@@ -12,7 +12,12 @@ import importlib.util
 import pkgutil
 from types import ModuleType
 
-_CORE_MODULES = ("app.db.models", "app.auth.models")
+_CORE_MODULES = (
+    "app.db.models",
+    "app.auth.models",
+    "app.auth.mfa.models",
+    "app.auth.oidc.models",
+)
 
 
 def _import_if_present(name: str) -> ModuleType | None:

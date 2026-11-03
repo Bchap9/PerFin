@@ -10,7 +10,9 @@
   row-level security is really enforced in tests.
 
 Fixtures: ``settings``, ``admin_engine``, ``owner_engine``, ``app_engine``,
-``db``, ``client``.
+``db``, ``client``, and the identity factories ``factories``,
+``make_household``, ``make_user``, ``login_as``, ``bearer_token`` and
+``authed_client`` (``tests/fixtures/factories.py``).
 """
 
 from __future__ import annotations
@@ -19,8 +21,9 @@ import base64
 import os
 import secrets
 import uuid
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from dataclasses import dataclass
+from typing import Any
 
 import psycopg
 import pytest
@@ -32,10 +35,12 @@ from sqlalchemy.orm import Session
 
 from app.core.settings import Settings, get_settings
 from app.db.base import Base
+from app.db.models import Household
 from app.db.registry import import_all_models
 from app.db.rls import schema_ddl
-from app.db.session import make_app_engine, make_engine
+from app.db.session import make_app_engine, make_engine, make_sessionmaker
 from app.main import create_app
+from tests.fixtures.factories import AuthedClient, Factories, LoggedIn, UserRecord
 
 DEFAULT_ADMIN_URL = "postgresql+psycopg://postgres:postgres@localhost:5432/postgres"
 
@@ -204,3 +209,64 @@ def client(settings: Settings) -> Iterator[TestClient]:
     """TestClient for an app built from the test settings."""
     with TestClient(create_app(settings)) as test_client:
         yield test_client
+
+
+# ---------------------------------------------------------------------------
+# Identity factories (Phase 1; tests/fixtures/factories.py)
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+def factories(app_engine: Engine, settings: Settings) -> Factories:
+    """Committing builders: rows are visible to a ``TestClient`` app."""
+    return Factories(make_sessionmaker(app_engine), settings)
+
+
+@pytest.fixture
+def make_household(factories: Factories) -> Callable[..., Household]:
+    """``make_household(name=None)`` -> committed ``Household``."""
+    return factories.household
+
+
+@pytest.fixture
+def make_user(factories: Factories) -> Callable[..., UserRecord]:
+    """``make_user(role="member", household=None, with_totp=False, ...)`` -> ``UserRecord``.
+
+    A new household is created for the user unless ``household`` is given or
+    ``role=None``. See ``tests.fixtures.factories.make_user`` for options.
+    """
+    return factories.user
+
+
+@pytest.fixture
+def login_as(factories: Factories) -> Callable[..., LoggedIn]:
+    """``login_as(client, user, mfa_verified=None)``: a real session cookie on ``client``.
+
+    Returns ``LoggedIn`` with the session id and ``headers()`` carrying the
+    session-bound CSRF token, Origin and Sec-Fetch-Site for unsafe requests.
+    """
+    return factories.login
+
+
+@pytest.fixture
+def bearer_token(factories: Factories) -> Callable[..., str]:
+    """``bearer_token(user, scopes=(), expires_at=None, revoked=False)`` -> raw PAT."""
+    return factories.token
+
+
+@pytest.fixture
+def authed_client(client: TestClient, factories: Factories) -> Callable[..., AuthedClient]:
+    """``authed_client(role="member", with_totp=True, ...)``: a logged-in client.
+
+    Creates a user (see ``make_user``), logs the shared ``client`` in as that
+    user and returns an ``AuthedClient`` whose unsafe methods add CSRF headers.
+    Users get a TOTP factor by default so ``PERFIN_REQUIRE_MFA`` does not
+    restrict them.
+    """
+
+    def build(**kwargs: Any) -> AuthedClient:
+        kwargs.setdefault("with_totp", True)
+        record = factories.user(**kwargs)
+        return AuthedClient(client, record, factories.login(client, record))
+
+    return build

@@ -24,6 +24,12 @@ from app.main import API_PREFIX, create_app
 pytestmark = pytest.mark.integration
 
 SESSION_COOKIE = "synthetic-session"
+# A stand-in for ``GET /auth/session`` that exercises CSRFProtect with a fake
+# resolver; the real endpoint is tested in tests/integration/test_auth_session.py.
+PROBE_PATH = "/csrf-probe/session"
+# A stand-in login form target; the real ``POST /auth/login`` (auth_local router)
+# owns that path and is tested in tests/integration/test_local_login.py.
+PROBE_LOGIN = "/csrf-probe/login"
 ORIGIN = "http://testserver"
 
 
@@ -32,7 +38,7 @@ def _build(settings: Settings) -> FastAPI:
     api = APIRouter()
     root = APIRouter()
 
-    @api.get("/auth/session")
+    @api.get(PROBE_PATH)
     def session(request: Request, response: Response) -> dict[str, str]:
         csrf = get_csrf(request)
         sid = csrf.session_id(request)
@@ -40,7 +46,7 @@ def _build(settings: Settings) -> FastAPI:
             return {"csrf_token": csrf.token_for_session(sid)}
         return {"csrf_token": csrf.issue_pre_auth(response)}
 
-    @api.post("/auth/login")
+    @api.post(PROBE_LOGIN)
     def login() -> dict[str, str]:
         return {"ok": "login"}
 
@@ -83,7 +89,7 @@ def client(app: FastAPI) -> Iterator[TestClient]:
 
 def _pre_auth(client: TestClient) -> tuple[str, str]:
     """Fetch a pre-auth token; return ``(nonce cookie value, token)``."""
-    response = client.get(f"{API_PREFIX}/auth/session")
+    response = client.get(f"{API_PREFIX}{PROBE_PATH}")
     assert response.status_code == 200
     nonce = response.cookies.get(PRE_AUTH_COOKIE)
     assert nonce
@@ -138,7 +144,7 @@ def test_extension_methods_need_a_token(client: TestClient, method: str) -> None
 
 
 def test_pre_auth_cookie_attributes(client: TestClient) -> None:
-    response = client.get(f"{API_PREFIX}/auth/session")
+    response = client.get(f"{API_PREFIX}{PROBE_PATH}")
     set_cookie = response.headers["set-cookie"]
     assert set_cookie.startswith(f"{PRE_AUTH_COOKIE}=")
     lowered = set_cookie.lower()
@@ -149,17 +155,17 @@ def test_pre_auth_cookie_attributes(client: TestClient) -> None:
 
 def test_login_with_pre_auth_token(client: TestClient) -> None:
     nonce, token = _pre_auth(client)
-    assert _post(client, "/auth/login", token=token, cookies={PRE_AUTH_COOKIE: nonce}) == 200
+    assert _post(client, PROBE_LOGIN, token=token, cookies={PRE_AUTH_COOKIE: nonce}) == 200
 
 
 def test_cookie_alone_is_not_enough(client: TestClient) -> None:
     nonce, _ = _pre_auth(client)
-    assert _post(client, "/auth/login", cookies={PRE_AUTH_COOKIE: nonce}) == 403
+    assert _post(client, PROBE_LOGIN, cookies={PRE_AUTH_COOKIE: nonce}) == 403
 
 
 def test_token_alone_is_not_enough(client: TestClient) -> None:
     _, token = _pre_auth(client)
-    assert _post(client, "/auth/login", token=token) == 403
+    assert _post(client, PROBE_LOGIN, token=token) == 403
 
 
 def test_naive_double_submit_is_rejected(client: TestClient) -> None:
@@ -203,7 +209,7 @@ def session_client(app: FastAPI) -> Iterator[TestClient]:
 def test_session_token_round_trip(session_client: TestClient) -> None:
     cookies = {SESSION_COOKIE: "session-one"}
     response = session_client.get(
-        f"{API_PREFIX}/auth/session", headers={"Cookie": f"{SESSION_COOKIE}=session-one"}
+        f"{API_PREFIX}{PROBE_PATH}", headers={"Cookie": f"{SESSION_COOKIE}=session-one"}
     )
     token = response.json()["csrf_token"]
     assert PRE_AUTH_COOKIE not in response.headers.get("set-cookie", "")
@@ -291,8 +297,17 @@ def test_bearer_requests_still_rejected_cross_site(client: TestClient) -> None:
 
 
 def test_backchannel_logout_is_exempt(client: TestClient) -> None:
-    response = client.post(f"{API_PREFIX}/auth/oidc/backchannel-logout")
-    assert response.status_code == 200
+    # The real OIDC router (app/api/routers/auth_oidc.py) owns this path and
+    # shadows the stand-in above; with OIDC not configured it answers
+    # ``404 oidc-disabled``. Reaching the handler without Origin,
+    # Sec-Fetch-Site or a token is what proves the CSRF exemption.
+    response = client.post(
+        f"{API_PREFIX}/auth/oidc/backchannel-logout", data={"logout_token": "synthetic"}
+    )
+    assert response.status_code == 404
+    assert response.json()["type"] == "urn:perfin:problem:oidc-disabled"
+    # A non-exempt unsafe request under the same conditions is refused.
+    assert client.post(f"{API_PREFIX}/auth/oidc/logout").status_code == 403
 
 
 def test_non_api_paths_are_not_checked(client: TestClient) -> None:
