@@ -1,135 +1,378 @@
-# PerFin reference deployment (DRAFT, Phase 0 target).
-# Hardened defaults: only the proxy publishes ports; app containers run as
-# non-root with read-only root filesystems and all capabilities dropped.
+# SPDX-License-Identifier: AGPL-3.0-or-later
 #
-#   cp .env.example .env   # then fill in every value marked CHANGE_ME
-#   docker compose up -d
+# PerFin reference deployment (SECURITY.md H1-H3, ARCHITECTURE.md "Deployment
+# topology").
+#
+#   cp .env.example .env && chmod 600 .env   # replace every CHANGE_ME
+#   cp Caddyfile.example Caddyfile           # set your host name
+#   mkdir -p inbox processed && sudo chown 10001:10001 processed
+#   docker compose up -d                     # proxy, api, worker, db (+ migrate)
+#   docker compose --profile egress up -d    # optional outbound allowlist proxy
+#   docker compose --profile av up -d        # optional ClamAV
+#   docker compose --profile mcp up -d       # optional read-only MCP server
+#
+# Hardening (checked by backend/tests/unit/test_compose_hardening.py):
+#   H1  app containers run as UID 10001 with a read-only root filesystem,
+#       every capability dropped, no-new-privileges, Docker's default seccomp
+#       profile, tmpfs scratch, and pid/memory limits. Third-party containers
+#       get the same treatment as far as each image allows.
+#   H2  only `proxy` publishes ports. api, worker, mcp, migrate and db are
+#       attached to `internal: true` networks only (no route out); the worker
+#       is not on any network the proxy can reach. Outbound traffic, when an
+#       integration needs it, goes through the `egress` allowlist proxy.
+#   H3  db publishes nothing, uses SCRAM-SHA-256, and creates a non-superuser
+#       app role and a separate owner role (deploy/db-init). The app connects
+#       as perfin_app; only the one-shot `migrate` service holds the owner
+#       password, and api/worker start only after it succeeded.
+#
+# Networks:
+#   edge      proxy only; the published ports live here
+#   web       proxy <-> api (and mcp); fixed subnet so the API trusts
+#             X-Forwarded-* from the proxy's address only
+#   backend   api, worker, migrate, db (and clamav)
+#   egress    api, worker (and clamav) <-> egress proxy
+#   outbound  egress proxy only; the single path to the internet
 
 name: perfin
 
-x-app-common: &app-common
-  image: ghcr.io/bchap9/perfin:${PERFIN_VERSION:-latest}
-  env_file: .env
+x-logging: &logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "5"
+
+# Hardening shared by every PerFin container (H1).
+x-hardened: &hardened
   user: "10001:10001"
   read_only: true
   cap_drop: [ALL]
   security_opt:
     - no-new-privileges:true
+  init: true
+  pids_limit: 256
+  mem_limit: 1g
+  memswap_limit: 1g
   tmpfs:
-    - /tmp:size=256m,mode=1777
-  depends_on:
-    db:
-      condition: service_healthy
-  restart: unless-stopped
-  logging:
-    driver: json-file
-    options: { max-size: "10m", max-file: "5" }
+    - /tmp:size=128m,mode=1777,noexec,nosuid,nodev
+  logging: *logging
+
+x-perfin-image: &perfin-image
+  image: ${APP_IMAGE:-ghcr.io/bchap9/perfin}:${PERFIN_VERSION:-latest}
+  build:
+    context: ..
+    dockerfile: deploy/Dockerfile
+    # Base-image overrides (e.g. a registry mirror); unset uses the
+    # Dockerfile defaults.
+    args:
+      - NODE_IMAGE
+      - PYTHON_IMAGE
+      - UV_IMAGE
 
 services:
+  # ---------------------------------------------------------------- proxy --
+  # TLS termination, HSTS, body limits (Caddyfile). The only service with
+  # published ports. Runs as UID 10002 (not the app's UID) with only
+  # NET_BIND_SERVICE, which the caddy binary needs to start at all.
   proxy:
-    image: caddy:2
+    image: ${CADDY_IMAGE:-docker.io/library/caddy:2}
+    user: "10002:10002"
+    read_only: true
+    cap_drop: [ALL]
+    cap_add: [NET_BIND_SERVICE]
+    security_opt:
+      - no-new-privileges:true
+    pids_limit: 128
+    mem_limit: 256m
+    memswap_limit: 256m
+    tmpfs:
+      - /tmp:size=16m,mode=1777,noexec,nosuid,nodev
     ports:
-      - "80:80"
-      - "443:443"
+      - "${PROXY_HTTP_PORT:-80}:80"
+      - "${PROXY_HTTPS_PORT:-443}:443"
+      - "${PROXY_HTTPS_PORT:-443}:443/udp"
     volumes:
       - ./Caddyfile:/etc/caddy/Caddyfile:ro
       - caddy_data:/data
       - caddy_config:/config
-    networks: [edge, internal]
+    networks:
+      edge: {}
+      web:
+        ipv4_address: ${PROXY_WEB_IP:-172.30.80.10}
+    depends_on:
+      proxy-init:
+        condition: service_completed_successfully
+      api:
+        condition: service_healthy
     restart: unless-stopped
+    logging: *logging
 
+  # One-shot: hand Caddy's state volumes to UID 10002. CHOWN is the only
+  # capability and there is no network.
+  proxy-init:
+    image: ${CADDY_IMAGE:-docker.io/library/caddy:2}
+    entrypoint: ["chown", "-R", "10002:10002", "/data", "/config"]
+    user: "0:0"
+    read_only: true
+    cap_drop: [ALL]
+    cap_add: [CHOWN]
+    security_opt:
+      - no-new-privileges:true
+    network_mode: none
+    pids_limit: 16
+    mem_limit: 64m
+    volumes:
+      - caddy_data:/data
+      - caddy_config:/config
+    restart: "no"
+    logging: *logging
+
+  # -------------------------------------------------------------- migrate --
+  # One-shot `perfin migrate` as the owner role. api and worker wait for it.
+  migrate:
+    <<: [*hardened, *perfin-image]
+    command: ["migrate"]
+    env_file: [.env]
+    environment:
+      # Owner credentials only; nothing else secret.
+      PERFIN_DATABASE_URL: ""
+      PERFIN_MASTER_KEY: ""
+      PERFIN_SECRET_KEY: ""
+      PERFIN_OIDC_CLIENT_SECRET: ""
+      POSTGRES_PASSWORD: ""
+      POSTGRES_OWNER_PASSWORD: ""
+      POSTGRES_APP_PASSWORD: ""
+    mem_limit: 512m
+    memswap_limit: 512m
+    healthcheck:
+      disable: true
+    networks: [backend]
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: "no"
+
+  # ------------------------------------------------------------------ api --
   api:
-    <<: *app-common
-    command: ["perfin", "api"]
+    <<: [*hardened, *perfin-image]
+    command: ["api"]
+    env_file: [.env]
     environment:
       PERFIN_ROLE: api
+      PERFIN_MIGRATION_DATABASE_URL: ""
+      POSTGRES_PASSWORD: ""
+      POSTGRES_OWNER_PASSWORD: ""
+      POSTGRES_APP_PASSWORD: ""
     volumes:
       - documents:/var/lib/perfin/documents
       - quarantine:/var/lib/perfin/quarantine
-    networks: [internal]
-    healthcheck:
-      test: ["CMD", "perfin", "healthcheck"]
-      interval: 30s
-      timeout: 5s
-      retries: 3
+    # `egress` only matters with the egress profile: OIDC discovery, JWKS and
+    # token exchange with an IdP listed in egress-allowlist.txt.
+    networks: [web, backend, egress]
+    # Image HEALTHCHECK: `perfin healthcheck` probes 127.0.0.1:8000/healthz.
+    stop_grace_period: 40s
+    depends_on:
+      db:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+    restart: unless-stopped
 
+  # --------------------------------------------------------------- worker --
+  # Parses untrusted files (ADR-0006): no published ports, not reachable
+  # from the proxy, no route out except the optional egress proxy.
   worker:
-    <<: *app-common
-    command: ["perfin", "worker"]
+    <<: [*hardened, *perfin-image]
+    command: ["worker"]
+    env_file: [.env]
     environment:
       PERFIN_ROLE: worker
+      PERFIN_MIGRATION_DATABASE_URL: ""
+      POSTGRES_PASSWORD: ""
+      POSTGRES_OWNER_PASSWORD: ""
+      POSTGRES_APP_PASSWORD: ""
+      PERFIN_DROPFOLDER_INBOX: /var/lib/perfin/inbox
+      PERFIN_DROPFOLDER_PROCESSED: /var/lib/perfin/processed
+    pids_limit: 512
+    mem_limit: 2g
+    memswap_limit: 2g
+    tmpfs:
+      # OCR and rendering scratch for the extraction sandbox.
+      - /tmp:size=1g,mode=1777,noexec,nosuid,nodev
     volumes:
       - documents:/var/lib/perfin/documents
       - quarantine:/var/lib/perfin/quarantine
-      # Drop folder: read-only inbox, read-write sibling for processed/failed.
-      - ${PERFIN_DROPFOLDER_INBOX:-./inbox}:/var/lib/perfin/inbox:ro
-      - ${PERFIN_DROPFOLDER_PROCESSED:-./processed}:/var/lib/perfin/processed
-    # The worker only needs the database. Egress for IMAP / price feeds is
-    # added by enabling the `egress` profile below.
-    networks: [internal]
+      # Drop folder (INGESTION.md): the inbox is read-only; processed files
+      # go to a writable sibling, never back into the inbox.
+      - ${DROPFOLDER_HOST_INBOX:-./inbox}:/var/lib/perfin/inbox:ro
+      - ${DROPFOLDER_HOST_PROCESSED:-./processed}:/var/lib/perfin/processed
+    networks: [backend, egress]
+    healthcheck:
+      # The worker serves no HTTP; its internal metrics endpoint answering
+      # means the process is alive.
+      test:
+        - CMD
+        - python
+        - -c
+        - "import os, urllib.request; urllib.request.urlopen('http://127.0.0.1:' + os.environ.get('PERFIN_METRICS_PORT', '9100') + '/metrics', timeout=3)"
+      interval: 30s
+      timeout: 5s
+      start_period: 20s
+      retries: 3
+    stop_grace_period: 40s
+    depends_on:
+      db:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+    restart: unless-stopped
 
+  # ------------------------------------------------------------------- db --
   db:
-    image: postgres:16-alpine
+    image: ${POSTGRES_IMAGE:-docker.io/library/postgres:16-alpine}
+    # The image's own postgres user (UID 70); the entrypoint then never
+    # needs root or any capability.
+    user: "70:70"
+    read_only: true
+    cap_drop: [ALL]
+    security_opt:
+      - no-new-privileges:true
+    pids_limit: 256
+    mem_limit: 1g
+    memswap_limit: 1g
+    shm_size: 128m
+    tmpfs:
+      - /tmp:size=64m,mode=1777,noexec,nosuid,nodev
+      - /var/run/postgresql:size=1m,mode=2777,uid=70,gid=70,noexec,nosuid,nodev
+    command:
+      - postgres
+      - -c
+      - password_encryption=scram-sha-256
+      - -c
+      - listen_addresses=*
+      - -c
+      - log_connections=on
+      - -c
+      - log_disconnections=on
     environment:
+      POSTGRES_USER: postgres
       POSTGRES_DB: perfin
-      POSTGRES_USER: perfin
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
       POSTGRES_INITDB_ARGS: "--auth-host=scram-sha-256 --auth-local=scram-sha-256"
+      POSTGRES_HOST_AUTH_METHOD: scram-sha-256
+      # Read by db-init/10-perfin-roles.sh on first start only.
+      POSTGRES_OWNER_PASSWORD: ${POSTGRES_OWNER_PASSWORD:?set POSTGRES_OWNER_PASSWORD in .env}
+      POSTGRES_APP_PASSWORD: ${POSTGRES_APP_PASSWORD:?set POSTGRES_APP_PASSWORD in .env}
+      PERFIN_DB_OWNER_ROLE: perfin_owner
+      PERFIN_DB_APP_ROLE: ${PERFIN_DB_APP_ROLE:-perfin_app}
     volumes:
       - pgdata:/var/lib/postgresql/data
-    networks: [internal]
+      - ./db-init:/docker-entrypoint-initdb.d:ro
+    networks: [backend]
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U perfin -d perfin"]
+      test: ["CMD", "pg_isready", "-U", "postgres", "-d", "perfin", "-h", "127.0.0.1"]
       interval: 10s
       timeout: 5s
+      start_period: 30s
       retries: 5
+    stop_grace_period: 60s
     restart: unless-stopped
+    logging: *logging
 
-  # Optional: antivirus scan of quarantined files (profile: av)
+  # --------------------------------------------------------------- clamav --
+  # Optional antivirus for quarantined files (profile `av`, PERFIN_ANTIVIRUS=
+  # clamav). Signature updates (freshclam) reach the internet only through
+  # the egress proxy: add database.clamav.net to egress-allowlist.txt and set
+  # HTTPProxyServer egress / HTTPProxyPort 3128 in freshclam.conf.
   clamav:
-    image: clamav/clamav:stable
+    image: ${CLAMAV_IMAGE:-docker.io/clamav/clamav:stable}
     profiles: [av]
-    networks: [internal]
+    read_only: true
+    cap_drop: [ALL]
+    # The image starts as root, fixes ownership of its state directory and
+    # drops to the clamav user; these are the capabilities that needs.
+    cap_add: [CHOWN, SETUID, SETGID, DAC_OVERRIDE]
+    security_opt:
+      - no-new-privileges:true
+    pids_limit: 256
+    mem_limit: 3g
+    memswap_limit: 3g
+    tmpfs:
+      - /tmp:size=256m,mode=1777,noexec,nosuid,nodev
+      - /run/clamav:size=8m,mode=0777
+      - /var/log/clamav:size=16m,mode=0777
     volumes:
       - clamav_db:/var/lib/clamav
+    networks: [backend, egress]
     restart: unless-stopped
+    logging: *logging
 
-  # Optional: read-only MCP server for AI assistants (profile: mcp).
-  # Holds one scoped API token; no DB, key or document access. Expose the
-  # HTTP transport only through the proxy with TLS, or prefer stdio.
+  # ------------------------------------------------------------------ mcp --
+  # Optional read-only MCP server for AI assistants (profile `mcp`,
+  # AI_ACCESS.md). It holds one scoped API token and talks only to the API:
+  # it does not read .env, so it never sees the database URL, the master key
+  # or the secret key, and it mounts no volumes (M7). The HTTP transport is
+  # served only through the proxy with TLS and an origin allowlist.
   mcp:
-    <<: *app-common
-    command: ["perfin", "mcp"]
+    <<: [*hardened, *perfin-image]
+    command: ["mcp"]
     profiles: [mcp]
     environment:
       PERFIN_ROLE: mcp
+      PERFIN_PUBLIC_URL: ${PERFIN_PUBLIC_URL:?set PERFIN_PUBLIC_URL in .env}
+      PERFIN_MCP_ENABLED: "true"
       PERFIN_MCP_TRANSPORT: http
-    env_file: .env
+      PERFIN_MCP_HTTP_ALLOWED_ORIGINS: ${PERFIN_MCP_HTTP_ALLOWED_ORIGINS:-}
+      PERFIN_LOG_LEVEL: ${PERFIN_LOG_LEVEL:-INFO}
+    mem_limit: 256m
+    memswap_limit: 256m
+    healthcheck:
+      disable: true
+    networks: [web]
     depends_on:
       api:
         condition: service_healthy
-    networks: [internal]
+    restart: unless-stopped
 
-  # Optional: egress allowlist proxy for the worker (profile: egress).
-  # Only hosts listed in egress-allowlist.txt are reachable (IMAP server,
-  # price API). Configure PERFIN_HTTPS_PROXY / PERFIN_IMAP_PROXY.
+  # --------------------------------------------------------------- egress --
+  # Optional CONNECT-only allowlist proxy (profile `egress`, deploy/egress).
+  # The only container with a route to the internet besides the TLS proxy;
+  # it reaches only the hosts in egress-allowlist.txt, and never private
+  # addresses unless EGRESS_ALLOW_PRIVATE_CIDRS says so.
   egress:
-    image: ghcr.io/bchap9/perfin-egress:${PERFIN_VERSION:-latest}
+    <<: *hardened
+    image: ${EGRESS_IMAGE:-ghcr.io/bchap9/perfin-egress}:${PERFIN_VERSION:-latest}
+    build:
+      context: ./egress
+      args:
+        - PYTHON_IMAGE
     profiles: [egress]
-    networks: [internal, edge]
+    environment:
+      EGRESS_ALLOW_PRIVATE_CIDRS: ${EGRESS_ALLOW_PRIVATE_CIDRS:-}
     volumes:
       - ./egress-allowlist.txt:/etc/egress/allowlist.txt:ro
+    mem_limit: 128m
+    memswap_limit: 128m
+    pids_limit: 64
+    networks: [egress, outbound]
     restart: unless-stopped
 
 networks:
-  edge:
-  internal:
-    internal: true   # no route to the outside world
+  edge: {}
+  web:
+    internal: true
+    ipam:
+      config:
+        - subnet: ${WEB_SUBNET:-172.30.80.0/24}
+  backend:
+    internal: true
+  egress:
+    internal: true
+  outbound: {}
 
 volumes:
-  pgdata:
-  documents:
-  quarantine:
-  caddy_data:
-  caddy_config:
-  clamav_db:
+  pgdata: {}
+  documents: {}
+  quarantine: {}
+  caddy_data: {}
+  caddy_config: {}
+  clamav_db: {}

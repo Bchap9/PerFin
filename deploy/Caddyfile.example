@@ -1,30 +1,133 @@
-# Copy to Caddyfile and set your hostname. Caddy obtains TLS automatically.
+# SPDX-License-Identifier: AGPL-3.0-or-later
+#
+# Reverse proxy for PerFin (ARCHITECTURE.md "Reverse proxy", SECURITY.md F6-F8,
+# H7). Copy to Caddyfile and replace perfin.example.com with your host name;
+# Caddy obtains and renews the certificate automatically (ACME).
+#
+# The proxy is the only container with published ports. It reaches the API
+# over the private `web` network; it cannot reach the worker or the database.
+{
+	# No admin API inside the container; restart the proxy to reload.
+	admin off
+	# Never try to add Caddy's local CA to the (read-only) system trust store.
+	skip_install_trust
+
+	servers {
+		# Slow-client bounds (SECURITY.md F8). No write timeout: the
+		# /api/v1/events server-sent-events stream is long-lived.
+		timeouts {
+			read_header 10s
+			read_body 60s
+			idle 2m
+		}
+		max_header_size 16KB
+
+		# Caddy is the edge: X-Forwarded-* sent by clients are ignored and
+		# replaced with what Caddy observed. Only if another proxy or a CDN
+		# sits in front of Caddy, list its addresses here, e.g.
+		#   trusted_proxies static 192.0.2.0/24
+		# The API in turn trusts X-Forwarded-* only from this proxy's fixed
+		# address (PERFIN_TRUSTED_PROXIES in .env).
+	}
+}
+
 perfin.example.com {
+	# TLS 1.2+ only; HTTP is redirected to HTTPS automatically.
+	tls {
+		protocols tls1.2 tls1.3
+	}
+
 	encode zstd gzip
 
+	# The API sets the full header set (CSP, COOP/CORP, Permissions-Policy,
+	# no-store); these are a backstop for anything answered by the proxy.
 	header {
 		Strict-Transport-Security "max-age=63072000; includeSubDomains; preload"
 		X-Content-Type-Options "nosniff"
 		Referrer-Policy "no-referrer"
 		X-Frame-Options "DENY"
 		-Server
+		-Via
 	}
 
-	# Large bodies only on the upload route
-	@upload path /api/v1/documents
+	# Request body limits: uploads up to PERFIN_UPLOAD_MAX_MB (+2 MB for
+	# multipart framing) on the upload route, 1 MB everywhere else. The API
+	# enforces its own limits too (backend/app/core/limits.py).
+	@upload path /api/v1/documents /api/v1/documents/
 	request_body @upload {
 		max_size 52MB
 	}
-	request_body {
+	@not_upload not path /api/v1/documents /api/v1/documents/
+	request_body @not_upload {
 		max_size 1MB
 	}
 
-	# Simple abuse brake on auth endpoints (requires the caddy-ratelimit module
-	# or move this to fail2ban / CrowdSec)
-	# rate_limit { zone auth { key {remote_host} events 20 window 1m } }
+	# Probes and metrics are internal (SECURITY.md H7). /healthz and /readyz
+	# are for the container healthcheck on the private network and are never
+	# answered from the internet. Prefix matches, so variants such as
+	# /healthz/, /readyz%2F, /healthz%00 or /healthz;x are refused too (Caddy
+	# matches the decoded path, case-insensitively). Metrics live on a
+	# separate port bound to the container's loopback interface by default
+	# (PERFIN_METRICS_BIND_HOST), which the proxy cannot reach; /metrics is
+	# refused here in case that ever changes.
+	@internal_only path /healthz* /readyz* /metrics*
+	handle @internal_only {
+		respond 404
+	}
 
-	reverse_proxy api:8000 {
-		header_up X-Forwarded-Proto {scheme}
-		flush_interval -1   # needed for server-sent events
+	# Rate limiting: Caddy core has none. Either build Caddy with the
+	# caddy-ratelimit module and enable, for example,
+	#   rate_limit {
+	#       zone auth {
+	#           match { path /api/v1/auth/* }
+	#           key {remote_host}
+	#           events 20
+	#           window 1m
+	#       }
+	#   }
+	# or ban repeated 401/429 responses with fail2ban/CrowdSec reading the
+	# proxy access log. The API rate-limits logins on its own (SECURITY.md A1).
+
+	# Server-sent events: never buffer the stream.
+	handle /api/v1/events* {
+		reverse_proxy api:8000 {
+			flush_interval -1
+			transport http {
+				dial_timeout 5s
+			}
+		}
+	}
+
+	# Optional MCP streamable-HTTP transport (profile `mcp`). Uncomment only
+	# if an AI client must reach it over the network; stdio is preferred.
+	# handle /mcp* {
+	#     reverse_proxy mcp:8001 {
+	#         flush_interval -1
+	#     }
+	# }
+
+	handle {
+		reverse_proxy api:8000 {
+			flush_interval -1
+			transport http {
+				dial_timeout 5s
+				response_header_timeout 60s
+			}
+		}
+	}
+
+	log {
+		output stdout
+		# Never log query strings, cookies or credentials (SECURITY.md H8).
+		format filter {
+			wrap json
+			fields {
+				request>uri regexp "\?.*$" "?redacted"
+				request>headers>Cookie delete
+				request>headers>Authorization delete
+				request>headers>X-Csrf-Token delete
+				resp_headers>Set-Cookie delete
+			}
+		}
 	}
 }
