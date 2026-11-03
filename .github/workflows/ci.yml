@@ -60,7 +60,7 @@ jobs:
       - name: uv.lock matches pyproject.toml
         working-directory: backend
         env:
-          UV_FROZEN: ""
+          UV_FROZEN: "false"
         run: uv lock --check
       - name: Every locked package is hash-pinned and comes from the public registries
         run: |
