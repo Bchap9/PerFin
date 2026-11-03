@@ -1,0 +1,30 @@
+# Copy to Caddyfile and set your hostname. Caddy obtains TLS automatically.
+perfin.example.com {
+	encode zstd gzip
+
+	header {
+		Strict-Transport-Security "max-age=63072000; includeSubDomains; preload"
+		X-Content-Type-Options "nosniff"
+		Referrer-Policy "no-referrer"
+		X-Frame-Options "DENY"
+		-Server
+	}
+
+	# Large bodies only on the upload route
+	@upload path /api/v1/documents
+	request_body @upload {
+		max_size 52MB
+	}
+	request_body {
+		max_size 1MB
+	}
+
+	# Simple abuse brake on auth endpoints (requires the caddy-ratelimit module
+	# or move this to fail2ban / CrowdSec)
+	# rate_limit { zone auth { key {remote_host} events 20 window 1m } }
+
+	reverse_proxy api:8000 {
+		header_up X-Forwarded-Proto {scheme}
+		flush_interval -1   # needed for server-sent events
+	}
+}

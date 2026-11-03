@@ -1,0 +1,19 @@
+# Phase 0 placeholder. Fills in as backend/ and frontend/ gain code.
+name: ci
+on:
+  push:
+    branches: [main]
+  pull_request:
+jobs:
+  backend:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Placeholder
+        run: echo "ruff, mypy --strict, pytest (unit + security matrix) go here"
+  frontend:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Placeholder
+        run: echo "eslint, tsc --strict, vitest go here"

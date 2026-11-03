@@ -1,0 +1,4 @@
+# One host per line. Only these are reachable from the worker when the
+# `egress` profile is enabled. Examples:
+# imap.fastmail.com
+# query1.finance.yahoo.com
