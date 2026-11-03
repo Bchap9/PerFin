@@ -1,0 +1,22 @@
+# Phase 0 placeholder for supply-chain and secret scanning.
+name: security
+on:
+  push:
+    branches: [main]
+  pull_request:
+  schedule:
+    - cron: "17 4 * * 1"
+jobs:
+  secrets:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with: { fetch-depth: 0 }
+      - name: Placeholder
+        run: echo "gitleaks detect goes here"
+  dependencies:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Placeholder
+        run: echo "pip-audit, npm audit, trivy fs, lockfile hash verification go here"

@@ -1,0 +1,129 @@
+# PerFin reference deployment (DRAFT, Phase 0 target).
+# Hardened defaults: only the proxy publishes ports; app containers run as
+# non-root with read-only root filesystems and all capabilities dropped.
+#
+#   cp .env.example .env   # then fill in every value marked CHANGE_ME
+#   docker compose up -d
+
+name: perfin
+
+x-app-common: &app-common
+  image: ghcr.io/bchap9/perfin:${PERFIN_VERSION:-latest}
+  env_file: .env
+  user: "10001:10001"
+  read_only: true
+  cap_drop: [ALL]
+  security_opt:
+    - no-new-privileges:true
+  tmpfs:
+    - /tmp:size=256m,mode=1777
+  depends_on:
+    db:
+      condition: service_healthy
+  restart: unless-stopped
+  logging:
+    driver: json-file
+    options: { max-size: "10m", max-file: "5" }
+
+services:
+  proxy:
+    image: caddy:2
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    networks: [edge, internal]
+    restart: unless-stopped
+
+  api:
+    <<: *app-common
+    command: ["perfin", "api"]
+    environment:
+      PERFIN_ROLE: api
+    volumes:
+      - documents:/var/lib/perfin/documents
+      - quarantine:/var/lib/perfin/quarantine
+    networks: [internal]
+    healthcheck:
+      test: ["CMD", "perfin", "healthcheck"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
+  worker:
+    <<: *app-common
+    command: ["perfin", "worker"]
+    environment:
+      PERFIN_ROLE: worker
+    volumes:
+      - documents:/var/lib/perfin/documents
+      - quarantine:/var/lib/perfin/quarantine
+      # Drop folder: read-only inbox, read-write sibling for processed/failed.
+      - ${PERFIN_DROPFOLDER_INBOX:-./inbox}:/var/lib/perfin/inbox:ro
+      - ${PERFIN_DROPFOLDER_PROCESSED:-./processed}:/var/lib/perfin/processed
+    # The worker only needs the database. Egress for IMAP / price feeds / a
+    # remote LLM is added by enabling the `egress` profile below.
+    networks: [internal]
+
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: perfin
+      POSTGRES_USER: perfin
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
+      POSTGRES_INITDB_ARGS: "--auth-host=scram-sha-256 --auth-local=scram-sha-256"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    networks: [internal]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U perfin -d perfin"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  # Optional: antivirus scan of quarantined files (profile: av)
+  clamav:
+    image: clamav/clamav:stable
+    profiles: [av]
+    networks: [internal]
+    volumes:
+      - clamav_db:/var/lib/clamav
+    restart: unless-stopped
+
+  # Optional: local LLM for ingestion fallback (profile: llm)
+  ollama:
+    image: ollama/ollama:latest
+    profiles: [llm]
+    networks: [internal]
+    volumes:
+      - ollama:/root/.ollama
+    restart: unless-stopped
+
+  # Optional: egress allowlist proxy for the worker (profile: egress).
+  # Only hosts listed in egress-allowlist.txt are reachable (IMAP server,
+  # price API, remote LLM). Configure PERFIN_HTTPS_PROXY / PERFIN_IMAP_PROXY.
+  egress:
+    image: ghcr.io/bchap9/perfin-egress:${PERFIN_VERSION:-latest}
+    profiles: [egress]
+    networks: [internal, edge]
+    volumes:
+      - ./egress-allowlist.txt:/etc/egress/allowlist.txt:ro
+    restart: unless-stopped
+
+networks:
+  edge:
+  internal:
+    internal: true   # no route to the outside world
+
+volumes:
+  pgdata:
+  documents:
+  quarantine:
+  caddy_data:
+  caddy_config:
+  clamav_db:
+  ollama:
