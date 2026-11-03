@@ -41,12 +41,63 @@ from app.core.audit import audit, verify_chain
 from app.core.settings import Settings
 from app.db.base import Base, household_scoped_tables
 from app.db.registry import import_all_models
-from app.db.rls import CUSTOM_RLS, set_context
+from app.db.rls import CUSTOM_RLS, EXTRA_POLICIES, set_context
 from app.db.session import make_engine
 from app.main import create_app
 from tests.conftest import DEFAULT_ADMIN_URL
 
 pytestmark = pytest.mark.integration
+
+#: Phase 0 platform tables (revision 0001).
+PHASE0_TABLES = frozenset({"household", "audit_log", "setting", "event", "job"})
+#: Phase 1 identity tables (revision 0002).
+PHASE1_TABLES = frozenset(
+    {
+        "app_user",
+        "credential",
+        "mfa_method",
+        "identity",
+        "user_session",
+        "password_reset_token",
+        "rate_limit_event",
+        "mfa_challenge",
+        "oidc_session",
+        "oidc_used_state",
+        "household_member",
+        "account_grant",
+        "api_token",
+    }
+)
+#: Identity tables deliberately without RLS: not household-scoped and reached
+#: only through ``app.auth`` service functions (DATA_MODEL.md, "Identity and
+#: access"). Any other table without RLS fails the test below.
+NO_RLS_TABLES = frozenset(
+    {
+        "alembic_version",
+        "app_user",
+        "credential",
+        "mfa_method",
+        "identity",
+        "user_session",
+        "password_reset_token",
+        "rate_limit_event",
+        "mfa_challenge",
+        "oidc_session",
+        "oidc_used_state",
+    }
+)
+#: Extra SELECT-only policies of the Phase 1 household-scoped tables.
+PHASE1_EXTRA_POLICIES = {
+    "household_member": {"member_self_read"},
+    "account_grant": {"grant_self_read"},
+    "api_token": {"token_self_read", "token_prefix_lookup"},
+}
+
+
+def _head() -> str:
+    head = ScriptDirectory.from_config(alembic_config()).get_current_head()
+    assert head is not None
+    return head
 
 
 @dataclass(frozen=True)
@@ -167,6 +218,9 @@ def test_single_head_and_linear_history() -> None:
     script = ScriptDirectory.from_config(alembic_config())
     assert len(script.get_heads()) == 1
     assert script.get_base() == "0001"
+    # One revision per phase, each on top of the previous one.
+    assert [rev.revision for rev in script.walk_revisions("base", "heads")] == ["0002", "0001"]
+    assert script.get_revision("0002").down_revision == "0001"
 
 
 def test_upgrade_head_matches_models_without_drift(migrated: Scratch) -> None:
@@ -179,6 +233,7 @@ def test_upgrade_head_matches_models_without_drift(migrated: Scratch) -> None:
     finally:
         engine.dispose()
     assert {t.name for t in Base.metadata.sorted_tables} | {"alembic_version"} == tables
+    assert tables >= PHASE0_TABLES | PHASE1_TABLES
 
 
 def test_check_detects_drift(migrated: Scratch) -> None:
@@ -217,9 +272,15 @@ def test_every_household_scoped_table_has_forced_rls(migrated: Scratch) -> None:
             }
     finally:
         engine.dispose()
+    assert {"household_member", "account_grant", "api_token"} <= set(scoped)
     for table in scoped:
         assert rows[table] == (True, True), table
         assert (table, "household_isolation") in policies
+    # Phase 1: the self-read and token-prefix policies, exactly as registered
+    # in app.db.rls.EXTRA_POLICIES (the conftest schema uses the same source).
+    for table, extra in PHASE1_EXTRA_POLICIES.items():
+        assert {name for t, name in policies if t == table} == {"household_isolation", *extra}
+        assert {p.name for p in EXTRA_POLICIES[table]} == extra
     # Custom policies: audit_log is RLS-enabled (not forced, so the owner can
     # verify the chain); household, job and setting are forced.
     assert rows["audit_log"] == (True, False)
@@ -231,9 +292,10 @@ def test_every_household_scoped_table_has_forced_rls(migrated: Scratch) -> None:
         assert {p.name for p in CUSTOM_RLS[table].policies} == {
             name for t, name in policies if t == table
         }, table
-    # Every application table has RLS (alembic_version holds no data).
+    # Every other application table has RLS (alembic_version holds no data;
+    # the identity tables are listed explicitly in NO_RLS_TABLES).
     unprotected = {t for t, (enabled, _) in rows.items() if not enabled}
-    assert unprotected == {"alembic_version"}
+    assert unprotected == NO_RLS_TABLES
 
 
 def test_tables_owned_by_owner_role_not_superuser(migrated: Scratch) -> None:
@@ -375,7 +437,7 @@ def test_app_role_privileges_are_least(migrated: Scratch) -> None:
         with app.connect() as conn:
             # /readyz reads the revision as the application role.
             assert conn.execute(text("SELECT version_num FROM alembic_version")).scalar_one() == (
-                "0001"
+                _head()
             )
             privileges = {
                 (str(r.table_name), str(r.privilege_type))
@@ -395,7 +457,7 @@ def test_app_role_privileges_are_least(migrated: Scratch) -> None:
         app.dispose()
     assert {p for t, p in privileges if t == "audit_log"} == {"SELECT", "INSERT"}
     assert {p for t, p in privileges if t == "alembic_version"} == {"SELECT"}
-    for table in ("household", "job", "event", "setting"):
+    for table in sorted((PHASE0_TABLES | PHASE1_TABLES) - {"audit_log"}):
         assert {p for t, p in privileges if t == table} == {
             "SELECT",
             "INSERT",
@@ -470,10 +532,11 @@ def test_perfin_migrate_uses_the_migration_url(
     try:
         with engine.connect() as conn:
             assert conn.execute(text("SELECT version_num FROM alembic_version")).scalar_one() == (
-                "0001"
+                _head()
             )
             # Granted to the configured app role.
             conn.execute(text("SELECT count(*) FROM job")).scalar_one()
+            conn.execute(text("SELECT count(*) FROM rate_limit_event")).scalar_one()
     finally:
         engine.dispose()
     # Idempotent: a second run is a no-op.
@@ -539,3 +602,114 @@ def test_perfin_audit_verify_detects_tampering(
     assert report["ok"] is False
     assert report["first_bad_seq"] == 2
     assert report["reason"] == "hash mismatch"
+
+
+def test_downgrade_0002_leaves_phase0_and_upgrades_again(migrated: Scratch) -> None:
+    """0002 removes exactly its own tables and enum types; 0001 data survives."""
+    cfg = migrated.config()
+    app = migrated.app_engine()
+    household = uuid.uuid4()
+    try:
+        with app.begin() as conn:
+            set_context(conn, household)
+            conn.execute(
+                text("INSERT INTO household (id, name) VALUES (:id, 'Synthetic household')"),
+                {"id": household},
+            )
+    finally:
+        app.dispose()
+    command.downgrade(cfg, "0001")
+    engine = migrated.owner_engine()
+    try:
+        assert _public_tables(engine) == PHASE0_TABLES | {"alembic_version"}
+        with engine.connect() as conn:
+            types = set(
+                conn.execute(
+                    text(
+                        "SELECT typname FROM pg_type "
+                        "WHERE typnamespace = 'public'::regnamespace AND typtype = 'e'"
+                    )
+                ).scalars()
+            )
+            assert types == {"job_state", "setting_scope"}
+            assert conn.execute(text("SELECT version_num FROM alembic_version")).scalar_one() == (
+                "0001"
+            )
+            # household is under forced RLS for the owner too.
+            set_context(conn, household)
+            assert conn.execute(text("SELECT count(*) FROM household")).scalar_one() == 1
+        command.upgrade(cfg, "head")
+        command.check(cfg)
+        assert _public_tables(engine) >= PHASE1_TABLES
+    finally:
+        engine.dispose()
+
+
+def test_phase1_rls_on_migrated_database(migrated: Scratch) -> None:
+    """Membership rows: self-read without a household, writes only in context.
+
+    The same behaviour the conftest schema gives, but on the schema the
+    revisions build, as the application role.
+    """
+    app = migrated.app_engine()
+    a, b = uuid.uuid4(), uuid.uuid4()
+    user = uuid.uuid4()
+    try:
+        with app.begin() as conn:
+            conn.execute(
+                text(
+                    "INSERT INTO app_user (id, username, display_name) "
+                    "VALUES (:id, 'synthetic-user', 'Synthetic User')"
+                ),
+                {"id": user},
+            )
+        for household in (a, b):
+            with app.begin() as conn:
+                set_context(conn, household)
+                conn.execute(
+                    text("INSERT INTO household (id, name) VALUES (:id, 'Synthetic')"),
+                    {"id": household},
+                )
+        with app.begin() as conn:
+            set_context(conn, a)
+            conn.execute(
+                text(
+                    "INSERT INTO household_member (id, household_id, user_id, role) "
+                    "VALUES (:id, :h, :u, 'member')"
+                ),
+                {"id": uuid.uuid4(), "h": a, "u": user},
+            )
+        # User-only context (no household): the user's own membership is visible.
+        with app.begin() as conn:
+            set_context(conn, None, user_id=user)
+            assert conn.execute(text("SELECT count(*) FROM household_member")).scalar_one() == 1
+        # Another user sees nothing without a household context.
+        with app.begin() as conn:
+            set_context(conn, None, user_id=uuid.uuid4())
+            assert conn.execute(text("SELECT count(*) FROM household_member")).scalar_one() == 0
+        # A user-only context cannot add itself to household B, nor can
+        # household A's context write a row for B.
+        for context in (None, a):
+            with app.connect() as conn, conn.begin():
+                set_context(conn, context, user_id=user)
+                with pytest.raises(DBAPIError, match="row-level security"):
+                    conn.execute(
+                        text(
+                            "INSERT INTO household_member (id, household_id, user_id, role) "
+                            "VALUES (:id, :h, :u, 'owner')"
+                        ),
+                        {"id": uuid.uuid4(), "h": b, "u": user},
+                    )
+        # Nor can a user-only context promote its own membership.
+        with app.begin() as conn:
+            set_context(conn, None, user_id=user)
+            updated = conn.execute(text("UPDATE household_member SET role = 'owner'"))
+            assert updated.rowcount == 0
+        # The rate-limit id sequence is usable by the application role.
+        with app.begin() as conn:
+            conn.execute(
+                text("INSERT INTO rate_limit_event (scope, key_hash) VALUES ('test', :k)"),
+                {"k": "0" * 64},
+            )
+    finally:
+        app.dispose()
