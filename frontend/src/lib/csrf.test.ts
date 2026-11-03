@@ -22,6 +22,22 @@ describe("session parsing", () => {
     });
   });
 
+  it("recognises a pending second factor and keeps only known factor types", async () => {
+    const body = {
+      type: "urn:perfin:problem:mfa-required",
+      authenticated: false,
+      csrf_token: "pending_tok",
+      mfa: { pending: true, methods: ["totp", "webauthn", "<b>", 3] },
+    };
+    expect(await sessionFromResponse(json(body, 401))).toEqual({
+      status: "mfa_pending",
+      csrfToken: "pending_tok",
+      methods: ["totp", "webauthn"],
+    });
+    // A 403 is never a pending login, whatever its body says.
+    expect(await sessionFromResponse(json(body, 403))).toEqual({ status: "anonymous", csrfToken: "pending_tok" });
+  });
+
   it("is unavailable on 404, server errors, non-JSON and network failures", async () => {
     expect(await sessionFromResponse(new Response(null, { status: 404 }))).toMatchObject({
       status: "unavailable",

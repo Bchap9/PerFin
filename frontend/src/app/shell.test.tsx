@@ -86,7 +86,7 @@ describe("app shell", () => {
     expect(screen.queryByRole("navigation", { name: "Main" })).not.toBeInTheDocument();
   });
 
-  it("offers sign-in when the session endpoint says anonymous, and nothing when it is missing", async () => {
+  it("sends an anonymous visitor to sign-in, remembering where they were going", async () => {
     vi.stubGlobal(
       "fetch",
       vi.fn(() =>
@@ -98,9 +98,11 @@ describe("app shell", () => {
         ),
       ),
     );
-    renderAt("/settings");
-    const signIn = await screen.findByRole("link", { name: "Sign in" });
-    expect(signIn).toHaveAttribute("href", "/login");
+    const router = renderAt("/settings");
+    expect(await screen.findByRole("heading", { level: 1, name: "Sign in" })).toBeInTheDocument();
+    expect(router.state.location.pathname).toBe("/login");
+    expect(new URLSearchParams(router.state.location.searchStr).get("return_to")).toBe("/settings");
+    expect(screen.queryByRole("navigation", { name: "Main" })).not.toBeInTheDocument();
   });
 
   it("does not show sign-in while the session endpoint does not exist (404)", async () => {

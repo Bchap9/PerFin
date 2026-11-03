@@ -7,19 +7,24 @@
  * bound to the session; without one the server issues a signed pre-auth
  * token (paired with the `__Host-perfin-pre` cookie) for the login endpoints.
  *
- * The token lives in memory only (never in localStorage). Until Phase 1 the
- * session endpoint does not exist: a 404 or a network error yields the
- * `unavailable` state and no token, and the app keeps working.
+ * The token lives in memory only (never in localStorage). A 404, a server
+ * error or a network error yields the `unavailable` state and no token, and
+ * the app keeps working. A `401 mfa-required` problem (password accepted,
+ * second factor outstanding) is the `mfa_pending` state: its token is bound
+ * to the pending session and only `POST /auth/mfa/verify` accepts it.
  */
 
 export const CSRF_HEADER = "X-CSRF-Token";
 export const SESSION_PATH = "/api/v1/auth/session";
 const MAX_TOKEN_LENGTH = 256;
 const TOKEN_RE = /^[A-Za-z0-9_\-.~+/=]+$/;
+const MFA_REQUIRED_TYPE = "urn:perfin:problem:mfa-required";
+const KNOWN_FACTORS = new Set(["totp", "webauthn"]);
 
 export type SessionState =
   | { status: "authenticated"; csrfToken: string | null; data: Readonly<Record<string, unknown>> }
   | { status: "anonymous"; csrfToken: string | null }
+  | { status: "mfa_pending"; csrfToken: string | null; methods: readonly string[] }
   | { status: "unavailable"; csrfToken: null; httpStatus: number | null };
 
 type FetchLike = (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
@@ -53,10 +58,24 @@ async function readJson(response: Response): Promise<unknown> {
   }
 }
 
+function pendingMethods(body: Record<string, unknown>): string[] | null {
+  const mfa = body["mfa"];
+  const pending = isRecord(mfa) && mfa["pending"] === true;
+  if (body["type"] !== MFA_REQUIRED_TYPE && !pending) {
+    return null;
+  }
+  const raw = isRecord(mfa) && Array.isArray(mfa["methods"]) ? mfa["methods"] : [];
+  return raw.filter((item): item is string => typeof item === "string" && KNOWN_FACTORS.has(item));
+}
+
 /** Interpret a `GET /auth/session` response. Exported for tests. */
 export async function sessionFromResponse(response: Response): Promise<SessionState> {
   if (response.status === 401 || response.status === 403) {
     const body = await readJson(response);
+    const methods = response.status === 401 && isRecord(body) ? pendingMethods(body) : null;
+    if (methods !== null) {
+      return { status: "mfa_pending", csrfToken: readToken(body), methods };
+    }
     return { status: "anonymous", csrfToken: readToken(body) };
   }
   if (!response.ok) {

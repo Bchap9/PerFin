@@ -7,7 +7,11 @@ import {
   type RouterHistory,
 } from "@tanstack/react-router";
 
+import { routes as authRoutes } from "../features/auth/routes";
+import { authGuard } from "../features/auth/guard";
 import { routes as homeRoutes } from "../features/home/routes";
+import { routes as settingsRoutes } from "../features/settings/routes";
+import { routes as setupRoutes } from "../features/setup/routes";
 import { AppProviders } from "./AppProviders";
 import { NotFoundPage, PendingPage, RouteErrorPage } from "./pages";
 import { RootLayout } from "./RootLayout";
@@ -18,6 +22,9 @@ export interface RouterContext {
 }
 
 export const rootRoute = createRootRouteWithContext<RouterContext>()({
+  // Every page but sign-in, setup and password reset needs a session
+  // (features/auth/guard.ts); the server enforces it again.
+  beforeLoad: authGuard,
   component: RootLayout,
   notFoundComponent: NotFoundPage,
   errorComponent: RouteErrorPage,
@@ -32,6 +39,9 @@ type FeatureRoutes = (parent: typeof rootRoute) => AnyRoute[];
 
 const features: FeatureRoutes[] = [
   homeRoutes,
+  authRoutes,
+  setupRoutes,
+  settingsRoutes,
 ];
 
 /**

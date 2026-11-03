@@ -4,6 +4,8 @@ import { Link, Outlet, useRouterState } from "@tanstack/react-router";
 import { useState } from "react";
 
 import { cx } from "../components/cx";
+import { AccountMenu } from "../features/auth/AccountMenu";
+import { isBarePath } from "../features/auth/guard";
 import { IconButton } from "../components/IconButton";
 import { CloseIcon, MenuIcon } from "../components/icons";
 import { sessionQueryOptions } from "../lib/session";
@@ -12,26 +14,21 @@ import { LOGIN_PATH } from "./shellRoutes";
 import { ThemeToggle } from "./ThemeProvider";
 import { useLiveUpdates } from "./useLiveUpdates";
 
-/** Paths rendered without the navigation chrome. */
-const BARE_PATHS = new Set([LOGIN_PATH]);
+/** Paths rendered without the navigation chrome (sign-in, setup, reset; see features/auth). */
+function isBare(pathname: string): boolean {
+  return pathname === LOGIN_PATH || isBarePath(pathname);
+}
 
 function SessionIndicator() {
   const session = useQuery(sessionQueryOptions());
   useLiveUpdates(session.data?.status === "authenticated");
-  if (session.data?.status !== "anonymous") {
-    return null;
-  }
-  return (
-    <Link to={LOGIN_PATH} className="btn btn--secondary btn--sm">
-      Sign in
-    </Link>
-  );
+  return <AccountMenu />;
 }
 
 export function RootLayout() {
   const pathname = useRouterState({ select: (state) => state.location.pathname });
   const [navOpen, setNavOpen] = useState(false);
-  const bare = BARE_PATHS.has(pathname);
+  const bare = isBare(pathname);
 
   return (
     <div className={cx("app-shell", bare && "app-shell--bare")}>
