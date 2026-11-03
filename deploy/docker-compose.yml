@@ -64,8 +64,8 @@ services:
       # Drop folder: read-only inbox, read-write sibling for processed/failed.
       - ${PERFIN_DROPFOLDER_INBOX:-./inbox}:/var/lib/perfin/inbox:ro
       - ${PERFIN_DROPFOLDER_PROCESSED:-./processed}:/var/lib/perfin/processed
-    # The worker only needs the database. Egress for IMAP / price feeds / a
-    # remote LLM is added by enabling the `egress` profile below.
+    # The worker only needs the database. Egress for IMAP / price feeds is
+    # added by enabling the `egress` profile below.
     networks: [internal]
 
   db:
@@ -94,18 +94,25 @@ services:
       - clamav_db:/var/lib/clamav
     restart: unless-stopped
 
-  # Optional: local LLM for ingestion fallback (profile: llm)
-  ollama:
-    image: ollama/ollama:latest
-    profiles: [llm]
+  # Optional: read-only MCP server for AI assistants (profile: mcp).
+  # Holds one scoped API token; no DB, key or document access. Expose the
+  # HTTP transport only through the proxy with TLS, or prefer stdio.
+  mcp:
+    <<: *app-common
+    command: ["perfin", "mcp"]
+    profiles: [mcp]
+    environment:
+      PERFIN_ROLE: mcp
+      PERFIN_MCP_TRANSPORT: http
+    env_file: .env
+    depends_on:
+      api:
+        condition: service_healthy
     networks: [internal]
-    volumes:
-      - ollama:/root/.ollama
-    restart: unless-stopped
 
   # Optional: egress allowlist proxy for the worker (profile: egress).
   # Only hosts listed in egress-allowlist.txt are reachable (IMAP server,
-  # price API, remote LLM). Configure PERFIN_HTTPS_PROXY / PERFIN_IMAP_PROXY.
+  # price API). Configure PERFIN_HTTPS_PROXY / PERFIN_IMAP_PROXY.
   egress:
     image: ghcr.io/bchap9/perfin-egress:${PERFIN_VERSION:-latest}
     profiles: [egress]
@@ -126,4 +133,3 @@ volumes:
   caddy_data:
   caddy_config:
   clamav_db:
-  ollama:

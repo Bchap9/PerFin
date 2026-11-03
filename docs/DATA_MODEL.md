@@ -17,6 +17,9 @@ user ───< mfa_method          (type: webauthn|totp|recovery, public key / 
 user ───< identity            (provider: local|oidc, issuer, subject, email_at_link, linked_at)
 user ───< session             (opaque id hash, user agent, ip, created, last_seen, expires, mfa_verified)
 user ───< api_token           (hashed token, scopes[], name, expires, last_used)
+household ──< ai_client       (name, tier 0|1|2, transport, pseudonym_salt, rounding,
+                               date_coarsening, model_endpoint?, token_id, revoked_at)
+ai_client ──< ai_call         (tool, params JSONB, response JSONB (redacted), bytes, created)
 household ──< account_grant   (member -> account visibility: none|view|edit)
 ```
 

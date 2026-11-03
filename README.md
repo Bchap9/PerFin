@@ -14,8 +14,12 @@ email, and PerFin works out what it is looking at and files it away.
 ## Goals
 
 - **Own your data.** Everything runs on hardware you control. No telemetry, no
-  third-party sync required. Optional integrations (price feeds, LLM providers)
-  are off by default and clearly labelled when they send data off-host.
+  third-party sync, and no model calls inside the app: files, account numbers
+  and personal details have no code path off the premises.
+- **AI help without exposure.** An optional read-only MCP server gives an
+  assistant de-identified, aggregated views (spending by category, savings
+  rate, net worth trend) under a tier policy you preview before enabling.
+  On-prem models can be granted more detail; hosted ones cannot.
 - **Security as a feature, not a layer.** Threat-modelled from day one. Argon2id
   passwords, WebAuthn/TOTP MFA, OIDC via Authentik, encrypted document storage,
   sandboxed parsing of untrusted files, strict CSP, hardened containers.
@@ -41,6 +45,7 @@ email, and PerFin works out what it is looking at and files it away.
 | [docs/INGESTION.md](docs/INGESTION.md) | Upload, drop-folder and email pipelines; classification, parsing, review queue |
 | [docs/AUTH.md](docs/AUTH.md) | Local login, MFA, sessions, OIDC with Authentik, authorisation model |
 | [docs/SECURITY.md](docs/SECURITY.md) | Threat model, identified vulnerabilities and the controls that address them |
+| [docs/AI_ACCESS.md](docs/AI_ACCESS.md) | MCP server, data tiers, redaction, on-prem model policy |
 | [docs/API.md](docs/API.md) | API conventions and the first-cut endpoint surface |
 | [docs/REPO_STRUCTURE.md](docs/REPO_STRUCTURE.md) | What lives where in this repository |
 | [docs/ROADMAP.md](docs/ROADMAP.md) | Phased delivery plan with milestones |

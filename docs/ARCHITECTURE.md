@@ -38,7 +38,11 @@ API.
              │  - snapshots, schedules, notifications       │
              └──────────────────────────────────────────────┘
                          ▲
-        Drop folder ─────┘ (read-only bind mount into worker; worker moves
+
+   AI client (MCP host) ─▶ perfin-mcp (optional role, API token only,
+                           tiered + redacted, read-only) ─▶ perfin-api
+
+        Drop folder ────── (read-only bind mount into worker; worker moves
         (host path)        processed files into the encrypted store)
 
    Authentik (OIDC) ◀──── browser redirects + back-channel token exchange from API
@@ -68,6 +72,13 @@ FastAPI application. Stateless apart from the DB. Serves the compiled SPA from
 - Server-sent events endpoint for live updates (job progress, new review items,
   balance changes). Clients use TanStack Query and invalidate on events.
 - Audit log writes.
+
+### perfin-mcp (optional)
+Same image, entrypoint `perfin mcp`. Speaks the Model Context Protocol over
+stdio or streamable HTTP and holds exactly one scoped read-only API token. It
+has no database credentials, no master key and no document mount. Every
+response passes through the tier policy and the redaction layer before it
+reaches the assistant. Details in AI_ACCESS.md.
 
 ### perfin-worker
 Same image, different entrypoint, stricter container settings (see
@@ -112,10 +123,9 @@ static assets served by the API with a strict CSP (no inline scripts, hashed
 styles).
 
 ### Optional integrations (all off by default)
-- **LLM provider** for classification/extraction fallback: local (Ollama,
-  llama.cpp server) or remote API. Treated as an untrusted oracle: it receives
-  redacted text, returns constrained JSON validated against a schema, and never
-  has tool access. See ADR-0004.
+- **MCP server** (`perfin mcp` role): a read-only, tiered, de-identified
+  window for AI assistants. PerFin never calls a model itself. See
+  AI_ACCESS.md and ADR-0007.
 - **Price feeds** for securities and FX.
 - **Notification channels**: SMTP, webhooks, ntfy, Gotify, Matrix.
 - **Antivirus**: ClamAV sidecar scanning quarantined files before parsing.
@@ -186,7 +196,7 @@ alive) and `/readyz` (DB reachable, migrations current).
 ## Deployment topology
 
 Default: a single host running Compose with `proxy`, `api`, `worker`, `db`,
-and optional `clamav`, `ollama`. The worker has `network_mode` restricted to
+and optional `clamav`, `mcp`. The worker has `network_mode` restricted to
 the internal network plus an egress allowlist implemented with a small
 forward-proxy sidecar when IMAP or price feeds are enabled. Volumes: `pgdata`,
 `documents` (encrypted blobs), `quarantine`, and the user-supplied drop folder

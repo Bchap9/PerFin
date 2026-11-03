@@ -93,8 +93,7 @@ Goal: scanned documents, receipts, email intake.
 - [ ] Email intake: IMAPS poller, alias token, sender policy, SPF/DKIM check,
       rejected digest, `.eml` provenance, attachment expansion
 - [ ] Full-text search over extracted text
-- [ ] Optional LLM fallback with redaction, JSON-schema output, capped
-      confidence, audit of every call; Ollama documented first
+- [ ] Column-mapping editor in review that produces reusable fingerprints
 - [ ] Heuristic classifier trained on synthetic + contributed samples
 
 ## Phase 5: Investments, loans, net worth (v0.5)
@@ -117,6 +116,25 @@ Goal: scanned documents, receipts, email intake.
 - [ ] Accountant export: originals zip + summary CSV/PDF
 - [ ] Reminders as the year closes ("3 expected documents still missing")
 
+## Phase 6b: AI access boundary (v0.7)
+
+Goal: an assistant can analyse spending and savings without any identifier,
+document or personal detail leaving the premises. See AI_ACCESS.md.
+
+- [ ] `ai:read:tier{0,1,2}` token scopes with server-side tier enforcement and
+      a response redaction layer in the API
+- [ ] Redaction denylist corpus (account number formats, emails, member names,
+      raw payee strings) as a CI gate
+- [ ] `perfin mcp` role: stdio and streamable HTTP transports, Tier 0 and
+      Tier 1 tools, rate limits, full-response audit log
+- [ ] Client management UI: create with step-up MFA, exposure preview,
+      rounding and date-coarsening options, revoke, kill switch, "AI access"
+      audit page
+- [ ] Tier 2 gating on private model endpoint check, with the honest caveat
+      in the UI
+- [ ] Setup guides for Claude Desktop and Claude Code as MCP hosts, and for an
+      on-prem Ollama/llama.cpp client
+
 ## Phase 7: Polish and 1.0
 
 - [ ] Notification channels: SMTP, webhook, ntfy, Gotify, Matrix
@@ -131,6 +149,8 @@ Goal: scanned documents, receipts, email intake.
 
 ## Later / ideas parking lot
 
+- Optional in-app assistant backed only by an on-prem endpoint, reusing the
+  MCP tier policy internally (never hosted providers)
 - Bank sync plugin interface (open banking, Plaid-compatible shim) with the
   same review-queue semantics as documents
 - Multi-household instances for families with separate finances

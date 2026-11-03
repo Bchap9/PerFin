@@ -44,17 +44,19 @@ PerFin/
 │   │   │   ├── intake/         upload, dropfolder, email
 │   │   │   ├── sandbox/        subprocess runner, rlimits, seccomp
 │   │   │   ├── extract/        pdf, image/ocr, csv, ofx, qif, xlsx, eml
-│   │   │   ├── classify/       fingerprints (yaml), heuristic model, llm fallback
+│   │   │   ├── classify/       fingerprints (yaml), heuristic model, column-mapping
 │   │   │   ├── parsers/        per-kind and per-institution parsers + fixtures
 │   │   │   ├── match/          dedupe, transfers, receipt linking
 │   │   │   └── pipeline.py     stage orchestration
-│   │   ├── integrations/       prices, fx, llm providers, notifications, antivirus
+│   │   ├── integrations/       prices, fx, notifications, antivirus
+│   │   ├── mcp/                MCP server role: tools, tier policy, redaction, transports
 │   │   ├── workers/            job handlers, scheduler, watcher processes
 │   │   └── api/                routers per domain, SSE, schemas
 │   └── tests/
 │       ├── unit/
 │       ├── integration/        against a real Postgres (testcontainers)
-│       ├── security/           authz matrix, csrf, oidc negatives, upload fuzz corpus
+│       ├── security/           authz matrix, csrf, oidc negatives, upload fuzz corpus,
+│       │                       redaction denylist corpus for ai:* scopes
 │       └── fixtures/           synthetic statements only
 ├── frontend/
 │   ├── package.json

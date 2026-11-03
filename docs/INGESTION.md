@@ -73,8 +73,10 @@ Order of attempts, each producing a confidence score:
 2. **Heuristic classifier.** Small gradient-boosted or logistic model over
    token features; trained offline on synthetic and contributed samples; runs
    locally with no network.
-3. **LLM fallback (opt-in).** Redacted text is sent with a strict JSON schema
-   for the expected output. See "LLM safety" below.
+3. **Column-mapping review.** No model is consulted. If neither stage reaches
+   threshold, the document goes to review with its extracted tables and a
+   mapping editor; saving the mapping creates a fingerprint so the next
+   statement from that layout is automatic.
 
 Output: `kind`, `institution_id?`, `account_id?` (matched by last-4 and
 institution), `period_start`, `period_end`, `tax_year?`, and per-field
@@ -171,26 +173,18 @@ the alternatives considered. Resolutions feed back:
 - HTML bodies are converted to text; remote images and scripts are never
   fetched. Inline `cid:` images are extracted as attachments.
 
-## LLM safety
+## No models in the pipeline
 
-When the optional LLM fallback is enabled:
+PerFin does not call a language model at any stage of ingestion, local or
+hosted (ADR-0007). Document text, account numbers and personal details have no
+code path off the host. The cost is that a never-seen statement layout needs a
+person once, through the column-mapping editor; the benefit is that the
+pipeline is deterministic, reproducible and auditable, and a crafted document
+cannot talk its way into the ledger.
 
-- Only runs after deterministic and heuristic stages fail to reach threshold.
-- Input is **redacted** before sending: account numbers masked to last 4, names
-  optionally pseudonymised, and the text truncated to the relevant region.
-- The prompt is fixed and versioned; document text is placed in a clearly
-  delimited data block. The model is instructed that the block is data, but the
-  design does not rely on that instruction.
-- Output must validate against a JSON Schema; anything else is discarded.
-  Returned values are treated as **suggestions with capped confidence** (never
-  above the review threshold on first sight), so a prompt injection embedded in
-  a statement can at most produce a wrong suggestion that lands in review.
-- The model has no tools, no network access through PerFin, and no ability to
-  trigger actions. Its only output channel is the validated JSON.
-- Local providers (Ollama) are preferred and documented first. A remote
-  provider shows a persistent banner in settings stating what is sent.
-- Every LLM call is logged (provider, model, token counts, document id) in the
-  audit log so the user can see exactly what left the host.
+The heuristic classifier is a small local model trained offline on synthetic
+and contributed samples; it never makes network calls and ships as a versioned
+artefact in the image.
 
 ## Parser contribution model
 

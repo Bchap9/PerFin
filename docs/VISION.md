@@ -79,6 +79,12 @@ minutes a month rather than hours.
 - Deductible-expense tagging on transactions with yearly roll-up.
 - Export: zip of originals plus a summary CSV/PDF for an accountant.
 
+### AI access (see docs/AI_ACCESS.md)
+- Read-only MCP server exposing aggregates and pseudonymised detail by tier.
+- No account numbers, documents, extracted text or member identities at any
+  tier. Exposure preview, per-call audit, revocation, kill switch.
+- On-prem models can be granted a wider tier; hosted ones cannot.
+
 ### Platform
 - Dashboard with configurable widgets.
 - Notifications: in-app, email, webhook, ntfy/Gotify/Matrix adapters later.
@@ -102,8 +108,11 @@ minutes a month rather than hours.
    hostile until validated. Parsing happens in a sandbox.
 2. **Confidence or review.** Automation never silently writes low-confidence
    data. It writes to the review queue.
-3. **Off-host is opt-in.** Nothing leaves the server unless the user turned on a
-   specific integration and can see what it sends.
+3. **Personal data never leaves the premises.** PerFin contains no model
+   client. AI assistants see only de-identified, aggregated data through the
+   MCP server, at a tier the owner chose after previewing exactly what it
+   returns. Price feeds and similar integrations are opt-in and send nothing
+   personal.
 4. **Boring where it counts.** Postgres, session cookies, well-known libraries.
    Novelty goes into the ingestion smarts, not the security plumbing.
 5. **Everything exportable.** If PerFin disappears tomorrow, the data walks out

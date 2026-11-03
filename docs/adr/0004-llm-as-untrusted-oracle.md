@@ -1,6 +1,9 @@
 # ADR-0004: The LLM is an optional, untrusted, constrained fallback
 
-Status: Accepted. Date: 2026-11-03.
+Status: **Superseded by ADR-0007** (2026-11-03). Kept for the record; the
+in-app LLM fallback described here will not be built.
+
+Original status: Accepted. Date: 2026-11-03.
 
 ## Context
 Large language models are very good at reading messy statements and receipts,
