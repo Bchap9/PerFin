@@ -1,22 +1,200 @@
-# Phase 0 placeholder for supply-chain and secret scanning.
+# SPDX-License-Identifier: AGPL-3.0-or-later
+#
+# Supply-chain and secret scanning (SECURITY.md H4, H5, F10).
+#
+# Runs on every change and weekly, so a newly published CVE in a locked
+# dependency or in the base image fails the build even when no code changed;
+# the weekly run also rebuilds the image from fresh base layers.
+#
+# Third-party actions are pinned to full commit SHAs (tag in the trailing
+# comment). Scanner binaries are downloaded at a pinned version and verified
+# against a SHA-256 recorded here, not taken from a "latest" URL.
 name: security
+
 on:
   push:
-    branches: [main]
+    branches: [main, 'claude/**']
   pull_request:
   schedule:
-    - cron: "17 4 * * 1"
+    - cron: "17 4 * * 1" # Mondays 04:17 UTC
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: security-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  UV_VERSION: "0.11.32"
+  NODE_VERSION: "22"
+  PYTHON_VERSION: "3.12"
+  GITLEAKS_VERSION: "8.30.1"
+  GITLEAKS_SHA256: "551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb"
+  TRIVY_VERSION: "0.76.1"
+  TRIVY_SHA256: "c7cbe3137fb8a48a17574bede3dd6beb16742d1e9772929940fc90082c39d9c0"
+  SEMGREP_VERSION: "1.183.0"
+
 jobs:
-  secrets:
-    runs-on: ubuntu-latest
+  gitleaks:
+    name: Secrets in git history (gitleaks)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v4
-        with: { fetch-depth: 0 }
-      - name: Placeholder
-        run: echo "gitleaks detect goes here"
-  dependencies:
-    runs-on: ubuntu-latest
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Install gitleaks ${{ env.GITLEAKS_VERSION }}
+        run: |
+          curl -sSfL -o "$RUNNER_TEMP/gitleaks.tgz" \
+            "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz"
+          echo "${GITLEAKS_SHA256}  $RUNNER_TEMP/gitleaks.tgz" | sha256sum --check --strict
+          tar -xzf "$RUNNER_TEMP/gitleaks.tgz" -C "$RUNNER_TEMP" gitleaks
+      - name: Scan every commit
+        run: |
+          "$RUNNER_TEMP/gitleaks" git --config .gitleaks.toml --redact --no-banner --verbose .
+      - name: Scan the working tree
+        run: |
+          "$RUNNER_TEMP/gitleaks" dir --config .gitleaks.toml --redact --no-banner .
+
+  pip-audit:
+    name: Python dependencies (pip-audit)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    defaults:
+      run:
+        working-directory: backend
     steps:
-      - uses: actions/checkout@v4
-      - name: Placeholder
-        run: echo "pip-audit, npm audit, trivy fs, lockfile hash verification go here"
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+      - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
+        with:
+          version: ${{ env.UV_VERSION }}
+          enable-cache: false
+      - name: Audit the locked environment
+        run: |
+          uv sync --frozen
+          uv run pip-audit --progress-spinner off
+
+  npm-audit:
+    name: Node dependencies (npm audit)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+      - name: Audit package-lock.json
+        run: |
+          npm ci --ignore-scripts
+          npm audit --audit-level=high
+
+  trivy-fs:
+    name: Repository scan (trivy fs)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install trivy ${{ env.TRIVY_VERSION }}
+        run: |
+          curl -sSfL -o "$RUNNER_TEMP/trivy.tgz" \
+            "https://github.com/aquasecurity/trivy/releases/download/v${TRIVY_VERSION}/trivy_${TRIVY_VERSION}_Linux-64bit.tar.gz"
+          echo "${TRIVY_SHA256}  $RUNNER_TEMP/trivy.tgz" | sha256sum --check --strict
+          tar -xzf "$RUNNER_TEMP/trivy.tgz" -C "$RUNNER_TEMP" trivy
+      - name: Vulnerabilities, secrets and Dockerfile misconfigurations
+        run: >-
+          "$RUNNER_TEMP/trivy" fs
+          --scanners vuln,secret,misconfig
+          --severity HIGH,CRITICAL
+          --ignore-unfixed
+          --exit-code 1
+          --skip-dirs frontend/node_modules
+          --skip-dirs backend/.venv
+          .
+
+  image:
+    name: Image build and scan (trivy image, SBOM)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install trivy ${{ env.TRIVY_VERSION }}
+        run: |
+          curl -sSfL -o "$RUNNER_TEMP/trivy.tgz" \
+            "https://github.com/aquasecurity/trivy/releases/download/v${TRIVY_VERSION}/trivy_${TRIVY_VERSION}_Linux-64bit.tar.gz"
+          echo "${TRIVY_SHA256}  $RUNNER_TEMP/trivy.tgz" | sha256sum --check --strict
+          tar -xzf "$RUNNER_TEMP/trivy.tgz" -C "$RUNNER_TEMP" trivy
+      - name: Build images from fresh base layers
+        run: |
+          docker build --pull --no-cache -f deploy/Dockerfile -t perfin:scan .
+          docker build --pull --no-cache -t perfin-egress:scan deploy/egress
+      - name: Scan application image (fail on fixable HIGH/CRITICAL)
+        run: >-
+          "$RUNNER_TEMP/trivy" image
+          --scanners vuln,secret
+          --severity HIGH,CRITICAL
+          --ignore-unfixed
+          --exit-code 1
+          perfin:scan
+      - name: Scan egress image (fail on fixable HIGH/CRITICAL)
+        run: >-
+          "$RUNNER_TEMP/trivy" image
+          --scanners vuln,secret
+          --severity HIGH,CRITICAL
+          --ignore-unfixed
+          --exit-code 1
+          perfin-egress:scan
+      - name: SBOM (CycloneDX)
+        if: always()
+        run: |
+          "$RUNNER_TEMP/trivy" image --format cyclonedx --output sbom-perfin.cdx.json perfin:scan
+          "$RUNNER_TEMP/trivy" image --format cyclonedx --output sbom-perfin-egress.cdx.json perfin-egress:scan
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: always()
+        with:
+          name: sbom
+          path: sbom-*.cdx.json
+          if-no-files-found: ignore
+          retention-days: 30
+
+  semgrep:
+    name: Semgrep (p/python, p/typescript) - advisory
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    # Advisory until the registry rule sets have been baselined against the
+    # codebase; Ruff (S rules), Bandit and the ESLint security plugins are
+    # the blocking SAST gates.
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
+        with:
+          version: ${{ env.UV_VERSION }}
+          enable-cache: false
+      - name: semgrep scan
+        env:
+          SEMGREP_SEND_METRICS: "off"
+        run: >-
+          uvx --python 3.12 "semgrep==${SEMGREP_VERSION}" scan
+          --config p/python --config p/typescript
+          --exclude frontend/src/lib/api/schema.d.ts
+          --metrics off --error
+          backend/app frontend/src deploy/egress scripts

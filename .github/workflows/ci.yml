@@ -1,19 +1,221 @@
-# Phase 0 placeholder. Fills in as backend/ and frontend/ gain code.
+# SPDX-License-Identifier: AGPL-3.0-or-later
+#
+# Quality gates: every job must pass before merge (DEVELOPMENT.md "Toolchain").
+#
+# Third-party actions are pinned to full commit SHAs (the tag each SHA was
+# resolved from is in the trailing comment); Dependabot keeps them current.
 name: ci
+
 on:
   push:
-    branches: [main]
+    branches: [main, 'claude/**']
   pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  UV_VERSION: "0.11.32"
+  NODE_VERSION: "22"
+  PYTHON_VERSION: "3.12"
+  # uv must never resolve: CI installs exactly what uv.lock says.
+  UV_FROZEN: "1"
+  UV_PYTHON_DOWNLOADS: never
+
 jobs:
+  spdx:
+    name: SPDX headers
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+      - name: Check licence headers
+        run: python scripts/check_spdx.py
+
+  lockfiles:
+    name: Lockfile integrity (F10)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
+        with:
+          version: ${{ env.UV_VERSION }}
+          enable-cache: false
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+      - name: uv.lock matches pyproject.toml
+        working-directory: backend
+        env:
+          UV_FROZEN: ""
+        run: uv lock --check
+      - name: Every locked package is hash-pinned and comes from the public registries
+        run: |
+          python - <<'EOF'
+          import json, sys, tomllib
+
+          problems = []
+          lock = tomllib.load(open("backend/uv.lock", "rb"))
+          for pkg in lock["package"]:
+              source = pkg.get("source", {})
+              if source.get("editable") == "." or source.get("virtual") == ".":
+                  continue  # the project itself
+              if source.get("registry") != "https://pypi.org/simple":
+                  problems.append(f"uv.lock: {pkg['name']} from {source}")
+              artifacts = pkg.get("wheels", []) + ([pkg["sdist"]] if "sdist" in pkg else [])
+              if not artifacts or any(not a.get("hash", "").startswith("sha256:") for a in artifacts):
+                  problems.append(f"uv.lock: {pkg['name']} lacks sha256 hashes")
+
+          npm = json.load(open("frontend/package-lock.json"))
+          if npm.get("lockfileVersion", 0) < 3:
+              problems.append("package-lock.json: lockfileVersion must be 3")
+          for path, meta in npm.get("packages", {}).items():
+              if not path or meta.get("link"):
+                  continue
+              resolved = meta.get("resolved", "")
+              if not resolved.startswith("https://registry.npmjs.org/"):
+                  problems.append(f"package-lock.json: {path} resolved from {resolved!r}")
+              if not meta.get("integrity", "").startswith("sha512-"):
+                  problems.append(f"package-lock.json: {path} lacks a sha512 integrity hash")
+
+          print("\n".join(problems) or "lockfiles OK")
+          sys.exit(1 if problems else 0)
+          EOF
+
   backend:
-    runs-on: ubuntu-latest
+    name: Backend (ruff, mypy, bandit, pytest)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_PASSWORD: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+    env:
+      PERFIN_TEST_DATABASE_URL: postgresql+psycopg://postgres:postgres@localhost:5432/postgres
+    defaults:
+      run:
+        working-directory: backend
     steps:
-      - uses: actions/checkout@v4
-      - name: Placeholder
-        run: echo "ruff, mypy --strict, pytest (unit + security matrix) go here"
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+      - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
+        with:
+          version: ${{ env.UV_VERSION }}
+          enable-cache: true
+          cache-dependency-glob: backend/uv.lock
+      - name: Install locked dependencies
+        run: uv sync --frozen
+      - name: Ruff lint
+        run: |
+          uv run ruff check .
+          uv run ruff check --config pyproject.toml ../scripts ../deploy/egress
+      - name: Ruff format
+        run: |
+          uv run ruff format --check .
+          uv run ruff format --check --config pyproject.toml ../scripts ../deploy/egress
+      - name: mypy --strict
+        run: |
+          uv run mypy
+          uv run mypy --strict ../scripts/check_spdx.py ../deploy/egress/egress_proxy.py
+      - name: Bandit
+        run: uv run bandit -q -c pyproject.toml -r app ../scripts ../deploy/egress
+      - name: pytest (unit, integration, security)
+        run: uv run pytest
+      - name: OpenAPI schema is up to date
+        run: |
+          uv run perfin openapi > "$RUNNER_TEMP/openapi.json"
+          diff -u openapi.json "$RUNNER_TEMP/openapi.json" \
+            || { echo "::error::backend/openapi.json is stale; run 'make openapi'"; exit 1; }
+
   frontend:
-    runs-on: ubuntu-latest
+    name: Frontend (eslint, tsc, vitest, build)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: frontend
     steps:
-      - uses: actions/checkout@v4
-      - name: Placeholder
-        run: echo "eslint, tsc --strict, vitest go here"
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      # `npm ci` fails if package-lock.json does not match package.json (F10).
+      - name: Install locked dependencies
+        run: npm ci --ignore-scripts
+      - name: ESLint
+        run: npm run lint
+      - name: Type check
+        run: npm run typecheck
+      - name: Vitest
+        run: npm test
+      - name: Production build
+        run: npm run build
+      - name: Generated API types match backend/openapi.json
+        run: |
+          npm run gen:api
+          git diff --exit-code -- src/lib/api/schema.d.ts \
+            || { echo "::error::frontend/src/lib/api/schema.d.ts is stale; run 'make openapi'"; exit 1; }
+
+  deploy:
+    name: Deployment files (compose, Caddyfile, image build)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: docker compose config (every profile)
+        working-directory: deploy
+        run: |
+          cp .env.example .env
+          docker compose --profile av --profile mcp --profile egress config --quiet
+          rm .env
+      - name: Caddyfile validates and is formatted
+        working-directory: deploy
+        run: |
+          docker run --rm -v "$PWD/Caddyfile.example:/etc/caddy/Caddyfile:ro" caddy:2 \
+            sh -c 'caddy validate --config /etc/caddy/Caddyfile --adapter caddyfile \
+                   && caddy fmt /etc/caddy/Caddyfile > /tmp/fmt && diff -u /etc/caddy/Caddyfile /tmp/fmt'
+      - name: Egress allowlist parses
+        run: |
+          EGRESS_ALLOWLIST=deploy/egress-allowlist.txt python3 -I deploy/egress/egress_proxy.py check
+      - name: Build application image
+        run: docker build -f deploy/Dockerfile -t perfin:ci .
+      - name: Image runs as UID 10001 on a read-only root filesystem
+        run: |
+          test "$(docker image inspect perfin:ci --format '{{.Config.User}}')" = "10001:10001"
+          docker run --rm --read-only --cap-drop ALL --security-opt no-new-privileges:true \
+            --tmpfs /tmp perfin:ci --help > /dev/null
+          docker run --rm --read-only --cap-drop ALL --security-opt no-new-privileges:true \
+            --tmpfs /tmp --entrypoint tesseract perfin:ci --version
+      - name: Build egress image
+        run: docker build -t perfin-egress:ci deploy/egress

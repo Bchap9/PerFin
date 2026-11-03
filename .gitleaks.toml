@@ -1,0 +1,28 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# gitleaks configuration (SECURITY.md H5). Run in CI by
+# .github/workflows/security.yml and locally with
+#   gitleaks git --redact .      (history)   gitleaks dir --redact .   (tree)
+#
+# The default rule set applies in full. The only exceptions are files whose
+# purpose is to contain synthetic, secret-shaped strings: the log-scrubbing
+# leak corpus must look like real tokens to prove they are redacted. Add a
+# path here only for such a corpus, never to silence a real finding.
+
+[extend]
+useDefault = true
+
+[[allowlists]]
+description = "Synthetic leak corpora for the PII/secret scrubbers (never real secrets)"
+paths = [
+  '''^backend/tests/unit/test_logging\.py$''',
+  '''^backend/tests/security/corpus/''',
+]
+
+[[allowlists]]
+description = "Build and cache output (gitignored; never committed)"
+paths = [
+  '''(^|/)__pycache__/''',
+  '''(^|/)node_modules/''',
+  '''(^|/)\.venv/''',
+  '''^frontend/dist/''',
+]
