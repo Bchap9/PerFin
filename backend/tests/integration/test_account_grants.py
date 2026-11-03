@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""Account grants service (data model only until accounts arrive in Phase 2).
+"""Account grants service.
 
 Runs the service functions in the rolled-back ``db`` fixture with a real RLS
 context, then checks ``app.auth.authz.account_access`` sees what was granted.
@@ -24,6 +24,7 @@ from app.domain.households.service import (
     set_account_grant,
 )
 from tests.fixtures.factories import UserRecord, add_member, make_household, make_user
+from tests.fixtures.ledger import make_account
 
 pytestmark = pytest.mark.integration
 
@@ -46,7 +47,8 @@ def _slug(exc: pytest.ExceptionInfo[ProblemError]) -> tuple[int, str]:
 def test_owner_grants_and_revokes(db: Session) -> None:
     owner = make_user(db, role="owner")
     member = make_user(db, role="member", household=owner.household)
-    account = uuid.uuid4()
+    assert owner.household_id is not None
+    account = make_account(db, owner.household_id).id
     p = _principal(db, owner)
     grant = set_account_grant(db, p, member.id, account, GrantLevel.VIEW)
     assert (grant.user_id, grant.account_id, grant.level) == (member.id, account, GrantLevel.VIEW)
@@ -83,7 +85,8 @@ def test_owner_grants_and_revokes(db: Session) -> None:
 def test_setting_the_same_level_again_is_not_audited(db: Session) -> None:
     admin = make_user(db, role="admin")
     member = make_user(db, role="member", household=admin.household)
-    account = uuid.uuid4()
+    assert admin.household_id is not None
+    account = make_account(db, admin.household_id).id
     p = _principal(db, admin)
     set_account_grant(db, p, member.id, account, GrantLevel.VIEW)
     set_account_grant(db, p, member.id, account, GrantLevel.VIEW)
@@ -102,7 +105,9 @@ def test_viewers_get_view_at_most(db: Session) -> None:
     with pytest.raises(ProblemError) as caught:
         set_account_grant(db, p, viewer.id, uuid.uuid4(), GrantLevel.EDIT)
     assert _slug(caught) == (422, "grant-level-not-allowed")
-    set_account_grant(db, p, viewer.id, uuid.uuid4(), GrantLevel.VIEW)
+    assert owner.household_id is not None
+    account = make_account(db, owner.household_id).id
+    set_account_grant(db, _principal(db, owner), viewer.id, account, GrantLevel.VIEW)
 
 
 @pytest.mark.parametrize("role", ["owner", "admin"])
@@ -130,9 +135,11 @@ def test_members_list_only_their_own_grants(db: Session) -> None:
     owner = make_user(db, role="owner")
     alice = make_user(db, role="member", household=owner.household)
     bob = make_user(db, role="member", household=owner.household)
+    assert owner.household_id is not None
+    first, second = (make_account(db, owner.household_id).id for _ in range(2))
     p = _principal(db, owner)
-    set_account_grant(db, p, alice.id, uuid.uuid4(), GrantLevel.VIEW)
-    set_account_grant(db, p, bob.id, uuid.uuid4(), GrantLevel.EDIT)
+    set_account_grant(db, p, alice.id, first, GrantLevel.VIEW)
+    set_account_grant(db, p, bob.id, second, GrantLevel.EDIT)
     assert len(list_account_grants(db, _principal(db, owner))) == 2
     as_alice = _principal(db, alice)
     assert [g.user_id for g in list_account_grants(db, as_alice)] == [alice.id]
@@ -154,7 +161,8 @@ def test_grants_stay_in_their_household(db: Session) -> None:
     member = make_user(db, role="member", household=owner.household)
     other_household = make_household(db)
     other_owner = make_user(db, role="owner", household=other_household)
-    account = uuid.uuid4()
+    assert owner.household_id is not None
+    account = make_account(db, owner.household_id).id
     set_account_grant(db, _principal(db, owner), member.id, account, GrantLevel.EDIT)
     assert list_account_grants(db, _principal(db, other_owner)) == []
     # The member's grant does not count when acting in another household.
@@ -167,3 +175,16 @@ def test_grants_stay_in_their_household(db: Session) -> None:
     )
     apply_rls_context(db, elsewhere)
     assert not account_access(db, elsewhere, account, "view")
+
+
+def test_grant_needs_an_account_of_the_household(db: Session) -> None:
+    """A missing account and another household's account are both 404 (F3)."""
+    owner = make_user(db, role="owner")
+    member = make_user(db, role="member", household=owner.household)
+    other = make_household(db)
+    foreign = make_account(db, other.id).id
+    for account_id in (uuid.uuid4(), foreign):
+        with pytest.raises(ProblemError) as caught:
+            set_account_grant(db, _principal(db, owner), member.id, account_id, GrantLevel.VIEW)
+        assert _slug(caught) == (404, "account-not-found")
+    assert list_account_grants(db, _principal(db, owner)) == []

@@ -136,6 +136,18 @@ class Envelope:
         return cls(key_version, wrap_nonce, wrapped_dek, nonce, raw[offset:])
 
 
+@dataclass(frozen=True)
+class WrappedKey:
+    """A data key wrapped by a master key version (stored next to a streamed blob)."""
+
+    key_version: int
+    wrap_nonce: bytes
+    wrapped_dek: bytes
+
+    def __repr__(self) -> str:
+        return f"WrappedKey(key_version={self.key_version})"
+
+
 class Keyring:
     """Master keys by version; ``current`` is used for new envelopes.
 
@@ -236,6 +248,44 @@ class Keyring:
         # Only the wrap changes: the payload (its nonce and ciphertext) is kept
         # byte for byte, so rotation never re-encrypts blobs (SECURITY.md G4).
         return Envelope(target, wrap_nonce, wrapped, envelope.nonce, envelope.ciphertext)
+
+    # ---- bare data keys (streamed blobs, ADR-0003) -------------------------------
+    def new_data_key(self, *, ad: bytes) -> tuple[bytes, WrappedKey]:
+        """A fresh random DEK and its wrap under the current master key.
+
+        For payloads that are not a single :class:`Envelope` (documents are
+        encrypted as a stream by ``app.domain.documents.blobstore``). The
+        wrap binds ``ad`` and the key version exactly as :meth:`encrypt` does.
+        """
+        dek = secrets.token_bytes(KEY_BYTES)
+        return dek, self.wrap_data_key(dek, ad=ad)
+
+    def wrap_data_key(self, dek: bytes, *, ad: bytes, to_version: int | None = None) -> WrappedKey:
+        if len(dek) != KEY_BYTES:
+            raise CryptoConfigError(f"data keys must be {KEY_BYTES} bytes")
+        version = self.current if to_version is None else to_version
+        wrap_nonce = secrets.token_bytes(NONCE_BYTES)
+        wrapped = bindings.crypto_aead_xchacha20poly1305_ietf_encrypt(
+            bytes(dek), _ad_with_context(_WRAP_CONTEXT, ad, version), wrap_nonce, self._key(version)
+        )
+        return WrappedKey(version, wrap_nonce, wrapped)
+
+    def unwrap_data_key(self, wrapped: WrappedKey, *, ad: bytes) -> bytes:
+        """The DEK of ``wrapped``; any failure raises :class:`DecryptionError`."""
+        if len(wrapped.wrap_nonce) != NONCE_BYTES or len(wrapped.wrapped_dek) != WRAPPED_DEK_BYTES:
+            raise DecryptionError
+        return self.unwrap_dek(
+            Envelope(wrapped.key_version, wrapped.wrap_nonce, wrapped.wrapped_dek, b"", b""),
+            ad=ad,
+        )
+
+    def rewrap_data_key(
+        self, wrapped: WrappedKey, *, ad: bytes, to_version: int | None = None
+    ) -> WrappedKey:
+        """Rotation for a bare data key: same DEK, new wrap (the payload is untouched)."""
+        return self.wrap_data_key(
+            self.unwrap_data_key(wrapped, ad=ad), ad=ad, to_version=to_version
+        )
 
     # ---- byte-level helpers ----------------------------------------------------
     def encrypt_bytes(self, plaintext: bytes, *, ad: bytes) -> bytes:

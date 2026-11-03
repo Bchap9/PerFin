@@ -20,6 +20,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 
 from app.auth.local import PASSWORD_INPUT_MAX
 from app.auth.models import USERNAME_MAX, GrantLevel, HouseholdRole, normalize_username
+from app.core.money import ISO_4217_CURRENCIES as ISO_4217_CURRENCIES  # re-export
 
 NAME_MAX: Final = 200
 EMAIL_MAX: Final = 320
@@ -36,24 +37,6 @@ EMAIL_PATTERN: Final = re.compile(r"^[^@\s]{1,64}@[^@\s]+\.[^@\s]+$")
 # ``en-US``, ``zh-Hant-TW``, ``es-419``).
 LOCALE_PATTERN: Final = re.compile(r"^[a-z]{2,3}(-[A-Z][a-z]{3})?(-([A-Z]{2}|[0-9]{3}))?$")
 TIMEZONE_PATTERN: Final = re.compile(r"^[A-Za-z][A-Za-z0-9_+\-]*(/[A-Za-z0-9_+\-]+){0,2}$")
-
-# Active ISO 4217 currency codes usable as a household's base currency. Fund
-# codes, precious metals, SDR and the testing/"no currency" codes are left
-# out on purpose (BOV, CHE, CHW, CLF, COU, MXV, USN, UYI, UYW, XAG, XAU, XBA,
-# XBB, XBC, XBD, XDR, XPD, XPT, XSU, XTS, XUA, XXX), as are withdrawn codes.
-ISO_4217_CURRENCIES: Final = frozenset(
-    """
-    AED AFN ALL AMD ANG AOA ARS AUD AWG AZN BAM BBD BDT BGN BHD BIF BMD BND BOB
-    BRL BSD BTN BWP BYN BZD CAD CDF CHF CLP CNY COP CRC CUC CUP CVE CZK DJF DKK
-    DOP DZD EGP ERN ETB EUR FJD FKP GBP GEL GHS GIP GMD GNF GTQ GYD HKD HNL HTG
-    HUF IDR ILS INR IQD IRR ISK JMD JOD JPY KES KGS KHR KMF KPW KRW KWD KYD KZT
-    LAK LBP LKR LRD LSL LYD MAD MDL MGA MKD MMK MNT MOP MRU MUR MVR MWK MXN MYR
-    MZN NAD NGN NIO NOK NPR NZD OMR PAB PEN PGK PHP PKR PLN PYG QAR RON RSD RUB
-    RWF SAR SBD SCR SDG SEK SGD SHP SLE SOS SRD SSP STN SVC SYP SZL THB TJS TMT
-    TND TOP TRY TTD TWD TZS UAH UGX USD UYU UZS VED VES VND VUV WST XAF XCD XCG
-    XOF XPF YER ZAR ZMW ZWG
-    """.split()  # noqa: SIM905 - a compact table reads better than 160 lines
-)
 
 Theme = Literal["system", "light", "dark"]
 DEFAULT_LOCALE: Final = "en-US"

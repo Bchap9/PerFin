@@ -4,8 +4,6 @@ ones (``household_member``, ``account_grant``, ``api_token``)."""
 
 from __future__ import annotations
 
-import uuid
-
 import pytest
 from sqlalchemy import Engine, select, text
 from sqlalchemy.exc import DBAPIError, IntegrityError
@@ -31,6 +29,7 @@ from tests.fixtures.factories import (
     make_household,
     make_user,
 )
+from tests.fixtures.ledger import make_account
 
 pytestmark = pytest.mark.integration
 
@@ -152,9 +151,9 @@ def test_grants_isolated_and_self_readable(db: Session) -> None:
     b = make_user(db, role=HouseholdRole.MEMBER)
     assert a.household
     assert b.household
-    account = uuid.uuid4()
+    account = make_account(db, a.household.id).id
     grant_account(db, a.household.id, a.id, account, GrantLevel.VIEW)
-    grant_account(db, b.household.id, b.id, uuid.uuid4(), GrantLevel.EDIT)
+    grant_account(db, b.household.id, b.id, make_account(db, b.household.id).id, GrantLevel.EDIT)
     set_context(db, b.household.id)
     assert db.execute(select(AccountGrant.account_id)).scalars().all() != [account]
     set_context(db, None, a.id)

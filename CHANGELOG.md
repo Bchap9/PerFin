@@ -40,6 +40,25 @@ ships it, checked with `zoneinfo.ZoneInfo("Europe/Berlin")` in that image.)
 
 ### Added
 
+- Ledger core (Phase 2): household-scoped models with forced RLS for
+  `institution`, `account` (every VISION.md type, `manual_asset` kinds,
+  `number_last4` as identity data, `is_asset`, `manual_balance`),
+  `balance_snapshot`, `transaction`, `transaction_split`, `payee`,
+  `category` (tree, kind, tax treatment), `tag`/`transaction_tag`, `rule`,
+  `scheduled_transaction`, `fx_rate`, `budget`/`budget_line`,
+  `goal`/`goal_account`/`goal_contribution`. Every reference between
+  household-scoped tables includes `household_id` (`app.db.types`), so the
+  database refuses cross-household links (F3); a transaction's currency is
+  its account's. `account_grant.account_id` now references `account`.
+- Shared ledger services: account visibility (`app.domain.accounts.visibility`:
+  role plus `account_grant`, `404 account-not-found` for hidden accounts),
+  `import_hash` with documented payee normalisation, the default category
+  set seeded for every new household (setup and `POST /households`), FX
+  conversion to the base currency (latest rate on or before the date,
+  half-even), balances from snapshots and transactions,
+  `app.core.money` (Decimal parsing, half-even rounding, `{amount,
+  currency}` API shapes), test factories in `tests/fixtures/ledger.py`.
+
 - Licence: GNU AGPL-3.0-or-later (`LICENSE`), SPDX header on every source
   file enforced by `scripts/check_spdx.py`.
 - Backend scaffold: `perfin` package (`app`), hash-locked `uv.lock` with the

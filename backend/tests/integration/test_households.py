@@ -37,6 +37,7 @@ from tests.fixtures.households import (
     instance_audit,
     problem_type,
 )
+from tests.fixtures.ledger import LedgerFactories
 
 pytestmark = pytest.mark.integration
 
@@ -417,7 +418,7 @@ def test_remove_member_cleans_up(actors: Actors, factories: Factories) -> None:
     household_id = owner.record.household_id
     assert household_id is not None
     target = actors.new(role="member", household=owner.record.household)
-    account_id = uuid.uuid4()
+    account_id = LedgerFactories(factories.session_factory).account(household_id).id
     factories.grant(household_id, target.user.id, account_id, GrantLevel.EDIT)
     raw = factories.token(target.record)
     response = owner.delete(f"{API}/households/{household_id}/members/{target.user.id}")

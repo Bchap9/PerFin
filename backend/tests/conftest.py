@@ -12,7 +12,8 @@
 Fixtures: ``settings``, ``admin_engine``, ``owner_engine``, ``app_engine``,
 ``db``, ``client``, and the identity factories ``factories``,
 ``make_household``, ``make_user``, ``login_as``, ``bearer_token`` and
-``authed_client`` (``tests/fixtures/factories.py``).
+``authed_client`` (``tests/fixtures/factories.py``), and ``ledger``
+(committing ledger builders, ``tests/fixtures/ledger.py``).
 """
 
 from __future__ import annotations
@@ -41,6 +42,7 @@ from app.db.rls import schema_ddl
 from app.db.session import make_app_engine, make_engine, make_sessionmaker
 from app.main import create_app
 from tests.fixtures.factories import AuthedClient, Factories, LoggedIn, UserRecord
+from tests.fixtures.ledger import LedgerFactories
 
 DEFAULT_ADMIN_URL = "postgresql+psycopg://postgres:postgres@localhost:5432/postgres"
 
@@ -270,3 +272,14 @@ def authed_client(client: TestClient, factories: Factories) -> Callable[..., Aut
         return AuthedClient(client, record, factories.login(client, record))
 
     return build
+
+
+# ---------------------------------------------------------------------------
+# Ledger factories (Phase 2; tests/fixtures/ledger.py)
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+def ledger(factories: Factories) -> LedgerFactories:
+    """Committing ledger builders: ``ledger.account(household_id, type=...)``, ..."""
+    return LedgerFactories(factories.session_factory)

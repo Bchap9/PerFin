@@ -54,6 +54,7 @@ from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db.base import Base, HouseholdScoped, Timestamps, UUIDPk
 from app.db.rls import CTX_USER, EXTRA_POLICIES, Policy
+from app.db.types import household_fk
 
 USERNAME_MAX = 64
 USER_AGENT_MAX = 512
@@ -331,8 +332,9 @@ class HouseholdMember(UUIDPk, Timestamps, HouseholdScoped, Base):
 class AccountGrant(UUIDPk, Timestamps, HouseholdScoped, Base):
     """Which accounts a member or viewer may see or edit.
 
-    ``account_id`` is a plain UUID until the ``account`` table arrives in
-    Phase 2, which adds the foreign key (TODO in DATA_MODEL.md).
+    ``(household_id, account_id)`` references ``account(household_id, id)``
+    (``ON DELETE CASCADE``; ``app.db.types.household_fk``), so a grant can
+    only name an account of its own household and goes with the account.
     """
 
     __tablename__ = "account_grant"
@@ -340,6 +342,7 @@ class AccountGrant(UUIDPk, Timestamps, HouseholdScoped, Base):
         UniqueConstraint(
             "household_id", "user_id", "account_id", name="uq_account_grant_member_account"
         ),
+        household_fk("account_grant", "account_id", "account"),
     )
 
     user_id: Mapped[uuid.UUID] = mapped_column(
@@ -348,8 +351,7 @@ class AccountGrant(UUIDPk, Timestamps, HouseholdScoped, Base):
         nullable=False,
         index=True,
     )
-    # TODO(phase 2): ForeignKey("account.id", ondelete="CASCADE").
-    account_id: Mapped[uuid.UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
+    account_id: Mapped[uuid.UUID] = mapped_column(Uuid(as_uuid=True), nullable=False, index=True)
     level: Mapped[GrantLevel] = mapped_column(_pg_enum(GrantLevel, "grant_level"), nullable=False)
 
 
@@ -417,3 +419,8 @@ EXTRA_POLICIES["api_token"] = [
     Policy("token_self_read", "SELECT", using=_OWN_ROWS),
     Policy("token_prefix_lookup", "SELECT", using=f"prefix = {CTX_LOOKUP_PREFIX}"),
 ]
+
+
+# ``account_grant`` references ``account``: make sure that table is in the
+# metadata wherever these models are used (flush ordering resolves every FK).
+import app.domain.accounts.models  # noqa: E402, F401

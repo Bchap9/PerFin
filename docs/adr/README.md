@@ -13,3 +13,4 @@ superseded ADRs are kept and marked.
 | [0005](0005-server-side-sessions.md) | Server-side sessions, not JWTs, for browser auth | Accepted |
 | [0006](0006-sandboxed-extraction.md) | File content is only ever parsed in a sandboxed worker subprocess | Accepted |
 | [0007](0007-ai-access-via-mcp.md) | No model calls inside PerFin; AI access only through a read-only MCP server that exposes finance, never identity | Accepted |
+| [0008](0008-household-consistent-foreign-keys.md) | Household-consistent foreign keys between household-scoped tables | Accepted |

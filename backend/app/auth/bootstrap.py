@@ -61,6 +61,7 @@ from app.core.settings import Settings
 from app.db.models import Household, Setting, SettingScope
 from app.db.rls import get_context, restore_context, set_context
 from app.db.session import make_app_engine, make_sessionmaker
+from app.domain.transactions.categories import seed_default_categories
 
 log = get_logger("perfin.bootstrap")
 
@@ -365,6 +366,7 @@ def complete_setup(
     db.flush()
     db.add(HouseholdMember(household_id=household_id, user_id=user.id, role=HouseholdRole.OWNER))
     db.flush()
+    seed_default_categories(db, household_id)
     restore_context(db, saved)
     _put_system_setting(
         db,

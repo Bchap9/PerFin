@@ -126,6 +126,18 @@ app/
   `household_id = nullif(current_setting('perfin.household_id', true), '')::uuid`.
   Tables that need extra visibility (membership lookup by user, instance-admin
   audit reads) declare an extra policy predicate in `rls.py`.
+- References between household-scoped tables include `household_id`
+  (ADR-0008, `app.db.types`): the target declares `household_key(table)`,
+  a mandatory parent uses `household_fk(...)`, an optional `SET NULL` lookup
+  keeps its plain `ForeignKey(..., ondelete="SET NULL")` plus
+  `household_ref_fk(...)`. A models module imports the models modules whose
+  tables it references (flush ordering resolves every foreign key). Money
+  columns use `app.db.types.AMOUNT` and `CURRENCY` with `currency_check()`;
+  enums use `pg_enum`.
+- Account-derived data (transactions, balances, budgets spent, goals,
+  reports) is filtered with `app.domain.accounts.visibility`
+  (`visible_account_filter`, `get_visible_account`); a hidden account is
+  `404 account-not-found`.
 - Per-request context is set with
   `set_config('perfin.household_id', :id, true)` (transaction-local) by
   `app.db.rls.set_context`. Code never builds SQL strings; bound parameters
@@ -185,6 +197,15 @@ app/
     functions in `tests/fixtures/factories.py` (`make_user(db, ...)`, ...)
     work inside the rolled-back `db` fixture; the fixtures above commit so a
     `TestClient` app (another connection) sees the rows.
+- Ledger data comes from `tests/fixtures/ledger.py`: flush-only
+  `make_account(db, household_id, type=..., currency=...)`,
+  `make_transaction(db, account, amount=..., posted_date=...)`,
+  `make_category`, `make_payee`, `make_tag`, `make_split`,
+  `make_snapshot`, `make_fx_rate`, `make_rule`, `make_budget`, `make_goal`,
+  `seed_categories(db, household_id)` (households from the identity
+  factories have no categories until this runs), and the committing `ledger`
+  fixture (`ledger.account(household_id, ...)`, `ledger.grant(household_id,
+  user_id, account, level)`, `ledger.run(make_x, ...)`).
 - Tests that drive the login, setup or reset endpoints use
   `tests/fixtures/auth_clients.py`: `browser(app, ip=None)` is a
   `TestClient` on `https://testserver` (so `Secure` cookies round-trip) with

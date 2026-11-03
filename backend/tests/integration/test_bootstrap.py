@@ -32,6 +32,8 @@ from app.core.settings import Settings
 from app.db.models import Setting
 from app.db.rls import set_context
 from app.db.session import make_app_engine, make_engine, make_sessionmaker
+from app.domain.transactions.categories import default_category_keys
+from app.domain.transactions.models import Category
 from app.main import API_PREFIX
 from tests.fixtures.auth_clients import browser, build_app, pre_auth_headers
 from tests.fixtures.fresh_db import FreshDatabase, fresh_database, reset_identity
@@ -182,6 +184,11 @@ def test_setup_creates_the_admin_and_disables_itself(
         set_context(db, None, user.id)
         member = db.execute(select(HouseholdMember)).scalar_one()
         assert member.role is HouseholdRole.OWNER
+        # The first household gets the default category set.
+        set_context(db, member.household_id, user.id)
+        keys = db.execute(select(Category.system_key)).scalars().all()
+        assert sorted(k or "" for k in keys) == sorted(default_category_keys())
+        set_context(db, None, user.id)
         assert (
             db.execute(
                 select(Setting).where(Setting.key == bootstrap.TOKEN_KEY)

@@ -176,6 +176,20 @@ class Settings(BaseSettings):
     dropfolder_after: Literal["move", "delete", "keep"] = "move"
     email_intake_enabled: bool = False
 
+    # ---- Document store and extraction sandbox -----------------------------
+    # Encrypted blobs (ADR-0003): processed documents and the quarantine area
+    # for files not yet processed (separate volumes in docker-compose.yml).
+    documents_dir: Path = Path("/var/lib/perfin/documents")
+    quarantine_dir: Path = Path("/var/lib/perfin/quarantine")
+    # Limits of the extraction subprocess (ADR-0006, SECURITY.md C1/C2).
+    extract_memory_mb: Annotated[int, Field(ge=64, le=16384)] = 1024
+    extract_cpu_seconds: Annotated[int, Field(ge=1, le=3600)] = 60
+    extract_timeout_seconds: Annotated[int, Field(ge=1, le=600)] = 120
+    extract_max_output_mb: Annotated[int, Field(ge=1, le=1024)] = 64
+    # Numeric UID (and GID) the extraction child switches to when the worker
+    # runs as root; ignored otherwise (the image already runs as 10001).
+    extract_uid: Annotated[int, Field(ge=1, le=2**31 - 1)] | None = None
+
     # ---- Integrations -------------------------------------------------------
     price_provider: str = "none"
     antivirus: Literal["none", "clamav"] = "none"
@@ -223,7 +237,11 @@ class Settings(BaseSettings):
         return None if value == "" else value
 
     @field_validator(
-        "migration_database_url", "oidc_household_id", "oidc_private_key_file", mode="before"
+        "migration_database_url",
+        "oidc_household_id",
+        "oidc_private_key_file",
+        "extract_uid",
+        mode="before",
     )
     @classmethod
     def _empty_url_is_none(cls, value: object) -> object:

@@ -28,9 +28,9 @@ Authorisation model (AUTH.md "Authorisation model", SECURITY.md I2/F3):
   user's account grants and revokes their personal access tokens there.
   Member management for a household is serialised with a row lock on the
   household, so two owners cannot demote each other at the same time.
-* Account grants (:func:`set_account_grant` and friends) are service
-  functions only until accounts arrive in Phase 2, which adds the endpoints
-  and the account existence check.
+* Account grants (:func:`set_account_grant` and friends) name an account
+  of the household (checked here and by the composite foreign key); what a
+  grant lets a member see is ``app.domain.accounts.visibility``.
 """
 
 from __future__ import annotations
@@ -58,9 +58,12 @@ from app.core.ids import uuid7
 from app.core.settings import Settings
 from app.db.models import Household
 from app.db.rls import get_context, restore_context, set_context
+from app.domain.accounts.repo import get_account
+from app.domain.accounts.visibility import account_not_found
 from app.domain.households import repo
 from app.domain.households.schemas import HouseholdCreate, HouseholdUpdate, MemberAdd
 from app.domain.households.users import create_local_user, user_not_found
+from app.domain.transactions.categories import seed_default_categories
 
 if TYPE_CHECKING:
     from starlette.requests import HTTPConnection
@@ -283,6 +286,7 @@ def create_household(
         db.add(household)
         db.flush()
         repo.add_member(db, household_id, owner.id, HouseholdRole.OWNER)
+        seeded = seed_default_categories(db, household_id)
         _record(
             db,
             principal,
@@ -294,6 +298,7 @@ def create_household(
                 "name": household.name,
                 "base_currency": household.base_currency,
                 "owner_user_id": str(owner.id),
+                "default_categories": seeded,
             },
             request=request,
         )
@@ -660,8 +665,9 @@ def set_account_grant(
 ) -> AccountGrant:
     """Create or change a member's or viewer's grant on an account (owner/admin).
 
-    A viewer can be granted ``view`` at most. TODO(phase 2): check that
-    ``account_id`` is an account of this household.
+    A viewer can be granted ``view`` at most. ``account_id`` must be an
+    account of this household (``404 account-not-found`` otherwise; the
+    composite foreign key on ``account_grant`` enforces it in the database).
     """
     household_id = _require_role(principal, HouseholdRole.ADMIN)
     member = _grantable_member(db, household_id, user_id)
@@ -669,6 +675,8 @@ def set_account_grant(
         raise ProblemError(
             422, "grant-level-not-allowed", "Grant level not allowed", "Viewers are read-only."
         )
+    if get_account(db, household_id, account_id) is None:
+        raise account_not_found()
     existing = repo.get_grant(db, household_id, user_id, account_id)
     previous = None if existing is None else existing.level.value
     if previous == level.value and existing is not None:

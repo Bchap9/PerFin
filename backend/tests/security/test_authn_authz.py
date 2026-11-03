@@ -44,6 +44,7 @@ from app.core.settings import Settings
 from app.db.rls import get_context, set_context
 from app.main import API_PREFIX, create_app
 from tests.fixtures.factories import Factories, LoggedIn, UserRecord
+from tests.fixtures.ledger import LedgerFactories
 
 pytestmark = [pytest.mark.integration, pytest.mark.security]
 
@@ -460,8 +461,8 @@ def test_account_access_matrix(
     edit: bool,
 ) -> None:
     record = _user(factories, role=role)
-    account_id = uuid.uuid4()
     assert record.household_id is not None
+    account_id = LedgerFactories(factories.session_factory).account(record.household_id).id
     if grant is not None:
         factories.grant(record.household_id, record.id, account_id, grant)
     _login(factories, api, record)
@@ -474,7 +475,7 @@ def test_grant_in_another_household_does_not_count(factories: Factories, api: Te
     record = _user(factories, role="member")
     elsewhere = factories.household()
     factories.member(elsewhere.id, record.id, HouseholdRole.MEMBER)
-    account_id = uuid.uuid4()
+    account_id = LedgerFactories(factories.session_factory).account(elsewhere.id).id
     factories.grant(elsewhere.id, record.id, account_id, GrantLevel.EDIT)
     _login(factories, api, record)  # acting in the first household
     assert api.get(f"{T}/account/{account_id}", params={"need": "view"}).json() == {
