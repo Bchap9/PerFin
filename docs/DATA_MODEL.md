@@ -28,6 +28,90 @@ household ──< account_grant   (member -> account visibility: none|view|edit)
   identity. Matching is by `(issuer, subject)`; email is informational.
 - A household is the unit of data sharing. Most self-hosters will have one.
 
+Phase 1 notes (`app/auth/models.py`, `app/auth/mfa/models.py`,
+`app/auth/oidc/models.py`; created by revision `0002_phase1_identity`, which
+also applies the RLS below and the application-role grants, and whose
+downgrade drops the Phase 1 enum types):
+
+- Table names: `user` and `session` are SQL keywords (`SELECT user` returns
+  the database role), so the tables are **`app_user`** and **`user_session`**.
+  `rate_limit_event` (scope, `key_hash` = SHA-256 of scope and key, created)
+  backs the login/MFA rate limits and is pruned hourly; it has a `bigint` id
+  and no `updated_at` (append-and-delete only).
+- `app_user`: `username` unique and stored lower-case (check constraint;
+  `normalize_username`), `display_name`, `email?`, `email_verified`,
+  `is_instance_admin` (set only from the local database, never from an OIDC
+  claim; SECURITY.md B6), `is_active`, `is_breakglass`, `locked_until`,
+  `failed_login_count`, `last_failed_login_at`, `last_login_at`.
+- `credential`: one per user; Argon2id PHC string plus `hash_params` JSONB
+  and `rotated_at`.
+- `mfa_method`: `type` totp|webauthn|recovery; TOTP `secret_encrypted` is an
+  `app.core.crypto` envelope with associated data
+  `column_ad("mfa_method", "secret_encrypted", id)` and `totp_last_counter`;
+  WebAuthn `credential_id` (unique), `public_key`, `sign_count`,
+  `transports`; recovery codes one row each with `code_hash` and
+  `consumed_at`.
+- `user_session`: `token_hash` (SHA-256 of the cookie value), `household_id`
+  (current; `ON DELETE SET NULL`), `stage` mfa_pending|authenticated,
+  `login_method` local|oidc|breakglass|bootstrap, `user_agent`, `ip`,
+  `last_seen_at`, `idle_expires_at`, `absolute_expires_at`,
+  `mfa_verified_at`, `remember_device`, `revoked_at`, `revoked_reason`,
+  `rotated_from_id`.
+- `household_member` (unique `(household_id, user_id)`, `role`),
+  `account_grant` (unique `(household_id, user_id, account_id)`, `level`) and
+  `api_token` (`prefix` unique public id, `token_hash`, `scopes[]`,
+  `expires_at` NOT NULL, `last_used_at`, `revoked_at`) are `HouseholdScoped`
+  (forced RLS). Each also has a **SELECT-only** policy `user_id =
+  perfin.user_id` so a user's memberships, grants and tokens can be listed
+  before a household context exists; `api_token` additionally allows
+  `prefix = perfin.token_prefix` (set by
+  `app.auth.principal.token_lookup_scope` while a bearer token is looked up).
+  Writes always need the household context.
+- `mfa_challenge` (`app/auth/mfa/models.py`): outstanding MFA ceremony of a
+  session: `session_id` (FK `user_session`, `ON DELETE CASCADE`), `user_id`,
+  `purpose` webauthn_register|webauthn_authenticate|totp_enroll (string with
+  a check constraint), `challenge` (WebAuthn), `secret_encrypted` (pending
+  TOTP secret, envelope bound to the challenge row), `expires_at`. At most
+  one per session and purpose; WebAuthn challenges are deleted when used;
+  expired rows are pruned hourly. Not household-scoped.
+- `oidc_session` (`app/auth/oidc/models.py`): the OIDC side of one browser
+  session: `session_id` (FK `user_session`, unique, `ON DELETE CASCADE`;
+  moved to the new id on every session rotation), `user_id` (FK
+  `app_user`, `ON DELETE CASCADE`), `issuer`, `subject`, `sid` (indexes
+  `(issuer, sid)` and `(issuer, subject)` for back-channel logout),
+  `id_token_encrypted` (the `id_token_hint` for RP-initiated logout, only
+  when the IdP has an end-session endpoint) and `refresh_token_encrypted`
+  (only with claim refresh): `app.core.crypto` envelopes bound to the row
+  (`column_ad("oidc_session", <column>, id)`); `claims_refreshed_at`. Rows of
+  ended sessions are pruned hourly. Not household-scoped.
+- `oidc_used_state` (`app/auth/oidc/models.py`): `state_hash` (primary
+  key: SHA-256 of a consumed OIDC `state`, or the domain-separated SHA-256
+  of a back-channel `logout_token`'s `(iss, jti)`), `expires_at` (cookie
+  lifetime plus skew for a state; `iat` + 10 minutes + skew for a logout
+  token), `created_at`. Makes each `state` and each logout token
+  single-use; pruned hourly. Not household-scoped.
+- `password_reset_token` (`app/auth/reset.py`): `token_hash` (SHA-256 of
+  the emailed token, unique), `user_id` (FK `app_user`, `ON DELETE
+  CASCADE`), `expires_at` (15 minutes), `used_at` (single use),
+  `requested_ip`. A new request deletes the user's unused tokens; spent rows
+  are pruned hourly after a day. Not household-scoped.
+- First-run setup keeps two **system** settings: `bootstrap.setup_token`
+  (`{"hash", "created_at", "expires_at"}`, only the SHA-256 of the one-time
+  token; deleted when setup completes) and `bootstrap.completed`
+  (`{"completed_at", "user_id"}`; once present, setup never reopens).
+- TODO(Phase 2): `account_grant.account_id` is a plain UUID until the
+  `account` table exists; Phase 2 adds the foreign key (`ON DELETE CASCADE`).
+- `account_grant` rows exist only for members and viewers (owners and admins
+  see every account; `app.domain.households.service.set_account_grant`
+  refuses them), viewers at most `view`. Removing a member deletes their
+  grants in that household.
+- User preferences are the **user** setting `user.preferences`
+  (`{"locale", "theme", "timezone"}`, defaults `en-US`, `system`, `UTC`;
+  invalid stored values fall back to the default). The display name stays on
+  `app_user.display_name`. No new table.
+- `household.base_currency` is an active ISO 4217 code (fund, metal, test and
+  withdrawn codes refused; `app.domain.households.schemas.ISO_4217_CURRENCIES`).
+
 ## Ledger
 
 ```

@@ -45,7 +45,8 @@ The importable package is `app` inside `backend/`; the console script is
 app/
   main.py            create_app(settings) -> FastAPI; middleware stack; router auto-discovery
   cli.py             perfin api | worker | mcp | migrate | config check | audit verify |
-                     healthcheck | openapi | ingest --dry-run | bootstrap-url | rotate-key
+                     healthcheck | openapi | ingest --dry-run | bootstrap-url |
+                     breakglass status|enable|disable | rotate-key
   core/
     settings.py      Settings (pydantic-settings, env prefix PERFIN_), get_settings()
     config_check.py  check_config(settings) -> list[Finding]; refuses insecure prod config
@@ -56,6 +57,8 @@ app/
     csrf.py          CSRF middleware / dependency
     logging.py       JSON logging + PII scrubbing filter; get_logger()
     crypto.py        envelope encryption (XChaCha20-Poly1305 via PyNaCl), master key loading
+    http.py          SafeHttpClient: SSRF-safe outbound HTTP (host allowlist, own DNS +
+                     address vetting + pinned connect, no cross-origin redirects, caps)
     audit.py         audit(...) helper writing audit_log
     events.py        emit(session, household_id, type, payload) -> event row + NOTIFY
     money.py         Money schema, Decimal helpers, currency validation
@@ -70,7 +73,18 @@ app/
     registry.py      import_all_models(): imports every models module so metadata is complete
     queue.py         Postgres job queue (SKIP LOCKED), enqueue(), dequeue(), reaper
     models.py        platform tables: job, event, audit_log, setting
-  auth/              local, mfa, sessions, oidc, tokens, authz, deps (Phase 1)
+  auth/              Phase 1. models (identity tables + RLS self-read policies),
+                     passwords (Argon2id), sessions (server-side, cookie, rotation),
+                     principal (session/PAT -> Principal + RLS context), deps (FastAPI
+                     resolution), authz (require_* guards, account grants), ratelimit
+                     (sliding windows, lockout); mfa/ (totp, webauthn, recovery,
+                     stepup, policy, challenges); local (login, lockout notice,
+                     new-password policy), breached (+ data/ list), reset,
+                     bootstrap (first-run setup); oidc/ (client, discovery, tokens,
+                     provisioning, flow, logout, refresh, models); tokens (personal
+                     access tokens: create/list/revoke, bearer rate limits); scopes
+                     (token scope catalog and role ceilings: a new scope goes there
+                     before `require_scope("...")` can name it)
   domain/<context>/  models.py, schemas.py, repo.py, service.py (one per bounded context)
   ingestion/         intake/, sandbox/, extract/, classify/, parsers/, match/, pipeline.py
   integrations/      prices, fx, notifications, antivirus
@@ -87,8 +101,8 @@ app/
   by `create_app()` under `/api/v1`; a module may also export `root_router`
   for the few unversioned paths (`/healthz`, `/readyz`). Do not edit
   `main.py` to add a router.
-- **Models**: `app/db/registry.py` imports `app.db.models`, `app.auth.models`
-  and every `app.domain.*.models` module it finds with `pkgutil`. Alembic's
+- **Models**: `app/db/registry.py` imports `app.db.models`, `app.auth.models`,
+  `app.auth.mfa.models`, `app.auth.oidc.models` and every `app.domain.*.models` module it finds with `pkgutil`. Alembic's
   `env.py` and the test fixtures call `import_all_models()`.
 - **Job handlers**: decorate with `@job_handler("type_name", payload=Model)` in
   any module under `app/workers/handlers/`; the runner discovers them.
@@ -148,10 +162,108 @@ app/
   RLS is really exercised. It drops the database at the end.
 - Fixtures: `settings`, `admin_engine`, `app_engine`, `db` (a Session in a
   rolled-back transaction where possible), `client` (FastAPI `TestClient`),
-  plus factories added by later phases (`make_user`, `make_household`,
-  `login_as(role)`).
+  plus the identity factories from `tests/fixtures/factories.py`:
+  - `make_household(name=None)` -> committed `Household`.
+  - `make_user(role="member", household=None, with_totp=False,
+    is_instance_admin=False, ...)` -> `UserRecord` (`.user`, `.household`,
+    `.role`, `.password`, `.totp_secret`, `.totp_now()`). A new household is
+    created unless `household` is passed or `role=None`. Passwords use cheap
+    test-only Argon2id parameters.
+  - `login_as(client, user, mfa_verified=None, stage=..., household_id=...)`
+    creates a real session through `app.auth.sessions.create_session`, puts
+    its cookie on the client and returns `LoggedIn` (`session_id`,
+    `csrf_token`, `headers()` with `X-CSRF-Token`, `Origin` and
+    `Sec-Fetch-Site` for unsafe requests). `mfa_verified` defaults to whether
+    the user has TOTP.
+  - `bearer_token(user, scopes=(), expires_at=None, revoked=False)` -> a raw
+    personal access token for `Authorization: Bearer`.
+  - `authed_client(role="member", ...)` -> `AuthedClient`: the `client`
+    logged in as a new user (with TOTP, so `PERFIN_REQUIRE_MFA` does not
+    restrict it) whose `post`/`patch`/`put`/`delete` add the CSRF headers.
+  - `factories` is the underlying `Factories` object (`.member()`,
+    `.grant()`, `.session()`, `.token()`, `.transaction()`). The flush-only
+    functions in `tests/fixtures/factories.py` (`make_user(db, ...)`, ...)
+    work inside the rolled-back `db` fixture; the fixtures above commit so a
+    `TestClient` app (another connection) sees the rows.
+- Tests that drive the login, setup or reset endpoints use
+  `tests/fixtures/auth_clients.py`: `browser(app, ip=None)` is a
+  `TestClient` on `https://testserver` (so `Secure` cookies round-trip) with
+  its own random client address (per-IP rate limits are shared through the
+  session database), `build_app(settings, limits=AuthLimits(...))` sets
+  test limits on `app.state.auth_limits`, and `pre_auth_headers(client)`
+  fetches the anonymous CSRF token. Tests that need a database with no user
+  at all (first-run setup) use `tests/fixtures/fresh_db.py`.
+- Tests that need several users logged in at once (an owner demoting a
+  member and checking the member's session) use `tests/fixtures/households.py`:
+  `Actors.open(settings, factories)` owns one app; `actors.new(role=...,
+  mfa_verified=None, ...)` / `actors.login(record)` give an `AuthedClient` on
+  its own https `TestClient` (TOTP user, fresh MFA, so step-up passes; pass
+  `mfa_verified=False` for a stale one); `household_audit`,
+  `instance_audit`, `household_events` and `problem_type` read back what an
+  endpoint recorded.
+- OIDC tests use `tests/fixtures/fake_idp.py`: `FakeIdP` (synthetic RSA and
+  EC keys, discovery, JWKS and a strict token endpoint: client auth,
+  single-use codes, redirect URI, PKCE) answering through `respx`;
+  `mocked_idp()`, `resolver()` (names the IdP without DNS, so the
+  SSRF-safe client pins to the fake address), `oidc_settings(settings,
+  ...)`, `clear_proxy_env(monkeypatch)` (the client honours `HTTPS_PROXY`),
+  `login_via_idp(client, idp, claims)` and `oidc_error(response)`. Knobs for
+  negative tests: `claim_overrides`, `header_overrides`, `remove_claims`,
+  `sign_with`, `published`, `token_mutator`, `discovery_overrides`.
+- Endpoint guards come from `app.auth.authz` (`require_authenticated`,
+  `require_role(HouseholdRole.X)`, `require_instance_admin`,
+  `require_scope("x:y")`, `require_step_up`); never read the session cookie
+  or `Authorization` header in a router. With `from __future__ import
+  annotations`, build `Annotated[Principal, Depends(require_role(...))]`
+  aliases at module level (string annotations are resolved from module
+  globals).
 - Test data is synthetic, produced by code in `tests/fixtures/` or
   `scripts/synth/`. No real statements, names or numbers.
+- `tests/security/test_auth_surface.py` enumerates every route of every
+  router module (and checks the list against the OpenAPI document): each
+  state-changing `/api/v1` route must refuse a request without a CSRF token
+  (only the OIDC back-channel logout is exempt), and every error of the
+  auth, setup, household, user-settings and admin routes must be problem
+  details. A new router is covered automatically; extend `PHASE1_PREFIXES`
+  (or add a prefix list for the new phase) to check its errors too.
+- `tests/security/test_input_models.py` (F4) walks the OpenAPI document and
+  fails for any request body that is not a named Pydantic model with
+  `extra="forbid"` (recursively through nested models and unions). Give
+  every new input model `model_config = ConfigDict(extra="forbid")`; a
+  free-form JSON field or a non-JSON body needs an entry with its reason in
+  `FREE_FORM_FIELDS` / `NON_MODEL_BODIES` there.
+- `tests/security/test_authz_matrix.py` is the authorisation matrix. It
+  walks `app.routes` (so every new route is seen) and **fails for any route
+  without an entry in `tests/security/authz_policy.py`** (`POLICIES`), and
+  for entries whose route is gone. Each route is then called as every
+  principal in `PRINCIPALS` (anonymous, viewer, member, admin, owner,
+  instance admin, owner of another household, MFA-restricted, MFA-pending,
+  stale step-up, token without scopes / with the route's scope / expired,
+  valid cookie plus a junk bearer token) and the answer must match the
+  policy; a CSRF matrix refuses every state-changing route without the
+  token, with another session's or the pre-auth token, and cross-site. To
+  add an endpoint, add one line to `POLICIES` keyed `"<METHOD> <full path
+  template>"` (`"MOUNT <path>"` for a mount) using the helpers there:
+  - `public()` for no authentication (plus `overrides=` for documented
+    exceptions such as `401` on `GET /auth/session`);
+  - `session(...)` for browser sessions only, `scoped("x:read", ...)` when
+    a token with that scope may call it, `instance_admin(...)`;
+  - `role=HouseholdRole.X` for a minimum role in the active household,
+    `step_up=True`, `enrol=True` (MFA-restricted sessions allowed),
+    `household_object=True` when the body names a household;
+  - `params={"name": kind}` for every path parameter, with a kind from
+    `PARAM_KINDS` (`household`, `member`, `user`, `own_session`,
+    `own_token`, `own_webauthn`); add a kind (and its generator in
+    `build_object`, and its `not_found` problem) for a new object type, so
+    cross-household access is checked to be `404`;
+  - `body={...}` only when a check runs inside the handler after body
+    validation (an empty body is sent otherwise).
+  Never loosen an entry to make the matrix pass; fix the guard.
+- Per-request conditions on a browser session go through
+  `app.auth.deps.session_acceptor` (passed as `load_session(accept=...)`);
+  today it keeps break-glass sessions on `PERFIN_BREAKGLASS_CIDRS`.
+- `tests/integration/test_auth_e2e.py` drives the whole login chain through
+  the real app (local and OIDC); keep it green when changing any auth step.
 - Never skip, xfail or weaken a test to get green.
 
 ## API conventions
@@ -180,7 +292,20 @@ src/
     money.ts, dates.ts
   components/        design system (Button, Input, Table, Dialog, Card, ...)
   features/<name>/   routes.tsx, queries.ts, components, tests
+    auth/            sign-in pages, guard.ts (root beforeLoad: session required
+                     except on the public sign-in/setup/reset pages),
+                     returnTo.ts (relative return_to only), StepUp.tsx
+                     (useStepUp().run(action): step-up dialog, then retry),
+                     session.ts (typed session; call sessionChanged /
+                     sessionRotated with each rotated csrf_token), testing.tsx
+                     (mockApi fetch router, session bodies, renderApp; tests only)
+    setup/, settings/ first-run setup; profile, security, household members
 ```
+
+Feature tests stub `fetch` with `mockApi` from `features/auth/testing.tsx`
+(msw is not used) and assert the `X-CSRF-Token` header on state-changing
+calls. Pages under `/settings` are wrapped in `StepUpProvider`; a sensitive
+action elsewhere needs its own provider.
 
 No `dangerouslySetInnerHTML`, no inline scripts or styles that need
 `unsafe-inline`, no third-party CDNs; everything is bundled.

@@ -40,19 +40,35 @@ exploit yet.
 Goal: username/password and Authentik OIDC both work, with MFA, sessions and
 roles. Still no finance features.
 
-- [ ] One-time bootstrap setup flow for the first admin
-- [ ] Local login with Argon2id, rate limits, lockout, uniform responses
-- [ ] Server-side sessions, `__Host-` cookie, rotation, idle/absolute timeouts,
+- [x] One-time bootstrap setup flow for the first admin
+- [x] Local login with Argon2id, rate limits, lockout, uniform responses
+      (telling the user about a lock out of band waits for the Phase 7
+      notification channels; until then it is an audit row and a household
+      event)
+- [x] Server-side sessions, `__Host-` cookie, rotation, idle/absolute timeouts,
       session list/revoke
-- [ ] WebAuthn registration/login, TOTP, recovery codes, step-up
-- [ ] OIDC: discovery, PKCE, full ID token validation, `(iss, sub)` matching,
+- [x] WebAuthn registration/login, TOTP, recovery codes, step-up
+      (WebAuthn is tested with a software authenticator in the backend and
+      with mocked browser APIs in the SPA; not yet tried with a hardware key
+      in a real browser)
+- [x] OIDC: discovery, PKCE, full ID token validation, `(iss, sub)` matching,
       JIT provisioning toggle, group-to-role mapping, RP-initiated and
       back-channel logout, OIDC-only mode with break-glass admin
-- [ ] Households, members, roles, account grants (data model only; accounts
+      (tested against the strict fake IdP in `tests/fixtures/fake_idp.py`;
+      not yet against a live Authentik)
+- [x] Households, members, roles, account grants (data model only; accounts
       arrive in Phase 2)
 - [ ] Authz test matrix in CI (every endpoint x every role x cross-household)
+      (the matrix exists and passes in `make check`:
+      `backend/tests/security/test_authz_matrix.py`; not ticked because, as
+      for the Phase 0 CI item, the CI workflows have not run on GitHub
+      Actions yet)
 - [ ] Authentik setup guide with screenshots-free step list
-- [ ] Personal access tokens with scopes
+      (`docs/AUTHENTIK.md` is complete against the final code, with no open
+      TODOs; not ticked until it has been walked through against a live
+      Authentik, which this build sandbox cannot run: some Authentik field
+      labels and version details are from documentation, not a live instance)
+- [x] Personal access tokens with scopes
 
 ## Phase 2: Ledger (v0.2)
 
