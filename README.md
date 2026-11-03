@@ -7,9 +7,14 @@ tax documents from one place, with ingestion that does most of the work for you:
 upload a statement, drop a file into a watched folder, or forward a receipt by
 email, and PerFin works out what it is looking at and files it away.
 
-> Status: **design phase**. This repository currently holds the architecture,
-> security model, data model and roadmap. See [docs/ROADMAP.md](docs/ROADMAP.md)
-> for what gets built when.
+> Status: **Phase 0 (foundations)**. The hardened skeleton boots: API with
+> security headers, CSP, CSRF and problem-details errors; Postgres with
+> row-level security, an append-only hash-chained audit log and migrations;
+> the job queue and worker; the SPA shell; hardened Compose and CI. There is
+> no login and no finance feature yet (Phase 1 and 2). See
+> [docs/ROADMAP.md](docs/ROADMAP.md) for what gets built when and
+> [docs/security/CONTROLS.md](docs/security/CONTROLS.md) for the status of
+> every security control.
 
 ## Goals
 
@@ -69,14 +74,41 @@ email, and PerFin works out what it is looking at and files it away.
 See [ADR-0001](docs/adr/0001-language-and-framework.md) for the reasoning and the
 alternatives that were considered.
 
-## Quick start (target state, not yet functional)
+## Quick start (Phase 0: boots, no login yet)
 
 ```bash
-cp deploy/.env.example deploy/.env   # fill in secrets
-docker compose -f deploy/docker-compose.yml up -d
+cd deploy
+cp .env.example .env && chmod 600 .env
+# Replace every CHANGE_ME (generation commands are at the top of the file):
+#   PERFIN_MASTER_KEY        openssl rand -base64 32   (back it up separately)
+#   PERFIN_SECRET_KEY        openssl rand -base64 48
+#   POSTGRES_PASSWORD, POSTGRES_OWNER_PASSWORD, POSTGRES_APP_PASSWORD
+#                            openssl rand -hex 32      (three different values)
+# and set PERFIN_PUBLIC_URL to your https:// address.
+cp Caddyfile.example Caddyfile          # set your host name
+mkdir -p inbox processed && sudo chown 10001:10001 processed
+docker compose up -d                    # db -> migrate -> api, worker -> proxy
+docker compose run --rm --no-deps api config check   # explains any refused setting
 ```
+
+`api`, `worker` and `mcp` refuse to start on insecure configuration
+(placeholder secrets, non-https public URL, `DEBUG` logging, ...); `perfin
+config check` lists every problem. `docker compose run --rm --no-deps migrate
+audit verify` checks the audit-log hash chain as the owner role.
+
+Development: `make check` runs every gate (SPDX, Ruff, mypy `--strict`,
+Bandit, pytest against a local PostgreSQL 16, ESLint, `tsc`, Vitest, the
+production build, `pip-audit`, `npm audit`); see
+[docs/DEVELOPMENT.md](docs/DEVELOPMENT.md).
 
 ## Licence
 
-To be decided before the first public release (AGPL-3.0 is the current leaning
-for a self-hosted application; see roadmap Phase 0).
+PerFin is free software: you can redistribute it and/or modify it under the
+terms of the GNU Affero General Public License as published by the Free
+Software Foundation, either version 3 of the License, or (at your option) any
+later version (`AGPL-3.0-or-later`). See [LICENSE](LICENSE) for the full text.
+
+Every source file carries the SPDX identifier
+`SPDX-License-Identifier: AGPL-3.0-or-later`; `scripts/check_spdx.py` enforces
+it in CI. If you run a modified PerFin as a network service, the AGPL requires
+you to offer your users the corresponding source.
