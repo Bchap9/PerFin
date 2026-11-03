@@ -80,10 +80,14 @@ minutes a month rather than hours.
 - Export: zip of originals plus a summary CSV/PDF for an accountant.
 
 ### AI access (see docs/AI_ACCESS.md)
-- Read-only MCP server exposing aggregates and pseudonymised detail by tier.
-- No account numbers, documents, extracted text or member identities at any
-  tier. Exposure preview, per-call audit, revocation, kill switch.
-- On-prem models can be granted a wider tier; hosted ones cannot.
+- Read-only MCP server exposing financial facts at full detail: spending,
+  payees and merchant locations, balances, savings, holdings, loans, tax
+  totals.
+- Hard denylist of identity data: addresses, DOB, SSN/EIN, account and card
+  numbers, member names, contact details, documents and extracted text.
+  Free text is scrubbed. Exposure preview, per-call audit, revocation, kill
+  switch, Aggregates mode for the cautious.
+- Works with hosted or on-prem models; on-prem is the private option.
 
 ### Platform
 - Dashboard with configurable widgets.
@@ -108,11 +112,12 @@ minutes a month rather than hours.
    hostile until validated. Parsing happens in a sandbox.
 2. **Confidence or review.** Automation never silently writes low-confidence
    data. It writes to the review queue.
-3. **Personal data never leaves the premises.** PerFin contains no model
-   client. AI assistants see only de-identified, aggregated data through the
-   MCP server, at a tier the owner chose after previewing exactly what it
-   returns. Price feeds and similar integrations are opt-in and send nothing
-   personal.
+3. **Identity never leaves the premises.** PerFin contains no model client.
+   AI assistants reach financial facts (spending, merchants, balances,
+   holdings) through the MCP server, never identity (addresses, DOB, SSN,
+   account numbers, names, contacts, documents). The owner previews exactly
+   what a client returns before enabling it. Price feeds and similar
+   integrations are opt-in and send nothing personal.
 4. **Boring where it counts.** Postgres, session cookies, well-known libraries.
    Novelty goes into the ingestion smarts, not the security plumbing.
 5. **Everything exportable.** If PerFin disappears tomorrow, the data walks out

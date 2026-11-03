@@ -98,13 +98,13 @@ master key present in memory.
 
 PerFin never calls a model itself (ADR-0007). The MCP server is the only
 AI-facing surface; its threat table lives in [AI_ACCESS.md](AI_ACCESS.md)
-(rows M1 to M7). Summary of the controls:
+(rows M1 to M8). Summary of the controls:
 
 | # | Vulnerability | Control |
 | --- | --- | --- |
-| E1 | Identifiers or document text reach a model | Tier policy enforced by API token scope; no tier returns account numbers, documents, extracted text or member identities; redaction denylist corpus in CI |
-| E2 | Prompt injection via payee/memo strings | Tiers 0 and 1 return only curated canonical payee names; MCP has no write tools, so there is nothing to act on |
-| E3 | Over-exposure by misconfiguration | Exposure preview with real data before a client is created; step-up MFA; Tier 2 only for private model endpoints; kill switch |
+| E1 | Identity data (address, DOB, SSN, account numbers, names, contacts) or document text reaches a model | Allowlist serialisers for the `ai:read` scope; denylist classes have no serialiser; free-text scrubber in API and MCP; CI corpus must show zero leaks; CI fails on unclassified columns |
+| E2 | Prompt injection via payee/memo strings | MCP has no write tools, so there is nothing to act on inside PerFin |
+| E3 | Over-exposure by misconfiguration | Exposure preview with real data before a client is created; step-up MFA; Aggregates mode and rounding/hiding options; kill switch |
 | E4 | Stolen MCP token or compromised MCP process | Read-only scoped token, hashed, expiring, rate limited, revocable; process has no DB, key or document access; full audit of every call and response |
 
 ### F. Web application
@@ -163,8 +163,9 @@ AI-facing surface; its threat table lives in [AI_ACCESS.md](AI_ACCESS.md)
 - [ ] MFA required for all users; OIDC with MFA at the IdP if used.
 - [ ] Drop folder mounted read-only; processed files moved to a sibling.
 - [ ] Receipts mailbox is dedicated; alias token set; sender allowlist set.
-- [ ] MCP role disabled unless in use; AI clients at the lowest tier that
-      does the job; Tier 2 only with an on-prem model you control.
+- [ ] MCP role disabled unless in use; review the exposure preview for each
+      AI client; prefer an on-prem model if merchant-level detail should not
+      leave the site.
 - [ ] Backups encrypted, restore tested with the provided script.
 - [ ] Automatic image updates with a maintenance window; release notes read
       for security advisories.

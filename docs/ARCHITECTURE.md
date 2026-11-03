@@ -42,7 +42,7 @@ API.
         (host path)        processed files into the encrypted store)
 
    AI client (MCP host) ─▶ perfin-mcp (optional role, API token only,
-                           tiered + redacted, read-only) ─▶ perfin-api
+                           identity scrubbed, read-only) ─▶ perfin-api
 
    Authentik (OIDC) ◀──── browser redirects + back-channel token exchange from API
    Receipts mailbox ◀──── worker polls over IMAPS
@@ -76,7 +76,7 @@ FastAPI application. Stateless apart from the DB. Serves the compiled SPA from
 Same image, entrypoint `perfin mcp`. Speaks the Model Context Protocol over
 stdio or streamable HTTP and holds exactly one scoped read-only API token. It
 has no database credentials, no master key and no document mount. Every
-response passes through the tier policy and the redaction layer before it
+response passes through the identity denylist and free-text scrubber before it
 reaches the assistant. Details in AI_ACCESS.md.
 
 ### perfin-worker
@@ -122,9 +122,10 @@ static assets served by the API with a strict CSP (no inline scripts, hashed
 styles).
 
 ### Optional integrations (all off by default)
-- **MCP server** (`perfin mcp` role): a read-only, tiered, de-identified
-  window for AI assistants. PerFin never calls a model itself. See
-  AI_ACCESS.md and ADR-0007.
+- **MCP server** (`perfin mcp` role): a read-only window for AI assistants
+  that exposes financial facts at full detail and never identity (addresses,
+  DOB, SSN, account numbers, names, documents). PerFin never calls a model
+  itself. See AI_ACCESS.md and ADR-0007.
 - **Price feeds** for securities and FX.
 - **Notification channels**: SMTP, webhooks, ntfy, Gotify, Matrix.
 - **Antivirus**: ClamAV sidecar scanning quarantined files before parsing.

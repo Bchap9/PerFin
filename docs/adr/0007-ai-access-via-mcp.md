@@ -1,4 +1,4 @@
-# ADR-0007: No model calls inside PerFin; AI access only through a tiered, read-only MCP server
+# ADR-0007: No model calls inside PerFin; AI access only through a read-only MCP server that exposes finance, never identity
 
 Status: Accepted. Date: 2026-11-03. Supersedes ADR-0004.
 
@@ -13,14 +13,20 @@ anywhere. At the same time, AI help analysing spending and savings is wanted.
 - PerFin contains **no LLM client**. Ingestion is deterministic parsers plus a
   local heuristic classifier plus the review queue.
 - AI assistance is provided through a separate, read-only **MCP server** role
-  that exposes de-identified, aggregated data under a three-tier policy
-  (aggregates; pseudonymised detail; on-prem-only detail). No tier ever
-  returns account numbers, documents, extracted text or member identities.
-- Tiers are enforced in the API by token scope, with redaction applied again in
-  the MCP process. The MCP process has no database or document access.
-- Tier 2 (raw memos, institution names) can only be granted when the client's
-  model endpoint resolves to a private address, and the UI states that this is
-  a policy check the operator is responsible for honouring.
+  governed by one rule: **financial facts are exposed, identity is not.**
+  Spending, merchants and their locations, balances, savings, holdings and
+  loans are available at full detail. Addresses, dates of birth, government
+  identifiers, account and card numbers (including last 4), member names and
+  contact details, and all document originals and extracted text are on a
+  denylist that applies to every client in every mode.
+- The denylist is enforced in the API by allowlist serialisers for the
+  `ai:read` scope plus a free-text scrubber, and again in the MCP process.
+  The MCP process has no database or document access.
+- Two modes, Detail (default) and Aggregates, plus per-client options
+  (rounding, hide nicknames, hide merchant location, date range cap).
+- Hosted and on-prem models are treated the same because the denylist already
+  holds for both; on-prem is documented as the choice for people who do not
+  want merchant-level detail off-site.
 - Every MCP call is audit-logged with its full response, and an exposure
   preview shows real sample output before a client is created.
 
@@ -36,6 +42,7 @@ anywhere. At the same time, AI help analysing spending and savings is wanted.
 ## Consequences
 - Long-tail statement layouts need a human once, via the column-mapping
   editor, instead of a model guess. Parser contributions matter more.
-- A new container role (`mcp`) and a new token scope family (`ai:read:tierN`).
-- A redaction test corpus becomes a required CI gate.
+- A new container role (`mcp`) and a new token scope (`ai:read`).
+- A scrubber test corpus and a column-classification test become required CI
+  gates; every new model column must be classified before it can ship.
 - See docs/AI_ACCESS.md for the full design.

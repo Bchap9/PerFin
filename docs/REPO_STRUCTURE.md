@@ -49,14 +49,14 @@ PerFin/
 │   │   │   ├── match/          dedupe, transfers, receipt linking
 │   │   │   └── pipeline.py     stage orchestration
 │   │   ├── integrations/       prices, fx, notifications, antivirus
-│   │   ├── mcp/                MCP server role: tools, tier policy, redaction, transports
+│   │   ├── mcp/                MCP server role: tools, modes, scrubber, transports
 │   │   ├── workers/            job handlers, scheduler, watcher processes
 │   │   └── api/                routers per domain, SSE, schemas
 │   └── tests/
 │       ├── unit/
 │       ├── integration/        against a real Postgres (testcontainers)
 │       ├── security/           authz matrix, csrf, oidc negatives, upload fuzz corpus,
-│       │                       redaction denylist corpus for ai:* scopes
+│       │                       scrubber leak corpus and column classification test for ai:read
 │       └── fixtures/           synthetic statements only
 ├── frontend/
 │   ├── package.json

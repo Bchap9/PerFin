@@ -2,151 +2,196 @@
 
 ## Principle
 
-PerFin itself never calls a language model, hosted or local, as part of
-ingestion or any other core function. Files, extracted text, account numbers
-and personal details never leave the premises because no code path sends them
-anywhere.
+PerFin itself never calls a language model, hosted or local. Files and
+extracted document text have no code path off the premises.
 
-AI assistance is instead provided *to* an assistant, not *by* one, through a
-read-only **MCP server** that exposes de-identified, aggregated financial data.
-The MCP server is the privacy boundary: whatever it returns is, by design, what
-an AI client is allowed to see. An operator who runs an on-prem model can point
-the same MCP server at it and widen the boundary for that client only.
+AI assistance is provided *to* an assistant, not *by* one, through a read-only
+**MCP server**. The rule it enforces is simple:
 
-## What an assistant can and cannot see
+> **Financial facts are exposed. Identity is not.**
 
-Data is classified into three tiers. Each MCP client (a named connection with
-its own token) is assigned a tier, and each tool declares the tier it needs.
+An assistant may see what you spent, where, on what, how much you saved, what
+you owe and what you own. It may never see who you are, where you live, your
+date of birth, your SSN, or any account number.
 
-| Tier | Name | Included | Never included |
-| --- | --- | --- | --- |
-| 0 | **Aggregates** | Totals and trends by category and month, budget vs actual, savings rate, net worth movement, allocation percentages, loan payoff projections, goal progress. Amounts optionally rounded or bucketed. Time granularity no finer than a day. | Account names, institutions, payees, memos, document text, individual transactions, any identifier |
-| 1 | **Pseudonymised detail** | Everything in Tier 0 plus individual transactions and holdings with: pseudonymous account labels ("Checking A"), category, canonical payee name (from the `payee` table, not raw statement text), amount, date, tags. Securities by ticker. | Raw payee strings, memos, account numbers including last 4, institution names, document text, notes, attachments, names of household members, addresses, emails |
-| 2 | **On-prem only** | Everything in Tier 1 plus raw memo text and institution names. | Account numbers, document originals, extracted document text, tax form box values that carry identifiers (SSN, EIN), member names, contact details |
+## The identity denylist
 
-Tier 2 can only be granted to a client whose model endpoint PerFin has verified
-is on a private network (see "On-prem models"). Tiers 0 and 1 may be granted to
-any client, including a hosted assistant, because they contain no identifiers.
-There is no tier that returns account numbers, documents, extracted text or
-member identities to any model, anywhere.
+These are **never** returned by the MCP server or the `ai:read` API scope, in
+any mode, in any field, to any client:
 
-Pseudonyms are stable per client (derived from account id + per-client salt) so
-an assistant can refer to "Checking A" consistently, and are reset when the
-client's token is rotated.
+| Class | Examples | How it is kept out |
+| --- | --- | --- |
+| Government identifiers | SSN, ITIN, EIN, passport, driver's licence numbers | Never stored in exposable columns; pattern scrubber on free text |
+| Account identifiers | Full account numbers, last-4 digits, routing numbers, card numbers, IBAN, loan numbers, policy numbers | Fields excluded from the `ai:read` serialisers; pattern scrubber on free text |
+| Personal identity | Legal names of household members, usernames, email addresses, phone numbers, date of birth | Fields excluded; member-name and contact scrubber on free text |
+| Location of a person | Home or mailing addresses, property addresses of owned real estate | Fields excluded; `manual_asset.description` scrubbed; street-address scrubber on free text |
+| Documents | Original files, page previews, extracted full text, OCR output | No tool exposes them; the MCP process has no document mount |
+| Credentials and secrets | Everything in the credentials class of SECURITY.md | Not reachable from the API at all |
+| Tax form identity boxes | SSN/EIN fields, employer/payer addresses on W-2/1099 | Tax tools return amounts by box label only |
+
+Merchant locations (the city and state where a card was used) are **financial
+facts**, not personal location, and are allowed. A home address is identity
+and is not.
+
+## What is exposed
+
+Everything else that describes money, by default at full detail:
+
+- Accounts by **type and user-given nickname** ("Chase Checking", "Roth IRA"),
+  institution name, currency, balance, balance history. Not the number.
+- Transactions: date, amount, canonical payee, merchant category, merchant
+  city/state when the statement carried it, category, tags, notes and memos
+  after scrubbing (see below), split details, transfer pairing.
+- Budgets, goals and progress, savings rate, recurring spend, cash-flow
+  calendar.
+- Holdings by ticker, quantity, cost basis, gains, allocation, performance.
+- Loans: lender, balance, rate, term, payment split, payoff projections.
+- Manual assets: kind, nickname, valuation history. Not the address.
+- Net worth history and breakdown.
+- Tax year: deductible totals by category and schedule hint, which expected
+  forms are received or missing by form type and issuer name, amounts by box
+  label.
+
+Document text itself is never exposed; the structured fields parsed from it
+are.
+
+## Free-text scrubbing
+
+Memos, notes and payee strings come from statements and can carry stray
+identifiers ("ZELLE TO JANE DOE", "CARD 1234", "ACCT ...5678", a phone number
+in a utility memo). Every free-text field that leaves through `ai:read` passes
+a scrubber that replaces matches with typed placeholders:
+
+- Account, card, routing, IBAN and loan number patterns, including partial
+  masks like `...5678` and `XXXX1234` -> `[ACCT]`
+- SSN/ITIN/EIN patterns -> `[GOVID]`
+- Email, phone -> `[EMAIL]`, `[PHONE]`
+- Street-address patterns -> `[ADDRESS]`
+- Household member legal names and configured aliases -> `[MEMBER]`
+- A user-maintained custom denylist (an ex-employer, a child's school) ->
+  `[REDACTED]`
+
+The scrubber runs in the API and again in the MCP process. Its test corpus in
+CI includes known-bad strings for every class and must reach zero leaks before
+a build ships. Users can see the scrubbed value next to the original in the
+"AI access" settings page to tune the custom list.
+
+## Modes
+
+Two modes. Both obey the denylist; the difference is detail.
+
+| Mode | Returns | Intended for |
+| --- | --- | --- |
+| **Detail** (default) | Everything in "What is exposed", transaction-level | Analysing spending, finding savings, planning payoff |
+| **Aggregates** | Totals and trends by category, month, account type and merchant category only; no individual transactions, payees or nicknames | Owners who want a conservative first step |
+
+Options per client: round amounts to the nearest 1/10/100, limit the date
+range the client can query, hide nicknames (fall back to "Checking A"), hide
+merchant location.
 
 ## Architecture
 
 ```
-  AI client (Claude Desktop / Claude Code / any MCP host)
-        │  MCP over stdio (local) or streamable HTTP (token auth)
+  AI client (Claude Desktop / Claude Code / any MCP host; hosted or on-prem model)
+        │  MCP over stdio (local) or streamable HTTP (token auth, TLS via proxy)
         ▼
   perfin-mcp  (separate process and container, role "mcp")
         │  - holds ONE scoped read-only API token for ONE household
-        │  - applies tier policy + redaction + rounding on every response
-        │  - rate limited, every call audit-logged with the full response
+        │  - applies mode, options and the free-text scrubber on every response
+        │  - rate limited; every call audit-logged with the full response
         │  - no write tools exist in the codebase
         ▼
-  perfin-api  /api/v1  (same authz as any user; token scope `ai:read:tier{N}`)
+  perfin-api  /ai/v1  (token scope `ai:read`; serialisers built from an
+                       explicit field allowlist, scrubber applied, denylist
+                       classes have no serialiser at all)
 ```
 
-- The MCP server is a thin client of the public API. It has no database
-  access, so a bug in it cannot reach anything the API would not return to a
-  token with that scope.
-- The API enforces the tier server-side: a `tier0` token calling a transaction
-  endpoint gets `403`, regardless of what the MCP process asks for. Redaction
-  is applied in the API's response layer for `ai:*` scopes, and then again in
-  the MCP server (defence in depth).
-- Transport defaults to **stdio**, which keeps the server off the network
-  entirely for desktop assistants on the same machine or over SSH. Streamable
-  HTTP is available for remote clients behind the reverse proxy with the
-  client token plus origin allowlisting; it is never exposed without TLS.
+- The `ai:read` serialisers are **allowlists**: a new column on a model is
+  invisible to AI clients until someone deliberately adds it, and the PR that
+  adds it must classify it.
+- The MCP process has no database access, no master key and no document
+  mount. A bug there cannot reach anything the API would not return to an
+  `ai:read` token.
+- Stdio transport is the default and keeps the server off the network for
+  assistants on the same machine or over SSH. HTTP transport is only served
+  through the reverse proxy with TLS and an origin allowlist.
 
 ## Tools (first cut)
 
-Read-only, each tagged with its minimum tier. Parameters are validated;
-free-text parameters are not passed through to any query as patterns.
+Read-only. Parameters are validated; free-text parameters are matched against
+canonical payee and category names, never used as raw query patterns.
 
 ```
-Tier 0
-  get_overview(period)                      net worth, cash flow, savings rate
-  get_spending_by_category(period, group_by: month|quarter|year, depth)
-  get_income_summary(period)
-  get_budget_status(period)
-  get_trends(metric, periods)               category or total over time
-  get_savings_goals()                       progress and projected completion
-  get_net_worth_history(range, granularity)
-  get_allocation()                          asset class percentages
-  get_loan_projections(extra_payment?)      payoff dates, interest saved
-  get_recurring_summary()                   subscription-like spend by category
-  get_tax_year_summary(year)                deductible totals by hint, no form values
-  explain_data_policy()                     returns this client's tier and what is excluded
-
-Tier 1 (adds)
-  list_transactions(period, category?, min_amount?, max_amount?, limit)
-  list_holdings()
-  list_accounts()                           pseudonymous labels and types only
-  find_anomalies(period)                    unusually large or new-category spend
-
-Tier 2 (adds, on-prem only)
-  list_transactions(..., include_memo=true)
-  list_accounts(include_institution=true)
+get_overview(period)                       net worth, cash flow, savings rate
+get_spending(period, group_by: category|payee|merchant_category|month|account, depth)
+get_income(period, group_by)
+get_budget_status(period)
+get_trends(metric, periods)
+get_recurring()                            subscriptions and bills detected
+get_savings_goals()
+get_net_worth_history(range, granularity)
+get_allocation()
+list_accounts()                            type, nickname, institution, balance
+list_transactions(period, account?, category?, payee?, min_amount?, max_amount?, limit)
+find_anomalies(period)                     unusually large or new spend
+list_holdings(account?)
+get_performance(range)
+list_loans()  get_loan_schedule(loan)  simulate_loan(loan, extra_payment)
+get_tax_year_summary(year)                 deductible totals, form checklist status
+explain_data_policy()                      this client's mode, options, and the denylist
 ```
 
-Deliberately absent: anything that returns documents, extracted text, review
-items, settings, members, audit logs, or that writes. Categorisation help from
-an assistant flows back through the human: the user reads the suggestion and
-applies it in the PerFin UI.
+Deliberately absent: anything returning documents, document text, review
+items, settings, members, sessions, audit logs, or that writes. Suggestions
+from an assistant (a new category, a rule) are applied by the user in the
+PerFin UI.
 
 ## Client management
 
-- Created in Settings by a household owner with step-up MFA: name, tier,
-  transport, optional expiry, optional amount rounding (nearest 1, 10, 100),
-  optional date coarsening (month only).
-- The **exposure preview** shows, before saving, a sample response from every
-  tool at that tier using the household's real data, so the user sees exactly
-  what the assistant will see.
-- Every call is written to the audit log with tool, parameters, byte count and
-  the full redacted response. An "AI access" page lists calls per client.
-- One-click revoke. Tokens are hashed at rest, scoped, and cannot be upgraded
-  to a higher tier without re-creation.
+- Created in Settings by a household owner with step-up MFA: name, mode,
+  options, transport, expiry.
+- The **exposure preview** renders a real sample from every tool with the
+  chosen settings before the client is saved, with scrubbed placeholders
+  highlighted.
+- Every call is written to `ai_call` with tool, parameters, byte count and the
+  full response as sent. The "AI access" page lists calls per client and lets
+  the owner search responses for a string to confirm something never left.
+- One-click revoke. Tokens hashed at rest, scoped to `ai:read`, expiring.
 - A kill switch in system settings disables the MCP role entirely.
 
-## On-prem models
+## Hosted versus on-prem models
 
-An operator may run a model on their own hardware (Ollama, llama.cpp,
-vLLM) and connect an MCP-capable client to it. PerFin does not talk to the
-model; the client does. PerFin's only involvement is deciding whether a client
-may be granted Tier 2:
+Because the denylist applies to every client, the same MCP server can serve a
+hosted assistant or an on-prem one (Ollama, llama.cpp, vLLM behind an MCP
+host). PerFin does not talk to the model and does not need to know which it
+is. The guidance in the docs will be:
 
-- The client registration includes the model endpoint URL the assistant will
-  use. PerFin resolves it and requires an RFC 1918, link-local, loopback or
-  unique-local address, or a hostname on an admin-configured allowlist.
-- This is a policy check, not an enforcement: PerFin cannot prevent a client
-  from forwarding data elsewhere. The settings page says so plainly. Tier 2 is
-  for operators who control both ends.
+- Hosted assistant: fine for Detail mode; consider rounding and hiding
+  nicknames if you prefer less fidelity off-site. Remember that merchant names
+  and amounts are themselves revealing even without identity.
+- On-prem model: no additional restrictions needed; this is the private
+  option for people who do not want merchant-level detail leaving at all.
 
-A future phase may add an optional **in-app assistant** backed only by an
-on-prem endpoint, using the same tier policy internally. It is explicitly out of
-scope until the MCP route has proven the policy model, and it would never
-support hosted providers.
+A future optional **in-app assistant** backed only by an on-prem endpoint is
+parked in the roadmap. It would reuse the same `ai:read` serialisers and would
+never support hosted providers.
 
 ## Ingestion without a model
 
-The classification and parsing pipeline relies on deterministic fingerprints,
-institution parsers, a small local heuristic classifier and the review queue.
-Where a model would have helped (a never-seen layout), the user instead gets a
-review item with the extracted tables and a "map these columns" editor that
-produces a reusable fingerprint. Coverage grows through contributed parsers
-with synthetic fixtures, not through inference.
+Classification and parsing rely on deterministic fingerprints, institution
+parsers, a small local heuristic classifier and the review queue with a
+column-mapping editor. A never-seen layout needs a person once; the saved
+mapping becomes a fingerprint.
 
 ## Threats specific to this boundary
 
 | # | Vulnerability | Control |
 | --- | --- | --- |
-| M1 | Identifier leakage through a tool response | Tier policy enforced in the API, redaction layer tested with a denylist corpus (account number formats, emails, member names, raw payee strings) in CI; responses that trip the detector are blocked and alerted |
-| M2 | Re-identification from detailed data | Pseudonyms per client, optional rounding and date coarsening, canonical payee names only below Tier 2 |
-| M3 | Prompt injection via data the assistant reads (a crafted payee or memo) | Tiers 0 and 1 never return raw statement text; canonical payee names are user-curated; the MCP server has no write tools so injected instructions have nothing to act on inside PerFin |
-| M4 | Stolen MCP token | Scoped read-only, hashed at rest, expiring, rate limited, revocable, origin-checked on HTTP transport, audit trail of every call |
-| M5 | Over-broad tier granted by mistake | Exposure preview before save, step-up MFA, Tier 2 gated on private endpoint check, persistent banner on the client while it exists |
-| M6 | Aggregation queries used as a denial of service | Per-client rate limits, bounded periods, cached aggregates |
-| M7 | MCP process compromise | Runs as its own container with only an API token; no DB credentials, no master key, no document store mount |
+| M1 | Identity field leaks through a serialiser | Allowlist serialisers; denylist classes have no `ai:read` serialiser; PR template requires classifying new fields; CI test enumerates every model column and fails on unclassified ones |
+| M2 | Identifier hiding in free text (memo, note, payee, asset description) | Two-stage scrubber with a CI corpus that must show zero leaks; user-visible scrubbed-vs-original view; custom denylist |
+| M3 | Prompt injection via scrubbed free text reaching the assistant | MCP has no write tools, so an injected instruction has nothing to act on inside PerFin; the host application's own protections cover the rest |
+| M4 | Stolen MCP token | Read-only `ai:read` scope, hashed, expiring, rate limited, revocable, origin-checked on HTTP transport, full audit trail |
+| M5 | Over-exposure by misconfiguration | Exposure preview before save, step-up MFA, Aggregates mode available, persistent banner while a client exists |
+| M6 | Aggregation queries as denial of service | Per-client rate limits, bounded periods, cached aggregates |
+| M7 | MCP process compromise | Own container, only an API token; no DB credentials, master key or document store mount |
+| M8 | Re-identification from rich financial detail (merchants, amounts, locations) | Accepted by design per owner's policy; mitigations offered as options: rounding, hide nicknames, hide merchant location, Aggregates mode, on-prem model |

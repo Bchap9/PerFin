@@ -98,10 +98,11 @@ POST            /settings/intake/email/rotate-alias
 GET/POST/PATCH/DELETE /settings/notifications/channels
 
 GET/POST/DELETE /settings/ai/clients            MCP clients (owner, step-up)
-GET             /settings/ai/clients/{id}/preview  exposure preview at a tier
-GET             /settings/ai/calls              audit of MCP calls
-GET             /ai/v1/...                      tier-scoped read-only views used
-                                                by the MCP role (ai:read:tierN)
+GET             /settings/ai/clients/{id}/preview  exposure preview with chosen options
+GET             /settings/ai/calls              audit of MCP calls, searchable
+GET             /ai/v1/...                      read-only views used by the MCP role
+                                                (scope ai:read; allowlist serialisers,
+                                                scrubbed free text)
 
 POST            /export                         full export (job)
 POST            /import                         full import (job)

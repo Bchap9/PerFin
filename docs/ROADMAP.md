@@ -118,20 +118,22 @@ Goal: scanned documents, receipts, email intake.
 
 ## Phase 6b: AI access boundary (v0.7)
 
-Goal: an assistant can analyse spending and savings without any identifier,
-document or personal detail leaving the premises. See AI_ACCESS.md.
+Goal: an assistant can analyse spending, merchants, savings, holdings and
+loans at full detail while addresses, dates of birth, government identifiers,
+account numbers, names, contact details and documents never leave the
+premises. See AI_ACCESS.md.
 
-- [ ] `ai:read:tier{0,1,2}` token scopes with server-side tier enforcement and
-      a response redaction layer in the API
-- [ ] Redaction denylist corpus (account number formats, emails, member names,
-      raw payee strings) as a CI gate
-- [ ] `perfin mcp` role: stdio and streamable HTTP transports, Tier 0 and
-      Tier 1 tools, rate limits, full-response audit log
-- [ ] Client management UI: create with step-up MFA, exposure preview,
-      rounding and date-coarsening options, revoke, kill switch, "AI access"
-      audit page
-- [ ] Tier 2 gating on private model endpoint check, with the honest caveat
-      in the UI
+- [ ] `ai:read` token scope with allowlist serialisers in the API; CI test
+      that fails on any model column not classified as exposed or denied
+- [ ] Free-text scrubber (account/card/routing patterns incl. partial masks,
+      SSN/EIN, email, phone, street address, member names, custom list) with
+      a CI corpus that must show zero leaks
+- [ ] `perfin mcp` role: stdio and streamable HTTP transports, full tool set,
+      Detail and Aggregates modes, rate limits, full-response audit log
+- [ ] Client management UI: create with step-up MFA, exposure preview with
+      highlighted placeholders, rounding / hide-nickname / hide-location /
+      date-cap options, scrubbed-vs-original view, revoke, kill switch,
+      searchable "AI access" audit page
 - [ ] Setup guides for Claude Desktop and Claude Code as MCP hosts, and for an
       on-prem Ollama/llama.cpp client
 
@@ -150,7 +152,7 @@ document or personal detail leaving the premises. See AI_ACCESS.md.
 ## Later / ideas parking lot
 
 - Optional in-app assistant backed only by an on-prem endpoint, reusing the
-  MCP tier policy internally (never hosted providers)
+  `ai:read` serialisers internally (never hosted providers)
 - Bank sync plugin interface (open banking, Plaid-compatible shim) with the
   same review-queue semantics as documents
 - Multi-household instances for families with separate finances
