@@ -13,17 +13,26 @@ Goal: a running skeleton that boots securely, has a login, and has nothing to
 exploit yet.
 
 - [x] Architecture, data model, ingestion design, security model, roadmap
-- [ ] Licence decision (leaning AGPL-3.0)
-- [ ] Monorepo scaffolding: `backend/` (uv, FastAPI, SQLAlchemy, Alembic),
+- [x] Licence decision: GNU AGPL-3.0-or-later (`LICENSE`, SPDX header on
+      every source file, enforced by `scripts/check_spdx.py`)
+- [x] Monorepo scaffolding: `backend/` (uv, FastAPI, SQLAlchemy, Alembic),
       `frontend/` (Vite, React, TS), `deploy/` (Compose, Caddy)
 - [ ] CI: lint, type-check, tests, Trivy image scan, gitleaks, lockfile check
-- [ ] `perfin config check` with insecure-config refusal
-- [ ] Database bootstrap, migrations, RLS policy scaffolding, audit log table
-- [ ] Postgres-backed job queue with a no-op job and worker entrypoint
-- [ ] Security headers middleware, CSP, CSRF, problem-details errors
-- [ ] Structured logging with PII scrubbing
-- [ ] Health/readiness endpoints, metrics on internal port
-- [ ] Hardened Compose: non-root, read-only, cap_drop, no published ports
+      (workflows written and every command run locally; not yet run on
+      GitHub Actions, and the full image with Tesseract plus its Trivy image
+      scan has not been built because the build sandbox blocks its external
+      fetches (the `ghcr.io` uv image, the Debian mirror); the live compose
+      and Trivy evidence so far comes from a local variant image)
+- [x] `perfin config check` with insecure-config refusal
+- [x] Database bootstrap, migrations, RLS policy scaffolding, audit log table
+      (forced RLS on all five platform tables, `household` and `job`
+      included, after the Phase 0 security review)
+- [x] Postgres-backed job queue with a no-op job and worker entrypoint
+- [x] Security headers middleware, CSP, CSRF, problem-details errors
+      (session-bound CSRF tokens are issued by the Phase 1 session endpoint)
+- [x] Structured logging with PII scrubbing
+- [x] Health/readiness endpoints, metrics on internal port
+- [x] Hardened Compose: non-root, read-only, cap_drop, no published ports
       except proxy
 
 ## Phase 1: Identity (v0.1)
