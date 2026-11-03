@@ -36,3 +36,9 @@ backups/
 .idea/
 .vscode/
 .DS_Store
+
+# Test/coverage output
+.coverage
+.coverage.*
+htmlcov/
+coverage/

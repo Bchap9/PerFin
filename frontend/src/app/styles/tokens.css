@@ -1,0 +1,132 @@
+/* SPDX-License-Identifier: AGPL-3.0-or-later */
+/*
+ * Design tokens. Light values on :root; dark values when the OS prefers dark
+ * and the user has not chosen light, or when the user chose dark
+ * (data-theme on <html>, set by src/app/theme.ts).
+ */
+:root {
+  color-scheme: light;
+
+  --font-sans: system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  --font-mono: ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace;
+  --font-size-xs: 0.75rem;
+  --font-size-sm: 0.875rem;
+  --font-size-md: 1rem;
+  --font-size-lg: 1.125rem;
+  --font-size-xl: 1.375rem;
+  --font-size-2xl: 1.75rem;
+  --line-height: 1.5;
+
+  --space-1: 0.25rem;
+  --space-2: 0.5rem;
+  --space-3: 0.75rem;
+  --space-4: 1rem;
+  --space-5: 1.5rem;
+  --space-6: 2rem;
+  --space-7: 3rem;
+
+  --radius-sm: 4px;
+  --radius-md: 8px;
+  --radius-lg: 12px;
+  --radius-pill: 999px;
+
+  --sidebar-width: 15rem;
+  --header-height: 3.5rem;
+  --content-max: 80rem;
+  --focus-ring-width: 3px;
+  --transition-fast: 120ms ease;
+
+  --color-bg: #f6f7f9;
+  --color-surface: #ffffff;
+  --color-surface-raised: #ffffff;
+  --color-surface-sunken: #eef0f3;
+  --color-text: #16191f;
+  --color-text-muted: #545b66;
+  --color-border: #d5d9e0;
+  --color-border-strong: #a9b0bc;
+  --color-accent: #1f5fbf;
+  --color-accent-hover: #194f9f;
+  --color-accent-contrast: #ffffff;
+  --color-accent-soft: #e3ecfa;
+  --color-focus: #1f5fbf;
+  --color-danger: #b42318;
+  --color-danger-hover: #93190f;
+  --color-danger-soft: #fde8e6;
+  --color-success: #1b7a3d;
+  --color-success-soft: #e1f3e7;
+  --color-warning: #8a5a00;
+  --color-warning-soft: #fdf1d8;
+  --color-info: #1f5fbf;
+  --color-info-soft: #e3ecfa;
+  --color-negative: #b42318;
+  --color-positive: #1b7a3d;
+  --color-backdrop: rgb(16 20 28 / 45%);
+  --shadow-sm: 0 1px 2px rgb(16 20 28 / 8%);
+  --shadow-md: 0 4px 16px rgb(16 20 28 / 12%);
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    color-scheme: dark;
+
+    --color-bg: #0f1216;
+    --color-surface: #171b21;
+    --color-surface-raised: #1e232b;
+    --color-surface-sunken: #12161b;
+    --color-text: #e8ebf0;
+    --color-text-muted: #a3abb8;
+    --color-border: #2d343e;
+    --color-border-strong: #4a5361;
+    --color-accent: #7aa7f0;
+    --color-accent-hover: #9bbdf4;
+    --color-accent-contrast: #0b1220;
+    --color-accent-soft: #1c2a40;
+    --color-focus: #9bbdf4;
+    --color-danger: #f28b82;
+    --color-danger-hover: #f6aaa3;
+    --color-danger-soft: #3b1d1b;
+    --color-success: #6fcf8f;
+    --color-success-soft: #173323;
+    --color-warning: #f0c060;
+    --color-warning-soft: #3a2d12;
+    --color-info: #7aa7f0;
+    --color-info-soft: #1c2a40;
+    --color-negative: #f28b82;
+    --color-positive: #6fcf8f;
+    --color-backdrop: rgb(0 0 0 / 60%);
+    --shadow-sm: 0 1px 2px rgb(0 0 0 / 40%);
+    --shadow-md: 0 4px 16px rgb(0 0 0 / 50%);
+  }
+}
+
+:root[data-theme="dark"] {
+  color-scheme: dark;
+
+  --color-bg: #0f1216;
+  --color-surface: #171b21;
+  --color-surface-raised: #1e232b;
+  --color-surface-sunken: #12161b;
+  --color-text: #e8ebf0;
+  --color-text-muted: #a3abb8;
+  --color-border: #2d343e;
+  --color-border-strong: #4a5361;
+  --color-accent: #7aa7f0;
+  --color-accent-hover: #9bbdf4;
+  --color-accent-contrast: #0b1220;
+  --color-accent-soft: #1c2a40;
+  --color-focus: #9bbdf4;
+  --color-danger: #f28b82;
+  --color-danger-hover: #f6aaa3;
+  --color-danger-soft: #3b1d1b;
+  --color-success: #6fcf8f;
+  --color-success-soft: #173323;
+  --color-warning: #f0c060;
+  --color-warning-soft: #3a2d12;
+  --color-info: #7aa7f0;
+  --color-info-soft: #1c2a40;
+  --color-negative: #f28b82;
+  --color-positive: #6fcf8f;
+  --color-backdrop: rgb(0 0 0 / 60%);
+  --shadow-sm: 0 1px 2px rgb(0 0 0 / 40%);
+  --shadow-md: 0 4px 16px rgb(0 0 0 / 50%);
+}

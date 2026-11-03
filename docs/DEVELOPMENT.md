@@ -13,7 +13,7 @@ commit.
 | --- | --- | --- |
 | Python | 3.12, managed by **uv** (`backend/uv.lock`, hash-locked) | `cd backend && uv sync` |
 | Lint/format | Ruff (lint + format) | `uv run ruff check . && uv run ruff format --check .` |
-| Types | mypy `--strict` (config in `pyproject.toml`, covers `app` and `tests`) | `uv run mypy` |
+| Types | mypy `--strict` (config in `pyproject.toml`, covers `app`, `tests` and `migrations`) | `uv run mypy` |
 | Python SAST | Bandit (`app/` only) | `uv run bandit -c pyproject.toml -r app` |
 | Python deps | pip-audit | `uv run pip-audit` |
 | Tests | pytest (+ pytest-cov) | `uv run pytest` |
@@ -44,8 +44,8 @@ The importable package is `app` inside `backend/`; the console script is
 ```
 app/
   main.py            create_app(settings) -> FastAPI; middleware stack; router auto-discovery
-  cli.py             perfin api | worker | mcp | migrate | config check | healthcheck |
-                     openapi | ingest --dry-run | bootstrap-url | rotate-key ...
+  cli.py             perfin api | worker | mcp | migrate | config check | audit verify |
+                     healthcheck | openapi | ingest --dry-run | bootstrap-url | rotate-key
   core/
     settings.py      Settings (pydantic-settings, env prefix PERFIN_), get_settings()
     config_check.py  check_config(settings) -> list[Finding]; refuses insecure prod config
@@ -60,6 +60,9 @@ app/
     events.py        emit(session, household_id, type, payload) -> event row + NOTIFY
     money.py         Money schema, Decimal helpers, currency validation
     metrics.py       Prometheus registry and internal metrics server
+    request_context.py  request id, client IP/scheme from trusted proxies only
+    limits.py        request body size limits
+    spa.py           serves the built SPA (PERFIN_STATIC_DIR) behind the CSP
   db/
     base.py          Base(DeclarativeBase), mixins: UUIDPk, Timestamps, HouseholdScoped
     session.py       engine/sessionmaker factories, get_db dependency
@@ -81,7 +84,9 @@ app/
 ### Plug-in points (so parallel work does not collide)
 
 - **Routers**: any module in `app/api/routers/` exporting `router` is included
-  by `create_app()` under `/api/v1`. Do not edit `main.py` to add a router.
+  by `create_app()` under `/api/v1`; a module may also export `root_router`
+  for the few unversioned paths (`/healthz`, `/readyz`). Do not edit
+  `main.py` to add a router.
 - **Models**: `app/db/registry.py` imports `app.db.models`, `app.auth.models`
   and every `app.domain.*.models` module it finds with `pkgutil`. Alembic's
   `env.py` and the test fixtures call `import_all_models()`.
@@ -118,7 +123,13 @@ app/
 - **Migrations**: one Alembic revision per roadmap phase (more if a phase
   needs data migrations), written at phase integration with autogenerate plus
   explicit RLS and grant statements generated from `rls.py`. Feature work in
-  parallel does not add revisions. `tests/integration/test_migrations.py`
+  parallel does not add revisions. Files are `migrations/versions/NNNN_<slug>.py`
+  with revision id `NNNN` (`uv run alembic revision --autogenerate --rev-id
+  0002 -m "phase1 identity"`). A revision names the tables it creates
+  explicitly (`all_rls_ddl(tables)`, `table_grants_ddl(tables, role)`) so it
+  never depends on tables a later phase adds to `Base.metadata`; the role
+  that gets the grants is `PERFIN_DB_APP_ROLE`. `perfin migrate` runs
+  `alembic upgrade head` as the owner role (`PERFIN_MIGRATION_DATABASE_URL`). `tests/integration/test_migrations.py`
   upgrades a fresh database to head, asserts `alembic check` reports no
   drift, asserts every `HouseholdScoped` table has RLS enabled and forced,
   and downgrades to base.
@@ -154,7 +165,7 @@ As in [API.md](API.md): `/api/v1`, problem-details errors raised with
 Input and output schemas are separate Pydantic models
 (`XCreate`/`XUpdate`/`XOut`, `extra="forbid"` on inputs). Routers call
 services; services call repos; nothing in `app/api` or `app/domain` imports
-`app/ingestion/extract` (enforced by a test).
+`app/ingestion/extract` (enforced by `tests/unit/test_import_boundaries.py`).
 
 ## Frontend layout
 

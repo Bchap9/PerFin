@@ -141,14 +141,48 @@ tax_category_map  (household, category -> schedule/line hint)
 ## Platform
 
 ```
-job               (queue, type, payload JSONB, state, run_after, attempts, locked_by,
-                   locked_at, last_error, household_id?)
+household         (name, base_currency)
+job               (queue, type, payload JSONB, state: queued|running|succeeded|failed|dead,
+                   priority (lower first), run_after, attempts, max_attempts, locked_by,
+                   locked_at, lease_expires_at, last_error, household_id?, dedupe_key?)
 event             (household, type, payload JSONB, created)   -- feeds SSE, pruned
-audit_log         (household?, user?, action, target_type, target_id, before JSONB,
-                   after JSONB, ip, user_agent, created)       -- append-only
-notification_channel (household, type, config (encrypted), enabled)
-setting           (scope: system|household|user, key, value JSONB)
+audit_log         (seq, household?, user?, action, target_type, target_id, before JSONB,
+                   after JSONB, ip, user_agent, request_id, created, prev_hash, hash)
+                                                               -- append-only, hash-chained
+notification_channel (household, type, config (encrypted), enabled)   -- Phase 7
+setting           (scope: system|household|user, scope_id?, key, value JSONB)
 ```
+
+Phase 0 notes (migration `0001_phase0_foundations`, `app/db/models.py`,
+`app/db/rls.py`):
+
+- `household` has forced RLS: a row is readable, updatable and deletable only
+  in its own context (an instance admin may also list and create households).
+  Every household-scoped table references it `ON DELETE CASCADE`, and
+  referential actions bypass RLS, so this is what stops one household from
+  deleting another's data. Maintenance that needs every household id calls
+  `perfin_household_ids()` (ids only).
+- `job` has forced RLS: a household context sees and changes only its own jobs;
+  the worker dequeues across households (`FOR UPDATE SKIP LOCKED`, ordered by
+  `priority, run_after, id`) inside `app.db.rls.queue_scope`. A trigger keeps
+  `id`, `queue`, `type`, `payload`, `household_id`, `dedupe_key` and
+  `created_at` immutable, and `payload` must be a JSON object (check
+  constraint). Reads on behalf of a user still filter on `household_id`
+  explicitly. `dedupe_key` (unique, nullable) makes enqueue idempotent; the
+  scheduler uses it so several workers create one job per recurring slot.
+- `event` is household-scoped (forced RLS).
+- `audit_log` has no foreign keys (rows outlive what they describe). The
+  application role may only `SELECT`/`INSERT`; triggers refuse `UPDATE`,
+  `DELETE` and `TRUNCATE` for every role. A `BEFORE INSERT` trigger assigns
+  `seq`, `created_at` (server clock), `prev_hash` and
+  `hash = sha256(prev_hash || canonical JSON of the row)`; `perfin audit
+  verify` recomputes the chain. Household rows are visible in that
+  household's context, instance-level rows (`household_id` NULL) only to an
+  instance admin; instance-level rows are appended only in an instance-admin
+  or system-actor context.
+- `setting` is unique on `(scope, scope_id, key)` with NULLs not distinct;
+  `scope_id` is NULL exactly for `system`. System settings are readable by
+  everyone and writable only in an instance-admin context.
 
 ## Encryption at the column level
 
