@@ -15,7 +15,9 @@
 # Email intake (IMAPS)
 # imap.fastmail.com:993
 #
-# OIDC issuer, if it is not on the LAN
+# OIDC issuer (the API reaches it only through this proxy in Compose). An
+# issuer on the LAN needs this entry too, plus its address in
+# EGRESS_ALLOW_PRIVATE_CIDRS (docs/AUTHENTIK.md, step 11)
 # auth.example.com:443
 #
 # ClamAV signature updates (profile av)

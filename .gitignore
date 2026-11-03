@@ -31,6 +31,8 @@ inbox/
 processed/
 quarantine/
 backups/
+# Shipped reference data inside the source tree (not user data).
+!backend/app/auth/data/
 
 # Editors / OS
 .idea/

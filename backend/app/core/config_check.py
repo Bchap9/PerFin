@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""Insecure-configuration checks (SECURITY.md H6, F5, G2, G4).
+"""Insecure-configuration checks (SECURITY.md H6, F5, G2, G4, B4, B5, B7).
 
 ``check_config(settings)`` returns every problem at once as ``Finding``
 objects. Outside ``PERFIN_DEV_MODE`` an ``error`` finding means the process
@@ -228,7 +228,77 @@ def _check_database_url(name: str, url_value: str, out: list[Finding]) -> None:
         )
 
 
+def _plain_url(url: str) -> bool:
+    """An absolute http(s) URL without userinfo, query or fragment."""
+    try:
+        parts = urlsplit(url.strip())
+    except ValueError:
+        return False
+    return (
+        parts.scheme in ("http", "https")
+        and bool(parts.hostname)
+        and "@" not in parts.netloc
+        and not parts.query
+        and not parts.fragment
+    )
+
+
+def _check_oidc_client_auth(settings: Settings, out: list[Finding]) -> None:
+    client_auth = settings.oidc_token_auth_method
+    if client_auth == "private_key_jwt":
+        path = settings.oidc_private_key_file
+        if path is None:
+            out.append(
+                Finding(
+                    "error",
+                    "oidc.private_key_missing",
+                    "PERFIN_OIDC_TOKEN_AUTH_METHOD=private_key_jwt needs "
+                    "PERFIN_OIDC_PRIVATE_KEY_FILE",
+                )
+            )
+            return
+        try:
+            mode = path.stat().st_mode
+        except OSError:
+            out.append(
+                Finding(
+                    "error",
+                    "oidc.private_key_unreadable",
+                    "PERFIN_OIDC_PRIVATE_KEY_FILE does not exist or is not readable",
+                )
+            )
+            return
+        if mode & stat.S_IROTH or mode & stat.S_IWOTH:
+            out.append(
+                Finding(
+                    "error",
+                    "oidc.private_key_world_readable",
+                    "PERFIN_OIDC_PRIVATE_KEY_FILE is readable or writable by other users; "
+                    "chmod 0400",
+                )
+            )
+        return
+    secret = settings.oidc_client_secret
+    if secret is None or not secret.get_secret_value().strip():
+        out.append(
+            Finding(
+                "error",
+                "oidc.client_secret_missing",
+                "OIDC is enabled but PERFIN_OIDC_CLIENT_SECRET is empty",
+            )
+        )
+    elif _is_placeholder(secret.get_secret_value()):
+        out.append(
+            Finding(
+                "error",
+                "oidc.client_secret_placeholder",
+                "PERFIN_OIDC_CLIENT_SECRET still holds a placeholder value",
+            )
+        )
+
+
 def _check_oidc(settings: Settings, out: list[Finding]) -> None:
+    """OIDC client, logout allowlist, OIDC-only mode (SECURITY.md B4, B5, B7)."""
     if settings.oidc_enabled:
         if not _https(settings.oidc_issuer):
             out.append(
@@ -236,6 +306,14 @@ def _check_oidc(settings: Settings, out: list[Finding]) -> None:
                     "error",
                     "oidc.issuer_not_https",
                     "PERFIN_OIDC_ISSUER must be an https:// URL",
+                )
+            )
+        elif not _plain_url(settings.oidc_issuer):
+            out.append(
+                Finding(
+                    "error",
+                    "oidc.issuer_invalid",
+                    "PERFIN_OIDC_ISSUER must be a plain URL (no credentials, query or fragment)",
                 )
             )
         if not settings.oidc_client_id.strip():
@@ -246,38 +324,84 @@ def _check_oidc(settings: Settings, out: list[Finding]) -> None:
                     "OIDC is enabled but PERFIN_OIDC_CLIENT_ID is empty",
                 )
             )
-        secret = settings.oidc_client_secret
-        if secret is None or not secret.get_secret_value().strip():
+        _check_oidc_client_auth(settings, out)
+        for uri in settings.oidc_post_logout_redirect_uris:
+            if not _https(uri) or not _plain_url(uri):
+                out.append(
+                    Finding(
+                        "error",
+                        "oidc.post_logout_uri_invalid",
+                        "every PERFIN_OIDC_POST_LOGOUT_REDIRECT_URIS entry must be an "
+                        "absolute https:// URL without query or fragment",
+                    )
+                )
+                break
+        if settings.oidc_jit_provisioning and not settings.oidc_require_group:
             out.append(
                 Finding(
-                    "error",
-                    "oidc.client_secret_missing",
-                    "OIDC is enabled but PERFIN_OIDC_CLIENT_SECRET is empty",
+                    "warning",
+                    "oidc.jit_without_group",
+                    "PERFIN_OIDC_JIT_PROVISIONING=true with PERFIN_OIDC_REQUIRE_GROUP=false: "
+                    "every user of the identity provider can create a PerFin account",
                 )
             )
-        elif _is_placeholder(secret.get_secret_value()):
-            out.append(
-                Finding(
-                    "error",
-                    "oidc.client_secret_placeholder",
-                    "PERFIN_OIDC_CLIENT_SECRET still holds a placeholder value",
-                )
+    elif settings.oidc_claim_refresh_minutes > 0:
+        out.append(
+            Finding(
+                "warning",
+                "oidc.claim_refresh_without_oidc",
+                "PERFIN_OIDC_CLAIM_REFRESH_MINUTES is set but OIDC is not configured",
             )
+        )
     if settings.oidc_allow_private_issuer:
         out.append(
             Finding(
                 "warning",
                 "oidc.private_issuer_allowed",
                 "PERFIN_OIDC_ALLOW_PRIVATE_ISSUER=true: the OIDC issuer may resolve to a "
-                "private address (allowed for a home-LAN identity provider)",
+                "private address (allowed for a home-LAN identity provider; never "
+                "link-local or metadata addresses, loopback only in dev mode)",
             )
         )
-    if not settings.local_login_enabled and not settings.oidc_enabled:
+    if not settings.local_login_enabled:
+        _check_oidc_only(settings, out)
+
+
+def _check_oidc_only(settings: Settings, out: list[Finding]) -> None:
+    """OIDC-only mode needs a working IdP client and a break-glass admin (B7)."""
+    if not settings.oidc_enabled:
         out.append(
             Finding(
                 "error",
                 "auth.lockout",
                 "PERFIN_LOCAL_LOGIN_ENABLED=false but OIDC is not configured: nobody could log in",
+            )
+        )
+    elif not settings.oidc_client_id.strip():
+        out.append(
+            Finding(
+                "error",
+                "auth.oidc_only_incomplete",
+                "PERFIN_LOCAL_LOGIN_ENABLED=false needs PERFIN_OIDC_ISSUER and "
+                "PERFIN_OIDC_CLIENT_ID configured",
+            )
+        )
+    if not settings.breakglass_admin_username.strip():
+        out.append(
+            Finding(
+                "error",
+                "breakglass.admin_missing",
+                "PERFIN_LOCAL_LOGIN_ENABLED=false needs a break-glass local admin: create one "
+                "and name it in PERFIN_BREAKGLASS_ADMIN_USERNAME",
+            )
+        )
+    if not settings.breakglass_cidrs:
+        out.append(
+            Finding(
+                "error",
+                "breakglass.no_cidrs",
+                "PERFIN_LOCAL_LOGIN_ENABLED=false needs PERFIN_BREAKGLASS_CIDRS (the networks "
+                "the break-glass admin may log in from)",
             )
         )
 
@@ -347,6 +471,70 @@ def _check_mcp(settings: Settings, out: list[Finding]) -> None:
         )
 
 
+def _check_smtp(settings: Settings, out: list[Finding]) -> None:
+    """SMTP (password reset, A11) and the opt-in HIBP check."""
+    host = settings.smtp_host.strip()
+    sender = settings.smtp_from.strip()
+    if host and not sender:
+        out.append(
+            Finding(
+                "warning",
+                "smtp.from_missing",
+                "PERFIN_SMTP_HOST is set but PERFIN_SMTP_FROM is empty: password reset "
+                "stays disabled",
+            )
+        )
+    if sender and not host:
+        out.append(
+            Finding(
+                "warning",
+                "smtp.host_missing",
+                "PERFIN_SMTP_FROM is set but PERFIN_SMTP_HOST is empty: password reset "
+                "stays disabled",
+            )
+        )
+    if sender and ("@" not in sender or any(ch in sender for ch in "\r\n")):
+        out.append(
+            Finding(
+                "warning",
+                "smtp.from_invalid",
+                "PERFIN_SMTP_FROM is not a single email address: password reset mail "
+                "will be refused",
+            )
+        )
+    has_user = bool(settings.smtp_username.strip())
+    has_password = settings.smtp_password is not None and bool(
+        settings.smtp_password.get_secret_value()
+    )
+    if has_user != has_password:
+        out.append(
+            Finding(
+                "warning",
+                "smtp.credentials_incomplete",
+                "set both PERFIN_SMTP_USERNAME and PERFIN_SMTP_PASSWORD, or neither",
+            )
+        )
+    if settings.smtp_configured and not settings.local_login_enabled:
+        out.append(
+            Finding(
+                "warning",
+                "smtp.reset_disabled_oidc_only",
+                "PERFIN_LOCAL_LOGIN_ENABLED=false: password reset is disabled even though "
+                "SMTP is configured (OIDC-only mode)",
+            )
+        )
+    if settings.hibp_check_enabled:
+        out.append(
+            Finding(
+                "warning",
+                "hibp.enabled",
+                "PERFIN_HIBP_CHECK_ENABLED=true: new passwords are checked against "
+                "api.pwnedpasswords.com (k-anonymity, an off-host call); the API needs "
+                "egress to that host",
+            )
+        )
+
+
 def _production_checks(settings: Settings) -> list[Finding]:
     out: list[Finding] = []
     _check_master_key(settings, out)
@@ -397,6 +585,7 @@ def _production_checks(settings: Settings) -> list[Finding]:
     _check_network(settings, out)
     _check_metrics(settings, out)
     _check_mcp(settings, out)
+    _check_smtp(settings, out)
     if not settings.master_key_backup_acknowledged:
         out.append(
             Finding(

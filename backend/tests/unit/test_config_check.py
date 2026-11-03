@@ -248,6 +248,7 @@ def test_oidc_fully_configured_is_accepted(secure_env: pytest.MonkeyPatch) -> No
         oidc_client_id="perfin",
         oidc_client_secret=SecretStr(OIDC_SECRET),
         local_login_enabled=False,
+        breakglass_admin_username="breakglass-admin",
     )
     assert check_config(settings) == []
 

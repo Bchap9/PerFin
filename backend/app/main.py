@@ -21,6 +21,7 @@ from fastapi import APIRouter, FastAPI
 
 from app import __version__
 from app.api import routers as routers_package
+from app.auth.sessions import session_id_from_cookie
 from app.core.csrf import CSRFProtect, install_csrf
 from app.core.errors import UnhandledErrorMiddleware, install_error_handlers
 from app.core.headers import SecurityHeadersMiddleware
@@ -99,7 +100,12 @@ def _install_middleware(app: FastAPI, settings: Settings) -> None:
     app.add_middleware(UnhandledErrorMiddleware)
     install_csrf(
         app,
-        CSRFProtect(secret_key=_csrf_key(settings), public_origin=settings.public_url),
+        CSRFProtect(
+            secret_key=_csrf_key(settings),
+            public_origin=settings.public_url,
+            # CSRF tokens bind to the session cookie (A5); no DB access here.
+            get_session_id=session_id_from_cookie,
+        ),
         api_prefix=API_PREFIX,
     )
     body_limits = dict.fromkeys(UPLOAD_PATHS, settings.upload_max_bytes)

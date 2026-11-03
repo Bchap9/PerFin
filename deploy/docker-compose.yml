@@ -26,7 +26,9 @@
 #       password, and api/worker start only after it succeeded.
 #
 # Networks:
-#   edge      proxy only; the published ports live here
+#   edge      proxy only; the published ports live here. Fixed subnet so
+#             its gateway (the address host-local clients such as an SSH
+#             tunnel arrive from) is predictable for PERFIN_BREAKGLASS_CIDRS
 #   web       proxy <-> api (and mcp); fixed subnet so the API trusts
 #             X-Forwarded-* from the proxy's address only
 #   backend   api, worker, migrate, db (and clamav)
@@ -138,6 +140,7 @@ services:
       PERFIN_MASTER_KEY: ""
       PERFIN_SECRET_KEY: ""
       PERFIN_OIDC_CLIENT_SECRET: ""
+      PERFIN_SMTP_PASSWORD: ""
       POSTGRES_PASSWORD: ""
       POSTGRES_OWNER_PASSWORD: ""
       POSTGRES_APP_PASSWORD: ""
@@ -187,6 +190,8 @@ services:
     environment:
       PERFIN_ROLE: worker
       PERFIN_MIGRATION_DATABASE_URL: ""
+      # Only the api sends mail (password reset).
+      PERFIN_SMTP_PASSWORD: ""
       POSTGRES_PASSWORD: ""
       POSTGRES_OWNER_PASSWORD: ""
       POSTGRES_APP_PASSWORD: ""
@@ -357,7 +362,11 @@ services:
     restart: unless-stopped
 
 networks:
-  edge: {}
+  edge:
+    ipam:
+      config:
+        - subnet: ${EDGE_SUBNET:-172.30.79.0/24}
+          gateway: ${EDGE_GATEWAY:-172.30.79.1}
   web:
     internal: true
     ipam:

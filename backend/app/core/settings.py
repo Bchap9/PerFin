@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import base64
 import binascii
+import uuid
 from functools import lru_cache
 from ipaddress import IPv4Network, IPv6Network, ip_network
 from pathlib import Path
@@ -87,16 +88,40 @@ class Settings(BaseSettings):
     # ---- Sessions -----------------------------------------------------------
     session_idle_minutes: Annotated[int, Field(ge=1)] = 30
     session_absolute_hours: Annotated[int, Field(ge=1)] = 12
+    # "Remember this device": absolute lifetime of such sessions (step-up
+    # actions still need a fresh MFA verification).
+    session_remember_days: Annotated[int, Field(ge=1, le=90)] = 30
     # Cookies carry ``Secure`` (and the ``__Host-`` prefix). Turning this off
     # is refused by ``perfin config check`` outside dev mode.
     secure_cookies: bool = True
     require_mfa: bool = True
+    # Personal access tokens: the longest expiry a user may choose (days).
+    # Every token expires; the hard cap is 365 days (SECURITY.md I3).
+    token_max_days: Annotated[int, Field(ge=1, le=365)] = 90
 
     # ---- Local login / break-glass -----------------------------------------
     local_login_enabled: bool = True
     breakglass_cidrs: Annotated[list[IPNetwork], NoDecode] = Field(
         default_factory=lambda: [ip_network("127.0.0.1/32")]
     )
+    # Opt-in k-anonymity range check against Have I Been Pwned for new
+    # passwords (an off-host call to api.pwnedpasswords.com; the local
+    # breached-password list is always checked).
+    hibp_check_enabled: bool = False
+    # Where the API writes the one-time setup URL while no user exists
+    # (AUTH.md "Admin bootstrap"); mode 0600, removed once setup completes.
+    bootstrap_url_file: Path = Path("/var/lib/perfin/documents/.perfin-setup/setup-url")
+
+    # ---- SMTP (password reset; notification channels later) --------------
+    # Password reset is offered only when host and from address are set.
+    # TLS is always required: STARTTLS (587) or implicit TLS (465).
+    smtp_host: str = ""
+    smtp_port: Annotated[int, Field(ge=1, le=65535)] = 587
+    smtp_tls: Literal["starttls", "implicit"] = "starttls"
+    smtp_username: str = ""
+    smtp_password: SecretStr | None = None
+    smtp_from: str = ""
+    smtp_timeout_seconds: Annotated[int, Field(ge=1, le=120)] = 10
 
     # ---- OIDC ---------------------------------------------------------------
     oidc_issuer: str = ""
@@ -111,6 +136,37 @@ class Settings(BaseSettings):
     oidc_group_viewer: str = "perfin-viewers"
     oidc_require_group: bool = True
     oidc_allow_private_issuer: bool = False
+    # Treat the IdP's ``amr`` claim (``mfa``, or factors of two kinds) as
+    # satisfied MFA (app.auth.mfa.policy). Only enable when the IdP enforces MFA.
+    oidc_trust_idp_mfa: bool = False
+    # Client authentication at the token endpoint (AUTH.md "OIDC"):
+    # client_secret_basic (PERFIN_OIDC_CLIENT_SECRET) or private_key_jwt
+    # (PEM private key in PERFIN_OIDC_PRIVATE_KEY_FILE, RSA or EC P-256).
+    oidc_token_auth_method: Literal["client_secret_basic", "private_key_jwt"] = (
+        "client_secret_basic"  # noqa: S105 - a method name, not a secret
+    )
+    oidc_private_key_file: Path | None = None
+    oidc_private_key_id: str = ""
+    # Offer to link an IdP identity to the local account with the same
+    # verified email after a local password (+MFA) login (B3).
+    oidc_link_by_verified_email: bool = False
+    # The household that group-mapped roles apply to; unset means the
+    # instance's only household (none is changed when there are several).
+    oidc_household_id: uuid.UUID | None = None
+    # Allowed post_logout_redirect_uri values for RP-initiated logout (B4);
+    # empty means "<PERFIN_PUBLIC_URL>/".
+    oidc_post_logout_redirect_uris: Annotated[list[str], NoDecode] = Field(default_factory=list)
+    # Periodic claim refresh with the refresh token (B8); 0 disables it and
+    # no refresh token is kept.
+    oidc_claim_refresh_minutes: Annotated[int, Field(ge=0, le=1440)] = 0
+    # JWKS refetch on an unknown ``kid`` at most this often (B9).
+    oidc_jwks_min_refresh_seconds: Annotated[int, Field(ge=10, le=3600)] = 300
+    # Maximum lifetime of the cached discovery document and JWKS.
+    oidc_metadata_max_age_seconds: Annotated[int, Field(ge=60, le=86400)] = 3600
+    oidc_http_timeout_seconds: Annotated[int, Field(ge=1, le=60)] = 10
+    # OIDC-only mode: the username of the break-glass local admin the operator
+    # set up (``perfin config check`` requires it when local login is off).
+    breakglass_admin_username: str = ""
 
     # ---- Intake -------------------------------------------------------------
     upload_max_mb: Annotated[int, Field(ge=1, le=1024)] = 50
@@ -144,7 +200,7 @@ class Settings(BaseSettings):
     def _parse_cidrs(cls, value: object) -> object:
         return _split(value, ",")
 
-    @field_validator("mcp_http_allowed_origins", mode="before")
+    @field_validator("mcp_http_allowed_origins", "oidc_post_logout_redirect_uris", mode="before")
     @classmethod
     def _parse_origins(cls, value: object) -> object:
         return _split(value, ",")
@@ -159,12 +215,16 @@ class Settings(BaseSettings):
     def _upper_log_level(cls, value: object) -> object:
         return value.upper() if isinstance(value, str) else value
 
-    @field_validator("master_key", "secret_key", "oidc_client_secret", mode="before")
+    @field_validator(
+        "master_key", "secret_key", "oidc_client_secret", "smtp_password", mode="before"
+    )
     @classmethod
     def _empty_secret_is_none(cls, value: object) -> object:
         return None if value == "" else value
 
-    @field_validator("migration_database_url", mode="before")
+    @field_validator(
+        "migration_database_url", "oidc_household_id", "oidc_private_key_file", mode="before"
+    )
     @classmethod
     def _empty_url_is_none(cls, value: object) -> object:
         return None if value == "" else value
@@ -184,6 +244,22 @@ class Settings(BaseSettings):
     @property
     def oidc_enabled(self) -> bool:
         return bool(self.oidc_issuer.strip())
+
+    @property
+    def oidc_redirect_uri(self) -> str:
+        """The fixed OIDC redirect URI (never taken from a request)."""
+        return self.public_url.rstrip("/") + "/api/v1/auth/oidc/callback"
+
+    @property
+    def effective_post_logout_redirect_uris(self) -> tuple[str, ...]:
+        """The RP-initiated logout allowlist (default ``<PERFIN_PUBLIC_URL>/``)."""
+        uris = tuple(u for u in self.oidc_post_logout_redirect_uris if u)
+        return uris or (self.public_url.rstrip("/") + "/",)
+
+    @property
+    def smtp_configured(self) -> bool:
+        """An SMTP relay and sender are set (password reset is offered)."""
+        return bool(self.smtp_host.strip() and self.smtp_from.strip())
 
     @property
     def upload_max_bytes(self) -> int:
