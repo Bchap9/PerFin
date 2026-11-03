@@ -38,12 +38,11 @@ API.
              │  - snapshots, schedules, notifications       │
              └──────────────────────────────────────────────┘
                          ▲
+        Drop folder ─────┘ (read-only bind mount into worker; worker moves
+        (host path)        processed files into the encrypted store)
 
    AI client (MCP host) ─▶ perfin-mcp (optional role, API token only,
                            tiered + redacted, read-only) ─▶ perfin-api
-
-        Drop folder ────── (read-only bind mount into worker; worker moves
-        (host path)        processed files into the encrypted store)
 
    Authentik (OIDC) ◀──── browser redirects + back-channel token exchange from API
    Receipts mailbox ◀──── worker polls over IMAPS
