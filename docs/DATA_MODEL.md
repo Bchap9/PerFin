@@ -19,8 +19,10 @@ user ───< session             (opaque id hash, user agent, ip, created, la
 user ───< api_token           (hashed token, scopes[], name, expires, last_used)
 household ──< ai_client       (name, mode: detail|aggregates, transport, rounding,
                                hide_nicknames, hide_merchant_location, date_range_cap,
-                               custom_denylist[], token_id, revoked_at)
-ai_client ──< ai_call         (tool, params JSONB, response JSONB (redacted), bytes, created)
+                               custom_denylist[], member_aliases[], token_id, created_by,
+                               expires_at, revoked_at, last_used_at)
+ai_client ──< ai_call         (tool, params JSONB, status, response JSONB (as sent,
+                               already scrubbed), bytes, created)
 household ──< account_grant   (member -> account visibility: none|view|edit)
 ```
 
@@ -110,8 +112,25 @@ downgrade drops the Phase 1 enum types):
   (`{"locale", "theme", "timezone"}`, defaults `en-US`, `system`, `UTC`;
   invalid stored values fall back to the default). The display name stays on
   `app_user.display_name`. No new table.
+- AI access switches (Phase 6b, `app/domain/ai/switches.py`): the **system**
+  setting `ai.enabled` is the instance kill switch and the **household**
+  setting `ai.enabled` the household's flag, each `{"enabled": bool}`; a
+  missing row means enabled. No new table.
 - `household.base_currency` is an active ISO 4217 code (fund, metal, test and
   withdrawn codes refused; `app.domain.households.schemas.ISO_4217_CURRENCIES`).
+
+AI access notes (Phase 6b, `app/domain/ai/models.py`, AI_ACCESS.md): both
+tables are household-scoped. `ai_client.rounding` is NULL, 1, 10 or 100;
+`date_range_cap` is days before today (1-3660, NULL for none);
+`custom_denylist` and `member_aliases` (terms the scrubber turns into
+`[REDACTED]` / `[MEMBER]`, at most 200 each) are identity data themselves
+(`classification: identity`); `token_id` is the client's `api_token` (scope
+exactly `ai:read`, minted only by `app.domain.ai.service.create_client`;
+revoking the client revokes it). `ai_call` stores every `/ai/v1` call with
+its tool name, validated parameters, HTTP status, byte count and the body as
+sent, refusals included. Every column of every table is classified for AI
+access in `app/domain/ai/classification.py` (exposed, free text, denied with
+a reason); a new column must be classified there before CI passes.
 
 ## Ledger
 

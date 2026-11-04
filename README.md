@@ -55,6 +55,8 @@ email, and PerFin works out what it is looking at and files it away.
 | [docs/AUTH.md](docs/AUTH.md) | Local login, MFA, sessions, OIDC with Authentik, authorisation model |
 | [docs/SECURITY.md](docs/SECURITY.md) | Threat model, identified vulnerabilities and the controls that address them |
 | [docs/security/ingestion.md](docs/security/ingestion.md) | What leaves the host during ingestion (nothing but the IMAP connection you configure) |
+| [docs/MCP_CLIENTS.md](docs/MCP_CLIENTS.md) | Connecting Claude Desktop, Claude Code and on-prem hosts to the read-only MCP server |
+| [docs/security/ai.md](docs/security/ai.md) | What leaves the host through the AI boundary |
 | [docs/AI_ACCESS.md](docs/AI_ACCESS.md) | MCP server, identity denylist, free-text scrubbing, modes |
 | [docs/API.md](docs/API.md) | API conventions and the first-cut endpoint surface |
 | [docs/REPO_STRUCTURE.md](docs/REPO_STRUCTURE.md) | What lives where in this repository |

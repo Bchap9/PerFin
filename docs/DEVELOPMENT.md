@@ -222,7 +222,10 @@ app/
   `loan_payment`, `loan_rate_change`, `manual_asset`, `asset_valuation`,
   `net_worth_snapshot`, `tax_year`, `tax_checklist_item`, `tax_category_map`,
   `tax_form_data`, `tax_export`; 11 new enum types dropped by its
-  downgrade). `alembic check` does not compare CHECK constraint text, so a
+  downgrade), `0006_phase6b_ai` (`ai_client` and `ai_call`, both
+  household-scoped, the `ai_call -> ai_client` household-consistent key,
+  enum types `ai_mode` and `ai_transport`; the AI switches are `setting`
+  rows and need no DDL). `alembic check` does not compare CHECK constraint text, so a
   `:word` inside a CHECK string is parsed as a bind parameter and silently
   rendered as `NULL` (both by `create_all` and by autogenerate): write regex
   character classes so no `:` is followed by a word character (0005 found
@@ -469,6 +472,20 @@ app/
   every new input model `model_config = ConfigDict(extra="forbid")`; a
   free-form JSON field or a non-JSON body needs an entry with its reason in
   `FREE_FORM_FIELDS` / `NON_MODEL_BODIES` there.
+- AI access (Phase 6b): every column of every table must be classified in
+  `app/domain/ai/classification.py` (exposed, free_text or denied with a
+  reason); `tests/security/ai/test_column_classification.py` fails for a
+  column that is not, and for an AI serialiser field (`app/api/ai/schemas.py`,
+  declared with `src("<table>.<column>", ...)`) that reads a denied one. A new
+  AI view returns an `AiOut` model, scrubs every free-text value through its
+  `AiContext` (`app/api/ai/views.py`) and gets an `ai()` entry in the authz
+  policy. `tests/security/ai/test_scrubber_corpus.py` runs the leak corpus in
+  `tests/security/ai/corpus/*.yaml` (add a case for every new identifier
+  shape; zero leaks required). AI clients for tests come from
+  `tests/fixtures/ai.py` (`ai_client(factories, owner, **options)` through the
+  real `create_client`, `ai_headers(raw)`); the authz matrix principal
+  `ai_token` is such a client of the matrix owner and must be refused
+  (`403 ai-token-confined`) on every route outside `/api/v1/ai/v1`.
 - `tests/security/test_authz_matrix.py` is the authorisation matrix. It
   walks `app.routes` (so every new route is seen) and **fails for any route
   without an entry in `tests/security/authz_policy.py`** (`POLICIES`), and

@@ -115,9 +115,145 @@ per calendar year, and delivery of `tax.reminder` (Phase 7
 notifications). `manual_asset.description` is not an encrypted column yet
 (G1). Next: Phase 6b (AI access boundary).
 
+Phase 6b (AI access boundary, v0.7) is finalized. Alembic head is `0006`
+(`0006_phase6b_ai`: `ai_client` and `ai_call` under forced RLS with grants,
+enum types `ai_mode` and `ai_transport`). `make check` passes from the repo
+root: SPDX; backend ruff, format, mypy --strict, bandit, 6932 pytest tests
+with `-n auto`, and OpenAPI drift; frontend eslint, tsc, 360 vitest tests
+and the build. `pip-audit` finds no known vulnerabilities, and
+`npm audit --audit-level=high` passes with 14 moderate advisories in dev
+tooling, none high.
+
+Live verification (`tests/security/mcp/test_mcp_live.py`): the installed
+`perfin mcp`, given only its enable flag, API URL, a mode-0600 token file
+and the stdio transport, served a real `mcp` SDK client session against a
+live uvicorn API. The session called all 19 tools on a household with
+identity and documents planted. No identity appeared in any answer or
+`ai_call` row, and every audit row equals the answer received. The run
+found one real bug, fixed with a regression test: the MCP second scrub
+turned allocation weights such as `1.0000000000` (and long returns, rates
+and quantities) into `[ACCT]`.
+
+Claude Code 2.1 connected to `perfin mcp` over stdio (installed and
+`uv run` forms) and over streamable HTTP with the bearer header; a wrong
+bearer was refused with 401. P56-SR-R1-02 does not reach the AI boundary
+(`test_ai_documents.py`), so E1 is now implemented. Every E1-E4 and M1-M8
+row is `implemented`.
+
+Four of five Phase 6b roadmap boxes are ticked. The setup-guides box stays
+open: Claude Desktop, the `docker exec`/`docker compose run` forms against
+the real image (whose build needs deb.debian.org, blocked here) and the
+`mcphost`/Ollama host were not run. The web UI was tested in jsdom only,
+not viewed in a real browser. Next: Phase 7 (Polish and 1.0).
+
 ## [Unreleased]
 
 ### Added
+
+- AI access boundary, API side (Phase 6b, AI_ACCESS.md, ADR-0007): read-only
+  `/api/v1/ai/v1` views (policy, overview, spending, income, trends, budget
+  status, goals, recurring, net worth history, allocation, accounts,
+  transactions, anomalies, holdings, performance, loans, loan schedule and
+  simulation, tax year summary) built from allowlist serialisers with the
+  client's mode (Detail/Aggregates) and options (rounding 1/10/100, hidden
+  nicknames, hidden merchant location, date cap) applied server-side;
+  `ai_client` and `ai_call` tables; the AI-client flow as the only minter of
+  `ai:read` tokens (owner, step-up), confined to the AI views; per-client
+  rate limits, bounded periods, cached aggregates; every call audited with
+  the full response. Free-text scrubber (`app/core/scrubber.py`) with a
+  zero-leak corpus and a false-positive corpus; a CI test that fails on any
+  unclassified database column or an AI field reading a denied one.
+- AI client management (Phase 6b, `app/api/routers/settings_ai.py`):
+  `/settings/ai/clients` (owner session; create and revoke with step-up;
+  mandatory expiry; the `ai:read` token shown once, hashed at rest;
+  revocation immediate), the exposure preview of every tool with chosen
+  options on real data before saving (`POST /settings/ai/preview`) or for a
+  saved client, placeholders marked by JSON path, nothing stored; the
+  searchable call audit (`/settings/ai/calls`); the scrubbed-vs-original
+  view of the owner's free text with terms to try
+  (`/settings/ai/scrubber-preview`); the instance kill switch
+  (`/settings/system/ai`, instance admin) and the household AI flag
+  (`/settings/ai`), either of which makes every AI view answer `403
+  ai-access-disabled`; `ai_clients_active` on `GET /auth/session` for the
+  persistent banner.
+- MCP server (Phase 6b, `perfin mcp`, `backend/app/mcp/`): a protocol server
+  only (the `mcp` SDK; no model client, ADR-0007) with the 19 read-only tools
+  of AI_ACCESS.md, each one GET on an `/ai/v1` view with the client's
+  `ai:read` token; arguments validated (unknown ones refused, free-text
+  filters matched against canonical names by the API); a second scrub of
+  every answer and error; a per-process rate limit; API refusals (kill
+  switch, revoked client, Aggregates mode, date cap) reported as policy.
+  stdio by default; streamable HTTP behind the proxy with a separate bearer
+  secret and an origin allowlist. Its own configuration gate: no database
+  URL, master key or secret key (refuses to start with one), only
+  `PERFIN_MCP_API_URL` and `PERFIN_MCP_TOKEN(_FILE)`; `PERFIN_ROLE=mcp perfin
+  config check` runs it. Compose: the `mcp` service shares the internal `ai`
+  network with the API only (and `mcp_edge` with the proxy), no volumes,
+  read-only, every capability dropped; `.env.example` gains `MCP_API_TOKEN`,
+  `MCP_HTTP_TOKEN` and `MCP_RATE_PER_MINUTE` for it.
+
+#### Phase 6b web UI
+
+- Settings > AI access (`frontend/src/features/settings/ai/`, owner only):
+  create-client wizard (name, mode, transport, expiry, rounding, hide
+  nicknames and merchant location, date range cap, denylist, aliases) with a
+  live exposure preview of every tool on real data; scrubber placeholders are
+  highlighted by splitting text into styled spans (never `innerHTML`);
+  step-up on create and revoke; the token is shown once with a copy button
+  and the MCP setup snippet; client list with preview and revoke; calls audit
+  with a search box; scrubbed-versus-original tuning view; household and
+  instance kill switch status. A persistent banner in the app layout shows
+  while `ai_clients_active`. `ShowOnceDialog` accepts children.
+
+#### Phase 6b integration
+
+- Alembic revision `0006_phase6b_ai`: `ai_client` and `ai_call` with forced
+  RLS, application-role grants and the household-consistent
+  `ai_call -> ai_client` key; the downgrade drops them and the `ai_mode` and
+  `ai_transport` enum types. The AI switches are `setting` rows (no DDL).
+  `test_migrations.py` covers the 0006 downgrade and cross-household
+  isolation of both tables on a migrated database.
+- `tests/security/mcp/test_mcp_e2e.py`: the owner creates a client over HTTP
+  after a TOTP step-up and reads its exposure preview; `perfin mcp` runs
+  over stdio against a live API with only its token, and an MCP client
+  session calls six tools; no planted identity in any answer or `ai_call`
+  row, each row equal to the answer the client got; the household flag and
+  the instance kill switch refuse and resume the running server; revoking
+  stops the token at once.
+- Fix: QIF and OFX extraction stopped with a validation error on a file with more
+  than 100 statements (repeated `!Type:Bank` headers or `STMTRS` blocks; found
+  by the sandbox mutation fuzzer); extractors now keep the first
+  `MAX_STATEMENTS` (100) and warn `statements_truncated:100`.
+
+#### Phase 6b: finalization (live verification, setup guides)
+
+- `tests/security/mcp/test_mcp_live.py`: the setup of docs/MCP_CLIENTS.md
+  run for real. The installed `perfin mcp`, given only `PERFIN_MCP_ENABLED`,
+  `PERFIN_MCP_API_URL`, a mode-0600 `PERFIN_MCP_TOKEN_FILE` and
+  `PERFIN_MCP_TRANSPORT=stdio`, serves an `mcp` SDK client session over
+  stdio against a live uvicorn API. The session calls all 19 tools (24
+  calls) on a household with identity and documents planted. No identity
+  appears in any answer or `ai_call` row, every audit row equals the answer
+  received, and the transcript is written for review.
+- `tests/security/ai/test_ai_documents.py`: documents never reach `ai:read`
+  (the P56-SR-R1-02 limit at the AI boundary). Every document column and
+  every reference to a document is denied, and no AI route serves a
+  document. An unredacted Form 1040, a payslip and a statement with an SSN,
+  a name, an address and an employee id in their kept page text appear in
+  no AI answer and no audit row, and the `ai:read` token is refused on
+  every document, review and import route.
+- `tests/security/mcp/test_mcp_deploy.py::test_stdio_override_of_the_compose_service_needs_nothing_else`:
+  the documented `docker exec` and `docker compose run` stdio forms start
+  from the compose service's environment plus `PERFIN_MCP_TRANSPORT=stdio`.
+- docs/MCP_CLIENTS.md verified against the code and finalized. Page labels
+  now match the shipped Settings > AI access page, the kill switches are
+  located correctly, a stdio-only `docker compose run` form was added, and
+  the `mcphost` model flag was corrected to `ollama/<model>`. The Claude
+  Code stdio forms (installed `perfin`, `uv run --project`) and the HTTP
+  form with its bearer header were run against Claude Code 2.1 and reported
+  *Connected*; a wrong bearer was refused with 401. A verification-status
+  note lists what was not run: Claude Desktop, the real image, and
+  `mcphost` with Ollama.
 
 #### Phases 5+6: finalization (live run, wealth screens)
 
@@ -1263,6 +1399,56 @@ notifications). `manual_asset.description` is not an encrypted column yet
 
 ### Security
 
+- Phase 6b security review round 2 (P6B-SR-R2-01..03):
+  - Account, card and routing digits, last four included, no longer reach an
+    assistant in four shapes both scrubber stages missed: the further groups
+    of a space-grouped number after a keyword (`Account 9876 5432`,
+    `routing 0210 0002 1`), a bracketed number (`Checking (4455)`,
+    `Card [4455]`), a keyword glued to its digits or joined by a non-ASCII
+    separator (`visa4455`, `card_4455`, `AMEX·1357`), and a bare stored
+    last four in an account's name or a memo (`Sapphire 6611`: the API
+    stage now knows every `account.number_last4` of the household). All in
+    the corpus, which now also runs through the MCP stage alone, and
+    planted end to end in every AI view.
+  - Member names are also caught spelled out (`j a n e`, `J.A.N.E`), with
+    Greek or Cyrillic look-alike letters or digits for letters (`JΑNE`,
+    `D0E`) and, for words of five letters or more, with a plural `s` and no
+    apostrophe (`WOLCOTTS`); spaced e-mails (`bob . smith @ gmail . com`)
+    are caught. The scrubber runs its stages to a fixed point, so it stays
+    idempotent. Remaining limits are in AI_ACCESS.md "Known limits".
+  - With the merchant location hidden, the `payee` filter compares the
+    payee as shown (location cut), so it no longer confirms a guessed city
+    and state.
+- Phase 6b security review round 1 (P6B-SR-R1-01..06):
+  - A security's symbol, name, sector and exchange are now classified as
+    free text and scrubbed in `list_holdings` and `get_allocation`. Sector
+    keys that scrub to the same value are merged. Before, a security named
+    "Jane Doe Family Trust 9988776" (typed by a member or taken from OFX
+    `SECNAME`) reached the assistant verbatim.
+  - The scrubber now catches more card-number forms: `*1234` and `x 1234`
+    masks, card brands and networks (`AMEX 4455`, `MASTERCARD 5678`), up to
+    two words between a keyword and its number (`DEBIT CARD PURCHASE 6655`),
+    12-digit numbers split by `/`, `_` or `,`, and an SSN written
+    `123,456,789`. Thousands-separated amounts (`12,345.67`) and dates
+    (`01/15/2026`, `VISA PURCHASE 03/14`) are kept. All of these are in the
+    corpus.
+  - The `payee` and `category` filters of `list_transactions` match the
+    scrubbed name. A guess at a hidden member name or denylisted term now
+    answers like a miss and no longer confirms it.
+  - The family-name words of the household's name are scrubber terms. A
+    two-letter name part is matched next to a longer one ("LI JANE").
+  - The AI aggregate cache key includes a digest of the scrubber terms, so
+    a renamed or new member never gets a body scrubbed with the old terms.
+  - `test_streams_per_user_are_capped` now waits for the first stream's slot
+    instead of sleeping a fixed time. This removes a flake under `-n auto`.
+- Phase 6b finalize: the second scrub in `perfin mcp` mangled numeric fields.
+  `get_allocation` sent `"weight": "1.0000000000"`, the 10-digit run read as an
+  account number, and the assistant got `[ACCT]` instead. Returns, rates,
+  prices and quantities with many digits were affected the same way. Found
+  by the live run of every tool. The fixed fields listed in
+  `app.mcp.scrub.NUMERIC_FIELDS` now keep plain decimals (at most 15 integer
+  digits); anything else in them is still scrubbed
+  (`tests/unit/test_mcp_scrub.py`).
 - Security review round 1 fixes (Phases 5+6). P56-SR-R1-01 (medium, F8):
   a member could record a trade dated 0001-01-02, after which
   `GET /investments/performance?range=max` valued 739 796 days (17 s per
@@ -1434,6 +1620,14 @@ notifications). `manual_asset.description` is not an encrypted column yet
 
 ### Changed
 
+- Phase 6b finalize: CONTROLS.md E1 is now `implemented`. The
+  P56-SR-R1-02 limit (statement and payslip page text kept as extracted)
+  does not reach the AI boundary, and `test_ai_documents.py` proves it. M3
+  (no write tools) and M8 (accepted re-identification risk, with options)
+  now describe how they are covered and which tests pin them. AI_ACCESS.md
+  documents the second scrub's numeric fields and the documents boundary.
+  docs/security/ai.md states that the kept document text is never read by
+  an AI view.
 - Phases 5+6 finalize: the SPA's hashed bundles are built into and served
   from `/static/` (`build.assetsDir`, `app/core/spa.py`, the immutable
   cache rule in `app/core/headers.py`) instead of Vite's default

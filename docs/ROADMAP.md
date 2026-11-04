@@ -307,19 +307,24 @@ loans at full detail while addresses, dates of birth, government identifiers,
 account numbers, names, contact details and documents never leave the
 premises. See AI_ACCESS.md.
 
-- [ ] `ai:read` token scope with allowlist serialisers in the API; CI test
+- [x] `ai:read` token scope with allowlist serialisers in the API; CI test
       that fails on any model column not classified as exposed or denied
-- [ ] Free-text scrubber (account/card/routing patterns incl. partial masks,
+- [x] Free-text scrubber (account/card/routing patterns incl. partial masks,
       SSN/EIN, email, phone, street address, member names, custom list) with
       a CI corpus that must show zero leaks
-- [ ] `perfin mcp` role: stdio and streamable HTTP transports, full tool set,
+- [x] `perfin mcp` role: stdio and streamable HTTP transports, full tool set,
       Detail and Aggregates modes, rate limits, full-response audit log
-- [ ] Client management UI: create with step-up MFA, exposure preview with
+- [x] Client management UI: create with step-up MFA, exposure preview with
       highlighted placeholders, rounding / hide-nickname / hide-location /
       date-cap options, scrubbed-vs-original view, revoke, kill switch,
       searchable "AI access" audit page
 - [ ] Setup guides for Claude Desktop and Claude Code as MCP hosts, and for an
       on-prem Ollama/llama.cpp client
+      (written: `docs/MCP_CLIENTS.md`. The Claude Code stdio and HTTP forms
+      were run against Claude Code 2.1 and connected; open: the Claude
+      Desktop config, the `docker exec`/`docker compose run` forms against
+      the real image, and the `mcphost`/Ollama host were not run, since
+      none is available in the build sandbox)
 
 ## Phase 7: Polish and 1.0
 

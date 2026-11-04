@@ -238,9 +238,14 @@ POST            /settings/intake/email/test
 POST            /settings/intake/email/rotate-alias  (step-up)
 GET/POST/PATCH/DELETE /settings/notifications/channels
 
-GET/POST/DELETE /settings/ai/clients            MCP clients (owner, step-up)
-GET             /settings/ai/clients/{id}/preview  exposure preview with chosen options
-GET             /settings/ai/calls              audit of MCP calls, searchable
+GET/PATCH       /settings/ai                    household AI flag + live client count (owner; PATCH step-up)
+GET/POST        /settings/ai/clients            MCP clients (owner session; POST step-up, token once)
+GET/DELETE      /settings/ai/clients/{id}       one client; DELETE revokes now (step-up)
+GET             /settings/ai/clients/{id}/preview  exposure preview with the saved options
+POST            /settings/ai/preview            exposure preview with chosen options, before saving
+GET             /settings/ai/calls              audit of MCP calls, searchable (?client_id&contains&limit)
+GET/POST        /settings/ai/scrubber-preview   my free text: original vs scrubbed (owner)
+GET/PATCH       /settings/system/ai             instance AI kill switch (instance admin; PATCH step-up)
 GET             /ai/v1/...                      read-only views used by the MCP role
                                                 (scope ai:read; allowlist serialisers,
                                                 scrubbed free text)
@@ -1337,3 +1342,115 @@ rate-limited` with `Retry-After`. Scopes: `accounts:read|write`,
 `households:read|write`, `export`, `ai:read` (reserved). Role ceilings: owner
 all; admin all but `ai:read`; member as admin without `households:write` and
 `export`; viewer the `:read` scopes.
+
+AI views notes (`/ai/v1`, Phase 6b, AI_ACCESS.md, `backend/app/api/ai/`):
+every route is a `GET` that answers **only** the token of an active AI
+client (`ai:read`, minted by `app.domain.ai.service.create_client`, the
+AI-client flow; `422 scope-reserved` for personal tokens). Anything else is
+`401` (no or bad credential) or `403 ai-client-required` (sessions, personal
+tokens, a revoked or expired client); a demoted owner's client gets `403
+insufficient-scope`. An AI token on any other route is `403
+ai-token-confined`. Per client: `429 rate-limited` beyond 60 calls a minute
+or 300 in ten minutes (on top of the per-token limit). Every call, refusals
+in the view included, is recorded in `ai_call` with the response as sent.
+Money is `{"amount", "currency"}` after the client's rounding (an integer
+string when rounding is on). Periods: `period` = `this_month`, `last_month`,
+`last_30_days`, `last_90_days`, `last_12_months`, `this_year`, `last_year`,
+`ytd`, `YYYY` or `YYYY-MM`, overridden by `date_from` / `date_to`; at most
+1830 days (`422 invalid-period`), clamped to the client's date cap (`422
+outside-date-range` when wholly before it). In Aggregates mode the
+transaction-level views (`/transactions`, `/recurring`, `/holdings`,
+`/loans`, `/loans/{id}/schedule|simulate`, `/anomalies`, spending by payee)
+are `403 not-in-aggregates-mode`, `group_by=account` becomes
+`account_type`, goal and budget names become "Goal A"/"Budget A" and tax
+issuers are omitted. Free text (payees, memos, notes, names people gave
+things, lenders, issuers) is scrubbed (`[ACCT]`, `[GOVID]`, `[EMAIL]`,
+`[PHONE]`, `[ADDRESS]`, `[MEMBER]`, `[REDACTED]`). Routes and tools:
+
+```
+GET /ai/v1/policy                      explain_data_policy
+GET /ai/v1/overview?period             get_overview (net worth now, cash flow, savings rate)
+GET /ai/v1/spending|income?period&group_by=category|payee|month|account|account_type&depth
+GET /ai/v1/trends?metric=spending|income&month=YYYY-MM&months
+GET /ai/v1/budgets/status?on           get_budget_status
+GET /ai/v1/goals                       get_savings_goals
+GET /ai/v1/recurring                   get_recurring (active schedules)
+GET /ai/v1/net-worth/history?range&granularity
+GET /ai/v1/allocation                  by asset class, sector and account (type)
+GET /ai/v1/accounts                    type, label, institution, currency, balance (no number)
+GET /ai/v1/transactions?period&account_id&category&payee&min_amount&max_amount&limit(<=200)&cursor
+GET /ai/v1/anomalies?period            large for its category, or a new payee
+GET /ai/v1/holdings?account_id         by ticker
+GET /ai/v1/performance?range&account_id
+GET /ai/v1/loans                       lender, balance, rate, term, payoff (no loan number)
+GET /ai/v1/loans/{loan_id}/schedule?basis&offset&limit(<=600)
+GET /ai/v1/loans/{loan_id}/simulate?extra_monthly&extra_once&extra_once_on   (stores nothing)
+GET /ai/v1/tax/{year}/summary          totals by category/schedule, amounts by box label, checklist
+```
+
+AI views also answer `403 ai-access-disabled` (`"scope": "instance"` or
+`"household"`) while the instance kill switch or the household's AI flag is
+off (see the AI settings notes).
+
+`category` and `payee` match canonical names exactly (case-insensitive),
+never as patterns, **as the client sees them** (scrubbed): a value the
+client's scrubber would change (a member's name, a denylisted term) matches
+nothing, like a miss, and `Gifts for [MEMBER]` matches the names that scrub
+to it (AI_ACCESS.md "Free-text scrubbing"). There is no merchant category code in the ledger, so
+`get_spending(group_by=merchant_category)` of AI_ACCESS.md is served by
+`category` (the household's categories).
+
+AI settings notes (`/settings/ai`, `/settings/system/ai`, Phase 6b,
+AI_ACCESS.md "Client management", `backend/app/api/routers/settings_ai.py`):
+every `/settings/ai` route needs the **owner** of the active household on a
+browser session (`403 forbidden` for other roles, `403 session-required`
+for tokens; an AI token gets `403 ai-token-confined`); changes need step-up
+(`403 step-up-required`).
+
+* `GET /settings/ai` -> `{"enabled", "household_enabled", "system_enabled",
+  "active_clients"}`. `PATCH /settings/ai` `{"enabled"?}` switches AI access
+  of the household (an empty body changes nothing). Off: every AI view of
+  the household answers `403 ai-access-disabled` and no client can be
+  created; clients are kept and resume when it is turned back on.
+* `GET /settings/system/ai` -> `{"enabled"}`; `PATCH` `{"enabled"?}` (instance
+  admin, step-up) is the kill switch of the whole instance, with the same
+  effect for every household. Both switches default to on (no row); both
+  changes are audited (`ai.system_switch`, `ai.household_switch`).
+* `POST /settings/ai/clients` `{"name", "expires_in_days" (required, 1 to
+  the token maximum), "mode"?, "transport"?, "rounding"? (1|10|100),
+  "hide_nicknames"?, "hide_merchant_location"?, "date_range_cap"? (days),
+  "custom_denylist"?, "member_aliases"?}` -> `201` client with `token`, the
+  raw `ai:read` token, shown once (SHA-256 at rest). `409
+  too-many-ai-clients`, `422 invalid-ai-options`, `422 expiry-too-long`,
+  `403 ai-access-disabled`. A client is `{"id", "name", "mode",
+  "transport", "rounding", "hide_nicknames", "hide_merchant_location",
+  "date_range_cap", "custom_denylist", "member_aliases", "token_prefix",
+  "status" (active | expired | revoked), "created_at", "expires_at",
+  "revoked_at", "last_used_at"}`. `DELETE /settings/ai/clients/{id}`
+  revokes the client and its token (`204`, idempotent); the next call with
+  the token is `401`. Another household's client is `404
+  ai-client-not-found`.
+* Exposure preview: `GET /settings/ai/clients/{id}/preview` (saved options)
+  and `POST /settings/ai/preview` (the create body's options, no expiry) ->
+  `{"mode", "tools": [{"tool", "params", "status", "bytes", "body",
+  "placeholders": [{"path", "placeholders"}]}], "placeholder_counts"}`:
+  every tool run with its default parameters on the household's real data
+  through the same views, serialisers and scrubber, `body` exactly as the
+  view would send it (a refusal as its problem body), each string holding a
+  placeholder marked by JSON path (`items[2].payee`) for highlighting.
+  Nothing is stored: no client, token, `ai_call` row or cache entry.
+* `GET /settings/ai/calls?client_id&contains(1-200)&limit(<=500)` ->
+  `{"items": [{"id", "client_id", "tool", "params", "status", "bytes",
+  "created_at", "response"}]}`, newest first; `contains` is a
+  case-insensitive substring of the stored response (no pattern syntax).
+* Scrubber preview: `GET /settings/ai/scrubber-preview?client_id&limit` and
+  `POST` `{"client_id"?, "custom_denylist"?, "member_aliases"?, "text"?,
+  "limit"?}` (terms to try before saving them; added to the client's) ->
+  `{"samples": [{"source", "original", "scrubbed", "changed",
+  "placeholders"}], "changed"}` over recent transaction payees, memos and
+  notes, split memos, payee names and account names/nicknames the owner can
+  see (and `text`, first).
+
+`GET /auth/session` carries `ai_clients_active` (the active household has a
+client that is neither revoked nor expired) for the persistent banner (M5),
+for every member of the household.
