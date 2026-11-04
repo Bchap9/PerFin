@@ -12,8 +12,9 @@
   injection through an address or subject).
 * Nothing secret is logged: failures are reported by exception class only.
 
-Phase 7 (notification channels) builds on :class:`Mailer`; tests replace it
-with a fake through ``app.state.mailer``.
+Household SMTP notification channels (:mod:`.email`) reuse
+:func:`build_message`; tests replace the reset mailer with a fake through
+``app.state.mailer``.
 """
 
 from __future__ import annotations
