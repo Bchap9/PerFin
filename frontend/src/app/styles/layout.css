@@ -100,6 +100,9 @@
 .app-main {
   grid-area: main;
   width: 100%;
+  /* A grid item's min-width defaults to its content's: let wide tables
+     scroll inside their .table-wrap instead of widening the page. */
+  min-width: 0;
   max-width: var(--content-max);
   padding: var(--space-5) var(--space-4);
 }

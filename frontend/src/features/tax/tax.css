@@ -1,0 +1,5 @@
+/* SPDX-License-Identifier: AGPL-3.0-or-later */
+/* The checklist's status select must show its whole label ("Not applicable"). */
+.tax-status-select {
+  min-width: 10.5rem;
+}

@@ -7,6 +7,7 @@ export const dashboardKeys = {
   spending: (from: string, to: string) => [...queryRoots.reports, "dashboard-spending", from, to],
   recent: [...queryRoots.transactions, "dashboard-recent"],
   review: [...queryRoots.review, "dashboard-open"],
+  tax: [...queryRoots.tax, "dashboard-years"],
 } as const;
 
 export const getCashflow = (from: string, to: string) =>

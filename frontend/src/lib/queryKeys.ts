@@ -17,6 +17,8 @@ export const queryRoots = {
   taxonomy: ["taxonomy"],
   investments: ["investments"],
   loans: ["loans"],
+  assets: ["assets"],
+  recurring: ["recurring"],
   netWorth: ["net-worth"],
   documents: ["documents"],
   review: ["review"],

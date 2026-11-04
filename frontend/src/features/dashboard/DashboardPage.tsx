@@ -19,6 +19,7 @@ import { budgetKeys, getBudgetReport, listBudgets } from "../budgets/api";
 import { barWidth, lineStatus } from "../budgets/report";
 import { PlanningPage, QueryState } from "../planning/PlanningPage";
 import { nameLookup, useAccounts, useCategories, type Account } from "../planning/queries";
+import { listTaxYears, openMissing, reminderText } from "../tax/api";
 import { dashboardKeys, getCashflow, getOpenReviewCount, getRecentTransactions, getSpendingByCategory } from "./api";
 
 const MAX_BUDGETS = 3;
@@ -208,6 +209,31 @@ function ReviewCard() {
   );
 }
 
+function TaxCard() {
+  const query = useQuery({ queryKey: dashboardKeys.tax, queryFn: listTaxYears });
+  const missing = openMissing(query.data ?? []);
+  return (
+    <Card title="Tax documents" actions={<Link to="/tax">Open tax</Link>}>
+      <QueryState loading={query.isPending} error={query.error} label="tax years">
+        {missing.length === 0 ? (
+          <p>No tax documents are missing.</p>
+        ) : (
+          <ul>
+            {missing.map((entry) => (
+              <li key={entry.year}>
+                <Link to="/tax/$year" params={{ year: String(entry.year) }}>
+                  {String(entry.year)}
+                </Link>
+                : {reminderText(entry.missing)}
+              </li>
+            ))}
+          </ul>
+        )}
+      </QueryState>
+    </Card>
+  );
+}
+
 function AccountsCard() {
   const query = useAccounts();
   const totals = useMemo(() => accountTotals(query.data ?? []), [query.data]);
@@ -253,6 +279,7 @@ export function DashboardPage() {
       <div className="planning-grid">
         <CashflowCard from={from} to={to} />
         <ReviewCard />
+        <TaxCard />
         <SpendingCard from={from} to={to} />
         <BudgetsCard />
         <AccountsCard />

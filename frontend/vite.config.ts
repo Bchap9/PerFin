@@ -7,6 +7,9 @@ export default defineConfig({
   plugins: [react()],
   build: {
     outDir: "dist",
+    // Hashed bundles under /static/ (served by app/core/spa.py): /assets is the
+    // Assets page, a client route.
+    assetsDir: "static",
     emptyOutDir: true,
     assetsInlineLimit: 0,
     sourcemap: false,

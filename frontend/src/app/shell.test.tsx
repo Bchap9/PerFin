@@ -42,7 +42,9 @@ describe("app shell", () => {
       "Rules",
       "Investments",
       "Loans",
+      "Assets",
       "Net worth",
+      "Calendar",
       "Documents",
       "Review",
       "Tax",
@@ -51,12 +53,13 @@ describe("app shell", () => {
     expect(within(nav).getByRole("link", { name: "Tax" })).toHaveAttribute("aria-current", "page");
     expect(within(nav).getByRole("link", { name: "Dashboard" })).not.toHaveAttribute("aria-current");
     expect(await screen.findByRole("heading", { level: 1, name: "Tax" })).toBeInTheDocument();
-    expect(screen.getByText("Not built yet")).toBeInTheDocument();
+    // Every section is a real feature now (Phases 5+6 built the last ones).
+    expect(screen.queryByText("Not built yet")).not.toBeInTheDocument();
     expect(screen.getByRole("link", { name: "Skip to content" })).toHaveAttribute("href", "#main");
     expect(screen.getByRole("main")).toHaveAttribute("id", "main");
   });
 
-  it("navigates between placeholder sections", async () => {
+  it("navigates between sections", async () => {
     const user = userEvent.setup();
     renderAt("/loans");
     expect(await screen.findByRole("heading", { level: 1, name: "Loans" })).toBeInTheDocument();
@@ -121,6 +124,18 @@ describe("shell routes", () => {
   it("provides a placeholder per nav item plus login", () => {
     const paths = shellRoutes({} as AnyRoute).map(normalizedPath);
     expect(paths).toEqual([...NAV_ITEMS.map((item) => item.to.replace(/^\//, "")), "login"]);
+  });
+
+  it("has a feature route for every navigation section (no placeholder left)", () => {
+    const router = createAppRouter({ queryClient: new QueryClient() }, createMemoryHistory({ initialEntries: ["/"] }));
+    const children = (router.routeTree.children ?? []) as AnyRoute[];
+    const placeholderPaths = new Set(shellRoutes({} as AnyRoute).map(normalizedPath));
+    const served = children.filter((route) => placeholderPaths.has(normalizedPath(route)));
+    // Each nav path (and login) appears once; none of them is the shell's placeholder.
+    expect(served.map(normalizedPath).sort()).toEqual([...placeholderPaths].sort());
+    for (const route of served) {
+      expect((route.options as { component?: { name?: string } }).component?.name).not.toBe("Placeholder");
+    }
   });
 
   it("normalises paths for comparison", () => {

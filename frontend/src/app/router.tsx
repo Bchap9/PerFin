@@ -8,7 +8,9 @@ import {
 } from "@tanstack/react-router";
 
 import { routes as accountsRoutes } from "../features/accounts/routes";
+import { routes as assetsRoutes } from "../features/assets/routes";
 import { routes as budgetsRoutes } from "../features/budgets/routes";
+import { routes as calendarRoutes } from "../features/calendar/routes";
 import { routes as dashboardRoutes } from "../features/dashboard/routes";
 import { routes as goalsRoutes } from "../features/goals/routes";
 import { routes as rulesRoutes } from "../features/rules/routes";
@@ -16,9 +18,13 @@ import { routes as authRoutes } from "../features/auth/routes";
 import { authGuard } from "../features/auth/guard";
 import { routes as documentsRoutes } from "../features/documents/routes";
 import { routes as importsRoutes } from "../features/imports/routes";
+import { routes as investmentsRoutes } from "../features/investments/routes";
+import { routes as loansRoutes } from "../features/loans/routes";
+import { routes as netWorthRoutes } from "../features/networth/routes";
 import { routes as reviewRoutes } from "../features/review/routes";
 import { routes as settingsRoutes } from "../features/settings/routes";
 import { routes as setupRoutes } from "../features/setup/routes";
+import { routes as taxRoutes } from "../features/tax/routes";
 import { routes as transactionsRoutes } from "../features/transactions/routes";
 import { AppProviders } from "./AppProviders";
 import { NotFoundPage, PendingPage, RouteErrorPage } from "./pages";
@@ -58,6 +64,12 @@ const features: FeatureRoutes[] = [
   goalsRoutes,
   rulesRoutes,
   documentsRoutes,
+  investmentsRoutes,
+  loansRoutes,
+  netWorthRoutes,
+  assetsRoutes,
+  calendarRoutes,
+  taxRoutes,
 ];
 
 /**
