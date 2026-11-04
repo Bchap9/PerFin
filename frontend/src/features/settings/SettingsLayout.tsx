@@ -50,6 +50,11 @@ const SECTIONS = [
     text: "Assistants that may read financial facts, what leaves, and an audit of every call.",
   },
   { to: "/settings/data", title: "Data export and import", text: "Take a copy of everything, or restore one." },
+  {
+    to: "/settings/notifications",
+    title: "Notifications",
+    text: "Email, webhook, ntfy, Gotify or Matrix alerts for sign-in security, roles, reviews, tax and backups.",
+  },
 ] as const;
 
 export function SettingsIndexPage() {

@@ -161,6 +161,49 @@
   grid-column: 2;
 }
 
+/* Touch screens: every control is at least 44px tall (WCAG 2.5.8 asks 24px,
+   platform guidelines 44px). */
+@media (pointer: coarse) {
+  .btn,
+  .btn--sm,
+  .input,
+  .select__control {
+    min-height: 2.75rem;
+  }
+
+  .btn--icon,
+  .btn--icon.btn--sm {
+    width: 2.75rem;
+  }
+
+  .card__actions a,
+  .app-header a {
+    display: inline-flex;
+    align-items: center;
+    min-height: 2.75rem;
+  }
+
+  .checkbox__control {
+    width: 1.5rem;
+    height: 1.5rem;
+  }
+
+  /* A link or text button that stands alone on its line (settings index,
+     "Back to ...", "Add note") gets a full-size target. */
+  .app-main li > a:only-child,
+  .app-main p > a:only-child,
+  .settings-links a,
+  .app-main .cell-text-button {
+    display: inline-flex;
+    align-items: center;
+    min-height: 2.75rem;
+  }
+}
+
+.btn--icon {
+  flex-shrink: 0;
+}
+
 /* ---- Card ------------------------------------------------------------------ */
 .card {
   border: 1px solid var(--color-border);
@@ -279,6 +322,88 @@
   padding: var(--space-6);
   text-align: center;
   color: var(--color-text-muted);
+}
+
+/* Narrow screens: a row becomes a card of "label: value" pairs. The header row
+   stays in the accessibility tree (visually hidden) so screen readers still get
+   column names; each cell shows its own label from data-label. */
+@media (max-width: 40rem) {
+  .table-wrap {
+    overflow: visible;
+    max-height: none;
+    border: 0;
+    background: transparent;
+  }
+
+  .table,
+  .table tbody,
+  .table tfoot,
+  .table tr,
+  .table td {
+    display: block;
+    width: 100%;
+  }
+
+  .table thead {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip: rect(0 0 0 0);
+  }
+
+  .table tbody tr,
+  .table tfoot tr {
+    margin-bottom: var(--space-3);
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-md);
+    background: var(--color-surface);
+  }
+
+  .table td,
+  .table tbody th,
+  .table--compact td,
+  .table--compact tbody th {
+    display: grid;
+    grid-template-columns: minmax(5rem, 40%) minmax(0, 1fr);
+    gap: var(--space-3);
+    align-items: center;
+    padding: var(--space-2) var(--space-3);
+    text-align: start;
+    overflow-wrap: anywhere;
+  }
+
+  .table td:last-child,
+  .table tbody th:last-child {
+    border-bottom: 0;
+  }
+
+  .table td[data-label]::before,
+  .table tbody th[data-label]::before {
+    content: attr(data-label);
+    color: var(--color-text-muted);
+    font-size: var(--font-size-sm);
+    font-weight: 600;
+  }
+
+  /* A cell with no label (an actions column) uses the full width. */
+  .table td:not([data-label]),
+  .table tbody th:not([data-label]) {
+    display: block;
+  }
+
+  .table .align-end,
+  .table .align-center {
+    text-align: start;
+  }
+
+  .table td > :not(:first-child) {
+    min-width: 0;
+  }
+
+  .table__empty {
+    display: block;
+  }
 }
 
 /* ---- Dialog ---------------------------------------------------------------- */
@@ -536,6 +661,12 @@
 .tabs__tab:disabled {
   cursor: not-allowed;
   opacity: 0.5;
+}
+
+@media (pointer: coarse) {
+  .tabs__tab {
+    min-height: 2.75rem;
+  }
 }
 
 .tabs__panel {

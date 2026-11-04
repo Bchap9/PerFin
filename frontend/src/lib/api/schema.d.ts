@@ -2674,6 +2674,59 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/settings/notifications/channels": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Notification channels */
+        get: operations["list_channels_api_v1_settings_notifications_channels_get"];
+        put?: never;
+        /** Add a notification channel (step-up) */
+        post: operations["create_channel_api_v1_settings_notifications_channels_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/settings/notifications/channels/{channel_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /** Remove a notification channel (step-up) */
+        delete: operations["delete_channel_api_v1_settings_notifications_channels__channel_id__delete"];
+        options?: never;
+        head?: never;
+        /** Change a notification channel (step-up) */
+        patch: operations["update_channel_api_v1_settings_notifications_channels__channel_id__patch"];
+        trace?: never;
+    };
+    "/api/v1/settings/notifications/channels/{channel_id}/test": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Send a test notification through a channel */
+        post: operations["test_channel_api_v1_settings_notifications_channels__channel_id__test_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/settings/system/ai": {
         parameters: {
             query?: never;
@@ -4920,6 +4973,184 @@ export interface components {
             parent_id?: string | null;
             tax_treatment?: components["schemas"]["TaxTreatment"] | null;
         };
+        /**
+         * ChannelConfigOut
+         * @description The non-secret part of a channel's configuration.
+         */
+        ChannelConfigOut: {
+            /** Homeserver Url */
+            homeserver_url?: string | null;
+            /** Host */
+            host?: string | null;
+            /** Port */
+            port?: number | null;
+            /** Priority */
+            priority?: number | null;
+            /** Recipients */
+            recipients?: string[] | null;
+            /** Room Id */
+            room_id?: string | null;
+            /** Sender */
+            sender?: string | null;
+            /** Server Url */
+            server_url?: string | null;
+            /** Tls */
+            tls?: ("starttls" | "implicit") | null;
+            /** Url */
+            url?: string | null;
+            /** Username */
+            username?: string | null;
+        };
+        /**
+         * ChannelConfigPatch
+         * @description Fields to change in a stored configuration (checked again after merging).
+         */
+        ChannelConfigPatch: {
+            /** Access Token */
+            access_token?: string | null;
+            /** Homeserver Url */
+            homeserver_url?: string | null;
+            /** Host */
+            host?: string | null;
+            /** Password */
+            password?: string | null;
+            /** Port */
+            port?: number | null;
+            /** Priority */
+            priority?: number | null;
+            /** Recipients */
+            recipients?: string[] | null;
+            /** Room Id */
+            room_id?: string | null;
+            /** Sender */
+            sender?: string | null;
+            /** Server Url */
+            server_url?: string | null;
+            /** Tls */
+            tls?: ("starttls" | "implicit") | null;
+            /** Token */
+            token?: string | null;
+            /** Topic */
+            topic?: string | null;
+            type?: components["schemas"]["ChannelType"] | null;
+            /** Url */
+            url?: string | null;
+            /** Username */
+            username?: string | null;
+        };
+        /** ChannelCreate */
+        ChannelCreate: {
+            /** Config */
+            config: components["schemas"]["SmtpConfigIn"] | components["schemas"]["WebhookConfigIn"] | components["schemas"]["NtfyConfigIn"] | components["schemas"]["GotifyConfigIn"] | components["schemas"]["MatrixConfigIn"];
+            /**
+             * Enabled
+             * @default true
+             */
+            enabled: boolean;
+            /** Events */
+            events?: ("account_locked" | "recovery_code_used" | "mfa_reset" | "role_changed" | "new_device" | "review_waiting" | "tax_reminder" | "backup_failed" | "ai_client_created")[];
+            /** Name */
+            name: string;
+        };
+        /** ChannelOut */
+        ChannelOut: {
+            config: components["schemas"]["ChannelConfigOut"];
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /** Enabled */
+            enabled: boolean;
+            /** Events */
+            events: ("account_locked" | "recovery_code_used" | "mfa_reset" | "role_changed" | "new_device" | "review_waiting" | "tax_reminder" | "backup_failed" | "ai_client_created")[];
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /** Last Outcome */
+            last_outcome: ("ok" | "blocked" | "tls_failed" | "auth_failed" | "rejected" | "connect_failed" | "timeout" | "server_error" | "protocol_error") | null;
+            /** Last Sent At */
+            last_sent_at: string | null;
+            /** Name */
+            name: string;
+            /** Secrets Set */
+            secrets_set: string[];
+            type: components["schemas"]["ChannelType"];
+            /**
+             * Updated At
+             * Format: date-time
+             */
+            updated_at: string;
+        };
+        /**
+         * ChannelSavedOut
+         * @description ``ChannelOut`` plus the webhook signing secret, only when just made.
+         */
+        ChannelSavedOut: {
+            config: components["schemas"]["ChannelConfigOut"];
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /** Enabled */
+            enabled: boolean;
+            /** Events */
+            events: ("account_locked" | "recovery_code_used" | "mfa_reset" | "role_changed" | "new_device" | "review_waiting" | "tax_reminder" | "backup_failed" | "ai_client_created")[];
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /** Last Outcome */
+            last_outcome: ("ok" | "blocked" | "tls_failed" | "auth_failed" | "rejected" | "connect_failed" | "timeout" | "server_error" | "protocol_error") | null;
+            /** Last Sent At */
+            last_sent_at: string | null;
+            /** Name */
+            name: string;
+            /** Secrets Set */
+            secrets_set: string[];
+            /** Signing Secret */
+            signing_secret?: string | null;
+            type: components["schemas"]["ChannelType"];
+            /**
+             * Updated At
+             * Format: date-time
+             */
+            updated_at: string;
+        };
+        /** ChannelTestOut */
+        ChannelTestOut: {
+            /** Ok */
+            ok: boolean;
+            /**
+             * Outcome
+             * @enum {string}
+             */
+            outcome: "ok" | "blocked" | "tls_failed" | "auth_failed" | "rejected" | "connect_failed" | "timeout" | "server_error" | "protocol_error";
+        };
+        /**
+         * ChannelType
+         * @enum {string}
+         */
+        ChannelType: "smtp" | "webhook" | "ntfy" | "gotify" | "matrix";
+        /**
+         * ChannelUpdate
+         * @description Change some fields; ``config`` is merged into the stored one (same type).
+         */
+        ChannelUpdate: {
+            config?: components["schemas"]["ChannelConfigPatch"] | null;
+            /** Enabled */
+            enabled?: boolean | null;
+            /** Events */
+            events?: ("account_locked" | "recovery_code_used" | "mfa_reset" | "role_changed" | "new_device" | "review_waiting" | "tax_reminder" | "backup_failed" | "ai_client_created")[] | null;
+            /** Name */
+            name?: string | null;
+            /** Rotate Secret */
+            rotate_secret?: boolean | null;
+        };
         /** ChecklistCounts */
         ChecklistCounts: {
             /** Expected */
@@ -5100,6 +5331,36 @@ export interface components {
              * @enum {string}
              */
             type: "currency";
+        };
+        /**
+         * DashboardEntry
+         * @description One widget on the dashboard: which one and how wide (``small``..``large``).
+         */
+        DashboardEntry: {
+            /**
+             * Size
+             * @default medium
+             * @enum {string}
+             */
+            size: "small" | "medium" | "large";
+            /**
+             * Widget
+             * @enum {string}
+             */
+            widget: "net_worth" | "cash_flow" | "spending" | "budgets" | "goals" | "recent_transactions" | "review_queue" | "upcoming_bills" | "holdings" | "loans" | "tax_documents" | "accounts";
+        };
+        /** DashboardEntryOut */
+        DashboardEntryOut: {
+            /**
+             * Size
+             * @enum {string}
+             */
+            size: "small" | "medium" | "large";
+            /**
+             * Widget
+             * @enum {string}
+             */
+            widget: "net_worth" | "cash_flow" | "spending" | "budgets" | "goals" | "recent_transactions" | "review_queue" | "upcoming_bills" | "holdings" | "loans" | "tax_documents" | "accounts";
         };
         /** DateCondition */
         DateCondition: {
@@ -5766,6 +6027,23 @@ export interface components {
             target?: components["schemas"]["MoneyIn"] | null;
             /** Target Date */
             target_date?: string | null;
+        };
+        /** GotifyConfigIn */
+        GotifyConfigIn: {
+            /**
+             * Priority
+             * @default 5
+             */
+            priority: number;
+            /** Server Url */
+            server_url: string;
+            /** Token */
+            token: string;
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            type: "gotify";
         };
         /**
          * GrantLevel
@@ -6759,6 +7037,20 @@ export interface components {
              */
             min_any: number;
         };
+        /** MatrixConfigIn */
+        MatrixConfigIn: {
+            /** Access Token */
+            access_token: string;
+            /** Homeserver Url */
+            homeserver_url: string;
+            /** Room Id */
+            room_id: string;
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            type: "matrix";
+        };
         /**
          * MemberAdd
          * @description ``POST /households/{id}/members``: exactly one of ``user_id``, ``username``, ``new_user``.
@@ -7057,6 +7349,28 @@ export interface components {
              * @enum {string}
              */
             type: "not";
+        };
+        /** NtfyConfigIn */
+        NtfyConfigIn: {
+            /**
+             * Priority
+             * @default 3
+             */
+            priority: number;
+            /**
+             * Server Url
+             * @default https://ntfy.sh
+             */
+            server_url: string;
+            /** Token */
+            token?: string | null;
+            /** Topic */
+            topic: string;
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            type: "ntfy";
         };
         /** OidcLogoutIn */
         OidcLogoutIn: {
@@ -8828,6 +9142,35 @@ export interface components {
              */
             rule_id: string;
         };
+        /** SmtpConfigIn */
+        SmtpConfigIn: {
+            /** Host */
+            host: string;
+            /** Password */
+            password?: string | null;
+            /**
+             * Port
+             * @default 587
+             */
+            port: number;
+            /** Recipients */
+            recipients: string[];
+            /** Sender */
+            sender: string;
+            /**
+             * Tls
+             * @default starttls
+             * @enum {string}
+             */
+            tls: "starttls" | "implicit";
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            type: "smtp";
+            /** Username */
+            username?: string | null;
+        };
         /** SnapshotOut */
         SnapshotOut: {
             /**
@@ -9709,6 +10052,8 @@ export interface components {
         };
         /** UserPreferencesOut */
         UserPreferencesOut: {
+            /** Dashboard Layout */
+            dashboard_layout?: components["schemas"]["DashboardEntryOut"][] | null;
             /** Display Name */
             display_name: string;
             /** Locale */
@@ -9723,6 +10068,8 @@ export interface components {
         };
         /** UserPreferencesUpdate */
         UserPreferencesUpdate: {
+            /** Dashboard Layout */
+            dashboard_layout?: components["schemas"]["DashboardEntry"][] | null;
             /** Display Name */
             display_name?: string | null;
             /** Locale */
@@ -9825,6 +10172,16 @@ export interface components {
              * @default Security key
              */
             name: string;
+        };
+        /** WebhookConfigIn */
+        WebhookConfigIn: {
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            type: "webhook";
+            /** Url */
+            url: string;
         };
         /**
          * ScheduleOut
@@ -22033,6 +22390,298 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["MailTestOut"];
+                };
+            };
+            /** @description Problem details */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Problem details */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Problem details */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Problem details */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+        };
+    };
+    list_channels_api_v1_settings_notifications_channels_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ChannelOut"][];
+                };
+            };
+            /** @description Problem details */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Problem details */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Problem details */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Problem details */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+        };
+    };
+    create_channel_api_v1_settings_notifications_channels_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ChannelCreate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ChannelSavedOut"];
+                };
+            };
+            /** @description Problem details */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Problem details */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Problem details */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Problem details */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+        };
+    };
+    delete_channel_api_v1_settings_notifications_channels__channel_id__delete: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                channel_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Problem details */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Problem details */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Problem details */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Problem details */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+        };
+    };
+    update_channel_api_v1_settings_notifications_channels__channel_id__patch: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                channel_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ChannelUpdate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ChannelSavedOut"];
+                };
+            };
+            /** @description Problem details */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Problem details */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Problem details */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Problem details */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+        };
+    };
+    test_channel_api_v1_settings_notifications_channels__channel_id__test_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                channel_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ChannelTestOut"];
                 };
             };
             /** @description Problem details */

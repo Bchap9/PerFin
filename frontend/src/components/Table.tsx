@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 /**
- * A data table with a sticky header. The scroll container is a focusable,
+ * A data table with a sticky header. At narrow widths (CSS `.table`) each row
+ * becomes a card of label and value pairs (from `data-label`), so nothing needs
+ * sideways scrolling; the markup stays a real table. The scroll container is a focusable,
  * labelled region so keyboard users can scroll it; the caption names both
  * the table and the region (it can be visually hidden).
  */
@@ -16,7 +18,17 @@ export interface TableColumn<Row> {
   align?: "start" | "end" | "center";
   /** Render this column's cells as row headers (`<th scope="row">`). */
   rowHeader?: boolean;
+  /**
+   * Text shown beside the value when the table collapses to cards on narrow
+   * screens. Defaults to `header` when that is a string; a column with no
+   * label (an actions column) shows only its value.
+   */
+  label?: string;
   className?: string;
+}
+
+function cellLabel<Row>(column: TableColumn<Row>): string | undefined {
+  return column.label ?? (typeof column.header === "string" ? column.header : undefined);
 }
 
 export interface TableProps<Row> {
@@ -80,11 +92,11 @@ export function Table<Row>({
               <tr key={rowKey(row)}>
                 {columns.map((column) =>
                   column.rowHeader === true ? (
-                    <th key={column.id} scope="row" className={cx(`align-${column.align ?? "start"}`, column.className)}>
+                    <th key={column.id} scope="row" data-label={cellLabel(column)} className={cx(`align-${column.align ?? "start"}`, column.className)}>
                       {column.cell(row)}
                     </th>
                   ) : (
-                    <td key={column.id} className={cx(`align-${column.align ?? "start"}`, column.className)}>
+                    <td key={column.id} data-label={cellLabel(column)} className={cx(`align-${column.align ?? "start"}`, column.className)}>
                       {column.cell(row)}
                     </td>
                   ),

@@ -61,7 +61,23 @@ export default tseslint.config(
     languageOptions: { globals: { ...globals.node } },
   },
   {
-    files: ["**/*.js"],
+    files: ["**/*.{js,mjs}"],
     ...tseslint.configs.disableTypeChecked,
+  },
+  {
+    // Build-time script: fixed inputs, no untrusted data.
+    files: ["scripts/**/*.mjs"],
+    languageOptions: { globals: { ...globals.node } },
+    rules: { "security/detect-object-injection": "off", "security/detect-non-literal-fs-filename": "off" },
+  },
+  {
+    // Tests read repository files by fixed paths.
+    files: ["src/**/*.test.{ts,tsx}"],
+    rules: { "security/detect-non-literal-fs-filename": "off" },
+  },
+  {
+    // The service worker is plain JS served as-is from public/.
+    files: ["public/sw.js"],
+    languageOptions: { globals: { ...globals.serviceworker } },
   },
 );

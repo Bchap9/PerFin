@@ -27,6 +27,7 @@
 
 .app-header {
   grid-area: header;
+  min-width: 0;
   position: sticky;
   top: 0;
   z-index: 20;
@@ -51,6 +52,7 @@
 
 .app-nav-toggle {
   display: inline-flex;
+  flex-shrink: 0;
 }
 
 .app-sidebar {
@@ -69,6 +71,14 @@
   display: none;
 }
 
+/* Dims the page behind the open small-screen drawer; a tap on it closes the drawer. */
+.app-nav-backdrop {
+  position: fixed;
+  inset: var(--header-height) 0 0 0;
+  z-index: 14;
+  background: rgb(0 0 0 / 40%);
+}
+
 .app-nav__list {
   display: flex;
   flex-direction: column;
@@ -79,7 +89,9 @@
 }
 
 .app-nav__link {
-  display: block;
+  display: flex;
+  align-items: center;
+  min-height: 2.75rem;
   padding: var(--space-2) var(--space-3);
   border-radius: var(--radius-md);
   color: var(--color-text);
@@ -149,6 +161,10 @@
   }
 
   .app-nav-toggle {
+    display: none;
+  }
+
+  .app-nav-backdrop {
     display: none;
   }
 

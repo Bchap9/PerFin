@@ -79,6 +79,36 @@ describe("app shell", () => {
     expect(screen.getByRole("navigation", { name: "Main" })).toHaveClass("app-sidebar--open");
   });
 
+  it("closes the mobile navigation on Escape, on a tap outside it and when a link is chosen", async () => {
+    const user = userEvent.setup();
+    renderAt("/tax");
+    const open = async () => {
+      await user.click(await screen.findByRole("button", { name: "Open navigation" }));
+      expect(screen.getByRole("navigation", { name: "Main" })).toHaveClass("app-sidebar--open");
+    };
+    const closed = () => {
+      expect(screen.getByRole("navigation", { name: "Main" })).not.toHaveClass("app-sidebar--open");
+      expect(screen.getByRole("button", { name: "Open navigation" })).toHaveAttribute("aria-expanded", "false");
+    };
+    await open();
+    await user.keyboard("{Escape}");
+    closed();
+
+    await open();
+    const backdrop = document.querySelector(".app-nav-backdrop");
+    if (backdrop === null) {
+      throw new Error("the drawer backdrop is missing");
+    }
+    await user.click(backdrop);
+    closed();
+    expect(document.querySelector(".app-nav-backdrop")).toBeNull();
+
+    await open();
+    await user.click(screen.getByRole("link", { name: "Loans" }));
+    expect(await screen.findByRole("heading", { level: 1, name: "Loans" })).toBeInTheDocument();
+    closed();
+  });
+
   it("renders a 404 page for unknown paths", async () => {
     renderAt("/no/such/page");
     expect(await screen.findByRole("heading", { level: 1, name: "Page not found" })).toBeInTheDocument();

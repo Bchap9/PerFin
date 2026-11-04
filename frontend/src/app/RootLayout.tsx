@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import { useQuery } from "@tanstack/react-query";
 import { Link, Outlet, useRouterState } from "@tanstack/react-router";
-import { useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 
 import { cx } from "../components/cx";
 import { AccountMenu } from "../features/auth/AccountMenu";
@@ -28,8 +28,32 @@ function SessionIndicator() {
 
 export function RootLayout() {
   const pathname = useRouterState({ select: (state) => state.location.pathname });
-  const [navOpen, setNavOpen] = useState(false);
+  // The drawer is open for one path: navigating elsewhere closes it.
+  const [openAt, setOpenAt] = useState<string | null>(null);
+  const navOpen = openAt === pathname;
+  const setNavOpen = useCallback(
+    (open: boolean | ((value: boolean) => boolean)): void => {
+      setOpenAt((current) => ((typeof open === "function" ? open(current === pathname) : open) ? pathname : null));
+    },
+    [pathname],
+  );
   const bare = isBare(pathname);
+
+  // The small-screen drawer closes on Escape.
+  useEffect(() => {
+    if (!navOpen) {
+      return undefined;
+    }
+    const onKey = (event: KeyboardEvent): void => {
+      if (event.key === "Escape") {
+        setNavOpen(false);
+      }
+    };
+    document.addEventListener("keydown", onKey);
+    return () => {
+      document.removeEventListener("keydown", onKey);
+    };
+  }, [navOpen, setNavOpen]);
 
   return (
     <div className={cx("app-shell", bare && "app-shell--bare")}>
@@ -55,6 +79,15 @@ export function RootLayout() {
           <SessionIndicator />
           <ThemeToggle />
         </header>
+      )}
+      {bare || !navOpen ? null : (
+        <div
+          className="app-nav-backdrop"
+          aria-hidden="true"
+          onClick={() => {
+            setNavOpen(false);
+          }}
+        />
       )}
       {bare ? null : (
         <nav id="app-sidebar" className={cx("app-sidebar", navOpen && "app-sidebar--open")} aria-label="Main">

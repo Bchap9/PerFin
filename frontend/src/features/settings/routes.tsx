@@ -7,6 +7,7 @@ import { AiAccessPage } from "./ai/AiAccessPage";
 import { DataPage } from "./DataPage";
 import { GeneralPage } from "./GeneralPage";
 import { IntakePage } from "./IntakePage";
+import { NotificationsPage } from "./notifications/NotificationsPage";
 import { HouseholdMembersPage } from "./HouseholdMembersPage";
 import { ProfilePage } from "./ProfilePage";
 import { SecurityPage } from "./SecurityPage";
@@ -28,6 +29,7 @@ export function routes(parent: AnyRoute): AnyRoute[] {
       child("intake", IntakePage),
       child("ai", AiAccessPage),
       child("data", DataPage),
+      child("notifications", NotificationsPage),
     ]),
   ];
 }

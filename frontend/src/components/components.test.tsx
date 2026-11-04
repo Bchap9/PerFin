@@ -218,3 +218,22 @@ describe("design system smoke test", () => {
     }
   });
 });
+
+describe("Table on narrow screens", () => {
+  it("labels each cell for the card layout, and leaves action columns unlabelled", () => {
+    interface R {
+      id: string;
+      name: string;
+    }
+    const columns = [
+      { id: "name", header: "Name", rowHeader: true, cell: (row: R) => row.name },
+      { id: "kind", header: "Kind of thing", label: "Kind", cell: () => "x" },
+      { id: "actions", header: <span className="visually-hidden">Actions</span>, cell: () => <button type="button">Go</button> },
+    ];
+    const { container } = render(<Table caption="T" columns={columns} rows={[{ id: "1", name: "A" }]} rowKey={(row) => row.id} />);
+    expect(container.querySelector("tbody th")).toHaveAttribute("data-label", "Name");
+    const cells = container.querySelectorAll("tbody td");
+    expect(cells[0]).toHaveAttribute("data-label", "Kind");
+    expect(cells[1]).not.toHaveAttribute("data-label");
+  });
+});

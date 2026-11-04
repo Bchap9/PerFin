@@ -13,6 +13,7 @@ import { ErrorBoundary } from "./app/ErrorBoundary";
 import { createAppRouter } from "./app/router";
 import { applyTheme, readStoredTheme } from "./app/theme";
 import { isApiError } from "./lib/api/client";
+import { registerServiceWorker } from "./pwa/register";
 
 // Apply the stored theme before the first paint (no inline script: CSP).
 applyTheme(readStoredTheme());
@@ -29,6 +30,8 @@ const queryClient = new QueryClient({
   },
 });
 const router = createAppRouter({ queryClient });
+
+registerServiceWorker();
 
 const container = document.getElementById("root");
 if (container === null) {
