@@ -80,25 +80,65 @@ rules, budgets, basic dashboard. Import of **structured** formats only.
 - [x] Rules engine with dry-run and re-apply
 - [x] Budgets (monthly/annual/custom, rollover, forecast) and spending, income, trend and cash-flow reports (API)
 - [x] Savings goals (accounts, contributions, progress, projected completion; API)
-- [ ] Structured import: CSV (with column mapping UI and saved mappings),
+- [x] Structured import: CSV (with column mapping UI and saved mappings),
       OFX/QFX, QIF, with `import_hash` dedupe and the review queue for
-      duplicates (backend done and covered end to end through the real app
-      and worker in `backend/tests/integration/test_phase2_end_to_end.py`;
-      open: the column mapping and review UI)
+      duplicates (backend covered end to end through the real app and worker
+      in `backend/tests/integration/test_phase2_end_to_end.py`; mapping
+      editor and review UI in `frontend/src/features/imports/` and
+      `frontend/src/features/review/` with vitest coverage; the whole path,
+      including mapping a CSV and confirming a duplicate in the browser, was
+      run live against `perfin api` + `perfin worker`, see CHANGELOG
+      "Resume here". Not built: auto-dedupe, the opening + transactions =
+      closing reconciliation check (Phase 3 box))
 - [x] Document store with envelope encryption; uploaded CSV/OFX kept as
       documents
-- [ ] SPA: dashboard, accounts, transactions grid with inline edit, rules,
+- [x] SPA: dashboard, accounts, transactions grid with inline edit, rules,
       budgets, review queue, settings; SSE-driven refresh
+      (every screen has vitest coverage against mocked fetch, and every page
+      was loaded live in headless Chrome against the real API, with a
+      transaction created over the API appearing in the open grid through
+      SSE without a reload. Known gaps, not part of this box: a reconnecting
+      stream refetches instead of resuming with `Last-Event-ID`; no UI for
+      rule import/export or for the household settings
+      `reports.include_pending_review` / `documents.viewer_download`, which
+      have no API yet either; transaction filters take one value per field)
 - [x] Full export/import (JSON + CSV + documents zip; docs/PORTABILITY.md)
+
+Deferred from Phase 2 (built later or waiting on a decision; none is needed
+for the boxes above):
+
+- S3-compatible blob store: only the local filesystem store exists
+  (`S3BlobStore` refuses to run; parking lot below).
+- `GET/PATCH /settings/household` and a UI for the household settings
+  `reports.include_pending_review` and `documents.viewer_download` (both use
+  their defaults until then).
+- Auto-dedupe of byte-identical uploads (they always go to review).
+- Periodic jobs: a sweeper for orphaned ciphertext files and a prune of
+  expired idempotency keys (both are pruned only opportunistically today).
+- Seccomp default-deny allowlist for the extraction child (C1 partial).
+- SSE resume on reconnect in the SPA (`Last-Event-ID`; it refetches instead).
+- Remapping rule references when a category, payee or tag is merged or
+  deleted (such conditions never match and such actions are skipped).
+- Audit rows for rejected uploads; `import_hash_alias` in export archives;
+  a streaming reader for large import archives.
 
 ## Phase 3: Smart ingestion I (v0.3)
 
 Goal: "upload a statement" works for text-layer PDFs; drop folder works.
 
 - [ ] Sandboxed extraction subprocess (rlimits, seccomp, timeouts)
+      (built in Phase 2 and used for every structured import:
+      `backend/app/ingestion/sandbox/`, tests in
+      `backend/tests/**/test_sandbox*.py`; left for Phase 3 to tick
+      once the PDF/OCR extractors run inside it, and the seccomp filter is
+      still a deny list rather than a default-deny allowlist, SECURITY.md C1
+      partial)
 - [ ] PDF text extraction and layout tables
 - [ ] Classification: kind detection, institution fingerprints (YAML), period
       detection, account matching by last-4
+      (Phase 2 already matches structured statements to an account by last
+      four digits and OFX institution, and takes the period from the
+      statement; the rest is open)
 - [ ] Statement parsers: generic bank/card table parser plus fingerprints for
       an initial set of institutions (contributed with synthetic fixtures)
 - [ ] Reconciliation check and confidence scoring

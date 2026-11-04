@@ -257,9 +257,12 @@ is `HouseholdScoped` with forced RLS):
   unpaired (counted as ambiguous) rather than guessed. A person may link
   two legs by hand regardless of the window, also across currencies (an
   exchange: any amounts of opposite sign). Unlinking or deleting a leg
-  dissolves the whole group. A user-triggered run only touches accounts the
-  user may edit; the run after an import (`transactions.auto_pair` job,
-  seeded with the document's transactions) covers the whole household.
+  dissolves the whole group, and needs edit on every leg (`409
+  transfer-conflict` otherwise). A user-triggered run only touches accounts
+  the user may edit; the run after an import (`transactions.auto_pair` job,
+  seeded with the document's transactions) only the accounts the document's
+  uploader may import into (every account for an owner's or admin's
+  document, or one without an uploader).
 - Reports leave out transactions with `review_state = pending` (still in
   the review queue) unless the household setting
   `reports.include_pending_review` is `true`

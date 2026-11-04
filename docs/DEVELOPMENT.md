@@ -16,7 +16,7 @@ commit.
 | Types | mypy `--strict` (config in `pyproject.toml`, covers `app`, `tests` and `migrations`) | `uv run mypy` |
 | Python SAST | Bandit (`app/` only) | `uv run bandit -c pyproject.toml -r app` |
 | Python deps | pip-audit | `uv run pip-audit` |
-| Tests | pytest (+ pytest-cov) | `uv run pytest` |
+| Tests | pytest (+ pytest-cov, pytest-xdist) | `uv run pytest -n auto` |
 | Node | 22, npm with `package-lock.json` | `cd frontend && npm ci` |
 | TS lint | ESLint flat config, `typescript-eslint` strict-type-checked, `eslint-plugin-security`, `eslint-plugin-react-hooks`, `no-unsanitized` | `npm run lint` |
 | TS types | `tsc --strict --noEmit` | `npm run typecheck` |
@@ -196,6 +196,14 @@ app/
   not collide), creates the schema with `Base.metadata.create_all` plus the
   RLS DDL and grants, and connects the application as a non-owner role so
   RLS is really exercised. It drops the database at the end.
+- The suite runs in parallel with pytest-xdist (`uv run pytest -n auto`, used
+  by `make check` and CI). Each xdist worker is its own pytest session, so it
+  gets its own database and roles; tests must not share state across workers
+  in any other way (fixed ports, fixed paths outside `tmp_path`, global
+  files). Parametrize ids must be deterministic (xdist checks that every
+  worker collects the same tests): wrap random values in
+  `pytest.param(..., id="...")`. For a single file while iterating,
+  `uv run pytest -n auto tests/path/test_x.py`.
 - Fixtures: `settings`, `admin_engine`, `app_engine`, `db` (a Session in a
   rolled-back transaction where possible), `client` (FastAPI `TestClient`),
   plus the identity factories from `tests/fixtures/factories.py`:

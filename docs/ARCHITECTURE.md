@@ -72,6 +72,18 @@ FastAPI application. Stateless apart from the DB. Serves the compiled SPA from
   balance changes). Clients use TanStack Query and invalidate on events.
 - Audit log writes.
 
+Implemented in Phase 2: every change writes an `event` row and a
+`pg_notify('perfin_events', ...)` in the same transaction
+(`app.core.events.emit`), so a notice exists only once the change commits;
+the notice carries `{id, household_id, type}` only. `GET /api/v1/events`
+holds one `LISTEN` connection per stream, filters each event by the
+subscriber's household, role and account grants, sends `id` and `type`
+(never the payload), and replays from `Last-Event-ID` within the event
+retention window. Streams are capped per user and per API process, re-check
+their session periodically and end after `PERFIN_SSE_MAX_STREAM_SECONDS`
+(the browser reconnects). Writes accept an optional `Idempotency-Key`
+(`app.core.idempotency`, keys kept 24 hours per household and user).
+
 ### perfin-mcp (optional)
 Same image, entrypoint `perfin mcp`. Speaks the Model Context Protocol over
 stdio or streamable HTTP and holds exactly one scoped read-only API token. It
@@ -85,6 +97,12 @@ SECURITY.md "Container hardening"). Pulls jobs from a Postgres table using
 `SELECT ... FOR UPDATE SKIP LOCKED`. Job families:
 
 - `ingest_document`: the full pipeline (see INGESTION.md).
+- `imports.apply_mapping`: re-run a structured import with a saved CSV
+  column mapping (Phase 2).
+- `transactions.auto_pair`: after an import, pair transfers between the
+  accounts the document's uploader may import into (Phase 2).
+- `portability.export`, `portability.import`, `portability.expire`: full
+  export and import archives (Phase 2, PORTABILITY.md).
 - `watch_dropfolder`: long-running; inotify where available, polling fallback.
 - `poll_mailbox`: IMAP IDLE/poll on a schedule.
 - `snapshot_net_worth`: daily.
@@ -96,6 +114,22 @@ SECURITY.md "Container hardening"). Pulls jobs from a Postgres table using
 Each job has a timeout, a retry policy, a dead-letter state and a per-user
 concurrency limit. OCR and parsing run in a subprocess with CPU and memory
 limits so a pathological PDF cannot take down the worker.
+
+Status after Phase 2: `ingest_document`, `imports.apply_mapping`,
+`run_rules`, `transactions.auto_pair`, `portability.*` and the identity
+maintenance jobs exist. `watch_dropfolder`, `poll_mailbox`,
+`snapshot_net_worth`, `refresh_prices`, `send_notification` and
+`backup_export` are later phases. The extraction subprocess is built
+(`app.ingestion.sandbox`: a fresh interpreter per document, rlimits on
+memory, CPU, open files and file size, a wall-clock timeout, its own process
+group, Landlock limiting the filesystem to reading the interpreter's own
+paths, a seccomp filter that denies network, exec, ptrace-style calls and
+every filesystem change, a non-dumpable worker so a same-UID child cannot
+read its environment or memory (ADR-0009), privileges dropped to
+`PERFIN_EXTRACT_UID` when the worker runs as root,
+plaintext only on stdin and the validated result on stdout; ADR-0006). The
+seccomp filter is a deny list, not yet a default-deny allowlist (SECURITY.md
+C1 partial).
 
 ### PostgreSQL
 Single database, schema-managed with Alembic. Row-level security policies
@@ -113,10 +147,19 @@ names are random UUIDs; original filenames live only in the database. Blobs are
 never served directly; the API decrypts and streams with `Content-Disposition:
 attachment` and a strict content type.
 
+Implemented in Phase 2: `LocalFSBlobStore` only, with two areas
+(`quarantine` for files not yet accepted, the permanent `documents` area).
+Each object is encrypted as a stream (libsodium secretstream,
+XChaCha20-Poly1305 per chunk) under its own data key, with the blob id as
+associated data; the data key is wrapped by the master key (ADR-0003). The
+S3-compatible store is deferred: `S3BlobStore` is an interface that refuses
+to run (ROADMAP "Later / ideas parking lot").
+
 ### Frontend
 React 18 + TypeScript, built with Vite, routed with TanStack Router, data
-fetching via TanStack Query with an SSE-driven invalidation layer. Charts with a
-lightweight library (likely Recharts or visx). Design system: a small component
+fetching via TanStack Query with an SSE-driven invalidation layer
+(`src/lib/sse.ts` maps event types to query roots). Charts use Recharts
+(account balance history); simple bar summaries are plain CSS. Design system: a small component
 set with light/dark themes. No server-side rendering is needed; the SPA is
 static assets served by the API with a strict CSP (no inline scripts, hashed
 styles).
@@ -141,7 +184,10 @@ styles).
    subprocess, classifies, fingerprints the institution, parses, deduplicates,
    runs rules, computes confidence per field, writes transactions or review
    items, moves blob from quarantine to the permanent store, sets
-   `status=processed` or `needs_review`.
+   `status=processed` or `needs_review`. (Phase 2 handles structured files
+   only: CSV/TSV, OFX/QFX, QIF; there is no antivirus or per-field
+   confidence yet, and a CSV without a matching saved column mapping waits
+   in review until one is saved.)
 4. Worker emits a `document.updated` event; API relays over SSE; the UI
    refreshes the document card and the review badge.
 

@@ -26,18 +26,111 @@ does) and the Authentik guide box waits for a walk-through against a live
 Authentik. Status per control: `docs/security/CONTROLS.md` (A1, A6, A8, F3,
 I2 and G1 stay partial for later-phase reasons stated in each row).
 
-Next: Phase 2 (Ledger). Open items carried over: the pre-auth CSRF cookie
+Phase 2 (Ledger, v0.2) is finalized: `make check` passes from the repo root
+(SPDX; backend ruff, format, mypy --strict, bandit, 4402 pytest tests with
+`-n auto`, OpenAPI drift; frontend eslint, tsc, 269 vitest tests, build;
+`pip-audit` no known vulnerabilities; `npm audit --audit-level=high` passes
+with 14 moderate advisories in dev tooling, none high). Alembic head is
+`0003`. The ledger was run end to end live (`perfin migrate` on a fresh
+database, `perfin api` and `perfin worker` in dev mode, built SPA): setup,
+TOTP login, accounts and a manual balance, OFX upload imported by the worker
+through the sandbox with a live `/events` stream, CSV mapped through
+`/review` with exact duplicates skipped and a near duplicate confirmed, QIF
+with a split, rule dry run then apply, budget report, cash-flow report,
+encrypted export (step-up, one-time download) and import into a second
+household with isolation checks; then every SPA page in headless Chrome,
+SSE refresh of the open grid, CSV mapping and duplicate confirmation through
+the UI. All eight Phase 2 roadmap boxes are ticked; the deferrals are listed
+under Phase 2 in `docs/ROADMAP.md` (S3 blob store, `/settings/household`,
+auto-dedupe, sweepers, seccomp allowlist, SSE resume in the SPA, rule
+reference remapping). The sandboxed extraction subprocess is built but its
+box belongs to Phase 3.
+
+Next: Phase 3 (Smart ingestion I). Open items carried over: the Phase 0 CI
+box and the Phase 1 authz-matrix CI and Authentik boxes still wait for a run
+on GitHub Actions and a live Authentik; security review round 1 of Phase 2
+(P2-SR-01..05) and round 2 (P2-SR-R2-01..02) are fixed in the working tree with regression tests; the pre-auth CSRF cookie
 (`__Host-perfin-pre`) and the OIDC cookies are always `Secure`, so dev mode
-over plain http works only on `localhost` (where browsers allow `Secure`
-cookies), unlike the session cookie, which has a `perfin-session-dev`
-fallback; npm audit lists 14 moderate advisories in dev tooling (eslint,
-typescript-eslint, openapi-typescript via minimatch), none high. (Time-zone
-validation uses the system tz database; the `python:3.12-slim` runtime base
-ships it, checked with `zoneinfo.ZoneInfo("Europe/Berlin")` in that image.)
+over plain http works only on `localhost`; C1 stays partial until the
+seccomp filter is a default-deny allowlist. (Time-zone validation uses the
+system tz database; the `python:3.12-slim` runtime base ships it.)
 
 ## [Unreleased]
 
 ### Added
+
+#### Phase 2: Ledger (v0.2)
+
+- Security review round 1 fixes. P2-SR-01 (high, C1): the extraction child
+  could read the worker's environment and memory through `/proc` and change
+  files of the shared UID 10001. The worker is now non-dumpable
+  (`protect_parent`, at `perfin worker` start-up and before every spawn),
+  the child confines itself with Landlock (read-only access to the
+  interpreter's paths and its own `/proc/<pid>`; refuses to run without
+  Landlock unless `PERFIN_EXTRACT_REQUIRE_LANDLOCK=false`), and seccomp
+  denies every filesystem-changing call and `open` for writing (ADR-0009,
+  amending ADR-0006). P2-SR-02 (F3): the after-import transfer matcher only
+  pairs accounts the uploader may import into, and unlinking or deleting a
+  transfer leg needs edit on every leg (`409 transfer-conflict`). P2-SR-03
+  (I2): transfer, rules, goal and document-deletion events name their
+  accounts, and the stream drops account-derived events that name none for
+  members and viewers. P2-SR-04 (C4): text uploads are scanned for active
+  markup over the whole stream, not only the first 8 KiB. P2-SR-05: a
+  user's stored `Idempotency-Key` answers are dropped when their grants or
+  role change. Setting `PERFIN_EXTRACT_REQUIRE_LANDLOCK` (default `true`).
+- Security review round 2 fixes. P2-SR-R2-01 (medium, C1): seccomp now
+  limits `rt_sigqueueinfo` and `rt_tgsigqueueinfo` to the child's own pid,
+  like `kill` and `tgkill`, and denies `fcntl` `F_SETOWN`, `F_SETOWN_EX`
+  and `F_SETSIG` (SIGIO file ownership on the child's pipes, found while
+  fixing this). Without Landlock signal scoping (ABI 6+, Linux 6.12+) a
+  parser exploit could otherwise stop or kill the worker and sibling
+  children; the regression test runs with Landlock capped at ABI 4 and
+  without Landlock. P2-SR-R2-02 (low, C1): the worker healthcheck runs under
+  `env -i`, so the dumpable same-UID probe no longer carries the env_file
+  secrets, and ADR-0009 names the remaining opt-out exposure (`docker exec`
+  into the worker).
+- Phase 2 finalize: the whole ledger path was run live against `perfin api`
+  and `perfin worker` (dev mode, real PostgreSQL 16, database freshly
+  migrated to `0003`, built SPA) with synthetic data only: first-run setup,
+  TOTP enrolment, login, accounts (checking matched by last four digits,
+  a manual asset with a balance snapshot and history), an OFX upload
+  imported by the worker through the sandbox while a live `/events` stream
+  delivered `document.*`, `transaction.created` and `balance.updated`
+  (ids and types only), a CSV upload mapped through `/review` (exact
+  duplicates skipped, a respelled row held as a near duplicate and
+  confirmed), a QIF upload with a split, a rule dry run (`/rules/test`,
+  nothing written) then create and apply to existing rows (exactly the
+  dry-run matches changed), a monthly budget report whose actual equals the
+  categorised spending, the cash-flow report, an encrypted full export
+  (step-up, SHA-256 checked, second download `410`) imported into a second
+  household (same ledger, categories, rules, budget and documents;
+  re-uploading the statement adds nothing; household A unchanged; B's
+  account `404` from A). In headless Chrome every SPA page rendered live
+  data without console or CSP errors, a transaction created over the API
+  appeared in the open grid through SSE without a reload, and a CSV was
+  mapped and a duplicate confirmed through the UI.
+- Frontend ledger screens (Phase 2): accounts list grouped by type with
+  balances, create/edit/close/reopen and a balance-history chart with
+  manual balances; the transactions grid with cursor paging, filters,
+  inline edit (category, payee, tags, notes) with rollback on refusal,
+  exact-decimal split editor, transfer link/unlink and bulk actions;
+  document upload with progress and live status; the CSV column-mapping
+  editor (starts from the server's suggestion, saves a mapping and applies
+  it); the review queue (duplicate side by side with its candidates,
+  unknown-account picker with "remember", unparsed items to the mapping
+  editor, dismiss). Viewers and view-only accounts get a read-only UI.
+- Frontend planning screens (Phase 2): a dashboard at `/` (this month's cash
+  flow, spending by category, budget status, recent transactions, review
+  count, account totals; each card loads on its own), budgets with a period
+  report (budgeted, carried over, actual, forecast, remaining, status) and a
+  line editor, goals with progress and projection and a contribution history,
+  rules (ordered list with move up/down, condition and action builder that
+  matches the backend rule schema, a dry run showing matches and the diff
+  before saving, and apply-to-existing with job progress), category hierarchy,
+  payee (merge, aliases) and tag management under Settings, plus Settings pages
+  for the household base currency, per-member account access (step-up) and
+  full data export (start, progress, one-time download) and import, each
+  behind step-up. The old placeholder home page is replaced by the dashboard.
 - Phase 2 integration: Alembic revision `0003` (`0003_phase2_ledger`) creates
   the 27 Phase 2 tables (ledger, documents and ingestion, imports,
   `idempotency_key`, `portability_archive`), each with forced RLS
@@ -54,6 +147,10 @@ ships it, checked with `zoneinfo.ZoneInfo("Europe/Berlin")` in that image.)
   sandbox and the importer, then `/transactions` (rules applied), `/review`
   (column mapping, near duplicate confirmed), reports with and without
   pending rows, and `/events` live and resumed.
+- Backend tests run in parallel with pytest-xdist (`uv run pytest -n auto`
+  in `make check`, `make backend-test` and CI). Each worker builds its own
+  per-session database; random parametrize values now carry fixed ids so
+  every worker collects the same tests.
 - Manual transactions (`POST /transactions`) now run through the
   household's rules (`apply_rules_to`); category, payee, notes and tags
   given in the request are protected.
@@ -255,6 +352,8 @@ ships it, checked with `zoneinfo.ZoneInfo("Europe/Berlin")` in that image.)
   `PERFIN_EXTRACT_MEMORY_MB`, `PERFIN_EXTRACT_CPU_SECONDS`,
   `PERFIN_EXTRACT_TIMEOUT_SECONDS`, `PERFIN_EXTRACT_MAX_OUTPUT_MB`,
   `PERFIN_EXTRACT_UID`.
+
+#### Phase 0: Scaffold
 
 - Licence: GNU AGPL-3.0-or-later (`LICENSE`), SPDX header on every source
   file enforced by `scripts/check_spdx.py`.
@@ -551,6 +650,22 @@ ships it, checked with `zoneinfo.ZoneInfo("Europe/Berlin")` in that image.)
 
 ### Security
 
+- Phase 2 (Ledger): every Phase 2 table (27, ledger, documents, imports,
+  `idempotency_key`, `portability_archive`) has forced RLS
+  (`household_isolation`) and least-privilege grants (revision `0003`);
+  references between household-scoped rows carry `household_id`, so the
+  database itself refuses a link into another household (ADR-0008, F3).
+  Account-level visibility (`account_grant`) is applied by transactions,
+  balances, reports, budgets, goals, documents, review and SSE (full
+  export and import are owner/admin only, who see every account); the
+  authz matrix covers every Phase 2 route with cross-household `404`
+  rows. Uploaded files are sniffed by magic bytes (SVG/HTML/polyglots
+  refused), stored encrypted per object and parsed only in the sandboxed
+  child (rlimits, seccomp deny list, no network, privilege drop; C1
+  partial). Full export, download and import and account-grant changes
+  need step-up; export archives can be passphrase-encrypted; CSV cells are
+  neutralised on import and export (C7). SSE messages carry ids and types
+  only.
 - Phase 1 security review round 1 fixes:
   - A break-glass account can no longer escape `PERFIN_BREAKGLASS_CIDRS`
     through a personal access token (P1-SR-01, B7). `POST /auth/tokens` is
@@ -658,6 +773,32 @@ ships it, checked with `zoneinfo.ZoneInfo("Europe/Berlin")` in that image.)
 
 ### Changed
 
+- Phase 2 finalize: `docs/ARCHITECTURE.md` describes the implemented SSE
+  relay (event row + `NOTIFY`, one `LISTEN` per stream, `Last-Event-ID`
+  replay), the Phase 2 worker jobs, the sandbox and the local-only blob
+  store; `docs/API.md` states which Phase 2 routes exist and that
+  `/settings/household` and `/audit` are not built yet; `docs/INGESTION.md`
+  states the Phase 2 intake scope (upload only, structured formats
+  extracted, no ZIP expansion, no auto-dedupe, no opening/closing
+  reconciliation yet); `docs/ROADMAP.md` lists the deferrals from Phase 2
+  (S3 blob store, household settings API, auto-dedupe, sweepers, seccomp
+  allowlist, SSE resume in the SPA, rule-reference remapping) and notes
+  that the sandboxed extraction subprocess (a Phase 3 box) is already
+  built. `docs/security/CONTROLS.md`: F8 lists every paginated or capped
+  Phase 2 list endpoint (still partial for the Phase 1 identity lists),
+  A6 records the Phase 2 step-up routes, C12 the review UI, G3 the SPA's
+  optional passphrase.
+- The placeholder home page is replaced by the dashboard; the app shell
+  test now checks the placeholder pages on routes that are still
+  placeholders (`/tax`, `/loans`).
+- `tests/integration/test_events.py`: the "payload stays out of the
+  NOTIFY" check used the value `d-1`, which can occur inside a random
+  UUIDv7 in the notice (it failed once in a full run); it now uses a marker
+  that cannot be part of a hex id. `test_api_tokens.py` and
+  `tests/security/test_token_security.py` took the token secret as the text
+  after the last `_`, but the base64url secret can itself contain `_` (a
+  run failed with the "secret" `0`); they now slice the documented
+  `pfn_<12 hex>_<43 chars>` layout.
 - `deploy/docker-compose.yml`: the `edge` network has a fixed subnet
   (`EDGE_SUBNET`, default `172.30.79.0/24`, gateway `EDGE_GATEWAY`,
   `172.30.79.1`), so the address host-local clients such as an SSH tunnel

@@ -20,7 +20,9 @@ authenticate with the session cookie plus CSRF header; scripts use
   idempotency-key-reused`; a repeat while the first is still running waits
   for it (`409 idempotency-key-in-use` with `Retry-After` after the lock
   timeout). Only successful answers are stored: a failed request may be
-  retried with its key. The Phase 1 creating `POST`s (`/households`,
+  retried with its key. A user's stored answers are dropped when their
+  account grants or role change, so a replay never returns what they may
+  no longer see (the request runs again). The Phase 1 creating `POST`s (`/households`,
   `/households/{id}/members`, `/admin/users`) ignore it; `POST /auth/tokens`
   never will (a replay could not return the secret).
 - Versioning: path version; breaking changes bump the path.
@@ -35,8 +37,21 @@ the first cut with `/setup`, `/auth/login/options`, `/auth/password`,
 WebAuthn options), `/auth/tokens/scopes`, `/auth/session/household`,
 `DELETE /households/{id}`, `/settings/user` and `/admin/users`. Once the
 first admin exists, `POST /setup` is `404` for good and `GET /setup/status`
-answers `{"setup_required": false}`. Everything from `/accounts` on is later
-phases.
+answers `{"setup_required": false}`.
+
+Phase 2 (v0.2) implements, as listed below: `/accounts` (with balances,
+close/reopen and grants), `/transactions` (splits, transfers, bulk),
+`/categories`, `/payees`, `/tags`, `/rules` (reorder, test, apply, export,
+import), `/jobs/{id}`, `/budgets` and their report, `/goals` and
+contributions, `/reports/*`, `/documents` (except `preview`, Phase 3, and
+the full-text `q`, Phase 4), `/imports/*`, `/review`, `/events`, `/export`
+and `/import`. It also adds `POST /transactions/transfers/auto-pair` and the
+grant routes. Not built yet among the Phase 2 families: `GET/PATCH
+/settings/household` (so the household settings `reports.include_pending_review`
+and `documents.viewer_download` have their defaults and no API) and `GET
+/audit`. Everything from `/securities` on is later phases. These Phase 2
+routes were run end to end against a live `perfin api` and `perfin worker`
+on a freshly migrated database (CHANGELOG "Resume here").
 
 ```
 GET    /setup/status                    first-run setup pending? (no user yet)
@@ -162,7 +177,7 @@ GET             /tax-years/{year}/export        zip (job)
 GET             /events                         SSE stream
 GET             /jobs/{id}
 
-GET/PATCH       /settings/household
+GET/PATCH       /settings/household            (not built yet)
 GET/PATCH       /settings/user
 GET/PATCH       /settings/system               (instance admin; OIDC, intake, integrations)
 GET/POST        /admin/users                   (instance admin; POST step-up)
@@ -354,9 +369,12 @@ is `403 session-required`). Each message is `id: <event id>` and `data:
 {"id", "type"}` (unnamed, so `EventSource.onmessage` gets it); payloads
 never leave the server, the client refetches. Events of the active
 household only, and for members and viewers only those whose payload
-`account_id`/`account_ids` names a visible account (or none), that are
-addressed to them (`user_id`), and whose document (`document.*` `id`,
-`review.*` `document_id`) is visible. `Last-Event-ID` (or
+`account_id`/`account_ids` names a visible account (or none), whose
+`all_account_ids` (goals) are all visible, that are addressed to them
+(`user_id`), and whose document (`document.*` `id`, `review.*`
+`document_id`) is visible; `transaction.*`, `balance.*` and `goal.*` events
+that name no account are not sent to them, and `document.deleted` without an
+account only to the uploader. `Last-Event-ID` (or
 `?last_event_id=`) resumes after that event within the 7-day event
 retention; an unknown or expired id gets `data: {"type": "stream.resync"}`
 (refetch everything). A comment line (`: keep-alive`) is sent after
@@ -506,7 +524,10 @@ accounts within the window (default 3 days, at most 14), closest first.
 "date_to"?, "window_days"?}`) pairs unlinked transfers among the caller's
 editable accounts and returns `{"paired": [{"group_id", "transaction_ids"}],
 "ambiguous"}` (rules in DATA_MODEL.md "Ledger"); the worker runs the same
-matcher over the whole household after every import. Deleting a
+matcher after every import over the accounts the document's uploader may
+import into (all of them for an owner's or admin's document). Unlinking, or
+deleting a leg, needs edit on every leg of the transfer (`409
+transfer-conflict` otherwise). Deleting a
 transaction keeps its audit row (`transaction.delete`, with its amounts,
 dates and ids but no free text). Every write emits a `transaction.*` event.
 

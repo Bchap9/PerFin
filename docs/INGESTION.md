@@ -38,6 +38,15 @@ received ─▶ scanning ─▶ extracting ─▶ classifying ─▶ parsing ─
 - Written to the **quarantine** blob area (encrypted like everything else, but
   logically separate and never linked from the UI as a downloadable file).
 
+Phase 2 status (`app/ingestion/intake/`): browser and token uploads
+(`POST /documents`) only; the drop folder and email intake are Phase 3. All
+the types above are accepted by the sniffer and stored, but only CSV/TSV,
+OFX/QFX and QIF are extracted; any other type is kept and waits in review
+(`unparsed`, `format_not_supported`) until its extractor lands. ZIP
+expansion is not built yet (a ZIP is stored as one document). Auto-dedupe is
+not built: a byte-identical upload always becomes a `possible_duplicate`
+item (`payload.reason: same_content`, `duplicate_of` the earlier document).
+
 ### 2. Scan (optional)
 If the ClamAV sidecar is enabled, the quarantined blob is scanned. Positive
 results move the document to `rejected` with the signature name recorded.
@@ -54,15 +63,24 @@ temporary working directory, its own process group and the decrypted file on
 stdin. Before reading input the child sets `RLIMIT_AS` (default 1 GiB,
 `PERFIN_EXTRACT_MEMORY_MB`), `RLIMIT_CPU` (`PERFIN_EXTRACT_CPU_SECONDS`),
 `RLIMIT_NOFILE`, `RLIMIT_FSIZE` 0, `RLIMIT_NPROC` 0 and `RLIMIT_CORE` 0,
-`PR_SET_NO_NEW_PRIVS` and a seccomp filter, and refuses to run if any of that
-fails. The filter is **default-allow with a deny list** (`EPERM` for sockets,
+`PR_SET_NO_NEW_PRIVS`, Landlock and a seccomp filter, and refuses to run if
+any of that fails. Landlock grants only *reading* beneath the interpreter's
+own paths (`sys.path`, the prefixes, system library directories) and the
+child's own `/proc/<pid>`: the documents and quarantine volumes, key files
+and other processes are out of reach (`PERFIN_EXTRACT_REQUIRE_LANDLOCK=false`
+lets it run on a kernel without Landlock, with only the other layers). The
+worker makes itself non-dumpable before it spawns a child, so a child under
+the same UID cannot open `/proc/<worker>/{environ,mem,fd}` (ADR-0009). The
+seccomp filter is **default-allow with a deny list** (`EPERM` for sockets,
 `execve`, `fork`/non-thread `clone`, signals to other processes, `ptrace`,
-mounts and namespaces, BPF, `io_uring`, keyrings, identity changes, ...): an
+mounts and namespaces, BPF, `io_uring`, keyrings, identity changes, every
+call that changes the filesystem, and `open`/`openat` for writing, ...): an
 allowlist was not chosen yet because CPython and the Phase 3 PDF/OCR
 libraries need a large, version-dependent syscall set; the container's
 `cap_drop: ALL`, read-only root and missing egress are the outer layers.
 When the worker runs as root, `PERFIN_EXTRACT_UID` makes the child switch to
-that UID. The parent kills the process group after
+that UID; the shipped image runs the worker as 10001 and the child shares
+that UID, isolated by the layers above. The parent kills the process group after
 `PERFIN_EXTRACT_TIMEOUT_SECONDS` or when stdout exceeds
 `PERFIN_EXTRACT_MAX_OUTPUT_MB`, and validates stdout against a strict
 Pydantic schema. Extractors are registered by kind
@@ -126,7 +144,10 @@ later parser version can re-run without the original being re-uploaded.
 
 **Reconciliation check.** For statements: opening balance + sum(transactions)
 must equal closing balance within rounding. Failure drops confidence and raises
-a review item describing the discrepancy.
+a review item describing the discrepancy. (Not built in Phase 2: structured
+statements record their closing balance as a `balance_snapshot`, but the
+opening + transactions = closing check and per-field confidence come with
+the Phase 3 parsers; SECURITY.md C12 partial.)
 
 ### 6. Match and deduplicate
 - Each parsed transaction gets an `import_hash`. Existing rows with the same
