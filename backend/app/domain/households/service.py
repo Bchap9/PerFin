@@ -54,6 +54,7 @@ from app.core import clock
 from app.core.audit import RequestMeta, audit
 from app.core.errors import ProblemError
 from app.core.events import emit
+from app.core.idempotency import forget_user_keys
 from app.core.ids import uuid7
 from app.core.settings import Settings
 from app.db.models import Household
@@ -492,6 +493,7 @@ def change_member_role(
     previous = member.role
     now = clock.utcnow()
     member.role = role
+    forget_user_keys(db, household_id, user_id)
     member.updated_at = now
     db.flush()
     repo.revoke_household_sessions(
@@ -682,6 +684,7 @@ def set_account_grant(
     if previous == level.value and existing is not None:
         return existing
     grant = repo.upsert_grant(db, household_id, user_id, account_id, level, now=clock.utcnow())
+    forget_user_keys(db, household_id, user_id)
     _record(
         db,
         principal,
@@ -711,6 +714,7 @@ def revoke_account_grant(
         return False
     grant_id, previous = existing.id, existing.level.value
     repo.delete_grants(db, household_id, user_id, account_id=account_id)
+    forget_user_keys(db, household_id, user_id)
     _record(
         db,
         principal,

@@ -36,7 +36,12 @@ How it holds under retries and concurrency:
   :data:`KEY_TTL`; expired rows of the household are removed whenever a new
   key is stored, and an expired key may be used again.
 * Only successful (2xx) answers are stored. The stored body is the response
-  model's JSON, i.e. exactly what the caller was allowed to see.
+  model's JSON, i.e. exactly what the caller was allowed to see **then**.
+  When what a user may see changes (an account grant set or revoked, a role
+  change), :func:`forget_user_keys` drops that user's stored answers, so a
+  replay can never hand back an object the user may no longer see (review
+  finding P2-SR-05); the retried request then runs again under the current
+  rules.
 """
 
 from __future__ import annotations
@@ -217,6 +222,15 @@ def _replay(
     if stored_status is None:  # pragma: no cover - only inside the first request's transaction
         raise key_in_use()
     return replay_response(int(stored_status), stored_body)
+
+
+def forget_user_keys(db: Session, household_id: uuid.UUID, user_id: uuid.UUID) -> None:
+    """Drop every stored answer of ``user_id`` in ``household_id`` (module doc)."""
+    db.execute(
+        delete(IdempotencyKey).where(
+            IdempotencyKey.household_id == household_id, IdempotencyKey.user_id == user_id
+        )
+    )
 
 
 def payload_of(body: BaseModel | None = None, **path: Any) -> Mapping[str, Any]:

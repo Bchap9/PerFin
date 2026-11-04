@@ -29,7 +29,7 @@ backend-check:
 	cd $(BACKEND) && uv run mypy \
 		&& uv run mypy --strict ../scripts/check_spdx.py ../deploy/egress/egress_proxy.py
 	cd $(BACKEND) && uv run bandit -q -c pyproject.toml -r app ../scripts ../deploy/egress
-	cd $(BACKEND) && uv run pytest
+	cd $(BACKEND) && uv run pytest -n auto
 	cd $(BACKEND) && uv run perfin openapi | diff -u openapi.json - \
 		|| { echo "backend/openapi.json is stale; run 'make openapi'" >&2; exit 1; }
 
@@ -46,7 +46,7 @@ audit:
 test: backend-test frontend-test
 
 backend-test:
-	cd $(BACKEND) && uv run pytest
+	cd $(BACKEND) && uv run pytest -n auto
 
 frontend-test:
 	cd $(FRONTEND) && npm test

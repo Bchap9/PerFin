@@ -46,6 +46,7 @@ from app.domain.documents.models import (
 from app.domain.documents.schemas import INGEST_JOB_TYPE, IngestDocumentPayload
 from app.domain.transactions.models import Transaction
 from app.ingestion import pipeline
+from app.ingestion.intake.sniff import RejectReason
 from app.ingestion.intake.upload import (
     UploadRejectedError,
     UploadTooLargeError,
@@ -227,6 +228,41 @@ def test_rejected_uploads_store_nothing(
     assert caught.value.slug == "unsupported-file-type"
     assert _files(tmp_path / "quarantine") == []
     assert db.execute(select(Document)).scalars().all() == []
+
+
+@pytest.mark.parametrize(
+    "tail", [b"<script>alert(1)</script>", b"javascript:alert(1)", b"<svg onload=x>"]
+)
+def test_text_polyglot_past_the_sniff_window_is_refused(
+    db: Session, store: LocalFSBlobStore, keyring: Keyring, tmp_path: Path, tail: bytes
+) -> None:
+    # Review finding P2-SR-04: active markup after the first 8 KiB of a text
+    # file, split across a chunk boundary (_chunks uses 4096-byte chunks).
+    owner = make_user(db, role="owner")
+    principal = _principal(owner)
+    apply_rls_context(db, principal)
+    head = csv_bytes(synth_transactions(1000))
+    assert len(head) > 3 * 8192
+    pad = b"x" * (4096 - len(head) % 4096 - 3)
+    data = head + pad + tail + b"\n"
+    with pytest.raises(UploadRejectedError) as caught:
+        _upload(db, principal, store, keyring, data)
+    assert (caught.value.status, caught.value.reason) == (415, RejectReason.POLYGLOT)
+    assert _files(tmp_path / "quarantine") == []
+    assert db.execute(select(Document)).scalars().all() == []
+
+
+def test_binary_types_are_checked_in_the_sniff_window_only(
+    db: Session, store: LocalFSBlobStore, keyring: Keyring
+) -> None:
+    # Compressed bytes in a large PDF may spell a short tag by chance; the
+    # download headers (attachment, nosniff, sandbox CSP) are the C4 control.
+    owner = make_user(db, role="owner")
+    principal = _principal(owner)
+    apply_rls_context(db, principal)
+    data = b"%PDF-1.7\n" + b"0" * 20_000 + b"<svg>" + b"\n%%EOF\n"
+    received = _upload(db, principal, store, keyring, data)
+    assert received.document_id is not None
 
 
 def test_oversized_upload_is_refused_mid_stream(

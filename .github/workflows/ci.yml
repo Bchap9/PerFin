@@ -145,7 +145,7 @@ jobs:
       - name: Bandit
         run: uv run bandit -q -c pyproject.toml -r app ../scripts ../deploy/egress
       - name: pytest (unit, integration, security)
-        run: uv run pytest
+        run: uv run pytest -n auto
       - name: OpenAPI schema is up to date
         run: |
           uv run perfin openapi > "$RUNNER_TEMP/openapi.json"

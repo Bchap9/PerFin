@@ -57,7 +57,9 @@ def test_only_the_hash_is_stored(actors: Actors, factories: Factories) -> None:
     owner = actors.new(role="owner")
     body = mint(owner, ["households:read"])
     raw = body["token"]
-    secret = raw.rsplit("_", 1)[1]
+    # pfn_<12 hex id>_<43 base64url chars>; the secret itself may contain "_".
+    secret = raw[len("pfn_") + 12 + 1 :]
+    assert len(secret) == 43
     household_id = owner.record.household_id
     assert household_id is not None
     with factories.transaction() as db:

@@ -26,7 +26,7 @@ from app.core.events import emit
 from app.core.settings import Settings
 from app.db.rls import set_context
 from app.domain.documents.blobstore import LocalFSBlobStore
-from app.domain.events.stream import uuid7_floor
+from app.domain.events.stream import StreamSlots, uuid7_floor
 from tests.fixtures.documents import make_document
 from tests.fixtures.factories import AuthedClient, Factories
 from tests.fixtures.households import API, Actors, problem_type
@@ -68,9 +68,26 @@ def emit_now(
         return emit(db, household_id, type_, payload)
 
 
-def later(delay: float, action: Callable[[], None]) -> threading.Thread:
+def while_streaming(
+    actors: Actors, user: AuthedClient, action: Callable[[], None], *, settle: float = 0.3
+) -> threading.Thread:
+    """Run ``action`` once ``user``'s stream is open (not after a fixed delay).
+
+    The stream holds a slot in the app's :class:`StreamSlots` from before it
+    picks its start point; waiting for that slot, then ``settle`` seconds,
+    keeps the test independent of how long the request takes to get there on
+    a loaded machine (an event emitted before the start point is, correctly,
+    never delivered to a fresh stream).
+    """
+
     def run() -> None:
-        time.sleep(delay)
+        deadline = time.monotonic() + 30
+        while time.monotonic() < deadline:
+            slots = getattr(actors.app.state, "sse_slots", None)
+            if isinstance(slots, StreamSlots) and slots.count(user.user.id) > 0:
+                break
+            time.sleep(0.01)
+        time.sleep(settle)
         action()
 
     thread = threading.Thread(target=run, daemon=True)
@@ -113,7 +130,7 @@ def test_stream_is_household_scoped_and_carries_ids_and_types_only(
             factories, home, "transaction.created", {"id": str(uuid.uuid4()), "memo": SECRET}
         )
 
-    thread = later(0.4, produce)
+    thread = while_streaming(actors, alice, produce)
     response = alice.get(EVENTS)
     thread.join()
     assert response.status_code == 200, response.text
@@ -167,7 +184,7 @@ def test_members_only_hear_about_what_they_can_see(
         ):
             sent[name] = emit_now(factories, hh, type_, payload)
 
-    thread = later(0.4, produce)
+    thread = while_streaming(actors, member, produce)
     as_member = member.get(EVENTS)
     thread.join()
     delivered = [d["id"] for d in data_of(as_member.text)]
@@ -196,7 +213,9 @@ def test_last_event_id_resumes_after_that_event(actors: Actors, factories: Facto
     assert data_of(fresh.text) == []
 
 
-@pytest.mark.parametrize("value", ["not-a-uuid", str(uuid.uuid4()), "expired"])
+@pytest.mark.parametrize(
+    "value", ["not-a-uuid", pytest.param(str(uuid.uuid4()), id="unknown-uuid"), "expired"]
+)
 def test_unusable_last_event_id_asks_for_a_resync(
     actors: Actors, factories: Factories, value: str
 ) -> None:
@@ -242,10 +261,11 @@ def test_a_revoked_session_ends_the_stream(
                     .values(revoked_at=utcnow(), revoked_reason="test")
                 )
 
-        thread = later(0.3, revoke)
+        thread = while_streaming(slow, owner, revoke)
         started = time.monotonic()
         response = owner.get(EVENTS)
         thread.join()
+        assert response.status_code == 200, response.text
         assert time.monotonic() - started < 5
         assert data_of(response.text)[-1] == {"type": "session.ended"}
 

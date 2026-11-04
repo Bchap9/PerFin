@@ -994,7 +994,7 @@ dev = [
     { name = "pip-audit" },
     { name = "pytest" },
     { name = "pytest-cov" },
-    { name = "pytest-xdist", specifier = ">=3.8.0" },
+    { name = "pytest-xdist" },
     { name = "respx" },
     { name = "ruff" },
     { name = "types-defusedxml" },

@@ -183,6 +183,9 @@ services:
   # --------------------------------------------------------------- worker --
   # Parses untrusted files (ADR-0006): no published ports, not reachable
   # from the proxy, no route out except the optional egress proxy.
+  # The extraction child shares UID 10001; it is isolated by a non-dumpable
+  # worker, Landlock and seccomp filesystem rules (ADR-0009), which need a
+  # host kernel with Landlock and Docker's default seccomp profile.
   worker:
     <<: [*hardened, *perfin-image]
     command: ["worker"]
@@ -213,12 +216,17 @@ services:
     networks: [backend, egress]
     healthcheck:
       # The worker serves no HTTP; its internal metrics endpoint answering
-      # means the process is alive.
+      # means the process is alive. The probe runs under `env -i`: it is a
+      # dumpable process of the worker's UID, so it must not carry the
+      # master key, secret key or database URL from env_file where an
+      # extraction child without Landlock could read /proc/<pid>/environ
+      # (review finding P2-SR-R2-02, ADR-0009).
       test:
-        - CMD
-        - python
-        - -c
-        - "import os, urllib.request; urllib.request.urlopen('http://127.0.0.1:' + os.environ.get('PERFIN_METRICS_PORT', '9100') + '/metrics', timeout=3)"
+        - CMD-SHELL
+        - >-
+          exec env -i /app/.venv/bin/python -I -c "import sys, urllib.request;
+          urllib.request.urlopen('http://127.0.0.1:' + sys.argv[1] + '/metrics', timeout=3)"
+          "$${PERFIN_METRICS_PORT:-9100}"
       interval: 30s
       timeout: 5s
       start_period: 20s

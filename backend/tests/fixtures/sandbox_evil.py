@@ -12,9 +12,13 @@ succeeded reports ``...:ok``.
 
 from __future__ import annotations
 
+import ctypes
+import fcntl
 import os
+import platform
 import signal
 import socket
+import struct
 import sys
 import time
 from collections.abc import Callable
@@ -90,12 +94,132 @@ def kill_others(data: bytes, options: ExtractOptions, kind: str) -> ExtractResul
     )
 
 
+# (rt_sigqueueinfo, rt_tgsigqueueinfo) by architecture.
+_SIGQUEUE_SYSCALLS = {"x86_64": (129, 297), "aarch64": (138, 240)}
+_SI_QUEUE = -1
+_F_SETOWN, _F_SETSIG, _F_SETOWN_EX, _F_OWNER_PID = 8, 10, 15, 1
+
+
+def _sigqueue(number: int, *pids: int) -> str:
+    """``rt_(tg)sigqueueinfo(pids..., 0, info)`` with ``si_code`` SI_QUEUE.
+
+    Signal 0 runs every permission check but delivers nothing, so the
+    probe never harms the parent even when the control is missing.
+    """
+    libc = ctypes.CDLL(None, use_errno=True)
+    info = ctypes.create_string_buffer(struct.pack("iii", 0, 0, _SI_QUEUE), 128)
+    ctypes.set_errno(0)
+    args = [ctypes.c_long(pid) for pid in pids]
+    if libc.syscall(ctypes.c_long(number), *args, ctypes.c_long(0), info) == 0:
+        return "ok"
+    return str(ctypes.get_errno())
+
+
+def signal_others(data: bytes, options: ExtractOptions, kind: str) -> ExtractResult:
+    """Signal the parent without ``kill``: queued signals and SIGIO file ownership."""
+    parent, me = os.getppid(), os.getpid()
+    queue, tgqueue = _SIGQUEUE_SYSCALLS[platform.machine()]
+    read_end, write_end = os.pipe()
+    owner_ex = struct.pack("ii", _F_OWNER_PID, parent)
+    return _result(
+        kind,
+        "sigqueue_parent:" + _sigqueue(queue, parent),
+        "tgsigqueue_parent:" + _sigqueue(tgqueue, parent, parent),
+        "sigqueue_init:" + _sigqueue(queue, 1),
+        "sigqueue_self:" + _sigqueue(queue, me),
+        "setown_parent:" + _errno_of(lambda: fcntl.fcntl(write_end, _F_SETOWN, parent)),
+        "setown_ex_parent:" + _errno_of(lambda: fcntl.fcntl(read_end, _F_SETOWN_EX, owner_ex)),
+        "setsig:" + _errno_of(lambda: fcntl.fcntl(write_end, _F_SETSIG, 0)),
+    )
+
+
 def writefile(data: bytes, options: ExtractOptions, kind: str) -> ExtractResult:
     def write() -> None:
         with open("scratch.bin", "wb") as handle:
             handle.write(b"x" * 1024)
 
     return _result(kind, "write:" + _errno_of(write))
+
+
+def escape_proc(data: bytes, options: ExtractOptions, kind: str) -> ExtractResult:
+    """Reach into the parent (the worker): its environment, memory and open files."""
+    parent = f"/proc/{os.getppid()}"
+
+    def environ() -> str:
+        with open(f"{parent}/environ", "rb") as handle:
+            return "SECRET" if b"PROBE_SECRET=" in handle.read() else "read"
+
+    def mem_read() -> None:
+        with open(f"{parent}/mem", "rb") as handle:
+            handle.seek(0x400000)
+            handle.read(1)
+
+    def mem_write() -> None:
+        with open(f"{parent}/mem", "r+b"):
+            pass
+
+    def environ_probe() -> str:
+        try:
+            return environ()
+        except OSError as exc:
+            return str(exc.errno)
+
+    return _result(
+        kind,
+        "environ:" + environ_probe(),
+        "mem_read:" + _errno_of(mem_read),
+        "mem_write:" + _errno_of(mem_write),
+        "fd:" + _errno_of(lambda: os.listdir(f"{parent}/fd")),
+    )
+
+
+def fs_tamper(data: bytes, options: ExtractOptions, kind: str) -> ExtractResult:
+    """Change files the child's UID owns; ``data`` is a directory holding ``victim`` and ``sub``."""
+    root = data.decode()
+    victim = os.path.join(root, "victim")
+
+    def open_mode(mode: str) -> Callable[[], object]:
+        def action() -> None:
+            with open(victim, mode):
+                pass
+
+        return action
+
+    def create() -> None:
+        with open(os.path.join(root, "new"), "xb"):
+            pass
+
+    return _result(
+        kind,
+        "unlink:" + _errno_of(lambda: os.unlink(victim)),
+        "rename:" + _errno_of(lambda: os.rename(victim, os.path.join(root, "moved"))),
+        "truncate:" + _errno_of(lambda: os.truncate(victim, 0)),
+        "chmod:" + _errno_of(lambda: os.chmod(victim, 0o700)),
+        "chown:" + _errno_of(lambda: os.chown(victim, os.getuid(), os.getgid())),
+        "utime:" + _errno_of(lambda: os.utime(victim, (0, 0))),
+        "open_rw:" + _errno_of(open_mode("r+b")),
+        "open_append:" + _errno_of(open_mode("ab")),
+        "open_trunc:" + _errno_of(open_mode("wb")),
+        "create:" + _errno_of(create),
+        "mkdir:" + _errno_of(lambda: os.mkdir(os.path.join(root, "made"))),
+        "rmdir:" + _errno_of(lambda: os.rmdir(os.path.join(root, "sub"))),
+        "symlink:" + _errno_of(lambda: os.symlink(victim, os.path.join(root, "sym"))),
+        "link:" + _errno_of(lambda: os.link(victim, os.path.join(root, "hard"))),
+    )
+
+
+def read_outside(data: bytes, options: ExtractOptions, kind: str) -> ExtractResult:
+    """Read a file outside the interpreter's paths (``data`` is its path), e.g. a key file."""
+
+    def read() -> str:
+        with open(data.decode(), "rb") as handle:
+            return "SECRET" if handle.read().startswith(b"PROBE_SECRET") else "read"
+
+    try:
+        outcome = read()
+    except OSError as exc:
+        outcome = str(exc.errno)
+    return _result(kind, "read:" + outcome, "listdir:" + _errno_of(lambda: os.listdir("/")))
 
 
 def bigoutput(data: bytes, options: ExtractOptions, kind: str) -> ExtractResult:
@@ -141,7 +265,11 @@ EXTRACTORS = {
     "network": network,
     "execve": execve,
     "kill_others": kill_others,
+    "signal_others": signal_others,
     "writefile": writefile,
+    "escape_proc": escape_proc,
+    "fs_tamper": fs_tamper,
+    "read_outside": read_outside,
     "bigoutput": bigoutput,
     "whoami": whoami,
     "echo": echo,

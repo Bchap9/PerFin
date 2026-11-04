@@ -413,6 +413,33 @@ def test_create_honours_idempotency_key(world: World) -> None:
     assert other.json()["id"] != first.json()["id"]
 
 
+def test_replay_after_a_revoked_grant_runs_again_under_current_visibility(
+    world: World,
+) -> None:
+    # Review finding P2-SR-05: a stored answer must not outlive the grant
+    # that allowed it.
+    from app.auth.principal import Principal, apply_rls_context
+    from app.domain.households import service as households_service
+
+    body = _create_body(world.edit_acct)
+    headers = {"Idempotency-Key": f"txn-{uuid.uuid4()}"}
+    first = world.member.post(TXN, json=body, headers=headers)
+    assert first.status_code == 201
+    owner = world.owner.record
+    with world.factories.transaction() as db:
+        principal = Principal(
+            user=owner.user, household_id=world.household_id, role=owner.role, auth_method="session"
+        )
+        apply_rls_context(db, principal)
+        assert households_service.revoke_account_grant(
+            db, principal, world.member.record.id, world.edit_acct.id
+        )
+    replay = world.member.post(TXN, json=body, headers=headers)
+    assert "Idempotent-Replayed" not in replay.headers
+    assert (replay.status_code, problem_type(replay)) == (404, "account-not-found")
+    assert _count(world.factories, world.household_id, Transaction) == 1
+
+
 # ---------------------------------------------------------------------------
 # Update and delete
 # ---------------------------------------------------------------------------

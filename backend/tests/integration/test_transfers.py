@@ -415,6 +415,47 @@ def test_job_handler_pairs_the_household(
     assert _group(db, inn) == group
 
 
+def test_after_import_run_pairs_only_accounts_the_uploader_may_edit(
+    db: Session, owner: UserRecord, factories: Factories, tmp_path: Any
+) -> None:
+    # Review finding P2-SR-02: a member's import must not pair with (and so
+    # reveal, or change) a transaction on an account hidden from the member.
+    from app.domain.documents.blobstore import LocalFSBlobStore
+    from app.workers.handlers.transfers import auto_pair_transfers
+    from tests.fixtures.documents import make_document
+
+    hh = _hh(owner)
+    member = make_user(db, role="member", household=owner.household)
+    mine, mine2, viewed, hidden = (make_account(db, hh) for _ in range(4))
+    for acct in (mine, mine2):
+        grant_account(db, hh, member.id, acct.id, GrantLevel.EDIT)
+    grant_account(db, hh, member.id, viewed.id, GrantLevel.VIEW)
+    store = LocalFSBlobStore(tmp_path / "documents", tmp_path / "quarantine")
+    doc = make_document(db, store, factories.keyring, hh, account_id=mine.id, uploaded_by=member.id)
+    to_hidden = make_transaction(
+        db, mine, amount="-40.00", posted_date=D, source_document_id=doc.id
+    )
+    hidden_in = make_transaction(db, hidden, amount="40.00", posted_date=D)
+    to_viewed = make_transaction(
+        db, mine, amount="-30.00", posted_date=D, source_document_id=doc.id
+    )
+    make_transaction(db, viewed, amount="30.00", posted_date=D)
+    out = make_transaction(db, mine, amount="-60.00", posted_date=D, source_document_id=doc.id)
+    inn = make_transaction(db, mine2, amount="60.00", posted_date=D)
+    set_context(db, hh)
+    auto_pair_transfers(_ctx(db, hh, AUTO_PAIR_JOB_TYPE), AutoPairJob(source_document_id=doc.id))
+    assert _group(db, out) is not None
+    assert _group(db, inn) == _group(db, out)
+    for row in (to_hidden, hidden_in, to_viewed):
+        assert _group(db, row) is None
+    # The same document uploaded by the owner pairs across the household.
+    doc.uploaded_by = owner.id
+    db.flush()
+    auto_pair_transfers(_ctx(db, hh, AUTO_PAIR_JOB_TYPE), AutoPairJob(source_document_id=doc.id))
+    assert _group(db, to_hidden) is not None
+    assert _group(db, hidden_in) == _group(db, to_hidden)
+
+
 @pytest.mark.parametrize(
     ("status", "enqueued"),
     [
@@ -527,6 +568,32 @@ def test_hidden_counterpart_is_not_revealed(api: dict[str, Any]) -> None:
     seen = api["member"].get(f"{TXN}/{out.id}").json()["transfer"]
     assert seen["counterpart_id"] is None
     assert seen["group_id"] == response.json()["transfer"]["group_id"]
+
+
+def test_member_cannot_dissolve_a_transfer_with_a_leg_it_cannot_edit(
+    api: dict[str, Any],
+) -> None:
+    # Review finding P2-SR-02: unlinking (or deleting the visible leg) would
+    # clear transfer_group_id on the hidden account's transaction.
+    ledger: LedgerFactories = api["ledger"]
+    member, owner = api["member"], api["owner"]
+    out = ledger.transaction(api["mine"], amount="-75.00", posted_date=D)
+    hidden_in = ledger.transaction(api["hidden"], amount="75.00", posted_date=D)
+    linked = owner.post(f"{TXN}/{out.id}/transfer", json={"counterpart_id": str(hidden_in.id)})
+    assert linked.status_code == 200
+    group = linked.json()["transfer"]["group_id"]
+    for response in (
+        member.delete(f"{TXN}/{out.id}/transfer"),
+        member.delete(f"{TXN}/{out.id}"),
+        member.post(f"{TXN}/bulk", json={"ids": [str(out.id)], "action": "delete"}),
+    ):
+        assert (response.status_code, problem_type(response)) == (409, "transfer-conflict")
+    assert owner.get(f"{TXN}/{hidden_in.id}").json()["transfer"]["group_id"] == group
+    assert owner.get(f"{TXN}/{out.id}").json()["transfer"]["group_id"] == group
+    assert household_events(api["factories"], api["hh"], "transaction.transfer_unlinked") == []
+    # An owner may.
+    assert owner.delete(f"{TXN}/{out.id}/transfer").status_code == 204
+    assert owner.get(f"{TXN}/{hidden_in.id}").json()["transfer"] is None
 
 
 def test_delete_dissolves_the_transfer(api: dict[str, Any]) -> None:

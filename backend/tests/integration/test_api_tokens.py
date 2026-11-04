@@ -102,7 +102,9 @@ def test_create_is_audited_without_the_secret(actors: Actors, factories: Factori
     assert rows[0].after is not None
     assert rows[0].after["scopes"] == ["households:read"]
     assert rows[0].after["name"] == "Synthetic script"
-    secret = body["token"].rsplit("_", 1)[1]
+    # pfn_<12 hex id>_<43 base64url chars>; the secret itself may contain "_".
+    secret = body["token"][len("pfn_") + 12 + 1 :]
+    assert len(secret) == 43
     assert secret not in str(rows[0].after)
     assert body["token"] not in str(rows[0].after)
 

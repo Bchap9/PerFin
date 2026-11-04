@@ -700,6 +700,7 @@ class ApplySummary:
     scanned: int = 0
     matched: int = 0
     changed_ids: list[uuid.UUID] = field(default_factory=list)
+    changed_accounts: set[uuid.UUID] = field(default_factory=set)
     hits: Counter[uuid.UUID] = field(default_factory=Counter)
 
     @property
@@ -774,6 +775,7 @@ def _apply_batch(
         summary.hits.update(outcome.matched)
         if write_outcome(db, row, outcome):
             summary.changed_ids.append(row.id)
+            summary.changed_accounts.add(row.account_id)
     db.flush()
 
 
@@ -806,6 +808,8 @@ def _finish(
         payload: dict[str, Any] = {
             "changed": summary.changed,
             "ids": [str(i) for i in summary.changed_ids[:IDS_IN_RECORD_MAX]],
+            # Members and viewers hear only about accounts they see (SECURITY.md I2).
+            "account_ids": sorted(str(a) for a in summary.changed_accounts),
         }
         if job_id is not None:
             payload["job_id"] = str(job_id)

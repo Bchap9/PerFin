@@ -11,8 +11,14 @@ matching test fail.
 from __future__ import annotations
 
 import errno
+import json
 import os
+import shutil
+import subprocess  # nosec B404
+import sys
+import tempfile
 import time
+from collections.abc import Iterator
 from dataclasses import replace
 from pathlib import Path
 
@@ -93,8 +99,194 @@ def test_cannot_signal_other_processes() -> None:
     assert found["kill_self"] == "ok"
 
 
+@pytest.mark.parametrize(
+    "module",
+    [
+        "tests.fixtures.sandbox_evil",
+        # Landlock signal scoping (ABI 6+) absent: only seccomp stops these
+        # (review finding P2-SR-R2-01), so removing a seccomp rule fails here.
+        "tests.fixtures.sandbox_evil_landlock_abi4",
+        "tests.fixtures.sandbox_evil_no_landlock",
+    ],
+)
+def test_cannot_signal_other_processes_without_kill(module: str) -> None:
+    found = _warnings("signal_others", replace(EVIL, module=module))
+    assert found == {
+        "sigqueue_parent": EPERM,
+        "tgsigqueue_parent": EPERM,
+        "sigqueue_init": EPERM,
+        "sigqueue_self": "ok",
+        "setown_parent": EPERM,
+        "setown_ex_parent": EPERM,
+        "setsig": EPERM,
+    }
+
+
 def test_cannot_write_files() -> None:
-    assert _warnings("writefile") == {"write": str(errno.EFBIG)}
+    # open(O_WRONLY|O_CREAT|O_TRUNC) is refused by seccomp before RLIMIT_FSIZE matters.
+    assert _warnings("writefile") == {"write": EPERM}
+
+
+# ---- Isolation from the worker and its files (review finding P2-SR-01) ------
+#
+# The shipped worker runs as UID 10001 and the child under the same UID, so
+# these probes run through a *driver* process that plays the worker: as an
+# unprivileged UID (65534 when the tests run as root), with a secret in its
+# environment, calling the real runner. Each sandbox layer is also tested on
+# its own (fixture variants without Landlock / without the seccomp filesystem
+# rules), so removing any one layer makes a test fail.
+
+FULL = "tests.fixtures.sandbox_evil"
+NO_LANDLOCK = "tests.fixtures.sandbox_evil_no_landlock"
+NO_FS_SECCOMP = "tests.fixtures.sandbox_evil_no_fs_seccomp"
+EACCES = str(errno.EACCES)
+PROBE_UID = 65534
+
+_DRIVER = """
+import json, sys
+from app.ingestion.sandbox.runner import SandboxConfig, run_extraction
+module, kind, data = sys.argv[1], sys.argv[2], sys.argv[3].encode()
+config = SandboxConfig(
+    module=module, memory_bytes=384 * 1024 * 1024, cpu_seconds=2,
+    timeout_seconds=20, max_output_bytes=1024 * 1024,
+)
+result = run_extraction(kind, data, config=config)
+assert result.ok, result
+print(json.dumps(result.warnings))
+"""
+
+
+def _unprivileged() -> int | None:
+    return PROBE_UID if os.geteuid() == 0 else None
+
+
+def _owned_by_driver(path: Path) -> None:
+    if (uid := _unprivileged()) is not None:
+        os.chown(path, uid, uid)
+
+
+@pytest.fixture
+def driver_dir() -> Iterator[Path]:
+    """A private directory of the worker stand-in's UID that it can reach.
+
+    Not ``tmp_path``: pytest's base directory is ``0700`` root's, so a
+    probe there would be refused by ordinary permissions, not by the sandbox.
+    """
+    path = Path(tempfile.mkdtemp(prefix="perfin-sandbox-probe-", dir="/tmp"))
+    try:
+        _owned_by_driver(path)
+        yield path
+    finally:
+        shutil.rmtree(path, ignore_errors=True)
+
+
+def _drive(module: str, kind: str, data: str) -> dict[str, str]:
+    """Run ``kind`` from ``module`` through the real runner in an unprivileged worker stand-in."""
+    uid = _unprivileged()
+    completed = subprocess.run(  # nosec B603 - fixed argv, our interpreter
+        [sys.executable, "-I", "-c", _DRIVER, module, kind, data],
+        env={"PROBE_SECRET": "worker-master-key"},
+        cwd="/",
+        capture_output=True,
+        timeout=60,
+        check=False,
+        user=uid,
+        group=uid,
+        extra_groups=[] if uid is not None else None,
+    )
+    assert completed.returncode == 0, completed.stderr.decode()[-2000:]
+    warnings: list[str] = json.loads(completed.stdout)
+    return dict(item.split(":", 1) for item in warnings)
+
+
+def test_child_cannot_reach_the_worker_process() -> None:
+    found = _drive(FULL, "escape_proc", "")
+    assert found == {"environ": EACCES, "mem_read": EACCES, "mem_write": EPERM, "fd": EACCES}
+
+
+def test_child_cannot_reach_the_worker_process_as_root() -> None:
+    # In-process (the test runner is the parent): with root's CAP_SYS_PTRACE and
+    # DAC override, only Landlock stands between the child and the parent.
+    found = _warnings("escape_proc")
+    assert found["environ"] == EACCES
+    assert found["mem_read"] == EACCES
+    assert found["fd"] == EACCES
+    assert found["mem_write"] == EPERM
+
+
+def test_worker_is_non_dumpable_so_a_same_uid_child_without_landlock_finds_nothing() -> None:
+    # Landlock removed: the worker's PR_SET_DUMPABLE 0 alone keeps its /proc
+    # entries (environment with the master key, memory, open files) root-owned.
+    found = _drive(NO_LANDLOCK, "escape_proc", "")
+    assert found["environ"] == EACCES, "the worker's environment was readable"
+    assert found["mem_read"] == EACCES
+    assert found["fd"] == EACCES
+    assert found["mem_write"] == EPERM
+
+
+def test_protect_parent_marks_the_process_non_dumpable() -> None:
+    code = (
+        "import ctypes\n"
+        "from app.ingestion.sandbox.runner import protect_parent\n"
+        "protect_parent()\n"
+        "print(ctypes.CDLL(None).prctl(3, 0, 0, 0, 0))\n"
+    )
+    completed = subprocess.run(  # nosec B603
+        [sys.executable, "-I", "-c", code], capture_output=True, check=True, timeout=60
+    )
+    assert completed.stdout.strip() == b"0"
+
+
+@pytest.mark.parametrize("module", [FULL, NO_LANDLOCK, NO_FS_SECCOMP])
+def test_child_cannot_change_files_its_uid_owns(module: str, driver_dir: Path) -> None:
+    root = driver_dir / "blobs"
+    root.mkdir(mode=0o700)
+    (root / "sub").mkdir()
+    victim = root / "victim"
+    victim.write_bytes(b"ciphertext")
+    for path in (root, root / "sub", victim):
+        _owned_by_driver(path)
+    found = _drive(module, "fs_tamper", str(root))
+    assert set(found) == {
+        "unlink", "rename", "truncate", "chmod", "chown", "utime", "open_rw", "open_append",
+        "open_trunc", "create", "mkdir", "rmdir", "symlink", "link",
+    }  # fmt: skip
+    changed = {name for name, outcome in found.items() if outcome == "ok"}
+    # Landlock does not cover metadata (mode, owner, times): only the seccomp
+    # rules stop those, so the Landlock-only variant may change them.
+    metadata = {"chmod", "chown", "utime"} if module == NO_FS_SECCOMP else set()
+    assert changed <= metadata
+    assert victim.read_bytes() == b"ciphertext"
+    assert sorted(p.name for p in root.iterdir()) == ["sub", "victim"]
+
+
+@pytest.mark.parametrize("module", [FULL, NO_FS_SECCOMP])
+def test_child_cannot_read_files_outside_the_interpreter(module: str, driver_dir: Path) -> None:
+    # Stand-in for the master key file and the documents volume: owned by the
+    # worker's (and so the child's) UID, mode 0600.
+    secret = driver_dir / "master.key"
+    secret.write_bytes(b"PROBE_SECRET")
+    secret.chmod(0o600)
+    _owned_by_driver(secret)
+    found = _drive(module, "read_outside", str(secret))
+    assert found == {"read": EACCES, "listdir": EACCES}
+
+
+def test_landlock_is_required_unless_the_operator_opts_out(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(child, "landlock_abi", lambda: 0)
+    with pytest.raises(child.HardenError, match="Landlock"):
+        child.install_landlock(required=True)
+    assert child.install_landlock(required=False) is False
+    assert SandboxLimits().require_landlock is True
+
+
+def test_readable_roots_never_include_the_filesystem_root_or_data_dirs() -> None:
+    roots = child.readable_roots()
+    assert "/" not in roots
+    for forbidden in ("/var/lib/perfin", tempfile.gettempdir(), "/proc", "/etc", "/home"):
+        assert forbidden not in roots
 
 
 def test_huge_output_is_cut_off_and_killed() -> None:
@@ -201,3 +393,27 @@ def test_deny_list_covers_the_essentials() -> None:
         "chroot",
     ):
         assert name in DENIED_SYSCALLS
+    for name in ("unlink", "unlinkat", "rename", "renameat2", "truncate", "ftruncate", "chmod"):
+        assert name in child.FILESYSTEM_DENIED_SYSCALLS
+
+
+def test_worker_marks_itself_non_dumpable_at_start(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    import argparse
+
+    from app import cli
+    from app.ingestion.sandbox import runner
+
+    calls: list[str] = []
+
+    def refusing() -> None:
+        calls.append("protect_parent")
+        raise SandboxError("harden_failed", "could not make the worker non-dumpable")
+
+    monkeypatch.setattr(runner, "protect_parent", refusing)
+    # concurrency=0 is invalid: without the call the command would stop there.
+    code = cli.cmd_worker(argparse.Namespace(queues=None, concurrency=0))
+    assert calls == ["protect_parent"]
+    assert code == cli.EXIT_FAIL
+    assert "non-dumpable" in capsys.readouterr().err

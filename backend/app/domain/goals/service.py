@@ -152,7 +152,18 @@ def _record(
         user_id=principal.user_id,
         request=request,
     )
-    emit(db, household_id, f"goal.{event}", {"goal_id": str(goal_id)})
+    # Members and viewers hear only about goals they may read: every account
+    # of the goal visible (SECURITY.md I2, events.deliverable).
+    accounts = {str(a) for a in repo.account_ids_for(db, household_id, [goal_id])[goal_id]}
+    for state in (before, after):
+        if isinstance(state, dict) and isinstance(state.get("account_ids"), list):
+            accounts.update(str(a) for a in state["account_ids"])
+    emit(
+        db,
+        household_id,
+        f"goal.{event}",
+        {"goal_id": str(goal_id), "all_account_ids": sorted(accounts)},
+    )
 
 
 def _get(

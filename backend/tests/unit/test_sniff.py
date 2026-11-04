@@ -114,3 +114,22 @@ def test_structured_types_map_to_extractor_kinds() -> None:
     assert FileType.QFX.extract_kind == "qfx"
     assert FileType.QIF.extract_kind == "qif"
     assert FileType.PDF.extract_kind is None
+
+
+@pytest.mark.parametrize("split", range(1, 11))
+def test_markup_scanner_finds_patterns_split_across_chunks(split: int) -> None:
+    from app.ingestion.intake.sniff import MarkupScanner
+
+    data = b"a" * 50 + b"javascript:" + b"b" * 50
+    cut = 50 + split
+    scanner = MarkupScanner()
+    assert not scanner.feed(data[:cut])
+    assert scanner.feed(data[cut:])
+
+
+def test_markup_scanner_ignores_plain_text() -> None:
+    from app.ingestion.intake.sniff import MarkupScanner
+
+    scanner = MarkupScanner()
+    for _ in range(100):
+        assert not scanner.feed(b"2026-01-02,Synthetic Grocer <grocer>,-12.34\n" * 20)

@@ -16,8 +16,15 @@ the membership, stops.
   is delivered;
 * an event whose payload names accounts (``account_id``, ``account_ids``) is
   delivered only if at least one of them is visible;
+* an event whose payload has ``all_account_ids`` (goals: readable only when
+  every account is visible) is delivered only if all of them are visible;
+* fail closed (review finding P2-SR-03): a ``transaction.*``, ``balance.*``
+  or ``goal.*`` event that names no account is dropped;
 * a ``document.*`` event (payload ``id``) or ``review.*`` event (payload
-  ``document_id``) about a document that exists and is hidden is dropped.
+  ``document_id``) about a document that exists and is hidden is dropped;
+  ``document.deleted`` (the row is gone) names the document's
+  ``account_id``, and without one is delivered only to its uploader
+  (payload ``uploaded_by``).
 
 What goes on the wire is :func:`frame`: the event id and type, nothing from
 the payload. The client refetches through the API, which applies the same
@@ -46,6 +53,11 @@ from app.domain.documents.service import visible_document_filter
 
 #: Payload keys naming accounts, as written by the services' ``emit`` calls.
 ACCOUNT_KEYS: Final = ("account_id", "account_ids")
+#: Payload key naming accounts that must *all* be visible.
+ALL_ACCOUNTS_KEY: Final = "all_account_ids"
+#: Event types about account data: without a named account they are dropped
+#: for members and viewers.
+ACCOUNT_SCOPED_PREFIXES: Final = ("transaction.", "balance.", "goal.")
 
 
 @dataclass(frozen=True)
@@ -196,6 +208,17 @@ def deliverable(db: Session, view: StreamView, events: Sequence[Event]) -> list[
             continue
         accounts = named_accounts(payload)
         if accounts and not accounts & view.accounts:
+            continue
+        required = payload.get(ALL_ACCOUNTS_KEY)
+        if isinstance(required, list) and not _uuids(required) <= view.accounts:
+            continue
+        if (
+            not accounts
+            and not isinstance(required, list)
+            and event.type.startswith(ACCOUNT_SCOPED_PREFIXES)
+        ):
+            continue
+        if event.type == "document.deleted" and not accounts and payload.get("uploaded_by") != user:
             continue
         candidates.append(event)
     documents = {d for d in (named_document(e) for e in candidates) if d is not None}

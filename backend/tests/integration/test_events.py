@@ -22,6 +22,9 @@ from tests.conftest import TestDatabase
 
 pytestmark = pytest.mark.integration
 
+#: A payload value that cannot occur in the notice's ids or type (not hex).
+PAYLOAD_MARKER = "payload-only-marker"
+
 
 def _dsn(url: URL) -> str:
     return url.set(drivername="postgresql").render_as_string(hide_password=False)
@@ -75,7 +78,7 @@ def test_emit_inserts_row_and_notifies_on_commit(
     household, _ = household_ids
     with factory() as session, session.begin():
         set_context(session, household)
-        event_id = emit(session, household, "document.processed", {"document_id": "d-1"})
+        event_id = emit(session, household, "document.processed", {"document_id": PAYLOAD_MARKER})
         # Not delivered before commit.
         assert _received(listener, timeout=0.2) == []
     payloads = _received(listener, timeout=5.0, stop_after=1)
@@ -85,12 +88,12 @@ def test_emit_inserts_row_and_notifies_on_commit(
     assert notice.id == event_id
     assert notice.household_id == household
     assert notice.type == "document.processed"
-    assert "d-1" not in payloads[0]  # payload stays in the row, not the NOTIFY
+    assert PAYLOAD_MARKER not in payloads[0]  # payload stays in the row, not the NOTIFY
 
     with factory() as session, session.begin():
         set_context(session, household)
         row = session.execute(select(Event).where(Event.id == event_id)).scalar_one()
-        assert row.payload == {"document_id": "d-1"}
+        assert row.payload == {"document_id": PAYLOAD_MARKER}
         assert row.type == "document.processed"
 
 

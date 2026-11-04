@@ -151,8 +151,8 @@ def test_create_validation(actors: Actors) -> None:
 @pytest.mark.parametrize(
     ("field", "value"),
     [
-        ("household_id", str(uuid.uuid4())),
-        ("id", str(uuid.uuid4())),
+        pytest.param("household_id", str(uuid.uuid4()), id="household_id"),
+        pytest.param("id", str(uuid.uuid4()), id="id"),
         ("closed_on", "2026-01-01"),
         ("created_at", "2026-01-01T00:00:00Z"),
         ("balance", {"amount": "1", "currency": "USD"}),

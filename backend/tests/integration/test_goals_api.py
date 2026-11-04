@@ -151,8 +151,10 @@ def test_goal_progress_and_projection(world: World, factories: Factories) -> Non
     assert added.after is not None
     assert "memo" not in added.after
     assert len(household_audit(factories, world.household_id, "goal.create")) == 1
+    # Ids only; the goal's accounts let the event stream filter it (P2-SR-03).
     assert household_events(factories, world.household_id, "goal.created")[0].payload == {
-        "goal_id": goal["id"]
+        "goal_id": goal["id"],
+        "all_account_ids": sorted(goal["account_ids"]),
     }
 
 

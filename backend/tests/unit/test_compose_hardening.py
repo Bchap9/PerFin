@@ -280,6 +280,17 @@ def test_worker_drop_folder_mounts() -> None:
     assert not [m for m in mounts("api") if "inbox" in m]
 
 
+def test_worker_healthcheck_runs_without_the_secrets() -> None:
+    # The probe is a dumpable process of the worker's UID: it must not carry
+    # the env_file secrets an extraction child could read from /proc (review
+    # finding P2-SR-R2-02, ADR-0009).
+    test = service("worker")["healthcheck"]["test"]
+    assert test[0] == "CMD-SHELL"
+    assert len(test) == 2
+    assert test[1].startswith("exec env -i ")
+    assert "os.environ" not in test[1]
+
+
 def test_api_trusts_forwarded_headers_from_the_proxy_only() -> None:
     proxy_ip = interpolation_default(service("proxy")["networks"]["web"]["ipv4_address"])
     subnet = interpolation_default(network_def("web")["ipam"]["config"][0]["subnet"])

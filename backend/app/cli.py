@@ -183,9 +183,17 @@ def cmd_worker(args: argparse.Namespace) -> int:
     from app.core.metrics import start_metrics_server
     from app.core.settings import get_settings
     from app.db.session import make_app_engine
+    from app.ingestion.sandbox.runner import SandboxError, protect_parent
     from app.workers.registry import discover_handlers
     from app.workers.runner import WorkerConfig, run_worker
 
+    # Before anything else: a same-UID extraction child must not be able to
+    # read this process's environment or memory (SECURITY.md C1).
+    try:
+        protect_parent()
+    except SandboxError as exc:
+        print(f"perfin worker: {exc}", file=sys.stderr)
+        return EXIT_FAIL
     try:
         config = WorkerConfig(
             queues=tuple(getattr(args, "queues", None) or ("default",)),

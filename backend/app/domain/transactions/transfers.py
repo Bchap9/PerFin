@@ -24,9 +24,17 @@ leaves an account (negative amount), the other arrives in another account
 Visibility (SECURITY.md F3): a user-triggered link or auto-pair only
 touches transactions on accounts the caller may **edit** (owner/admin: all;
 member: ``edit`` grants). The after-import run (:func:`auto_pair` without a
-principal, from the ingest worker) works on the whole household, as the
-system. A leg on an account the caller cannot see is shown as a transfer
-without its counterpart (``TransferOut.counterpart_id`` is ``null``).
+principal, from the ingest worker) acts for the document's uploader: only
+accounts the uploader may import into take part (``allowed_account_ids``,
+from :func:`app.ingestion.match.accounts.importable_account_ids`), so a
+member's import never pairs with an account hidden from that member
+(review finding P2-SR-02). Unlinking (directly, or by deleting a leg) needs
+**edit** on every leg of the group: a member cannot dissolve a transfer an
+owner or admin made with an account the member cannot edit
+(``409 transfer-conflict``). A leg on an account the caller cannot see is
+shown as a transfer without its counterpart (``TransferOut.counterpart_id``
+is ``null``); only an owner's or admin's link or import creates such a
+group.
 
 Every link, unlink and auto-pair run is audited and emits a
 ``transaction.*`` event so the SPA refreshes.
@@ -41,7 +49,7 @@ from dataclasses import dataclass
 from datetime import date
 from typing import TYPE_CHECKING, Final
 
-from sqlalchemy import ColumnElement, and_, func, or_, select, true, update
+from sqlalchemy import ColumnElement, and_, false, func, or_, select, true, update
 from sqlalchemy.orm import Session, aliased
 
 from app.auth.principal import Principal
@@ -161,7 +169,11 @@ def link(
         db,
         household_id,
         "transaction.transfer_linked",
-        {"group_id": str(group_id), "ids": [str(transaction.id), str(other.id)]},
+        {
+            "group_id": str(group_id),
+            "ids": [str(transaction.id), str(other.id)],
+            "account_ids": sorted({str(transaction.account_id), str(other.account_id)}),
+        },
     )
     return group_id
 
@@ -182,17 +194,35 @@ def unlink(
     if group_id is None:
         return []
     household_id = transaction.household_id
-    ids = list(
-        db.execute(
+    if principal is not None:
+        edit = visible_account_filter(principal, Transaction.account_id, need="edit")
+        locked_out = db.execute(
+            select(Transaction.id)
+            .where(
+                Transaction.household_id == household_id,
+                Transaction.transfer_group_id == group_id,
+                ~edit,
+            )
+            .limit(1)
+        ).first()
+        if locked_out is not None:
+            raise transfer_conflict(
+                "The other leg of this transfer is on an account you cannot edit;"
+                " an owner or admin can unlink it."
+            )
+    legs: list[tuple[uuid.UUID, uuid.UUID]] = [
+        (leg_id, account_id)
+        for leg_id, account_id in db.execute(
             update(Transaction)
             .where(
                 Transaction.household_id == household_id,
                 Transaction.transfer_group_id == group_id,
             )
             .values(transfer_group_id=None, updated_at=clock.utcnow())
-            .returning(Transaction.id)
-        ).scalars()
-    )
+            .returning(Transaction.id, Transaction.account_id)
+        )
+    ]
+    ids = [leg_id for leg_id, _ in legs]
     transaction.transfer_group_id = None
     audit(
         db,
@@ -208,7 +238,11 @@ def unlink(
         db,
         household_id,
         "transaction.transfer_unlinked",
-        {"group_id": str(group_id), "ids": [str(i) for i in sorted(ids)]},
+        {
+            "group_id": str(group_id),
+            "ids": [str(i) for i in sorted(ids)],
+            "account_ids": sorted({str(account_id) for _, account_id in legs}),
+        },
     )
     return sorted(ids)
 
@@ -360,6 +394,7 @@ def auto_pair(
     date_from: date | None = None,
     date_to: date | None = None,
     source_document_id: uuid.UUID | None = None,
+    allowed_account_ids: Collection[uuid.UUID] | None = None,
     window_days: int = TRANSFER_WINDOW_DEFAULT,
     request: HTTPConnection | None = None,
 ) -> AutoPairOutcome:
@@ -367,7 +402,9 @@ def auto_pair(
 
     With a ``principal`` only accounts it may edit take part (``account_ids``
     must all be editable: ``404 account-not-found`` otherwise); without one
-    (the after-import run) the whole household does. ``account_ids``,
+    (the after-import run) the accounts in ``allowed_account_ids`` do (the
+    uploader's importable accounts; ``None``: the whole household, for an
+    owner's or admin's document). ``account_ids``,
     ``date_from``/``date_to`` and ``source_document_id`` choose the **seed**
     transactions: a pair needs at least one seed leg, while its other leg
     may be on any account in scope and up to ``window_days`` outside the
@@ -380,6 +417,12 @@ def auto_pair(
 
         def scope(t: type[Transaction]) -> ColumnElement[bool]:
             return visible_account_filter(caller, t.account_id, need="edit")
+
+    elif allowed_account_ids is not None:
+        allowed = list(allowed_account_ids)
+
+        def scope(t: type[Transaction]) -> ColumnElement[bool]:
+            return t.account_id.in_(allowed) if allowed else false()
 
     else:
 
@@ -403,6 +446,7 @@ def auto_pair(
     edges = _edges(db, household_id, scope, seed, window_days)
     matched, ambiguous = _match(edges)
     pairs: list[Pair] = []
+    paired_accounts: set[str] = set()
     if matched:
         legs = repo.get_many(
             db, household_id, [i for pair in matched for i in pair], true(), lock=True
@@ -419,6 +463,7 @@ def auto_pair(
             for leg in (out_leg, in_leg):
                 leg.transfer_group_id = group_id
                 leg.updated_at = now
+                paired_accounts.add(str(leg.account_id))
             pairs.append(Pair(group_id, out_id, in_id))
         db.flush()
     if pairs or ambiguous:
@@ -443,7 +488,7 @@ def auto_pair(
             db,
             household_id,
             "transaction.transfers_paired",
-            {"paired": len(pairs), "ambiguous": ambiguous},
+            {"paired": len(pairs), "ambiguous": ambiguous, "account_ids": sorted(paired_accounts)},
         )
     return AutoPairOutcome(pairs, ambiguous)
 

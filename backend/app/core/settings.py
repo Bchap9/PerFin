@@ -189,6 +189,11 @@ class Settings(BaseSettings):
     # Numeric UID (and GID) the extraction child switches to when the worker
     # runs as root; ignored otherwise (the image already runs as 10001).
     extract_uid: Annotated[int, Field(ge=1, le=2**31 - 1)] | None = None
+    # The child refuses to run without Landlock (SECURITY.md C1). Set to false
+    # only on a kernel without Landlock: seccomp and the worker's non-dumpable
+    # flag are then the only layers between a parser exploit and the files
+    # the worker's UID can read.
+    extract_require_landlock: bool = True
 
     # ---- Full export and import (docs/PORTABILITY.md) -----------------------
     # A finished export can be downloaded once within this many minutes; then
