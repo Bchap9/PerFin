@@ -89,7 +89,10 @@ Status: Accepted. Date: 2026-11-04.
 The PDF, image, EML and ZIP extractors run in the same hardened child as the
 structured ones. OCR was the one library that did not fit: `pytesseract`
 starts the `tesseract` program, and the child's seccomp filter denies
-`execve`, `fork` and non-thread `clone` (and `RLIMIT_NPROC` is 0).
+`execve`, `fork` and non-thread `clone`. (An earlier `RLIMIT_NPROC` 0 was
+dropped on 2026-11-04: it counts every thread of the UID and binds only
+non-root processes, so it broke PyMuPDF's and Tesseract's threads in an
+unprivileged child; seccomp alone stops new processes.)
 
 **Decision.** Tesseract runs **in process** through `tesserocr` (the C++ API
 of libtesseract, linked into the child; its manylinux wheel bundles

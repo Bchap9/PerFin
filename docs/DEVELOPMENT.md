@@ -21,6 +21,7 @@ commit.
 | TS lint | ESLint flat config, `typescript-eslint` strict-type-checked, `eslint-plugin-security`, `eslint-plugin-react-hooks`, `no-unsanitized` | `npm run lint` |
 | TS types | `tsc --strict --noEmit` | `npm run typecheck` |
 | TS tests | Vitest + Testing Library (jsdom) | `npm test` |
+| Helm chart | helm 3.19 + kubeconform, built by `scripts/install-chart-tools.sh <dir>` (Go module hashes pinned); `backend/tests/unit/test_helm_chart.py` needs `helm` on `PATH` (or `PERFIN_HELM`) | `make chart-check` |
 | Repo checks | SPDX header check, gitleaks | `make check` runs everything |
 
 `make check` at the repo root runs every gate. Nothing merges red.
@@ -46,7 +47,9 @@ app/
   main.py            create_app(settings) -> FastAPI; middleware stack; router auto-discovery
   cli.py             perfin api | worker | mcp | migrate | config check | audit verify |
                      healthcheck | openapi | ingest --dry-run | bootstrap-url |
-                     breakglass status|enable|disable | rotate-key
+                     breakglass status|enable|disable | notify backup-failed |
+                     rotate-key | backup-encrypt | backup-decrypt | backup-info |
+                     restore-check (the last five live in ops/commands.py)
   core/
     settings.py      Settings (pydantic-settings, env prefix PERFIN_), get_settings()
     config_check.py  check_config(settings) -> list[Finding]; refuses insecure prod config
@@ -107,6 +110,10 @@ app/
   ingestion/         intake/, sandbox/, extract/, classify/, parsers/, match/, pipeline.py
   integrations/      prices, fx, notifications, antivirus
   mcp/               MCP server role
+  ops/               operator tooling: keyrotation.py (`perfin rotate-key`; a new encrypted
+                     column goes in ENVELOPE_COLUMNS), backup.py (backup archive encryption,
+                     restore document check), commands.py (CLI registration);
+                     scripts/backup.sh and scripts/restore.sh drive them (docs/BACKUP_RESTORE.md)
   workers/           registry.py (@job_handler), runner.py, scheduler.py, handlers/
   api/
     routers/<name>.py  each module exports `router: APIRouter` (auto-included under /api/v1)
@@ -143,6 +150,20 @@ app/
   only, get a `config_check` warning naming its destination and a section
   in docs/security/integrations.md. The `refresh_prices` job
   (`app/workers/handlers/market_data.py`) is its only caller.
+- **Notifications**: a new notifiable event is one entry in
+  `app.domain.notifications.routing.ROUTES` (event type -> kind and a
+  generic sentence without identity or financial detail; a new kind is also
+  a value of `Kind`) and a call `notify(db, household_id, event_type,
+  source_id=...)` next to the `emit` that records it, in the household's
+  RLS context. A new channel type is a module in
+  `app/integrations/notifications/` (protocol `Channel`, raise `ChannelError`
+  with an outcome code), a `ChannelType` value, a config model in
+  `app.domain.notifications.schemas` (`CONFIG_MODELS`, `SECRET_FIELDS`,
+  `DESTINATION_FIELDS`) and a branch in `registry.py`; HTTPS goes through
+  `app.integrations.notifications.web.deliver`. Tests use the local fake
+  services of `tests/fixtures/fake_notify.py` (`running_https`,
+  `running_smtp`, `local_options`) and `tests/fixtures/notifications.py`
+  (`make_channel`). docs/security/notifications.md lists what leaves.
 - **Settings**: add fields to `Settings`; insecure combinations go in
   `config_check.py` with a test.
 - **Frontend features**: `src/features/<name>/routes.tsx` exports
@@ -225,7 +246,10 @@ app/
   downgrade), `0006_phase6b_ai` (`ai_client` and `ai_call`, both
   household-scoped, the `ai_call -> ai_client` household-consistent key,
   enum types `ai_mode` and `ai_transport`; the AI switches are `setting`
-  rows and need no DDL). `alembic check` does not compare CHECK constraint text, so a
+  rows and need no DDL), `0007_phase7` (`notification_channel`,
+  household-scoped, enum type `notification_channel_type`; the dashboard
+  layout lives in the existing user settings JSON and key rotation rewraps
+  existing columns, so neither needs DDL). `alembic check` does not compare CHECK constraint text, so a
   `:word` inside a CHECK string is parsed as a bind parameter and silently
   rendered as `NULL` (both by `create_all` and by autogenerate): write regex
   character classes so no `:` is followed by a word character (0005 found
@@ -395,7 +419,8 @@ app/
   thread meanwhile; the authz matrix uses 0.2 s and a temporary blob store
   (parameter kinds `stored_document`, `review_item`).
 - Structured imports: `tests/fixtures/synth_statements.py` (standard library
-  only; also `scripts/synth/statements.py --out DIR` for the dev seed)
+  only; also `scripts/synth/statements.py --out DIR` writes the samples as files;
+  the dev seed (`scripts/seed_dev.py`, "Dev stack") uses `synth_ledger`)
   generates invented institutions, merchants and account numbers: a seeded
   history (`synth_ledger`), statement windows with opening/closing balances
   (`statement`, `sample_statement`; overlapping windows share rows), CSV/TSV
@@ -583,6 +608,89 @@ action elsewhere needs its own provider.
 
 No `dangerouslySetInnerHTML`, no inline scripts or styles that need
 `unsafe-inline`, no third-party CDNs; everything is bundled.
+
+## Dev stack
+
+`make dev` (`scripts/dev.sh up`) brings up a complete local stack on a
+synthetic household. Requirements: Linux (the worker's extraction sandbox
+uses seccomp and Landlock), Docker with the compose plugin, `uv`, Node 22
+with npm, and `openssl`. Behind a registry mirror set the image, e.g.
+`POSTGRES_IMAGE=mirror.gcr.io/library/postgres:16-alpine make dev`.
+On a kernel without Landlock the extraction sandbox refuses to run, so the
+seed's document uploads (and any upload) fail; for local development only,
+add `PERFIN_EXTRACT_REQUIRE_LANDLOCK=false` to `.dev/env` (it is generated
+once and kept) and run `make dev` again. ADR-0009 describes what the child
+can still read without Landlock.
+
+| Command | Does |
+| --- | --- |
+| `make dev` | everything below, in the foreground until Ctrl-C |
+| `make dev-down` | stops the database container (data kept) |
+| `make dev-reset` | deletes the database volume and `.dev/`; the next `make dev` creates a new database, new secrets and a new dev admin |
+| `scripts/dev.sh seed` | runs only the seed (database up and migrated) |
+
+`make dev` does, in order:
+
+1. Generates `.dev/env` once (mode 0600, git-ignored): random Postgres
+   passwords, `PERFIN_MASTER_KEY`, `PERFIN_SECRET_KEY`, and the dev settings
+   (`PERFIN_DEV_MODE=true`, `PERFIN_SECURE_COOKIES=false`,
+   `PERFIN_REQUIRE_MFA=false`, `PERFIN_PUBLIC_URL=http://localhost:5173`,
+   documents and quarantine under `.dev/`). There are no default credentials.
+2. Starts PostgreSQL 16 from `deploy/docker-compose.dev.yml` (project
+   `perfin-dev`, published on `127.0.0.1:55432`, override with
+   `PERFIN_DEV_DB_PORT`) with the production `deploy/db-init` scripts, so the
+   API connects as the non-owner `perfin_app` role and row-level security
+   applies.
+3. `uv sync`, `npm ci` (only when `frontend/node_modules` is missing) and
+   `perfin migrate` as the owner role.
+4. Runs `scripts/seed_dev.py` (below).
+5. Starts `uvicorn app.main:create_app --factory --reload` on
+   `127.0.0.1:8000`, `perfin worker`, and the Vite dev server on
+   `http://localhost:5173` (proxies `/api`). Each service's log lines are
+   prefixed `[api]`, `[worker]` and `[web]`. The OpenAPI UI is at
+   `http://127.0.0.1:8000/api/v1/docs` (dev mode only).
+
+### The seed
+
+`scripts/seed_dev.py` (run from `backend/`: `uv run python
+../scripts/seed_dev.py`) builds the household **through the real code
+paths**: first-run setup (`app.auth.bootstrap`) for the admin, the HTTP API
+(an in-process app with a short-lived seeding session that is ended
+afterwards) for everything else, the real upload endpoint and ingestion jobs
+for documents. It refuses (exit 2) unless `PERFIN_DEV_MODE=true`, and refuses
+a database that has any user other than its own `dev-admin` or a seed that did
+not finish (the last step creates the tag `dev-seed`).
+
+* **Credentials:** the username is `dev-admin`; the password is generated
+  (`secrets.token_urlsafe`) and printed **once** to stdout when the seed
+  creates the admin. It is stored nowhere (only the Argon2id hash). Lost it:
+  `make dev-reset`. A second run prints `already seeded` and changes nothing.
+* **Data:** 12 accounts covering every account type (checking, savings, credit
+  card, cash, brokerage, retirement, loan, mortgage, line of credit, manual
+  asset x2, manual liability); about 6 months of transactions from
+  `tests/fixtures/synth_statements.synth_ledger` (rent, payroll, groceries,
+  coffee, card purchases, savings transfers paired by the transfer matcher) and
+  detected recurring schedules; three rules, a monthly budget, two goals with a
+  contribution; a brokerage account (two buys of one security, a sale of a
+  chosen lot, a dividend), a retirement account (average cost), three
+  securities with price history; a mortgage with 13 payments and a car loan; a
+  house and a car with valuations; monthly net worth snapshots; a tax year
+  (last calendar year) with an expectations checklist; and an AI client
+  example that is created and then **revoked** (its token is discarded, so it
+  is a disabled example).
+* **Documents:** a bank statement CSV, a brokerage statement PDF, a receipt
+  image and four tax form PDFs (`synth_tax_forms`) are uploaded through
+  `POST /documents` and processed by the real ingestion jobs run in the seed
+  process (sandboxed extraction). The forms fill the tax year; the statement,
+  brokerage statement and receipt leave open items in the review queue.
+* Everything is generated; dates are relative to the day the seed runs.
+
+`backend/tests/integration/test_seed_dev.py` runs the seed on an empty
+database and reads the household back through the API as the dev admin
+(every account type, ledger, budget, goals, rules, holdings, loans, assets,
+net worth history, tax forms, documents, review queue, the revoked AI client),
+and checks that a second run changes nothing and that it refuses outside dev
+mode, next to other users and after an unfinished run.
 
 ## Security controls register
 

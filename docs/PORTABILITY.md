@@ -49,10 +49,11 @@ the download belong to the user who requested it; anyone else gets `404`.
 Every step is audited (`export.request|complete|fail|download|expire`,
 `import.request|complete|fail`; ids, counts, sizes and error slugs only) and
 emits an event of the same name; a finished import also emits
-`account.imported`, `transaction.imported`, `budget.imported` and
-`document.imported` so open pages refresh.
+`account.imported`, `transaction.imported`, `budget.imported`,
+`document.imported`, `investment.imported`, `loan.imported`,
+`asset.imported` and `tax.imported` so open pages refresh.
 
-## Archive layout (format version 1)
+## Archive layout (format version 2)
 
 A zip archive:
 
@@ -63,26 +64,44 @@ A zip archive:
 | `documents/<document id>/<name>` | The decrypted original of each document |
 | `manifest.json` | Written last; see below |
 
-Entities, in dependency order (`app/domain/portability/entities.py`):
-`institutions`, `categories`, `payees`, `tags`, `accounts`, `documents`
-(metadata, including the stored extraction), `transactions`,
-`transaction_splits`, `transaction_tags`, `balance_snapshots`,
-`scheduled_transactions`, `rules`, `budgets`, `budget_lines`, `goals`,
-`goal_accounts`, `goal_contributions`, `fx_rates`, `import_mappings`,
-`document_links`. Each row has every column of the table except
-`household_id`; user references (`document.uploaded_by`,
-`import_mapping.created_by`), the document's blob and its full-text index
-are left out. Not exported, by design: blobs (originals are exported
-decrypted), the review queue, ingestion history, learned parser
-fingerprints, `import_hash_alias` (see below), members, grants, tokens,
-events and the export/import jobs themselves. The Phase 5/6 tables
-(securities, prices, investment transactions, lots, per-account
-investment settings (`investment_account`), loans and their
-payments and rate changes, manual assets and valuations, tax years,
-checklist items, category-to-schedule maps and tax form data) are **not in
-format version 1 yet** (listed in `NOT_EXPORTED` until the archive gains
-them); the `holding` cache and `net_worth_snapshot` are derived and will
-stay out.
+Entities, in dependency order (`app/domain/portability/entities.py`,
+`ENTITIES`; `since` is the format version that introduced each):
+
+| Since | Entities |
+| --- | --- |
+| 1 | `institutions`, `categories`, `payees`, `tags`, `accounts`, `documents` (metadata, including the stored extraction), `transactions`, `transaction_splits`, `transaction_tags`, `balance_snapshots`, `scheduled_transactions` (recurring and scheduled transactions), `rules`, `budgets`, `budget_lines`, `goals`, `goal_accounts`, `goal_contributions`, `fx_rates`, `import_mappings` |
+| 2 | `parser_fingerprints` (learned layouts), `securities`, `prices`, `investment_accounts` (cost method per account), `investment_txns`, `lots`, `loans`, `loan_payments`, `loan_rate_changes`, `manual_assets`, `asset_valuations`, `net_worth_snapshots` (the stored history), `tax_years`, `tax_checklist_items`, `tax_category_maps`, `tax_form_data`, `ai_clients` (definitions only) |
+| 1 | `document_links` (last: a link may name a transaction, account, investment transaction, loan payment or tax year) |
+
+Each row has every column of the table except `household_id` and these:
+
+| Entity | Column left out | Why |
+| --- | --- | --- |
+| `documents` | `blob_id`, `extracted_text`, `uploaded_by` | the original is exported decrypted and re-encrypted into a new blob; the full-text index is rebuilt; a user of this instance |
+| `import_mappings` | `created_by` | a user of this instance |
+| `ai_clients` | `token_id`, `created_by` | the client's bearer token is a secret of this instance and never leaves it; a user of this instance |
+
+Not exported, by design (`NOT_EXPORTED`, each with its reason; a unit test
+fails for a household table in neither list):
+
+| Table | Why |
+| --- | --- |
+| `api_token` | personal access tokens of this instance (secrets) |
+| `mail_intake` | the mailbox connection: username, password and the intake alias are secrets; allowed senders map to this instance's user ids. Set email intake up again after an import |
+| `account_grant`, `household_member`, `dropfolder_route` | users and per-user settings of this instance (user ids do not travel) |
+| `blob` | storage internals; document originals are exported decrypted |
+| `holding` | derived cache: rebuilt from the imported lots |
+| `idempotency_key`, `event` | request replay cache, live-update stream |
+| `import_hash_alias` | the hash of a deleted duplicate cannot be recomputed for new account ids (see Import) |
+| `portability_archive`, `tax_export` | the export/import jobs and one-time accountant exports themselves |
+| `review_item`, `ingest_job`, `dropfolder_entry`, `mail_intake_message` | ingestion workflow and history of this instance |
+| `ai_call` | the audit of what this instance's AI clients read (like `audit_log`, which belongs to the instance); its response bodies only repeat exported data |
+
+`investment_txn.lot_links` names lots, which are written after the
+transactions (a lot names its opening transaction): entries naming a lot
+that no longer exists when the transactions are read are dropped, and an
+export during which a linked lot disappears (a concurrent change of the
+position) fails with `export-concurrent-change`; request it again.
 
 Values (`app/domain/portability/codec.py`): UUIDs, dates and timestamps
 (ISO 8601 with offset) as strings, decimals as plain decimal strings
@@ -105,7 +124,7 @@ and spaces, at most 120 characters (`document` when nothing is left).
 ```json
 {
   "format": "perfin-export",
-  "format_version": 1,
+  "format_version": 2,
   "app_version": "0.2.0",
   "created_at": "2026-11-04T10:00:00+00:00",
   "household": {"name": "...", "base_currency": "USD"},
@@ -157,15 +176,20 @@ anything is written (`app/domain/portability/import_.py`, `zipsafe.py`):
   drive letters or control characters; no directories, links, duplicates,
   encrypted members or compression other than stored/deflated. Member names
   are never used as file system paths;
-* the manifest: `format` must be `perfin-export`; an unknown
-  `format_version` is `archive-version-unsupported`;
+* the manifest: `format` must be `perfin-export`; `format_version` 1 and 2
+  are read, anything else is `archive-version-unsupported`. A version 1
+  archive (written before the Phase 3-6 tables were added) has none of the
+  version 2 members and imports none of their rows; a version 2 member in
+  it is `archive-unexpected-member`;
 * the members must be exactly those the manifest lists, each matching its
   SHA-256 and size, each in a known place of the layout, every document row
   with exactly one original;
 * every row: exactly the expected columns, strictly typed values that fit
   their columns, unique ids, counts as in the manifest; split sums, rule
-  documents, import mapping specs and the category depth are validated like
-  the services that normally write them.
+  documents, import mapping specs, the category depth, `lot_links` and
+  learned layouts (match rules as "remember this layout" validates them,
+  at most 100 layouts per household) are validated like the services that
+  normally write them.
 
 Then every row gets a new id and references are re-mapped (a reference to a
 row that is not in the archive refuses the import). Institutions (by
@@ -175,9 +199,39 @@ ones; an existing import mapping with the same name and an existing FX rate
 for the same pair and day win over the archive's; names that would clash
 get ` (imported)`. Rules are appended after the household's own.
 
+The version 2 entities follow the same pattern:
+
+* **securities** are merged by symbol and exchange; one of the same symbol
+  quoted in another currency is `archive-inconsistent`. A **price** of the
+  same security and day, a **net worth snapshot** of the same day, a
+  **tax category map** of the same category and jurisdiction, a **checklist
+  item** of the same tax year, form and issuer, and a **learned layout**
+  (institution, kind, parser) the household already has win over the
+  archive's (counted as `skipped`). **Tax years** are merged by year (the
+  household's own state and notes are kept).
+* Investment settings, investment transactions, lots, loans with their
+  payments and rate changes, manual assets and valuations, and tax form
+  data are created for the imported accounts, documents and tax years.
+* `investment_txn.lot_links` is re-mapped to the new lot ids (a link to a
+  lot that is not in the archive refuses the import), and the `holding`
+  cache is rebuilt from the imported lots (`created.holdings` in the
+  summary), so holdings, cost basis and gains equal the original's.
+* The account and security ids in a net worth snapshot's `breakdown` are
+  re-mapped (an id of an account deleted since the snapshot becomes a
+  fresh id that names no row, as in rules).
+* An **AI client** arrives as its definition only (name, mode, rounding,
+  hiding options, date-range cap, denylist, member aliases, expiry, last
+  use): without a token and revoked (`revoked_at` set to the import time
+  unless it already was). Create a new client to connect an assistant
+  again; the imported one documents the policy that was used.
+
 `import_hash` includes the account id, so it is recomputed for the new
 account: the running index is recovered by trying indexes until the stored
-hash matches, and the same index is hashed with the new account id.
+hash matches, and the same index is hashed with the new account id. An
+investment transaction's hash also includes the security (and, for an
+opening position, the day); it is recomputed the same way for the new
+account and security. A hash that cannot be recovered is dropped and
+counted (`import_hash_unrecoverable`).
 Importing the same statement again into the new household is therefore
 still recognised as a duplicate. `import_hash_alias` rows (hashes of
 deleted duplicates) cannot be recomputed and are not exported, so a
@@ -197,8 +251,10 @@ never a value): `archive-not-zip`, `archive-unsafe`,
 `archive-members-mismatch`, `archive-unexpected-member`,
 `archive-hash-mismatch`, `archive-invalid-value`,
 `archive-reference-unknown`, `archive-document-rejected`, `archive-limit`
-(rule count, category depth), `archive-inconsistent` (a database rule such
-as a transaction whose currency differs from its account's),
+(rule count, category depth, learned layouts), `archive-inconsistent` (a
+database rule such as a transaction whose currency differs from its
+account's, or a security clashing with one of the household in another
+currency),
 `archive-unreadable`. The household is unchanged after any of them and
 every stored file the import wrote is removed.
 

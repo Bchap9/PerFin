@@ -4,152 +4,192 @@ All notable changes to PerFin are recorded here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## Resume here
+## Status
 
-Phase 0 (Foundations) is integrated: every gate in `make check` passes and the
-Compose stack boots (db-init roles, `migrate` applies revision `0001`, api and
-worker healthy behind Caddy). One Phase 0 box is still open in
-`docs/ROADMAP.md`: CI has not yet run on GitHub Actions, and the full runtime
-image (Tesseract via apt) and its Trivy image scan have not been built, because
-the build sandbox blocks its external fetches (deb.debian.org, the ghcr.io uv
-image); live compose and Trivy evidence so far used a local variant image.
+1.0.0 is prepared but not tagged. Every phase (0-7) is implemented. Alembic
+head is `0007_phase7`. `make check` passes from the repository root
+(2026-11-04): SPDX; backend ruff, ruff format, mypy --strict (633 source
+files plus 4 scripts), bandit, 7410 pytest tests with `-n auto` and OpenAPI
+drift; frontend eslint, tsc, 399 vitest tests in 55 files and the
+production build; `pip-audit` finds no known vulnerabilities and
+`npm audit --audit-level=high` passes with 10 moderate advisories in dev
+tooling (eslint, typescript-eslint, minimatch), none high.
 
-Phase 1 (Identity, v0.1) is finalized: every gate in `make check` plus
-`pip-audit` and `npm audit --audit-level=high` passes, and the identity flow
-was run once end to end against a live `perfin api` (dev mode, real
-PostgreSQL, built SPA): bootstrap through `POST /setup`, enrolment-only
-session, TOTP enrolment, logout, login with password plus TOTP (replayed code
-refused), step-up, personal access token creation, bearer calls with scope
-enforcement, revocation. Seven of nine Phase 1 roadmap boxes are ticked; the
-authz matrix box waits for CI to run on GitHub Actions (as the Phase 0 CI box
-does) and the Authentik guide box waits for a walk-through against a live
-Authentik. Status per control: `docs/security/CONTROLS.md` (A1, A6, A8, F3,
-I2 and G1 stay partial for later-phase reasons stated in each row).
+What remains (details in docs/ROADMAP.md):
 
-Phase 2 (Ledger, v0.2) is finalized: `make check` passes from the repo root
-(SPDX; backend ruff, format, mypy --strict, bandit, 4402 pytest tests with
-`-n auto`, OpenAPI drift; frontend eslint, tsc, 269 vitest tests, build;
-`pip-audit` no known vulnerabilities; `npm audit --audit-level=high` passes
-with 14 moderate advisories in dev tooling, none high). Alembic head is
-`0003`. The ledger was run end to end live (`perfin migrate` on a fresh
-database, `perfin api` and `perfin worker` in dev mode, built SPA): setup,
-TOTP login, accounts and a manual balance, OFX upload imported by the worker
-through the sandbox with a live `/events` stream, CSV mapped through
-`/review` with exact duplicates skipped and a near duplicate confirmed, QIF
-with a split, rule dry run then apply, budget report, cash-flow report,
-encrypted export (step-up, one-time download) and import into a second
-household with isolation checks; then every SPA page in headless Chrome,
-SSE refresh of the open grid, CSV mapping and duplicate confirmation through
-the UI. All eight Phase 2 roadmap boxes are ticked; the deferrals are listed
-under Phase 2 in `docs/ROADMAP.md` (S3 blob store, `/settings/household`,
-auto-dedupe, sweepers, seccomp allowlist, SSE resume in the SPA, rule
-reference remapping). The sandboxed extraction subprocess is built but its
-box belongs to Phase 3.
-
-Next: Phase 3 (Smart ingestion I). Open items carried over: the Phase 0 CI
-box and the Phase 1 authz-matrix CI and Authentik boxes still wait for a run
-on GitHub Actions and a live Authentik; security review round 1 of Phase 2
-(P2-SR-01..05) and round 2 (P2-SR-R2-01..02) are fixed in the working tree with regression tests; the pre-auth CSRF cookie
-(`__Host-perfin-pre`) and the OIDC cookies are always `Secure`, so dev mode
-over plain http works only on `localhost`; C1 stays partial until the
-seccomp filter is a default-deny allowlist. (Time-zone validation uses the
-system tz database; the `python:3.12-slim` runtime base ships it.)
-
-Phases 3+4 (Smart ingestion I and II, v0.3/v0.4) are finalized: Alembic
-head is `0004`; `make check` passes from the repo root (SPDX; backend ruff,
-format, mypy --strict, bandit, 5240 pytest tests with `-n auto`, OpenAPI
-drift; frontend eslint, tsc, 291 vitest tests, build; `pip-audit` no known
-vulnerabilities; `npm audit --audit-level=high` passes with 14 moderate
-advisories in dev tooling, none high). Live run on a fresh migrated
-database with `perfin api`, `perfin worker` and a fake local clamd: setup and
-TOTP login, a text-layer PDF statement into the ledger, a scanned PDF through
-OCR (22 of 22 rows) with its page preview, a receipt photo linked to its
-card transaction, a drop-folder PDF attributed, imported and moved, an
-infected test file rejected, full-text search, `perfin ingest --dry-run`,
-and in headless Chrome a doubtful OCR row corrected, confirmed and turned
-into a rule through the review UI. That run found a real bug, fixed with a
-regression test: migration `0004` lacked the `receipt_match` review kind,
-so every document reaching the matching stage was dead-lettered on a
-migrated database. The extraction child's seccomp filter is now a
-default-kill allowlist (C1 implemented, ADR-0006 addendum), checked on the
-host and in the `python:3.12-slim` base image. gitleaks (`git` and `dir`)
-is clean after allowlisting one synthetic test token; `.gitignore` no
-longer hides `frontend/src/features/documents/` (the `documents/` data
-pattern matched it; it must be added to git with this phase). Roadmap:
-every Phase 3 and 4 box is ticked except the classifier box (synthetic
-samples only, no contributed ones). Not run here: the compose stack with
-the real worker image (its Debian `tesseract-ocr-eng` data), Semgrep
-(semgrep.dev blocked; the workflow keeps it blocking), a real clamd and a
-real IMAPS provider. Open: parsers for invoices, tax forms, insurance and
-brokerage statements; an API and UI for drop-folder and antivirus status.
-Next: Phase 5 (investments, loans, net worth).
-
-Phases 5+6 (Investments, loans, net worth; Tax vault, v0.5/v0.6) are
-finalized: Alembic head is `0005` (`0005_phase5_6_wealth_tax`, 17
-household-scoped tables under forced RLS with grants, 11 enum types).
-`make check` passes from the repo root (SPDX; backend ruff, format, mypy
---strict, bandit, 6078 pytest tests with `-n auto`, OpenAPI drift;
-frontend eslint, tsc, 333 vitest tests, build; `pip-audit` no known
-vulnerabilities; `npm audit --audit-level=high` passes with 14 moderate
-advisories in dev tooling, none high). Live run on a fresh database
-migrated by `perfin migrate`, with `perfin api`, `perfin worker` and the
-built SPA (dev mode): setup and TOTP login; a brokerage PDF and OFX, two
-mortgage statements, a W-2 and a 1099-INT processed through the sandbox
-with no review item; holdings equal to the statement positions,
-performance (TWR/MWR), the loan payment split (`schedule_check` `ok`),
-schedule and extra-payment simulation, a manual asset valuation, recurring
-detection and the cash-flow calendar, the `snapshot_net_worth` job storing
-and backfilling snapshots, the 2025 checklist ticked off with exact box
-amounts and no identity value in a database dump, and the accountant export
-(refused to a personal access token, one-time download after step-up);
-then every Phase 5/6 page in headless Chrome. The run found two real bugs,
-fixed with regression tests: request transactions committed after the
-response was sent (`DbSession` is now `scope="function"`), and the
-`/assets` client route colliding with Vite's `/assets/` bundle mount
-(bundles now under `/static/`). Every Phase 5 and 6 roadmap box is ticked.
-Deferred (ROADMAP Phase 5 "Deferred"): the Phase 5/6 tables in the
-portability export, screens for `/fx-rates`, cost methods, specific-lot
-sales, loan-term edits and held-statement resolution, mergers/spin-offs,
-external feeds against real services (H2 partial), UTC days, one tax year
-per calendar year, and delivery of `tax.reminder` (Phase 7
-notifications). `manual_asset.description` is not an encrypted column yet
-(G1). Next: Phase 6b (AI access boundary).
-
-Phase 6b (AI access boundary, v0.7) is finalized. Alembic head is `0006`
-(`0006_phase6b_ai`: `ai_client` and `ai_call` under forced RLS with grants,
-enum types `ai_mode` and `ai_transport`). `make check` passes from the repo
-root: SPDX; backend ruff, format, mypy --strict, bandit, 6932 pytest tests
-with `-n auto`, and OpenAPI drift; frontend eslint, tsc, 360 vitest tests
-and the build. `pip-audit` finds no known vulnerabilities, and
-`npm audit --audit-level=high` passes with 14 moderate advisories in dev
-tooling, none high.
-
-Live verification (`tests/security/mcp/test_mcp_live.py`): the installed
-`perfin mcp`, given only its enable flag, API URL, a mode-0600 token file
-and the stdio transport, served a real `mcp` SDK client session against a
-live uvicorn API. The session called all 19 tools on a household with
-identity and documents planted. No identity appeared in any answer or
-`ai_call` row, and every audit row equals the answer received. The run
-found one real bug, fixed with a regression test: the MCP second scrub
-turned allocation weights such as `1.0000000000` (and long returns, rates
-and quantities) into `[ACCT]`.
-
-Claude Code 2.1 connected to `perfin mcp` over stdio (installed and
-`uv run` forms) and over streamable HTTP with the bearer header; a wrong
-bearer was refused with 401. P56-SR-R1-02 does not reach the AI boundary
-(`test_ai_documents.py`), so E1 is now implemented. Every E1-E4 and M1-M8
-row is `implemented`.
-
-Four of five Phase 6b roadmap boxes are ticked. The setup-guides box stays
-open: Claude Desktop, the `docker exec`/`docker compose run` forms against
-the real image (whose build needs deb.debian.org, blocked here) and the
-`mcphost`/Ollama host were not run. The web UI was tested in jsdom only,
-not viewed in a real browser. Next: Phase 7 (Polish and 1.0).
+- An external security review or penetration test before the tag. An
+  internal review was done every phase (docs/security/CONTROLS.md).
+- CI green end to end on GitHub Actions. The backend pytest job has not
+  completed on GitHub yet, and the Phase 7 tree has not been pushed.
+- The release workflow runs for the first time when `v1.0.0` is pushed.
+  Signing, SBOM attestation and provenance are unproven until then.
+- Not exercised: the Helm chart on a live cluster, a live Authentik, real
+  notification providers, the egress profile with real outbound
+  integrations, WebAuthn with a hardware key, Claude Desktop and on-prem MCP
+  hosts, and contributed classifier samples.
 
 ## [Unreleased]
 
+Nothing yet.
+
+## [1.0.0] - 2026-11-04
+
+First stable release. It covers every roadmap phase:
+
+- **Phase 0, Foundations:** monorepo (FastAPI, SQLAlchemy, Alembic; Vite,
+  React, TypeScript), `perfin config check` with insecure-config refusal,
+  forced row-level security, a hash-chained audit log, the Postgres job
+  queue, security headers, strict CSP and CSRF, PII-scrubbed logging,
+  health and metrics endpoints, and a hardened Compose stack.
+- **Phase 1, Identity (v0.1):** first-run setup, Argon2id local login with
+  rate limits and lockout, server-side sessions, TOTP, WebAuthn, recovery
+  codes and step-up, OIDC (Authentik) with PKCE and back-channel logout,
+  households, roles and account grants, personal access tokens, and the
+  authz matrix test.
+- **Phase 2, Ledger (v0.2):** accounts, transactions, splits and transfers,
+  categories, payees, tags, rules, budgets, goals, reports, CSV/OFX/QIF/XLSX
+  imports with dedupe, the review queue, server-sent events, and encrypted
+  full export and import.
+- **Phases 3-4, Smart ingestion (v0.3, v0.4):** the sandboxed extraction
+  subprocess (seccomp default-kill allowlist, Landlock, rlimits), text-layer
+  and scanned PDFs with OCR, receipt photos, the drop folder, IMAPS email
+  intake, optional ClamAV, a document classifier, learned layouts and
+  full-text search.
+- **Phases 5-6, Wealth and tax (v0.5, v0.6):** securities, prices and FX,
+  lots and cost methods, performance, loans with amortisation, manual
+  assets, net worth history, recurring transactions and the cash-flow
+  calendar; the tax vault with checklists, parsed forms and the accountant
+  export.
+- **Phase 6b, AI access boundary (v0.7):** the `ai:read` scope with
+  allowlist serialisers, the column classification gate, the identity
+  scrubber with a zero-leak corpus, and the read-only `perfin mcp` server
+  (stdio and HTTP) with client management, an exposure preview and a full
+  audit log.
+- **Phase 7, Polish and 1.0:** notification channels (SMTP, webhook, ntfy,
+  Gotify, Matrix), a configurable dashboard, PWA manifest, service worker
+  and responsive layout, encrypted backup and restore with a restore test,
+  master-key rotation, a Helm chart, a tag-only signed release workflow,
+  the `make dev` stack with a synthetic seed, deployment, operations,
+  upgrading and backup guides, the documentation site, and the v1.0.0
+  release verification (docs/RELEASE_CHECKLIST.md).
+
+Still open before the `v1.0.0` tag is pushed: an external security review,
+and the first run of the release workflow, which only runs on a tag. Other
+known limits are listed in docs/ROADMAP.md and docs/security/CONTROLS.md.
+
 ### Added
 
+- Alembic revision `0007_phase7` (Phase 7 integration):
+  `notification_channel` with forced RLS and application-role grants; the
+  downgrade drops it and the `notification_channel_type` enum type. The
+  dashboard layout (user settings JSON) and key rotation need no DDL.
+- Dev stack (Phase 7). `make dev` (`scripts/dev.sh`) generates `.dev/env`
+  (random database passwords, master and secret keys; no defaults), starts
+  PostgreSQL 16 from `deploy/docker-compose.dev.yml` (mirror-able with
+  `POSTGRES_IMAGE`), runs the migrations, seeds a synthetic household and runs
+  the API with reload, the worker and Vite; `make dev-down` and `make
+  dev-reset` stop and wipe it. `scripts/seed_dev.py` refuses unless
+  `PERFIN_DEV_MODE=true` and unless the database is empty or holds only its own
+  finished seed; it creates `dev-admin` with a generated password printed once,
+  then builds accounts of every type, six months of transactions, rules, a
+  budget, goals, investments, a mortgage and a car loan, manual assets, net
+  worth history, a tax year with forms, a revoked AI client example and
+  uploaded documents that leave items in the review queue.
+  `test_seed_dev.py` covers it. Documented in README and
+  `docs/DEVELOPMENT.md` ("Dev stack").
+- Operator documentation and documentation site (Phase 7).
+  `docs/DEPLOYMENT.md` (single-host Compose install: prerequisites, exact
+  secret-generation commands, the master key and its acknowledgement, first
+  boot and where the one-time setup URL appears, the Caddyfile plus tested
+  nginx and Traefik equivalents, drop folder, email intake, MCP role,
+  hardening checklist walk-through) and `docs/OPERATIONS.md` (JSON logs,
+  `/healthz` and `/readyz`, the internal metrics port and metric names, job
+  states and dead letters, fixes for pending migrations, master key mismatch,
+  sandbox, OCR, IMAP TLS, OIDC issuer, disk and stuck jobs). New
+  `docs/security/` pages `oidc.md`, `email.md` and `what-leaves-the-host.md`
+  complete the per-integration set linked from the README. `mkdocs.yml`
+  (mkdocs-material, no analytics, no external fonts) with hash-pinned
+  `requirements-docs.txt` and a CI `docs` job running `mkdocs build --strict`.
+  The shipped `Caddyfile.example` now allows the full-import archive size on
+  `/api/v1/import` (it was capped at 1 MB, below `PERFIN_IMPORT_MAX_MB`).
+- Release pipeline and Helm chart (SECURITY.md H1, H2, H4; docs/UPGRADING.md).
+  `.github/workflows/release.yml` runs only on pushed `v*` tags: it checks the
+  tag against every version string and the CHANGELOG (`scripts/release_notes.py`),
+  builds `ghcr.io/bchap9/perfin` and `ghcr.io/bchap9/perfin-egress` for
+  linux/amd64 and linux/arm64 (buildx + QEMU), pushes them by digest, scans
+  both platforms with Trivy (fixable HIGH/CRITICAL fails the release) before
+  adding the semver tags, writes CycloneDX and SPDX SBOMs, signs the digest and
+  SBOMs with cosign keyless signing, attests SLSA provenance and the SBOMs
+  (GitHub attestations, pushed to the registry), publishes the signed Helm
+  chart to `oci://ghcr.io/bchap9/charts/perfin`, and creates the GitHub
+  release with the CHANGELOG section, SBOMs, Sigstore bundles and
+  `SHA256SUMS`. Actions are SHA-pinned and each job has least-privilege
+  permissions. `deploy/helm/perfin` deploys the api, worker, optional mcp,
+  a `perfin migrate` hook Job and an optional bundled PostgreSQL with the
+  Compose hardening (non-root, read-only root, no capabilities, RuntimeDefault
+  seccomp, no service-account token), secrets only from existing Secrets
+  (per-role keys, the mcp pod gets none), and default-deny NetworkPolicies
+  mirroring the Compose networks. CI lints and validates the chart (`helm
+  lint --strict`, `kubeconform`) with tools built by
+  `scripts/install-chart-tools.sh` from hash-pinned Go modules;
+  `backend/tests/unit/test_helm_chart.py` and `test_release_workflow.py`
+  check the hardening and the pipeline. `docs/UPGRADING.md` covers the
+  versioning policy, verification with cosign, Compose and Helm upgrades,
+  migrations and rollback.
+- Backup, restore and key rotation (SECURITY.md G3, G4; docs/BACKUP_RESTORE.md):
+  `scripts/backup.sh` writes one passphrase-encrypted archive (`pg_dump`
+  custom format as the superuser, the encrypted document volumes, a manifest
+  with versions, Alembic head, the verified audit-log head and the master
+  key's fingerprint, never the key) for Docker Compose or a bare-metal
+  install; `scripts/restore.sh` verifies and decrypts it, refuses a non-empty
+  target without `--force`, restores into a fresh stack, migrates, checks the
+  audit chain against the manifest and decrypts a sample of documents. New
+  commands `perfin backup-encrypt`, `backup-decrypt`, `backup-info`,
+  `restore-check` and `perfin rotate-key` (rewraps every data key under a new
+  master key in resumable batches without re-encrypting any payload, verifies,
+  audits; `--status`, `--dry-run`). New setting `PERFIN_MASTER_KEY_VERSION`
+  (default 1). A restore verification test runs both scripts in CI.
+
+- Configurable dashboard (Phase 7): widgets from a catalogue of twelve (net
+  worth, cash flow, spending, budgets, goals, recent transactions, review
+  queue, upcoming bills, holdings and allocation, loans, tax documents,
+  accounts) that the person adds, removes, reorders and resizes; the layout is
+  saved per user as `dashboard_layout` of `GET/PATCH /settings/user`.
+- PWA: web app manifest, generated PNG icons (`npm run gen:icons`) and a
+  service worker that caches only fingerprinted `/static/` files and icons and
+  never touches `/api` or the HTML shell; registered from a module through a
+  Trusted Types policy (no inline script).
+- Responsive pass: tables collapse to cards below 40rem, the small-screen
+  drawer has a backdrop and closes on Escape, touch targets are 44px on
+  touch screens, no horizontal scroll at 375px.
+
+- Notification channels (Phase 7, docs/security/notifications.md): SMTP
+  (STARTTLS required or implicit TLS, certificate verified), webhook (HTTPS,
+  HMAC-SHA256 signature over timestamp and body), ntfy, Gotify and Matrix,
+  configured per household under Settings > Notifications
+  (`/api/v1/settings/notifications/channels`: owner/admin browser session,
+  changes behind step-up, credentials write-only and encrypted per row, test
+  send). Account lock (A1), recovery code use and MFA reset (A8), role and
+  membership changes (I2), sign-in from a new device, AI client creation,
+  tax reminders, daily "review items waiting" and `perfin notify
+  backup-failed` queue a `send_notification` job per subscribed channel,
+  retried with backoff; every message is one generic sentence without
+  identity or financial detail. Egress through `SafeHttpClient` / a vetted
+  SMTP socket, optional instance allowlist
+  `PERFIN_NOTIFICATIONS_ALLOWED_HOSTS`. New table `notification_channel`
+  (needs the Phase 7 migration).
+- Full export completeness (PORTABILITY.md, archive format version 2): the
+  export now carries every user-data table added in Phases 3-6 (learned
+  parser layouts, securities, prices, per-account cost method, investment
+  transactions with re-mapped `lot_links`, lots, loans, payments, rate
+  changes, manual assets, valuations, stored net worth snapshots, tax years,
+  checklists, category-to-schedule maps, tax form data, AI client
+  definitions without their token). Import rebuilds the `holding` cache,
+  merges securities and tax years, recomputes investment import hashes and
+  still reads format version 1 archives. `NOT_EXPORTED` keeps only secrets,
+  per-instance identity, caches and job/audit history, each with a reason.
+  A round-trip test of a fully populated household compares ledger,
+  holdings, lots, loans, net worth and tax figures.
 - AI access boundary, API side (Phase 6b, AI_ACCESS.md, ADR-0007): read-only
   `/api/v1/ai/v1` views (policy, overview, spending, income, trends, budget
   status, goals, recurring, net worth history, allocation, accounts,
@@ -1397,8 +1437,210 @@ not viewed in a real browser. Next: Phase 7 (Polish and 1.0).
   when `PERFIN_LOG_LEVEL` suppresses the WARNING log line that normally
   carries it; tested end to end on an empty database.
 
+### Changed
+
+- Version 1.0.0: `backend/pyproject.toml` (and `backend/uv.lock`),
+  `app.__version__` (served in the OpenAPI document, the MCP server info,
+  backup manifests and export archives), `frontend/package.json` and
+  `package-lock.json`; the Helm chart was already `1.0.0`.
+  `scripts/release_notes.py check v1.0.0` passes. No tag has been created.
+- CI backend job: timeout raised from 20 to 45 minutes and pytest runs with
+  `-n logical` instead of `-n auto` (which started a single worker on the
+  hosted runner); run 41870347026 was cancelled at the 20-minute limit.
+- README: status is the 1.0.0 release candidate, the quick start points to
+  docs/DEPLOYMENT.md, the Helm chart README and docs/UPGRADING.md, and
+  names the setup link; DEVELOPMENT.md documents
+  `PERFIN_EXTRACT_REQUIRE_LANDLOCK=false` in `.dev/env` for kernels without
+  Landlock.
+- CONTROLS.md at 1.0: no row is `planned`. G2 now names what is missing (no
+  native KMS client; key separation is documented), G5 describes household
+  deletion and what it leaves, A6 lists household deletion and notification
+  channels under step-up, and H1/H4 record the shipped image built, run
+  read-only and Trivy-scanned on GitHub Actions.
+- Phase 6b finalize: CONTROLS.md E1 is now `implemented`. The
+  P56-SR-R1-02 limit (statement and payslip page text kept as extracted)
+  does not reach the AI boundary, and `test_ai_documents.py` proves it. M3
+  (no write tools) and M8 (accepted re-identification risk, with options)
+  now describe how they are covered and which tests pin them. AI_ACCESS.md
+  documents the second scrub's numeric fields and the documents boundary.
+  docs/security/ai.md states that the kept document text is never read by
+  an AI view.
+- Phases 5+6 finalize: the SPA's hashed bundles are built into and served
+  from `/static/` (`build.assetsDir`, `app/core/spa.py`, the immutable
+  cache rule in `app/core/headers.py`) instead of Vite's default
+  `/assets/`, which is the Assets page's client route. Docs:
+  `docs/ROADMAP.md` (Phase 5 net worth and recurring boxes ticked, live-run
+  record, deferrals), `docs/API.md` (read-your-writes convention, live-run
+  status), `docs/ARCHITECTURE.md` (job status, SPA paths),
+  `docs/INGESTION.md` (live check), `docs/security/integrations.md` (feeds
+  off in the live run; not run against real services), `docs/VISION.md`
+  (status notes on corporate actions and the export),
+  `docs/security/CONTROLS.md` (A6 accountant export step-up, F1/F9 static
+  path, F3 stale revision text and tax vault visibility, F8 Phase 5/6
+  bounds, G1 `manual_asset.description` not encrypted).
+- `app/domain/portability/entities.py`: the `api_token` reason is a named
+  constant instead of a literal under `# nosec B105`, which bandit applied
+  to the whole `NOT_EXPORTED` dict and reported as 63 "nosec encountered"
+  warnings.
+- The tax checklist's status select is wide enough for its labels, and a
+  wide table scrolls inside its card instead of widening the page
+  (`.app-main { min-width: 0 }`).
+- Phases 3+4 finalize: `docs/INGESTION.md` (seccomp allowlist, the review
+  UI), `docs/ARCHITECTURE.md` (sandbox status), `docs/API.md` (the
+  document `error` values from the sandbox, including `syscall_denied`),
+  ADR-0006 (addendum: default-kill allowlist), `docs/security/CONTROLS.md`
+  (C1 and C12 implemented, H2 narrowed), `docs/ROADMAP.md` (Phase 3 and 4
+  boxes, live-run record and deferrals) and the README document table.
+- The sandbox runner reports a child killed by `SIGSYS` as
+  `syscall_denied` instead of `crashed`.
+
+- Phase 2 finalize: `docs/ARCHITECTURE.md` describes the implemented SSE
+  relay (event row + `NOTIFY`, one `LISTEN` per stream, `Last-Event-ID`
+  replay), the Phase 2 worker jobs, the sandbox and the local-only blob
+  store; `docs/API.md` states which Phase 2 routes exist and that
+  `/settings/household` and `/audit` are not built yet; `docs/INGESTION.md`
+  states the Phase 2 intake scope (upload only, structured formats
+  extracted, no ZIP expansion, no auto-dedupe, no opening/closing
+  reconciliation yet); `docs/ROADMAP.md` lists the deferrals from Phase 2
+  (S3 blob store, household settings API, auto-dedupe, sweepers, seccomp
+  allowlist, SSE resume in the SPA, rule-reference remapping) and notes
+  that the sandboxed extraction subprocess (a Phase 3 box) is already
+  built. `docs/security/CONTROLS.md`: F8 lists every paginated or capped
+  Phase 2 list endpoint (still partial for the Phase 1 identity lists),
+  A6 records the Phase 2 step-up routes, C12 the review UI, G3 the SPA's
+  optional passphrase.
+- The placeholder home page is replaced by the dashboard; the app shell
+  test now checks the placeholder pages on routes that are still
+  placeholders (`/tax`, `/loans`).
+- `tests/integration/test_events.py`: the "payload stays out of the
+  NOTIFY" check used the value `d-1`, which can occur inside a random
+  UUIDv7 in the notice (it failed once in a full run); it now uses a marker
+  that cannot be part of a hex id. `test_api_tokens.py` and
+  `tests/security/test_token_security.py` took the token secret as the text
+  after the last `_`, but the base64url secret can itself contain `_` (a
+  run failed with the "secret" `0`); they now slice the documented
+  `pfn_<12 hex>_<43 chars>` layout.
+- `deploy/docker-compose.yml`: the `edge` network has a fixed subnet
+  (`EDGE_SUBNET`, default `172.30.79.0/24`, gateway `EDGE_GATEWAY`,
+  `172.30.79.1`), so the address host-local clients such as an SSH tunnel
+  arrive from is predictable for `PERFIN_BREAKGLASS_CIDRS`. The shipped
+  `PERFIN_BREAKGLASS_CIDRS=127.0.0.1/32` stays as a fail-closed default
+  (break-glass login through the proxy is off until set); `.env.example` and
+  `docs/AUTHENTIK.md` explain the gateway value and the IPv6 userland-proxy
+  caveat.
+- `deploy/egress-allowlist.txt`: the OIDC issuer comment no longer suggests
+  that a LAN issuer needs no allowlist entry.
+- `docs/API.md` lists the endpoints Phase 1 added beyond the first cut
+  (`/setup`, `/auth/login/options`, `/auth/password`, `/auth/password-reset/*`,
+  `/auth/oidc/status|link|logout`, `/auth/step-up`, `/auth/mfa/*`,
+  `/auth/tokens/scopes`, `/auth/session/household`, `/settings/user`,
+  `/admin/users`), corrects the sessions and tokens lines, and states that
+  `Idempotency-Key` is not implemented yet.
+- `deploy/.env.example` keeps comments on their own lines, so the file also
+  works with `docker run --env-file` and systemd `EnvironmentFile`.
+- Ruff and mypy now cover `backend/migrations`.
+
+### Fixed
+
+- A sale of hand-picked lots (`lots` on a sell) made
+  `GET /investments/performance` answer `422 lot-not-available`, and net
+  worth silently left that account and security out: the in-memory replays
+  in `app/domain/investments/performance.py` and
+  `app/domain/networth/compute.py` drew fresh lot ids instead of the stored
+  ones the sale names. Both now pass the stored ids
+  (`investments.service.stored_lot_ids`).
+  `test_investments_api.py::test_sale_of_hand_picked_lots_in_performance_and_net_worth`
+  fails without either half of the fix.
+- Compose `proxy-init` failed on every `docker compose up` after the first
+  (`chown: /data/caddy/certificates: Permission denied`): Caddy creates its
+  state directories with mode 0700, which the one-shot root container
+  (CHOWN only) cannot traverse, so the proxy was not started again after an
+  upgrade or a `down`/`up`. It now leaves a volume Caddy already owns alone.
+  Found by the v1.0.0 verification run (`docs/RELEASE_CHECKLIST.md`);
+  `test_proxy_init_leaves_volumes_caddy_already_owns`.
+- The Compose `av` profile could not start: the ClamAV image's `/init`
+  re-links `/var/lock` and edits `/etc/clamav` in place, which the read-only
+  root filesystem refuses, so `clamav` restarted forever. The new
+  `deploy/clamav/entrypoint.sh` does the same work in `/tmp` and takes
+  `FRESHCLAM_CONF_*` / `CLAMD_CONF_*` settings (freshclam's proxy for the
+  egress profile). Found by the v1.0.0 verification run; real clamd then
+  rejected an EICAR upload. `test_clamav_runs_read_only_with_own_entrypoint`.
+- The AI scrubber let a street name through when a government id came just
+  before the address (`SSN 123-45-6789 742 Evergreen Terrace` reached the MCP
+  client and `ai_call` as `[GOVID] Evergreen Terrace`, SECURITY.md/AI_ACCESS.md
+  M2): the keyworded-id rule ran over spaces into the house number. It now
+  stops after nine digit or mask positions (four after "last 4"), and a house
+  number is no longer taken from the tail of a dashed id (`123-45-6789 742
+  ...` left `123-` before). Found by the v1.0.0 verification run; new cases in
+  the scrubber corpus.
+- `scripts/backup.sh` (Compose mode) failed with `service "api" is not
+  running` when api and worker were stopped, which its own documentation
+  recommends for a consistent snapshot: it now reads the documents and
+  encrypts in one-off `api` containers. Found by the v1.0.0 verification run;
+  `test_backup_script_compose.py`.
+- `perfin api` and `perfin worker` served normally when `PERFIN_DATABASE_URL`
+  named the schema owner (or a superuser), leaving row-level security one
+  `ALTER TABLE` away (SECURITY.md H3). Both now ask the database at startup
+  and refuse a superuser, `BYPASSRLS` or table-owning role (dev mode only
+  warns; an unreachable database fails closed). Found by the v1.0.0
+  verification run; `tests/integration/test_database_role_gate.py`.
+- The MCP process loaded `app.db`, `app.auth` and the key modules again
+  (SECURITY.md E4): `build_parser` registers the operator commands, whose
+  option defaults were imported from `app.ops.backup` and
+  `app.ops.keyrotation`. The defaults now live in `app.ops.defaults`, and
+  `test_a_running_mcp_process_loads_no_database_or_key_module` passes again.
+- `recurring.detect` failed every run at INFO log level (`KeyError: Attempt to
+  overwrite 'created' in LogRecord`): its counts were passed as `extra` fields
+  that collide with `LogRecord` attributes; they are now prefixed `detect_`.
+  Found by the dev seed's worker; regression test in `test_recurring_api.py`.
+- `DbSession` (`app/auth/deps.py`) is a `scope="function"` dependency, so
+  the transaction commits before the response is sent. The live run saw 1
+  failed read in 300 `POST /accounts` then `GET /accounts/{id}` pairs (0 in
+  1000 after the fix) and once a `401` right after `POST /auth/step-up`
+  rotated the session. Regression test:
+  `tests/integration/test_commit_before_response.py`.
+- Reloading `/assets` or opening `/assets/<id>` directly answered a problem
+  `404`: the path belonged to the SPA bundle mount. Bundles now live under
+  `/static/`; `tests/integration/test_spa.py` serves `index.html` for both.
+- `src/app/shell.test.tsx` expected the Tax section to be a placeholder
+  after the tax screens replaced it.
+- `security.symbol`'s CHECK constraint: the character class `[...:_-]`
+  contained `:_`, which SQLAlchemy parses as a bind parameter in a CHECK
+  string and rendered as `NULL`, so the database refused symbols with `:` or
+  `_` that the API accepts. The class is reordered (`_:-`) in the model and
+  in revision `0005`; `test_phase56_tables_refuse_other_households_on_migrated_database`
+  inserts such a symbol on a migrated database.
+- Migration `0004` adds the `receipt_match` label to the `review_kind`
+  enum. Without it, on a migrated database (tests build the schema from
+  the models, so they passed) every document that reached the matching
+  stage (which looks up open receipt suggestions) failed with `invalid
+  input value for enum review_kind` and was dead-lettered, the first PDF
+  statement of the live run included. The downgrade deletes `receipt_match` items and restores the 0003
+  labels.
+- `.gitignore`: the `documents/` data pattern also matched the SPA's
+  `frontend/src/features/documents/` (document library, detail page and page
+  viewer), so those sources were silently left out of git; it is now
+  re-included like `backend/app/domain/documents/`.
+
 ### Security
 
+- Phase 7 security review round 1 (P7-SR-R1-01..07):
+  - The Helm chart refuses an empty or null `networkPolicy.ingressFrom`,
+    `networkPolicy.dns.peers` or `externalDatabase.networkPeers`, an empty
+    peer, and an `egressAllowlist` rule without a non-empty `to`: an empty
+    peer list matches every source or destination, so such a value made the
+    api reachable from every pod or opened port 53 to any host.
+  - A webhook notification channel moved to another host or port gets a new
+    signing secret (returned once), so signed bodies cannot be replayed
+    from one receiver to the other.
+  - docs/DEPLOYMENT.md: the key-file recipe writes the existing master key
+    to `secrets/master.key` instead of generating a different one, and comes
+    before the backup acknowledgement; the key never changes except through
+    `perfin rotate-key`. docs/BACKUP_RESTORE.md: the rotation procedure
+    covers `PERFIN_MASTER_KEY_FILE` and keeps the old key file until
+    `rotate-key --status` exits 0 and a new backup exists.
+  - The release workflow builds the chart tools with the same pinned Go
+    (`actions/setup-go`, Go 1.24) as CI.
 - Phase 6b security review round 2 (P6B-SR-R2-01..03):
   - Account, card and routing digits, last four included, no longer reach an
     assistant in four shapes both scrubber stages missed: the further groups
@@ -1617,119 +1859,3 @@ not viewed in a real browser. Next: Phase 7 (Polish and 1.0).
   patterns backtracked quadratically (8-31 s for one 20 000-character
   string); they are now linear (about 50 ms for 50 000 characters) and a test
   enforces it.
-
-### Changed
-
-- Phase 6b finalize: CONTROLS.md E1 is now `implemented`. The
-  P56-SR-R1-02 limit (statement and payslip page text kept as extracted)
-  does not reach the AI boundary, and `test_ai_documents.py` proves it. M3
-  (no write tools) and M8 (accepted re-identification risk, with options)
-  now describe how they are covered and which tests pin them. AI_ACCESS.md
-  documents the second scrub's numeric fields and the documents boundary.
-  docs/security/ai.md states that the kept document text is never read by
-  an AI view.
-- Phases 5+6 finalize: the SPA's hashed bundles are built into and served
-  from `/static/` (`build.assetsDir`, `app/core/spa.py`, the immutable
-  cache rule in `app/core/headers.py`) instead of Vite's default
-  `/assets/`, which is the Assets page's client route. Docs:
-  `docs/ROADMAP.md` (Phase 5 net worth and recurring boxes ticked, live-run
-  record, deferrals), `docs/API.md` (read-your-writes convention, live-run
-  status), `docs/ARCHITECTURE.md` (job status, SPA paths),
-  `docs/INGESTION.md` (live check), `docs/security/integrations.md` (feeds
-  off in the live run; not run against real services), `docs/VISION.md`
-  (status notes on corporate actions and the export),
-  `docs/security/CONTROLS.md` (A6 accountant export step-up, F1/F9 static
-  path, F3 stale revision text and tax vault visibility, F8 Phase 5/6
-  bounds, G1 `manual_asset.description` not encrypted).
-- `app/domain/portability/entities.py`: the `api_token` reason is a named
-  constant instead of a literal under `# nosec B105`, which bandit applied
-  to the whole `NOT_EXPORTED` dict and reported as 63 "nosec encountered"
-  warnings.
-- The tax checklist's status select is wide enough for its labels, and a
-  wide table scrolls inside its card instead of widening the page
-  (`.app-main { min-width: 0 }`).
-- Phases 3+4 finalize: `docs/INGESTION.md` (seccomp allowlist, the review
-  UI), `docs/ARCHITECTURE.md` (sandbox status), `docs/API.md` (the
-  document `error` values from the sandbox, including `syscall_denied`),
-  ADR-0006 (addendum: default-kill allowlist), `docs/security/CONTROLS.md`
-  (C1 and C12 implemented, H2 narrowed), `docs/ROADMAP.md` (Phase 3 and 4
-  boxes, live-run record and deferrals) and the README document table.
-- The sandbox runner reports a child killed by `SIGSYS` as
-  `syscall_denied` instead of `crashed`.
-
-- Phase 2 finalize: `docs/ARCHITECTURE.md` describes the implemented SSE
-  relay (event row + `NOTIFY`, one `LISTEN` per stream, `Last-Event-ID`
-  replay), the Phase 2 worker jobs, the sandbox and the local-only blob
-  store; `docs/API.md` states which Phase 2 routes exist and that
-  `/settings/household` and `/audit` are not built yet; `docs/INGESTION.md`
-  states the Phase 2 intake scope (upload only, structured formats
-  extracted, no ZIP expansion, no auto-dedupe, no opening/closing
-  reconciliation yet); `docs/ROADMAP.md` lists the deferrals from Phase 2
-  (S3 blob store, household settings API, auto-dedupe, sweepers, seccomp
-  allowlist, SSE resume in the SPA, rule-reference remapping) and notes
-  that the sandboxed extraction subprocess (a Phase 3 box) is already
-  built. `docs/security/CONTROLS.md`: F8 lists every paginated or capped
-  Phase 2 list endpoint (still partial for the Phase 1 identity lists),
-  A6 records the Phase 2 step-up routes, C12 the review UI, G3 the SPA's
-  optional passphrase.
-- The placeholder home page is replaced by the dashboard; the app shell
-  test now checks the placeholder pages on routes that are still
-  placeholders (`/tax`, `/loans`).
-- `tests/integration/test_events.py`: the "payload stays out of the
-  NOTIFY" check used the value `d-1`, which can occur inside a random
-  UUIDv7 in the notice (it failed once in a full run); it now uses a marker
-  that cannot be part of a hex id. `test_api_tokens.py` and
-  `tests/security/test_token_security.py` took the token secret as the text
-  after the last `_`, but the base64url secret can itself contain `_` (a
-  run failed with the "secret" `0`); they now slice the documented
-  `pfn_<12 hex>_<43 chars>` layout.
-- `deploy/docker-compose.yml`: the `edge` network has a fixed subnet
-  (`EDGE_SUBNET`, default `172.30.79.0/24`, gateway `EDGE_GATEWAY`,
-  `172.30.79.1`), so the address host-local clients such as an SSH tunnel
-  arrive from is predictable for `PERFIN_BREAKGLASS_CIDRS`. The shipped
-  `PERFIN_BREAKGLASS_CIDRS=127.0.0.1/32` stays as a fail-closed default
-  (break-glass login through the proxy is off until set); `.env.example` and
-  `docs/AUTHENTIK.md` explain the gateway value and the IPv6 userland-proxy
-  caveat.
-- `deploy/egress-allowlist.txt`: the OIDC issuer comment no longer suggests
-  that a LAN issuer needs no allowlist entry.
-- `docs/API.md` lists the endpoints Phase 1 added beyond the first cut
-  (`/setup`, `/auth/login/options`, `/auth/password`, `/auth/password-reset/*`,
-  `/auth/oidc/status|link|logout`, `/auth/step-up`, `/auth/mfa/*`,
-  `/auth/tokens/scopes`, `/auth/session/household`, `/settings/user`,
-  `/admin/users`), corrects the sessions and tokens lines, and states that
-  `Idempotency-Key` is not implemented yet.
-- `deploy/.env.example` keeps comments on their own lines, so the file also
-  works with `docker run --env-file` and systemd `EnvironmentFile`.
-- Ruff and mypy now cover `backend/migrations`.
-
-### Fixed
-
-- `DbSession` (`app/auth/deps.py`) is a `scope="function"` dependency, so
-  the transaction commits before the response is sent. The live run saw 1
-  failed read in 300 `POST /accounts` then `GET /accounts/{id}` pairs (0 in
-  1000 after the fix) and once a `401` right after `POST /auth/step-up`
-  rotated the session. Regression test:
-  `tests/integration/test_commit_before_response.py`.
-- Reloading `/assets` or opening `/assets/<id>` directly answered a problem
-  `404`: the path belonged to the SPA bundle mount. Bundles now live under
-  `/static/`; `tests/integration/test_spa.py` serves `index.html` for both.
-- `src/app/shell.test.tsx` expected the Tax section to be a placeholder
-  after the tax screens replaced it.
-- `security.symbol`'s CHECK constraint: the character class `[...:_-]`
-  contained `:_`, which SQLAlchemy parses as a bind parameter in a CHECK
-  string and rendered as `NULL`, so the database refused symbols with `:` or
-  `_` that the API accepts. The class is reordered (`_:-`) in the model and
-  in revision `0005`; `test_phase56_tables_refuse_other_households_on_migrated_database`
-  inserts such a symbol on a migrated database.
-- Migration `0004` adds the `receipt_match` label to the `review_kind`
-  enum. Without it, on a migrated database (tests build the schema from
-  the models, so they passed) every document that reached the matching
-  stage (which looks up open receipt suggestions) failed with `invalid
-  input value for enum review_kind` and was dead-lettered, the first PDF
-  statement of the live run included. The downgrade deletes `receipt_match` items and restores the 0003
-  labels.
-- `.gitignore`: the `documents/` data pattern also matched the SPA's
-  `frontend/src/features/documents/` (document library, detail page and page
-  viewer), so those sources were silently left out of git; it is now
-  re-included like `backend/app/domain/documents/`.

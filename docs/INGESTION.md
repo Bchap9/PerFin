@@ -81,7 +81,9 @@ app.ingestion.sandbox.child '<job JSON>'` with an empty environment, a private
 temporary working directory, its own process group and the decrypted file on
 stdin. Before reading input the child sets `RLIMIT_AS` (default 1 GiB,
 `PERFIN_EXTRACT_MEMORY_MB`), `RLIMIT_CPU` (`PERFIN_EXTRACT_CPU_SECONDS`),
-`RLIMIT_NOFILE`, `RLIMIT_FSIZE` 0, `RLIMIT_NPROC` 0 and `RLIMIT_CORE` 0,
+`RLIMIT_NOFILE`, `RLIMIT_FSIZE` 0 and `RLIMIT_CORE` 0 (no `RLIMIT_NPROC`: it
+counts the threads of the whole UID, shared with the worker, and 0 stopped the
+extractors' own threads; seccomp stops new processes instead),
 `PR_SET_NO_NEW_PRIVS`, Landlock and a seccomp filter, and refuses to run if
 any of that fails. Landlock grants only *reading* beneath the interpreter's
 own paths (`sys.path`, the prefixes, system library directories) and the

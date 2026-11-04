@@ -85,7 +85,8 @@ can run with both, or be locked to OIDC only.
     leaves it as it is (the session is only `mfa_pending`), so password
     logins interleaved with code guesses never undo the lockout. A used recovery code is audited and
     emits a `security.recovery_code_used` event into each of the user's
-    households (delivery through notification channels: Phase 7).
+    households, which queues a generic notification for each household
+    channel subscribed to `recovery_code_used` (docs/security/notifications.md).
   - Adding a factor needs step-up once the user has one; confirming a new
     factor proves possession, so the session rotates and counts as freshly
     verified. Removing the last factor is refused while
@@ -142,8 +143,8 @@ control. The `Origin`/`Sec-Fetch-Site` headers are additionally checked.
 ### Brute force and enumeration
 - Per-account and per-IP sliding-window rate limits on login, MFA, password
   reset and OIDC callback.
-- Progressive delay then temporary lock after N failures; lock notifies the
-  user via configured channel.
+- Progressive delay then temporary lock after N failures; the lock is sent
+  to the household's notification channels (generic message, no identity).
 - Identical responses for "no such user" and "wrong password".
 - Password reset is only available if an SMTP channel is configured; tokens
   are single-use, 15-minute, hashed at rest, and the response never confirms
@@ -155,8 +156,11 @@ control. The `Origin`/`Sec-Fetch-Site` headers are additionally checked.
   the 10th a 15-minute lock; during either the login is refused like a wrong
   password). When the lock starts the API writes a `user.locked` audit row,
   emits a `user.locked` event into each of the user's households and calls
-  the hooks registered with `app.auth.local.register_lock_notifier`
-  (notification channels deliver it from Phase 7). Every login success and
+  the hooks registered with `app.auth.local.register_lock_notifier`; the
+  event queues a notification for each household channel subscribed to
+  `account_locked` (docs/security/notifications.md). A sign-in whose
+  `User-Agent` matches none of the user's other sessions is routed as
+  `new_device` the same way. Every login success and
   failure, logout, password change and reset is audited at instance level
   without any password, hash or token.
 - Password reset (`app/auth/reset.py`): SMTP is `PERFIN_SMTP_HOST`,
@@ -453,8 +457,8 @@ viewer          -> read-only on granted accounts; no documents download by defau
     deletes it.
   - Every membership change is audited (before/after role), emits a
     household event (`member.added`, `member.role_changed`,
-    `member.removed`) for the SSE stream and the notification channels of
-    Phase 7, and revokes the affected user's sessions acting in that
+    `member.removed`) for the SSE stream and the notification channels
+    (kind `role_changed`, docs/security/notifications.md), and revokes the affected user's sessions acting in that
     household (or in none) with reason `privilege_change` (SECURITY.md A3,
     I2); their other households' sessions are untouched. Removal also
     deletes their account grants and revokes their personal access tokens

@@ -139,7 +139,10 @@ SECURITY.md "Container hardening"). Pulls jobs from a Postgres table using
   household and day, which emits `tax.reminder` on the days of
   `PERFIN_TAX_REMINDER_DATES` for open years with expected documents missing.
 - `run_rules`: re-apply rules after a rule change.
-- `send_notification`: fan out to configured channels.
+- `send_notification`: deliver one generic notification through one
+  household channel (Phase 7, `app/workers/handlers/notifications.py`;
+  queued by `app.domain.notifications.routing.notify`, retried with
+  backoff); `notify_review_waiting`: daily, routes "review items waiting".
 - `backup_export`: produce encrypted export archives.
 
 Each job has a timeout, a retry policy, a dead-letter state and a per-user
@@ -154,7 +157,8 @@ maintenance jobs, `watch_dropfolder` and `dropfolder.finish`, and
 `recurring.detect`, `refresh_prices`, `tax.export`/`tax.export_expire` and
 `tax_reminders`/`tax.reminders` (the snapshot, recurring and export jobs ran
 through a live `perfin worker` in the Phases 5+6 live run).
-`send_notification` and `backup_export` are later phases. The extraction subprocess is built
+Phase 7 adds `send_notification` and `notify_review_waiting`
+(docs/security/notifications.md); `backup_export` is not built. The extraction subprocess is built
 (`app.ingestion.sandbox`: a fresh interpreter per document, rlimits on
 memory, CPU, open files and file size, a wall-clock timeout, its own process
 group, Landlock limiting the filesystem to reading the interpreter's own
@@ -206,7 +210,8 @@ styles).
   DOB, SSN, account numbers, names, documents). PerFin never calls a model
   itself. See AI_ACCESS.md and ADR-0007.
 - **Price feeds** for securities and FX.
-- **Notification channels**: SMTP, webhooks, ntfy, Gotify, Matrix.
+- **Notification channels**: SMTP, webhooks, ntfy, Gotify, Matrix
+  (generic messages only; see docs/security/notifications.md).
 - **Antivirus**: ClamAV sidecar scanning quarantined files before parsing.
 
 ## Key flows

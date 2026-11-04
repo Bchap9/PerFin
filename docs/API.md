@@ -236,7 +236,11 @@ POST            /admin/users/{id}/mfa-reset    (instance admin, step-up)
 GET/PATCH       /settings/intake               receipts mailbox (owner/admin session; PATCH step-up)
 POST            /settings/intake/email/test
 POST            /settings/intake/email/rotate-alias  (step-up)
-GET/POST/PATCH/DELETE /settings/notifications/channels
+GET/POST        /settings/notifications/channels       household channels (owner/admin session;
+                                                POST step-up; webhook secret shown once)
+PATCH/DELETE    /settings/notifications/channels/{id}  (step-up; credentials write-only,
+                                                retyped when the destination changes)
+POST            /settings/notifications/channels/{id}/test  send the test sentence now
 
 GET/PATCH       /settings/ai                    household AI flag + live client count (owner; PATCH step-up)
 GET/POST        /settings/ai/clients            MCP clients (owner session; POST step-up, token once)
@@ -1177,7 +1181,12 @@ month `inflow`, `outflow` (both positive) and `net`, plus the totals.
 User settings notes: `GET /settings/user` returns `{"display_name", "locale",
 "theme", "timezone"}` (defaults `en-US`, `system`, `UTC`); `PATCH` takes any
 of them (locale a BCP 47 tag, theme `system|light|dark`, timezone an IANA
-name) and needs a browser session. A token reads them only with the
+name) and needs a browser session. `dashboard_layout` is `null` until the
+person customises the dashboard, then an ordered list of `{"widget", "size"}`
+(`small|medium|large`; widgets `net_worth`, `cash_flow`, `spending`, `budgets`,
+`goals`, `recent_transactions`, `review_queue`, `upcoming_bills`, `holdings`,
+`loans`, `tax_documents`, `accounts`; each at most once; `[]` is an empty
+dashboard; anything else is `422`). A token reads them only with the
 `settings:read` scope (`403 insufficient-scope` otherwise).
 
 Tax vault notes (`app.domain.tax`, router `tax`; scopes `tax:read` /
@@ -1287,6 +1296,39 @@ sender maps to someone who is not a member, admin or owner. `POST
 mail-intake-not-configured` without stored credentials). `POST
 /settings/intake/email/rotate-alias` (step-up) returns `{"alias_token",
 "alias_rotated_at"}`; mail to the old token is rejected from then on.
+
+Notification channels notes (docs/security/notifications.md): every
+`/settings/notifications/channels` route needs a browser session of an
+owner or admin (tokens refused); `POST`, `PATCH` and `DELETE` also need
+fresh step-up. A channel is `{"id", "name", "type", "enabled", "events",
+"config", "secrets_set", "last_sent_at", "last_outcome", "created_at",
+"updated_at"}`; `type` is `smtp|webhook|ntfy|gotify|matrix`, `events` a
+subset of `account_locked`, `recovery_code_used`, `mfa_reset`,
+`role_changed`, `new_device`, `review_waiting`, `tax_reminder`,
+`backup_failed`, `ai_client_created` (default: all), `config` only the
+non-secret fields (`host`, `port`, `tls`, `sender`, `recipients`,
+`username`, `url`, `server_url`, `homeserver_url`, `room_id`, `priority`).
+`POST` takes `{"name", "enabled"?, "events"?, "config": {"type", ...}}`
+(webhook `url`; ntfy `server_url`, `topic`, `token`?, `priority`; Gotify
+`server_url`, `token`, `priority`; Matrix `homeserver_url`, `room_id`
+(`!id:server`), `access_token`; SMTP `host`, `port`, `tls`
+(`starttls|implicit`), `sender`, `recipients` (1-10), `username`?,
+`password`?) and answers `201` with the channel plus `signing_secret`
+(webhooks only, shown once). URLs must be `https` without credentials or
+fragment. `PATCH` takes `name`, `enabled`, `events`, `config` (merged into
+the stored one; credentials write-only) and `rotate_secret` (webhook).
+`PATCH` answers with `signing_secret` (shown once) after `rotate_secret`
+and whenever a webhook's `url` moves to another host or port: the old
+secret is replaced so signed bodies cannot be replayed between receivers.
+Errors: `404 notification-channel-not-found`, `409
+notification-channel-limit` (20 per household), `422
+notification-host-not-allowed` (outside
+`PERFIN_NOTIFICATIONS_ALLOWED_HOSTS`), `422 notification-secret-required`
+(destination changed without the credentials), `422
+notification-type-immutable`, `422 notification-no-signing-secret`. `POST
+.../{id}/test` sends the test sentence now: `{"ok", "outcome"}` with
+`outcome` one of `ok`, `blocked`, `tls_failed`, `auth_failed`, `rejected`,
+`connect_failed`, `timeout`, `server_error`, `protocol_error`.
 
 Admin users notes: `GET /admin/users?cursor=&limit=` (max 500) returns
 `{"items": [...], "next_cursor"}` with `id`, `username`, `display_name`,

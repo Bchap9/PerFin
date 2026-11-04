@@ -528,7 +528,9 @@ service (per account: side, amount, currency, base amount; unconverted
 currencies). Because it names every account, a stored snapshot is shown
 only to a principal who sees every account (`sees_household_totals`:
 owners, admins, or members/viewers granted every account); anyone else gets
-figures recomputed over their visible accounts. Not exported (derived).
+figures recomputed over their visible accounts. Exported as the stored
+history (PORTABILITY.md, format version 2; the ids in `breakdown` are
+re-mapped on import).
 
 How a day is valued (`app/domain/networth/compute.py`, one implementation for
 the daily job, the backfill and recomputed views):
@@ -806,7 +808,10 @@ event             (household, type, payload JSONB, created)   -- feeds SSE, prun
 audit_log         (seq, household?, user?, action, target_type, target_id, before JSONB,
                    after JSONB, ip, user_agent, request_id, created, prev_hash, hash)
                                                                -- append-only, hash-chained
-notification_channel (household, type, config (encrypted), enabled)   -- Phase 7
+notification_channel (household, name, type: smtp|webhook|ntfy|gotify|matrix,
+                   config_encrypted (whole configuration incl. credentials, bound to
+                   the row), events JSONB (subscribed kinds), enabled, last_sent_at?,
+                   last_outcome?)                              -- Phase 7; not exported
 setting           (scope: system|household|user, scope_id?, key, value JSONB)
 mail_intake       (household (unique), enabled, host?, port, username_encrypted?,
                    password_encrypted?, inbox_folder, processed_folder, rejected_folder,

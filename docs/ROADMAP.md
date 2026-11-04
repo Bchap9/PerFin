@@ -18,11 +18,17 @@ exploit yet.
 - [x] Monorepo scaffolding: `backend/` (uv, FastAPI, SQLAlchemy, Alembic),
       `frontend/` (Vite, React, TS), `deploy/` (Compose, Caddy)
 - [ ] CI: lint, type-check, tests, Trivy image scan, gitleaks, lockfile check
-      (workflows written and every command run locally; not yet run on
-      GitHub Actions, and the full image with Tesseract plus its Trivy image
-      scan has not been built because the build sandbox blocks its external
-      fetches (the `ghcr.io` uv image, the Debian mirror); the live compose
-      and Trivy evidence so far comes from a local variant image)
+      (the workflows run on GitHub Actions. At commit c57c564 (2026-11-04)
+      the lockfile, SPDX, frontend and deployment jobs passed, the shipped
+      image was built with Tesseract, run read-only as UID 10001 and passed
+      `trivy image` with an SBOM (security runs 41802902976 and
+      41870346701), and `pip-audit`, `npm audit`, `trivy fs` and Semgrep
+      passed. Not ticked because no run has been green end to end yet: the
+      backend pytest step has never completed on GitHub (run 41837844159
+      failed 31 tests, fixed since; run 41870347026 hit the job's 20-minute
+      limit, now 45 minutes with `pytest -n logical`), and gitleaks failed
+      on a synthetic test key in history (allowlisted since). The Phase 7
+      tree has not been pushed yet)
 - [x] `perfin config check` with insecure-config refusal
 - [x] Database bootstrap, migrations, RLS policy scaffolding, audit log table
       (forced RLS on all five platform tables, `household` and `job`
@@ -42,9 +48,8 @@ roles. Still no finance features.
 
 - [x] One-time bootstrap setup flow for the first admin
 - [x] Local login with Argon2id, rate limits, lockout, uniform responses
-      (telling the user about a lock out of band waits for the Phase 7
-      notification channels; until then it is an audit row and a household
-      event)
+      (telling the user about a lock out of band arrived with the Phase 7
+      notification channels)
 - [x] Server-side sessions, `__Host-` cookie, rotation, idle/absolute timeouts,
       session list/revoke
 - [x] WebAuthn registration/login, TOTP, recovery codes, step-up
@@ -61,8 +66,8 @@ roles. Still no finance features.
 - [ ] Authz test matrix in CI (every endpoint x every role x cross-household)
       (the matrix exists and passes in `make check`:
       `backend/tests/security/test_authz_matrix.py`; not ticked because, as
-      for the Phase 0 CI item, the CI workflows have not run on GitHub
-      Actions yet)
+      for the Phase 0 CI item, the backend job that runs it has not yet
+      completed green on GitHub Actions)
 - [ ] Authentik setup guide with screenshots-free step list
       (`docs/AUTHENTIK.md` is complete against the final code, with no open
       TODOs; not ticked until it has been walked through against a live
@@ -282,8 +287,8 @@ Deferred from Phases 5-6 (not needed for the boxes above):
   and there is no feed-specific test through the egress proxy (H2 partial).
 - Net worth and recurring days are UTC dates; tax years are one per
   household and calendar year (no separate state jurisdiction year);
-  `tax.reminder` events are not delivered anywhere until notifications
-  (Phase 7).
+  `tax.reminder` events are delivered by the Phase 7 notification channels
+  (kind `tax_reminder`).
 
 ## Phase 6: Tax vault (v0.6)
 
@@ -293,7 +298,8 @@ Deferred from Phases 5-6 (not needed for the boxes above):
 - [x] Accountant export: originals zip + summary CSV/PDF
 - [x] Reminders as the year closes ("3 expected documents still missing")
       (the `tax.reminder` event and the missing-documents line on `/tax` and
-      the dashboard; delivery by mail or push waits for Phase 7 notifications)
+      the dashboard; delivery by mail or push through the Phase 7
+      notification channels)
 
 Screens: `frontend/src/features/tax/` (years, checklist, roll-up, schedule
 hints, accountant export with step-up). The tax forms are parsed from
@@ -328,15 +334,63 @@ premises. See AI_ACCESS.md.
 
 ## Phase 7: Polish and 1.0
 
-- [ ] Notification channels: SMTP, webhook, ntfy, Gotify, Matrix
-- [ ] Configurable dashboard widgets
-- [ ] Encrypted backup/restore scripts with restore test
-- [ ] Key rotation procedure (rewrap DEKs)
+- [x] Notification channels: SMTP, webhook, ntfy, Gotify, Matrix
+      (docs/security/notifications.md; lock, recovery code, MFA reset, role
+      change, new device, AI client, review waiting, tax reminder and
+      `perfin notify backup-failed` routed to subscribed channels. Tested
+      against local fake TLS services only; no real ntfy, Gotify, Matrix or
+      SMTP provider was used. The `notification_channel` table is created
+      by migration `0007_phase7`)
+- [x] Configurable dashboard widgets
+- [x] Encrypted backup/restore scripts with restore test
+      (scripts/backup.sh, scripts/restore.sh, docs/BACKUP_RESTORE.md; the
+      restore verification test runs both scripts in `--bare` mode against
+      PostgreSQL 16 in CI. The Compose mode is not exercised by CI; it was
+      run end to end once in the v1.0.0 verification run
+      (docs/RELEASE_CHECKLIST.md step 8: quiesced backup and restore into a
+      fresh Compose stack, PASS) on a labelled local variant of the image,
+      because the shipped Dockerfile cannot be built in the build sandbox,
+      not on the published image)
+- [x] Key rotation procedure (rewrap DEKs) (`perfin rotate-key`, resumable,
+      verified, audited; docs/BACKUP_RESTORE.md "Key rotation")
 - [ ] Helm chart
-- [ ] PWA manifest and responsive pass
-- [ ] Documentation site; per-integration "what leaves the host" pages
+      (`deploy/helm/perfin`: api, worker, optional mcp, migrate Job,
+      optional PostgreSQL, default-deny NetworkPolicies, hardened pods;
+      `backend/tests/unit/test_helm_chart.py` renders it and checks the
+      hardening and refusals, and `make chart-check` / the CI `helm` job run
+      `helm lint --strict` and kubeconform. Not ticked because it has never
+      been installed on a live cluster: the app pods and the NetworkPolicies
+      under an enforcing CNI are unverified)
+- [x] PWA manifest and responsive pass
+- [x] Documentation site; per-integration "what leaves the host" pages
+      (`mkdocs.yml` with hash-pinned `requirements-docs.txt`;
+      `mkdocs build --strict` passes locally and is a CI job, which has not
+      run on GitHub yet; `docs/security/what-leaves-the-host.md` indexes one
+      page per integration: ingestion, prices and FX, notifications, AI
+      access, OIDC, email)
 - [ ] External security review / pen test before 1.0 tag
+      (an internal security review was done at the end of every phase, its
+      findings fixed with regression tests or recorded as open (for example
+      P1-SR-05 under I2), and every control's status is in
+      `docs/security/CONTROLS.md`. An external review or penetration test has
+      not been done and is still required before the `v1.0.0` tag is pushed)
 - [ ] Signed releases, SBOM, published image provenance
+      (workflow implemented, first execution on tag push:
+      `.github/workflows/release.yml` builds amd64/arm64 images, gates them
+      on Trivy, signs them with cosign, attaches CycloneDX/SPDX SBOMs and
+      SLSA provenance, and publishes the signed chart and a GitHub release;
+      `backend/tests/unit/test_release_workflow.py` checks it statically and
+      `scripts/release_notes.py check v1.0.0` passes. Not ticked because no
+      release has been signed or published yet: the workflow runs only when
+      a `v*` tag is pushed)
+
+Release verification for v1.0.0 (2026-11-04): the ten steps in
+`docs/RELEASE_CHECKLIST.md` (image build, bootstrap, MFA and step-up,
+statement imports, drop folder, MCP with the identity denylist, Compose
+backup and restore into a fresh stack, container hardening, config check)
+were run against a live Compose stack built from a local variant of the
+image (deb.debian.org is blocked in the build sandbox). The run found and
+fixed five bugs, each with a regression test (CHANGELOG, Fixed).
 
 ## Later / ideas parking lot
 

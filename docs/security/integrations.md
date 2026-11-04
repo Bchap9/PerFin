@@ -5,7 +5,8 @@ rates. This page answers one question for an operator or reviewer: with a
 feed turned on, which bytes cross a network boundary, to where, and what
 stays home. Controls are referenced by their `docs/SECURITY.md` id; their
 implementation status is in [`CONTROLS.md`](CONTROLS.md). Ingestion
-(upload, drop folder, email) is covered by [`ingestion.md`](ingestion.md).
+(upload, drop folder, email) is covered by [`ingestion.md`](ingestion.md),
+household notification channels by [`notifications.md`](notifications.md).
 
 ## Short answer
 
