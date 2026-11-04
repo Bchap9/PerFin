@@ -26,6 +26,8 @@ Rules enforced here:
   network, which only the session check (``app.auth.deps.session_acceptor``)
   enforces, so its tokens are refused here (and ``app.auth.tokens`` refuses
   to mint them, ``set_breakglass`` revokes existing ones).
+* A token granted ``ai:read`` (only the AI-client flow mints one) gives an
+  ``ai_only`` principal, confined to the AI views by ``app.auth.deps``.
 * ``restricted``: when ``PERFIN_REQUIRE_MFA`` is on and the user has no MFA
   method (and the session was not MFA-verified by the IdP), the principal may
   only enrol MFA (``app.auth.authz.require_mfa_if_enforced``).
@@ -58,7 +60,7 @@ from app.auth.models import (
     User,
     UserSession,
 )
-from app.auth.scopes import effective_scopes
+from app.auth.scopes import AI_SCOPE, effective_scopes
 from app.auth.sessions import SessionPolicy, load_session
 from app.core import clock
 from app.db.rls import set_context
@@ -95,6 +97,9 @@ class Principal:
     login_method: LoginMethod | None = None
     mfa_enrolled: bool = False
     mfa_required: bool = False
+    #: An AI client's token (granted ``ai:read``): usable only on the AI views
+    #: (``app.auth.deps`` refuses it everywhere else, AI_ACCESS.md M4).
+    ai_only: bool = False
     session: UserSession | None = field(default=None, repr=False, compare=False)
 
     @property
@@ -305,6 +310,9 @@ def authenticate_token(
         token_id=token.id,
         mfa_enrolled=has_primary_mfa(db, user.id),
         mfa_required=require_mfa,
+        # Decided by the *granted* scopes: a demoted owner's AI token loses
+        # ai:read from its effective scopes but stays confined.
+        ai_only=AI_SCOPE in token.scopes,
     )
     apply_rls_context(db, principal)
     # The row is now visible through household_isolation; record its use.

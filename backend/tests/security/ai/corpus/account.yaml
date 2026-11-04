@@ -1,0 +1,111 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Account, card, routing, IBAN and loan numbers -> [ACCT]. Every number is
+# invented (card numbers are the public test numbers of the card schemes).
+# ``secrets``: digit strings that must not survive in any form. Every case is
+# also checked under the obfuscations of test_scrubber_corpus.VARIANTS.
+placeholder: "[ACCT]"
+kind: digits
+cases:
+  - {text: "ACCT ...5678", secrets: ["5678"]}
+  - {text: "ACCT...5678 TRANSFER", secrets: ["5678"]}
+  - {text: "VISA...5678", secrets: ["5678"]}
+  - {text: "Payment from card …4821", secrets: ["4821"]}
+  - {text: "XXXX1234 PURCHASE", secrets: ["1234"]}
+  - {text: "xxxx-1234 debit", secrets: ["1234"]}
+  - {text: "****1234", secrets: ["1234"]}
+  - {text: "CARD ****9911 AUTH", secrets: ["9911"]}
+  - {text: "•••• 7310 contactless", secrets: ["7310"]}
+  - {text: "CHK XX**4402", secrets: ["4402"]}
+  - {text: "CARD x6543 SQ *CAFE", secrets: ["6543"]}
+  - {text: "ACCT 1234", secrets: ["1234"]}
+  - {text: "acct# 99887", secrets: ["99887"]}
+  - {text: "Account no. 4455", secrets: ["4455"]}
+  - {text: "account number: 0042-1199", secrets: ["00421199", "1199"]}
+  - {text: "A/C 7781", secrets: ["7781"]}
+  - {text: "card ending in 1234", secrets: ["1234"]}
+  - {text: "CARD ENDING 8812", secrets: ["8812"]}
+  - {text: "ending with 3321", secrets: ["3321"]}
+  - {text: "Visa ends in 2468", secrets: ["2468"]}
+  - {text: "last 4: 1357", secrets: ["1357"]}
+  - {text: "last four 9753", secrets: ["9753"]}
+  - {text: "CARD 1234", secrets: ["1234"]}
+  - {text: "DEBIT CARD 5501 PURCHASE", secrets: ["5501"]}
+  - {text: "checking 3141", secrets: ["3141"]}
+  - {text: "SAVINGS #2718", secrets: ["2718"]}
+  - {text: "4111 1111 1111 1111", secrets: ["4111111111111111"]}
+  - {text: "4111-1111-1111-1111", secrets: ["4111111111111111"]}
+  - {text: "4111.1111.1111.1111", secrets: ["4111111111111111"]}
+  - {text: "4111111111111111", secrets: ["4111111111111111"]}
+  - {text: "PAID WITH 5555555555554444 ONLINE", secrets: ["5555555555554444"]}
+  - {text: "AMEX 3782 822463 10005", secrets: ["378282246310005"]}
+  - {text: "card 6011-1111-1111-1117 declined", secrets: ["6011111111111117"]}
+  - {text: "ID12345678", secrets: ["12345678"]}
+  - {text: "REF#98765432101", secrets: ["98765432101"]}
+  - {text: "XFER TO 000123456789", secrets: ["000123456789"]}
+  - {text: "XFER TO CHK 000123456789 CONF 77", secrets: ["000123456789"]}
+  - {text: "WIRE 7700112233 BENEF", secrets: ["7700112233"]}
+  - {text: "routing 021000021", secrets: ["021000021"]}
+  - {text: "RTN: 011000015 ACCT: 4455667788", secrets: ["011000015", "4455667788"]}
+  - {text: "ABA 121000358", secrets: ["121000358"]}
+  - {text: "IBAN DE89 3704 0044 0532 0130 00", secrets: ["89370400440532013000"]}
+  - {text: "DE89370400440532013000", secrets: ["89370400440532013000"]}
+  - {text: "to GB82 WEST 1234 5698 7654 32 ref", secrets: ["12345698765432"]}
+  - {text: "LOAN #12-345678", secrets: ["12345678"]}
+  - {text: "Loan no. 88-001-2345", secrets: ["880012345"]}
+  - {text: "MORTGAGE 0044556677 PMT", secrets: ["0044556677"]}
+  - {text: "policy POL-7765432", secrets: ["7765432"]}
+  - {text: "member mbr 5566778", secrets: ["5566778"]}
+  - {text: "ONLINE TRANSFER 12.50 TO 4400112233", secrets: ["4400112233"]}
+  - {text: "Transfer to acct ending 0099 on 2026-03-04", secrets: ["0099"]}
+  - {text: "4111 1111 1111 1111X", secrets: ["4111111111111111"]}
+  - {text: "card4111111111111111exp", secrets: ["4111111111111111"]}
+  - {text: "(ACCT 6677)", secrets: ["6677"]}
+  - {text: "ACCT:5678;", secrets: ["5678"]}
+  - {text: "Memo: savings 0099 -> checking 1122", secrets: ["0099", "1122"]}
+  # Security review P6B-SR-R1-02: single-star and "x " masks, card brands and
+  # networks without a "card" keyword, words between keyword and number, and
+  # 12-digit numbers split by "/", "_" or ",".
+  - {text: "VISA *3344", secrets: ["3344"]}
+  - {text: "*7788", secrets: ["7788"]}
+  - {text: "AMAZON MKTPLACE VISA * 4321", secrets: ["4321"]}
+  - {text: "AMEX 4455", secrets: ["4455"]}
+  - {text: "American Express 9012 payment", secrets: ["9012"]}
+  - {text: "MASTERCARD 5678", secrets: ["5678"]}
+  - {text: "MC 2345 RECURRING", secrets: ["2345"]}
+  - {text: "DISCOVER 8765", secrets: ["8765"]}
+  - {text: "DEBIT CARD PURCHASE 6655", secrets: ["6655"]}
+  - {text: "POS PURCHASE 3456 SAFEWAY", secrets: ["3456"]}
+  - {text: "VISA SIGNATURE CARD 1928", secrets: ["1928"]}
+  - {text: "VISA RECURRING PAYMENT 1928", secrets: ["1928"]}
+  - {text: "ACCOUNT ONLINE TRANSFER 7531 DONE", secrets: ["7531"]}
+  - {text: "x 2211", secrets: ["2211"]}
+  - {text: "paid with card x 8642", secrets: ["8642"]}
+  - {text: "1234/5678/9012", secrets: ["123456789012", "5678", "9012"]}
+  - {text: "1234_5678_9012", secrets: ["123456789012", "5678", "9012"]}
+  - {text: "1234,5678,9012", secrets: ["123456789012", "5678", "9012"]}
+  - {text: "acct 1234/5678/9012", secrets: ["123456789012", "5678", "9012"]}
+  # Security review P6B-SR-R2-01: (a) every space-separated group of a number
+  # after a keyword, (b) a bracketed number, (c) a keyword glued to its digits
+  # or joined by a non-ASCII separator, (d) a bare stored last four
+  # (config.yaml account_numbers; ``needs_terms``: only the API stage knows
+  # the household's numbers, the MCP stage cannot).
+  - {text: "Account 9876 5432", secrets: ["9876", "5432"]}
+  - {text: "acct 12 3456", secrets: ["3456"]}
+  - {text: "Card 4111 1111", secrets: ["4111", "1111"]}
+  - {text: "loan 4455 6677", secrets: ["4455", "6677"]}
+  - {text: "IBAN DE89 3704", secrets: ["3704"]}
+  - {text: "routing 0210 0002 1", secrets: ["0210", "0002"]}
+  - {text: "acct 98 76 54 32", secrets: ["98765432", "765432"]}
+  - {text: "Checking (4455)", secrets: ["4455"]}
+  - {text: "TOTAL CHECKING (4455)", secrets: ["4455"]}
+  - {text: "VISA (2299)", secrets: ["2299"]}
+  - {text: "Card [4455]", secrets: ["4455"]}
+  - {text: "visa4455", secrets: ["4455"]}
+  - {text: "CARD4455", secrets: ["4455"]}
+  - {text: "MC4455", secrets: ["4455"]}
+  - {text: "card_4455", secrets: ["4455"]}
+  - {text: "AMEX·1357", secrets: ["1357"]}
+  - {text: "VISA*4455 PURCHASE", secrets: ["4455"]}
+  - {text: "Sapphire 6611", secrets: ["6611"], needs_terms: true}
+  - {text: "Rewards (6611) autopay", secrets: ["6611"], needs_terms: true}
+  - {text: "transfer from 6611 to savings", secrets: ["6611"], needs_terms: true}

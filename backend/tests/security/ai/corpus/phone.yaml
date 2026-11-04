@@ -1,0 +1,22 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Phone numbers (US and international) -> [PHONE]. 555 and reserved
+# fictional ranges only.
+placeholder: "[PHONE]"
+kind: digits
+cases:
+  - {text: "CITY UTILITIES 555-123-4567", secrets: ["5551234567"]}
+  - {text: "call (555) 123-4567 now", secrets: ["5551234567"]}
+  - {text: "PH 555.123.4567", secrets: ["5551234567"]}
+  - {text: "tel 5551234567", any_placeholder: true, secrets: ["5551234567"]}
+  - {text: "+1 555 123 4567", secrets: ["5551234567"]}
+  - {text: "+1-555-123-4567", secrets: ["5551234567"]}
+  - {text: "1-555-123-4567 support", secrets: ["5551234567"]}
+  - {text: "+1 (555) 123-4567", secrets: ["5551234567"]}
+  - {text: "+44 20 7946 0958", secrets: ["2079460958"]}
+  - {text: "+44 (0)20 7946 0958", secrets: ["2079460958"]}
+  - {text: "+33 1 99 00 12 34", secrets: ["199001234"]}
+  - {text: "+49 30 901820", secrets: ["30901820"]}
+  - {text: "+61 4 9100 0000", secrets: ["491000000"]}
+  - {text: "+91 98765 43210", secrets: ["9876543210"]}
+  - {text: "AMZN Mktp 555-0100-1234 WA", any_placeholder: true, secrets: ["55501001234"]}
+  - {text: "GAS CO 555 123 4567 BILL", secrets: ["5551234567"]}

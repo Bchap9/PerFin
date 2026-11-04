@@ -83,6 +83,7 @@ def test_authenticated_session_shape(factories: Factories, client: TestClient) -
             "enrollment_required": False,
         },
         "auth_method": "local",
+        "ai_clients_active": False,
     }
     assert body["mfa"]["verified_at"] is not None
     # The session-bound token works for unsafe requests; no pre-auth cookie is issued.

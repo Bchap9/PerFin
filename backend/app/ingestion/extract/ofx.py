@@ -44,6 +44,7 @@ from app.ingestion.extract.common import (
 from app.ingestion.extract.ofx_invest import investment_statements
 from app.ingestion.extract.registry import register
 from app.ingestion.sandbox.protocol import (
+    MAX_STATEMENTS,
     Balance,
     ExtractedTransaction,
     ExtractOptions,
@@ -320,10 +321,12 @@ def extract_ofx(data: bytes, options: ExtractOptions, kind: str) -> ExtractResul
     warnings: set[str] = set()
     budget = [options.max_transactions]
     institution = _institution(root)
+    nodes = [node for name in ("STMTRS", "CCSTMTRS") for node in root.iter(name)]
+    if len(nodes) > MAX_STATEMENTS:
+        warnings.add(f"statements_truncated:{MAX_STATEMENTS}")
     statements = [
         _statement(node, kind, options, budget, warnings, institution)
-        for name in ("STMTRS", "CCSTMTRS")
-        for node in root.iter(name)
+        for node in nodes[:MAX_STATEMENTS]
     ]
     investments = investment_statements(root, kind, options, budget, warnings, institution)
     if not statements and not investments:

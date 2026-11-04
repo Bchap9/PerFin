@@ -8,6 +8,9 @@ The serving roles (``api``, ``worker``, ``mcp``) pass through a startup gate
 first: JSON logging is configured and ``app.core.config_check.enforce_config``
 refuses to boot on any insecure-configuration error (SECURITY.md H6). The
 gate runs in ``main()``, so a handler added later is covered automatically.
+The ``mcp`` role has its own gate (``app.mcp.config``): it holds no database
+URL, master key or secret key and refuses to start if it is given one (M7);
+``perfin config check`` with ``PERFIN_ROLE=mcp`` runs that check.
 """
 
 from __future__ import annotations
@@ -48,8 +51,38 @@ def _unavailable(command: str, phase: str) -> Handler:
     return handler
 
 
-def _startup_gate() -> int:
+def _mcp_gate() -> int:
+    """Startup gate of the ``mcp`` role (AI_ACCESS.md M7).
+
+    The role never loads ``Settings`` (database URL, master key): it is
+    checked by ``app.mcp.config``, which refuses an environment that carries
+    a database URL, the master key, the secret key or another credential, and
+    requires ``PERFIN_MCP_API_URL`` and ``PERFIN_MCP_TOKEN(_FILE)``.
+    """
+    from app.core.logging import configure_logging, get_logger
+    from app.mcp.config import check
+
+    config, findings = check()
+    configure_logging(config.log_level if config is not None else "INFO")
+    log = get_logger("perfin.config")
+    for finding in findings:
+        log.log(
+            40 if finding.level == "error" else 30,
+            finding.message,
+            extra={"code": finding.code, "check": "config"},
+        )
+    if config is None:
+        for finding in findings:
+            if finding.level == "error":
+                print(f"perfin mcp: {finding.render()}", file=sys.stderr)
+        return EXIT_FAIL
+    return EXIT_OK
+
+
+def _startup_gate(command: str = "api") -> int:
     """Configure logging and refuse to start on configuration errors."""
+    if command == "mcp":
+        return _mcp_gate()
     from app.core.config_check import InsecureConfigError, enforce_config
     from app.core.logging import configure_logging
     from app.core.settings import get_settings
@@ -212,6 +245,26 @@ def cmd_worker(args: argparse.Namespace) -> int:
         return run_worker(engine, config=config, install_signal_handlers=True)
     finally:
         engine.dispose()
+
+
+def cmd_mcp(_args: argparse.Namespace) -> int:
+    """Run the read-only MCP server (AI_ACCESS.md; ``app.mcp``).
+
+    ``main()`` has already run the mcp gate (``app.mcp.config``): no database
+    URL, master key or secret key in the environment, an API URL and an
+    ``ai:read`` token present. stdio by default; ``PERFIN_MCP_TRANSPORT=http``
+    serves streamable HTTP for the reverse proxy.
+    """
+    from app.mcp.config import McpConfigError, load
+    from app.mcp.server import run
+
+    try:
+        config = load()
+    except McpConfigError as exc:
+        print(f"perfin mcp: {exc}", file=sys.stderr)
+        return EXIT_FAIL
+    run(config)
+    return EXIT_OK
 
 
 def alembic_config() -> Config:
@@ -421,9 +474,34 @@ def cmd_audit_verify(_args: argparse.Namespace) -> int:
     return EXIT_OK if result.ok else EXIT_FAIL
 
 
+def _config_check_mcp() -> int:
+    """``perfin config check`` with ``PERFIN_ROLE=mcp`` (role-aware, M7)."""
+    from app.mcp.config import check
+
+    config, findings = check()
+    for finding in findings:
+        print(finding.render(), file=sys.stderr)
+    errors = sum(1 for f in findings if f.level == "error")
+    warnings = len(findings) - errors
+    if config is None:
+        print(
+            f"perfin config check (mcp): {errors} error(s), {warnings} warning(s); "
+            "refusing this configuration",
+            file=sys.stderr,
+        )
+        return EXIT_FAIL
+    print(f"perfin config check (mcp): OK ({warnings} warning(s))")
+    return EXIT_OK
+
+
 def cmd_config_check(_args: argparse.Namespace) -> int:
+    import os
+
     from app.core.config_check import check_config, has_errors
     from app.core.settings import Settings
+
+    if os.environ.get("PERFIN_ROLE", "").strip().lower() == "mcp":
+        return _config_check_mcp()
 
     try:
         settings = Settings()
@@ -533,9 +611,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--concurrency", type=int, default=1, help="jobs run in parallel (default 1)"
     )
     worker.set_defaults(func=cmd_worker)
-    sub.add_parser("mcp", help="run the read-only MCP server").set_defaults(
-        func=_unavailable("mcp", "Phase 6b")
-    )
+    sub.add_parser("mcp", help="run the read-only MCP server").set_defaults(func=cmd_mcp)
     sub.add_parser("migrate", help="apply database migrations").set_defaults(func=cmd_migrate)
 
     config = sub.add_parser("config", help="configuration tools")
@@ -597,7 +673,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     args = parser.parse_args(argv)
     handler: Handler = args.func
     if args.command in SERVING_COMMANDS and not getattr(handler, "perfin_unavailable", False):
-        gate = _startup_gate()
+        gate = _startup_gate(args.command)
         if gate != EXIT_OK:
             return gate
     return handler(args)

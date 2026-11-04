@@ -1,0 +1,12 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# The client's custom denylist (config.yaml) -> [REDACTED].
+placeholder: "[REDACTED]"
+kind: text
+cases:
+  - {text: "ACME WIDGETS CORP PAYROLL", secrets: ["acme widgets"]}
+  - {text: "Acme  Widgets-Corp direct dep", secrets: ["acme widgets"]}
+  - {text: "acmewidgetscorp", secrets: ["acmewidgetscorp"]}
+  - {text: "LINCOLN ELEMENTARY PTA", secrets: ["lincoln elementary"]}
+  - {text: "Lincoln Elementary, lunch account", secrets: ["lincoln elementary"]}
+  - {text: "OAKWOOD CLINIC copay", secrets: ["oakwood clinic"]}
+  - {text: "oakwood.clinic billing", secrets: ["oakwood clinic"]}

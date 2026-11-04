@@ -67,8 +67,11 @@ CATALOG: Final[Mapping[str, str]] = MappingProxyType(
 
 ALL_SCOPES: Final[frozenset[str]] = frozenset(CATALOG)
 
+#: The AI client scope (ADR-0007): minted only by ``app.domain.ai.service``.
+AI_SCOPE: Final = "ai:read"
+
 #: Scopes that exist but cannot be put on a personal access token.
-RESERVED_SCOPES: Final[frozenset[str]] = frozenset({"ai:read"})
+RESERVED_SCOPES: Final[frozenset[str]] = frozenset({AI_SCOPE})
 
 #: Scopes a personal access token may be created with (role permitting).
 GRANTABLE_SCOPES: Final[frozenset[str]] = ALL_SCOPES - RESERVED_SCOPES

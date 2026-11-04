@@ -74,6 +74,7 @@ from app.domain.investments.service import replay_position
 from app.domain.loans.models import Loan
 from app.domain.rules.schemas import RUN_RULES_JOB_TYPE, RunRulesJob
 from app.domain.tax.models import TaxYear
+from tests.fixtures.ai import ai_client
 from tests.fixtures.auth_clients import SAME_ORIGIN, random_ip
 from tests.fixtures.documents import make_document, make_review_item
 from tests.fixtures.factories import (
@@ -319,6 +320,10 @@ def make_caller(
         assert response.status_code == 401, response.text
         token = response.json()["csrf_token"]
         return Caller(who, client, unsafe_headers={**SAME_ORIGIN, CSRF_HEADER: token})
+    if who == "ai_token":
+        _, raw = ai_client(factories, owner)
+        bearer = {"Authorization": f"Bearer {raw}"}
+        return Caller(who, client, headers=bearer, unsafe_headers=bearer, record=owner)
     if who in ("pat_none", "pat_scope", "pat_expired"):
         scopes: tuple[str, ...] = ()
         expires_at = None
@@ -437,6 +442,11 @@ def build_object(
             for role, level in (("member", GrantLevel.EDIT), ("viewer", GrantLevel.VIEW)):
                 grant_account(db, household_id, world.users[role].id, account.id, level)
             return str(make_scheduled_transaction(db, account).id)
+    if kind == "ai_client":
+        # Always the matrix household's owner: the owner of another household
+        # is handed this one and must get 404.
+        client, _raw = ai_client(factories, world.users["owner"])
+        return str(client.id)
     if kind in ("export_archive", "import_archive"):
         return str(make_portability_object(factories, world, kind, owner).job_id)
     if kind in ("tax_year", "tax_checklist_item", "tax_export"):
@@ -769,6 +779,7 @@ def test_policy_table_is_consistent() -> None:
         "pat_none",
         "pat_scope",
         "pat_expired",
+        "ai_token",
     }
 
 

@@ -272,7 +272,7 @@ def test_a_revoked_session_ends_the_stream(
 
 def test_streams_per_user_are_capped(factories: Factories, settings: Settings) -> None:
     with Actors.open(
-        sse_settings(settings, sse_max_streams_per_user=1, sse_max_stream_seconds=1.2), factories
+        sse_settings(settings, sse_max_streams_per_user=1, sse_max_stream_seconds=3), factories
     ) as capped:
         owner = capped.new(role="owner")
         second = capped.login(owner.record)
@@ -283,7 +283,14 @@ def test_streams_per_user_are_capped(factories: Factories, settings: Settings) -
 
         thread = threading.Thread(target=first_stream, daemon=True)
         thread.start()
-        time.sleep(0.4)
+        # Wait until the first stream holds its slot (not a fixed delay: on a
+        # loaded machine the first request may take longer to get there).
+        deadline = time.monotonic() + 30
+        while time.monotonic() < deadline:
+            slots = getattr(capped.app.state, "sse_slots", None)
+            if isinstance(slots, StreamSlots) and slots.count(owner.user.id) > 0:
+                break
+            time.sleep(0.01)
         refused = second.get(EVENTS)
         thread.join()
         assert results["first"].status_code == 200

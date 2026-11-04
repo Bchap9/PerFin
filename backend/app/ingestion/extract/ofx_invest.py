@@ -43,6 +43,7 @@ from pydantic import ValidationError
 from app.ingestion.extract.common import clean_text, last4, parse_amount
 from app.ingestion.sandbox.protocol import (
     MAX_POSITIONS,
+    MAX_STATEMENTS,
     AssetClassCode,
     Balance,
     ExtractOptions,
@@ -504,5 +505,5 @@ def investment_statements(
     catalogue = _Catalogue(root)
     return [
         _statement(node, kind, catalogue, options, budget, warnings, institution)
-        for node in nodes[:100]
+        for node in nodes[:MAX_STATEMENTS]
     ]

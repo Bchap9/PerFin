@@ -13,6 +13,105 @@
         "title": "AcceptedOut",
         "type": "object"
       },
+      "AccountAi": {
+        "additionalProperties": false,
+        "properties": {
+          "asset_kind": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Asset Kind",
+            "x-ai-source": [
+              "account.asset_kind"
+            ]
+          },
+          "balance": {
+            "$ref": "#/components/schemas/AiMoney",
+            "x-ai-source": [
+              "balance_snapshot.balance",
+              "transaction.amount",
+              "computed"
+            ]
+          },
+          "closed": {
+            "title": "Closed",
+            "type": "boolean",
+            "x-ai-source": [
+              "account.closed_on"
+            ]
+          },
+          "currency": {
+            "title": "Currency",
+            "type": "string",
+            "x-ai-source": [
+              "account.currency"
+            ]
+          },
+          "id": {
+            "title": "Id",
+            "type": "string",
+            "x-ai-source": [
+              "account.id"
+            ]
+          },
+          "institution": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Institution",
+            "x-ai-source": [
+              "institution.name"
+            ]
+          },
+          "is_asset": {
+            "title": "Is Asset",
+            "type": "boolean",
+            "x-ai-source": [
+              "account.is_asset"
+            ]
+          },
+          "label": {
+            "title": "Label",
+            "type": "string",
+            "x-ai-source": [
+              "account.nickname",
+              "account.name",
+              "account.type",
+              "policy"
+            ]
+          },
+          "type": {
+            "title": "Type",
+            "type": "string",
+            "x-ai-source": [
+              "account.type"
+            ]
+          }
+        },
+        "required": [
+          "id",
+          "label",
+          "type",
+          "asset_kind",
+          "institution",
+          "currency",
+          "balance",
+          "is_asset",
+          "closed"
+        ],
+        "title": "AccountAi",
+        "type": "object"
+      },
       "AccountClose": {
         "additionalProperties": false,
         "description": "``POST /accounts/{id}/close``: the closing date (default today).",
@@ -446,6 +545,44 @@
         ],
         "title": "AccountType",
         "type": "string"
+      },
+      "AccountTypeTotal": {
+        "additionalProperties": false,
+        "properties": {
+          "accounts": {
+            "title": "Accounts",
+            "type": "integer",
+            "x-ai-source": [
+              "computed"
+            ]
+          },
+          "balance": {
+            "items": {
+              "$ref": "#/components/schemas/AiMoney"
+            },
+            "title": "Balance",
+            "type": "array",
+            "x-ai-source": [
+              "balance_snapshot.balance",
+              "transaction.amount",
+              "computed"
+            ]
+          },
+          "type": {
+            "title": "Type",
+            "type": "string",
+            "x-ai-source": [
+              "account.type"
+            ]
+          }
+        },
+        "required": [
+          "type",
+          "accounts",
+          "balance"
+        ],
+        "title": "AccountTypeTotal",
+        "type": "object"
       },
       "AccountUpdate": {
         "additionalProperties": false,
@@ -904,6 +1041,1894 @@
         "title": "AdminUserUpdate",
         "type": "object"
       },
+      "AiAccessOut": {
+        "description": "``GET /settings/ai``: the switches and the number of live clients.",
+        "properties": {
+          "active_clients": {
+            "title": "Active Clients",
+            "type": "integer"
+          },
+          "enabled": {
+            "description": "Both switches are on: active clients can read.",
+            "title": "Enabled",
+            "type": "boolean"
+          },
+          "household_enabled": {
+            "title": "Household Enabled",
+            "type": "boolean"
+          },
+          "system_enabled": {
+            "title": "System Enabled",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "enabled",
+          "household_enabled",
+          "system_enabled",
+          "active_clients"
+        ],
+        "title": "AiAccessOut",
+        "type": "object"
+      },
+      "AiAccessUpdate": {
+        "additionalProperties": false,
+        "properties": {
+          "enabled": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Enabled"
+          }
+        },
+        "title": "AiAccessUpdate",
+        "type": "object"
+      },
+      "AiAccountsOut": {
+        "additionalProperties": false,
+        "properties": {
+          "as_of": {
+            "format": "date",
+            "title": "As Of",
+            "type": "string",
+            "x-ai-source": [
+              "computed"
+            ]
+          },
+          "by_type": {
+            "items": {
+              "$ref": "#/components/schemas/AccountTypeTotal"
+            },
+            "title": "By Type",
+            "type": "array",
+            "x-ai-source": [
+              "nested"
+            ]
+          },
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/AccountAi"
+            },
+            "title": "Items",
+            "type": "array",
+            "x-ai-source": [
+              "nested"
+            ]
+          },
+          "mode": {
+            "enum": [
+              "detail",
+              "aggregates"
+            ],
+            "title": "Mode",
+            "type": "string",
+            "x-ai-source": [
+              "policy"
+            ]
+          }
+        },
+        "required": [
+          "as_of",
+          "mode",
+          "items",
+          "by_type"
+        ],
+        "title": "AiAccountsOut",
+        "type": "object"
+      },
+      "AiAllocationOut": {
+        "additionalProperties": false,
+        "properties": {
+          "as_of": {
+            "format": "date",
+            "title": "As Of",
+            "type": "string",
+            "x-ai-source": [
+              "computed"
+            ]
+          },
+          "by": {
+            "additionalProperties": {
+              "items": {
+                "$ref": "#/components/schemas/AllocationAi"
+              },
+              "type": "array"
+            },
+            "title": "By",
+            "type": "object",
+            "x-ai-source": [
+              "nested"
+            ]
+          },
+          "currency": {
+            "title": "Currency",
+            "type": "string",
+            "x-ai-source": [
+              "household.base_currency"
+            ]
+          },
+          "market_value": {
+            "$ref": "#/components/schemas/AiMoney",
+            "x-ai-source": [
+              "holding.quantity",
+              "price.close"
+            ]
+          }
+        },
+        "required": [
+          "as_of",
+          "currency",
+          "market_value",
+          "by"
+        ],
+        "title": "AiAllocationOut",
+        "type": "object"
+      },
+      "AiAnomaliesOut": {
+        "additionalProperties": false,
+        "properties": {
+          "date_from": {
+            "format": "date",
+            "title": "Date From",
+            "type": "string",
+            "x-ai-source": [
+              "request",
+              "policy"
+            ]
+          },
+          "date_to": {
+            "format": "date",
+            "title": "Date To",
+            "type": "string",
+            "x-ai-source": [
+              "request"
+            ]
+          },
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/AnomalyAi"
+            },
+            "title": "Items",
+            "type": "array",
+            "x-ai-source": [
+              "nested"
+            ]
+          }
+        },
+        "required": [
+          "date_from",
+          "date_to",
+          "items"
+        ],
+        "title": "AiAnomaliesOut",
+        "type": "object"
+      },
+      "AiBudgetStatusOut": {
+        "additionalProperties": false,
+        "properties": {
+          "as_of": {
+            "format": "date",
+            "title": "As Of",
+            "type": "string",
+            "x-ai-source": [
+              "request"
+            ]
+          },
+          "budgets": {
+            "items": {
+              "$ref": "#/components/schemas/BudgetAi"
+            },
+            "title": "Budgets",
+            "type": "array",
+            "x-ai-source": [
+              "nested"
+            ]
+          }
+        },
+        "required": [
+          "as_of",
+          "budgets"
+        ],
+        "title": "AiBudgetStatusOut",
+        "type": "object"
+      },
+      "AiCallOut": {
+        "properties": {
+          "bytes": {
+            "title": "Bytes",
+            "type": "integer"
+          },
+          "client_id": {
+            "format": "uuid",
+            "title": "Client Id",
+            "type": "string"
+          },
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "params": {
+            "additionalProperties": true,
+            "title": "Params",
+            "type": "object"
+          },
+          "response": {
+            "title": "Response"
+          },
+          "status": {
+            "title": "Status",
+            "type": "integer"
+          },
+          "tool": {
+            "title": "Tool",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "client_id",
+          "tool",
+          "params",
+          "status",
+          "bytes",
+          "created_at",
+          "response"
+        ],
+        "title": "AiCallOut",
+        "type": "object"
+      },
+      "AiCallsOut": {
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/AiCallOut"
+            },
+            "title": "Items",
+            "type": "array"
+          }
+        },
+        "required": [
+          "items"
+        ],
+        "title": "AiCallsOut",
+        "type": "object"
+      },
+      "AiClientCreate": {
+        "additionalProperties": false,
+        "description": "``POST /settings/ai/clients``: a name and an expiry are mandatory.",
+        "properties": {
+          "custom_denylist": {
+            "items": {
+              "maxLength": 100,
+              "minLength": 1,
+              "type": "string"
+            },
+            "maxItems": 200,
+            "title": "Custom Denylist",
+            "type": "array"
+          },
+          "date_range_cap": {
+            "anyOf": [
+              {
+                "maximum": 3660.0,
+                "minimum": 1.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Date Range Cap"
+          },
+          "expires_in_days": {
+            "maximum": 365.0,
+            "minimum": 1.0,
+            "title": "Expires In Days",
+            "type": "integer"
+          },
+          "hide_merchant_location": {
+            "default": false,
+            "title": "Hide Merchant Location",
+            "type": "boolean"
+          },
+          "hide_nicknames": {
+            "default": false,
+            "title": "Hide Nicknames",
+            "type": "boolean"
+          },
+          "member_aliases": {
+            "items": {
+              "maxLength": 100,
+              "minLength": 1,
+              "type": "string"
+            },
+            "maxItems": 200,
+            "title": "Member Aliases",
+            "type": "array"
+          },
+          "mode": {
+            "$ref": "#/components/schemas/AiMode",
+            "default": "detail"
+          },
+          "name": {
+            "maxLength": 100,
+            "minLength": 1,
+            "title": "Name",
+            "type": "string"
+          },
+          "rounding": {
+            "anyOf": [
+              {
+                "enum": [
+                  1,
+                  10,
+                  100
+                ],
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Rounding"
+          },
+          "transport": {
+            "$ref": "#/components/schemas/AiTransport",
+            "default": "stdio"
+          }
+        },
+        "required": [
+          "name",
+          "expires_in_days"
+        ],
+        "title": "AiClientCreate",
+        "type": "object"
+      },
+      "AiClientCreatedOut": {
+        "properties": {
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "custom_denylist": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Custom Denylist",
+            "type": "array"
+          },
+          "date_range_cap": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Date Range Cap"
+          },
+          "expires_at": {
+            "format": "date-time",
+            "title": "Expires At",
+            "type": "string"
+          },
+          "hide_merchant_location": {
+            "title": "Hide Merchant Location",
+            "type": "boolean"
+          },
+          "hide_nicknames": {
+            "title": "Hide Nicknames",
+            "type": "boolean"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "last_used_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Used At"
+          },
+          "member_aliases": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Member Aliases",
+            "type": "array"
+          },
+          "mode": {
+            "$ref": "#/components/schemas/AiMode"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "revoked_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Revoked At"
+          },
+          "rounding": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Rounding"
+          },
+          "status": {
+            "enum": [
+              "active",
+              "expired",
+              "revoked"
+            ],
+            "title": "Status",
+            "type": "string"
+          },
+          "token": {
+            "description": "The raw ai:read token. Shown once; it cannot be retrieved again.",
+            "title": "Token",
+            "type": "string"
+          },
+          "token_prefix": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Token Prefix"
+          },
+          "transport": {
+            "$ref": "#/components/schemas/AiTransport"
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "mode",
+          "transport",
+          "rounding",
+          "hide_nicknames",
+          "hide_merchant_location",
+          "date_range_cap",
+          "custom_denylist",
+          "member_aliases",
+          "token_prefix",
+          "status",
+          "created_at",
+          "expires_at",
+          "revoked_at",
+          "last_used_at",
+          "token"
+        ],
+        "title": "AiClientCreatedOut",
+        "type": "object"
+      },
+      "AiClientOut": {
+        "description": "A client as the owner sees it (never the token or its hash).",
+        "properties": {
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "custom_denylist": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Custom Denylist",
+            "type": "array"
+          },
+          "date_range_cap": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Date Range Cap"
+          },
+          "expires_at": {
+            "format": "date-time",
+            "title": "Expires At",
+            "type": "string"
+          },
+          "hide_merchant_location": {
+            "title": "Hide Merchant Location",
+            "type": "boolean"
+          },
+          "hide_nicknames": {
+            "title": "Hide Nicknames",
+            "type": "boolean"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "last_used_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Used At"
+          },
+          "member_aliases": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Member Aliases",
+            "type": "array"
+          },
+          "mode": {
+            "$ref": "#/components/schemas/AiMode"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "revoked_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Revoked At"
+          },
+          "rounding": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Rounding"
+          },
+          "status": {
+            "enum": [
+              "active",
+              "expired",
+              "revoked"
+            ],
+            "title": "Status",
+            "type": "string"
+          },
+          "token_prefix": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Token Prefix"
+          },
+          "transport": {
+            "$ref": "#/components/schemas/AiTransport"
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "mode",
+          "transport",
+          "rounding",
+          "hide_nicknames",
+          "hide_merchant_location",
+          "date_range_cap",
+          "custom_denylist",
+          "member_aliases",
+          "token_prefix",
+          "status",
+          "created_at",
+          "expires_at",
+          "revoked_at",
+          "last_used_at"
+        ],
+        "title": "AiClientOut",
+        "type": "object"
+      },
+      "AiDataPolicyOut": {
+        "additionalProperties": false,
+        "description": "``explain_data_policy``: this client's mode, options and the denylist.",
+        "properties": {
+          "client_name": {
+            "title": "Client Name",
+            "type": "string",
+            "x-ai-source": [
+              "ai_client.name"
+            ]
+          },
+          "custom_denylist_entries": {
+            "title": "Custom Denylist Entries",
+            "type": "integer",
+            "x-ai-source": [
+              "policy"
+            ]
+          },
+          "date_range_cap_days": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Date Range Cap Days",
+            "x-ai-source": [
+              "ai_client.date_range_cap"
+            ]
+          },
+          "earliest_date": {
+            "anyOf": [
+              {
+                "format": "date",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Earliest Date",
+            "x-ai-source": [
+              "ai_client.date_range_cap",
+              "computed"
+            ]
+          },
+          "exposed": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Exposed",
+            "type": "array",
+            "x-ai-source": [
+              "computed"
+            ]
+          },
+          "hide_merchant_location": {
+            "title": "Hide Merchant Location",
+            "type": "boolean",
+            "x-ai-source": [
+              "ai_client.hide_merchant_location"
+            ]
+          },
+          "hide_nicknames": {
+            "title": "Hide Nicknames",
+            "type": "boolean",
+            "x-ai-source": [
+              "ai_client.hide_nicknames"
+            ]
+          },
+          "mode": {
+            "enum": [
+              "detail",
+              "aggregates"
+            ],
+            "title": "Mode",
+            "type": "string",
+            "x-ai-source": [
+              "ai_client.mode"
+            ]
+          },
+          "never_exposed": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Never Exposed",
+            "type": "array",
+            "x-ai-source": [
+              "computed"
+            ]
+          },
+          "placeholders": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Placeholders",
+            "type": "array",
+            "x-ai-source": [
+              "computed"
+            ]
+          },
+          "rate_limits": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Rate Limits",
+            "type": "array",
+            "x-ai-source": [
+              "computed"
+            ]
+          },
+          "rounding": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Rounding",
+            "x-ai-source": [
+              "ai_client.rounding"
+            ]
+          }
+        },
+        "required": [
+          "client_name",
+          "mode",
+          "rounding",
+          "hide_nicknames",
+          "hide_merchant_location",
+          "date_range_cap_days",
+          "earliest_date",
+          "custom_denylist_entries",
+          "placeholders",
+          "never_exposed",
+          "exposed",
+          "rate_limits"
+        ],
+        "title": "AiDataPolicyOut",
+        "type": "object"
+      },
+      "AiFlowOut": {
+        "additionalProperties": false,
+        "properties": {
+          "currency": {
+            "title": "Currency",
+            "type": "string",
+            "x-ai-source": [
+              "household.base_currency"
+            ]
+          },
+          "date_from": {
+            "format": "date",
+            "title": "Date From",
+            "type": "string",
+            "x-ai-source": [
+              "request",
+              "policy"
+            ]
+          },
+          "date_to": {
+            "format": "date",
+            "title": "Date To",
+            "type": "string",
+            "x-ai-source": [
+              "request"
+            ]
+          },
+          "flow": {
+            "enum": [
+              "spending",
+              "income"
+            ],
+            "title": "Flow",
+            "type": "string",
+            "x-ai-source": [
+              "request"
+            ]
+          },
+          "group_by": {
+            "title": "Group By",
+            "type": "string",
+            "x-ai-source": [
+              "request"
+            ]
+          },
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/FlowItemAi"
+            },
+            "title": "Items",
+            "type": "array",
+            "x-ai-source": [
+              "nested"
+            ]
+          },
+          "total": {
+            "$ref": "#/components/schemas/AiMoney",
+            "x-ai-source": [
+              "transaction.amount",
+              "transaction_split.amount",
+              "fx_rate.rate"
+            ]
+          }
+        },
+        "required": [
+          "flow",
+          "group_by",
+          "currency",
+          "date_from",
+          "date_to",
+          "items",
+          "total"
+        ],
+        "title": "AiFlowOut",
+        "type": "object"
+      },
+      "AiGoalsOut": {
+        "additionalProperties": false,
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/GoalAi"
+            },
+            "title": "Items",
+            "type": "array",
+            "x-ai-source": [
+              "nested"
+            ]
+          }
+        },
+        "required": [
+          "items"
+        ],
+        "title": "AiGoalsOut",
+        "type": "object"
+      },
+      "AiHoldingsOut": {
+        "additionalProperties": false,
+        "properties": {
+          "as_of": {
+            "format": "date",
+            "title": "As Of",
+            "type": "string",
+            "x-ai-source": [
+              "computed"
+            ]
+          },
+          "cost_basis": {
+            "$ref": "#/components/schemas/AiMoney",
+            "x-ai-source": [
+              "holding.cost_basis"
+            ]
+          },
+          "currency": {
+            "title": "Currency",
+            "type": "string",
+            "x-ai-source": [
+              "household.base_currency"
+            ]
+          },
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/HoldingAi"
+            },
+            "title": "Items",
+            "type": "array",
+            "x-ai-source": [
+              "nested"
+            ]
+          },
+          "market_value": {
+            "$ref": "#/components/schemas/AiMoney",
+            "x-ai-source": [
+              "holding.quantity",
+              "price.close"
+            ]
+          },
+          "unrealized": {
+            "$ref": "#/components/schemas/GainsAi",
+            "x-ai-source": [
+              "nested"
+            ]
+          }
+        },
+        "required": [
+          "as_of",
+          "currency",
+          "items",
+          "market_value",
+          "cost_basis",
+          "unrealized"
+        ],
+        "title": "AiHoldingsOut",
+        "type": "object"
+      },
+      "AiLoanScheduleOut": {
+        "additionalProperties": false,
+        "properties": {
+          "basis": {
+            "title": "Basis",
+            "type": "string",
+            "x-ai-source": [
+              "request"
+            ]
+          },
+          "loan_id": {
+            "title": "Loan Id",
+            "type": "string",
+            "x-ai-source": [
+              "loan.id"
+            ]
+          },
+          "rows": {
+            "items": {
+              "$ref": "#/components/schemas/ScheduleRowAi"
+            },
+            "title": "Rows",
+            "type": "array",
+            "x-ai-source": [
+              "nested"
+            ]
+          },
+          "start_balance": {
+            "$ref": "#/components/schemas/AiMoney",
+            "x-ai-source": [
+              "loan.principal_original",
+              "loan_payment.principal",
+              "computed"
+            ]
+          },
+          "total_rows": {
+            "title": "Total Rows",
+            "type": "integer",
+            "x-ai-source": [
+              "computed"
+            ]
+          },
+          "totals": {
+            "$ref": "#/components/schemas/ScheduleTotalsAi",
+            "x-ai-source": [
+              "nested"
+            ]
+          }
+        },
+        "required": [
+          "loan_id",
+          "basis",
+          "start_balance",
+          "rows",
+          "total_rows",
+          "totals"
+        ],
+        "title": "AiLoanScheduleOut",
+        "type": "object"
+      },
+      "AiLoansOut": {
+        "additionalProperties": false,
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/LoanAi"
+            },
+            "title": "Items",
+            "type": "array",
+            "x-ai-source": [
+              "nested"
+            ]
+          }
+        },
+        "required": [
+          "items"
+        ],
+        "title": "AiLoansOut",
+        "type": "object"
+      },
+      "AiMode": {
+        "enum": [
+          "detail",
+          "aggregates"
+        ],
+        "title": "AiMode",
+        "type": "string"
+      },
+      "AiMoney": {
+        "additionalProperties": false,
+        "description": "Money after the client's rounding; the parent field names the columns.",
+        "properties": {
+          "amount": {
+            "title": "Amount",
+            "type": "string",
+            "x-ai-source": [
+              "value"
+            ]
+          },
+          "currency": {
+            "title": "Currency",
+            "type": "string",
+            "x-ai-source": [
+              "value"
+            ]
+          }
+        },
+        "required": [
+          "amount",
+          "currency"
+        ],
+        "title": "AiMoney",
+        "type": "object"
+      },
+      "AiNetWorthHistoryOut": {
+        "additionalProperties": false,
+        "properties": {
+          "change": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/AiMoney"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "x-ai-source": [
+              "computed"
+            ]
+          },
+          "currency": {
+            "title": "Currency",
+            "type": "string",
+            "x-ai-source": [
+              "household.base_currency"
+            ]
+          },
+          "date_from": {
+            "format": "date",
+            "title": "Date From",
+            "type": "string",
+            "x-ai-source": [
+              "computed",
+              "policy"
+            ]
+          },
+          "date_to": {
+            "format": "date",
+            "title": "Date To",
+            "type": "string",
+            "x-ai-source": [
+              "computed"
+            ]
+          },
+          "granularity": {
+            "title": "Granularity",
+            "type": "string",
+            "x-ai-source": [
+              "request",
+              "computed"
+            ]
+          },
+          "points": {
+            "items": {
+              "$ref": "#/components/schemas/NetWorthPointAi"
+            },
+            "title": "Points",
+            "type": "array",
+            "x-ai-source": [
+              "nested"
+            ]
+          },
+          "range": {
+            "title": "Range",
+            "type": "string",
+            "x-ai-source": [
+              "request"
+            ]
+          }
+        },
+        "required": [
+          "currency",
+          "range",
+          "granularity",
+          "date_from",
+          "date_to",
+          "points",
+          "change"
+        ],
+        "title": "AiNetWorthHistoryOut",
+        "type": "object"
+      },
+      "AiOptionsIn": {
+        "additionalProperties": false,
+        "description": "The exposure options of a client (also the body of ``POST /settings/ai/preview``).",
+        "properties": {
+          "custom_denylist": {
+            "items": {
+              "maxLength": 100,
+              "minLength": 1,
+              "type": "string"
+            },
+            "maxItems": 200,
+            "title": "Custom Denylist",
+            "type": "array"
+          },
+          "date_range_cap": {
+            "anyOf": [
+              {
+                "maximum": 3660.0,
+                "minimum": 1.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Date Range Cap"
+          },
+          "hide_merchant_location": {
+            "default": false,
+            "title": "Hide Merchant Location",
+            "type": "boolean"
+          },
+          "hide_nicknames": {
+            "default": false,
+            "title": "Hide Nicknames",
+            "type": "boolean"
+          },
+          "member_aliases": {
+            "items": {
+              "maxLength": 100,
+              "minLength": 1,
+              "type": "string"
+            },
+            "maxItems": 200,
+            "title": "Member Aliases",
+            "type": "array"
+          },
+          "mode": {
+            "$ref": "#/components/schemas/AiMode",
+            "default": "detail"
+          },
+          "name": {
+            "default": "Preview",
+            "maxLength": 100,
+            "minLength": 1,
+            "title": "Name",
+            "type": "string"
+          },
+          "rounding": {
+            "anyOf": [
+              {
+                "enum": [
+                  1,
+                  10,
+                  100
+                ],
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Rounding"
+          },
+          "transport": {
+            "$ref": "#/components/schemas/AiTransport",
+            "default": "stdio"
+          }
+        },
+        "title": "AiOptionsIn",
+        "type": "object"
+      },
+      "AiOverviewOut": {
+        "additionalProperties": false,
+        "description": "``get_overview``: net worth now, cash flow and savings rate over the period.",
+        "properties": {
+          "as_of": {
+            "format": "date",
+            "title": "As Of",
+            "type": "string",
+            "x-ai-source": [
+              "computed"
+            ]
+          },
+          "assets": {
+            "$ref": "#/components/schemas/AiMoney",
+            "x-ai-source": [
+              "balance_snapshot.balance",
+              "transaction.amount",
+              "holding.quantity",
+              "price.close"
+            ]
+          },
+          "currency": {
+            "title": "Currency",
+            "type": "string",
+            "x-ai-source": [
+              "household.base_currency"
+            ]
+          },
+          "date_from": {
+            "format": "date",
+            "title": "Date From",
+            "type": "string",
+            "x-ai-source": [
+              "request",
+              "policy"
+            ]
+          },
+          "date_to": {
+            "format": "date",
+            "title": "Date To",
+            "type": "string",
+            "x-ai-source": [
+              "request"
+            ]
+          },
+          "inflow": {
+            "$ref": "#/components/schemas/AiMoney",
+            "x-ai-source": [
+              "transaction.amount"
+            ]
+          },
+          "liabilities": {
+            "$ref": "#/components/schemas/AiMoney",
+            "x-ai-source": [
+              "balance_snapshot.balance",
+              "transaction.amount"
+            ]
+          },
+          "months": {
+            "items": {
+              "$ref": "#/components/schemas/CashflowMonthAi"
+            },
+            "title": "Months",
+            "type": "array",
+            "x-ai-source": [
+              "nested"
+            ]
+          },
+          "net_cash_flow": {
+            "$ref": "#/components/schemas/AiMoney",
+            "x-ai-source": [
+              "transaction.amount"
+            ]
+          },
+          "net_worth": {
+            "$ref": "#/components/schemas/AiMoney",
+            "x-ai-source": [
+              "balance_snapshot.balance",
+              "transaction.amount",
+              "holding.quantity",
+              "price.close"
+            ]
+          },
+          "outflow": {
+            "$ref": "#/components/schemas/AiMoney",
+            "x-ai-source": [
+              "transaction.amount"
+            ]
+          },
+          "savings_rate": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Savings Rate",
+            "x-ai-source": [
+              "computed"
+            ]
+          }
+        },
+        "required": [
+          "as_of",
+          "currency",
+          "date_from",
+          "date_to",
+          "assets",
+          "liabilities",
+          "net_worth",
+          "inflow",
+          "outflow",
+          "net_cash_flow",
+          "savings_rate",
+          "months"
+        ],
+        "title": "AiOverviewOut",
+        "type": "object"
+      },
+      "AiPerformanceOut": {
+        "additionalProperties": false,
+        "properties": {
+          "currency": {
+            "title": "Currency",
+            "type": "string",
+            "x-ai-source": [
+              "household.base_currency"
+            ]
+          },
+          "end": {
+            "format": "date",
+            "title": "End",
+            "type": "string",
+            "x-ai-source": [
+              "computed"
+            ]
+          },
+          "end_value": {
+            "$ref": "#/components/schemas/AiMoney",
+            "x-ai-source": [
+              "holding.quantity",
+              "price.close"
+            ]
+          },
+          "fees": {
+            "$ref": "#/components/schemas/AiMoney",
+            "x-ai-source": [
+              "investment_txn.fees"
+            ]
+          },
+          "income": {
+            "$ref": "#/components/schemas/AiMoney",
+            "x-ai-source": [
+              "investment_txn.amount"
+            ]
+          },
+          "inflows": {
+            "$ref": "#/components/schemas/AiMoney",
+            "x-ai-source": [
+              "investment_txn.amount"
+            ]
+          },
+          "mwr": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Mwr",
+            "x-ai-source": [
+              "computed"
+            ]
+          },
+          "mwr_annualized": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Mwr Annualized",
+            "x-ai-source": [
+              "computed"
+            ]
+          },
+          "outflows": {
+            "$ref": "#/components/schemas/AiMoney",
+            "x-ai-source": [
+              "investment_txn.amount"
+            ]
+          },
+          "range": {
+            "title": "Range",
+            "type": "string",
+            "x-ai-source": [
+              "request"
+            ]
+          },
+          "realized": {
+            "$ref": "#/components/schemas/GainsAi",
+            "x-ai-source": [
+              "nested"
+            ]
+          },
+          "start": {
+            "format": "date",
+            "title": "Start",
+            "type": "string",
+            "x-ai-source": [
+              "computed",
+              "policy"
+            ]
+          },
+          "start_value": {
+            "$ref": "#/components/schemas/AiMoney",
+            "x-ai-source": [
+              "holding.quantity",
+              "price.close",
+              "investment_txn.amount"
+            ]
+          },
+          "twr": {
+            "title": "Twr",
+            "type": "string",
+            "x-ai-source": [
+              "computed"
+            ]
+          },
+          "twr_annualized": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Twr Annualized",
+            "x-ai-source": [
+              "computed"
+            ]
+          },
+          "unrealized": {
+            "$ref": "#/components/schemas/GainsAi",
+            "x-ai-source": [
+              "nested"
+            ]
+          }
+        },
+        "required": [
+          "range",
+          "start",
+          "end",
+          "currency",
+          "start_value",
+          "end_value",
+          "inflows",
+          "outflows",
+          "income",
+          "fees",
+          "twr",
+          "twr_annualized",
+          "mwr",
+          "mwr_annualized",
+          "realized",
+          "unrealized"
+        ],
+        "title": "AiPerformanceOut",
+        "type": "object"
+      },
+      "AiRecurringOut": {
+        "additionalProperties": false,
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/RecurringAi"
+            },
+            "title": "Items",
+            "type": "array",
+            "x-ai-source": [
+              "nested"
+            ]
+          }
+        },
+        "required": [
+          "items"
+        ],
+        "title": "AiRecurringOut",
+        "type": "object"
+      },
+      "AiSimulationOut": {
+        "additionalProperties": false,
+        "properties": {
+          "as_of": {
+            "format": "date",
+            "title": "As Of",
+            "type": "string",
+            "x-ai-source": [
+              "computed"
+            ]
+          },
+          "balance": {
+            "$ref": "#/components/schemas/AiMoney",
+            "x-ai-source": [
+              "loan_payment.principal",
+              "computed"
+            ]
+          },
+          "baseline": {
+            "$ref": "#/components/schemas/ScenarioAi",
+            "x-ai-source": [
+              "nested"
+            ]
+          },
+          "extra_monthly": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/AiMoney"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "x-ai-source": [
+              "request"
+            ]
+          },
+          "extra_once": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/AiMoney"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "x-ai-source": [
+              "request"
+            ]
+          },
+          "interest_saved": {
+            "$ref": "#/components/schemas/AiMoney",
+            "x-ai-source": [
+              "computed"
+            ]
+          },
+          "loan_id": {
+            "title": "Loan Id",
+            "type": "string",
+            "x-ai-source": [
+              "loan.id"
+            ]
+          },
+          "payments_saved": {
+            "title": "Payments Saved",
+            "type": "integer",
+            "x-ai-source": [
+              "computed"
+            ]
+          },
+          "with_extras": {
+            "$ref": "#/components/schemas/ScenarioAi",
+            "x-ai-source": [
+              "nested"
+            ]
+          }
+        },
+        "required": [
+          "loan_id",
+          "as_of",
+          "balance",
+          "extra_monthly",
+          "extra_once",
+          "baseline",
+          "with_extras",
+          "interest_saved",
+          "payments_saved"
+        ],
+        "title": "AiSimulationOut",
+        "type": "object"
+      },
+      "AiTaxYearSummaryOut": {
+        "additionalProperties": false,
+        "properties": {
+          "by_treatment": {
+            "additionalProperties": {
+              "$ref": "#/components/schemas/AiMoney"
+            },
+            "title": "By Treatment",
+            "type": "object",
+            "x-ai-source": [
+              "category.tax_treatment",
+              "transaction.amount"
+            ]
+          },
+          "categories": {
+            "items": {
+              "$ref": "#/components/schemas/TaxCategoryAi"
+            },
+            "title": "Categories",
+            "type": "array",
+            "x-ai-source": [
+              "nested"
+            ]
+          },
+          "checklist": {
+            "items": {
+              "$ref": "#/components/schemas/TaxChecklistAi"
+            },
+            "title": "Checklist",
+            "type": "array",
+            "x-ai-source": [
+              "nested"
+            ]
+          },
+          "currency": {
+            "title": "Currency",
+            "type": "string",
+            "x-ai-source": [
+              "household.base_currency"
+            ]
+          },
+          "expected": {
+            "title": "Expected",
+            "type": "integer",
+            "x-ai-source": [
+              "computed"
+            ]
+          },
+          "filing_status": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Filing Status",
+            "x-ai-source": [
+              "tax_year.filing_status"
+            ]
+          },
+          "forms": {
+            "items": {
+              "$ref": "#/components/schemas/TaxFormAi"
+            },
+            "title": "Forms",
+            "type": "array",
+            "x-ai-source": [
+              "nested"
+            ]
+          },
+          "jurisdiction": {
+            "title": "Jurisdiction",
+            "type": "string",
+            "x-ai-source": [
+              "tax_year.jurisdiction"
+            ]
+          },
+          "missing": {
+            "title": "Missing",
+            "type": "integer",
+            "x-ai-source": [
+              "computed"
+            ]
+          },
+          "partial": {
+            "title": "Partial",
+            "type": "boolean",
+            "x-ai-source": [
+              "computed"
+            ]
+          },
+          "received": {
+            "title": "Received",
+            "type": "integer",
+            "x-ai-source": [
+              "computed"
+            ]
+          },
+          "state": {
+            "title": "State",
+            "type": "string",
+            "x-ai-source": [
+              "tax_year.state"
+            ]
+          },
+          "year": {
+            "title": "Year",
+            "type": "integer",
+            "x-ai-source": [
+              "tax_year.year"
+            ]
+          }
+        },
+        "required": [
+          "year",
+          "jurisdiction",
+          "filing_status",
+          "state",
+          "currency",
+          "partial",
+          "by_treatment",
+          "categories",
+          "forms",
+          "checklist",
+          "expected",
+          "received",
+          "missing"
+        ],
+        "title": "AiTaxYearSummaryOut",
+        "type": "object"
+      },
+      "AiTransactionsOut": {
+        "additionalProperties": false,
+        "properties": {
+          "date_from": {
+            "format": "date",
+            "title": "Date From",
+            "type": "string",
+            "x-ai-source": [
+              "request",
+              "policy"
+            ]
+          },
+          "date_to": {
+            "format": "date",
+            "title": "Date To",
+            "type": "string",
+            "x-ai-source": [
+              "request"
+            ]
+          },
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/TransactionAi"
+            },
+            "title": "Items",
+            "type": "array",
+            "x-ai-source": [
+              "nested"
+            ]
+          },
+          "next_cursor": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Next Cursor",
+            "x-ai-source": [
+              "transaction.posted_date",
+              "transaction.id"
+            ]
+          }
+        },
+        "required": [
+          "date_from",
+          "date_to",
+          "items",
+          "next_cursor"
+        ],
+        "title": "AiTransactionsOut",
+        "type": "object"
+      },
+      "AiTransport": {
+        "enum": [
+          "stdio",
+          "http"
+        ],
+        "title": "AiTransport",
+        "type": "string"
+      },
+      "AiTrendsOut": {
+        "additionalProperties": false,
+        "properties": {
+          "categories": {
+            "items": {
+              "$ref": "#/components/schemas/TrendRowAi"
+            },
+            "title": "Categories",
+            "type": "array",
+            "x-ai-source": [
+              "nested"
+            ]
+          },
+          "currency": {
+            "title": "Currency",
+            "type": "string",
+            "x-ai-source": [
+              "household.base_currency"
+            ]
+          },
+          "flow": {
+            "enum": [
+              "spending",
+              "income"
+            ],
+            "title": "Flow",
+            "type": "string",
+            "x-ai-source": [
+              "request"
+            ]
+          },
+          "month": {
+            "title": "Month",
+            "type": "string",
+            "x-ai-source": [
+              "request"
+            ]
+          },
+          "months": {
+            "title": "Months",
+            "type": "integer",
+            "x-ai-source": [
+              "request",
+              "policy"
+            ]
+          },
+          "series": {
+            "items": {
+              "$ref": "#/components/schemas/TrendPointAi"
+            },
+            "title": "Series",
+            "type": "array",
+            "x-ai-source": [
+              "nested"
+            ]
+          },
+          "total": {
+            "$ref": "#/components/schemas/TrendRowAi",
+            "x-ai-source": [
+              "nested"
+            ]
+          }
+        },
+        "required": [
+          "flow",
+          "month",
+          "months",
+          "currency",
+          "series",
+          "total",
+          "categories"
+        ],
+        "title": "AiTrendsOut",
+        "type": "object"
+      },
       "AliasOut": {
         "properties": {
           "alias_rotated_at": {
@@ -1079,6 +3104,43 @@
           }
         },
         "title": "AllCondition",
+        "type": "object"
+      },
+      "AllocationAi": {
+        "additionalProperties": false,
+        "properties": {
+          "key": {
+            "title": "Key",
+            "type": "string",
+            "x-ai-source": [
+              "security.asset_class",
+              "security.sector",
+              "security.currency",
+              "account.type",
+              "computed"
+            ]
+          },
+          "value": {
+            "$ref": "#/components/schemas/AiMoney",
+            "x-ai-source": [
+              "holding.quantity",
+              "price.close"
+            ]
+          },
+          "weight": {
+            "title": "Weight",
+            "type": "string",
+            "x-ai-source": [
+              "computed"
+            ]
+          }
+        },
+        "required": [
+          "key",
+          "value",
+          "weight"
+        ],
+        "title": "AllocationAi",
         "type": "object"
       },
       "AllocationOut": {
@@ -1273,6 +3335,109 @@
           }
         },
         "title": "AmountCondition",
+        "type": "object"
+      },
+      "AnomalyAi": {
+        "additionalProperties": false,
+        "properties": {
+          "account": {
+            "title": "Account",
+            "type": "string",
+            "x-ai-source": [
+              "account.nickname",
+              "account.name",
+              "account.type",
+              "policy"
+            ]
+          },
+          "amount": {
+            "$ref": "#/components/schemas/AiMoney",
+            "x-ai-source": [
+              "transaction.amount",
+              "transaction.currency"
+            ]
+          },
+          "category": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Category",
+            "x-ai-source": [
+              "category.name"
+            ]
+          },
+          "kind": {
+            "enum": [
+              "large",
+              "new_payee"
+            ],
+            "title": "Kind",
+            "type": "string",
+            "x-ai-source": [
+              "computed"
+            ]
+          },
+          "payee": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Payee",
+            "x-ai-source": [
+              "payee.name",
+              "transaction.raw_payee"
+            ]
+          },
+          "posted_date": {
+            "format": "date",
+            "title": "Posted Date",
+            "type": "string",
+            "x-ai-source": [
+              "transaction.posted_date"
+            ]
+          },
+          "reason": {
+            "title": "Reason",
+            "type": "string",
+            "x-ai-source": [
+              "computed"
+            ]
+          },
+          "typical": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/AiMoney"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "x-ai-source": [
+              "transaction.amount",
+              "computed"
+            ]
+          }
+        },
+        "required": [
+          "kind",
+          "posted_date",
+          "amount",
+          "payee",
+          "category",
+          "account",
+          "typical",
+          "reason"
+        ],
+        "title": "AnomalyAi",
         "type": "object"
       },
       "AnyCondition-Input": {
@@ -1868,6 +4033,92 @@
         "title": "Body_post_backchannel_logout_api_v1_auth_oidc_backchannel_logout_post",
         "type": "object"
       },
+      "BudgetAi": {
+        "additionalProperties": false,
+        "properties": {
+          "currency": {
+            "title": "Currency",
+            "type": "string",
+            "x-ai-source": [
+              "budget.currency"
+            ]
+          },
+          "expense": {
+            "$ref": "#/components/schemas/BudgetTotalsAi",
+            "x-ai-source": [
+              "nested"
+            ]
+          },
+          "income": {
+            "$ref": "#/components/schemas/BudgetTotalsAi",
+            "x-ai-source": [
+              "nested"
+            ]
+          },
+          "lines": {
+            "items": {
+              "$ref": "#/components/schemas/BudgetLineAi"
+            },
+            "title": "Lines",
+            "type": "array",
+            "x-ai-source": [
+              "nested"
+            ]
+          },
+          "name": {
+            "title": "Name",
+            "type": "string",
+            "x-ai-source": [
+              "budget.name",
+              "policy"
+            ]
+          },
+          "period": {
+            "title": "Period",
+            "type": "string",
+            "x-ai-source": [
+              "budget.period"
+            ]
+          },
+          "period_end": {
+            "format": "date",
+            "title": "Period End",
+            "type": "string",
+            "x-ai-source": [
+              "budget.end_date",
+              "computed"
+            ]
+          },
+          "period_start": {
+            "format": "date",
+            "title": "Period Start",
+            "type": "string",
+            "x-ai-source": [
+              "budget.start_date",
+              "computed"
+            ]
+          },
+          "unbudgeted": {
+            "$ref": "#/components/schemas/AiMoney",
+            "x-ai-source": [
+              "transaction.amount"
+            ]
+          }
+        },
+        "required": [
+          "name",
+          "period",
+          "period_start",
+          "period_end",
+          "currency",
+          "lines",
+          "unbudgeted",
+          "expense",
+          "income"
+        ],
+        "title": "BudgetAi",
+        "type": "object"
+      },
       "BudgetCreate": {
         "additionalProperties": false,
         "description": "``POST /budgets``.\n\n``period`` monthly or annual: ``start_date`` is the first day of a month\nand there is no ``end_date``; periods are calendar months, or twelve\nmonths from ``start_date``. ``custom``: one period ``start_date ..\nend_date`` (at most 3660 days). ``currency`` defaults to the household's\nbase currency.",
@@ -1931,6 +4182,84 @@
           "start_date"
         ],
         "title": "BudgetCreate",
+        "type": "object"
+      },
+      "BudgetLineAi": {
+        "additionalProperties": false,
+        "properties": {
+          "actual": {
+            "$ref": "#/components/schemas/AiMoney",
+            "x-ai-source": [
+              "transaction.amount",
+              "transaction_split.amount"
+            ]
+          },
+          "available": {
+            "$ref": "#/components/schemas/AiMoney",
+            "x-ai-source": [
+              "budget_line.amount",
+              "transaction.amount"
+            ]
+          },
+          "budgeted": {
+            "$ref": "#/components/schemas/AiMoney",
+            "x-ai-source": [
+              "budget_line.amount"
+            ]
+          },
+          "category": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Category",
+            "x-ai-source": [
+              "category.name"
+            ]
+          },
+          "forecast": {
+            "$ref": "#/components/schemas/AiMoney",
+            "x-ai-source": [
+              "transaction.amount",
+              "computed"
+            ]
+          },
+          "kind": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Kind",
+            "x-ai-source": [
+              "category.kind"
+            ]
+          },
+          "remaining": {
+            "$ref": "#/components/schemas/AiMoney",
+            "x-ai-source": [
+              "budget_line.amount",
+              "transaction.amount"
+            ]
+          }
+        },
+        "required": [
+          "category",
+          "kind",
+          "budgeted",
+          "available",
+          "actual",
+          "remaining",
+          "forecast"
+        ],
+        "title": "BudgetLineAi",
         "type": "object"
       },
       "BudgetLineIn": {
@@ -2254,6 +4583,45 @@
           "forecast"
         ],
         "title": "BudgetTotals",
+        "type": "object"
+      },
+      "BudgetTotalsAi": {
+        "additionalProperties": false,
+        "properties": {
+          "actual": {
+            "$ref": "#/components/schemas/AiMoney",
+            "x-ai-source": [
+              "transaction.amount"
+            ]
+          },
+          "budgeted": {
+            "$ref": "#/components/schemas/AiMoney",
+            "x-ai-source": [
+              "budget_line.amount"
+            ]
+          },
+          "forecast": {
+            "$ref": "#/components/schemas/AiMoney",
+            "x-ai-source": [
+              "transaction.amount",
+              "computed"
+            ]
+          },
+          "remaining": {
+            "$ref": "#/components/schemas/AiMoney",
+            "x-ai-source": [
+              "budget_line.amount",
+              "transaction.amount"
+            ]
+          }
+        },
+        "required": [
+          "budgeted",
+          "actual",
+          "remaining",
+          "forecast"
+        ],
+        "title": "BudgetTotalsAi",
         "type": "object"
       },
       "BudgetUpdate": {
@@ -2804,6 +5172,44 @@
           "net"
         ],
         "title": "CashflowMonth",
+        "type": "object"
+      },
+      "CashflowMonthAi": {
+        "additionalProperties": false,
+        "properties": {
+          "inflow": {
+            "$ref": "#/components/schemas/AiMoney",
+            "x-ai-source": [
+              "transaction.amount"
+            ]
+          },
+          "month": {
+            "title": "Month",
+            "type": "string",
+            "x-ai-source": [
+              "computed"
+            ]
+          },
+          "net": {
+            "$ref": "#/components/schemas/AiMoney",
+            "x-ai-source": [
+              "transaction.amount"
+            ]
+          },
+          "outflow": {
+            "$ref": "#/components/schemas/AiMoney",
+            "x-ai-source": [
+              "transaction.amount"
+            ]
+          }
+        },
+        "required": [
+          "month",
+          "inflow",
+          "outflow",
+          "net"
+        ],
+        "title": "CashflowMonthAi",
         "type": "object"
       },
       "CashflowReport": {
@@ -4704,6 +7110,35 @@
         "title": "ExportRequest",
         "type": "object"
       },
+      "ExposurePreviewOut": {
+        "description": "What every tool would return with these options; nothing is stored or sent.",
+        "properties": {
+          "mode": {
+            "$ref": "#/components/schemas/AiMode"
+          },
+          "placeholder_counts": {
+            "additionalProperties": {
+              "type": "integer"
+            },
+            "title": "Placeholder Counts",
+            "type": "object"
+          },
+          "tools": {
+            "items": {
+              "$ref": "#/components/schemas/PreviewToolOut"
+            },
+            "title": "Tools",
+            "type": "array"
+          }
+        },
+        "required": [
+          "mode",
+          "tools",
+          "placeholder_counts"
+        ],
+        "title": "ExposurePreviewOut",
+        "type": "object"
+      },
       "FactorAddedOut": {
         "properties": {
           "csrf_token": {
@@ -4761,6 +7196,44 @@
         ],
         "title": "Flow",
         "type": "string"
+      },
+      "FlowItemAi": {
+        "additionalProperties": false,
+        "properties": {
+          "amount": {
+            "$ref": "#/components/schemas/AiMoney",
+            "x-ai-source": [
+              "transaction.amount",
+              "transaction_split.amount",
+              "fx_rate.rate"
+            ]
+          },
+          "name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Name",
+            "x-ai-source": [
+              "category.name",
+              "payee.name",
+              "account.type",
+              "account.nickname",
+              "account.name",
+              "computed"
+            ]
+          }
+        },
+        "required": [
+          "name",
+          "amount"
+        ],
+        "title": "FlowItemAi",
+        "type": "object"
       },
       "FlowReport": {
         "description": "``GET /reports/spending`` and ``GET /reports/income``.\n\nSpending amounts are positive money out (refunds in an expense category\nreduce them); income amounts are positive money in.",
@@ -5086,6 +7559,39 @@
         "title": "FxRateSet",
         "type": "object"
       },
+      "GainsAi": {
+        "additionalProperties": false,
+        "properties": {
+          "long_term": {
+            "$ref": "#/components/schemas/AiMoney",
+            "x-ai-source": [
+              "lot.cost_per_unit",
+              "price.close"
+            ]
+          },
+          "short_term": {
+            "$ref": "#/components/schemas/AiMoney",
+            "x-ai-source": [
+              "lot.cost_per_unit",
+              "price.close"
+            ]
+          },
+          "total": {
+            "$ref": "#/components/schemas/AiMoney",
+            "x-ai-source": [
+              "lot.cost_per_unit",
+              "price.close"
+            ]
+          }
+        },
+        "required": [
+          "short_term",
+          "long_term",
+          "total"
+        ],
+        "title": "GainsAi",
+        "type": "object"
+      },
       "GainsOut": {
         "properties": {
           "long_term": {
@@ -5104,6 +7610,118 @@
           "total"
         ],
         "title": "GainsOut",
+        "type": "object"
+      },
+      "GoalAi": {
+        "additionalProperties": false,
+        "properties": {
+          "achieved": {
+            "title": "Achieved",
+            "type": "boolean",
+            "x-ai-source": [
+              "goal.achieved_at"
+            ]
+          },
+          "archived": {
+            "title": "Archived",
+            "type": "boolean",
+            "x-ai-source": [
+              "goal.archived"
+            ]
+          },
+          "contributed": {
+            "$ref": "#/components/schemas/AiMoney",
+            "x-ai-source": [
+              "goal_contribution.amount"
+            ]
+          },
+          "name": {
+            "title": "Name",
+            "type": "string",
+            "x-ai-source": [
+              "goal.name",
+              "policy"
+            ]
+          },
+          "on_track": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "On Track",
+            "x-ai-source": [
+              "computed"
+            ]
+          },
+          "percent": {
+            "title": "Percent",
+            "type": "string",
+            "x-ai-source": [
+              "computed"
+            ]
+          },
+          "projected_completion": {
+            "anyOf": [
+              {
+                "format": "date",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Projected Completion",
+            "x-ai-source": [
+              "computed"
+            ]
+          },
+          "remaining": {
+            "$ref": "#/components/schemas/AiMoney",
+            "x-ai-source": [
+              "goal.target_amount",
+              "goal_contribution.amount"
+            ]
+          },
+          "target": {
+            "$ref": "#/components/schemas/AiMoney",
+            "x-ai-source": [
+              "goal.target_amount",
+              "goal.currency"
+            ]
+          },
+          "target_date": {
+            "anyOf": [
+              {
+                "format": "date",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Target Date",
+            "x-ai-source": [
+              "goal.target_date"
+            ]
+          }
+        },
+        "required": [
+          "name",
+          "target",
+          "target_date",
+          "contributed",
+          "remaining",
+          "percent",
+          "projected_completion",
+          "on_track",
+          "achieved",
+          "archived"
+        ],
+        "title": "GoalAi",
         "type": "object"
       },
       "GoalCreate": {
@@ -5469,6 +8087,165 @@
           "market_value_base"
         ],
         "title": "HoldingAccountOut",
+        "type": "object"
+      },
+      "HoldingAi": {
+        "additionalProperties": false,
+        "properties": {
+          "account": {
+            "title": "Account",
+            "type": "string",
+            "x-ai-source": [
+              "account.nickname",
+              "account.name",
+              "account.type",
+              "policy"
+            ]
+          },
+          "asset_class": {
+            "title": "Asset Class",
+            "type": "string",
+            "x-ai-source": [
+              "security.asset_class"
+            ]
+          },
+          "cost_basis": {
+            "$ref": "#/components/schemas/AiMoney",
+            "x-ai-source": [
+              "holding.cost_basis"
+            ]
+          },
+          "currency": {
+            "title": "Currency",
+            "type": "string",
+            "x-ai-source": [
+              "security.currency"
+            ]
+          },
+          "market_value": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/AiMoney"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "x-ai-source": [
+              "holding.quantity",
+              "price.close"
+            ]
+          },
+          "name": {
+            "title": "Name",
+            "type": "string",
+            "x-ai-source": [
+              "security.name"
+            ]
+          },
+          "price": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Price",
+            "x-ai-source": [
+              "price.close",
+              "investment_txn.price"
+            ]
+          },
+          "price_date": {
+            "anyOf": [
+              {
+                "format": "date",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Price Date",
+            "x-ai-source": [
+              "price.price_date",
+              "investment_txn.trade_date"
+            ]
+          },
+          "quantity": {
+            "title": "Quantity",
+            "type": "string",
+            "x-ai-source": [
+              "holding.quantity"
+            ]
+          },
+          "sector": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Sector",
+            "x-ai-source": [
+              "security.sector"
+            ]
+          },
+          "symbol": {
+            "title": "Symbol",
+            "type": "string",
+            "x-ai-source": [
+              "security.symbol"
+            ]
+          },
+          "unrealized": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/GainsAi"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "x-ai-source": [
+              "nested"
+            ]
+          },
+          "weight": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Weight",
+            "x-ai-source": [
+              "computed"
+            ]
+          }
+        },
+        "required": [
+          "account",
+          "symbol",
+          "name",
+          "asset_class",
+          "sector",
+          "currency",
+          "quantity",
+          "cost_basis",
+          "price",
+          "price_date",
+          "market_value",
+          "unrealized",
+          "weight"
+        ],
+        "title": "HoldingAi",
         "type": "object"
       },
       "HoldingOut": {
@@ -6641,6 +9418,192 @@
         ],
         "title": "LinkTarget",
         "type": "string"
+      },
+      "LoanAi": {
+        "additionalProperties": false,
+        "properties": {
+          "account": {
+            "title": "Account",
+            "type": "string",
+            "x-ai-source": [
+              "account.nickname",
+              "account.name",
+              "account.type",
+              "policy"
+            ]
+          },
+          "balance": {
+            "$ref": "#/components/schemas/AiMoney",
+            "x-ai-source": [
+              "loan_payment.principal",
+              "balance_snapshot.balance",
+              "computed"
+            ]
+          },
+          "currency": {
+            "title": "Currency",
+            "type": "string",
+            "x-ai-source": [
+              "loan.currency"
+            ]
+          },
+          "escrow_amount": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/AiMoney"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "x-ai-source": [
+              "loan.escrow_amount"
+            ]
+          },
+          "id": {
+            "title": "Id",
+            "type": "string",
+            "x-ai-source": [
+              "loan.id"
+            ]
+          },
+          "lender": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Lender",
+            "x-ai-source": [
+              "loan.lender"
+            ]
+          },
+          "maturity_date": {
+            "format": "date",
+            "title": "Maturity Date",
+            "type": "string",
+            "x-ai-source": [
+              "computed"
+            ]
+          },
+          "next_due_date": {
+            "anyOf": [
+              {
+                "format": "date",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Next Due Date",
+            "x-ai-source": [
+              "computed"
+            ]
+          },
+          "origination_date": {
+            "format": "date",
+            "title": "Origination Date",
+            "type": "string",
+            "x-ai-source": [
+              "loan.origination_date"
+            ]
+          },
+          "payment_amount": {
+            "$ref": "#/components/schemas/AiMoney",
+            "x-ai-source": [
+              "loan.payment_amount"
+            ]
+          },
+          "payoff_date": {
+            "anyOf": [
+              {
+                "format": "date",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Payoff Date",
+            "x-ai-source": [
+              "computed"
+            ]
+          },
+          "principal_original": {
+            "$ref": "#/components/schemas/AiMoney",
+            "x-ai-source": [
+              "loan.principal_original"
+            ]
+          },
+          "rate": {
+            "title": "Rate",
+            "type": "string",
+            "x-ai-source": [
+              "loan.rate",
+              "loan_rate_change.new_rate"
+            ]
+          },
+          "rate_type": {
+            "title": "Rate Type",
+            "type": "string",
+            "x-ai-source": [
+              "loan.rate_type"
+            ]
+          },
+          "remaining_interest": {
+            "$ref": "#/components/schemas/AiMoney",
+            "x-ai-source": [
+              "computed"
+            ]
+          },
+          "remaining_payments": {
+            "title": "Remaining Payments",
+            "type": "integer",
+            "x-ai-source": [
+              "computed"
+            ]
+          },
+          "term_months": {
+            "title": "Term Months",
+            "type": "integer",
+            "x-ai-source": [
+              "loan.term_months"
+            ]
+          },
+          "type": {
+            "title": "Type",
+            "type": "string",
+            "x-ai-source": [
+              "account.type"
+            ]
+          }
+        },
+        "required": [
+          "id",
+          "account",
+          "type",
+          "lender",
+          "currency",
+          "principal_original",
+          "balance",
+          "rate",
+          "rate_type",
+          "term_months",
+          "origination_date",
+          "payment_amount",
+          "escrow_amount",
+          "maturity_date",
+          "next_due_date",
+          "payoff_date",
+          "remaining_payments",
+          "remaining_interest"
+        ],
+        "title": "LoanAi",
+        "type": "object"
       },
       "LoanCreate": {
         "additionalProperties": false,
@@ -8741,6 +11704,51 @@
         "title": "NetWorthLatest",
         "type": "object"
       },
+      "NetWorthPointAi": {
+        "additionalProperties": false,
+        "properties": {
+          "as_of": {
+            "format": "date",
+            "title": "As Of",
+            "type": "string",
+            "x-ai-source": [
+              "net_worth_snapshot.as_of_date",
+              "computed"
+            ]
+          },
+          "assets": {
+            "$ref": "#/components/schemas/AiMoney",
+            "x-ai-source": [
+              "net_worth_snapshot.assets",
+              "balance_snapshot.balance",
+              "computed"
+            ]
+          },
+          "liabilities": {
+            "$ref": "#/components/schemas/AiMoney",
+            "x-ai-source": [
+              "net_worth_snapshot.liabilities",
+              "balance_snapshot.balance",
+              "computed"
+            ]
+          },
+          "net": {
+            "$ref": "#/components/schemas/AiMoney",
+            "x-ai-source": [
+              "net_worth_snapshot.net",
+              "computed"
+            ]
+          }
+        },
+        "required": [
+          "as_of",
+          "assets",
+          "liabilities",
+          "net"
+        ],
+        "title": "NetWorthPointAi",
+        "type": "object"
+      },
       "NetWorthPointOut": {
         "properties": {
           "as_of": {
@@ -9581,6 +12589,29 @@
         "title": "PeriodOut",
         "type": "object"
       },
+      "PlaceholderMark": {
+        "description": "A string in a preview body that carries scrubber placeholders.",
+        "properties": {
+          "path": {
+            "description": "JSON path of the string, e.g. items[2].payee",
+            "title": "Path",
+            "type": "string"
+          },
+          "placeholders": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Placeholders",
+            "type": "array"
+          }
+        },
+        "required": [
+          "path",
+          "placeholders"
+        ],
+        "title": "PlaceholderMark",
+        "type": "object"
+      },
       "PreviewBalance": {
         "properties": {
           "amount": {
@@ -9842,6 +12873,48 @@
           "header_fingerprint"
         ],
         "title": "PreviewTable",
+        "type": "object"
+      },
+      "PreviewToolOut": {
+        "properties": {
+          "body": {
+            "description": "The body exactly as the AI view would send it.",
+            "title": "Body"
+          },
+          "bytes": {
+            "title": "Bytes",
+            "type": "integer"
+          },
+          "params": {
+            "additionalProperties": true,
+            "title": "Params",
+            "type": "object"
+          },
+          "placeholders": {
+            "items": {
+              "$ref": "#/components/schemas/PlaceholderMark"
+            },
+            "title": "Placeholders",
+            "type": "array"
+          },
+          "status": {
+            "title": "Status",
+            "type": "integer"
+          },
+          "tool": {
+            "title": "Tool",
+            "type": "string"
+          }
+        },
+        "required": [
+          "tool",
+          "params",
+          "status",
+          "bytes",
+          "body",
+          "placeholders"
+        ],
+        "title": "PreviewToolOut",
         "type": "object"
       },
       "PreviewTransaction": {
@@ -10302,6 +13375,137 @@
           "code"
         ],
         "title": "RecoveryProofIn",
+        "type": "object"
+      },
+      "RecurringAi": {
+        "additionalProperties": false,
+        "properties": {
+          "account": {
+            "title": "Account",
+            "type": "string",
+            "x-ai-source": [
+              "account.nickname",
+              "account.name",
+              "account.type",
+              "policy"
+            ]
+          },
+          "active": {
+            "title": "Active",
+            "type": "boolean",
+            "x-ai-source": [
+              "scheduled_transaction.active"
+            ]
+          },
+          "amount_max": {
+            "$ref": "#/components/schemas/AiMoney",
+            "x-ai-source": [
+              "scheduled_transaction.amount_max",
+              "scheduled_transaction.currency"
+            ]
+          },
+          "amount_min": {
+            "$ref": "#/components/schemas/AiMoney",
+            "x-ai-source": [
+              "scheduled_transaction.amount_min",
+              "scheduled_transaction.currency"
+            ]
+          },
+          "cadence": {
+            "title": "Cadence",
+            "type": "string",
+            "x-ai-source": [
+              "scheduled_transaction.cadence"
+            ]
+          },
+          "category": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Category",
+            "x-ai-source": [
+              "category.name"
+            ]
+          },
+          "interval_count": {
+            "title": "Interval Count",
+            "type": "integer",
+            "x-ai-source": [
+              "scheduled_transaction.interval_count"
+            ]
+          },
+          "last_seen_on": {
+            "anyOf": [
+              {
+                "format": "date",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Seen On",
+            "x-ai-source": [
+              "scheduled_transaction.last_seen_on"
+            ]
+          },
+          "name": {
+            "title": "Name",
+            "type": "string",
+            "x-ai-source": [
+              "scheduled_transaction.name"
+            ]
+          },
+          "next_due": {
+            "format": "date",
+            "title": "Next Due",
+            "type": "string",
+            "x-ai-source": [
+              "scheduled_transaction.next_due"
+            ]
+          },
+          "origin": {
+            "title": "Origin",
+            "type": "string",
+            "x-ai-source": [
+              "scheduled_transaction.origin"
+            ]
+          },
+          "payee": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Payee",
+            "x-ai-source": [
+              "payee.name"
+            ]
+          }
+        },
+        "required": [
+          "name",
+          "payee",
+          "category",
+          "account",
+          "cadence",
+          "interval_count",
+          "next_due",
+          "amount_min",
+          "amount_max",
+          "origin",
+          "active",
+          "last_seen_on"
+        ],
+        "title": "RecurringAi",
         "type": "object"
       },
       "RecurringExtraIn": {
@@ -12555,6 +15759,54 @@
         "title": "SavingsModel",
         "type": "object"
       },
+      "ScenarioAi": {
+        "additionalProperties": false,
+        "properties": {
+          "payments": {
+            "title": "Payments",
+            "type": "integer",
+            "x-ai-source": [
+              "computed"
+            ]
+          },
+          "payoff_date": {
+            "anyOf": [
+              {
+                "format": "date",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Payoff Date",
+            "x-ai-source": [
+              "computed"
+            ]
+          },
+          "total_extra": {
+            "$ref": "#/components/schemas/AiMoney",
+            "x-ai-source": [
+              "computed",
+              "request"
+            ]
+          },
+          "total_interest": {
+            "$ref": "#/components/schemas/AiMoney",
+            "x-ai-source": [
+              "computed"
+            ]
+          }
+        },
+        "required": [
+          "payoff_date",
+          "payments",
+          "total_interest",
+          "total_extra"
+        ],
+        "title": "ScenarioAi",
+        "type": "object"
+      },
       "ScenarioOut": {
         "properties": {
           "payments": {
@@ -12731,6 +15983,85 @@
         "title": "ScheduleOrigin",
         "type": "string"
       },
+      "ScheduleRowAi": {
+        "additionalProperties": false,
+        "properties": {
+          "balance": {
+            "$ref": "#/components/schemas/AiMoney",
+            "x-ai-source": [
+              "computed"
+            ]
+          },
+          "due_date": {
+            "format": "date",
+            "title": "Due Date",
+            "type": "string",
+            "x-ai-source": [
+              "computed"
+            ]
+          },
+          "escrow": {
+            "$ref": "#/components/schemas/AiMoney",
+            "x-ai-source": [
+              "loan.escrow_amount"
+            ]
+          },
+          "extra": {
+            "$ref": "#/components/schemas/AiMoney",
+            "x-ai-source": [
+              "computed",
+              "request"
+            ]
+          },
+          "interest": {
+            "$ref": "#/components/schemas/AiMoney",
+            "x-ai-source": [
+              "computed"
+            ]
+          },
+          "number": {
+            "title": "Number",
+            "type": "integer",
+            "x-ai-source": [
+              "computed"
+            ]
+          },
+          "payment": {
+            "$ref": "#/components/schemas/AiMoney",
+            "x-ai-source": [
+              "loan.payment_amount",
+              "computed"
+            ]
+          },
+          "principal": {
+            "$ref": "#/components/schemas/AiMoney",
+            "x-ai-source": [
+              "computed"
+            ]
+          },
+          "rate": {
+            "title": "Rate",
+            "type": "string",
+            "x-ai-source": [
+              "loan.rate",
+              "loan_rate_change.new_rate"
+            ]
+          }
+        },
+        "required": [
+          "number",
+          "due_date",
+          "rate",
+          "payment",
+          "principal",
+          "interest",
+          "extra",
+          "escrow",
+          "balance"
+        ],
+        "title": "ScheduleRowAi",
+        "type": "object"
+      },
       "ScheduleRowOut": {
         "properties": {
           "balance": {
@@ -12781,6 +16112,60 @@
           "balance"
         ],
         "title": "ScheduleRowOut",
+        "type": "object"
+      },
+      "ScheduleTotalsAi": {
+        "additionalProperties": false,
+        "properties": {
+          "extra": {
+            "$ref": "#/components/schemas/AiMoney",
+            "x-ai-source": [
+              "computed"
+            ]
+          },
+          "interest": {
+            "$ref": "#/components/schemas/AiMoney",
+            "x-ai-source": [
+              "computed"
+            ]
+          },
+          "payments": {
+            "title": "Payments",
+            "type": "integer",
+            "x-ai-source": [
+              "computed"
+            ]
+          },
+          "payoff_date": {
+            "anyOf": [
+              {
+                "format": "date",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Payoff Date",
+            "x-ai-source": [
+              "computed"
+            ]
+          },
+          "principal": {
+            "$ref": "#/components/schemas/AiMoney",
+            "x-ai-source": [
+              "computed"
+            ]
+          }
+        },
+        "required": [
+          "payments",
+          "principal",
+          "interest",
+          "extra",
+          "payoff_date"
+        ],
+        "title": "ScheduleTotalsAi",
         "type": "object"
       },
       "ScheduleTotalsOut": {
@@ -12987,6 +16372,123 @@
           "reserved"
         ],
         "title": "ScopeOut",
+        "type": "object"
+      },
+      "ScrubbedSample": {
+        "properties": {
+          "changed": {
+            "title": "Changed",
+            "type": "boolean"
+          },
+          "original": {
+            "title": "Original",
+            "type": "string"
+          },
+          "placeholders": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Placeholders",
+            "type": "array"
+          },
+          "scrubbed": {
+            "title": "Scrubbed",
+            "type": "string"
+          },
+          "source": {
+            "description": "Where the text lives, e.g. transaction.memo",
+            "title": "Source",
+            "type": "string"
+          }
+        },
+        "required": [
+          "source",
+          "original",
+          "scrubbed",
+          "changed",
+          "placeholders"
+        ],
+        "title": "ScrubbedSample",
+        "type": "object"
+      },
+      "ScrubberPreviewIn": {
+        "additionalProperties": false,
+        "description": "Terms to try before saving them on a client, and optional ad-hoc text.",
+        "properties": {
+          "client_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Client Id"
+          },
+          "custom_denylist": {
+            "items": {
+              "maxLength": 100,
+              "minLength": 1,
+              "type": "string"
+            },
+            "maxItems": 200,
+            "title": "Custom Denylist",
+            "type": "array"
+          },
+          "limit": {
+            "default": 100,
+            "maximum": 500.0,
+            "minimum": 1.0,
+            "title": "Limit",
+            "type": "integer"
+          },
+          "member_aliases": {
+            "items": {
+              "maxLength": 100,
+              "minLength": 1,
+              "type": "string"
+            },
+            "maxItems": 200,
+            "title": "Member Aliases",
+            "type": "array"
+          },
+          "text": {
+            "anyOf": [
+              {
+                "maxLength": 4096,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Text"
+          }
+        },
+        "title": "ScrubberPreviewIn",
+        "type": "object"
+      },
+      "ScrubberPreviewOut": {
+        "properties": {
+          "changed": {
+            "title": "Changed",
+            "type": "integer"
+          },
+          "samples": {
+            "items": {
+              "$ref": "#/components/schemas/ScrubbedSample"
+            },
+            "title": "Samples",
+            "type": "array"
+          }
+        },
+        "required": [
+          "samples",
+          "changed"
+        ],
+        "title": "ScrubberPreviewOut",
         "type": "object"
       },
       "SecurityBrief": {
@@ -13514,6 +17016,12 @@
       },
       "SessionOut": {
         "properties": {
+          "ai_clients_active": {
+            "default": false,
+            "description": "The active household has a live AI client (not revoked, not expired): the app shows a persistent banner (AI_ACCESS.md M5).",
+            "title": "Ai Clients Active",
+            "type": "boolean"
+          },
           "auth_method": {
             "enum": [
               "local",
@@ -14003,6 +17511,52 @@
           "match"
         ],
         "title": "SnippetPart",
+        "type": "object"
+      },
+      "SplitAi": {
+        "additionalProperties": false,
+        "properties": {
+          "amount": {
+            "$ref": "#/components/schemas/AiMoney",
+            "x-ai-source": [
+              "transaction_split.amount"
+            ]
+          },
+          "category": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Category",
+            "x-ai-source": [
+              "category.name"
+            ]
+          },
+          "memo": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Memo",
+            "x-ai-source": [
+              "transaction_split.memo"
+            ]
+          }
+        },
+        "required": [
+          "category",
+          "amount",
+          "memo"
+        ],
+        "title": "SplitAi",
         "type": "object"
       },
       "SplitAmountAction-Input": {
@@ -14601,6 +18155,38 @@
         "title": "SummaryHint",
         "type": "object"
       },
+      "SystemAiOut": {
+        "properties": {
+          "enabled": {
+            "description": "False: the kill switch is engaged for the instance.",
+            "title": "Enabled",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "enabled"
+        ],
+        "title": "SystemAiOut",
+        "type": "object"
+      },
+      "SystemAiUpdate": {
+        "additionalProperties": false,
+        "properties": {
+          "enabled": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Enabled"
+          }
+        },
+        "title": "SystemAiUpdate",
+        "type": "object"
+      },
       "TagCreate": {
         "additionalProperties": false,
         "properties": {
@@ -14691,6 +18277,156 @@
           "name"
         ],
         "title": "TagUpdate",
+        "type": "object"
+      },
+      "TaxBoxAi": {
+        "additionalProperties": false,
+        "properties": {
+          "amount": {
+            "$ref": "#/components/schemas/AiMoney",
+            "x-ai-source": [
+              "tax_form_data.boxes"
+            ]
+          },
+          "box": {
+            "title": "Box",
+            "type": "string",
+            "x-ai-source": [
+              "computed"
+            ]
+          },
+          "label": {
+            "title": "Label",
+            "type": "string",
+            "x-ai-source": [
+              "computed"
+            ]
+          }
+        },
+        "required": [
+          "box",
+          "label",
+          "amount"
+        ],
+        "title": "TaxBoxAi",
+        "type": "object"
+      },
+      "TaxCategoryAi": {
+        "additionalProperties": false,
+        "properties": {
+          "category": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Category",
+            "x-ai-source": [
+              "category.name"
+            ]
+          },
+          "line": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Line",
+            "x-ai-source": [
+              "tax_category_map.line"
+            ]
+          },
+          "schedule": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Schedule",
+            "x-ai-source": [
+              "tax_category_map.schedule"
+            ]
+          },
+          "tax_treatment": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Tax Treatment",
+            "x-ai-source": [
+              "category.tax_treatment"
+            ]
+          },
+          "total": {
+            "$ref": "#/components/schemas/AiMoney",
+            "x-ai-source": [
+              "transaction.amount",
+              "transaction_split.amount"
+            ]
+          }
+        },
+        "required": [
+          "category",
+          "tax_treatment",
+          "schedule",
+          "line",
+          "total"
+        ],
+        "title": "TaxCategoryAi",
+        "type": "object"
+      },
+      "TaxChecklistAi": {
+        "additionalProperties": false,
+        "properties": {
+          "form_type": {
+            "title": "Form Type",
+            "type": "string",
+            "x-ai-source": [
+              "tax_checklist_item.expected_form"
+            ]
+          },
+          "issuer": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Issuer",
+            "x-ai-source": [
+              "tax_checklist_item.issuer",
+              "policy"
+            ]
+          },
+          "status": {
+            "title": "Status",
+            "type": "string",
+            "x-ai-source": [
+              "tax_checklist_item.status"
+            ]
+          }
+        },
+        "required": [
+          "form_type",
+          "issuer",
+          "status"
+        ],
+        "title": "TaxChecklistAi",
         "type": "object"
       },
       "TaxExportOut": {
@@ -14838,6 +18574,42 @@
         ],
         "title": "TaxExportState",
         "type": "string"
+      },
+      "TaxFormAi": {
+        "additionalProperties": false,
+        "properties": {
+          "boxes": {
+            "items": {
+              "$ref": "#/components/schemas/TaxBoxAi"
+            },
+            "title": "Boxes",
+            "type": "array",
+            "x-ai-source": [
+              "nested"
+            ]
+          },
+          "count": {
+            "title": "Count",
+            "type": "integer",
+            "x-ai-source": [
+              "computed"
+            ]
+          },
+          "form_type": {
+            "title": "Form Type",
+            "type": "string",
+            "x-ai-source": [
+              "tax_form_data.form_type"
+            ]
+          }
+        },
+        "required": [
+          "form_type",
+          "count",
+          "boxes"
+        ],
+        "title": "TaxFormAi",
+        "type": "object"
       },
       "TaxSummaryOut": {
         "properties": {
@@ -15435,6 +19207,190 @@
           "code"
         ],
         "title": "TotpProofIn",
+        "type": "object"
+      },
+      "TransactionAi": {
+        "additionalProperties": false,
+        "properties": {
+          "account": {
+            "title": "Account",
+            "type": "string",
+            "x-ai-source": [
+              "account.nickname",
+              "account.name",
+              "account.type",
+              "policy"
+            ]
+          },
+          "account_id": {
+            "title": "Account Id",
+            "type": "string",
+            "x-ai-source": [
+              "transaction.account_id"
+            ]
+          },
+          "amount": {
+            "$ref": "#/components/schemas/AiMoney",
+            "x-ai-source": [
+              "transaction.amount",
+              "transaction.currency"
+            ]
+          },
+          "category": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Category",
+            "x-ai-source": [
+              "category.name"
+            ]
+          },
+          "id": {
+            "title": "Id",
+            "type": "string",
+            "x-ai-source": [
+              "transaction.id"
+            ]
+          },
+          "memo": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Memo",
+            "x-ai-source": [
+              "transaction.memo"
+            ]
+          },
+          "merchant_city": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Merchant City",
+            "x-ai-source": [
+              "transaction.raw_payee",
+              "policy"
+            ]
+          },
+          "merchant_state": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Merchant State",
+            "x-ai-source": [
+              "transaction.raw_payee",
+              "policy"
+            ]
+          },
+          "notes": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Notes",
+            "x-ai-source": [
+              "transaction.notes"
+            ]
+          },
+          "payee": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Payee",
+            "x-ai-source": [
+              "payee.name",
+              "transaction.raw_payee"
+            ]
+          },
+          "posted_date": {
+            "format": "date",
+            "title": "Posted Date",
+            "type": "string",
+            "x-ai-source": [
+              "transaction.posted_date"
+            ]
+          },
+          "splits": {
+            "items": {
+              "$ref": "#/components/schemas/SplitAi"
+            },
+            "title": "Splits",
+            "type": "array",
+            "x-ai-source": [
+              "nested"
+            ]
+          },
+          "status": {
+            "title": "Status",
+            "type": "string",
+            "x-ai-source": [
+              "transaction.status"
+            ]
+          },
+          "tags": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Tags",
+            "type": "array",
+            "x-ai-source": [
+              "tag.name"
+            ]
+          },
+          "transfer": {
+            "title": "Transfer",
+            "type": "boolean",
+            "x-ai-source": [
+              "transaction.transfer_group_id"
+            ]
+          }
+        },
+        "required": [
+          "id",
+          "posted_date",
+          "amount",
+          "account_id",
+          "account",
+          "payee",
+          "merchant_city",
+          "merchant_state",
+          "category",
+          "tags",
+          "memo",
+          "notes",
+          "status",
+          "transfer",
+          "splits"
+        ],
+        "title": "TransactionAi",
         "type": "object"
       },
       "TransactionCreate": {
@@ -16067,6 +20023,31 @@
         "title": "TrendPoint",
         "type": "object"
       },
+      "TrendPointAi": {
+        "additionalProperties": false,
+        "properties": {
+          "amount": {
+            "$ref": "#/components/schemas/AiMoney",
+            "x-ai-source": [
+              "transaction.amount",
+              "transaction_split.amount"
+            ]
+          },
+          "month": {
+            "title": "Month",
+            "type": "string",
+            "x-ai-source": [
+              "computed"
+            ]
+          }
+        },
+        "required": [
+          "month",
+          "amount"
+        ],
+        "title": "TrendPointAi",
+        "type": "object"
+      },
       "TrendReport": {
         "properties": {
           "categories": {
@@ -16207,6 +20188,101 @@
           "yoy_percent"
         ],
         "title": "TrendRow",
+        "type": "object"
+      },
+      "TrendRowAi": {
+        "additionalProperties": false,
+        "properties": {
+          "amount": {
+            "$ref": "#/components/schemas/AiMoney",
+            "x-ai-source": [
+              "transaction.amount",
+              "transaction_split.amount"
+            ]
+          },
+          "mom_percent": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Mom Percent",
+            "x-ai-source": [
+              "computed"
+            ]
+          },
+          "name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Name",
+            "x-ai-source": [
+              "category.name",
+              "computed"
+            ]
+          },
+          "previous": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/AiMoney"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "x-ai-source": [
+              "transaction.amount",
+              "transaction_split.amount",
+              "policy"
+            ]
+          },
+          "year_ago": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/AiMoney"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "x-ai-source": [
+              "transaction.amount",
+              "transaction_split.amount",
+              "policy"
+            ]
+          },
+          "yoy_percent": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Yoy Percent",
+            "x-ai-source": [
+              "computed"
+            ]
+          }
+        },
+        "required": [
+          "name",
+          "amount",
+          "previous",
+          "year_ago",
+          "mom_percent",
+          "yoy_percent"
+        ],
+        "title": "TrendRowAi",
         "type": "object"
       },
       "UnbudgetedOut": {
@@ -17659,6 +21735,1731 @@
         "summary": "Remove every second factor of a user (instance admin, step-up)",
         "tags": [
           "admin"
+        ]
+      }
+    },
+    "/api/v1/ai/v1/accounts": {
+      "get": {
+        "operationId": "list_accounts_api_v1_ai_v1_accounts_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AiAccountsOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/problem+json": {}
+            },
+            "description": "Problem details"
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {}
+            },
+            "description": "Problem details"
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {}
+            },
+            "description": "Problem details"
+          },
+          "422": {
+            "content": {
+              "application/problem+json": {}
+            },
+            "description": "Problem details"
+          },
+          "429": {
+            "content": {
+              "application/problem+json": {}
+            },
+            "description": "Problem details"
+          }
+        },
+        "summary": "list_accounts",
+        "tags": [
+          "ai"
+        ]
+      }
+    },
+    "/api/v1/ai/v1/allocation": {
+      "get": {
+        "operationId": "get_allocation_api_v1_ai_v1_allocation_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AiAllocationOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/problem+json": {}
+            },
+            "description": "Problem details"
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {}
+            },
+            "description": "Problem details"
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {}
+            },
+            "description": "Problem details"
+          },
+          "422": {
+            "content": {
+              "application/problem+json": {}
+            },
+            "description": "Problem details"
+          },
+          "429": {
+            "content": {
+              "application/problem+json": {}
+            },
+            "description": "Problem details"
+          }
+        },
+        "summary": "get_allocation",
+        "tags": [
+          "ai"
+        ]
+      }
+    },
+    "/api/v1/ai/v1/anomalies": {
+      "get": {
+        "operationId": "find_anomalies_api_v1_ai_v1_anomalies_get",
+        "parameters": [
+          {
+            "description": "this_month, last_month, last_30_days, last_90_days, last_12_months, this_year, last_year, ytd, YYYY or YYYY-MM",
+            "in": "query",
+            "name": "period",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 20,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "this_month, last_month, last_30_days, last_90_days, last_12_months, this_year, last_year, ytd, YYYY or YYYY-MM",
+              "title": "Period"
+            }
+          },
+          {
+            "in": "query",
+            "name": "date_from",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "date",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Date From"
+            }
+          },
+          {
+            "in": "query",
+            "name": "date_to",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "date",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Date To"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AiAnomaliesOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/problem+json": {}
+            },
+            "description": "Problem details"
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {}
+            },
+            "description": "Problem details"
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {}
+            },
+            "description": "Problem details"
+          },
+          "422": {
+            "content": {
+              "application/problem+json": {}
+            },
+            "description": "Problem details"
+          },
+          "429": {
+            "content": {
+              "application/problem+json": {}
+            },
+            "description": "Problem details"
+          }
+        },
+        "summary": "find_anomalies",
+        "tags": [
+          "ai"
+        ]
+      }
+    },
+    "/api/v1/ai/v1/budgets/status": {
+      "get": {
+        "operationId": "get_budget_status_api_v1_ai_v1_budgets_status_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "on",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "date",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "On"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AiBudgetStatusOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/problem+json": {}
+            },
+            "description": "Problem details"
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {}
+            },
+            "description": "Problem details"
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {}
+            },
+            "description": "Problem details"
+          },
+          "422": {
+            "content": {
+              "application/problem+json": {}
+            },
+            "description": "Problem details"
+          },
+          "429": {
+            "content": {
+              "application/problem+json": {}
+            },
+            "description": "Problem details"
+          }
+        },
+        "summary": "get_budget_status",
+        "tags": [
+          "ai"
+        ]
+      }
+    },
+    "/api/v1/ai/v1/goals": {
+      "get": {
+        "operationId": "get_savings_goals_api_v1_ai_v1_goals_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AiGoalsOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/problem+json": {}
+            },
+            "description": "Problem details"
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {}
+            },
+            "description": "Problem details"
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {}
+            },
+            "description": "Problem details"
+          },
+          "422": {
+            "content": {
+              "application/problem+json": {}
+            },
+            "description": "Problem details"
+          },
+          "429": {
+            "content": {
+              "application/problem+json": {}
+            },
+            "description": "Problem details"
+          }
+        },
+        "summary": "get_savings_goals",
+        "tags": [
+          "ai"
+        ]
+      }
+    },
+    "/api/v1/ai/v1/holdings": {
+      "get": {
+        "operationId": "list_holdings_api_v1_ai_v1_holdings_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "account_id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Account Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AiHoldingsOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/problem+json": {}
+            },
+            "description": "Problem details"
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {}
+            },
+            "description": "Problem details"
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {}
+            },
+            "description": "Problem details"
+          },
+          "422": {
+            "content": {
+              "application/problem+json": {}
+            },
+            "description": "Problem details"
+          },
+          "429": {
+            "content": {
+              "application/problem+json": {}
+            },
+            "description": "Problem details"
+          }
+        },
+        "summary": "list_holdings",
+        "tags": [
+          "ai"
+        ]
+      }
+    },
+    "/api/v1/ai/v1/income": {
+      "get": {
+        "operationId": "get_income_api_v1_ai_v1_income_get",
+        "parameters": [
+          {
+            "description": "this_month, last_month, last_30_days, last_90_days, last_12_months, this_year, last_year, ytd, YYYY or YYYY-MM",
+            "in": "query",
+            "name": "period",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 20,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "this_month, last_month, last_30_days, last_90_days, last_12_months, this_year, last_year, ytd, YYYY or YYYY-MM",
+              "title": "Period"
+            }
+          },
+          {
+            "in": "query",
+            "name": "date_from",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "date",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Date From"
+            }
+          },
+          {
+            "in": "query",
+            "name": "date_to",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "date",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Date To"
+            }
+          },
+          {
+            "in": "query",
+            "name": "group_by",
+            "required": false,
+            "schema": {
+              "default": "category",
+              "enum": [
+                "category",
+                "payee",
+                "month",
+                "account",
+                "account_type"
+              ],
+              "title": "Group By",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "depth",
+            "required": false,
+            "schema": {
+              "default": 1,
+              "maximum": 3,
+              "minimum": 1,
+              "title": "Depth",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AiFlowOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/problem+json": {}
+            },
+            "description": "Problem details"
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {}
+            },
+            "description": "Problem details"
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {}
+            },
+            "description": "Problem details"
+          },
+          "422": {
+            "content": {
+              "application/problem+json": {}
+            },
+            "description": "Problem details"
+          },
+          "429": {
+            "content": {
+              "application/problem+json": {}
+            },
+            "description": "Problem details"
+          }
+        },
+        "summary": "get_income",
+        "tags": [
+          "ai"
+        ]
+      }
+    },
+    "/api/v1/ai/v1/loans": {
+      "get": {
+        "operationId": "list_loans_api_v1_ai_v1_loans_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AiLoansOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/problem+json": {}
+            },
+            "description": "Problem details"
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {}
+            },
+            "description": "Problem details"
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {}
+            },
+            "description": "Problem details"
+          },
+          "422": {
+            "content": {
+              "application/problem+json": {}
+            },
+            "description": "Problem details"
+          },
+          "429": {
+            "content": {
+              "application/problem+json": {}
+            },
+            "description": "Problem details"
+          }
+        },
+        "summary": "list_loans",
+        "tags": [
+          "ai"
+        ]
+      }
+    },
+    "/api/v1/ai/v1/loans/{loan_id}/schedule": {
+      "get": {
+        "operationId": "get_loan_schedule_api_v1_ai_v1_loans__loan_id__schedule_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "loan_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Loan Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "basis",
+            "required": false,
+            "schema": {
+              "default": "projected",
+              "enum": [
+                "original",
+                "projected"
+              ],
+              "title": "Basis",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "offset",
+            "required": false,
+            "schema": {
+              "default": 0,
+              "maximum": 10000,
+              "minimum": 0,
+              "title": "Offset",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 120,
+              "maximum": 600,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AiLoanScheduleOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/problem+json": {}
+            },
+            "description": "Problem details"
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {}
+            },
+            "description": "Problem details"
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {}
+            },
+            "description": "Problem details"
+          },
+          "422": {
+            "content": {
+              "application/problem+json": {}
+            },
+            "description": "Problem details"
+          },
+          "429": {
+            "content": {
+              "application/problem+json": {}
+            },
+            "description": "Problem details"
+          }
+        },
+        "summary": "get_loan_schedule",
+        "tags": [
+          "ai"
+        ]
+      }
+    },
+    "/api/v1/ai/v1/loans/{loan_id}/simulate": {
+      "get": {
+        "operationId": "simulate_loan_api_v1_ai_v1_loans__loan_id__simulate_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "loan_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Loan Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "extra_monthly",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maximum": 1000000000000.0,
+                  "minimum": 0.0,
+                  "type": "number"
+                },
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Extra Monthly"
+            }
+          },
+          {
+            "in": "query",
+            "name": "extra_once",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maximum": 1000000000000.0,
+                  "minimum": 0.0,
+                  "type": "number"
+                },
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Extra Once"
+            }
+          },
+          {
+            "in": "query",
+            "name": "extra_once_on",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "date",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Extra Once On"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AiSimulationOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/problem+json": {}
+            },
+            "description": "Problem details"
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {}
+            },
+            "description": "Problem details"
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {}
+            },
+            "description": "Problem details"
+          },
+          "422": {
+            "content": {
+              "application/problem+json": {}
+            },
+            "description": "Problem details"
+          },
+          "429": {
+            "content": {
+              "application/problem+json": {}
+            },
+            "description": "Problem details"
+          }
+        },
+        "summary": "simulate_loan (computes only, stores nothing)",
+        "tags": [
+          "ai"
+        ]
+      }
+    },
+    "/api/v1/ai/v1/net-worth/history": {
+      "get": {
+        "operationId": "get_net_worth_history_api_v1_ai_v1_net_worth_history_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "range",
+            "required": false,
+            "schema": {
+              "default": "1y",
+              "enum": [
+                "1m",
+                "3m",
+                "6m",
+                "ytd",
+                "1y",
+                "3y",
+                "5y",
+                "max"
+              ],
+              "title": "Range",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "granularity",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "day",
+                    "week",
+                    "month"
+                  ],
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Granularity"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AiNetWorthHistoryOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/problem+json": {}
+            },
+            "description": "Problem details"
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {}
+            },
+            "description": "Problem details"
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {}
+            },
+            "description": "Problem details"
+          },
+          "422": {
+            "content": {
+              "application/problem+json": {}
+            },
+            "description": "Problem details"
+          },
+          "429": {
+            "content": {
+              "application/problem+json": {}
+            },
+            "description": "Problem details"
+          }
+        },
+        "summary": "get_net_worth_history",
+        "tags": [
+          "ai"
+        ]
+      }
+    },
+    "/api/v1/ai/v1/overview": {
+      "get": {
+        "operationId": "get_overview_api_v1_ai_v1_overview_get",
+        "parameters": [
+          {
+            "description": "this_month, last_month, last_30_days, last_90_days, last_12_months, this_year, last_year, ytd, YYYY or YYYY-MM",
+            "in": "query",
+            "name": "period",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 20,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "this_month, last_month, last_30_days, last_90_days, last_12_months, this_year, last_year, ytd, YYYY or YYYY-MM",
+              "title": "Period"
+            }
+          },
+          {
+            "in": "query",
+            "name": "date_from",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "date",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Date From"
+            }
+          },
+          {
+            "in": "query",
+            "name": "date_to",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "date",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Date To"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AiOverviewOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/problem+json": {}
+            },
+            "description": "Problem details"
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {}
+            },
+            "description": "Problem details"
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {}
+            },
+            "description": "Problem details"
+          },
+          "422": {
+            "content": {
+              "application/problem+json": {}
+            },
+            "description": "Problem details"
+          },
+          "429": {
+            "content": {
+              "application/problem+json": {}
+            },
+            "description": "Problem details"
+          }
+        },
+        "summary": "get_overview",
+        "tags": [
+          "ai"
+        ]
+      }
+    },
+    "/api/v1/ai/v1/performance": {
+      "get": {
+        "operationId": "get_performance_api_v1_ai_v1_performance_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "range",
+            "required": false,
+            "schema": {
+              "default": "1y",
+              "enum": [
+                "1m",
+                "3m",
+                "6m",
+                "ytd",
+                "1y",
+                "3y",
+                "5y",
+                "max"
+              ],
+              "title": "Range",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "account_id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Account Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AiPerformanceOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/problem+json": {}
+            },
+            "description": "Problem details"
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {}
+            },
+            "description": "Problem details"
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {}
+            },
+            "description": "Problem details"
+          },
+          "422": {
+            "content": {
+              "application/problem+json": {}
+            },
+            "description": "Problem details"
+          },
+          "429": {
+            "content": {
+              "application/problem+json": {}
+            },
+            "description": "Problem details"
+          }
+        },
+        "summary": "get_performance",
+        "tags": [
+          "ai"
+        ]
+      }
+    },
+    "/api/v1/ai/v1/policy": {
+      "get": {
+        "operationId": "explain_data_policy_api_v1_ai_v1_policy_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AiDataPolicyOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/problem+json": {}
+            },
+            "description": "Problem details"
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {}
+            },
+            "description": "Problem details"
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {}
+            },
+            "description": "Problem details"
+          },
+          "422": {
+            "content": {
+              "application/problem+json": {}
+            },
+            "description": "Problem details"
+          },
+          "429": {
+            "content": {
+              "application/problem+json": {}
+            },
+            "description": "Problem details"
+          }
+        },
+        "summary": "explain_data_policy: this client's mode, options and the identity denylist",
+        "tags": [
+          "ai"
+        ]
+      }
+    },
+    "/api/v1/ai/v1/recurring": {
+      "get": {
+        "operationId": "get_recurring_api_v1_ai_v1_recurring_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AiRecurringOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/problem+json": {}
+            },
+            "description": "Problem details"
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {}
+            },
+            "description": "Problem details"
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {}
+            },
+            "description": "Problem details"
+          },
+          "422": {
+            "content": {
+              "application/problem+json": {}
+            },
+            "description": "Problem details"
+          },
+          "429": {
+            "content": {
+              "application/problem+json": {}
+            },
+            "description": "Problem details"
+          }
+        },
+        "summary": "get_recurring",
+        "tags": [
+          "ai"
+        ]
+      }
+    },
+    "/api/v1/ai/v1/spending": {
+      "get": {
+        "operationId": "get_spending_api_v1_ai_v1_spending_get",
+        "parameters": [
+          {
+            "description": "this_month, last_month, last_30_days, last_90_days, last_12_months, this_year, last_year, ytd, YYYY or YYYY-MM",
+            "in": "query",
+            "name": "period",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 20,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "this_month, last_month, last_30_days, last_90_days, last_12_months, this_year, last_year, ytd, YYYY or YYYY-MM",
+              "title": "Period"
+            }
+          },
+          {
+            "in": "query",
+            "name": "date_from",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "date",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Date From"
+            }
+          },
+          {
+            "in": "query",
+            "name": "date_to",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "date",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Date To"
+            }
+          },
+          {
+            "in": "query",
+            "name": "group_by",
+            "required": false,
+            "schema": {
+              "default": "category",
+              "enum": [
+                "category",
+                "payee",
+                "month",
+                "account",
+                "account_type"
+              ],
+              "title": "Group By",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "depth",
+            "required": false,
+            "schema": {
+              "default": 1,
+              "maximum": 3,
+              "minimum": 1,
+              "title": "Depth",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AiFlowOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/problem+json": {}
+            },
+            "description": "Problem details"
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {}
+            },
+            "description": "Problem details"
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {}
+            },
+            "description": "Problem details"
+          },
+          "422": {
+            "content": {
+              "application/problem+json": {}
+            },
+            "description": "Problem details"
+          },
+          "429": {
+            "content": {
+              "application/problem+json": {}
+            },
+            "description": "Problem details"
+          }
+        },
+        "summary": "get_spending",
+        "tags": [
+          "ai"
+        ]
+      }
+    },
+    "/api/v1/ai/v1/tax/{year}/summary": {
+      "get": {
+        "operationId": "get_tax_year_summary_api_v1_ai_v1_tax__year__summary_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "year",
+            "required": true,
+            "schema": {
+              "maximum": 2200,
+              "minimum": 1900,
+              "title": "Year",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AiTaxYearSummaryOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/problem+json": {}
+            },
+            "description": "Problem details"
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {}
+            },
+            "description": "Problem details"
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {}
+            },
+            "description": "Problem details"
+          },
+          "422": {
+            "content": {
+              "application/problem+json": {}
+            },
+            "description": "Problem details"
+          },
+          "429": {
+            "content": {
+              "application/problem+json": {}
+            },
+            "description": "Problem details"
+          }
+        },
+        "summary": "get_tax_year_summary",
+        "tags": [
+          "ai"
+        ]
+      }
+    },
+    "/api/v1/ai/v1/transactions": {
+      "get": {
+        "operationId": "list_transactions_api_v1_ai_v1_transactions_get",
+        "parameters": [
+          {
+            "description": "this_month, last_month, last_30_days, last_90_days, last_12_months, this_year, last_year, ytd, YYYY or YYYY-MM",
+            "in": "query",
+            "name": "period",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 20,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "this_month, last_month, last_30_days, last_90_days, last_12_months, this_year, last_year, ytd, YYYY or YYYY-MM",
+              "title": "Period"
+            }
+          },
+          {
+            "in": "query",
+            "name": "date_from",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "date",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Date From"
+            }
+          },
+          {
+            "in": "query",
+            "name": "date_to",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "date",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Date To"
+            }
+          },
+          {
+            "in": "query",
+            "name": "account_id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Account Id"
+            }
+          },
+          {
+            "in": "query",
+            "name": "category",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 200,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Category"
+            }
+          },
+          {
+            "in": "query",
+            "name": "payee",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 200,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Payee"
+            }
+          },
+          {
+            "in": "query",
+            "name": "min_amount",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maximum": 1000000000000.0,
+                  "minimum": 0.0,
+                  "type": "number"
+                },
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Min Amount"
+            }
+          },
+          {
+            "in": "query",
+            "name": "max_amount",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maximum": 1000000000000.0,
+                  "minimum": 0.0,
+                  "type": "number"
+                },
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Max Amount"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 50,
+              "maximum": 200,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "cursor",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 200,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Cursor"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AiTransactionsOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/problem+json": {}
+            },
+            "description": "Problem details"
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {}
+            },
+            "description": "Problem details"
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {}
+            },
+            "description": "Problem details"
+          },
+          "422": {
+            "content": {
+              "application/problem+json": {}
+            },
+            "description": "Problem details"
+          },
+          "429": {
+            "content": {
+              "application/problem+json": {}
+            },
+            "description": "Problem details"
+          }
+        },
+        "summary": "list_transactions",
+        "tags": [
+          "ai"
+        ]
+      }
+    },
+    "/api/v1/ai/v1/trends": {
+      "get": {
+        "operationId": "get_trends_api_v1_ai_v1_trends_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "metric",
+            "required": false,
+            "schema": {
+              "default": "spending",
+              "enum": [
+                "spending",
+                "income"
+              ],
+              "title": "Metric",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "month",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "pattern": "^\\d{4}-\\d{2}$",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Month"
+            }
+          },
+          {
+            "in": "query",
+            "name": "months",
+            "required": false,
+            "schema": {
+              "default": 12,
+              "maximum": 60,
+              "minimum": 1,
+              "title": "Months",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AiTrendsOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/problem+json": {}
+            },
+            "description": "Problem details"
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {}
+            },
+            "description": "Problem details"
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {}
+            },
+            "description": "Problem details"
+          },
+          "422": {
+            "content": {
+              "application/problem+json": {}
+            },
+            "description": "Problem details"
+          },
+          "429": {
+            "content": {
+              "application/problem+json": {}
+            },
+            "description": "Problem details"
+          }
+        },
+        "summary": "get_trends",
+        "tags": [
+          "ai"
         ]
       }
     },
@@ -28450,6 +34251,712 @@
         ]
       }
     },
+    "/api/v1/settings/ai": {
+      "get": {
+        "operationId": "get_ai_access_api_v1_settings_ai_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AiAccessOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/problem+json": {}
+            },
+            "description": "Problem details"
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {}
+            },
+            "description": "Problem details"
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {}
+            },
+            "description": "Problem details"
+          },
+          "409": {
+            "content": {
+              "application/problem+json": {}
+            },
+            "description": "Problem details"
+          },
+          "422": {
+            "content": {
+              "application/problem+json": {}
+            },
+            "description": "Problem details"
+          }
+        },
+        "summary": "AI access of the household: switches and live clients",
+        "tags": [
+          "settings"
+        ]
+      },
+      "patch": {
+        "operationId": "patch_ai_access_api_v1_settings_ai_patch",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AiAccessUpdate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AiAccessOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/problem+json": {}
+            },
+            "description": "Problem details"
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {}
+            },
+            "description": "Problem details"
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {}
+            },
+            "description": "Problem details"
+          },
+          "409": {
+            "content": {
+              "application/problem+json": {}
+            },
+            "description": "Problem details"
+          },
+          "422": {
+            "content": {
+              "application/problem+json": {}
+            },
+            "description": "Problem details"
+          }
+        },
+        "summary": "Turn AI access of the household off or on (step-up)",
+        "tags": [
+          "settings"
+        ]
+      }
+    },
+    "/api/v1/settings/ai/calls": {
+      "get": {
+        "operationId": "list_ai_calls_api_v1_settings_ai_calls_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "client_id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Client Id"
+            }
+          },
+          {
+            "in": "query",
+            "name": "contains",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 200,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Contains"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 50,
+              "maximum": 500,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AiCallsOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/problem+json": {}
+            },
+            "description": "Problem details"
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {}
+            },
+            "description": "Problem details"
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {}
+            },
+            "description": "Problem details"
+          },
+          "409": {
+            "content": {
+              "application/problem+json": {}
+            },
+            "description": "Problem details"
+          },
+          "422": {
+            "content": {
+              "application/problem+json": {}
+            },
+            "description": "Problem details"
+          }
+        },
+        "summary": "Audit of AI calls with the responses as sent; search them for a string",
+        "tags": [
+          "settings"
+        ]
+      }
+    },
+    "/api/v1/settings/ai/clients": {
+      "get": {
+        "operationId": "list_ai_clients_api_v1_settings_ai_clients_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/AiClientOut"
+                  },
+                  "title": "Response List Ai Clients Api V1 Settings Ai Clients Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/problem+json": {}
+            },
+            "description": "Problem details"
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {}
+            },
+            "description": "Problem details"
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {}
+            },
+            "description": "Problem details"
+          },
+          "409": {
+            "content": {
+              "application/problem+json": {}
+            },
+            "description": "Problem details"
+          },
+          "422": {
+            "content": {
+              "application/problem+json": {}
+            },
+            "description": "Problem details"
+          }
+        },
+        "summary": "AI clients of the household",
+        "tags": [
+          "settings"
+        ]
+      },
+      "post": {
+        "operationId": "create_ai_client_api_v1_settings_ai_clients_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AiClientCreate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AiClientCreatedOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/problem+json": {}
+            },
+            "description": "Problem details"
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {}
+            },
+            "description": "Problem details"
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {}
+            },
+            "description": "Problem details"
+          },
+          "409": {
+            "content": {
+              "application/problem+json": {}
+            },
+            "description": "Problem details"
+          },
+          "422": {
+            "content": {
+              "application/problem+json": {}
+            },
+            "description": "Problem details"
+          }
+        },
+        "summary": "Create an AI client and its ai:read token (step-up; token shown once)",
+        "tags": [
+          "settings"
+        ]
+      }
+    },
+    "/api/v1/settings/ai/clients/{client_id}": {
+      "delete": {
+        "operationId": "revoke_ai_client_api_v1_settings_ai_clients__client_id__delete",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "client_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Client Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/problem+json": {}
+            },
+            "description": "Problem details"
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {}
+            },
+            "description": "Problem details"
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {}
+            },
+            "description": "Problem details"
+          },
+          "409": {
+            "content": {
+              "application/problem+json": {}
+            },
+            "description": "Problem details"
+          },
+          "422": {
+            "content": {
+              "application/problem+json": {}
+            },
+            "description": "Problem details"
+          }
+        },
+        "summary": "Revoke an AI client and its token now (step-up)",
+        "tags": [
+          "settings"
+        ]
+      },
+      "get": {
+        "operationId": "get_ai_client_api_v1_settings_ai_clients__client_id__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "client_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Client Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AiClientOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/problem+json": {}
+            },
+            "description": "Problem details"
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {}
+            },
+            "description": "Problem details"
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {}
+            },
+            "description": "Problem details"
+          },
+          "409": {
+            "content": {
+              "application/problem+json": {}
+            },
+            "description": "Problem details"
+          },
+          "422": {
+            "content": {
+              "application/problem+json": {}
+            },
+            "description": "Problem details"
+          }
+        },
+        "summary": "One AI client",
+        "tags": [
+          "settings"
+        ]
+      }
+    },
+    "/api/v1/settings/ai/clients/{client_id}/preview": {
+      "get": {
+        "operationId": "preview_ai_client_api_v1_settings_ai_clients__client_id__preview_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "client_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Client Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ExposurePreviewOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/problem+json": {}
+            },
+            "description": "Problem details"
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {}
+            },
+            "description": "Problem details"
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {}
+            },
+            "description": "Problem details"
+          },
+          "409": {
+            "content": {
+              "application/problem+json": {}
+            },
+            "description": "Problem details"
+          },
+          "422": {
+            "content": {
+              "application/problem+json": {}
+            },
+            "description": "Problem details"
+          }
+        },
+        "summary": "What every tool returns to this client, with its saved options",
+        "tags": [
+          "settings"
+        ]
+      }
+    },
+    "/api/v1/settings/ai/preview": {
+      "post": {
+        "operationId": "preview_ai_options_api_v1_settings_ai_preview_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AiOptionsIn"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ExposurePreviewOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/problem+json": {}
+            },
+            "description": "Problem details"
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {}
+            },
+            "description": "Problem details"
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {}
+            },
+            "description": "Problem details"
+          },
+          "409": {
+            "content": {
+              "application/problem+json": {}
+            },
+            "description": "Problem details"
+          },
+          "422": {
+            "content": {
+              "application/problem+json": {}
+            },
+            "description": "Problem details"
+          }
+        },
+        "summary": "What every tool would return with these options, before saving",
+        "tags": [
+          "settings"
+        ]
+      }
+    },
+    "/api/v1/settings/ai/scrubber-preview": {
+      "get": {
+        "operationId": "get_scrubber_preview_api_v1_settings_ai_scrubber_preview_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "client_id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Client Id"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 100,
+              "maximum": 500,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ScrubberPreviewOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/problem+json": {}
+            },
+            "description": "Problem details"
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {}
+            },
+            "description": "Problem details"
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {}
+            },
+            "description": "Problem details"
+          },
+          "409": {
+            "content": {
+              "application/problem+json": {}
+            },
+            "description": "Problem details"
+          },
+          "422": {
+            "content": {
+              "application/problem+json": {}
+            },
+            "description": "Problem details"
+          }
+        },
+        "summary": "My free text next to its scrubbed form (a client's terms, or none)",
+        "tags": [
+          "settings"
+        ]
+      },
+      "post": {
+        "operationId": "post_scrubber_preview_api_v1_settings_ai_scrubber_preview_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ScrubberPreviewIn"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ScrubberPreviewOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/problem+json": {}
+            },
+            "description": "Problem details"
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {}
+            },
+            "description": "Problem details"
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {}
+            },
+            "description": "Problem details"
+          },
+          "409": {
+            "content": {
+              "application/problem+json": {}
+            },
+            "description": "Problem details"
+          },
+          "422": {
+            "content": {
+              "application/problem+json": {}
+            },
+            "description": "Problem details"
+          }
+        },
+        "summary": "Try denylist terms and aliases on my free text before saving them",
+        "tags": [
+          "settings"
+        ]
+      }
+    },
     "/api/v1/settings/intake": {
       "get": {
         "operationId": "get_intake_api_v1_settings_intake_get",
@@ -28633,6 +35140,116 @@
           }
         },
         "summary": "Log in to the receipts mailbox and report the outcome",
+        "tags": [
+          "settings"
+        ]
+      }
+    },
+    "/api/v1/settings/system/ai": {
+      "get": {
+        "operationId": "get_system_ai_api_v1_settings_system_ai_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SystemAiOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/problem+json": {}
+            },
+            "description": "Problem details"
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {}
+            },
+            "description": "Problem details"
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {}
+            },
+            "description": "Problem details"
+          },
+          "409": {
+            "content": {
+              "application/problem+json": {}
+            },
+            "description": "Problem details"
+          },
+          "422": {
+            "content": {
+              "application/problem+json": {}
+            },
+            "description": "Problem details"
+          }
+        },
+        "summary": "The instance AI kill switch (instance admin)",
+        "tags": [
+          "settings"
+        ]
+      },
+      "patch": {
+        "operationId": "patch_system_ai_api_v1_settings_system_ai_patch",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SystemAiUpdate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SystemAiOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/problem+json": {}
+            },
+            "description": "Problem details"
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {}
+            },
+            "description": "Problem details"
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {}
+            },
+            "description": "Problem details"
+          },
+          "409": {
+            "content": {
+              "application/problem+json": {}
+            },
+            "description": "Problem details"
+          },
+          "422": {
+            "content": {
+              "application/problem+json": {}
+            },
+            "description": "Problem details"
+          }
+        },
+        "summary": "Engage or release the instance AI kill switch (instance admin, step-up)",
         "tags": [
           "settings"
         ]

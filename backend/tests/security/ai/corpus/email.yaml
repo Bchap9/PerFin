@@ -1,0 +1,18 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# E-mail addresses -> [EMAIL] (also spelled-out forms). Invented addresses.
+placeholder: "[EMAIL]"
+kind: text
+cases:
+  - {text: "ZELLE FROM someone@example.com", secrets: ["someone@example.com"]}
+  - {text: "paypal to carl.ross+bills@mail.example.co.uk", secrets: ["carl.ross", "example.co.uk"]}
+  - {text: "Contact: A.Person_9@sub.example.org.", secrets: ["a.person_9"]}
+  - {text: "invoice sent to billing-dept@example-corp.io today", secrets: ["billing-dept"]}
+  - {text: "kim [at] example [dot] com", secrets: ["kim"]}
+  - {text: "kim(at)example(dot)com", secrets: ["kim"]}
+  - {text: "lee at example dot com", secrets: ["lee at example"]}
+  - {text: "<pat.q@example.net>", secrets: ["pat.q"]}
+  - {text: "REFUND REF:xy.z@example.net", secrets: ["xy.z@example.net"]}
+  - {text: "VENMO @ user: chris@example.org memo", secrets: ["chris@example.org"]}
+  # Security review P6B-SR-R2-02: spaces around "@" and the dots.
+  - {text: "bob . smith @ gmail . com", secrets: ["bob", "smith", "gmail"]}
+  - {text: "send to carl @ example . org", secrets: ["carl", "example"]}

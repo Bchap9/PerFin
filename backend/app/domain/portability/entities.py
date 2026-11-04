@@ -190,5 +190,8 @@ NOT_EXPORTED: Final[Mapping[str, str]] = MappingProxyType(
         "tax_category_map": "Phase 5/6 export not implemented yet",
         "tax_form_data": "Phase 5/6 export not implemented yet",
         "tax_export": "a transient, one-time accountant export (like portability_archive)",
+        # Phase 6b (AI_ACCESS.md): clients hold an instance token; calls are its audit.
+        "ai_client": "AI clients and their tokens belong to this instance (recreate them)",
+        "ai_call": "audit of what this instance's AI clients read",
     }
 )

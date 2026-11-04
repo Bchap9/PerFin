@@ -19,7 +19,7 @@ from app.ingestion.extract.common import ExtractFailure, decode_text, parse_amou
 from app.ingestion.extract.delimited import extract_delimited
 from app.ingestion.extract.ofx import extract_ofx
 from app.ingestion.extract.qif import extract_qif
-from app.ingestion.sandbox.protocol import ExtractOptions
+from app.ingestion.sandbox.protocol import MAX_STATEMENTS, ExtractOptions
 from app.ingestion.sandbox.runner import run_extraction
 from tests.fixtures.statements import (
     BILLION_LAUGHS_PROLOG,
@@ -286,6 +286,24 @@ def test_qif_ambiguous_dates_assume_month_first() -> None:
     result = extract_qif(qif_bytes(txns, date_style="mdy"), OPTIONS, "qif")
     assert result.statements[0].date_order == "mdy_assumed"
     assert "date_order_assumed_mdy" in result.warnings
+
+
+def test_qif_more_sections_than_a_result_holds_are_cut() -> None:
+    # Found by the sandbox mutation fuzzer: repeated ``!Type:Bank`` headers made
+    # more statements than ExtractResult accepts (a crash instead of a result).
+    data = b"!Type:Bank\n" * (MAX_STATEMENTS + 5) + qif_bytes(TXNS)
+    result = extract_qif(data, OPTIONS, "qif")
+    assert len(result.statements) == MAX_STATEMENTS
+    assert f"statements_truncated:{MAX_STATEMENTS}" in result.warnings
+
+
+def test_ofx_more_statements_than_a_result_holds_are_cut() -> None:
+    xml = ofx_xml(TXNS).decode()
+    start, end = xml.index("<CREDITCARDMSGSRSV1>"), xml.index("</OFX>")
+    data = (xml[:start] + xml[start:end] * (MAX_STATEMENTS + 5) + xml[end:]).encode()
+    result = extract_ofx(data, OPTIONS, "ofx")
+    assert len(result.statements) == MAX_STATEMENTS
+    assert f"statements_truncated:{MAX_STATEMENTS}" in result.warnings
 
 
 def test_qif_iso_dates() -> None:

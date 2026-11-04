@@ -5,6 +5,8 @@
   ``Cash``, ``CCard``, ``Oth A``, ``Oth L``) become one statement each, with
   the account name from a preceding ``!Account`` block when there is one.
   Investment, category, class and memorised sections are skipped (warning).
+  At most ``MAX_STATEMENTS`` sections are read; later ones are skipped with
+  the warning ``statements_truncated:<n>``.
 * Records end with ``^``. Fields: ``D`` date, ``T``/``U`` amount, ``P``
   payee, ``M`` memo, ``N`` check number, ``C`` cleared flag, ``L`` category,
   and ``S``/``E``/``$`` split lines.
@@ -29,6 +31,7 @@ from typing import Final, Literal
 from app.ingestion.extract.common import ExtractFailure, clean_text, decode_text, parse_amount
 from app.ingestion.extract.registry import register
 from app.ingestion.sandbox.protocol import (
+    MAX_STATEMENTS,
     ExtractedTransaction,
     ExtractOptions,
     ExtractResult,
@@ -138,7 +141,10 @@ def _sections(text: str, options: ExtractOptions, warnings: set[str]) -> list[_S
             elif lowered.startswith("type:"):
                 in_account = False
                 kind = lowered[5:].strip()
-                if kind in TRANSACTION_TYPES:
+                if kind in TRANSACTION_TYPES and len(sections) >= MAX_STATEMENTS:
+                    current = None
+                    warnings.add(f"statements_truncated:{MAX_STATEMENTS}")
+                elif kind in TRANSACTION_TYPES:
                     current = _Section(TRANSACTION_TYPES[kind], account_name)
                     sections.append(current)
                 else:

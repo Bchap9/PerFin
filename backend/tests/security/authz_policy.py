@@ -58,7 +58,7 @@ from app.auth.models import HouseholdRole
 from app.auth.scopes import CATALOG
 
 Access = Literal["public", "pending_login", "mfa_ceremony", "authenticated", "instance_admin"]
-TokenRule = Literal["refused", "scope"]
+TokenRule = Literal["refused", "scope", "ai"]
 
 #: Every principal the matrix tries, in the order it tries them. Order
 #: matters only for destructive endpoints: the most privileged callers go
@@ -70,6 +70,7 @@ PRINCIPALS: Final[tuple[str, ...]] = (
     "cookie_bogus_bearer",  # the owner's valid session cookie plus a junk bearer token
     "pat_none",  # the owner's token without scopes
     "pat_scope",  # the owner's token with the route's scope (or every grantable one)
+    "ai_token",  # the token of an AI client the owner created (ai:read, Phase 6b)
     "mfa_pending",  # member, password accepted, second factor pending
     "restricted",  # owner without any factor while PERFIN_REQUIRE_MFA is on
     "other_owner",  # owner of another household
@@ -179,6 +180,9 @@ PARAM_KINDS: Final[Mapping[str, ParamKind]] = MappingProxyType(
         # A manual recurring transaction (scheduled_transaction) on a fresh
         # account granted to the matrix member (edit) and viewer (view).
         "scheduled_transaction": ParamKind("scheduled_transaction", "schedule-not-found"),
+        # An AI client of the matrix household, created by its owner through
+        # the AI-client flow (Phase 6b).
+        "ai_client": ParamKind("ai_client", "ai-client-not-found"),
     }
 )
 OWN_KINDS: Final = frozenset(k for k in PARAM_KINDS if k.startswith("own_"))
@@ -195,6 +199,7 @@ HOUSEHOLD_OBJECT_KINDS: Final = frozenset(
     | {"fx_rate"}
     | {"scheduled_transaction"}
     | {"tax_year", "tax_checklist_item", "tax_export"}
+    | {"ai_client"}
 )
 
 
@@ -229,6 +234,10 @@ NOT_IN_HOUSEHOLD: Final = deny(404, "household-not-found")
 #: (which guard answers first differs per route; all are authorisation
 #: refusals).
 TOKEN_REFUSED: Final = deny(403, "session-required", "step-up-required", "forbidden")
+#: An AI client's token outside the AI views (app.auth.deps, AI_ACCESS.md M4).
+AI_CONFINED: Final = deny(403, "ai-token-confined")
+#: Anything but an active AI client's token on an AI view.
+AI_CLIENT_REQUIRED: Final = deny(403, "ai-client-required")
 #: Endpoints that only browser sessions may call and that answer a bearer
 #: request with ``400`` instead of resolving a principal at all.
 BEARER_NOT_A_SESSION: Final = deny(400, "session-required")
@@ -246,6 +255,8 @@ DENIAL_TYPES: Final[Mapping[int, frozenset[str]]] = MappingProxyType(
                 "step-up-required",
                 "mfa-enrollment-required",
                 "csrf-failed",
+                "ai-token-confined",
+                "ai-client-required",
             }
         ),
         404: frozenset(k.not_found for k in PARAM_KINDS.values() if k.not_found),
@@ -281,6 +292,11 @@ def scoped(scope: str, **kwargs: Any) -> Policy:
     return Policy("authenticated", tokens="scope", scope=scope, **kwargs)
 
 
+def ai(**kwargs: Any) -> Policy:
+    """An AI view: only an active AI client's token (``ai:read``), never a session."""
+    return Policy("authenticated", tokens="ai", scope="ai:read", **kwargs)
+
+
 def instance_admin(**kwargs: Any) -> Policy:
     return Policy("instance_admin", **kwargs)
 
@@ -309,12 +325,14 @@ LOAN = {"loan_id": "loan"}
 TAXY = {"year": "tax_year"}
 ASSET = {"asset_id": "manual_asset"}
 SCHED = {"schedule_id": "scheduled_transaction"}
+AIC = {"client_id": "ai_client"}
 #: A member's grants on one account (the path names a fresh member).
 GRANT = {**HH, "user_id": "member", "account_id": "account"}
 
 #: GET /auth/session is public (the SPA asks it who is logged in) but answers
 #: 401 to anything that is not a live principal.
 _SESSION_PROBE = public(
+    ai_token=AI_CONFINED,
     anonymous=UNAUTHENTICATED,
     mfa_pending=deny(401, "mfa-required"),
     pat_expired=INVALID_TOKEN,
@@ -720,6 +738,43 @@ POLICIES: Final[Mapping[str, Policy]] = MappingProxyType(
         f"PATCH {API}/settings/intake": session(role=A, step_up=True),
         f"POST {API}/settings/intake/email/test": session(role=A),
         f"POST {API}/settings/intake/email/rotate-alias": session(role=A, step_up=True),
+        # --- AI views (Phase 6b, AI_ACCESS.md): an AI client's token only ----
+        f"GET {API}/ai/v1/policy": ai(),
+        f"GET {API}/ai/v1/overview": ai(),
+        f"GET {API}/ai/v1/spending": ai(),
+        f"GET {API}/ai/v1/income": ai(),
+        f"GET {API}/ai/v1/trends": ai(),
+        f"GET {API}/ai/v1/budgets/status": ai(),
+        f"GET {API}/ai/v1/goals": ai(),
+        f"GET {API}/ai/v1/recurring": ai(),
+        f"GET {API}/ai/v1/net-worth/history": ai(),
+        f"GET {API}/ai/v1/allocation": ai(),
+        f"GET {API}/ai/v1/accounts": ai(),
+        f"GET {API}/ai/v1/transactions": ai(),
+        f"GET {API}/ai/v1/anomalies": ai(),
+        f"GET {API}/ai/v1/holdings": ai(),
+        f"GET {API}/ai/v1/performance": ai(),
+        f"GET {API}/ai/v1/loans": ai(),
+        f"GET {API}/ai/v1/loans/{{loan_id}}/schedule": ai(params=LOAN),
+        f"GET {API}/ai/v1/loans/{{loan_id}}/simulate": ai(params=LOAN),
+        f"GET {API}/ai/v1/tax/{{year}}/summary": ai(params=TAXY),
+        # --- AI access settings (owner, browser session; changes step-up) ---
+        f"GET {API}/settings/ai": session(role=O),
+        f"PATCH {API}/settings/ai": session(role=O, step_up=True),
+        f"GET {API}/settings/ai/clients": session(role=O),
+        f"POST {API}/settings/ai/clients": session(role=O, step_up=True),
+        f"GET {API}/settings/ai/clients/{{client_id}}": session(role=O, params=AIC),
+        f"DELETE {API}/settings/ai/clients/{{client_id}}": session(
+            role=O, step_up=True, params=AIC
+        ),
+        f"GET {API}/settings/ai/clients/{{client_id}}/preview": session(role=O, params=AIC),
+        f"POST {API}/settings/ai/preview": session(role=O),
+        f"GET {API}/settings/ai/calls": session(role=O),
+        f"GET {API}/settings/ai/scrubber-preview": session(role=O),
+        f"POST {API}/settings/ai/scrubber-preview": session(role=O),
+        # The instance AI kill switch (an empty PATCH changes nothing).
+        f"GET {API}/settings/system/ai": instance_admin(),
+        f"PATCH {API}/settings/system/ai": instance_admin(step_up=True),
         # --- instance administration ---------------------------------------
         f"GET {API}/admin/users": instance_admin(),
         f"GET {API}/admin/users/{{user_id}}": instance_admin(params={"user_id": "user"}),
@@ -742,6 +797,22 @@ def expected(policy: Policy, who: str) -> Outcome:
     """What ``who`` must get from a route with ``policy`` (see the module doc)."""
     if who in policy.overrides:
         return policy.overrides[who]
+    if who == "ai_token":
+        # Confined to the AI views; elsewhere it is a bearer token that the
+        # principal resolution refuses (public routes behave as for any token).
+        if policy.tokens == "ai":
+            return ALLOWED
+        if policy.access in ("public", "pending_login", "mfa_ceremony"):
+            return expected(policy, "pat_none")
+        return AI_CONFINED
+    if policy.tokens == "ai":
+        if who in ("anonymous", "mfa_pending"):
+            return UNAUTHENTICATED
+        if who in INVALID_BEARER:
+            return INVALID_TOKEN
+        if who == "restricted":
+            return MFA_ENROLMENT
+        return AI_CLIENT_REQUIRED
     if policy.access == "public":
         return ALLOWED
     if policy.access == "pending_login":
@@ -797,8 +868,10 @@ def policy_problems() -> list[str]:
     for key, policy in POLICIES.items():
         if policy.scope is not None and policy.scope not in CATALOG:
             problems.append(f"{key}: scope {policy.scope!r} is not in app.auth.scopes.CATALOG")
-        if (policy.tokens == "scope") != (policy.scope is not None):
-            problems.append(f"{key}: tokens='scope' needs a scope (and only then)")
+        if (policy.tokens in ("scope", "ai")) != (policy.scope is not None):
+            problems.append(f"{key}: tokens='scope'/'ai' needs a scope (and only then)")
+        if (policy.tokens == "ai") != key.startswith(f"GET {API}/ai/v1/"):
+            problems.append(f"{key}: only the GET /ai/v1 views are AI views, and all of them")
         if policy.access != "authenticated" and (
             policy.role or policy.enrol or policy.tokens != "refused"
         ):

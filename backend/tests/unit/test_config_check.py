@@ -429,7 +429,9 @@ def test_api_boots_on_secure_config_with_json_logging(secure_env: pytest.MonkeyP
 
 
 @pytest.mark.usefixtures("restore_logging")
-@pytest.mark.parametrize("command", ["worker", "mcp"])
+# The mcp role has its own gate (app.mcp.config; tests/security/mcp/test_mcp_config.py):
+# it must refuse exactly the SECURE_ENV secrets this test gives the other roles.
+@pytest.mark.parametrize("command", ["worker"])
 def test_every_serving_role_is_gated(
     clean_env: pytest.MonkeyPatch, command: str, capsys: pytest.CaptureFixture[str]
 ) -> None:

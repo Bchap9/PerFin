@@ -22,7 +22,10 @@ run as the owner, exactly like ``perfin migrate`` in production, and then:
   before it;
 * 0005 (Phases 5+6) creates the investment, loan, manual asset, net worth and
   tax vault tables under forced RLS with household-consistent keys, and its
-  downgrade removes exactly those tables and their enum types.
+  downgrade removes exactly those tables and their enum types;
+* 0006 (Phase 6b) creates ``ai_client`` and ``ai_call`` under forced RLS with
+  the household-consistent ``ai_call -> ai_client`` key, and its downgrade
+  removes exactly those tables and the ``ai_mode``/``ai_transport`` types.
 """
 
 from __future__ import annotations
@@ -153,6 +156,10 @@ PHASE56_ENUM_TYPES = frozenset(
         "valuation_source",
     }
 )
+#: Phase 6b AI access tables (revision 0006), all household-scoped.
+PHASE6B_TABLES = frozenset({"ai_client", "ai_call"})
+#: Enum types created by revision 0006.
+PHASE6B_ENUM_TYPES = frozenset({"ai_mode", "ai_transport"})
 #: Enum types created by revision 0002 (identity).
 PHASE1_ENUM_TYPES = frozenset(
     {
@@ -316,6 +323,7 @@ def test_single_head_and_linear_history() -> None:
     assert script.get_base() == "0001"
     # One revision per phase, each on top of the previous one.
     assert [rev.revision for rev in script.walk_revisions("base", "heads")] == [
+        "0006",
         "0005",
         "0004",
         "0003",
@@ -326,6 +334,7 @@ def test_single_head_and_linear_history() -> None:
     assert script.get_revision("0003").down_revision == "0002"
     assert script.get_revision("0004").down_revision == "0003"
     assert script.get_revision("0005").down_revision == "0004"
+    assert script.get_revision("0006").down_revision == "0005"
 
 
 def test_upgrade_head_matches_models_without_drift(migrated: Scratch) -> None:
@@ -339,7 +348,12 @@ def test_upgrade_head_matches_models_without_drift(migrated: Scratch) -> None:
         engine.dispose()
     assert {t.name for t in Base.metadata.sorted_tables} | {"alembic_version"} == tables
     assert tables >= (
-        PHASE0_TABLES | PHASE1_TABLES | PHASE2_TABLES | PHASE34_TABLES | PHASE56_TABLES
+        PHASE0_TABLES
+        | PHASE1_TABLES
+        | PHASE2_TABLES
+        | PHASE34_TABLES
+        | PHASE56_TABLES
+        | PHASE6B_TABLES
     )
 
 
@@ -421,7 +435,7 @@ def test_every_household_scoped_table_has_forced_rls(migrated: Scratch) -> None:
     finally:
         engine.dispose()
     assert {"household_member", "account_grant", "api_token"} <= set(scoped)
-    assert set(scoped) >= PHASE2_TABLES | PHASE34_TABLES | PHASE56_TABLES
+    assert set(scoped) >= PHASE2_TABLES | PHASE34_TABLES | PHASE56_TABLES | PHASE6B_TABLES
     for table in scoped:
         assert rows[table] == (True, True), table
         assert (table, "household_isolation") in policies
@@ -606,7 +620,14 @@ def test_app_role_privileges_are_least(migrated: Scratch) -> None:
         app.dispose()
     assert {p for t, p in privileges if t == "audit_log"} == {"SELECT", "INSERT"}
     assert {p for t, p in privileges if t == "alembic_version"} == {"SELECT"}
-    all_tables = PHASE0_TABLES | PHASE1_TABLES | PHASE2_TABLES | PHASE34_TABLES | PHASE56_TABLES
+    all_tables = (
+        PHASE0_TABLES
+        | PHASE1_TABLES
+        | PHASE2_TABLES
+        | PHASE34_TABLES
+        | PHASE56_TABLES
+        | PHASE6B_TABLES
+    )
     for table in sorted(all_tables - {"audit_log"}):
         assert {p for t, p in privileges if t == table} == {
             "SELECT",
@@ -1284,6 +1305,7 @@ def test_downgrade_0005_leaves_phase34_and_upgrades_again(migrated: Scratch) -> 
         assert _public_tables(engine) == (
             PHASE0_TABLES | PHASE1_TABLES | PHASE2_TABLES | PHASE34_TABLES | {"alembic_version"}
         )
+        assert not set(_db_enum_labels(engine)) & PHASE6B_ENUM_TYPES
         assert not set(_db_enum_labels(engine)) & PHASE56_ENUM_TYPES
         with engine.connect() as conn:
             assert conn.execute(text("SELECT version_num FROM alembic_version")).scalar_one() == (
@@ -1365,5 +1387,94 @@ def test_phase56_tables_refuse_other_households_on_migrated_database(
             set_context(conn, a)
             with pytest.raises(DBAPIError, match="check constraint"):
                 _insert_security(conn, a, "BAD SYMBOL")
+    finally:
+        app.dispose()
+
+
+def test_downgrade_0006_leaves_phase56_and_upgrades_again(migrated: Scratch) -> None:
+    """0006 removes exactly ai_client, ai_call and their enum types."""
+    cfg = migrated.config()
+    engine = migrated.owner_engine()
+    try:
+        assert set(_db_enum_labels(engine)) >= PHASE6B_ENUM_TYPES
+        command.downgrade(cfg, "0005")
+        assert _public_tables(engine) == (
+            PHASE0_TABLES
+            | PHASE1_TABLES
+            | PHASE2_TABLES
+            | PHASE34_TABLES
+            | PHASE56_TABLES
+            | {"alembic_version"}
+        )
+        assert not set(_db_enum_labels(engine)) & PHASE6B_ENUM_TYPES
+        assert set(_db_enum_labels(engine)) >= PHASE56_ENUM_TYPES
+        command.upgrade(cfg, "head")
+        command.check(cfg)
+        assert _public_tables(engine) >= PHASE6B_TABLES
+        assert _db_enum_labels(engine) == _model_enum_labels()
+    finally:
+        engine.dispose()
+
+
+def _insert_ai_client(conn: Connection, household: uuid.UUID) -> uuid.UUID:
+    client = uuid.uuid4()
+    conn.execute(
+        text(
+            "INSERT INTO ai_client (id, household_id, name, mode, transport, expires_at) "
+            "VALUES (:id, :h, 'Synthetic assistant', 'detail', 'stdio', now() + interval '1 day')"
+        ),
+        {"id": client, "h": household},
+    )
+    return client
+
+
+def _insert_ai_call(conn: Connection, household: uuid.UUID, client: uuid.UUID) -> None:
+    conn.execute(
+        text(
+            "INSERT INTO ai_call (id, household_id, ai_client_id, tool, status, bytes, response) "
+            "VALUES (:id, :h, :c, 'list_accounts', 200, 2, '{}'::jsonb)"
+        ),
+        {"id": uuid.uuid4(), "h": household, "c": client},
+    )
+
+
+def test_phase6b_ai_tables_refuse_other_households_on_migrated_database(
+    migrated: Scratch,
+) -> None:
+    """AI clients and calls are invisible across households and calls stay in-household."""
+    app = migrated.app_engine()
+    a, b = uuid.uuid4(), uuid.uuid4()
+    try:
+        for household in (a, b):
+            with app.begin() as conn:
+                set_context(conn, household)
+                conn.execute(
+                    text("INSERT INTO household (id, name) VALUES (:id, 'Synthetic')"),
+                    {"id": household},
+                )
+        with app.begin() as conn:
+            set_context(conn, a)
+            client_a = _insert_ai_client(conn, a)
+            _insert_ai_call(conn, a, client_a)
+        with app.begin() as conn:
+            set_context(conn, b)
+            for table in sorted(PHASE6B_TABLES):
+                count = conn.execute(text(f"SELECT count(*) FROM {table}")).scalar_one()  # noqa: S608
+                assert count == 0, table
+        with app.connect() as conn, conn.begin():
+            set_context(conn, b)
+            # A call of household b cannot point at household a's client.
+            with pytest.raises(DBAPIError, match="foreign key"):
+                _insert_ai_call(conn, b, client_a)
+        with app.connect() as conn, conn.begin():
+            set_context(conn, b)
+            with pytest.raises(DBAPIError, match="row-level security"):
+                _insert_ai_client(conn, a)
+        with app.connect() as conn, conn.begin():
+            set_context(conn, a)
+            with pytest.raises(DBAPIError, match="check constraint"):
+                conn.execute(
+                    text("UPDATE ai_client SET rounding = 5 WHERE id = :id"), {"id": client_a}
+                )
     finally:
         app.dispose()

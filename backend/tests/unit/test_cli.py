@@ -14,7 +14,6 @@ from app.cli import EXIT_UNAVAILABLE, main
 @pytest.mark.parametrize(
     ("argv", "phase"),
     [
-        (["mcp"], "Phase 6b"),
         (["rotate-key"], "Phase 7"),
     ],
 )

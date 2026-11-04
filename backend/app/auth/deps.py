@@ -13,6 +13,10 @@
   rule must not depend on that).
 * Bearer authentication (``app.auth.tokens.authenticate_bearer``) is rate
   limited: failed attempts per client IP, use per token (``429``).
+* A token granted ``ai:read`` (an AI client's, ``Principal.ai_only``) is
+  refused (``403 ai-token-confined``) on every route but the AI views (whose
+  router marks the request with :func:`mark_ai_route`), including the public
+  ones that look at the caller (``GET /auth/session``).
 * Otherwise the session cookie (``app.auth.sessions``); no or a dead cookie
   means anonymous.
 * A break-glass session (``login_method = breakglass``, SECURITY.md B7) is
@@ -106,6 +110,20 @@ def session_acceptor(request: Request) -> Callable[[UserSession], bool]:
     return accept
 
 
+def mark_ai_route(request: Request) -> None:
+    """Router dependency of ``app.api.ai`` (and only it): this request is an AI view.
+
+    FastAPI solves router dependencies before the endpoint's, so the mark is
+    set before the principal is resolved. Every other route is unmarked and
+    refuses an AI client's token.
+    """
+    request.state.ai_route = True
+
+
+def is_ai_route(request: Request) -> bool:
+    return getattr(request.state, "ai_route", False) is True
+
+
 def get_optional_principal(request: Request, db: DbSession) -> Principal | None:
     """The authenticated caller, ``None`` when anonymous (see module doc)."""
     cached = getattr(request.state, "principal", None)
@@ -124,6 +142,14 @@ def get_optional_principal(request: Request, db: DbSession) -> Principal | None:
             policy=SessionPolicy.from_settings(settings),
             require_mfa=settings.require_mfa,
             accept=session_acceptor(request),
+        )
+    if principal is not None and principal.ai_only and not is_ai_route(request):
+        # An AI client's token reaches the AI views and nothing else (M4).
+        raise ProblemError(
+            403,
+            "ai-token-confined",
+            "Not available to AI clients",
+            "An AI client token can only read the AI views.",
         )
     if principal is not None:
         request.state.principal = principal

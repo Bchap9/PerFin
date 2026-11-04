@@ -5,7 +5,9 @@
 
 * **Logged in** (session cookie or bearer token): ``200`` with the user, the
   active household and role, the MFA state, the login method and a CSRF token
-  bound to the session (``null`` for bearer callers, who need none).
+  bound to the session (``null`` for bearer callers, who need none), and
+  ``ai_clients_active`` (the household has a live AI client: the persistent
+  banner of AI_ACCESS.md M5).
 * **Not logged in**: ``401`` problem (``unauthenticated``) whose body also
   carries ``authenticated: false`` and a fresh *pre-auth* CSRF token; the
   response sets the ``__Host-perfin-pre`` cookie it is paired with, so the
@@ -29,7 +31,7 @@ from typing import Annotated, Any, Literal
 
 from fastapi import APIRouter, Depends, Request, Response, status
 from fastapi.responses import JSONResponse
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
@@ -52,6 +54,7 @@ from app.core.csrf import get_csrf
 from app.core.errors import ProblemError, problem_response
 from app.db.models import Household
 from app.db.rls import get_context, restore_context, set_context
+from app.domain.ai.switches import active_client_count
 
 router = APIRouter(tags=["auth"])
 
@@ -99,6 +102,11 @@ class SessionOut(BaseModel):
     csrf_token: str | None
     mfa: SessionMfaOut
     auth_method: Literal["local", "oidc", "breakglass", "bootstrap", "token"]
+    ai_clients_active: bool = Field(
+        default=False,
+        description="The active household has a live AI client (not revoked, not "
+        "expired): the app shows a persistent banner (AI_ACCESS.md M5).",
+    )
 
 
 class SessionInfoOut(BaseModel):
@@ -124,10 +132,12 @@ class RevokedOut(BaseModel):
 def _session_out(db: Session, request: Request, principal: Principal) -> SessionOut:
     settings = get_app_settings(request)
     household: SessionHouseholdOut | None = None
+    ai_active = False
     if principal.household_id is not None and principal.role is not None:
         row = db.get(Household, principal.household_id)
         if row is not None:
             household = SessionHouseholdOut(id=row.id, name=row.name, role=principal.role.value)
+            ai_active = active_client_count(db, row.id) > 0
     csrf_token: str | None = None
     if principal.auth_method == "session":
         raw = raw_session_id(request, settings)
@@ -155,6 +165,7 @@ def _session_out(db: Session, request: Request, principal: Principal) -> Session
             enrollment_required=principal.restricted,
         ),
         auth_method=method,
+        ai_clients_active=ai_active,
     )
 
 

@@ -68,6 +68,8 @@ PAGE_TEXT_MAX: Final = 400_000
 MAX_PIXELS_CEILING: Final = 200_000_000
 MAX_PREVIEW_PNG_BYTES: Final = 8 * 1024 * 1024
 MAX_CHILDREN_CEILING: Final = 1000
+#: Most bank/card and investment statements one result carries (extractors stop there).
+MAX_STATEMENTS: Final = 100
 MAX_CHILD_BYTES_CEILING: Final = 1024 * 1024 * 1024
 #: Largest coordinate accepted (points or pixels); page sizes beyond are refused.
 MAX_COORD: Final = 1_000_000.0
@@ -812,9 +814,9 @@ class ExtractResult(_Strict):
     ok: bool
     extractor_version: Annotated[str, Field(max_length=32)] = ""
     tables: list[Table] = Field(default_factory=list, max_length=100)
-    statements: list[Statement] = Field(default_factory=list, max_length=100)
+    statements: list[Statement] = Field(default_factory=list, max_length=MAX_STATEMENTS)
     #: Brokerage statements (OFX ``INVSTMTRS``; PDF ones are worker-written).
-    investments: list[InvestmentStatement] = Field(default_factory=list, max_length=100)
+    investments: list[InvestmentStatement] = Field(default_factory=list, max_length=MAX_STATEMENTS)
     #: Documents (PDF pages, image frames), previews and container contents.
     pages: list[Page] = Field(default_factory=list, max_length=MAX_PAGES_CEILING)
     previews: list[Preview] = Field(default_factory=list, max_length=MAX_PAGES_CEILING)
