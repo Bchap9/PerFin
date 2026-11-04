@@ -1,5 +1,19 @@
 # Deploying PerFin
 
+> [!WARNING]
+> **Disclaimer: this project is entirely vibe coded.** PerFin was written by
+> AI coding agents directed through prompts, not written line by line by a
+> human. A person has not reviewed it line by line, and no external security
+> review or penetration test has been done. Its tests and internal reviews
+> are evidence, not proof.
+>
+> It is **not intended for, and not proven safe for, exposure to the open
+> internet.** Run it only on a private network: your LAN, a VPN, or behind
+> an authenticating gateway such as Authentik's forward-auth outpost. Use it
+> at your own risk, keep your own backups, and do not rely on it as your only
+> record of anything that matters. The AGPL-3.0 licence's "no warranty"
+> terms apply in full.
+
 This guide takes one Linux host from nothing to a running, hardened PerFin
 with Docker Compose. It uses the files in `deploy/`: `docker-compose.yml`,
 `.env.example`, `Caddyfile.example`, `egress-allowlist.txt` and `db-init/`.
@@ -11,7 +25,7 @@ UPGRADING.md.
 What you get:
 
 ```
-internet -> proxy (Caddy, TLS, the only published ports 80/443)
+LAN or VPN -> proxy (Caddy, TLS, the only published ports 80/443)
               |  web network (internal)
               v
             api ----- backend network (internal) ----- db (PostgreSQL 16)
