@@ -47,3 +47,10 @@ backups/
 .coverage.*
 htmlcov/
 coverage/
+
+# Local dev stack (scripts/dev.sh): generated secrets, documents, logs
+.dev/
+
+# Built documentation site (mkdocs build)
+/site/
+/.venv-docs/

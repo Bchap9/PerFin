@@ -1,0 +1,5 @@
+# Inputs of the documentation build (requirements-docs.txt is generated):
+#   uv pip compile --generate-hashes --python-version 3.12 requirements-docs.in -o requirements-docs.txt
+# Only mkdocs and the Material theme: no analytics or network plugins.
+mkdocs==1.6.1
+mkdocs-material==9.8.0
