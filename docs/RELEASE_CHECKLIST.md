@@ -17,7 +17,7 @@ scratch directory, never in the repository.
 
 | # | Step | Outcome |
 |---|---|---|
-| 1 | Build the image from `deploy/Dockerfile` | **FAIL here (sandbox), PASS on CI**: Debian apt is blocked in this sandbox, so a labelled local variant was used; the shipped image is built and Trivy-scanned by GitHub Actions |
+| 1 | Build the image from `deploy/Dockerfile` | **FAIL here (sandbox), PASS on CI**: Debian apt is blocked in this sandbox, so a labelled local variant was used; the shipped image of the committed tree (`21d2b38`) was built and Trivy-scanned by GitHub Actions (`security` run 41927816284, `ci` run 41927816446, both green) |
 | 2 | Full Compose stack (proxy, db, migrate, api, worker; profiles `av` and `mcp`) | **PASS** after two fixes (`proxy-init`, ClamAV entrypoint); profile `egress` NOT EXERCISED |
 | 3 | Admin bootstrap with the setup URL from the logs | **PASS** |
 | 4 | Local login with TOTP MFA; step-up | **PASS** |
@@ -50,7 +50,8 @@ Each fix has a regression test, and each test was confirmed to fail when its fix
   workflow runs the same check). Not a blocker any more.
 - The release workflow (`.github/workflows/release.yml`) has never run. Check
   the first tag run closely (signing, attestations, chart push).
-- CI has not run since the Phase 7 changes.
+- CI is green end to end on the committed Phase 7 tree: `ci` run 41927816446
+  and `security` run 41927816284 (commit `21d2b38`). Not a blocker any more.
 - The external penetration test is outstanding (docs/ROADMAP.md, Phase 7).
 
 ## 1. Build the image
@@ -100,8 +101,21 @@ The image used for the run is `perfin:rv-local-fix`
   job; the CI-green track fixed that afterwards.
 - The latest fully green `security` run is **41802902976** (commit
   `9cb9864`).
-- Neither run built the current tree (Phase 7 is uncommitted). The next push
-  must show a green image job before tagging.
+- Neither run built the Phase 7 tree. It has since been committed and
+  pushed: `security` run **41927816284** (commit `21d2b38`) is green in every job,
+  including "Image build and scan (trivy image, SBOM)" and gitleaks over the
+  full history, and `ci` run **41927816446** (same commit) is green, including the
+  "Deployment files" job that builds the image and runs it read-only as
+  UID 10001. Getting there fixed three CI-only failures: the extraction
+  sandbox killed every ruled-table PDF on the hosted runner with `SIGSYS`
+  (`prctl(PR_CAPBSET_READ)` from libcap, loaded by glibc's `systemd` NSS
+  module after Landlock hid `/etc/passwd` from onnxruntime's
+  `getpwuid_r`; ADR-0009 addendum), and gitleaks flagged a synthetic
+  webhook secret in a test fixture's history (allowlisted by exact path and
+  value; the fixture now builds an obviously fake value at runtime), and a
+  test that checked an import's audit row for account digits failed when a
+  random transaction UUID in it held the same four digits (ids are masked
+  before such checks; `ci` run 41924198511).
 
 ## 2. Compose stack
 

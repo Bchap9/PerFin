@@ -17,18 +17,18 @@ exploit yet.
       every source file, enforced by `scripts/check_spdx.py`)
 - [x] Monorepo scaffolding: `backend/` (uv, FastAPI, SQLAlchemy, Alembic),
       `frontend/` (Vite, React, TS), `deploy/` (Compose, Caddy)
-- [ ] CI: lint, type-check, tests, Trivy image scan, gitleaks, lockfile check
-      (the workflows run on GitHub Actions. At commit c57c564 (2026-11-04)
-      the lockfile, SPDX, frontend and deployment jobs passed, the shipped
-      image was built with Tesseract, run read-only as UID 10001 and passed
-      `trivy image` with an SBOM (security runs 41802902976 and
-      41870346701), and `pip-audit`, `npm audit`, `trivy fs` and Semgrep
-      passed. Not ticked because no run has been green end to end yet: the
-      backend pytest step has never completed on GitHub (run 41837844159
-      failed 31 tests, fixed since; run 41870347026 hit the job's 20-minute
-      limit, now 45 minutes with `pytest -n logical`), and gitleaks failed
-      on a synthetic test key in history (allowlisted since). The Phase 7
-      tree has not been pushed yet)
+- [x] CI: lint, type-check, tests, Trivy image scan, gitleaks, lockfile check
+      (green end to end on GitHub Actions at commit 21d2b38 (2026-11-04): `ci`
+      run 41927816446 (SPDX, lockfiles, backend ruff/mypy/bandit/pytest/OpenAPI
+      drift, frontend, Helm chart, deployment files and image, docs site)
+      and `security` run 41927816284 (gitleaks over every commit and the tree,
+      pip-audit, npm audit, Semgrep, `trivy fs`, the shipped image built
+      and passing `trivy image` with an SBOM). The last blockers were a
+      sandbox `SIGSYS` on the hosted runner (`prctl(PR_CAPBSET_READ)` from
+      libcap via glibc's `systemd` NSS module, ADR-0009 addendum), a
+      synthetic webhook secret in history (allowlisted, built at runtime
+      now) and a test that found card digits inside random row UUIDs
+      (ids are masked before that check now))
 - [x] `perfin config check` with insecure-config refusal
 - [x] Database bootstrap, migrations, RLS policy scaffolding, audit log table
       (forced RLS on all five platform tables, `household` and `job`
@@ -63,11 +63,9 @@ roles. Still no finance features.
       not yet against a live Authentik)
 - [x] Households, members, roles, account grants (data model only; accounts
       arrive in Phase 2)
-- [ ] Authz test matrix in CI (every endpoint x every role x cross-household)
-      (the matrix exists and passes in `make check`:
-      `backend/tests/security/test_authz_matrix.py`; not ticked because, as
-      for the Phase 0 CI item, the backend job that runs it has not yet
-      completed green on GitHub Actions)
+- [x] Authz test matrix in CI (every endpoint x every role x cross-household)
+      (`backend/tests/security/test_authz_matrix.py`, run by the backend
+      job of `ci` run 41927816446, green on GitHub Actions at commit 21d2b38)
 - [ ] Authentik setup guide with screenshots-free step list
       (`docs/AUTHENTIK.md` is complete against the final code, with no open
       TODOs; not ticked until it has been walked through against a live

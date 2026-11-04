@@ -8,19 +8,21 @@ All notable changes to PerFin are recorded here. The format follows
 
 1.0.0 is prepared but not tagged. Every phase (0-7) is implemented. Alembic
 head is `0007_phase7`. `make check` passes from the repository root
-(2026-11-04): SPDX; backend ruff, ruff format, mypy --strict (633 source
-files plus 4 scripts), bandit, 7410 pytest tests with `-n auto` and OpenAPI
+(2026-11-04): SPDX; backend ruff, ruff format, mypy --strict (634 source
+files plus 4 scripts), bandit, 7431 pytest tests with `-n auto` and OpenAPI
 drift; frontend eslint, tsc, 399 vitest tests in 55 files and the
 production build; `pip-audit` finds no known vulnerabilities and
 `npm audit --audit-level=high` passes with 10 moderate advisories in dev
 tooling (eslint, typescript-eslint, minimatch), none high.
+CI is green end to end on GitHub Actions for commit `21d2b38`: `ci` run
+41927816446 (including the full backend pytest job) and `security` run
+41927816284 (gitleaks over every commit, pip-audit, npm audit, Semgrep, `trivy
+fs`, and the shipped image built and passing `trivy image` with an SBOM).
 
 What remains (details in docs/ROADMAP.md):
 
 - An external security review or penetration test before the tag. An
   internal review was done every phase (docs/security/CONTROLS.md).
-- CI green end to end on GitHub Actions. The backend pytest job has not
-  completed on GitHub yet, and the Phase 7 tree has not been pushed.
 - The release workflow runs for the first time when `v1.0.0` is pushed.
   Signing, SBOM attestation and provenance are unproven until then.
 - Not exercised: the Helm chart on a live cluster, a live Authentik, real
@@ -1542,6 +1544,30 @@ known limits are listed in docs/ROADMAP.md and docs/security/CONTROLS.md.
 
 ### Fixed
 
+- The extraction sandbox killed every text-layer PDF with ruled tables
+  (`syscall_denied`, `SIGSYS`) on hosts whose `nsswitch.conf` falls through
+  to glibc's `systemd` module (Ubuntu, the GitHub runner): PyMuPDF's table
+  detection imports onnxruntime, which calls `getpwuid_r`; Landlock hides
+  `/etc/passwd`, `libnss_systemd` is loaded, and libcap's constructor calls
+  `prctl(PR_CAPBSET_READ)`, which was not on the seccomp allowlist. That
+  read-only `prctl` option is now allowed; every other option still ends
+  the child (ADR-0009 addendum).
+  `test_sandbox.py::test_user_database_lookups_do_not_kill_the_child` and
+  `test_sandbox_documents.py::test_text_pdf_tables_as_an_unprivileged_uid`
+  fail without the fix.
+- A `syscall_denied` extraction now names the refused call on x86-64
+  (`exit status 159, syscall 157 (prctl)` in the worker log): the child's
+  filter traps to a small SIGSYS handler that reports the number and exits;
+  the call still never runs, and the handler cannot be replaced
+  (docs/OPERATIONS.md).
+- gitleaks flagged the synthetic webhook signing secret in
+  `backend/tests/fixtures/notifications.py` (history); the fixture now
+  builds an obviously fake value at runtime and `.gitleaks.toml` allowlists
+  the old literal for that path only.
+- Tests that check audit and review payloads for card or account digits
+  failed now and then (CI run 41924198511) when a random row UUID in the
+  payload contained the same four digits; ids are masked before the check
+  (`tests.fixtures.factories.without_ids`).
 - A sale of hand-picked lots (`lots` on a sell) made
   `GET /investments/performance` answer `422 lot-not-available`, and net
   worth silently left that account and security out: the in-memory replays
