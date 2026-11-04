@@ -163,6 +163,329 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/ai/v1/accounts": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** list_accounts */
+        get: operations["list_accounts_api_v1_ai_v1_accounts_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/ai/v1/allocation": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** get_allocation */
+        get: operations["get_allocation_api_v1_ai_v1_allocation_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/ai/v1/anomalies": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** find_anomalies */
+        get: operations["find_anomalies_api_v1_ai_v1_anomalies_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/ai/v1/budgets/status": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** get_budget_status */
+        get: operations["get_budget_status_api_v1_ai_v1_budgets_status_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/ai/v1/goals": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** get_savings_goals */
+        get: operations["get_savings_goals_api_v1_ai_v1_goals_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/ai/v1/holdings": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** list_holdings */
+        get: operations["list_holdings_api_v1_ai_v1_holdings_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/ai/v1/income": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** get_income */
+        get: operations["get_income_api_v1_ai_v1_income_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/ai/v1/loans": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** list_loans */
+        get: operations["list_loans_api_v1_ai_v1_loans_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/ai/v1/loans/{loan_id}/schedule": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** get_loan_schedule */
+        get: operations["get_loan_schedule_api_v1_ai_v1_loans__loan_id__schedule_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/ai/v1/loans/{loan_id}/simulate": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** simulate_loan (computes only, stores nothing) */
+        get: operations["simulate_loan_api_v1_ai_v1_loans__loan_id__simulate_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/ai/v1/net-worth/history": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** get_net_worth_history */
+        get: operations["get_net_worth_history_api_v1_ai_v1_net_worth_history_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/ai/v1/overview": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** get_overview */
+        get: operations["get_overview_api_v1_ai_v1_overview_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/ai/v1/performance": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** get_performance */
+        get: operations["get_performance_api_v1_ai_v1_performance_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/ai/v1/policy": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** explain_data_policy: this client's mode, options and the identity denylist */
+        get: operations["explain_data_policy_api_v1_ai_v1_policy_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/ai/v1/recurring": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** get_recurring */
+        get: operations["get_recurring_api_v1_ai_v1_recurring_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/ai/v1/spending": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** get_spending */
+        get: operations["get_spending_api_v1_ai_v1_spending_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/ai/v1/tax/{year}/summary": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** get_tax_year_summary */
+        get: operations["get_tax_year_summary_api_v1_ai_v1_tax__year__summary_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/ai/v1/transactions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** list_transactions */
+        get: operations["list_transactions_api_v1_ai_v1_transactions_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/ai/v1/trends": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** get_trends */
+        get: operations["get_trends_api_v1_ai_v1_trends_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/assets": {
         parameters: {
             query?: never;
@@ -2176,6 +2499,129 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/settings/ai": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** AI access of the household: switches and live clients */
+        get: operations["get_ai_access_api_v1_settings_ai_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        /** Turn AI access of the household off or on (step-up) */
+        patch: operations["patch_ai_access_api_v1_settings_ai_patch"];
+        trace?: never;
+    };
+    "/api/v1/settings/ai/calls": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Audit of AI calls with the responses as sent; search them for a string */
+        get: operations["list_ai_calls_api_v1_settings_ai_calls_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/settings/ai/clients": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** AI clients of the household */
+        get: operations["list_ai_clients_api_v1_settings_ai_clients_get"];
+        put?: never;
+        /** Create an AI client and its ai:read token (step-up; token shown once) */
+        post: operations["create_ai_client_api_v1_settings_ai_clients_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/settings/ai/clients/{client_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** One AI client */
+        get: operations["get_ai_client_api_v1_settings_ai_clients__client_id__get"];
+        put?: never;
+        post?: never;
+        /** Revoke an AI client and its token now (step-up) */
+        delete: operations["revoke_ai_client_api_v1_settings_ai_clients__client_id__delete"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/settings/ai/clients/{client_id}/preview": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** What every tool returns to this client, with its saved options */
+        get: operations["preview_ai_client_api_v1_settings_ai_clients__client_id__preview_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/settings/ai/preview": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** What every tool would return with these options, before saving */
+        post: operations["preview_ai_options_api_v1_settings_ai_preview_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/settings/ai/scrubber-preview": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** My free text next to its scrubbed form (a client's terms, or none) */
+        get: operations["get_scrubber_preview_api_v1_settings_ai_scrubber_preview_get"];
+        put?: never;
+        /** Try denylist terms and aliases on my free text before saving them */
+        post: operations["post_scrubber_preview_api_v1_settings_ai_scrubber_preview_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/settings/intake": {
         parameters: {
             query?: never;
@@ -2226,6 +2672,24 @@ export interface paths {
         options?: never;
         head?: never;
         patch?: never;
+        trace?: never;
+    };
+    "/api/v1/settings/system/ai": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** The instance AI kill switch (instance admin) */
+        get: operations["get_system_ai_api_v1_settings_system_ai_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        /** Engage or release the instance AI kill switch (instance admin, step-up) */
+        patch: operations["patch_system_ai_api_v1_settings_system_ai_patch"];
         trace?: never;
     };
     "/api/v1/settings/user": {
@@ -2663,6 +3127,26 @@ export interface components {
              */
             status: "accepted";
         };
+        /** AccountAi */
+        AccountAi: {
+            /** Asset Kind */
+            asset_kind: string | null;
+            balance: components["schemas"]["AiMoney"];
+            /** Closed */
+            closed: boolean;
+            /** Currency */
+            currency: string;
+            /** Id */
+            id: string;
+            /** Institution */
+            institution: string | null;
+            /** Is Asset */
+            is_asset: boolean;
+            /** Label */
+            label: string;
+            /** Type */
+            type: string;
+        };
         /**
          * AccountClose
          * @description ``POST /accounts/{id}/close``: the closing date (default today).
@@ -2812,6 +3296,15 @@ export interface components {
          * @enum {string}
          */
         AccountType: "checking" | "savings" | "credit_card" | "cash" | "brokerage" | "retirement" | "loan" | "mortgage" | "line_of_credit" | "manual_asset" | "manual_liability";
+        /** AccountTypeTotal */
+        AccountTypeTotal: {
+            /** Accounts */
+            accounts: number;
+            /** Balance */
+            balance: components["schemas"]["AiMoney"][];
+            /** Type */
+            type: string;
+        };
         /**
          * AccountUpdate
          * @description ``PATCH /accounts/{id}``: only the fields given change.
@@ -2956,6 +3449,577 @@ export interface components {
             /** Is Breakglass */
             is_breakglass?: boolean | null;
         };
+        /**
+         * AiAccessOut
+         * @description ``GET /settings/ai``: the switches and the number of live clients.
+         */
+        AiAccessOut: {
+            /** Active Clients */
+            active_clients: number;
+            /**
+             * Enabled
+             * @description Both switches are on: active clients can read.
+             */
+            enabled: boolean;
+            /** Household Enabled */
+            household_enabled: boolean;
+            /** System Enabled */
+            system_enabled: boolean;
+        };
+        /** AiAccessUpdate */
+        AiAccessUpdate: {
+            /** Enabled */
+            enabled?: boolean | null;
+        };
+        /** AiAccountsOut */
+        AiAccountsOut: {
+            /**
+             * As Of
+             * Format: date
+             */
+            as_of: string;
+            /** By Type */
+            by_type: components["schemas"]["AccountTypeTotal"][];
+            /** Items */
+            items: components["schemas"]["AccountAi"][];
+            /**
+             * Mode
+             * @enum {string}
+             */
+            mode: "detail" | "aggregates";
+        };
+        /** AiAllocationOut */
+        AiAllocationOut: {
+            /**
+             * As Of
+             * Format: date
+             */
+            as_of: string;
+            /** By */
+            by: {
+                [key: string]: components["schemas"]["AllocationAi"][];
+            };
+            /** Currency */
+            currency: string;
+            market_value: components["schemas"]["AiMoney"];
+        };
+        /** AiAnomaliesOut */
+        AiAnomaliesOut: {
+            /**
+             * Date From
+             * Format: date
+             */
+            date_from: string;
+            /**
+             * Date To
+             * Format: date
+             */
+            date_to: string;
+            /** Items */
+            items: components["schemas"]["AnomalyAi"][];
+        };
+        /** AiBudgetStatusOut */
+        AiBudgetStatusOut: {
+            /**
+             * As Of
+             * Format: date
+             */
+            as_of: string;
+            /** Budgets */
+            budgets: components["schemas"]["BudgetAi"][];
+        };
+        /** AiCallOut */
+        AiCallOut: {
+            /** Bytes */
+            bytes: number;
+            /**
+             * Client Id
+             * Format: uuid
+             */
+            client_id: string;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /** Params */
+            params: {
+                [key: string]: unknown;
+            };
+            /** Response */
+            response: unknown;
+            /** Status */
+            status: number;
+            /** Tool */
+            tool: string;
+        };
+        /** AiCallsOut */
+        AiCallsOut: {
+            /** Items */
+            items: components["schemas"]["AiCallOut"][];
+        };
+        /**
+         * AiClientCreate
+         * @description ``POST /settings/ai/clients``: a name and an expiry are mandatory.
+         */
+        AiClientCreate: {
+            /** Custom Denylist */
+            custom_denylist?: string[];
+            /** Date Range Cap */
+            date_range_cap?: number | null;
+            /** Expires In Days */
+            expires_in_days: number;
+            /**
+             * Hide Merchant Location
+             * @default false
+             */
+            hide_merchant_location: boolean;
+            /**
+             * Hide Nicknames
+             * @default false
+             */
+            hide_nicknames: boolean;
+            /** Member Aliases */
+            member_aliases?: string[];
+            /** @default detail */
+            mode: components["schemas"]["AiMode"];
+            /** Name */
+            name: string;
+            /** Rounding */
+            rounding?: (1 | 10 | 100) | null;
+            /** @default stdio */
+            transport: components["schemas"]["AiTransport"];
+        };
+        /** AiClientCreatedOut */
+        AiClientCreatedOut: {
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /** Custom Denylist */
+            custom_denylist: string[];
+            /** Date Range Cap */
+            date_range_cap: number | null;
+            /**
+             * Expires At
+             * Format: date-time
+             */
+            expires_at: string;
+            /** Hide Merchant Location */
+            hide_merchant_location: boolean;
+            /** Hide Nicknames */
+            hide_nicknames: boolean;
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /** Last Used At */
+            last_used_at: string | null;
+            /** Member Aliases */
+            member_aliases: string[];
+            mode: components["schemas"]["AiMode"];
+            /** Name */
+            name: string;
+            /** Revoked At */
+            revoked_at: string | null;
+            /** Rounding */
+            rounding: number | null;
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "active" | "expired" | "revoked";
+            /**
+             * Token
+             * @description The raw ai:read token. Shown once; it cannot be retrieved again.
+             */
+            token: string;
+            /** Token Prefix */
+            token_prefix: string | null;
+            transport: components["schemas"]["AiTransport"];
+        };
+        /**
+         * AiClientOut
+         * @description A client as the owner sees it (never the token or its hash).
+         */
+        AiClientOut: {
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /** Custom Denylist */
+            custom_denylist: string[];
+            /** Date Range Cap */
+            date_range_cap: number | null;
+            /**
+             * Expires At
+             * Format: date-time
+             */
+            expires_at: string;
+            /** Hide Merchant Location */
+            hide_merchant_location: boolean;
+            /** Hide Nicknames */
+            hide_nicknames: boolean;
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /** Last Used At */
+            last_used_at: string | null;
+            /** Member Aliases */
+            member_aliases: string[];
+            mode: components["schemas"]["AiMode"];
+            /** Name */
+            name: string;
+            /** Revoked At */
+            revoked_at: string | null;
+            /** Rounding */
+            rounding: number | null;
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "active" | "expired" | "revoked";
+            /** Token Prefix */
+            token_prefix: string | null;
+            transport: components["schemas"]["AiTransport"];
+        };
+        /**
+         * AiDataPolicyOut
+         * @description ``explain_data_policy``: this client's mode, options and the denylist.
+         */
+        AiDataPolicyOut: {
+            /** Client Name */
+            client_name: string;
+            /** Custom Denylist Entries */
+            custom_denylist_entries: number;
+            /** Date Range Cap Days */
+            date_range_cap_days: number | null;
+            /** Earliest Date */
+            earliest_date: string | null;
+            /** Exposed */
+            exposed: string[];
+            /** Hide Merchant Location */
+            hide_merchant_location: boolean;
+            /** Hide Nicknames */
+            hide_nicknames: boolean;
+            /**
+             * Mode
+             * @enum {string}
+             */
+            mode: "detail" | "aggregates";
+            /** Never Exposed */
+            never_exposed: string[];
+            /** Placeholders */
+            placeholders: string[];
+            /** Rate Limits */
+            rate_limits: string[];
+            /** Rounding */
+            rounding: number | null;
+        };
+        /** AiFlowOut */
+        AiFlowOut: {
+            /** Currency */
+            currency: string;
+            /**
+             * Date From
+             * Format: date
+             */
+            date_from: string;
+            /**
+             * Date To
+             * Format: date
+             */
+            date_to: string;
+            /**
+             * Flow
+             * @enum {string}
+             */
+            flow: "spending" | "income";
+            /** Group By */
+            group_by: string;
+            /** Items */
+            items: components["schemas"]["FlowItemAi"][];
+            total: components["schemas"]["AiMoney"];
+        };
+        /** AiGoalsOut */
+        AiGoalsOut: {
+            /** Items */
+            items: components["schemas"]["GoalAi"][];
+        };
+        /** AiHoldingsOut */
+        AiHoldingsOut: {
+            /**
+             * As Of
+             * Format: date
+             */
+            as_of: string;
+            cost_basis: components["schemas"]["AiMoney"];
+            /** Currency */
+            currency: string;
+            /** Items */
+            items: components["schemas"]["HoldingAi"][];
+            market_value: components["schemas"]["AiMoney"];
+            unrealized: components["schemas"]["GainsAi"];
+        };
+        /** AiLoanScheduleOut */
+        AiLoanScheduleOut: {
+            /** Basis */
+            basis: string;
+            /** Loan Id */
+            loan_id: string;
+            /** Rows */
+            rows: components["schemas"]["ScheduleRowAi"][];
+            start_balance: components["schemas"]["AiMoney"];
+            /** Total Rows */
+            total_rows: number;
+            totals: components["schemas"]["ScheduleTotalsAi"];
+        };
+        /** AiLoansOut */
+        AiLoansOut: {
+            /** Items */
+            items: components["schemas"]["LoanAi"][];
+        };
+        /**
+         * AiMode
+         * @enum {string}
+         */
+        AiMode: "detail" | "aggregates";
+        /**
+         * AiMoney
+         * @description Money after the client's rounding; the parent field names the columns.
+         */
+        AiMoney: {
+            /** Amount */
+            amount: string;
+            /** Currency */
+            currency: string;
+        };
+        /** AiNetWorthHistoryOut */
+        AiNetWorthHistoryOut: {
+            change: components["schemas"]["AiMoney"] | null;
+            /** Currency */
+            currency: string;
+            /**
+             * Date From
+             * Format: date
+             */
+            date_from: string;
+            /**
+             * Date To
+             * Format: date
+             */
+            date_to: string;
+            /** Granularity */
+            granularity: string;
+            /** Points */
+            points: components["schemas"]["NetWorthPointAi"][];
+            /** Range */
+            range: string;
+        };
+        /**
+         * AiOptionsIn
+         * @description The exposure options of a client (also the body of ``POST /settings/ai/preview``).
+         */
+        AiOptionsIn: {
+            /** Custom Denylist */
+            custom_denylist?: string[];
+            /** Date Range Cap */
+            date_range_cap?: number | null;
+            /**
+             * Hide Merchant Location
+             * @default false
+             */
+            hide_merchant_location: boolean;
+            /**
+             * Hide Nicknames
+             * @default false
+             */
+            hide_nicknames: boolean;
+            /** Member Aliases */
+            member_aliases?: string[];
+            /** @default detail */
+            mode: components["schemas"]["AiMode"];
+            /**
+             * Name
+             * @default Preview
+             */
+            name: string;
+            /** Rounding */
+            rounding?: (1 | 10 | 100) | null;
+            /** @default stdio */
+            transport: components["schemas"]["AiTransport"];
+        };
+        /**
+         * AiOverviewOut
+         * @description ``get_overview``: net worth now, cash flow and savings rate over the period.
+         */
+        AiOverviewOut: {
+            /**
+             * As Of
+             * Format: date
+             */
+            as_of: string;
+            assets: components["schemas"]["AiMoney"];
+            /** Currency */
+            currency: string;
+            /**
+             * Date From
+             * Format: date
+             */
+            date_from: string;
+            /**
+             * Date To
+             * Format: date
+             */
+            date_to: string;
+            inflow: components["schemas"]["AiMoney"];
+            liabilities: components["schemas"]["AiMoney"];
+            /** Months */
+            months: components["schemas"]["CashflowMonthAi"][];
+            net_cash_flow: components["schemas"]["AiMoney"];
+            net_worth: components["schemas"]["AiMoney"];
+            outflow: components["schemas"]["AiMoney"];
+            /** Savings Rate */
+            savings_rate: string | null;
+        };
+        /** AiPerformanceOut */
+        AiPerformanceOut: {
+            /** Currency */
+            currency: string;
+            /**
+             * End
+             * Format: date
+             */
+            end: string;
+            end_value: components["schemas"]["AiMoney"];
+            fees: components["schemas"]["AiMoney"];
+            income: components["schemas"]["AiMoney"];
+            inflows: components["schemas"]["AiMoney"];
+            /** Mwr */
+            mwr: string | null;
+            /** Mwr Annualized */
+            mwr_annualized: string | null;
+            outflows: components["schemas"]["AiMoney"];
+            /** Range */
+            range: string;
+            realized: components["schemas"]["GainsAi"];
+            /**
+             * Start
+             * Format: date
+             */
+            start: string;
+            start_value: components["schemas"]["AiMoney"];
+            /** Twr */
+            twr: string;
+            /** Twr Annualized */
+            twr_annualized: string | null;
+            unrealized: components["schemas"]["GainsAi"];
+        };
+        /** AiRecurringOut */
+        AiRecurringOut: {
+            /** Items */
+            items: components["schemas"]["RecurringAi"][];
+        };
+        /** AiSimulationOut */
+        AiSimulationOut: {
+            /**
+             * As Of
+             * Format: date
+             */
+            as_of: string;
+            balance: components["schemas"]["AiMoney"];
+            baseline: components["schemas"]["ScenarioAi"];
+            extra_monthly: components["schemas"]["AiMoney"] | null;
+            extra_once: components["schemas"]["AiMoney"] | null;
+            interest_saved: components["schemas"]["AiMoney"];
+            /** Loan Id */
+            loan_id: string;
+            /** Payments Saved */
+            payments_saved: number;
+            with_extras: components["schemas"]["ScenarioAi"];
+        };
+        /** AiTaxYearSummaryOut */
+        AiTaxYearSummaryOut: {
+            /** By Treatment */
+            by_treatment: {
+                [key: string]: components["schemas"]["AiMoney"];
+            };
+            /** Categories */
+            categories: components["schemas"]["TaxCategoryAi"][];
+            /** Checklist */
+            checklist: components["schemas"]["TaxChecklistAi"][];
+            /** Currency */
+            currency: string;
+            /** Expected */
+            expected: number;
+            /** Filing Status */
+            filing_status: string | null;
+            /** Forms */
+            forms: components["schemas"]["TaxFormAi"][];
+            /** Jurisdiction */
+            jurisdiction: string;
+            /** Missing */
+            missing: number;
+            /** Partial */
+            partial: boolean;
+            /** Received */
+            received: number;
+            /** State */
+            state: string;
+            /** Year */
+            year: number;
+        };
+        /** AiTransactionsOut */
+        AiTransactionsOut: {
+            /**
+             * Date From
+             * Format: date
+             */
+            date_from: string;
+            /**
+             * Date To
+             * Format: date
+             */
+            date_to: string;
+            /** Items */
+            items: components["schemas"]["TransactionAi"][];
+            /** Next Cursor */
+            next_cursor: string | null;
+        };
+        /**
+         * AiTransport
+         * @enum {string}
+         */
+        AiTransport: "stdio" | "http";
+        /** AiTrendsOut */
+        AiTrendsOut: {
+            /** Categories */
+            categories: components["schemas"]["TrendRowAi"][];
+            /** Currency */
+            currency: string;
+            /**
+             * Flow
+             * @enum {string}
+             */
+            flow: "spending" | "income";
+            /** Month */
+            month: string;
+            /** Months */
+            months: number;
+            /** Series */
+            series: components["schemas"]["TrendPointAi"][];
+            total: components["schemas"]["TrendRowAi"];
+        };
         /** AliasOut */
         AliasOut: {
             /**
@@ -2985,6 +4049,14 @@ export interface components {
              * @enum {string}
              */
             type: "all";
+        };
+        /** AllocationAi */
+        AllocationAi: {
+            /** Key */
+            key: string;
+            value: components["schemas"]["AiMoney"];
+            /** Weight */
+            weight: string;
         };
         /** AllocationOut */
         AllocationOut: {
@@ -3061,6 +4133,29 @@ export interface components {
              * @enum {string}
              */
             type: "amount";
+        };
+        /** AnomalyAi */
+        AnomalyAi: {
+            /** Account */
+            account: string;
+            amount: components["schemas"]["AiMoney"];
+            /** Category */
+            category: string | null;
+            /**
+             * Kind
+             * @enum {string}
+             */
+            kind: "large" | "new_payee";
+            /** Payee */
+            payee: string | null;
+            /**
+             * Posted Date
+             * Format: date
+             */
+            posted_date: string;
+            /** Reason */
+            reason: string;
+            typical: components["schemas"]["AiMoney"] | null;
         };
         /** AnyCondition */
         "AnyCondition-Input": {
@@ -3254,6 +4349,30 @@ export interface components {
             /** Logout Token */
             logout_token: string;
         };
+        /** BudgetAi */
+        BudgetAi: {
+            /** Currency */
+            currency: string;
+            expense: components["schemas"]["BudgetTotalsAi"];
+            income: components["schemas"]["BudgetTotalsAi"];
+            /** Lines */
+            lines: components["schemas"]["BudgetLineAi"][];
+            /** Name */
+            name: string;
+            /** Period */
+            period: string;
+            /**
+             * Period End
+             * Format: date
+             */
+            period_end: string;
+            /**
+             * Period Start
+             * Format: date
+             */
+            period_start: string;
+            unbudgeted: components["schemas"]["AiMoney"];
+        };
         /**
          * BudgetCreate
          * @description ``POST /budgets``.
@@ -3284,6 +4403,18 @@ export interface components {
              * Format: date
              */
             start_date: string;
+        };
+        /** BudgetLineAi */
+        BudgetLineAi: {
+            actual: components["schemas"]["AiMoney"];
+            available: components["schemas"]["AiMoney"];
+            budgeted: components["schemas"]["AiMoney"];
+            /** Category */
+            category: string | null;
+            forecast: components["schemas"]["AiMoney"];
+            /** Kind */
+            kind: string | null;
+            remaining: components["schemas"]["AiMoney"];
         };
         /**
          * BudgetLineIn
@@ -3420,6 +4551,13 @@ export interface components {
             carried_over: components["schemas"]["Money"];
             forecast: components["schemas"]["Money"];
             remaining: components["schemas"]["Money"];
+        };
+        /** BudgetTotalsAi */
+        BudgetTotalsAi: {
+            actual: components["schemas"]["AiMoney"];
+            budgeted: components["schemas"]["AiMoney"];
+            forecast: components["schemas"]["AiMoney"];
+            remaining: components["schemas"]["AiMoney"];
         };
         /**
          * BudgetUpdate
@@ -3625,6 +4763,14 @@ export interface components {
             month: string;
             net: components["schemas"]["Money"];
             outflow: components["schemas"]["Money"];
+        };
+        /** CashflowMonthAi */
+        CashflowMonthAi: {
+            inflow: components["schemas"]["AiMoney"];
+            /** Month */
+            month: string;
+            net: components["schemas"]["AiMoney"];
+            outflow: components["schemas"]["AiMoney"];
         };
         /**
          * CashflowReport
@@ -4319,6 +5465,19 @@ export interface components {
             /** Passphrase */
             passphrase?: string | null;
         };
+        /**
+         * ExposurePreviewOut
+         * @description What every tool would return with these options; nothing is stored or sent.
+         */
+        ExposurePreviewOut: {
+            mode: components["schemas"]["AiMode"];
+            /** Placeholder Counts */
+            placeholder_counts: {
+                [key: string]: number;
+            };
+            /** Tools */
+            tools: components["schemas"]["PreviewToolOut"][];
+        };
         /** FactorAddedOut */
         FactorAddedOut: {
             /** Csrf Token */
@@ -4345,6 +5504,12 @@ export interface components {
          * @enum {string}
          */
         Flow: "spending" | "income";
+        /** FlowItemAi */
+        FlowItemAi: {
+            amount: components["schemas"]["AiMoney"];
+            /** Name */
+            name: string | null;
+        };
         /**
          * FlowReport
          * @description ``GET /reports/spending`` and ``GET /reports/income``.
@@ -4481,11 +5646,37 @@ export interface components {
              */
             rate_date: string;
         };
+        /** GainsAi */
+        GainsAi: {
+            long_term: components["schemas"]["AiMoney"];
+            short_term: components["schemas"]["AiMoney"];
+            total: components["schemas"]["AiMoney"];
+        };
         /** GainsOut */
         GainsOut: {
             long_term: components["schemas"]["Money"];
             short_term: components["schemas"]["Money"];
             total: components["schemas"]["Money"];
+        };
+        /** GoalAi */
+        GoalAi: {
+            /** Achieved */
+            achieved: boolean;
+            /** Archived */
+            archived: boolean;
+            contributed: components["schemas"]["AiMoney"];
+            /** Name */
+            name: string;
+            /** On Track */
+            on_track: boolean | null;
+            /** Percent */
+            percent: string;
+            /** Projected Completion */
+            projected_completion: string | null;
+            remaining: components["schemas"]["AiMoney"];
+            target: components["schemas"]["AiMoney"];
+            /** Target Date */
+            target_date: string | null;
         };
         /**
          * GoalCreate
@@ -4605,6 +5796,32 @@ export interface components {
             account_id: string;
             cost_method: components["schemas"]["CostMethod"];
             market_value_base: components["schemas"]["Money"] | null;
+        };
+        /** HoldingAi */
+        HoldingAi: {
+            /** Account */
+            account: string;
+            /** Asset Class */
+            asset_class: string;
+            cost_basis: components["schemas"]["AiMoney"];
+            /** Currency */
+            currency: string;
+            market_value: components["schemas"]["AiMoney"] | null;
+            /** Name */
+            name: string;
+            /** Price */
+            price: string | null;
+            /** Price Date */
+            price_date: string | null;
+            /** Quantity */
+            quantity: string;
+            /** Sector */
+            sector: string | null;
+            /** Symbol */
+            symbol: string;
+            unrealized: components["schemas"]["GainsAi"] | null;
+            /** Weight */
+            weight: string | null;
         };
         /** HoldingOut */
         HoldingOut: {
@@ -5002,6 +6219,46 @@ export interface components {
          * @enum {string}
          */
         LinkTarget: "transaction" | "investment_txn" | "loan_payment" | "account" | "tax_year";
+        /** LoanAi */
+        LoanAi: {
+            /** Account */
+            account: string;
+            balance: components["schemas"]["AiMoney"];
+            /** Currency */
+            currency: string;
+            escrow_amount: components["schemas"]["AiMoney"] | null;
+            /** Id */
+            id: string;
+            /** Lender */
+            lender: string | null;
+            /**
+             * Maturity Date
+             * Format: date
+             */
+            maturity_date: string;
+            /** Next Due Date */
+            next_due_date: string | null;
+            /**
+             * Origination Date
+             * Format: date
+             */
+            origination_date: string;
+            payment_amount: components["schemas"]["AiMoney"];
+            /** Payoff Date */
+            payoff_date: string | null;
+            principal_original: components["schemas"]["AiMoney"];
+            /** Rate */
+            rate: string;
+            /** Rate Type */
+            rate_type: string;
+            remaining_interest: components["schemas"]["AiMoney"];
+            /** Remaining Payments */
+            remaining_payments: number;
+            /** Term Months */
+            term_months: number;
+            /** Type */
+            type: string;
+        };
         /**
          * LoanCreate
          * @description ``POST /loans``: the terms of an existing loan, mortgage or line-of-credit account.
@@ -5713,6 +6970,17 @@ export interface components {
             /** Unpriced Security Ids */
             unpriced_security_ids: string[];
         };
+        /** NetWorthPointAi */
+        NetWorthPointAi: {
+            /**
+             * As Of
+             * Format: date
+             */
+            as_of: string;
+            assets: components["schemas"]["AiMoney"];
+            liabilities: components["schemas"]["AiMoney"];
+            net: components["schemas"]["AiMoney"];
+        };
         /** NetWorthPointOut */
         NetWorthPointOut: {
             /**
@@ -5979,6 +7247,19 @@ export interface components {
             /** State */
             state: string;
         };
+        /**
+         * PlaceholderMark
+         * @description A string in a preview body that carries scrubber placeholders.
+         */
+        PlaceholderMark: {
+            /**
+             * Path
+             * @description JSON path of the string, e.g. items[2].payee
+             */
+            path: string;
+            /** Placeholders */
+            placeholders: string[];
+        };
         /** PreviewBalance */
         PreviewBalance: {
             /** Amount */
@@ -6049,6 +7330,26 @@ export interface components {
             rows: string[][];
             /** Truncated */
             truncated: boolean;
+        };
+        /** PreviewToolOut */
+        PreviewToolOut: {
+            /**
+             * Body
+             * @description The body exactly as the AI view would send it.
+             */
+            body: unknown;
+            /** Bytes */
+            bytes: number;
+            /** Params */
+            params: {
+                [key: string]: unknown;
+            };
+            /** Placeholders */
+            placeholders: components["schemas"]["PlaceholderMark"][];
+            /** Status */
+            status: number;
+            /** Tool */
+            tool: string;
         };
         /** PreviewTransaction */
         PreviewTransaction: {
@@ -6239,6 +7540,34 @@ export interface components {
              * @enum {string}
              */
             method: "recovery";
+        };
+        /** RecurringAi */
+        RecurringAi: {
+            /** Account */
+            account: string;
+            /** Active */
+            active: boolean;
+            amount_max: components["schemas"]["AiMoney"];
+            amount_min: components["schemas"]["AiMoney"];
+            /** Cadence */
+            cadence: string;
+            /** Category */
+            category: string | null;
+            /** Interval Count */
+            interval_count: number;
+            /** Last Seen On */
+            last_seen_on: string | null;
+            /** Name */
+            name: string;
+            /**
+             * Next Due
+             * Format: date
+             */
+            next_due: string;
+            /** Origin */
+            origin: string;
+            /** Payee */
+            payee: string | null;
         };
         /**
          * RecurringExtraIn
@@ -6916,6 +8245,15 @@ export interface components {
             /** Savings Rate */
             savings_rate: string | null;
         };
+        /** ScenarioAi */
+        ScenarioAi: {
+            /** Payments */
+            payments: number;
+            /** Payoff Date */
+            payoff_date: string | null;
+            total_extra: components["schemas"]["AiMoney"];
+            total_interest: components["schemas"]["AiMoney"];
+        };
         /** ScenarioOut */
         ScenarioOut: {
             /** Payments */
@@ -6986,6 +8324,24 @@ export interface components {
          * @enum {string}
          */
         ScheduleOrigin: "detected" | "manual";
+        /** ScheduleRowAi */
+        ScheduleRowAi: {
+            balance: components["schemas"]["AiMoney"];
+            /**
+             * Due Date
+             * Format: date
+             */
+            due_date: string;
+            escrow: components["schemas"]["AiMoney"];
+            extra: components["schemas"]["AiMoney"];
+            interest: components["schemas"]["AiMoney"];
+            /** Number */
+            number: number;
+            payment: components["schemas"]["AiMoney"];
+            principal: components["schemas"]["AiMoney"];
+            /** Rate */
+            rate: string;
+        };
         /** ScheduleRowOut */
         ScheduleRowOut: {
             balance: components["schemas"]["Money"];
@@ -7004,6 +8360,16 @@ export interface components {
             /** Rate */
             rate: string;
             total: components["schemas"]["Money"];
+        };
+        /** ScheduleTotalsAi */
+        ScheduleTotalsAi: {
+            extra: components["schemas"]["AiMoney"];
+            interest: components["schemas"]["AiMoney"];
+            /** Payments */
+            payments: number;
+            /** Payoff Date */
+            payoff_date: string | null;
+            principal: components["schemas"]["AiMoney"];
         };
         /** ScheduleTotalsOut */
         ScheduleTotalsOut: {
@@ -7055,6 +8421,48 @@ export interface components {
             reserved: boolean;
             /** Scope */
             scope: string;
+        };
+        /** ScrubbedSample */
+        ScrubbedSample: {
+            /** Changed */
+            changed: boolean;
+            /** Original */
+            original: string;
+            /** Placeholders */
+            placeholders: string[];
+            /** Scrubbed */
+            scrubbed: string;
+            /**
+             * Source
+             * @description Where the text lives, e.g. transaction.memo
+             */
+            source: string;
+        };
+        /**
+         * ScrubberPreviewIn
+         * @description Terms to try before saving them on a client, and optional ad-hoc text.
+         */
+        ScrubberPreviewIn: {
+            /** Client Id */
+            client_id?: string | null;
+            /** Custom Denylist */
+            custom_denylist?: string[];
+            /**
+             * Limit
+             * @default 100
+             */
+            limit: number;
+            /** Member Aliases */
+            member_aliases?: string[];
+            /** Text */
+            text?: string | null;
+        };
+        /** ScrubberPreviewOut */
+        ScrubberPreviewOut: {
+            /** Changed */
+            changed: number;
+            /** Samples */
+            samples: components["schemas"]["ScrubbedSample"][];
         };
         /** SecurityBrief */
         SecurityBrief: {
@@ -7226,6 +8634,12 @@ export interface components {
         };
         /** SessionOut */
         SessionOut: {
+            /**
+             * Ai Clients Active
+             * @description The active household has a live AI client (not revoked, not expired): the app shows a persistent banner (AI_ACCESS.md M5).
+             * @default false
+             */
+            ai_clients_active: boolean;
             /**
              * Auth Method
              * @enum {string}
@@ -7451,6 +8865,14 @@ export interface components {
             /** Text */
             text: string;
         };
+        /** SplitAi */
+        SplitAi: {
+            amount: components["schemas"]["AiMoney"];
+            /** Category */
+            category: string | null;
+            /** Memo */
+            memo: string | null;
+        };
         /** SplitAmountAction */
         "SplitAmountAction-Input": {
             /** Lines */
@@ -7621,6 +9043,19 @@ export interface components {
             schedule: string | null;
             total: components["schemas"]["Money"];
         };
+        /** SystemAiOut */
+        SystemAiOut: {
+            /**
+             * Enabled
+             * @description False: the kill switch is engaged for the instance.
+             */
+            enabled: boolean;
+        };
+        /** SystemAiUpdate */
+        SystemAiUpdate: {
+            /** Enabled */
+            enabled?: boolean | null;
+        };
         /** TagCreate */
         TagCreate: {
             /** Name */
@@ -7657,6 +9092,35 @@ export interface components {
         TagUpdate: {
             /** Name */
             name: string;
+        };
+        /** TaxBoxAi */
+        TaxBoxAi: {
+            amount: components["schemas"]["AiMoney"];
+            /** Box */
+            box: string;
+            /** Label */
+            label: string;
+        };
+        /** TaxCategoryAi */
+        TaxCategoryAi: {
+            /** Category */
+            category: string | null;
+            /** Line */
+            line: string | null;
+            /** Schedule */
+            schedule: string | null;
+            /** Tax Treatment */
+            tax_treatment: string | null;
+            total: components["schemas"]["AiMoney"];
+        };
+        /** TaxChecklistAi */
+        TaxChecklistAi: {
+            /** Form Type */
+            form_type: string;
+            /** Issuer */
+            issuer: string | null;
+            /** Status */
+            status: string;
         };
         /** TaxExportOut */
         TaxExportOut: {
@@ -7706,6 +9170,15 @@ export interface components {
          * @enum {string}
          */
         TaxExportState: "pending" | "ready" | "downloaded" | "expired" | "failed";
+        /** TaxFormAi */
+        TaxFormAi: {
+            /** Boxes */
+            boxes: components["schemas"]["TaxBoxAi"][];
+            /** Count */
+            count: number;
+            /** Form Type */
+            form_type: string;
+        };
         /** TaxSummaryOut */
         TaxSummaryOut: {
             /** By Hint */
@@ -7938,6 +9411,41 @@ export interface components {
              */
             method: "totp";
         };
+        /** TransactionAi */
+        TransactionAi: {
+            /** Account */
+            account: string;
+            /** Account Id */
+            account_id: string;
+            amount: components["schemas"]["AiMoney"];
+            /** Category */
+            category: string | null;
+            /** Id */
+            id: string;
+            /** Memo */
+            memo: string | null;
+            /** Merchant City */
+            merchant_city: string | null;
+            /** Merchant State */
+            merchant_state: string | null;
+            /** Notes */
+            notes: string | null;
+            /** Payee */
+            payee: string | null;
+            /**
+             * Posted Date
+             * Format: date
+             */
+            posted_date: string;
+            /** Splits */
+            splits: components["schemas"]["SplitAi"][];
+            /** Status */
+            status: string;
+            /** Tags */
+            tags: string[];
+            /** Transfer */
+            transfer: boolean;
+        };
         /**
          * TransactionCreate
          * @description A manual transaction. ``amount.currency`` must be the account's currency.
@@ -8130,6 +9638,12 @@ export interface components {
             /** Month */
             month: string;
         };
+        /** TrendPointAi */
+        TrendPointAi: {
+            amount: components["schemas"]["AiMoney"];
+            /** Month */
+            month: string;
+        };
         /** TrendReport */
         TrendReport: {
             /** Categories */
@@ -8167,6 +9681,18 @@ export interface components {
             previous: components["schemas"]["Money"];
             year_ago: components["schemas"]["Money"];
             yoy_change: components["schemas"]["Money"];
+            /** Yoy Percent */
+            yoy_percent: string | null;
+        };
+        /** TrendRowAi */
+        TrendRowAi: {
+            amount: components["schemas"]["AiMoney"];
+            /** Mom Percent */
+            mom_percent: string | null;
+            /** Name */
+            name: string | null;
+            previous: components["schemas"]["AiMoney"] | null;
+            year_ago: components["schemas"]["AiMoney"] | null;
             /** Yoy Percent */
             yoy_percent: string | null;
         };
@@ -9204,6 +10730,1305 @@ export interface operations {
             };
             /** @description Problem details */
             422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+        };
+    };
+    list_accounts_api_v1_ai_v1_accounts_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AiAccountsOut"];
+                };
+            };
+            /** @description Problem details */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Problem details */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Problem details */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Problem details */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Problem details */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+        };
+    };
+    get_allocation_api_v1_ai_v1_allocation_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AiAllocationOut"];
+                };
+            };
+            /** @description Problem details */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Problem details */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Problem details */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Problem details */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Problem details */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+        };
+    };
+    find_anomalies_api_v1_ai_v1_anomalies_get: {
+        parameters: {
+            query?: {
+                /** @description this_month, last_month, last_30_days, last_90_days, last_12_months, this_year, last_year, ytd, YYYY or YYYY-MM */
+                period?: string | null;
+                date_from?: string | null;
+                date_to?: string | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AiAnomaliesOut"];
+                };
+            };
+            /** @description Problem details */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Problem details */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Problem details */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Problem details */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Problem details */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+        };
+    };
+    get_budget_status_api_v1_ai_v1_budgets_status_get: {
+        parameters: {
+            query?: {
+                on?: string | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AiBudgetStatusOut"];
+                };
+            };
+            /** @description Problem details */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Problem details */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Problem details */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Problem details */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Problem details */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+        };
+    };
+    get_savings_goals_api_v1_ai_v1_goals_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AiGoalsOut"];
+                };
+            };
+            /** @description Problem details */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Problem details */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Problem details */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Problem details */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Problem details */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+        };
+    };
+    list_holdings_api_v1_ai_v1_holdings_get: {
+        parameters: {
+            query?: {
+                account_id?: string | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AiHoldingsOut"];
+                };
+            };
+            /** @description Problem details */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Problem details */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Problem details */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Problem details */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Problem details */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+        };
+    };
+    get_income_api_v1_ai_v1_income_get: {
+        parameters: {
+            query?: {
+                /** @description this_month, last_month, last_30_days, last_90_days, last_12_months, this_year, last_year, ytd, YYYY or YYYY-MM */
+                period?: string | null;
+                date_from?: string | null;
+                date_to?: string | null;
+                group_by?: "category" | "payee" | "month" | "account" | "account_type";
+                depth?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AiFlowOut"];
+                };
+            };
+            /** @description Problem details */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Problem details */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Problem details */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Problem details */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Problem details */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+        };
+    };
+    list_loans_api_v1_ai_v1_loans_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AiLoansOut"];
+                };
+            };
+            /** @description Problem details */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Problem details */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Problem details */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Problem details */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Problem details */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+        };
+    };
+    get_loan_schedule_api_v1_ai_v1_loans__loan_id__schedule_get: {
+        parameters: {
+            query?: {
+                basis?: "original" | "projected";
+                offset?: number;
+                limit?: number;
+            };
+            header?: never;
+            path: {
+                loan_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AiLoanScheduleOut"];
+                };
+            };
+            /** @description Problem details */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Problem details */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Problem details */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Problem details */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Problem details */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+        };
+    };
+    simulate_loan_api_v1_ai_v1_loans__loan_id__simulate_get: {
+        parameters: {
+            query?: {
+                extra_monthly?: number | string | null;
+                extra_once?: number | string | null;
+                extra_once_on?: string | null;
+            };
+            header?: never;
+            path: {
+                loan_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AiSimulationOut"];
+                };
+            };
+            /** @description Problem details */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Problem details */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Problem details */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Problem details */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Problem details */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+        };
+    };
+    get_net_worth_history_api_v1_ai_v1_net_worth_history_get: {
+        parameters: {
+            query?: {
+                range?: "1m" | "3m" | "6m" | "ytd" | "1y" | "3y" | "5y" | "max";
+                granularity?: ("day" | "week" | "month") | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AiNetWorthHistoryOut"];
+                };
+            };
+            /** @description Problem details */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Problem details */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Problem details */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Problem details */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Problem details */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+        };
+    };
+    get_overview_api_v1_ai_v1_overview_get: {
+        parameters: {
+            query?: {
+                /** @description this_month, last_month, last_30_days, last_90_days, last_12_months, this_year, last_year, ytd, YYYY or YYYY-MM */
+                period?: string | null;
+                date_from?: string | null;
+                date_to?: string | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AiOverviewOut"];
+                };
+            };
+            /** @description Problem details */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Problem details */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Problem details */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Problem details */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Problem details */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+        };
+    };
+    get_performance_api_v1_ai_v1_performance_get: {
+        parameters: {
+            query?: {
+                range?: "1m" | "3m" | "6m" | "ytd" | "1y" | "3y" | "5y" | "max";
+                account_id?: string | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AiPerformanceOut"];
+                };
+            };
+            /** @description Problem details */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Problem details */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Problem details */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Problem details */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Problem details */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+        };
+    };
+    explain_data_policy_api_v1_ai_v1_policy_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AiDataPolicyOut"];
+                };
+            };
+            /** @description Problem details */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Problem details */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Problem details */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Problem details */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Problem details */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+        };
+    };
+    get_recurring_api_v1_ai_v1_recurring_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AiRecurringOut"];
+                };
+            };
+            /** @description Problem details */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Problem details */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Problem details */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Problem details */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Problem details */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+        };
+    };
+    get_spending_api_v1_ai_v1_spending_get: {
+        parameters: {
+            query?: {
+                /** @description this_month, last_month, last_30_days, last_90_days, last_12_months, this_year, last_year, ytd, YYYY or YYYY-MM */
+                period?: string | null;
+                date_from?: string | null;
+                date_to?: string | null;
+                group_by?: "category" | "payee" | "month" | "account" | "account_type";
+                depth?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AiFlowOut"];
+                };
+            };
+            /** @description Problem details */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Problem details */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Problem details */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Problem details */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Problem details */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+        };
+    };
+    get_tax_year_summary_api_v1_ai_v1_tax__year__summary_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                year: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AiTaxYearSummaryOut"];
+                };
+            };
+            /** @description Problem details */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Problem details */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Problem details */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Problem details */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Problem details */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+        };
+    };
+    list_transactions_api_v1_ai_v1_transactions_get: {
+        parameters: {
+            query?: {
+                /** @description this_month, last_month, last_30_days, last_90_days, last_12_months, this_year, last_year, ytd, YYYY or YYYY-MM */
+                period?: string | null;
+                date_from?: string | null;
+                date_to?: string | null;
+                account_id?: string | null;
+                category?: string | null;
+                payee?: string | null;
+                min_amount?: number | string | null;
+                max_amount?: number | string | null;
+                limit?: number;
+                cursor?: string | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AiTransactionsOut"];
+                };
+            };
+            /** @description Problem details */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Problem details */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Problem details */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Problem details */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Problem details */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+        };
+    };
+    get_trends_api_v1_ai_v1_trends_get: {
+        parameters: {
+            query?: {
+                metric?: "spending" | "income";
+                month?: string | null;
+                months?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AiTrendsOut"];
+                };
+            };
+            /** @description Problem details */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Problem details */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Problem details */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Problem details */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Problem details */
+            429: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -18278,6 +21103,748 @@ export interface operations {
             };
         };
     };
+    get_ai_access_api_v1_settings_ai_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AiAccessOut"];
+                };
+            };
+            /** @description Problem details */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Problem details */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Problem details */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Problem details */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Problem details */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+        };
+    };
+    patch_ai_access_api_v1_settings_ai_patch: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AiAccessUpdate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AiAccessOut"];
+                };
+            };
+            /** @description Problem details */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Problem details */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Problem details */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Problem details */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Problem details */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+        };
+    };
+    list_ai_calls_api_v1_settings_ai_calls_get: {
+        parameters: {
+            query?: {
+                client_id?: string | null;
+                contains?: string | null;
+                limit?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AiCallsOut"];
+                };
+            };
+            /** @description Problem details */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Problem details */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Problem details */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Problem details */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Problem details */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+        };
+    };
+    list_ai_clients_api_v1_settings_ai_clients_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AiClientOut"][];
+                };
+            };
+            /** @description Problem details */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Problem details */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Problem details */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Problem details */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Problem details */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+        };
+    };
+    create_ai_client_api_v1_settings_ai_clients_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AiClientCreate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AiClientCreatedOut"];
+                };
+            };
+            /** @description Problem details */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Problem details */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Problem details */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Problem details */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Problem details */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+        };
+    };
+    get_ai_client_api_v1_settings_ai_clients__client_id__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                client_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AiClientOut"];
+                };
+            };
+            /** @description Problem details */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Problem details */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Problem details */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Problem details */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Problem details */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+        };
+    };
+    revoke_ai_client_api_v1_settings_ai_clients__client_id__delete: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                client_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Problem details */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Problem details */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Problem details */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Problem details */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Problem details */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+        };
+    };
+    preview_ai_client_api_v1_settings_ai_clients__client_id__preview_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                client_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ExposurePreviewOut"];
+                };
+            };
+            /** @description Problem details */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Problem details */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Problem details */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Problem details */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Problem details */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+        };
+    };
+    preview_ai_options_api_v1_settings_ai_preview_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AiOptionsIn"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ExposurePreviewOut"];
+                };
+            };
+            /** @description Problem details */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Problem details */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Problem details */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Problem details */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Problem details */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+        };
+    };
+    get_scrubber_preview_api_v1_settings_ai_scrubber_preview_get: {
+        parameters: {
+            query?: {
+                client_id?: string | null;
+                limit?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ScrubberPreviewOut"];
+                };
+            };
+            /** @description Problem details */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Problem details */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Problem details */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Problem details */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Problem details */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+        };
+    };
+    post_scrubber_preview_api_v1_settings_ai_scrubber_preview_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ScrubberPreviewIn"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ScrubberPreviewOut"];
+                };
+            };
+            /** @description Problem details */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Problem details */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Problem details */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Problem details */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Problem details */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+        };
+    };
     get_intake_api_v1_settings_intake_get: {
         parameters: {
             query?: never;
@@ -18466,6 +22033,140 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["MailTestOut"];
+                };
+            };
+            /** @description Problem details */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Problem details */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Problem details */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Problem details */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+        };
+    };
+    get_system_ai_api_v1_settings_system_ai_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SystemAiOut"];
+                };
+            };
+            /** @description Problem details */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Problem details */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Problem details */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Problem details */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Problem details */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+        };
+    };
+    patch_system_ai_api_v1_settings_system_ai_patch: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SystemAiUpdate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SystemAiOut"];
+                };
+            };
+            /** @description Problem details */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
                 };
             };
             /** @description Problem details */

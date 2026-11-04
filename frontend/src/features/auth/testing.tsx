@@ -67,6 +67,8 @@ export interface SessionOptions {
   enrolled?: boolean;
   authMethod?: "local" | "oidc" | "breakglass" | "bootstrap" | "token";
   csrfToken?: string;
+  aiClientsActive?: boolean;
+  instanceAdmin?: boolean;
 }
 
 export function sessionBody(options: SessionOptions = {}): Record<string, unknown> {
@@ -76,7 +78,7 @@ export function sessionBody(options: SessionOptions = {}): Record<string, unknow
       id: options.userId ?? "u-1",
       username: options.username ?? "alice",
       display_name: options.displayName ?? "Alice",
-      is_instance_admin: false,
+      is_instance_admin: options.instanceAdmin ?? false,
     },
     household:
       options.household === false
@@ -91,6 +93,7 @@ export function sessionBody(options: SessionOptions = {}): Record<string, unknow
       enrollment_required: options.enrollmentRequired ?? false,
     },
     auth_method: options.authMethod ?? "local",
+    ai_clients_active: options.aiClientsActive ?? false,
   };
 }
 

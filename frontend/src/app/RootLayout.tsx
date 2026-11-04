@@ -5,6 +5,7 @@ import { useState } from "react";
 
 import { cx } from "../components/cx";
 import { AccountMenu } from "../features/auth/AccountMenu";
+import { AiBanner } from "../features/settings/ai/AiBanner";
 import { isBarePath } from "../features/auth/guard";
 import { IconButton } from "../components/IconButton";
 import { CloseIcon, MenuIcon } from "../components/icons";
@@ -76,6 +77,7 @@ export function RootLayout() {
         </nav>
       )}
       <main id="main" className="app-main" tabIndex={-1}>
+        {bare ? null : <AiBanner />}
         <Outlet />
       </main>
     </div>

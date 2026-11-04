@@ -3,6 +3,7 @@ import { createRoute, type AnyRoute } from "@tanstack/react-router";
 
 import { CategoriesPage } from "../categories/CategoriesPage";
 import { AccessPage } from "./AccessPage";
+import { AiAccessPage } from "./ai/AiAccessPage";
 import { DataPage } from "./DataPage";
 import { GeneralPage } from "./GeneralPage";
 import { IntakePage } from "./IntakePage";
@@ -25,6 +26,7 @@ export function routes(parent: AnyRoute): AnyRoute[] {
       child("access", AccessPage),
       child("categories", CategoriesPage),
       child("intake", IntakePage),
+      child("ai", AiAccessPage),
       child("data", DataPage),
     ]),
   ];

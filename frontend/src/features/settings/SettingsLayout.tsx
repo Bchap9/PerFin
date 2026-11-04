@@ -44,6 +44,11 @@ const SECTIONS = [
   { to: "/settings/access", title: "Account access", text: "Which accounts each member or viewer can see or edit." },
   { to: "/settings/categories", title: "Categories, payees and tags", text: "Organise how transactions are grouped." },
   { to: "/settings/intake", title: "Intake", text: "Receipts mailbox, its alias, the drop folder and virus scanning." },
+  {
+    to: "/settings/ai",
+    title: "AI access",
+    text: "Assistants that may read financial facts, what leaves, and an audit of every call.",
+  },
   { to: "/settings/data", title: "Data export and import", text: "Take a copy of everything, or restore one." },
 ] as const;
 

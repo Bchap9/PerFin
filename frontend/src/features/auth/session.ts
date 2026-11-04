@@ -77,6 +77,7 @@ export function authSessionOf(state: SessionState | undefined): AuthSession | nu
       enrollment_required: mfa["enrollment_required"] === true,
     },
     auth_method: isAuthMethod(method) ? method : "local",
+    ai_clients_active: data["ai_clients_active"] === true,
   };
 }
 
