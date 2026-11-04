@@ -17,8 +17,10 @@ EXPIRE_JOB_TYPE: Final = "portability.expire"
 
 #: The archive format this code writes; :data:`SUPPORTED_FORMAT_VERSIONS` it reads.
 ARCHIVE_FORMAT: Final = "perfin-export"
-FORMAT_VERSION: Final = 1
-SUPPORTED_FORMAT_VERSIONS: Final = frozenset({1})
+#: Version 2 added the Phase 3-6 tables (``EntitySpec.since``); version 1
+#: archives are still imported (those tables are simply absent).
+FORMAT_VERSION: Final = 2
+SUPPORTED_FORMAT_VERSIONS: Final = frozenset({1, 2})
 
 PASSPHRASE_MIN: Final = 12
 PASSPHRASE_MAX: Final = 1024

@@ -24,7 +24,10 @@ and from there into a new encrypted object of the blob store
 Rows are read in dependency order within one database transaction; a row
 whose required parent was not exported (created between two reads) is left
 out and an optional reference to a row that was not exported becomes null,
-so every archive is self-consistent and importable.
+so every archive is self-consistent and importable. ``investment_txn.lot_links``
+names lots, which are written after the transactions: entries naming a lot
+that does not exist when the transactions are read are dropped, and an
+export during which a linked lot disappears fails (``export-concurrent-change``).
 """
 
 from __future__ import annotations
@@ -63,6 +66,7 @@ from app.domain.documents.blobstore import (
     SealedBlob,
 )
 from app.domain.documents.models import Blob, BlobArea, Document
+from app.domain.investments.models import Lot
 from app.domain.portability import codec
 from app.domain.portability.entities import (
     CSV_PREFIX,
@@ -204,6 +208,28 @@ def _keep(
     return row
 
 
+def _lot_links(row: dict[str, Any], lot_ids: set[uuid.UUID]) -> set[uuid.UUID]:
+    """Drop ``lot_links`` entries naming a lot that no longer exists (module doc).
+
+    Returns the lot ids the remaining entries name.
+    """
+    links = row.get("lot_links")
+    if not isinstance(links, list):
+        return set()
+    kept = []
+    named: set[uuid.UUID] = set()
+    for link in links:
+        try:
+            lot_id = uuid.UUID(str(link["lot_id"]))
+        except (KeyError, TypeError, ValueError):
+            continue
+        if lot_id in lot_ids:
+            kept.append(link)
+            named.add(lot_id)
+    row["lot_links"] = kept
+    return named
+
+
 class _Writer:
     def __init__(
         self,
@@ -226,6 +252,8 @@ class _Writer:
         self.members = _Members()
         self.exported: dict[str, set[uuid.UUID]] = defaultdict(set)
         self.counts: dict[str, int] = {}
+        #: Lots named by an exported ``investment_txn.lot_links``.
+        self.linked_lots: set[uuid.UUID] = set()
         # Small lookups for the CSV files.
         self.names: dict[str, dict[uuid.UUID, str]] = defaultdict(dict)
         self.category_parent: dict[uuid.UUID, uuid.UUID | None] = {}
@@ -236,12 +264,23 @@ class _Writer:
     def entity(self, spec: EntitySpec) -> None:
         columns = spec.columns()
         count = 0
+        lot_ids: set[uuid.UUID] = set()
+        if spec.name == "investment_txns":
+            # Lots are written after the transactions (a lot names its opening
+            # transaction); a link may only name a lot that exists now.
+            lot_ids = set(
+                self.session.execute(
+                    select(Lot.id).where(Lot.household_id == self.household_id)
+                ).scalars()
+            )
         with self.member(spec.member) as write:
             write(b"[")
             for mapping in _rows(self.session, spec, self.household_id):
                 row = _keep(spec, dict(mapping), self.exported)
                 if row is None:
                     continue
+                if spec.name == "investment_txns":
+                    self.linked_lots |= _lot_links(row, lot_ids)
                 self._remember(spec, row)
                 encoded = {c.name: codec.encode(c, row[c.name]) for c in columns}
                 write((b",\n" if count else b"\n") + json.dumps(encoded, sort_keys=True).encode())
@@ -251,6 +290,10 @@ class _Writer:
                     self.check_cancelled()
             write(b"\n]\n")
         self.counts[spec.name] = count
+        if spec.name == "lots" and self.linked_lots - self.exported["lots"]:
+            # A lot was replaced while the export ran (a concurrent change of
+            # the position): the archive would not import; the user retries.
+            raise ExportFailedError("export-concurrent-change")
 
     def _remember(self, spec: EntitySpec, row: dict[str, Any]) -> None:
         if spec.name in ("accounts", "payees", "tags", "institutions"):

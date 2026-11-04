@@ -22,10 +22,23 @@ keys are checked before it decides):
   **merged** into existing ones of the household; an existing import mapping
   of the same name or an FX rate for the same pair and day is kept and the
   archive's is skipped; names that would clash are suffixed ``(imported)``;
+* securities are merged by symbol and exchange (a different quote currency
+  is ``archive-inconsistent``); a price, net worth snapshot, tax category
+  map, checklist item or learned layout (parser fingerprint) the household
+  already has for the same key wins over the archive's; tax years are
+  merged by year;
 * everything else (accounts, transactions, splits, tags on transactions,
   balance snapshots, schedules, rules, budgets, goals, documents and their
-  links) is created; rules are appended after the household's own;
-* ``import_hash`` embeds the account id, so it is recomputed for the new
+  links, investment settings, investment transactions, lots, loans with
+  payments and rate changes, manual assets and valuations, tax form data,
+  AI client definitions) is created; rules are appended after the
+  household's own;
+* ``investment_txn.lot_links`` and the ids in a net worth snapshot's
+  ``breakdown`` are re-mapped; the ``holding`` cache is rebuilt from the
+  imported lots; an AI client arrives without a token and revoked;
+* a format version 1 archive simply has none of the version 2 entities;
+* ``import_hash`` (of transactions and investment transactions) embeds the
+  account id (and the security), so it is recomputed for the new
   account (its running index is recovered by trying the indexes until the
   stored hash matches); re-importing the same statement into the new
   household is therefore still recognised as a duplicate. A hash that cannot
@@ -35,8 +48,9 @@ keys are checked before it decides):
   trusted; a type intake would refuse is ``archive-document-rejected``) and
   encrypted into new ``permanent`` blobs; documents still being processed
   when exported arrive as ``needs_review``;
-* rules, import mapping specs, split sums and the category depth are
-  validated as the services that normally write them would.
+* rules, import mapping specs, split sums, the category depth, lot links,
+  learned layouts (and their per-household limit) are validated as the
+  services that normally write them would.
 """
 
 from __future__ import annotations
@@ -48,25 +62,33 @@ from collections import defaultdict
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 from decimal import Decimal
-from typing import Any, Final
+from typing import Any, Final, cast
 
 from pydantic import ValidationError
 from sqlalchemy import insert, select, text
 from sqlalchemy.orm import Session
 
+from app.core import clock
 from app.core.crypto import Keyring
 from app.core.ids import uuid7
-from app.domain.accounts.models import Institution
+from app.domain.accounts.models import Account, Institution
 from app.domain.documents.blobstore import BlobStore, EncryptingWriter, SealedBlob
 from app.domain.documents.models import (
     TERMINAL_STATUSES,
     Blob,
     BlobArea,
+    DocumentKind,
     DocumentStatus,
+    ParserFingerprint,
 )
 from app.domain.fx.models import FxRate
 from app.domain.imports.models import ImportMapping
 from app.domain.imports.schemas import MappingSpec
+from app.domain.investments import service as investments_service
+from app.domain.investments.models import InvestmentTxnType, Price, Security
+from app.domain.investments.statement_import import HASH_VERSION as INVEST_HASH_VERSION
+from app.domain.investments.statement_import import activity_hash
+from app.domain.networth.models import NetWorthSnapshot
 from app.domain.portability.codec import ArchiveInvalidError, decode
 from app.domain.portability.entities import (
     BY_NAME,
@@ -75,6 +97,7 @@ from app.domain.portability.entities import (
     ENTITIES,
     LINK_TARGETS,
     MANIFEST,
+    entities_for,
 )
 from app.domain.portability.schemas import (
     ARCHIVE_FORMAT,
@@ -85,10 +108,19 @@ from app.domain.portability.zipsafe import SafeZip, ZipLimits
 from app.domain.rules import engine
 from app.domain.rules import repo as rules_repo
 from app.domain.rules.schemas import RULES_MAX, RuleBody
+from app.domain.tax.models import TaxCategoryMap, TaxChecklistItem, TaxYear
 from app.domain.taxonomy.service import MAX_CATEGORY_DEPTH
 from app.domain.transactions.import_hash import import_hash, normalize_payee
 from app.domain.transactions.models import Category, Payee, Tag
+from app.ingestion.classify.fingerprints import (
+    MAX_HOUSEHOLD_FINGERPRINTS,
+    SCHEMA_VERSION,
+    FingerprintError,
+    FingerprintSpec,
+    parse_match_rules,
+)
 from app.ingestion.intake.sniff import SNIFF_BYTES, Rejected, sniff
+from app.ingestion.sandbox.protocol import InvestmentActivity
 
 MANIFEST_MAX_BYTES: Final = 16 * 1024 * 1024
 #: Largest ``data/*.json`` or ``csv/*.csv`` member read into memory.
@@ -96,6 +128,8 @@ DATA_MEMBER_MAX_BYTES: Final = 512 * 1024 * 1024
 #: How many running indexes are tried to recover an import hash.
 HASH_INDEX_MAX: Final = 64
 CSV_MEMBERS: Final = frozenset({f"{CSV_PREFIX}accounts.csv", f"{CSV_PREFIX}transactions.csv"})
+#: Field separator of the investment activity hashes (``statement_import``).
+_INVEST_SEP: Final = "\x1f"
 _RULE_KINDS: Final = {
     "category": "categories",
     "payee": "payees",
@@ -180,8 +214,9 @@ def read_archive(data: bytes, *, limits: ZipLimits | None = None) -> ParsedArchi
         raise _fail(
             "archive-members-mismatch", "the archive's members differ from those in its manifest"
         )
-    rows: dict[str, list[dict[str, Any]]] = {}
-    for spec in ENTITIES:
+    rows: dict[str, list[dict[str, Any]]] = {spec.name: [] for spec in ENTITIES}
+    held = entities_for(manifest.format_version)
+    for spec in held:
         if spec.member not in members:
             raise _fail("archive-members-mismatch", f"the archive has no {spec.member}")
         content = archive.read(spec.member, limit=DATA_MEMBER_MAX_BYTES)
@@ -191,7 +226,7 @@ def read_archive(data: bytes, *, limits: ZipLimits | None = None) -> ParsedArchi
             raise _fail("archive-members-mismatch", f"the row count of {spec.member} differs")
     for name in CSV_MEMBERS & members:
         _check_member(archive, manifest, name, archive.read(name, limit=DATA_MEMBER_MAX_BYTES))
-    known = {spec.member for spec in ENTITIES} | CSV_MEMBERS
+    known = {spec.member for spec in held} | CSV_MEMBERS
     document_ids = {row["id"] for row in rows["documents"]}
     documents: dict[uuid.UUID, str] = {}
     for name in sorted(members - known):
@@ -241,6 +276,45 @@ def _free_name(name: str, taken: set[str], limit: int) -> str:
     raise _fail("archive-limit", "too many clashing names")
 
 
+def recover_investment_hash(
+    stored: str,
+    old_account: uuid.UUID,
+    new_account: uuid.UUID,
+    old_security: uuid.UUID | None,
+    new_security: uuid.UUID | None,
+    row: dict[str, Any],
+) -> str | None:
+    """``investment_txn.import_hash`` recomputed for the new account and security, or None.
+
+    Statement activity hashes (``activity_hash``) embed the account, the
+    security, the units as parsed (a split stores its ratio instead, so no
+    units are tried too) and a running index; an opening position's hash
+    embeds the account, the security and the day.
+    """
+    if old_security is not None and new_security is not None:
+        day = row["trade_date"].isoformat()
+
+        def opening(account: uuid.UUID, security: uuid.UUID) -> str:
+            parts = (INVEST_HASH_VERSION, str(account), "opening", str(security), day)
+            return hashlib.sha256(_INVEST_SEP.join(parts).encode()).hexdigest()
+
+        if opening(old_account, old_security) == stored:
+            return opening(new_account, new_security)
+    kind = row["type"].value if isinstance(row["type"], InvestmentTxnType) else str(row["type"])
+    for quantity in dict.fromkeys((row["quantity"], None)):
+        # Not validated: only the fields the hash reads are set.
+        activity = InvestmentActivity.model_construct(
+            type=cast(Any, kind),
+            trade_date=row["trade_date"],
+            quantity=quantity,
+            amount=row["amount"],
+        )
+        for index in range(HASH_INDEX_MAX):
+            if activity_hash(old_account, activity, old_security, index) == stored:
+                return activity_hash(new_account, activity, new_security, index)
+    return None
+
+
 def recover_import_hash(
     stored: str, old_account: uuid.UUID, new_account: uuid.UUID, row: dict[str, Any]
 ) -> str | None:
@@ -276,6 +350,9 @@ class _Importer:
         self.skipped: dict[str, int] = defaultdict(int)
         self.unrecoverable_hashes = 0
         self.written_keys = written_keys
+        #: Securities and tax years the household had before the import.
+        self.existing_securities: set[uuid.UUID] = set()
+        self.existing_tax_years: set[uuid.UUID] = set()
 
     # ---- helpers ---------------------------------------------------------
     def rows(self, entity: str) -> list[dict[str, Any]]:
@@ -308,7 +385,8 @@ class _Importer:
             row = self.map_refs(entity, row)
             if transform is not None:
                 row = transform(row, old)
-            new = uuid7()
+            # Lots get their new ids ahead of time (``investment_txns``).
+            new = self.ids[entity].get(old) or uuid7()
             self.ids[entity][old] = new
             row["id"] = new
             row["household_id"] = self.household_id
@@ -626,6 +704,285 @@ class _Importer:
         self.write(BY_NAME["rules"].table, out)
         self.created["rules"] += len(out)
 
+    # ---- format version 2 ------------------------------------------------
+    def parser_fingerprints(self) -> None:
+        """Learned layouts; a layout the household already has keeps its own versions."""
+        existing = {
+            (inst, kind, parser)
+            for inst, kind, parser in self.session.execute(
+                select(
+                    ParserFingerprint.institution_id,
+                    ParserFingerprint.kind,
+                    ParserFingerprint.parser_name,
+                ).where(ParserFingerprint.household_id == self.household_id)
+            )
+        }
+        new_rows: list[dict[str, Any]] = []
+        layouts: set[tuple[uuid.UUID | None, Any, Any]] = set(existing)
+        for row in self.rows("parser_fingerprints"):
+            self.check_fingerprint(row)
+            institution = self.ids["institutions"].get(row["institution_id"])
+            layout = (institution, row["kind"], row["parser_name"])
+            if layout in existing:
+                self.skipped["parser_fingerprints"] += 1
+                continue
+            layouts.add(layout)
+            new_rows.append(row)
+        if len(layouts) > MAX_HOUSEHOLD_FINGERPRINTS:
+            raise _fail(
+                "archive-limit",
+                f"a household remembers at most {MAX_HOUSEHOLD_FINGERPRINTS} layouts",
+            )
+        self.insert("parser_fingerprints", new_rows)
+
+    @staticmethod
+    def check_fingerprint(row: dict[str, Any]) -> None:
+        """As ``remember_layout`` validates a fingerprint before storing it."""
+        try:
+            if row["kind"] is DocumentKind.UNKNOWN:
+                raise FingerprintError("a fingerprint names a known kind")
+            spec = parse_match_rules(row["match_rules"])
+            FingerprintSpec.model_validate(
+                {
+                    "schema": SCHEMA_VERSION,
+                    "key": "household-check",
+                    "institution": "check",
+                    "kind": row["kind"].value,
+                    "parser": row["parser_name"],
+                    "version": 1,
+                    "match": spec,
+                }
+            )
+        except (FingerprintError, ValidationError):
+            raise _fail("archive-invalid-value", "a parser fingerprint does not validate") from None
+        row["match_rules"] = spec.model_dump(mode="json", exclude_defaults=True)
+
+    def securities(self) -> None:
+        """Merged into the catalogue by symbol and exchange (same quote currency)."""
+        existing = {
+            (symbol, exchange): (sid, currency)
+            for sid, symbol, exchange, currency in self.session.execute(
+                select(Security.id, Security.symbol, Security.exchange, Security.currency).where(
+                    Security.household_id == self.household_id
+                )
+            )
+        }
+        new_rows: list[dict[str, Any]] = []
+        for row in self.rows("securities"):
+            match = existing.get((row["symbol"], row["exchange"]))
+            if match is None:
+                new_rows.append(row)
+                continue
+            security_id, currency = match
+            if currency != row["currency"]:
+                raise _fail(
+                    "archive-inconsistent",
+                    "securities.currency: a security of the archive is quoted in another "
+                    "currency than the household's security of the same symbol",
+                )
+            self.ids["securities"][row["id"]] = security_id
+            self.merged["securities"] += 1
+        self.insert("securities", new_rows)
+        self.existing_securities = {sid for sid, _ in existing.values()}
+
+    def prices(self) -> None:
+        """A price the household already has for the security and day wins."""
+        existing = {
+            (security_id, day)
+            for security_id, day in self.session.execute(
+                select(Price.security_id, Price.price_date).where(
+                    Price.household_id == self.household_id,
+                    Price.security_id.in_(self.existing_securities),
+                )
+            )
+        }
+        new_rows = []
+        for row in self.rows("prices"):
+            security = self.ids["securities"].get(row["security_id"])
+            if (security, row["price_date"]) in existing:
+                self.skipped["prices"] += 1
+                continue
+            new_rows.append(row)
+        self.insert("prices", new_rows)
+
+    def investment_txns(self) -> None:
+        """Lot ids are assigned first so ``lot_links`` can be re-mapped (and validated)."""
+        for row in self.parsed.rows["lots"]:
+            self.ids["lots"][row["id"]] = uuid7()
+        old_rows = {row["id"]: row for row in self.parsed.rows["investment_txns"]}
+
+        def transform(row: dict[str, Any], old: uuid.UUID) -> dict[str, Any]:
+            try:
+                links = investments_service.parse_lot_links(row["lot_links"])
+            except (ValidationError, ValueError):
+                raise _fail(
+                    "archive-invalid-value", "investment_txns.lot_links: does not validate"
+                ) from None
+            remapped = []
+            for link in links:
+                new_lot = self.ids["lots"].get(link.lot_id)
+                if new_lot is None:
+                    raise _fail(
+                        "archive-reference-unknown",
+                        "investment_txns.lot_links names a lots row that is not in the archive",
+                    )
+                remapped.append(link.model_copy(update={"lot_id": new_lot}))
+            row["lot_links"] = investments_service.dump_lot_links(remapped)
+            stored = row["import_hash"]
+            if stored is not None:
+                original = old_rows[old]
+                recovered = recover_investment_hash(
+                    stored,
+                    original["account_id"],
+                    row["account_id"],
+                    original["security_id"],
+                    row["security_id"],
+                    row,
+                )
+                if recovered is None:
+                    self.unrecoverable_hashes += 1
+                row["import_hash"] = recovered
+            return row
+
+        self.insert("investment_txns", transform=transform)
+
+    def holdings(self) -> None:
+        """Rebuild the ``holding`` cache of every account that received lots."""
+        accounts = {self.ids["accounts"][row["account_id"]] for row in self.parsed.rows["lots"]}
+        today = investments_service.today()
+        for account_id in sorted(accounts, key=lambda u: u.bytes):
+            account = self.session.get(Account, account_id)
+            if account is None:  # pragma: no cover - inserted above
+                raise _fail("archive-reference-unknown", "lots name an unknown account")
+            self.created["holdings"] += len(
+                investments_service.rebuild_holdings(self.session, account, today)
+            )
+
+    def net_worth_snapshots(self) -> None:
+        """A day the household already has a snapshot for keeps its own."""
+        taken = set(
+            self.session.execute(
+                select(NetWorthSnapshot.as_of_date).where(
+                    NetWorthSnapshot.household_id == self.household_id
+                )
+            ).scalars()
+        )
+        new_rows = []
+        for row in self.rows("net_worth_snapshots"):
+            if row["as_of_date"] in taken:
+                self.skipped["net_worth_snapshots"] += 1
+                continue
+            row["breakdown"] = self.remap_breakdown(row["breakdown"])
+            new_rows.append(row)
+        self.insert("net_worth_snapshots", new_rows)
+
+    def remap_breakdown(self, breakdown: dict[str, Any]) -> dict[str, Any]:
+        """The ids in a snapshot's breakdown, re-mapped.
+
+        An id the archive does not hold (an account deleted since the
+        snapshot) becomes a fresh id that names no row, like a rule's.
+        """
+
+        def mapped(entity: str, value: Any) -> Any:
+            try:
+                old = uuid.UUID(str(value))
+            except ValueError:
+                raise _fail(
+                    "archive-invalid-value", "net_worth_snapshots.breakdown: expected an id"
+                ) from None
+            return str(self.ids[entity].get(old) or uuid7())
+
+        out = dict(breakdown)
+        for key in ("accounts", "unconverted"):
+            items = out.get(key)
+            if isinstance(items, list):
+                out[key] = [
+                    {**item, "account_id": mapped("accounts", item["account_id"])}
+                    if isinstance(item, dict) and "account_id" in item
+                    else item
+                    for item in items
+                ]
+        unpriced = out.get("unpriced_security_ids")
+        if isinstance(unpriced, list):
+            out["unpriced_security_ids"] = [mapped("securities", v) for v in unpriced]
+        return out
+
+    def tax_years(self) -> None:
+        """Merged by year: the household's own tax year keeps its state and notes."""
+        existing: dict[int, uuid.UUID] = {
+            year: tid
+            for tid, year in self.session.execute(
+                select(TaxYear.id, TaxYear.year).where(TaxYear.household_id == self.household_id)
+            )
+        }
+        new_rows = []
+        for row in self.rows("tax_years"):
+            match = existing.get(row["year"])
+            if match is not None:
+                self.ids["tax_years"][row["id"]] = match
+                self.merged["tax_years"] += 1
+                continue
+            new_rows.append(row)
+        self.insert("tax_years", new_rows)
+        self.existing_tax_years = set(existing.values())
+
+    def tax_checklist_items(self) -> None:
+        existing = {
+            (year, form, issuer)
+            for year, form, issuer in self.session.execute(
+                select(
+                    TaxChecklistItem.tax_year_id,
+                    TaxChecklistItem.expected_form,
+                    TaxChecklistItem.issuer,
+                ).where(
+                    TaxChecklistItem.household_id == self.household_id,
+                    TaxChecklistItem.tax_year_id.in_(self.existing_tax_years),
+                )
+            )
+        }
+        new_rows = []
+        for row in self.rows("tax_checklist_items"):
+            year = self.ids["tax_years"].get(row["tax_year_id"])
+            if (year, row["expected_form"], row["issuer"]) in existing:
+                self.skipped["tax_checklist_items"] += 1
+                continue
+            new_rows.append(row)
+        self.insert("tax_checklist_items", new_rows)
+
+    def tax_category_maps(self) -> None:
+        existing = {
+            (category, jurisdiction)
+            for category, jurisdiction in self.session.execute(
+                select(TaxCategoryMap.category_id, TaxCategoryMap.jurisdiction).where(
+                    TaxCategoryMap.household_id == self.household_id
+                )
+            )
+        }
+        new_rows = []
+        seen: set[tuple[uuid.UUID | None, str]] = set()
+        for row in self.rows("tax_category_maps"):
+            key = (self.ids["categories"].get(row["category_id"]), row["jurisdiction"])
+            if key in existing or key in seen:
+                # Two archive categories merged into one: the first map wins.
+                self.skipped["tax_category_maps"] += 1
+                continue
+            seen.add(key)
+            new_rows.append(row)
+        self.insert("tax_category_maps", new_rows)
+
+    def ai_clients(self) -> None:
+        """Client definitions only: without a token, so they arrive revoked."""
+        now = clock.utcnow()
+
+        def transform(row: dict[str, Any], _: uuid.UUID) -> dict[str, Any]:
+            row["token_id"] = None
+            row["created_by"] = None
+            if row["revoked_at"] is None:
+                row["revoked_at"] = now
+            return row
+
+        self.insert("ai_clients", transform=transform)
+
     def document_links(self) -> None:
         def transform(row: dict[str, Any], _: uuid.UUID) -> dict[str, Any]:
             target = LINK_TARGETS.get(str(row["target_type"]))
@@ -660,6 +1017,25 @@ class _Importer:
         self.insert("goal_contributions")
         self.fx_rates()
         self.import_mappings()
+        # Format version 2 (empty for a version 1 archive).
+        self.parser_fingerprints()
+        self.securities()
+        self.prices()
+        self.insert("investment_accounts")
+        self.investment_txns()
+        self.insert("lots")
+        self.holdings()
+        self.insert("loans")
+        self.insert("loan_payments")
+        self.insert("loan_rate_changes")
+        self.insert("manual_assets")
+        self.insert("asset_valuations")
+        self.net_worth_snapshots()
+        self.tax_years()
+        self.tax_checklist_items()
+        self.tax_category_maps()
+        self.insert("tax_form_data")
+        self.ai_clients()
         self.document_links()
         # Deferred household foreign keys are checked now, inside the
         # caller's savepoint, instead of at the job's commit.

@@ -29,7 +29,8 @@ export-not-found`` / ``import-not-found``.
 Every step is audit logged (``export.request|complete|fail|download|expire``,
 ``import.request|complete|fail``; ids, counts and error slugs only) and
 emits an event (``export.*``, ``import.*``, plus ``account.imported``,
-``transaction.imported``, ``budget.imported``, ``document.imported`` after
+``transaction.imported``, ``budget.imported``, ``document.imported``,
+``investment.imported``, ``loan.imported``, ``asset.imported``, ``tax.imported`` after
 an import so open pages refresh).
 """
 
@@ -927,6 +928,10 @@ def run_import_job(
         ("transaction.imported", ("transactions",)),
         ("budget.imported", ("budgets", "goals")),
         ("document.imported", ("documents",)),
+        ("investment.imported", ("securities", "prices", "investment_txns", "lots")),
+        ("loan.imported", ("loans", "loan_payments", "loan_rate_changes")),
+        ("asset.imported", ("manual_assets", "asset_valuations")),
+        ("tax.imported", ("tax_years", "tax_checklist_items", "tax_form_data")),
     ):
         count = sum(int(created.get(name, 0)) for name in entities)
         if count:
