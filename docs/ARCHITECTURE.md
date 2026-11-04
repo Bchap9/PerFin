@@ -123,21 +123,23 @@ Each job has a timeout, a retry policy, a dead-letter state and a per-user
 concurrency limit. OCR and parsing run in a subprocess with CPU and memory
 limits so a pathological PDF cannot take down the worker.
 
-Status after Phase 2: `ingest_document`, `imports.apply_mapping`,
-`run_rules`, `transactions.auto_pair`, `portability.*` and the identity
-maintenance jobs exist. `watch_dropfolder`, `poll_mailbox`,
-`snapshot_net_worth`, `refresh_prices`, `send_notification` and
-`backup_export` are later phases. The extraction subprocess is built
+Status after Phases 3-4: `ingest_document`, `imports.apply_mapping`,
+`run_rules`, `transactions.auto_pair`, `portability.*`, the identity
+maintenance jobs, `watch_dropfolder` and `dropfolder.finish`, and
+`poll_mailboxes`/`poll_mailbox` exist. `snapshot_net_worth`,
+`refresh_prices`, `send_notification` and `backup_export` are later
+phases. The extraction subprocess is built
 (`app.ingestion.sandbox`: a fresh interpreter per document, rlimits on
 memory, CPU, open files and file size, a wall-clock timeout, its own process
 group, Landlock limiting the filesystem to reading the interpreter's own
-paths, a seccomp filter that denies network, exec, ptrace-style calls and
-every filesystem change, a non-dumpable worker so a same-UID child cannot
-read its environment or memory (ADR-0009), privileges dropped to
-`PERFIN_EXTRACT_UID` when the worker runs as root,
-plaintext only on stdin and the validated result on stdout; ADR-0006). The
-seccomp filter is a deny list, not yet a default-deny allowlist (SECURITY.md
-C1 partial).
+paths, a default-kill seccomp allowlist (any syscall the extractors do not
+need kills the child; network, exec, new processes, ptrace-style calls and
+every filesystem change fail with `EPERM`), a non-dumpable worker so a
+same-UID child cannot read its environment or memory (ADR-0009), privileges
+dropped to `PERFIN_EXTRACT_UID` when the worker runs as root, plaintext only
+on stdin and the validated result on stdout; ADR-0006 and its addendum).
+Every extractor runs in it: CSV/TSV, OFX/QFX, QIF, XLSX, PDF (PyMuPDF),
+images with OCR (Tesseract in process through `tesserocr`), EML and ZIP.
 
 ### PostgreSQL
 Single database, schema-managed with Alembic. Row-level security policies
@@ -192,10 +194,14 @@ styles).
    subprocess, classifies, fingerprints the institution, parses, deduplicates,
    runs rules, computes confidence per field, writes transactions or review
    items, moves blob from quarantine to the permanent store, sets
-   `status=processed` or `needs_review`. (Phase 2 handles structured files
-   only: CSV/TSV, OFX/QFX, QIF; there is no antivirus or per-field
-   confidence yet, and a CSV without a matching saved column mapping waits
-   in review until one is saved.)
+   `status=processed` or `needs_review`. (Since Phases 3-4: structured
+   files (CSV/TSV, OFX/QFX, QIF, XLSX) and PDF, image (OCR), EML and ZIP
+   documents; the optional ClamAV scan; classification by fingerprint or the
+   naive Bayes classifier; statement, payslip and receipt parsers with
+   per-field confidence and reconciliation; receipts matched to their
+   transaction. A CSV without a matching saved column mapping still waits in
+   review until one is saved; invoices, tax forms and brokerage statements
+   have no parser yet and wait in review.)
 4. Worker emits a `document.updated` event; API relays over SSE; the UI
    refreshes the document card and the review badge.
 

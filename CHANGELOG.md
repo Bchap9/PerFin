@@ -55,9 +55,167 @@ over plain http works only on `localhost`; C1 stays partial until the
 seccomp filter is a default-deny allowlist. (Time-zone validation uses the
 system tz database; the `python:3.12-slim` runtime base ships it.)
 
+Phases 3+4 (Smart ingestion I and II, v0.3/v0.4) are finalized: Alembic
+head is `0004`; `make check` passes from the repo root (SPDX; backend ruff,
+format, mypy --strict, bandit, 5240 pytest tests with `-n auto`, OpenAPI
+drift; frontend eslint, tsc, 291 vitest tests, build; `pip-audit` no known
+vulnerabilities; `npm audit --audit-level=high` passes with 14 moderate
+advisories in dev tooling, none high). Live run on a fresh migrated
+database with `perfin api`, `perfin worker` and a fake local clamd: setup and
+TOTP login, a text-layer PDF statement into the ledger, a scanned PDF through
+OCR (22 of 22 rows) with its page preview, a receipt photo linked to its
+card transaction, a drop-folder PDF attributed, imported and moved, an
+infected test file rejected, full-text search, `perfin ingest --dry-run`,
+and in headless Chrome a doubtful OCR row corrected, confirmed and turned
+into a rule through the review UI. That run found a real bug, fixed with a
+regression test: migration `0004` lacked the `receipt_match` review kind,
+so every document reaching the matching stage was dead-lettered on a
+migrated database. The extraction child's seccomp filter is now a
+default-kill allowlist (C1 implemented, ADR-0006 addendum), checked on the
+host and in the `python:3.12-slim` base image. gitleaks (`git` and `dir`)
+is clean after allowlisting one synthetic test token; `.gitignore` no
+longer hides `frontend/src/features/documents/` (the `documents/` data
+pattern matched it; it must be added to git with this phase). Roadmap:
+every Phase 3 and 4 box is ticked except the classifier box (synthetic
+samples only, no contributed ones). Not run here: the compose stack with
+the real worker image (its Debian `tesseract-ocr-eng` data), Semgrep
+(semgrep.dev blocked; the workflow keeps it blocking), a real clamd and a
+real IMAPS provider. Open: parsers for invoices, tax forms, insurance and
+brokerage statements; an API and UI for drop-folder and antivirus status.
+Next: Phase 5 (investments, loans, net worth).
+
 ## [Unreleased]
 
 ### Added
+
+#### Phases 3-4: finalization (live run, seccomp allowlist, ingestion security page)
+
+- Live verification of Phases 3+4 against `perfin api` and `perfin worker`
+  on a fresh database migrated to `0004` (dev mode, built SPA, fake local
+  clamd): setup and TOTP login; a text-layer PDF statement into the ledger;
+  a scanned PDF through OCR (22 of 22 rows) with its page preview; a receipt
+  photo linked to its card transaction; a drop-folder PDF attributed to the
+  subfolder's member, imported and moved to `processed/`; an infected test
+  file rejected; full-text search; a doubtful OCR row corrected, confirmed
+  and turned into a rule through the review UI in headless Chrome; `perfin
+  ingest --dry-run`. Repeated after the seccomp change below.
+- `docs/security/ingestion.md`: what leaves the host during ingestion
+  (document content never does; ClamAV and OCR are local; the only egress
+  is the IMAPS connection to the mailbox host an owner or admin configures,
+  through the egress proxy when one is set).
+- `frontend/src/features/imports/mapping.test.tsx`: the mapping editor
+  shows the PDF page above the table and saves the mapping with its
+  `document_id`, so the server fingerprints the table header.
+- `tests/integration/test_migrations.py`: every enum type's labels on a
+  migrated database equal the models' (`alembic check` does not compare
+  enum labels), and the `0004` downgrade removes `receipt_match` items only.
+
+#### Phases 3-4: frontend (document library, page viewer, review tools, intake settings)
+
+- Document library (`/documents/library`): filters for kind, status and tax
+  year plus full-text search, matched words shown as `<mark>` elements (no
+  `innerHTML`). Document detail (`/documents/{id}`): file facts, a download
+  link only when the server says `downloadable`, and the page viewer.
+- Page viewer (`frontend/src/features/documents/PageViewer.tsx`): the
+  sandbox-rendered page image, previous/next page, highlight boxes placed
+  as percentages of the page, optional outline of recognised words.
+- Review tools (`frontend/src/features/review/ReviewTools.tsx`): doubtful
+  rows highlighted on the page with other readings to pick and "Save
+  corrections and confirm"; "Create a rule from this"; "Remember this
+  layout" for a new institution (optionally re-reading received files);
+  member and account choice with "remember this folder" for drop-folder
+  files of unknown owner; "Show receipt" beside receipt-match suggestions;
+  "Map columns" for any item that needs it, with the PDF or image page
+  above the mapping form.
+- Settings > Intake (`/settings/intake`, owner/admin): mailbox form (the
+  password is sent only when typed), connection test, alias display and
+  rotation (step-up), allowed senders.
+
+#### Phases 3-4: integration (migration 0004, end-to-end test)
+
+- Alembic revision `0004_phase3_4_ingestion`: `dropfolder_route`,
+  `dropfolder_entry`, `mail_intake` and `mail_intake_message`, each with
+  forced RLS (`household_isolation`) and DML grants for the application
+  role, household-consistent keys to `document`/`account` (ADR-0008); a
+  data step backfills `document.extracted_text` for documents extracted
+  before Phase 3 (in SQL, `FORCE` lifted on `document` for that statement
+  only). The `tsvector` column, its GIN index and `parser_fingerprint` came
+  with `0003`; previews are blobs referenced from the extraction (no table).
+  Tests: `test_0004_backfills_search_vectors_of_earlier_documents`,
+  `test_downgrade_0004_leaves_phase2_and_upgrades_again`,
+  `test_phase34_tables_refuse_other_households_on_migrated_database`.
+- `tests/integration/test_phase3_4_end_to_end.py`: through the real app and
+  the real worker (sandbox, Tesseract), a text-layer PDF statement reaches
+  the ledger; the same layout scanned is OCR'd into the ledger or held in
+  review; a receipt photo is linked to its card transaction; a drop-folder
+  file is ingested and moved; a mailbox message is accepted and a spoofed
+  one digested; `GET /documents?q=` finds the statement; `perfin ingest
+  --dry-run` prints every stage.
+- Generated client types: `GET /review/{id}/rule-draft` keeps a single
+  `RuleCreate` schema (its model is generated in validation mode, so
+  OpenAPI no longer splits `RuleCreate-Input`/`-Output`, which broke the
+  rules builder); region boxes (`bbox`) are four-number lists rather than
+  tuples (openapi-fetch dropped the tuple type, so the review client types
+  disagreed with themselves); the upload page lists `DocumentListItem`
+  (formerly `DocumentOut`).
+- Docs: the Phase 2 "structured files only" limits in ARCHITECTURE.md,
+  API.md, INGESTION.md and the README status are replaced by the Phases 3-4
+  state; ROADMAP boxes ticked where the work is done and tested.
+
+#### Phases 3-4: review tools (previews, regions, corrections, remember this layout)
+
+- `GET /documents/{id}/preview?page=`: the sandbox-rendered page PNG,
+  decrypted and checked again (plain PNG chunks only) before it is sent
+  inline as `image/png` with `nosniff`, a `sandbox` CSP and `no-store`;
+  download rule (I1), never from quarantine, audited (`document.preview`).
+  `GET /documents/{id}/regions?page=`: word boxes for highlighting; the
+  words only for callers the download rule allows (SECURITY.md C5, I1).
+- `GET /review/{id}` adds `regions` (where a doubtful row or an account
+  number was read) and `alternatives` (other readings on the row's line,
+  ranked accounts, candidate transactions, institutions).
+- `low_confidence_field` items can be resolved: rows corrected and the held
+  rows confirmed (a failed reconciliation: the whole statement on that
+  account). `POST /review/{id}/correct` corrects the document's
+  institution, account, period, tax year and kind and its rows' values.
+- `POST /review/{id}/remember-layout`: a household parser fingerprint
+  derived from the header text and table layout (or given), validated and
+  required to match its source document; similar pending documents are
+  reprocessed. `GET /review/{id}/rule-draft`: a pre-filled rule for `POST
+  /rules`.
+- PDF/image page tables no parser read go through the Phase 2 column
+  mapping (preview, mapping editor, importer); a mapping saved from one is
+  reused for the next PDF of the same layout.
+
+#### Phases 3-4: search, dry-run CLI, XLSX, antivirus and upload fuzz corpus
+
+- Full-text search: `document.extracted_text` (`tsvector`, `simple` config,
+  GIN index) is written by the worker after every extraction and cleared on
+  failure (`app/domain/documents/search.py`); `GET /documents?q=` matches with
+  `websearch_to_tsquery` on a bound parameter, ranks by `ts_rank_cd`, pages
+  on a `<score>.<id>` cursor, and returns `rank` plus plain-text snippet
+  segments (`{"text", "match"}`, never markup) only to callers who may
+  download the document (I1); for other viewers `q` matches only the
+  original filename (P34-SR-02 below).
+- `perfin ingest --dry-run FILE [--household ID]` (`app/ingestion/dryrun.py`):
+  receive (sniff and the upload's refusals), scan, extract through the real
+  sandbox, classify, parse and, with a household, a read-only account match;
+  one JSON document per stage; no blob or database write.
+- XLSX extractor (`app/ingestion/extract/xlsx.py`, sandbox only): ZIP
+  central-directory caps before openpyxl, DTD/entity refusal in every XML
+  part, defusedxml required, `read_only`/`data_only` (formulas never
+  evaluated), sheet/row/column/cell caps, formula neutralisation (C6, C7);
+  worksheets import like CSV through the column mapping.
+- Optional ClamAV (`app/integrations/antivirus/`, compose profile `av`):
+  clamd `INSTREAM` with size cap and timeouts as a scan stage before
+  extraction; positive -> `rejected` with the signature; fail closed by
+  default (`PERFIN_ANTIVIRUS_FAIL_MODE`), checked by `perfin config check`
+  (C9). Tested against a fake clamd.
+- Upload fuzz corpus (`backend/tests/security/fuzz/`): about 55 generated
+  hostile files (malformed PDFs, flat and nested zip bombs, polyglots,
+  XXE/billion laughs in OFX/XML/XLSX, pixel bombs, malformed MIME, foreign
+  archives and executables) through intake, the sandbox and the worker
+  handler, plus a time-boxed hypothesis mutation fuzz of the sandbox entry
+  point.
 
 #### Phase 4: email intake
 
@@ -119,6 +277,33 @@ system tz database; the `python:3.12-slim` runtime base ships it.)
   `inbox_missing`, `processed_not_writable`, `settle_short` warnings).
   `deploy/.env.example` enables the drop folder with `keep`, matching the
   read-only inbox mount.
+
+#### Phases 3-4: receipts (parsing and transaction matching)
+
+- `app/ingestion/parsers/receipt.py` (`receipt_basic`): reads receipts in
+  the worker from the stored extraction of thermal-print photos (OCR in the
+  sandbox), e-receipt PDFs and receipt mail bodies: merchant, date (and
+  time), subtotal/tax/tip/discount/total with a consistency check, best
+  effort line items, payment brand and card last four (identity data:
+  stored, never logged, audited or put in a review payload), currency, and
+  per-field confidence. OCR label folding (`T0TAL`, `AMOUNTDUE`, `TOTAI`);
+  a lost decimal point or a currency symbol read as a digit is believed
+  only when it makes the figures consistent.
+- `app/ingestion/match/receipts.py`: receipt -> transaction matching on
+  amount (exact, refund, tip up to 30%), date within 3 days and merchant
+  similarity (payee name and aliases first). A confident unique match is
+  linked (`document_link`, audit `document.link` with `auto: true`);
+  otherwise a `receipt_match` review item with up to five ranked
+  suggestions, limited to accounts the uploader may edit (and to the
+  receipt's own account when it was filed under one). Resolving it
+  (`{"kind": "receipt_match", "transaction_id"}`) links the chosen
+  transaction; later imports re-match open items. Review UI: "Attach this
+  receipt" with the suggestions.
+- `tests/fixtures/synth_receipts.py`: Pillow-rendered thermal receipts
+  (58/80 mm, faded ink, noise, specks, blur, skew), reportlab e-receipt
+  PDFs and HTML receipt mails, from tuning and held-out seeds; field
+  accuracy on the held-out set is in INGESTION.md ("Receipts") and
+  enforced by `tests/unit/test_receipt_accuracy.py`.
 
 #### Phases 3-4: statement parsers, reconciliation and confidence
 
@@ -191,6 +376,37 @@ system tz database; the `python:3.12-slim` runtime base ships it.)
 - `.gitignore`: `backend/app/domain/documents/` was matched by the
   `documents/` data pattern and therefore never committed; it is now
   explicitly included.
+- Security review round 1 fixes (Phases 3-4). P34-SR-01 (high, C12/C10):
+  fingerprint regexes now compile every alternation atomic (`(?>...)`) as
+  well as every quantifier possessive; `(?:a|a)` repeated 36 times then `b`
+  passed the old subset and backtracked 2^36 times in the API thread of
+  "remember this layout" and in the worker
+  (`test_alternation_cannot_backtrack_exponentially`). P34-SR-02 (medium,
+  I1): a viewer who may not download documents searched their extracted
+  text through `GET /documents?q=` (a yes/no oracle for account numbers or
+  tax ids); their `q` now matches only `original_filename`. P34-SR-03 (low,
+  D1): a `dkim=pass` must name its signer, and that signer must be the
+  `From` domain or a parent of it. P34-SR-04 (low, I1): `GET
+  /documents/{id}/regions` returns no word boxes to callers who may not
+  download.
+- Security review round 2 fixes (Phases 3-4). P34-SR-R2-01 (medium,
+  C10/F8/C12): fingerprint matching had no total work budget: a safe
+  pattern still costs up to pattern x line^2 per line, so 32 `any` rules
+  of `[a ]*` x 12 then `!` over 4000 lines of 300 characters took 64 s for
+  one `match_fingerprint` call, in the API thread of "remember this layout"
+  (learning check, `best_match`, the scan of up to 500 similar documents)
+  and in the worker, and remembered versions were unlimited. Now household
+  fingerprints' pattern rules run under a wall-clock `MatchBudget` checked
+  before every line (0.25 s shared by all household fingerprints of a
+  document; out of budget = no match), the similar-document scan shares
+  2 s, the learning check answers `422 layout-too-costly`, a household
+  remembers at most 100 layouts (`409 fingerprint-limit`) and only the
+  latest version of each is matched (`tests/security/test_fingerprint_budget.py`,
+  `tests/integration/test_fingerprint_limits.py`). P34-SR-R2-02 (low, D1):
+  a rejected message is recorded under a hash of its whole header block
+  instead of `Message-ID` plus `From`, so a rejected forgery can no longer
+  send a later legitimate message with the same `Message-ID` to the
+  rejected folder (`test_rejected_forgery_does_not_shadow_the_real_message`).
 
 #### Phase 2: Ledger (v0.2)
 
@@ -783,6 +999,29 @@ system tz database; the `python:3.12-slim` runtime base ships it.)
 
 ### Security
 
+- Phases 3-4: the extraction child's seccomp filter is now a **default-kill
+  allowlist** (C1 implemented; ADR-0006 addendum). Only the syscalls
+  CPython, PyMuPDF, Pillow, pillow-heif and libtesseract need are allowed,
+  some only in a safe form (`clone` for threads, `kill`/`tgkill`/
+  `rt_sigqueueinfo`/`rt_tgsigqueueinfo` and `prlimit64` on the child
+  itself, listed `fcntl` and `ioctl` commands, `open`/`openat` without a
+  write flag); anything else kills the child and the document fails with
+  `extraction failed: syscall_denied`. Before, everything not on a deny list
+  was allowed. The list comes from `strace` of every extractor, the fuzz
+  corpus and the mutation fuzzer; the sandbox, document and fuzz suites
+  pass with it on the host and in the `python:3.12-slim` base image (Debian
+  glibc 2.41) under Docker's default seccomp profile.
+  `test_syscall_outside_the_allowlist_kills_the_child` fails if the filter
+  is default-allow again.
+- Phases 3-4: gitleaks allowlists the synthetic mail-intake alias token in
+  `backend/tests/unit/test_email_policy.py` (path and exact value), which
+  the history scan of the Phases 3+4 checkpoint commit reported; gitleaks
+  `git` and `dir` scans are clean. The security workflow keeps Semgrep
+  blocking (no `continue-on-error`) with the reviewed SHA-1 suppression in
+  `backend/app/auth/breached.py`.
+- Phases 3-4: H2 is closer: the IMAPS intake tunnels through the egress
+  proxy (`CONNECT host:993`) when `HTTPS_PROXY` is set; only the Phase 5
+  price feeds remain.
 - Phase 2 (Ledger): every Phase 2 table (27, ledger, documents, imports,
   `idempotency_key`, `portability_archive`) has forced RLS
   (`household_isolation`) and least-privilege grants (revision `0003`);
@@ -906,6 +1145,15 @@ system tz database; the `python:3.12-slim` runtime base ships it.)
 
 ### Changed
 
+- Phases 3+4 finalize: `docs/INGESTION.md` (seccomp allowlist, the review
+  UI), `docs/ARCHITECTURE.md` (sandbox status), `docs/API.md` (the
+  document `error` values from the sandbox, including `syscall_denied`),
+  ADR-0006 (addendum: default-kill allowlist), `docs/security/CONTROLS.md`
+  (C1 and C12 implemented, H2 narrowed), `docs/ROADMAP.md` (Phase 3 and 4
+  boxes, live-run record and deferrals) and the README document table.
+- The sandbox runner reports a child killed by `SIGSYS` as
+  `syscall_denied` instead of `crashed`.
+
 - Phase 2 finalize: `docs/ARCHITECTURE.md` describes the implemented SSE
   relay (event row + `NOTIFY`, one `LISTEN` per stream, `Last-Event-ID`
   replay), the Phase 2 worker jobs, the sandbox and the local-only blob
@@ -951,3 +1199,17 @@ system tz database; the `python:3.12-slim` runtime base ships it.)
 - `deploy/.env.example` keeps comments on their own lines, so the file also
   works with `docker run --env-file` and systemd `EnvironmentFile`.
 - Ruff and mypy now cover `backend/migrations`.
+
+### Fixed
+
+- Migration `0004` adds the `receipt_match` label to the `review_kind`
+  enum. Without it, on a migrated database (tests build the schema from
+  the models, so they passed) every document that reached the matching
+  stage (which looks up open receipt suggestions) failed with `invalid
+  input value for enum review_kind` and was dead-lettered, the first PDF
+  statement of the live run included. The downgrade deletes `receipt_match` items and restores the 0003
+  labels.
+- `.gitignore`: the `documents/` data pattern also matched the SPA's
+  `frontend/src/features/documents/` (document library, detail page and page
+  viewer), so those sources were silently left out of git; it is now
+  re-included like `backend/app/domain/documents/`.

@@ -7,11 +7,14 @@ tax documents from one place, with ingestion that does most of the work for you:
 upload a statement, drop a file into a watched folder, or forward a receipt by
 email, and PerFin works out what it is looking at and files it away.
 
-> Status: **Phase 0 (foundations)**. The hardened skeleton boots: API with
-> security headers, CSP, CSRF and problem-details errors; Postgres with
-> row-level security, an append-only hash-chained audit log and migrations;
-> the job queue and worker; the SPA shell; hardened Compose and CI. There is
-> no login and no finance feature yet (Phase 1 and 2). See
+> Status: **Phases 0-4 (foundations, identity, ledger, smart ingestion)**,
+> unreleased. Login with MFA and OIDC, households and account grants; the
+> ledger (accounts, transactions, rules, budgets, goals, reports); and
+> ingestion of CSV/OFX/QIF/XLSX, text-layer and scanned PDFs, photos of
+> receipts and `.eml` mail through uploads, a watched drop folder and an
+> IMAPS mailbox, all parsed in a sandboxed subprocess, reconciled, scored
+> and sent to a review queue when unsure. Investments, loans and net worth
+> come next (Phase 5). See
 > [docs/ROADMAP.md](docs/ROADMAP.md) for what gets built when and
 > [docs/security/CONTROLS.md](docs/security/CONTROLS.md) for the status of
 > every security control.
@@ -51,6 +54,7 @@ email, and PerFin works out what it is looking at and files it away.
 | [docs/INGESTION.md](docs/INGESTION.md) | Upload, drop-folder and email pipelines; classification, parsing, review queue |
 | [docs/AUTH.md](docs/AUTH.md) | Local login, MFA, sessions, OIDC with Authentik, authorisation model |
 | [docs/SECURITY.md](docs/SECURITY.md) | Threat model, identified vulnerabilities and the controls that address them |
+| [docs/security/ingestion.md](docs/security/ingestion.md) | What leaves the host during ingestion (nothing but the IMAP connection you configure) |
 | [docs/AI_ACCESS.md](docs/AI_ACCESS.md) | MCP server, identity denylist, free-text scrubbing, modes |
 | [docs/API.md](docs/API.md) | API conventions and the first-cut endpoint surface |
 | [docs/REPO_STRUCTURE.md](docs/REPO_STRUCTURE.md) | What lives where in this repository |
@@ -74,7 +78,7 @@ email, and PerFin works out what it is looking at and files it away.
 See [ADR-0001](docs/adr/0001-language-and-framework.md) for the reasoning and the
 alternatives that were considered.
 
-## Quick start (Phase 0: boots, no login yet)
+## Quick start
 
 ```bash
 cd deploy

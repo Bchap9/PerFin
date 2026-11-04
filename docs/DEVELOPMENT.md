@@ -185,7 +185,12 @@ app/
   (27 household-scoped ledger, document, import and platform tables; the
   `account_grant -> account` key, deleting orphan Phase 1 grants first; a
   data step that needs to see every household's rows of a forced-RLS table
-  lifts `FORCE ROW LEVEL SECURITY` for that statement only, as 0003 does).
+  lifts `FORCE ROW LEVEL SECURITY` for that statement only, as 0003 does),
+  `0004_phase3_4_ingestion` (`dropfolder_route`, `dropfolder_entry`,
+  `mail_intake`, `mail_intake_message`; the search vector of documents
+  extracted before it backfilled in SQL, with `FORCE` lifted on `document`
+  for that statement; the `tsvector` column, its GIN index and
+  `parser_fingerprint` already came with 0003).
 
 ### Tests
 
@@ -263,6 +268,19 @@ app/
   directory, e.g. Debian/Ubuntu `tesseract-ocr-eng`). Sandbox hardening is tested
   with hostile extractors in `tests/fixtures/sandbox_evil.py`, run through
   the real child code path with `SandboxConfig(module="tests.fixtures.sandbox_evil")`.
+  The child's seccomp filter is a default-kill allowlist
+  (`ALLOWED_SYSCALLS` in `app/ingestion/sandbox/child.py`, ADR-0006
+  addendum). A new extractor or an update of PyMuPDF, Pillow, pillow-heif,
+  tesserocr or the base image can need a syscall that is not listed: the
+  document then fails with `extraction failed: syscall_denied`. Find the
+  call with `strace -f` on the sandbox tests, add it only if it cannot
+  reach the network, other processes or the filesystem for writing (argument
+  checks where it can), and run `tests/security/test_sandbox*.py` and
+  `tests/security/fuzz` in the built image as well as on the host.
+  Receipts for parser, accuracy and end-to-end tests come from
+  `tests/fixtures/synth_receipts.py` (Pillow thermal prints with noise and
+  skew, reportlab e-receipt PDFs, HTML receipt mails); `TUNING_SEEDS` may be
+  used while tuning OCR or the parser, the held-out seeds only for measuring.
 - Statement parsers: `tests/fixtures/synth_pdf_statements.py` draws PDF
   statements (reportlab) in the layout of each fictional institution of the
   shipped fingerprints from a `SynthStatement` (multi-page, pending items,

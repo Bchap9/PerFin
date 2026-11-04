@@ -126,42 +126,89 @@ for the boxes above):
 
 Goal: "upload a statement" works for text-layer PDFs; drop folder works.
 
-- [ ] Sandboxed extraction subprocess (rlimits, seccomp, timeouts)
-      (built in Phase 2 and used for every structured import:
-      `backend/app/ingestion/sandbox/`, tests in
-      `backend/tests/**/test_sandbox*.py`; left for Phase 3 to tick
-      once the PDF/OCR extractors run inside it, and the seccomp filter is
-      still a deny list rather than a default-deny allowlist, SECURITY.md C1
-      partial)
-- [ ] PDF text extraction and layout tables
-- [ ] Classification: kind detection, institution fingerprints (YAML), period
+- [x] Sandboxed extraction subprocess (rlimits, seccomp, timeouts)
+      (`backend/app/ingestion/sandbox/`: every extractor (CSV/TSV, OFX/QFX,
+      QIF, XLSX, PDF, images with OCR, EML, ZIP) runs in it; the seccomp
+      filter is a default-kill allowlist since this phase (ADR-0006
+      addendum), tested by `backend/tests/security/test_sandbox*.py` and the
+      fuzz corpus on the host and in the `python:3.12-slim` base image, and
+      used by the live run below)
+- [x] PDF text extraction and layout tables
+- [x] Classification: kind detection, institution fingerprints (YAML), period
       detection, account matching by last-4
-      (Phase 2 already matches structured statements to an account by last
-      four digits and OFX institution, and takes the period from the
-      statement; the rest is open)
-- [ ] Statement parsers: generic bank/card table parser plus fingerprints for
+- [x] Statement parsers: generic bank/card table parser plus fingerprints for
       an initial set of institutions (contributed with synthetic fixtures)
-- [ ] Reconciliation check and confidence scoring
-- [ ] Review queue UI with page preview and region highlight; "remember this
+- [x] Reconciliation check and confidence scoring
+- [x] Review queue UI with page preview and region highlight; "remember this
       layout" and "create a rule from this" actions
-- [ ] Drop folder watcher with settle time, read-only mount, subfolder
+      (`frontend/src/features/review/ReviewTools.tsx`,
+      `frontend/src/features/documents/PageViewer.tsx`; vitest coverage
+      for every tool, backend `tests/integration/test_review_tools.py`;
+      preview, highlight, correct-and-confirm and rule drafting were also
+      walked in headless Chrome against a live API and worker.
+      "Remember this layout" and the drop folder's unknown-owner dialog are
+      covered by vitest and the backend tests only, not by the live walk)
+- [x] Drop folder watcher with settle time, read-only mount, subfolder
       mapping, processed/failed handling, caps
-- [ ] `perfin ingest --dry-run` CLI
-- [ ] Upload fuzz corpus in CI (malformed PDF, zip bomb, polyglot, XXE)
-- [ ] Optional ClamAV sidecar
+      (live: a PDF dropped into a member's subfolder was attributed,
+      imported and moved to `processed/`. No API or UI yet to list the drop
+      folder's status, routes or entries: routes are created only by the
+      unknown-owner "remember" choice and by name matching)
+- [x] `perfin ingest --dry-run` CLI
+- [x] Upload fuzz corpus in CI (malformed PDF, zip bomb, polyglot, XXE)
+- [x] Optional ClamAV sidecar
+      (tested against a protocol-faithful fake clamd, also in the live run;
+      not run against a real clamd here)
 
 ## Phase 4: Smart ingestion II (v0.4)
 
 Goal: scanned documents, receipts, email intake.
 
-- [ ] OCR pipeline (ocrmypdf/Tesseract), image preprocessing, receipt profile
-- [ ] Receipt parsing (merchant, date, total, tax, line items) and
+- [x] OCR pipeline (ocrmypdf/Tesseract), image preprocessing, receipt profile
+      (Tesseract in process through `tesserocr` inside the sandbox child,
+      not ocrmypdf: ADR-0009 addendum)
+- [x] Receipt parsing (merchant, date, total, tax, line items) and
       receipt-to-transaction matching with suggestions
 - [x] Email intake: IMAPS poller, alias token, sender policy, SPF/DKIM check,
       rejected digest, `.eml` provenance, attachment expansion
-- [ ] Full-text search over extracted text
-- [ ] Column-mapping editor in review that produces reusable fingerprints
+      (against a fake IMAPS server in tests; not run against a real mail
+      provider. IMAP IDLE and OAuth mailbox login are not built)
+- [x] Full-text search over extracted text
+- [x] Column-mapping editor in review that produces reusable fingerprints
+      (a mapping saved from a PDF or image table carries the table's header
+      fingerprint and imports the next document of that layout without a
+      question: `tests/integration/test_review_tools.py::
+      test_pdf_table_mapping_is_reused_for_the_next_document`; the editor
+      shows the page above the mapping form:
+      `frontend/src/features/imports/mapping.test.tsx`)
 - [ ] Heuristic classifier trained on synthetic + contributed samples
+      (the naive Bayes classifier is trained and evaluated on synthetic
+      samples only; no contributed samples exist yet, so its accuracy on
+      real documents is unknown)
+
+Live verification of Phases 3+4 (2026-11-04; fresh database migrated to
+`0004`, `perfin api` and `perfin worker` in dev mode, a fake local clamd):
+setup and TOTP login; a text-layer PDF statement imported into the ledger
+with no review; an image-only scan of a statement OCR'd and imported (22 of
+22 rows), with its page preview served as PNG; a thermal-receipt photo
+linked to its card transaction; a drop-folder PDF attributed to the
+subfolder's member, imported and moved; an infected test file rejected by
+clamd; `GET /documents?q=` finding the statement; a second scan held for a
+doubtful OCR reading, corrected, confirmed and turned into a rule through
+the review UI in headless Chrome; `perfin ingest --dry-run` printing every
+stage. The run found that migration `0004` lacked the `receipt_match`
+review kind; fixed with a regression test (CHANGELOG).
+
+Deferred from Phases 3-4 (not needed for the boxes above):
+
+- Parsers for invoices, tax forms (the `tax_1099_int` fingerprint),
+  insurance declarations and brokerage statements (they wait in review);
+  payslips create no ledger rows.
+- An API and UI for the drop folder's status, routes and entries, and for
+  the antivirus status.
+- The compose stack with the real worker image (its Debian
+  `tesseract-ocr-eng` data) and Semgrep have not been run here
+  (deb.debian.org and semgrep.dev are blocked in the build sandbox).
 
 ## Phase 5: Investments, loans, net worth (v0.5)
 

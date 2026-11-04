@@ -366,7 +366,8 @@ document          (household, kind: statement|receipt|invoice|tax_form|payslip|
                    source: upload|dropfolder|email|api, source_meta JSONB,
                    blob_id, sha256, size, mime_detected, original_filename,
                    uploaded_by?, account_id?, institution_id?,
-                   period_start?, period_end?, tax_year?, extracted_text (tsvector),
+                   period_start?, period_end?, tax_year?, extracted_text (tsvector,
+                   GIN, written by the worker),
                    extraction JSONB, confidence JSONB, parser_version)
 blob              (household, store, key, area: quarantine|permanent, size, stored_size,
                    enc_alg, key_version, wrap_nonce, wrapped_dek, nonce, shredded_at?,
@@ -432,6 +433,14 @@ Notes on the documents foundation (`app/domain/documents/`):
   `{parent_document_id, origin: attachment|inline|zip_member, depth,
   content_id?}`; `depth` (1) is what the pipeline extracts it at, so a
   container inside a container is not expanded (SECURITY.md D4).
+- `document.extracted_text` is the full-text index (`tsvector`, config
+  `simple`, GIN index `ix_document_extracted_text`), written only by the
+  worker from the validated extraction (`app.domain.documents.search.
+  update_search_index`: pages or text, an email's subject, structured table
+  cells; at most 500 000 characters, a shorter prefix when the vector would
+  exceed PostgreSQL's 1 MB limit) and cleared when an extraction fails.
+  It is not exported (rebuilt by re-extraction) and never returned by the API;
+  snippets are computed from `extraction.text` per request (API.md).
 - `review_item.state` is `open` exactly while `resolved_at` is NULL.
 - `import_hash_alias` (`app/domain/review/models.py`) records "these two
   imported rows are the same transaction": confirming a `near_match`

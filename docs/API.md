@@ -43,9 +43,12 @@ Phase 2 (v0.2) implements, as listed below: `/accounts` (with balances,
 close/reopen and grants), `/transactions` (splits, transfers, bulk),
 `/categories`, `/payees`, `/tags`, `/rules` (reorder, test, apply, export,
 import), `/jobs/{id}`, `/budgets` and their report, `/goals` and
-contributions, `/reports/*`, `/documents` (except `preview`, Phase 3, and
-the full-text `q`, Phase 4), `/imports/*`, `/review`, `/events`, `/export`
-and `/import`. It also adds `POST /transactions/transfers/auto-pair` and the
+contributions, `/reports/*`, `/documents`, `/imports/*`, `/review`, `/events`, `/export`
+and `/import`. Phases 3-4 (v0.3, v0.4) add the document routes `preview`
+and `regions`, the full-text `q` on `GET /documents`, the review tools
+(correct, confirm held rows, remember this layout, rule draft, unknown
+owner) and `/settings/intake` (mailbox settings, connection test, alias
+rotation); the drop folder and mailbox intake are worker jobs, not routes. It also adds `POST /transactions/transfers/auto-pair` and the
 grant routes. Not built yet among the Phase 2 families: `GET/PATCH
 /settings/household` (so the household settings `reports.include_pending_review`
 and `documents.viewer_download` have their defaults and no API) and `GET
@@ -155,6 +158,7 @@ GET             /documents                     filters: kind, status, account, t
 GET             /documents/{id}
 GET             /documents/{id}/download        decrypts and streams, attachment
 GET             /documents/{id}/preview?page=   rendered PNG, sandboxed
+GET             /documents/{id}/regions?page=   word boxes for review highlighting
 POST            /documents/{id}/reprocess
 DELETE          /documents/{id}
 POST            /documents/{id}/link            attach to transaction etc.
@@ -168,6 +172,9 @@ GET             /review                         open items
 GET             /review/{id}
 POST            /review/{id}/resolve            payload: chosen values, "remember" flags
 POST            /review/{id}/dismiss
+POST            /review/{id}/correct            document facts and row values
+POST            /review/{id}/remember-layout    household parser fingerprint, reprocess similar
+GET             /review/{id}/rule-draft         pre-filled rule for POST /rules
 
 GET/POST/PATCH/DELETE /tax-years
 GET             /tax-years/{year}/checklist
@@ -284,7 +291,12 @@ C3, C4, G5, I1): a document is `{"id", "kind", "status", "source", "size",
 "mime_detected", "sha256", "original_filename", "uploaded_by", "account_id",
 "institution_id", "period_start", "period_end", "tax_year",
 "parser_version", "error", "created_at", "updated_at"}`; never the file, the
-extraction or extracted text. Owners and admins see every document of the
+extraction or extracted text. A document whose extraction failed has
+`status: "failed"` and `error: "extraction failed: <code>"` with the
+sandbox code (`timeout`, `cpu_limit`, `memory_limit`, `output_too_large`,
+`bad_output`, `harden_failed`, `killed`, `syscall_denied` (the child made a
+syscall outside its seccomp allowlist), `crashed`, `usage`, `input_too_large`) and an
+`unparsed` review item. Owners and admins see every document of the
 household; members and viewers the documents of accounts they may view and
 their own unattached uploads (anything else `404 document-not-found`). `POST
 /documents?account_id=` (member or above) takes `multipart/form-data` with
@@ -300,8 +312,23 @@ a `possible_duplicate`). `Idempotency-Key` is honoured with the content's
 SHA-256 in the request fingerprint (another file under the same key is `422
 idempotency-key-reused`; a replay keeps nothing). `GET
 /documents?cursor=&limit=&kind=&status=&account=&tax_year=` lists newest
-first (`limit` 1-500, default 100; a hidden `account` is `404`); `q` arrives
-in Phase 4. `GET /documents/{id}` adds `links` (`{"id", "document_id",
+first (`limit` 1-500, default 100; a hidden `account` is `404`). With `q`
+(1-200 characters; `app.domain.documents.search`) only documents whose
+extracted text matches are listed, best match first: the text is a bound
+parameter to `websearch_to_tsquery('simple', :q)` (quoted phrases, `or`,
+`-word`; never a syntax error) against `document.extracted_text`, ranked by
+`ts_rank_cd`; the keyset cursor is `<score>.<id>` (a cursor from the other
+ordering is `422 invalid-cursor`). Each item then carries `rank` and
+`snippet`: a list of plain-text segments `{"text", "match"}` (at most 400
+characters, two fragments; control and bidi characters replaced) that the
+client renders as text, never as markup. For callers who may not download
+the document (a viewer, unless the household setting
+`documents.viewer_download` is `true`: the same I1 rule as the download)
+`q` never touches the extracted text: it matches and ranks only the
+`original_filename` (split into words at punctuation), and `snippet` is
+`null`. Otherwise every query would tell them whether a token (an account
+number, a tax id, a salary) appears in a document they may not open. Without `q`, `rank` and
+`snippet` are `null`. `GET /documents/{id}` adds `links` (`{"id", "document_id",
 "target_type", "target_id", "created_at"}`), `open_review_items`,
 `quarantined`, `downloadable` and `can_edit`. `GET /documents/{id}/download`
 needs member or above, or a viewer in a household whose setting
@@ -327,7 +354,24 @@ is its `404`), answers `201`, or `200` with the existing link;
 first, then the rows (links, review items, ingest history), then the files
 (G5); imported transactions keep their rows with `source_document_id`
 `null`. Events: `document.created|updated|linked|deleted` (ids and status).
-`GET /documents/{id}/preview` is Phase 3.
+`GET /documents/{id}/preview?page=` (default page 1) returns the
+sandbox-rendered PNG of that page (decrypted from its preview blob and
+checked again: plain PNG chunks only) as `image/png`, `Content-Disposition:
+inline`, `nosniff`, a `sandbox` CSP and `no-store`; it follows the download
+rule (member or above, a viewer only with `documents.viewer_download`, else
+`403 forbidden`), a quarantined document is `409 document-quarantined`, a
+page without a preview `404 preview-not-found`, a blob that fails
+authentication or is not a plain PNG `500 document-unreadable`; audited as
+`document.preview`. `GET /documents/{id}/regions?page=` (any role that can
+see the document) returns `{"document_id", "page", "page_count", "width",
+"height", "unit" (pt | px), "text_source", "text_included",
+"words_truncated", "preview": {"width", "height", "dpi", "scale"} | null,
+"words": [{"bbox", "line", "text", "conf"}]}` from the stored extraction
+(boxes in page units, origin top left; `px = unit * scale`); for callers
+the download rule refuses `text_included` is `false` and `words` is empty
+(per-word boxes would show the layout, such as how many digits a figure
+has, of a document they may not open);
+`404 page-not-found` without that page, `409 document-quarantined`.
 
 Review notes (`app.domain.review.service`, router `review`; INGESTION.md
 "Review queue"): an item is `{"id", "kind", "state", "document_id",
@@ -335,7 +379,12 @@ Review notes (`app.domain.review.service`, router `review`; INGESTION.md
 "next_step", "can_resolve"}` (`payload` holds ids and short facts written by
 the pipeline or importer, never file content; `next_step` is
 `confirm_duplicate`, `choose_account`, `column_mapping`, `reprocess`,
-`choose_owner` or `attach_receipt`).
+`choose_owner`, `attach_receipt` or `correct_fields`; `GET /review/{id}`
+also returns `regions` (`[{"page", "bbox", "label": "transaction" |
+"account_number" | "page", "transaction_id"?, "fields"}]`) and
+`alternatives` (`[{"field", "value", "label", "score", "transaction_id",
+"source": "document" | "ledger" | "household"}]`; values read from the
+document only for callers the download rule allows), both `null` in lists).
 `GET /review?state=&kind=&document=&cursor=&limit=` (any role; `state`
 defaults to `open`, `all` for every state; oldest first, `limit` 1-500)
 lists items of documents the caller can see whose payload `account_id`, if
@@ -370,8 +419,41 @@ attaches the receipt to that transaction, which need not be a suggestion,
 with the checks of `POST /documents/{id}/links`: a transaction the caller
 cannot edit is `404 transaction-not-found`; `"transaction_id": null`
 records that none applies; `next_step` is `attach_receipt`; INGESTION.md
-"Receipts"). Other kinds can only be dismissed for now (`409
-review-resolution-unsupported`). Closing the last open item of an accepted
+"Receipts"); `{"kind": "low_confidence_field", "transactions": [{"transaction_id",
+"posted_date"?, "amount"? (`{"amount", "currency"}`), "raw_payee"?,
+"memo"?}], "confirm"}` (corrects rows imported from the item's document,
+each one the caller edits, else `422 invalid-resolution`; with `confirm`,
+default `true`, the item's pending rows become `confirmed`, for a
+`reconciliation_failed`/`reconciliation_unavailable` item every pending row
+of the document on the item's account; audited as `transaction.update`).
+Other kinds can only be dismissed for now (`409
+review-resolution-unsupported`). Review tools, same callers and open-item
+rule as resolve unless noted: `POST /review/{id}/correct` `{"document"?:
+{"institution_id"?, "account_id"?, "period_start"?, "period_end"?,
+"tax_year"?, "kind"?}, "transactions": [...as above], "resolve"}` (an
+institution of the household, `404 institution-not-found`; an account the
+caller edits; `null` clears institution, period and tax year; a period that
+ends before it starts is `422`; audit `document.correct`; `resolve` closes
+the item) answers the item. `POST /review/{id}/remember-layout`
+`{"institution_id", "kind"?, "parser"?, "match"?, "reprocess_similar"}`
+stores a household `parser_fingerprint` (`match` has the shipped
+fingerprints' schema, derived from the document's header lines and table
+layout when absent): `409 layout-unavailable` without extracted pages, `422
+kind-required`, `422 parser-unknown`, `422` for rules outside the schema or
+with an unsafe regex, `422 layout-not-distinctive`, `422 layout-does-not-match`
+(the rules must recognise this document), `422 layout-too-costly` (the rules
+did not finish within the household matching budget on this document), `409
+fingerprint-limit` (the household already remembers 100 layouts, or the
+layout 10 000 versions); it resolves the item, reprocesses the document and
+up to 50 `needs_review` documents the caller may change whose stored layout
+matches (the scan of up to 500 of them stops when its 2 s matching budget is
+spent), and answers `{"fingerprint_id", "version",
+"institution_id", "kind", "parser", "match", "ambiguous", "reprocessed",
+"item"}` (audit `parser_fingerprint.create`). `GET /review/{id}/rule-draft`
+(owner or admin, who may create rules; any item state) answers
+`{"item_id", "transaction_id", "rule"}` with a rule body for `POST /rules`
+pre-filled from the first row the item names that the caller can see (`409
+rule-draft-unavailable` without one or without a payee). Closing the last open item of an accepted
 `needs_review` document makes it `processed`. Audit `review.resolve` /
 `review.dismiss`; events `review.resolved` / `review.dismissed` (`{"id",
 "kind", "document_id", "account_id"?}`). Tokens need `review:read` /

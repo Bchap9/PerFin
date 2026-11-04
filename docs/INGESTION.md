@@ -38,12 +38,12 @@ received ─▶ scanning ─▶ extracting ─▶ classifying ─▶ parsing ─
 - Written to the **quarantine** blob area (encrypted like everything else, but
   logically separate and never linked from the UI as a downloadable file).
 
-Phase 2 status (`app/ingestion/intake/`): browser and token uploads
+Status after Phases 3-4 (`app/ingestion/intake/`): browser and token uploads
 (`POST /documents`), the drop folder and email intake (below). All
 the types above are accepted by the sniffer and stored. CSV/TSV, OFX/QFX,
-QIF (Phase 2) and PDF, PNG, JPEG, TIFF, HEIC, EML and ZIP (Phases 3-4, see
-"Extract") are extracted; XLSX is kept and waits in review (`unparsed`,
-`format_not_supported`) until its extractor lands. A ZIP is expanded once
+QIF (Phase 2) and PDF, PNG, JPEG, TIFF, HEIC, EML, ZIP and XLSX (Phases 3-4,
+see "Extract") are extracted; an XLSX worksheet is a table like a CSV and
+goes through the same column mapping. A ZIP is expanded once
 inside the sandbox and each member becomes a document of its own (below).
 Auto-dedupe is
 not built: a byte-identical upload always becomes a `possible_duplicate`
@@ -52,6 +52,23 @@ item (`payload.reason: same_content`, `duplicate_of` the earlier document).
 ### 2. Scan (optional)
 If the ClamAV sidecar is enabled, the quarantined blob is scanned. Positive
 results move the document to `rejected` with the signature name recorded.
+
+Status (`app/integrations/antivirus/`, `pipeline._scan`; SECURITY.md C9):
+with `PERFIN_ANTIVIRUS=clamav` (compose profile `av`) the worker streams the
+decrypted quarantined blob to clamd `INSTREAM` at `PERFIN_CLAMAV_ADDRESS`
+(`tcp://clamav:3310` on the internal `backend` network, or `unix:///...`),
+in 64 KiB chunks, never more than `PERFIN_CLAMAV_MAX_MB` (default 50), each
+socket operation bounded by `PERFIN_CLAMAV_TIMEOUT_SECONDS` (default 30) and
+the whole scan by four times that. The scan runs before any extraction. A
+positive verdict sets `rejected` with `error = malware detected: <signature>`
+and the stage log holding the signature name (allowlisted characters, at most 200); the blob stays in
+quarantine and is never served. When the scan cannot run (clamd down,
+timeout, no reply, file above the cap), `PERFIN_ANTIVIRUS_FAIL_MODE=closed`
+(the default) retries the job while the failure is retryable and then marks
+the document `failed` with an `unparsed` review item (`reason: scan_failed`);
+`open` goes on unscanned and logs it. `perfin config check` refuses an
+invalid address and warns about fail-open and a scan cap below the upload
+cap.
 
 ### 3. Extract
 Runs in a **sandboxed subprocess** inside the worker container: separate
@@ -73,21 +90,32 @@ and other processes are out of reach (`PERFIN_EXTRACT_REQUIRE_LANDLOCK=false`
 lets it run on a kernel without Landlock, with only the other layers). The
 worker makes itself non-dumpable before it spawns a child, so a child under
 the same UID cannot open `/proc/<worker>/{environ,mem,fd}` (ADR-0009). The
-seccomp filter is **default-allow with a deny list** (`EPERM` for sockets,
+seccomp filter is a **default-kill allowlist** (Phases 3-4): only the
+syscalls CPython, PyMuPDF, Pillow and Tesseract need run (memory, reading
+already-permitted files, time, futexes and threads, its own process facts,
+signals to itself), some only with argument checks (`clone` only for
+threads, `prlimit64`/`kill`/`tgkill` only on itself, `fcntl` and `ioctl`
+only with listed commands, `open`/`openat` only without a write flag); any
+other syscall kills the child with `SIGSYS` and the document fails with the
+sandbox code `syscall_denied`. The list was derived from `strace` of every
+extractor, the fuzz corpus and the mutation fuzzer, and the sandbox tests
+pass with it on the host (Ubuntu glibc) and in the `python:3.12-slim` base
+image (Debian glibc). The calls a parser exploit wants fail with `EPERM`
+rather than a kill so tests can tell which layer stopped them: sockets,
 `execve`, `fork`/non-thread `clone`, signals to other processes, `ptrace`,
 mounts and namespaces, BPF, `io_uring`, keyrings, identity changes, every
-call that changes the filesystem, and `open`/`openat` for writing, ...): an
-allowlist was not chosen yet because CPython and the Phase 3 PDF/OCR
-libraries need a large, version-dependent syscall set; the container's
-`cap_drop: ALL`, read-only root and missing egress are the outer layers.
+call that changes the filesystem and `open`/`openat` for writing. The
+container's `cap_drop: ALL`, read-only root and missing egress are the outer
+layers (ADR-0006 addendum).
 When the worker runs as root, `PERFIN_EXTRACT_UID` makes the child switch to
 that UID; the shipped image runs the worker as 10001 and the child shares
 that UID, isolated by the layers above. The parent kills the process group after
 `PERFIN_EXTRACT_TIMEOUT_SECONDS` or when stdout exceeds
 `PERFIN_EXTRACT_MAX_OUTPUT_MB`, and validates stdout against a strict
 Pydantic schema. Extractors are registered by kind
-(`app/ingestion/extract/registry.py`); Phase 2 ships CSV/TSV, OFX/QFX (SGML
-and XML) and QIF.
+(`app/ingestion/extract/registry.py`): CSV/TSV, OFX/QFX (SGML and XML) and
+QIF since Phase 2; PDF, images (with OCR), EML, ZIP and XLSX since Phases
+3-4 (below).
 
 - PDF (`app/ingestion/extract/pdf.py`): PyMuPDF on the in-memory stream.
   Words with boxes per page (points, origin top left), grouped into lines;
@@ -220,15 +248,31 @@ the validated sandbox output, never on file content):
   institutions matching equally strongly is no match. YAML is read with
   `yaml.safe_load` after refusing anchors and aliases and files over 64 KiB,
   then validated by a strict schema (unknown keys refused, bounded lists).
-  Regexes accept only a linear-time subset (no backreferences, lookarounds,
+  Regexes accept only a restricted subset (no backreferences, lookarounds,
   inline flags, lazy quantifiers, nested quantifiers or quantified
   alternations; at most 256 characters, 12 quantifiers, repeat counts up to
-  100) and are compiled with **possessive** quantifiers, then run over one
-  line of at most 300 characters (`safe_regex.py`). A user's "remember this
+  100) and are compiled with **possessive** quantifiers and **atomic
+  alternation** (every group with `|`, and a pattern with a top-level `|`,
+  becomes `(?>...)`), so the engine never returns into a quantifier or an
+  alternation it has left: one match attempt costs at most pattern length
+  times line length, a search at most that times the line length. They run
+  over one line of at most 300 characters (`safe_regex.py`). Possessive
+  quantifiers alone were not enough: `(?:a|a)` repeated 36 times then `b`
+  backtracked 2^36 times (security review P34-SR-01). The first alternative
+  that matches wins, so longer alternatives go first (`(?:ab|a)c`). A user's "remember this
   layout" is a `parser_fingerprint` row (`remember_layout`: same `match`
   schema, version incremented per institution, kind and parser); household
   fingerprints are tried with the shipped ones and win ties; a stored row
-  that no longer validates is skipped. Six fictional institutions ship
+  that no longer validates is skipped. Matching work is bounded in total
+  (security review P34-SR-R2-01: a linear-per-attempt pattern still costs
+  pattern x line^2 per line, and 64 rules over 4000 lines took a minute):
+  only the latest version of each layout is matched, a household remembers
+  at most 100 layouts (`MAX_HOUSEHOLD_FINGERPRINTS`), and the pattern rules
+  (`regex`, `account_mask`) of household fingerprints run under a
+  wall-clock `MatchBudget` checked before every line, 0.25 s per document
+  shared by all of them (`HOUSEHOLD_MATCH_SECONDS`); a fingerprint whose
+  evaluation runs out of budget does not match, and the document goes on to
+  the classifier and review. Shipped fingerprints are not budgeted. Six fictional institutions ship
   (Example Federal Credit Union, Sample National Bank (checking and
   1099-INT), Demo Card Services, Placeholder Brokerage, Fictional Mutual
   Insurance, Mock Savings and Loan with day-first dates).
@@ -270,9 +314,12 @@ the validated sandbox output, never on file content):
   origin, version, parser, id?}, institution_name?, period?: {source,
   inferred}, classifier?: {model, scores}, review?: [...]}`. Structured
   statements (OFX/QIF/CSV) keep the Phase 2 classify step; containers are
-  not classified. The pipeline does not yet raise a review item for a low
-  classification confidence by itself: those documents already wait in
-  review because no PDF/image parser exists yet.
+  not classified. The pipeline does not raise a review item for a low
+  classification confidence by itself: a document whose kind stays
+  `unknown` or that no parser reads waits in review (`unparsed`,
+  `no_records`), and a statement whose account cannot be matched waits as
+  `unknown_account`; the classification reasons are kept in
+  `document.confidence.review` and the ingest log.
 
 ### 5. Parse
 Produce structured records appropriate to the kind:
@@ -581,6 +628,74 @@ download (`POST /documents` streams the multipart body straight into the
 encrypting writer; downloads are attachments of the sniffed type, never
 from quarantine) are in API.md "Documents notes".
 
+Phases 3-4 implementation (`app/domain/review/assist.py`, `actions.py`,
+`layout.py`; API.md "Review notes"):
+
+- **Page and region.** `GET /documents/{id}/preview?page=` serves the page
+  PNG the sandbox rendered (stored encrypted; checked again for plain PNG
+  chunks; `image/png` inline, `nosniff`, `sandbox` CSP, `no-store`;
+  audited). It follows the download rule (member or above, a viewer only
+  where `documents.viewer_download` is on) and never serves a quarantined
+  document. `GET /documents/{id}/regions?page=` gives the page's word
+  boxes to anyone who can see the document, the words themselves only
+  under the download rule. `GET /review/{id}` adds `regions` (the box a
+  parser read a doubtful row from, matched by page, date and amount in the
+  stored extraction; where an account number was printed for
+  `unknown_account`) and `alternatives` (other amounts and dates on the
+  row's line, for callers who may see the content; accounts ranked by last
+  four digits, institution and currency; candidate and suggested
+  transactions; the household's institutions).
+- **Correct.** `POST /review/{id}/correct` corrects the document's
+  institution, account, period, tax year and kind and the values of rows
+  imported from it (through the transactions service: edit rights,
+  audit). The `low_confidence_field` resolution corrects rows and confirms
+  the item's pending rows (a statement that did not reconcile: all its
+  pending rows on that account).
+- **Remember this layout.** `POST /review/{id}/remember-layout` writes a
+  household `parser_fingerprint`: rules from the request, or derived from
+  the document (the first header line without digit runs must hold; other
+  such header lines and the table's column layout corroborate, at least
+  one of them). The rules pass the fingerprint schema and the ReDoS-safe
+  regex subset, must recognise the document they are learned from, and
+  the parser must exist (the generic parser of the kind by default; an
+  institution parser is never reused for another layout). The rules must
+  hold within the matching budget (`422 layout-too-costly`), and a
+  household remembers at most 100 layouts (`409 fingerprint-limit`). The
+  item is resolved; the document and up to 50 other `needs_review`
+  documents the person may change whose stored layout the fingerprint
+  matches are reprocessed (of the 500 newest scanned; the scan stops when
+  its 2 s matching budget is spent).
+- **Create a rule from this.** `GET /review/{id}/rule-draft` returns a rule
+  pre-filled from one of the item's rows (payee text, account and sign;
+  the row's category, else payee, else a review flag), validated by the
+  rules schema but not saved; it is created through `POST /rules`.
+- **PDF table column mapping.** A PDF or image that no parser read and
+  that has page tables offers its largest table (same header across pages
+  joined, cells formula-neutralised) to `GET /imports/{id}/preview`, the
+  mapping editor and the importer as if it were a CSV table. A mapping
+  saved from it (`POST /imports/mappings` with `document_id`) carries that
+  header's fingerprint, so the next PDF of the same layout is imported by
+  it without a question. Receipts and payslips are excluded.
+- **Unknown owner.** The `unknown_owner` resolution with `remember` routes
+  the drop-folder subfolder (see "Drop folder specifics").
+- **The review UI** (`frontend/src/features/review/ReviewTools.tsx`,
+  `frontend/src/features/documents/PageViewer.tsx`): each item shows the
+  page image with the doubtful row's box highlighted (positions as
+  percentages of the page, so they hold at any size; recognised words can
+  be outlined), the other readings to pick ("Use date ...", a picked amount
+  keeps the row's sign), "Confirm as read" / "Save corrections and
+  confirm", "Create a rule from this" (draft, then "Save this rule"),
+  "Remember this layout" for a new institution (optionally re-reading files
+  already received), the member/account choice with "remember this
+  folder" for an unknown owner, "Show receipt" beside ranked receipt
+  suggestions, and "Map columns" with the page above the mapping form for a
+  PDF or image table. The document library (`/documents/library`: kind,
+  status, tax year and full-text search with matched words marked) and
+  document detail (`/documents/{id}`, page viewer, download only when the
+  server says `downloadable`) use the same viewer. A low-confidence OCR row
+  was corrected and confirmed and a rule saved through this UI in headless
+  Chrome against a live API and worker (Phases 3+4 finalization).
+
 ## Drop folder specifics
 
 - Mounted **read-only** into the worker where possible; the worker copies into
@@ -712,14 +827,21 @@ Phase 4 status (`app/ingestion/intake/email.py`, `app/workers/handlers/mailbox.p
   `From` address. Only the topmost `Authentication-Results` header (or the
   topmost from `authserv_id`) is read, since anyone can add such headers
   further down; comments are ignored; `spf=pass` and `dkim=pass` are both
-  required, and a DKIM pass that names its signing domain must be aligned
-  with the `From` domain (equal, or one a subdomain of the other).
+  required, and the DKIM pass must name its signing domain (`header.d` or
+  `header.i`; a bare `dkim=pass` counts as unaligned) and that domain must
+  be the `From` domain or a parent of it (a signer below the `From` domain
+  or a one-label domain does not count).
 - **Two-phase move and dedupe.** Each decision is recorded in
-  `mail_intake_message` (key: SHA-256 of `Message-ID` plus `From`, or of
-  the header block) in the job's transaction; a message is moved only by a
-  later run that finds it recorded, and the handler queues that follow-up
-  run whenever a run recorded something. A second copy of a recorded
-  message is moved without being imported again. Servers without `MOVE`
+  `mail_intake_message` (key of an accepted message: SHA-256 of
+  `Message-ID` plus `From`, or of the header block; of a rejected one:
+  SHA-256 of the whole header block, so that a rejected forgery carrying a
+  legitimate message's `Message-ID` and `From` cannot send that message to
+  the rejected folder, security review P34-SR-R2-02) in the job's
+  transaction; a message is moved only by a later run that finds it
+  recorded, and the handler queues that follow-up run whenever a run
+  recorded something. A second copy of an accepted message (or an
+  identical copy of a rejected one) is moved without being imported or
+  evaluated again. Servers without `MOVE`
   get `COPY`, `\Deleted` and `UID EXPUNGE`.
 - **Caps.** Per run `PERFIN_EMAIL_INTAKE_MAX_MESSAGES_PER_RUN` new
   messages (50), `PERFIN_EMAIL_INTAKE_MAX_MB_PER_RUN` (200) fetched;
@@ -755,7 +877,12 @@ Institution fingerprints live in `backend/app/ingestion/classify/fingerprints/`
 fixture format that uses **synthetic** statements (never real ones). A
 contributor adds a fixture, a fingerprint and, if needed, a parser subclass.
 A CLI `perfin ingest --dry-run file.pdf` prints every stage's output for
-debugging without writing to the database.
+debugging without writing to the database (`app/ingestion/dryrun.py`): one
+JSON document per stage (`receive` with the sniff and the same refusals as an
+upload, `scan` when ClamAV is configured, `extract` through the real sandbox,
+`classify`, `parse`, and with `--household` a `match` read in a rolled-back
+`READ ONLY` transaction). Nothing is written to the blob store or the
+database; previews and child documents are summarised, not printed.
 
 The steps, the parser contract and the review checklist are in
 [CONTRIBUTING-parsers.md](CONTRIBUTING-parsers.md). In short:
