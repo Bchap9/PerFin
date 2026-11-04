@@ -29,8 +29,14 @@ export const EVENTS_PATH = "/api/v1/events";
 export type EventMapping = Readonly<Record<string, readonly QueryKey[]>>;
 
 export const DEFAULT_EVENT_MAPPING: EventMapping = {
-  "document.*": [queryRoots.documents, queryRoots.review, queryRoots.dashboard],
-  "review.*": [queryRoots.review, queryRoots.dashboard],
+  "document.*": [
+    queryRoots.documents,
+    queryRoots.review,
+    queryRoots.transactions,
+    queryRoots.accounts,
+    queryRoots.dashboard,
+  ],
+  "review.*": [queryRoots.review, queryRoots.documents, queryRoots.transactions, queryRoots.dashboard],
   "job.*": [queryRoots.jobs],
   "account.*": [queryRoots.accounts, queryRoots.netWorth, queryRoots.dashboard],
   "account_grant.*": [queryRoots.accounts, queryRoots.transactions, queryRoots.settings],

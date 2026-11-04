@@ -1,6 +1,10 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import { createRoute, type AnyRoute } from "@tanstack/react-router";
 
+import { CategoriesPage } from "../categories/CategoriesPage";
+import { AccessPage } from "./AccessPage";
+import { DataPage } from "./DataPage";
+import { GeneralPage } from "./GeneralPage";
 import { HouseholdMembersPage } from "./HouseholdMembersPage";
 import { ProfilePage } from "./ProfilePage";
 import { SecurityPage } from "./SecurityPage";
@@ -16,6 +20,10 @@ export function routes(parent: AnyRoute): AnyRoute[] {
       child("profile", ProfilePage),
       child("security", SecurityPage),
       child("household", HouseholdMembersPage),
+      child("general", GeneralPage),
+      child("access", AccessPage),
+      child("categories", CategoriesPage),
+      child("data", DataPage),
     ]),
   ];
 }

@@ -40,6 +40,10 @@ const SECTIONS = [
     text: "Password, second factors, recovery codes, sessions and personal access tokens.",
   },
   { to: "/settings/household", title: "Household members", text: "Who can see this household's finances, and their roles." },
+  { to: "/settings/general", title: "Household", text: "The household's name and base currency." },
+  { to: "/settings/access", title: "Account access", text: "Which accounts each member or viewer can see or edit." },
+  { to: "/settings/categories", title: "Categories, payees and tags", text: "Organise how transactions are grouped." },
+  { to: "/settings/data", title: "Data export and import", text: "Take a copy of everything, or restore one." },
 ] as const;
 
 export function SettingsIndexPage() {

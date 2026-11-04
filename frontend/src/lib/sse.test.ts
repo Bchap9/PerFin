@@ -79,7 +79,13 @@ function setup() {
 
 describe("event type mapping", () => {
   it("maps event types to query-key invalidations", () => {
-    expect(invalidationsFor("document.updated")).toEqual([["documents"], ["review"], ["dashboard"]]);
+    expect(invalidationsFor("document.updated")).toEqual([
+      ["documents"],
+      ["review"],
+      ["transactions"],
+      ["accounts"],
+      ["dashboard"],
+    ]);
     expect(invalidationsFor("job.updated")).toEqual([["jobs"]]);
     expect(invalidationsFor("transaction.created")).toEqual([
       ["transactions"],
@@ -118,6 +124,17 @@ describe("event type mapping", () => {
     expect(invalidationsFor("account_grant.changed")).toContainEqual(["transactions"]);
   });
 
+  it("refreshes the ledger screens when imports and reviews change", () => {
+    for (const type of ["document.updated", "review.resolved", "review.dismissed"]) {
+      const keys = invalidationsFor(type).map((key) => JSON.stringify(key));
+      expect(keys).toContain('["transactions"]');
+      expect(keys).toContain('["review"]');
+      expect(keys).toContain('["documents"]');
+    }
+    expect(invalidationsFor("balance.updated")).toContainEqual(["accounts"]);
+    expect(invalidationsFor("transaction.transfer_linked")).toContainEqual(["transactions"]);
+  });
+
   it("reads the type from unnamed message data", () => {
     expect(typeFromMessageData('{"id":"1","type":"review.created"}')).toBe("review.created");
     expect(typeFromMessageData('{"type":"<img src=x>"}')).toBeNull();
@@ -152,7 +169,7 @@ describe("startEventStream", () => {
     expect(current().url).toBe("/api/v1/events");
     current().open();
     current().emit("document.updated");
-    expect(invalidated).toEqual([["documents"], ["review"], ["dashboard"]]);
+    expect(invalidated).toEqual([["documents"], ["review"], ["transactions"], ["accounts"], ["dashboard"]]);
     invalidated.length = 0;
     current().emit("message", JSON.stringify({ id: "x", type: "job.updated" }));
     expect(invalidated).toEqual([["jobs"]]);

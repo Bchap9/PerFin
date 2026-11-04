@@ -28,7 +28,7 @@ function renderAt(path: string) {
 
 describe("app shell", () => {
   it("shows every navigation section and marks the current one", async () => {
-    renderAt("/accounts");
+    renderAt("/tax");
     const nav = await screen.findByRole("navigation", { name: "Main" });
     const labels = within(nav)
       .getAllByRole("link")
@@ -38,6 +38,8 @@ describe("app shell", () => {
       "Accounts",
       "Transactions",
       "Budgets",
+      "Goals",
+      "Rules",
       "Investments",
       "Loans",
       "Net worth",
@@ -46,9 +48,9 @@ describe("app shell", () => {
       "Tax",
       "Settings",
     ]);
-    expect(within(nav).getByRole("link", { name: "Accounts" })).toHaveAttribute("aria-current", "page");
+    expect(within(nav).getByRole("link", { name: "Tax" })).toHaveAttribute("aria-current", "page");
     expect(within(nav).getByRole("link", { name: "Dashboard" })).not.toHaveAttribute("aria-current");
-    expect(await screen.findByRole("heading", { level: 1, name: "Accounts" })).toBeInTheDocument();
+    expect(await screen.findByRole("heading", { level: 1, name: "Tax" })).toBeInTheDocument();
     expect(screen.getByText("Not built yet")).toBeInTheDocument();
     expect(screen.getByRole("link", { name: "Skip to content" })).toHaveAttribute("href", "#main");
     expect(screen.getByRole("main")).toHaveAttribute("id", "main");
@@ -56,8 +58,8 @@ describe("app shell", () => {
 
   it("navigates between placeholder sections", async () => {
     const user = userEvent.setup();
-    renderAt("/budgets");
-    expect(await screen.findByRole("heading", { level: 1, name: "Budgets" })).toBeInTheDocument();
+    renderAt("/loans");
+    expect(await screen.findByRole("heading", { level: 1, name: "Loans" })).toBeInTheDocument();
     await user.click(screen.getByRole("link", { name: "Net worth" }));
     expect(await screen.findByRole("heading", { level: 1, name: "Net worth" })).toBeInTheDocument();
     expect(screen.getByRole("link", { name: "Net worth" })).toHaveAttribute("aria-current", "page");
@@ -127,9 +129,9 @@ describe("shell routes", () => {
     expect(normalizedPath(route as unknown as AnyRoute)).toBe("accounts");
   });
 
-  it("lets a feature's route replace the placeholder (home serves /)", async () => {
+  it("lets a feature's route replace the placeholder (the dashboard serves /)", async () => {
     renderAt("/");
-    expect(await screen.findByText(/Nothing to see here yet/)).toBeInTheDocument();
+    expect(await screen.findByRole("heading", { level: 1, name: "Dashboard" })).toBeInTheDocument();
     const nav = screen.getByRole("navigation", { name: "Main" });
     expect(within(nav).getByRole("link", { name: "Dashboard" })).toHaveAttribute("aria-current", "page");
     expect(screen.queryByText("Not built yet")).not.toBeInTheDocument();

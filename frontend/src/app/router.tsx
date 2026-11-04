@@ -7,11 +7,18 @@ import {
   type RouterHistory,
 } from "@tanstack/react-router";
 
+import { routes as accountsRoutes } from "../features/accounts/routes";
+import { routes as budgetsRoutes } from "../features/budgets/routes";
+import { routes as dashboardRoutes } from "../features/dashboard/routes";
+import { routes as goalsRoutes } from "../features/goals/routes";
+import { routes as rulesRoutes } from "../features/rules/routes";
 import { routes as authRoutes } from "../features/auth/routes";
 import { authGuard } from "../features/auth/guard";
-import { routes as homeRoutes } from "../features/home/routes";
+import { routes as importsRoutes } from "../features/imports/routes";
+import { routes as reviewRoutes } from "../features/review/routes";
 import { routes as settingsRoutes } from "../features/settings/routes";
 import { routes as setupRoutes } from "../features/setup/routes";
+import { routes as transactionsRoutes } from "../features/transactions/routes";
 import { AppProviders } from "./AppProviders";
 import { NotFoundPage, PendingPage, RouteErrorPage } from "./pages";
 import { RootLayout } from "./RootLayout";
@@ -38,10 +45,17 @@ export const rootRoute = createRootRouteWithContext<RouterContext>()({
 type FeatureRoutes = (parent: typeof rootRoute) => AnyRoute[];
 
 const features: FeatureRoutes[] = [
-  homeRoutes,
+  dashboardRoutes,
   authRoutes,
   setupRoutes,
   settingsRoutes,
+  accountsRoutes,
+  transactionsRoutes,
+  importsRoutes,
+  reviewRoutes,
+  budgetsRoutes,
+  goalsRoutes,
+  rulesRoutes,
 ];
 
 /**

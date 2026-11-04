@@ -16,6 +16,8 @@ export const NAV_ITEMS: readonly NavItem[] = [
   { to: "/accounts", label: "Accounts", summary: "Bank, card, brokerage, loan and manual accounts." },
   { to: "/transactions", label: "Transactions", summary: "Search, categorise and split transactions." },
   { to: "/budgets", label: "Budgets", summary: "Monthly budgets by category." },
+  { to: "/goals", label: "Goals", summary: "Savings targets with progress and projection." },
+  { to: "/rules", label: "Rules", summary: "Categorise and tag transactions automatically." },
   { to: "/investments", label: "Investments", summary: "Holdings, lots and performance." },
   { to: "/loans", label: "Loans", summary: "Balances, amortisation and payoff scenarios." },
   { to: "/net-worth", label: "Net worth", summary: "Assets and liabilities over time." },
