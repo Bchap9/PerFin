@@ -75,7 +75,11 @@ def unauthenticated(detail: str = "Authentication is required.") -> ProblemError
     return ProblemError(401, "unauthenticated", "Not authenticated", detail)
 
 
-DbSession = Annotated[Session, Depends(get_db)]
+# scope="function": the transaction commits before the response is sent, so
+# a client that got a 2xx reads its own write on the next request and a failed
+# commit is a 500, not a success (FastAPI's default "request" scope ends the
+# dependency after the response; tests/integration/test_commit_before_response.py).
+DbSession = Annotated[Session, Depends(get_db, scope="function")]
 
 
 def session_acceptor(request: Request) -> Callable[[UserSession], bool]:

@@ -101,7 +101,8 @@ def ledger_lines(
     Columns: ``account_id``, ``posted_date``, ``month`` (first day of the
     posted month), ``fx_day`` (NULL for lines in ``scope.currency``, else the
     posted date), ``currency``, ``category_id``, ``payee_id``, ``amount``,
-    ``flow`` (``'expense'`` or ``'income'``) and ``recurring``: with
+    ``flow`` (``'expense'`` or ``'income'``), ``tax_flag`` (the split's
+    deductible flag; ``false`` for an unsplit transaction) and ``recurring``: with
     ``recurring_from``, whether a line posted on or after that date matches
     an active scheduled transaction (same account, payee and category); the
     budget forecast projects only the other lines linearly.
@@ -115,6 +116,7 @@ def ledger_lines(
         else_=literal(INCOME),
     )
     fx_day = case((Transaction.currency == scope.currency, null()), else_=Transaction.posted_date)
+    tax_flag = case((split.id.is_(None), literal(False)), else_=split.tax_flag)
     month = cast(func.date_trunc("month", Transaction.posted_date), Date)
     recurring: ColumnElement[bool]
     if recurring_from is None:
@@ -156,6 +158,7 @@ def ledger_lines(
             amount.label("amount"),
             flow.label("flow"),
             recurring.label("recurring"),
+            tax_flag.label("tax_flag"),
         )
         .select_from(Transaction)
         .outerjoin(

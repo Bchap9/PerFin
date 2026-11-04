@@ -329,3 +329,11 @@ def test_parser_detect_and_parse_on_a_document_view() -> None:
     outcome = parser.parse(view, threshold=THRESHOLD)
     assert outcome.receipt is not None
     assert not outcome.empty
+
+
+def test_a_line_with_an_ssn_or_ein_is_never_the_merchant() -> None:
+    """P56-SR-R1-02: identity-shaped tokens are not merchant candidates."""
+    text = "Jordan Quill Testperson SSN 000-00-0000\n" + BASIC
+    receipt = _read(text)
+    assert receipt.merchant == "CORNER MARKET"
+    assert not any("000-00-0000" in c for c in receipt.merchant_candidates)

@@ -240,6 +240,17 @@ class Settings(BaseSettings):
     # while it is validated and applied).
     import_max_mb: Annotated[int, Field(ge=1, le=4096)] = 512
 
+    # ---- Tax vault (Phase 6) --------------------------------------------------
+    # Days (MM-DD, comma separated) of the year after a tax year on which an
+    # open tax year with expected documents still missing raises a
+    # "N expected documents still missing" reminder (event ``tax.reminder``).
+    tax_reminder_dates: Annotated[
+        str,
+        Field(
+            pattern=r"^(?:(?:0[1-9]|1[0-2])-(?:0[1-9]|[12][0-9]|3[01]))?(?:,(?:0[1-9]|1[0-2])-(?:0[1-9]|[12][0-9]|3[01]))*$"
+        ),
+    ] = "01-31,02-15,03-01,03-15,04-01"
+
     # ---- Live updates (Server-Sent Events, ``GET /events``) -----------------
     # Comment line sent when nothing else was, so proxies keep the stream open.
     sse_heartbeat_seconds: Annotated[float, Field(gt=0, le=300)] = 15
@@ -251,7 +262,27 @@ class Settings(BaseSettings):
     sse_max_streams_per_user: Annotated[int, Field(ge=1, le=100)] = 5
 
     # ---- Integrations -------------------------------------------------------
-    price_provider: str = "none"
+    # Market data (docs/security/integrations.md, app.integrations.prices/fx).
+    # Manual prices and FX rates are always available; external feeds are
+    # opt-in and send only ticker symbols (prices) or nothing at all (ECB).
+    # "http_json": GET PERFIN_PRICE_PROVIDER_URL with {symbol} filled in.
+    price_provider: Literal["none", "http_json"] = "none"
+    # https URL template with exactly one {symbol} placeholder.
+    price_provider_url: str = ""
+    # Dotted paths into the JSON answer (``data.0.close``): the close (required),
+    # its date (ISO, optional: today) and currency (optional: the setting below).
+    price_provider_price_field: str = "price"
+    price_provider_date_field: str = ""
+    price_provider_currency_field: str = ""
+    price_provider_currency: str = "USD"
+    # Optional instance credential sent as a request header (never in the URL).
+    price_provider_auth_header: str = ""
+    price_provider_api_key: SecretStr | None = None
+    # Most distinct symbols asked for per refresh run (one request each).
+    price_provider_max_symbols: Annotated[int, Field(ge=1, le=5000)] = 500
+    # "ecb": the European Central Bank's daily reference rates (one fixed URL,
+    # nothing household-specific is sent).
+    fx_provider: Literal["none", "ecb"] = "none"
     antivirus: Literal["none", "clamav"] = "none"
     # clamd on the internal network: tcp://host:port or unix:///path (SECURITY.md C9).
     clamav_address: str = "tcp://clamav:3310"

@@ -60,7 +60,7 @@ def _test_router() -> tuple[APIRouter, APIRouter]:
             "request_id": request_id(request),
         }
 
-    @root.get("/assets/app-1234.js")
+    @root.get("/static/app-1234.js")
     def asset() -> Response:
         return Response(b"console.log(1)", media_type="text/javascript")
 
@@ -156,11 +156,11 @@ def test_api_responses_are_never_cacheable(app_client: TestClient) -> None:
 
 
 def test_static_assets_get_long_cache(app_client: TestClient) -> None:
-    response = app_client.get("/assets/app-1234.js")
+    response = app_client.get("/static/app-1234.js")
     assert response.status_code == 200
     assert response.headers["cache-control"] == STATIC_CACHE_CONTROL
     assert response.headers["x-content-type-options"] == "nosniff"
-    missing = app_client.get("/assets/missing.js")
+    missing = app_client.get("/static/missing.js")
     assert missing.status_code == 404
     assert missing.headers["cache-control"] == "no-store"
 

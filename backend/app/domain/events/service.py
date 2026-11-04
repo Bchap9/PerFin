@@ -57,7 +57,17 @@ ACCOUNT_KEYS: Final = ("account_id", "account_ids")
 ALL_ACCOUNTS_KEY: Final = "all_account_ids"
 #: Event types about account data: without a named account they are dropped
 #: for members and viewers.
-ACCOUNT_SCOPED_PREFIXES: Final = ("transaction.", "balance.", "goal.")
+ACCOUNT_SCOPED_PREFIXES: Final = (
+    "transaction.",
+    "balance.",
+    "goal.",
+    "investment.",
+    "security.",
+    "loan.",
+    "asset.",
+    "schedule.",
+    "networth.",
+)
 
 
 @dataclass(frozen=True)

@@ -16,7 +16,7 @@ pytestmark = pytest.mark.integration
 
 INDEX = (
     "<!doctype html><html><head>"
-    '<script type="module" src="/assets/index-abc123.js"></script>'
+    '<script type="module" src="/static/index-abc123.js"></script>'
     "</head><body><div id=root></div></body></html>"
 )
 
@@ -24,12 +24,12 @@ INDEX = (
 @pytest.fixture
 def static_dir(tmp_path: Path) -> Path:
     build = tmp_path / "dist"
-    (build / "assets").mkdir(parents=True)
+    (build / "static").mkdir(parents=True)
     (build / "index.html").write_text(INDEX, encoding="utf-8")
-    (build / "assets" / "index-abc123.js").write_text("console.log(1);\n", encoding="utf-8")
+    (build / "static" / "index-abc123.js").write_text("console.log(1);\n", encoding="utf-8")
     (build / "robots.txt").write_text("User-agent: *\nDisallow: /\n", encoding="utf-8")
     (tmp_path / "secret.txt").write_text("outside the build\n", encoding="utf-8")
-    (build / "assets" / "link.js").symlink_to(tmp_path / "secret.txt")
+    (build / "static" / "link.js").symlink_to(tmp_path / "secret.txt")
     return build
 
 
@@ -40,7 +40,20 @@ def spa_client(settings: Settings, static_dir: Path) -> Iterator[TestClient]:
         yield client
 
 
-@pytest.mark.parametrize("path", ["/", "/accounts", "/settings/security", "/login"])
+@pytest.mark.parametrize(
+    "path",
+    [
+        "/",
+        "/accounts",
+        "/settings/security",
+        "/login",
+        # The Assets pages (Phase 5) are client routes: the hashed bundles live
+        # under /static/, not Vite's default /assets/ (found in the live run,
+        # where a reload of /assets answered a problem 404).
+        "/assets",
+        "/assets/01a1a665-0dda-7633-b51c-5c46ea8eb3d1",
+    ],
+)
 def test_client_routes_get_index_with_strict_headers(spa_client: TestClient, path: str) -> None:
     response = spa_client.get(path)
     assert response.status_code == 200
@@ -55,14 +68,14 @@ def test_client_routes_get_index_with_strict_headers(spa_client: TestClient, pat
 
 
 def test_hashed_assets_are_long_cached(spa_client: TestClient) -> None:
-    response = spa_client.get("/assets/index-abc123.js")
+    response = spa_client.get("/static/index-abc123.js")
     assert response.status_code == 200
     assert "immutable" in response.headers["cache-control"]
     assert response.headers["x-content-type-options"] == "nosniff"
 
 
 def test_missing_asset_is_404_not_index_and_not_cached(spa_client: TestClient) -> None:
-    response = spa_client.get("/assets/nope.js")
+    response = spa_client.get("/static/nope.js")
     assert response.status_code == 404
     assert response.text != INDEX
     assert response.headers["cache-control"] == "no-store"
@@ -70,7 +83,7 @@ def test_missing_asset_is_404_not_index_and_not_cached(spa_client: TestClient) -
 
 @pytest.mark.parametrize(
     "path",
-    ["/assets/link.js", "/assets/../../secret.txt", "/assets/%2e%2e/%2e%2e/secret.txt"],
+    ["/static/link.js", "/static/../../secret.txt", "/static/%2e%2e/%2e%2e/secret.txt"],
 )
 def test_no_symlinks_or_traversal(spa_client: TestClient, path: str) -> None:
     response = spa_client.get(path)

@@ -37,13 +37,14 @@ import secrets
 import uuid
 from collections.abc import Callable, Iterator, Mapping
 from dataclasses import dataclass, field
-from datetime import timedelta
+from datetime import date, timedelta
 from pathlib import Path
 from typing import Any
 
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
+from sqlalchemy import select
 from starlette.routing import BaseRoute, Mount, Route
 
 from app.auth.models import (
@@ -64,9 +65,15 @@ from app.db.models import Household
 from app.db.queue import enqueue
 from app.db.rls import set_context
 from app.db.session import make_sessionmaker
+from app.domain.accounts.models import Account
+from app.domain.assets.models import ManualAsset
 from app.domain.documents.blobstore import LocalFSBlobStore
 from app.domain.goals.models import Goal
+from app.domain.investments.models import Security
+from app.domain.investments.service import replay_position
+from app.domain.loans.models import Loan
 from app.domain.rules.schemas import RUN_RULES_JOB_TYPE, RunRulesJob
+from app.domain.tax.models import TaxYear
 from tests.fixtures.auth_clients import SAME_ORIGIN, random_ip
 from tests.fixtures.documents import make_document, make_review_item
 from tests.fixtures.factories import (
@@ -84,14 +91,28 @@ from tests.fixtures.ledger import (
     make_account,
     make_budget,
     make_category,
+    make_fx_rate,
     make_goal,
     make_goal_contribution,
     make_payee,
     make_rule,
+    make_scheduled_transaction,
     make_tag,
     make_transaction,
 )
 from tests.fixtures.portability import make_import_record, make_ready_export
+from tests.fixtures.tax import free_tax_year, make_checklist_item, make_tax_export, make_tax_year
+from tests.fixtures.wealth import (
+    make_asset_valuation,
+    make_brokerage,
+    make_investment_txn,
+    make_loan,
+    make_loan_payment,
+    make_loan_rate_change,
+    make_manual_asset,
+    make_price,
+    make_security,
+)
 from tests.security.authz_policy import (
     DENIAL_TYPES,
     OWN_KINDS,
@@ -189,8 +210,8 @@ OWN_OBJECT_ROUTES = [
 def matrix_settings(settings: Settings, tmp_path_factory: pytest.TempPathFactory) -> Settings:
     static: Path = tmp_path_factory.mktemp("matrix-static")
     (static / "index.html").write_text("<!doctype html><title>PerFin</title>\n")
-    (static / "assets").mkdir()
-    (static / "assets" / ASSET).write_text("export {};\n")
+    (static / "static").mkdir()
+    (static / "static" / ASSET).write_text("export {};\n")
     blobs: Path = tmp_path_factory.mktemp("matrix-blobs")
     return settings.model_copy(
         update={
@@ -400,13 +421,105 @@ def build_object(
         return str(make_import_object(factories, world, kind).id)
     if kind in ("stored_document", "review_item"):
         return str(make_stored_document_object(factories, world, kind).id)
+    if kind in ("security", "investment_txn", "price"):
+        return str(make_investment_object(factories, world, kind, built or {}).id)
+    if kind in ("loan", "loan_payment", "loan_rate_change", "manual_asset", "asset_valuation"):
+        return str(make_loan_or_asset_object(factories, world, kind, built or {}).id)
+    if kind == "fx_rate":
+        # A fresh day each time, so every caller deletes its own rate.
+        day = date(2000, 1, 1) + timedelta(days=secrets.randbelow(9000))
+        with factories.transaction() as db:
+            return str(make_fx_rate(db, world.household.id, rate_date=day).id)
+    if kind == "scheduled_transaction":
+        household_id = world.household.id
+        with factories.transaction() as db:
+            account = make_account(db, household_id)
+            for role, level in (("member", GrantLevel.EDIT), ("viewer", GrantLevel.VIEW)):
+                grant_account(db, household_id, world.users[role].id, account.id, level)
+            return str(make_scheduled_transaction(db, account).id)
     if kind in ("export_archive", "import_archive"):
         return str(make_portability_object(factories, world, kind, owner).job_id)
+    if kind in ("tax_year", "tax_checklist_item", "tax_export"):
+        return make_tax_object(factories, world, kind, owner, built or {})
     if kind == "job":
         household_id = world.household.id
         with factories.transaction() as db, household_context(db, household_id):
             return str(enqueue(db, RUN_RULES_JOB_TYPE, RunRulesJob(), household_id=household_id))
     raise AssertionError(f"no generator for parameter kind {kind!r}")
+
+
+def make_investment_object(
+    factories: Factories, world: World, kind: str, built: Mapping[str, str]
+) -> Any:
+    """A security without activity, a buy of a new one on a fresh brokerage
+    account (member ``edit``, viewer ``view``; lots replayed), or a price of
+    the security built for the same path."""
+    household_id = world.household.id
+    with factories.transaction() as db:
+        if kind == "security":
+            return make_security(db, household_id)
+        if kind == "price":
+            security_id = uuid.UUID(built["security"]) if "security" in built else None
+            if security_id is None:
+                security = make_security(db, household_id)
+            else:
+                with household_context(db, household_id):
+                    found = db.get(Security, security_id)
+                assert found is not None
+                security = found
+            return make_price(db, security)
+        if kind == "investment_txn":
+            account = make_brokerage(db, household_id)
+            grant_account(db, household_id, world.users["member"].id, account.id, GrantLevel.EDIT)
+            grant_account(db, household_id, world.users["viewer"].id, account.id, GrantLevel.VIEW)
+            security = make_security(db, household_id)
+            row = make_investment_txn(db, account, security=security, amount="-1000")
+            with household_context(db, household_id):
+                replay_position(db, account, security.id)
+            return row
+    raise AssertionError(f"no investment generator for {kind!r}")
+
+
+def make_loan_or_asset_object(
+    factories: Factories, world: World, kind: str, built: Mapping[str, str]
+) -> Any:
+    """A loan on a fresh mortgage account or a manual asset on a fresh property
+    account (member ``edit``, viewer ``view``), or a payment / rate change of
+    the path's loan, a valuation of the path's asset."""
+    household_id = world.household.id
+    with factories.transaction() as db:
+        if kind in ("loan", "loan_payment", "loan_rate_change"):
+            if "loan" in built:
+                with household_context(db, household_id):
+                    found = db.get(Loan, uuid.UUID(built["loan"]))
+                assert found is not None
+                loan = found
+            else:
+                loan = make_loan(db, household_id)
+                for role, level in (("member", GrantLevel.EDIT), ("viewer", GrantLevel.VIEW)):
+                    grant_account(db, household_id, world.users[role].id, loan.account_id, level)
+            if kind == "loan":
+                return loan
+            if kind == "loan_payment":
+                return make_loan_payment(db, loan)
+            day = date(2025, 1, 1) + timedelta(days=secrets.randbelow(9000))
+            return make_loan_rate_change(db, loan, effective_date=day, new_rate="0.05")
+        if "manual_asset" in built:
+            with household_context(db, household_id):
+                found_asset = db.get(ManualAsset, uuid.UUID(built["manual_asset"]))
+            assert found_asset is not None
+            asset = found_asset
+        else:
+            asset = make_manual_asset(db, household_id)
+            for role, level in (("member", GrantLevel.EDIT), ("viewer", GrantLevel.VIEW)):
+                grant_account(db, household_id, world.users[role].id, asset.account_id, level)
+        if kind == "manual_asset":
+            return asset
+        with household_context(db, household_id):
+            account = db.get(Account, asset.account_id)
+        assert account is not None
+        day = date(2000, 1, 1) + timedelta(days=secrets.randbelow(9000))
+        return make_asset_valuation(db, account, valued_on=day)
 
 
 def make_ledger_object(factories: Factories, world: World, kind: str) -> Any:
@@ -510,6 +623,31 @@ def make_portability_object(
         if kind == "import_archive":
             return make_import_record(db, household_id, owner.id)
     raise AssertionError(f"no portability generator for {kind!r}")
+
+
+def make_tax_object(
+    factories: Factories, world: World, kind: str, owner: UserRecord, built: Mapping[str, str]
+) -> str:
+    """A tax year of the matrix household (a random year no other path uses
+    yet), a checklist item of the path's year, or a ready accountant export of
+    the path's year requested by ``owner``. Returns the path value."""
+    household_id = world.household.id
+    with factories.transaction() as db:
+        if kind == "tax_year":
+            return str(make_tax_year(db, household_id, year=free_tax_year(db, household_id)).year)
+        year = int(built["tax_year"]) if "tax_year" in built else None
+        if year is None:
+            year = make_tax_year(db, household_id, year=free_tax_year(db, household_id)).year
+        with household_context(db, household_id):
+            tax_year = db.execute(
+                select(TaxYear).where(TaxYear.household_id == household_id, TaxYear.year == year)
+            ).scalar_one()
+        if kind == "tax_checklist_item":
+            return str(make_checklist_item(db, tax_year).id)
+        if kind == "tax_export":
+            store = LocalFSBlobStore.from_settings(factories.settings)
+            return str(make_tax_export(db, store, factories.keyring, tax_year, owner.id).job_id)
+    raise AssertionError(f"no tax generator for {kind!r}")
 
 
 def make_taxonomy_object(factories: Factories, world: World, kind: str) -> Any:
@@ -652,7 +790,7 @@ def test_enumeration_sees_every_documented_operation(matrix_app: FastAPI) -> Non
     live = route_keys(matrix_app)
     assert documented, "the OpenAPI document lists no operations"
     assert documented <= live, sorted(documented - live)
-    assert "MOUNT /assets" in live
+    assert "MOUNT /static" in live
 
 
 @pytest.mark.parametrize("key", ROUTES)

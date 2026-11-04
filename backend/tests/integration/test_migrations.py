@@ -19,7 +19,10 @@ run as the owner, exactly like ``perfin migrate`` in production, and then:
   references to another household's objects, as the application role;
 * 0004 (Phases 3+4 ingestion) creates the drop-folder and mail-intake tables
   under forced RLS and backfills the search vector of documents extracted
-  before it.
+  before it;
+* 0005 (Phases 5+6) creates the investment, loan, manual asset, net worth and
+  tax vault tables under forced RLS with household-consistent keys, and its
+  downgrade removes exactly those tables and their enum types.
 """
 
 from __future__ import annotations
@@ -111,6 +114,44 @@ PHASE2_TABLES = frozenset(
 #: Phases 3+4 ingestion tables (revision 0004), all household-scoped.
 PHASE34_TABLES = frozenset(
     {"dropfolder_route", "dropfolder_entry", "mail_intake", "mail_intake_message"}
+)
+#: Phases 5+6 wealth and tax vault tables (revision 0005), all household-scoped.
+PHASE56_TABLES = frozenset(
+    {
+        "security",
+        "price",
+        "investment_account",
+        "investment_txn",
+        "lot",
+        "holding",
+        "loan",
+        "loan_payment",
+        "loan_rate_change",
+        "manual_asset",
+        "asset_valuation",
+        "net_worth_snapshot",
+        "tax_year",
+        "tax_checklist_item",
+        "tax_category_map",
+        "tax_form_data",
+        "tax_export",
+    }
+)
+#: Enum types created by revision 0005.
+PHASE56_ENUM_TYPES = frozenset(
+    {
+        "asset_class",
+        "cost_method",
+        "investment_txn_type",
+        "loan_rate_type",
+        "tax_checklist_origin",
+        "tax_checklist_status",
+        "tax_export_state",
+        "tax_form_data_source",
+        "tax_year_state",
+        "valuation_method",
+        "valuation_source",
+    }
 )
 #: Enum types created by revision 0002 (identity).
 PHASE1_ENUM_TYPES = frozenset(
@@ -275,6 +316,7 @@ def test_single_head_and_linear_history() -> None:
     assert script.get_base() == "0001"
     # One revision per phase, each on top of the previous one.
     assert [rev.revision for rev in script.walk_revisions("base", "heads")] == [
+        "0005",
         "0004",
         "0003",
         "0002",
@@ -283,6 +325,7 @@ def test_single_head_and_linear_history() -> None:
     assert script.get_revision("0002").down_revision == "0001"
     assert script.get_revision("0003").down_revision == "0002"
     assert script.get_revision("0004").down_revision == "0003"
+    assert script.get_revision("0005").down_revision == "0004"
 
 
 def test_upgrade_head_matches_models_without_drift(migrated: Scratch) -> None:
@@ -295,7 +338,9 @@ def test_upgrade_head_matches_models_without_drift(migrated: Scratch) -> None:
     finally:
         engine.dispose()
     assert {t.name for t in Base.metadata.sorted_tables} | {"alembic_version"} == tables
-    assert tables >= PHASE0_TABLES | PHASE1_TABLES | PHASE2_TABLES | PHASE34_TABLES
+    assert tables >= (
+        PHASE0_TABLES | PHASE1_TABLES | PHASE2_TABLES | PHASE34_TABLES | PHASE56_TABLES
+    )
 
 
 def _db_enum_labels(engine: Engine) -> dict[str, list[str]]:
@@ -376,7 +421,7 @@ def test_every_household_scoped_table_has_forced_rls(migrated: Scratch) -> None:
     finally:
         engine.dispose()
     assert {"household_member", "account_grant", "api_token"} <= set(scoped)
-    assert set(scoped) >= PHASE2_TABLES | PHASE34_TABLES
+    assert set(scoped) >= PHASE2_TABLES | PHASE34_TABLES | PHASE56_TABLES
     for table in scoped:
         assert rows[table] == (True, True), table
         assert (table, "household_isolation") in policies
@@ -561,7 +606,7 @@ def test_app_role_privileges_are_least(migrated: Scratch) -> None:
         app.dispose()
     assert {p for t, p in privileges if t == "audit_log"} == {"SELECT", "INSERT"}
     assert {p for t, p in privileges if t == "alembic_version"} == {"SELECT"}
-    all_tables = PHASE0_TABLES | PHASE1_TABLES | PHASE2_TABLES | PHASE34_TABLES
+    all_tables = PHASE0_TABLES | PHASE1_TABLES | PHASE2_TABLES | PHASE34_TABLES | PHASE56_TABLES
     for table in sorted(all_tables - {"audit_log"}):
         assert {p for t, p in privileges if t == table} == {
             "SELECT",
@@ -1225,5 +1270,100 @@ def test_phase34_tables_refuse_other_households_on_migrated_database(
                     ),
                     {"id": uuid.uuid4(), "h": a, "k": secrets.token_hex(32)},
                 )
+    finally:
+        app.dispose()
+
+
+def test_downgrade_0005_leaves_phase34_and_upgrades_again(migrated: Scratch) -> None:
+    """0005 removes exactly its own tables and enum types; earlier ones stay."""
+    cfg = migrated.config()
+    engine = migrated.owner_engine()
+    try:
+        assert set(_db_enum_labels(engine)) >= PHASE56_ENUM_TYPES
+        command.downgrade(cfg, "0004")
+        assert _public_tables(engine) == (
+            PHASE0_TABLES | PHASE1_TABLES | PHASE2_TABLES | PHASE34_TABLES | {"alembic_version"}
+        )
+        assert not set(_db_enum_labels(engine)) & PHASE56_ENUM_TYPES
+        with engine.connect() as conn:
+            assert conn.execute(text("SELECT version_num FROM alembic_version")).scalar_one() == (
+                "0004"
+            )
+        command.upgrade(cfg, "head")
+        command.check(cfg)
+        assert _public_tables(engine) >= PHASE56_TABLES
+        assert _db_enum_labels(engine) == _model_enum_labels()
+    finally:
+        engine.dispose()
+
+
+def _insert_security(conn: Connection, household: uuid.UUID, symbol: str) -> uuid.UUID:
+    security = uuid.uuid4()
+    conn.execute(
+        text(
+            "INSERT INTO security (id, household_id, symbol, name, asset_class, currency) "
+            "VALUES (:id, :h, :s, 'Synthetic fund', 'etf', 'USD')"
+        ),
+        {"id": security, "h": household, "s": symbol},
+    )
+    return security
+
+
+def test_phase56_tables_refuse_other_households_on_migrated_database(
+    migrated: Scratch,
+) -> None:
+    """Wealth and tax rows are invisible across households and keys stay in-household."""
+    app = migrated.app_engine()
+    a, b = uuid.uuid4(), uuid.uuid4()
+    try:
+        for household in (a, b):
+            with app.begin() as conn:
+                set_context(conn, household)
+                conn.execute(
+                    text("INSERT INTO household (id, name) VALUES (:id, 'Synthetic')"),
+                    {"id": household},
+                )
+        with app.begin() as conn:
+            set_context(conn, a)
+            # Exchange-qualified and underscore symbols pass the CHECK (the
+            # character class once lost ':' and '_' to bind-parameter parsing).
+            security_a = _insert_security(conn, a, "XTSE:SYN_A")
+            conn.execute(
+                text(
+                    "INSERT INTO price (id, household_id, security_id, price_date, close, "
+                    "currency, source) VALUES (:id, :h, :s, '2026-01-02', 10.5, 'USD', 'manual')"
+                ),
+                {"id": uuid.uuid4(), "h": a, "s": security_a},
+            )
+            conn.execute(
+                text(
+                    "INSERT INTO tax_year (id, household_id, year, jurisdiction, state) "
+                    "VALUES (:id, :h, 2025, 'US', 'open')"
+                ),
+                {"id": uuid.uuid4(), "h": a},
+            )
+        with app.begin() as conn:
+            set_context(conn, b)
+            for table in sorted(PHASE56_TABLES):
+                count = conn.execute(text(f"SELECT count(*) FROM {table}")).scalar_one()  # noqa: S608
+                assert count == 0, table
+        with app.connect() as conn, conn.begin():
+            set_context(conn, b)
+            with pytest.raises(DBAPIError, match="foreign key"):
+                conn.execute(
+                    text(
+                        "INSERT INTO price (id, household_id, security_id, price_date, close, "
+                        "currency, source) VALUES (:id, :h, :s, '2026-01-05', 1, 'USD', 'manual')"
+                    ),
+                    {"id": uuid.uuid4(), "h": b, "s": security_a},
+                )
+        with app.connect() as conn, conn.begin():
+            set_context(conn, b)
+            with pytest.raises(DBAPIError, match="row-level security"):
+                _insert_security(conn, a, "SYN")
+        with app.connect() as conn, conn.begin():
+            set_context(conn, a)
+            with pytest.raises(DBAPIError, match="check constraint"):
+                _insert_security(conn, a, "BAD SYMBOL")
     finally:
         app.dispose()

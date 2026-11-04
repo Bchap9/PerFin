@@ -650,6 +650,58 @@ def _check_antivirus(settings: Settings, out: list[Finding]) -> None:
         )
 
 
+def _check_market_data(settings: Settings, out: list[Finding]) -> None:
+    """Price and FX feeds (docs/security/integrations.md, SECURITY.md B5/H2)."""
+    from app.integrations.fx.ecb import ECB_DAILY_URL
+    from app.integrations.prices.base import PriceProviderConfigError
+    from app.integrations.prices.http_json import HttpJsonConfig
+
+    if settings.price_provider == "none":
+        if settings.price_provider_url.strip():
+            out.append(
+                Finding(
+                    "warning",
+                    "prices.url_unused",
+                    "PERFIN_PRICE_PROVIDER_URL is set but PERFIN_PRICE_PROVIDER=none: "
+                    "no prices are fetched",
+                )
+            )
+    else:
+        checked = settings
+        if settings.role != "worker":
+            # Only the worker calls the feed; the compose file gives the
+            # credential to the worker alone, so other roles do not need it.
+            checked = settings.model_copy(
+                update={"price_provider_auth_header": "", "price_provider_api_key": None}
+            )
+        try:
+            config = HttpJsonConfig.from_settings(checked)
+        except PriceProviderConfigError as exc:
+            out.append(Finding("error", "prices.provider_invalid", str(exc)))
+        else:
+            out.append(
+                Finding(
+                    "warning",
+                    "prices.provider_enabled",
+                    f"PERFIN_PRICE_PROVIDER={settings.price_provider}: the ticker symbols of "
+                    f"the households' securities are sent to {config.host_key} (one request "
+                    "per symbol; nothing else about a household); the worker needs egress "
+                    "to that host",
+                )
+            )
+    if settings.fx_provider == "ecb":
+        host = ECB_DAILY_URL.split("/")[2]
+        out.append(
+            Finding(
+                "warning",
+                "fx.provider_enabled",
+                f"PERFIN_FX_PROVIDER=ecb: the worker downloads the ECB daily reference rates "
+                f"from {host} (nothing household-specific is sent); it needs egress to that "
+                "host",
+            )
+        )
+
+
 def _production_checks(settings: Settings) -> list[Finding]:
     out: list[Finding] = []
     _check_master_key(settings, out)
@@ -703,6 +755,7 @@ def _production_checks(settings: Settings) -> list[Finding]:
     _check_mcp(settings, out)
     _check_smtp(settings, out)
     _check_dropfolder(settings, out)
+    _check_market_data(settings, out)
     if not settings.master_key_backup_acknowledged:
         out.append(
             Finding(

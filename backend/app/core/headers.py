@@ -13,7 +13,7 @@ F7, F9, C4).
   ``Cross-Origin-Resource-Policy: same-origin``.
 * ``Strict-Transport-Security`` unless ``PERFIN_DEV_MODE`` is on.
 * ``Cache-Control: no-store`` on every response except hashed static assets
-  under ``/assets/``, which get a one-year ``immutable`` cache.
+  under ``/static/``, which get a one-year ``immutable`` cache.
 
 A handler may set its own ``Content-Security-Policy`` (downloads use
 :func:`attachment_headers`, which adds ``sandbox``); the middleware never
@@ -41,7 +41,7 @@ from urllib.parse import quote
 from starlette.datastructures import MutableHeaders
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
-STATIC_PREFIXES: tuple[str, ...] = ("/assets/",)
+STATIC_PREFIXES: tuple[str, ...] = ("/static/",)
 STATIC_CACHE_CONTROL = "public, max-age=31536000, immutable"
 NO_STORE = "no-store"
 HSTS_VALUE = "max-age=63072000; includeSubDomains"
@@ -156,7 +156,7 @@ class SecurityHeadersMiddleware:
                     headers["Content-Security-Policy"] = self.csp
                 status = int(message.get("status", 200))
                 # Static assets: long cache only for successful responses; an
-                # error page or redirect under /assets/ must not be cached.
+                # error page or redirect under /static/ must not be cached.
                 if is_static and 200 <= status < 300:
                     headers["Cache-Control"] = cache_control
                 else:

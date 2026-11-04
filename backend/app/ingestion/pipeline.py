@@ -45,8 +45,18 @@ Phase 2 routes only **structured** formats (CSV, TSV, OFX, QFX, QIF):
   go through the structured importer like an OFX statement (rows below
   ``confidence_threshold`` or of a statement that does not reconcile are
   imported pending, with ``low_confidence_field`` items; SECURITY.md C12);
-  a payslip is kept on the document (``kind = payslip``, period) and goes to
-  review when its figures do not add up. Parser output stays in
+  brokerage statements (``app.ingestion.parsers.brokerage``: holdings and
+  activity, reconciled positions x prices and cash) go the same way into
+  ``app.domain.investments.statement_import`` (held back when they do not
+  reconcile); a payslip is kept on the document (``kind = payslip``, period) and goes to
+  review when its figures do not add up; a loan statement
+  (``app.ingestion.parsers.loan_statement``) records its payment split and
+  balances on the matching loan (``app.domain.loans.statement_import``; held
+  back when it does not reconcile); tax forms (``app.ingestion.parsers.tax_forms``:
+  form type, year, issuer name and amount boxes only) go to the tax vault
+  (``app.domain.tax.ingest``: form data, tax year, checklist ticked off), and
+  the stored pages and search index of a tax form keep no identity text
+  (``redact_identity``). Parser output stays in
   ``document.extraction`` (``statements``, ``parse``).
 * Accepted documents (``processed`` or ``needs_review`` after a successful
   extraction) move from quarantine to the permanent area
@@ -59,7 +69,7 @@ Every outcome is audited (``document.ingest``) and emits ``document.updated``.
 from __future__ import annotations
 
 import uuid
-from collections.abc import Callable, Iterable
+from collections.abc import Callable, Iterable, Sequence
 from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any, Protocol
@@ -90,6 +100,8 @@ from app.domain.documents.previews import discard_previews, store_previews
 from app.domain.documents.search import clear_search_index, update_search_index
 from app.domain.documents.service import open_plaintext, promote_blob
 from app.domain.imports.service import import_extraction
+from app.domain.loans.statement_import import import_loan_statement
+from app.domain.tax.ingest import import_tax_forms
 from app.ingestion.children import document_depth, receive_children
 from app.ingestion.classify.fingerprints import builtin_fingerprints
 from app.ingestion.classify.service import classify_document
@@ -101,15 +113,21 @@ from app.ingestion.parsers.receipt import PARSER_NAME as RECEIPT_PARSER
 from app.ingestion.parsers.receipt import PARSER_VERSION as RECEIPT_PARSER_VERSION
 from app.ingestion.parsers.receipt import parse_email_receipt
 from app.ingestion.parsers.registry import DOCUMENT_KINDS, parse_extraction
+from app.ingestion.parsers.tax_forms import carries_tax_identity, redact_identity
 from app.ingestion.sandbox.protocol import (
     CONTAINER_KINDS,
     REVIEW_ERROR_CODES,
+    WARNINGS_MAX,
     ExtractOptions,
     ExtractResult,
+    InvestmentStatement,
+    LoanStatement,
     ParseInfo,
     ParserRef,
     Payslip,
     Receipt,
+    Statement,
+    TaxFormRead,
 )
 from app.ingestion.sandbox.runner import SandboxConfig, SandboxError, run_extraction
 from app.integrations.antivirus import Scanner
@@ -236,20 +254,24 @@ def _review(db: Session, document: Document, kind: ReviewKind, payload: dict[str
 
 
 def _classify(db: Session, document: Document, result: ExtractResult) -> dict[str, Any]:
-    if not (result.statements or result.tables) and result.kind not in CONTAINER_KINDS:
+    structured: list[Statement | InvestmentStatement] = [
+        *result.statements,
+        *result.investments,
+    ]
+    if not (structured or result.tables) and result.kind not in CONTAINER_KINDS:
         # PDFs, images and text: fingerprints, then the heuristic classifier.
         return classify_document(db, document, result)
     facts: dict[str, Any] = {}
-    if result.statements or result.tables:
+    if structured or result.tables:
         document.kind = DocumentKind.STATEMENT
-    starts = [s.period_start for s in result.statements if s.period_start]
-    ends = [s.period_end for s in result.statements if s.period_end]
+    starts = [s.period_start for s in structured if s.period_start]
+    ends = [s.period_end for s in structured if s.period_end]
     if starts and ends and min(starts) <= max(ends):
         document.period_start, document.period_end = min(starts), max(ends)
     if document.account_id is None:
-        last4s = {s.account.last4 for s in result.statements if s.account.last4}
+        last4s = {s.account.last4 for s in structured if s.account.last4}
         if len(last4s) == 1:
-            institutions = {s.account.institution for s in result.statements}
+            institutions = {s.account.institution for s in structured}
             match = match_account(
                 db,
                 document.household_id,
@@ -302,6 +324,38 @@ def _parse_document(
     info = result.parse
     if info is None:  # pragma: no cover - parse_extraction always records it
         return result, {}
+    # A tax document outside the registered set (a prior-year 1040, an
+    # unrecognised form) can be classified as anything; its identity text is
+    # masked too unless a statement, payslip or loan parser read the pages
+    # (their review tools need the page text). P56-SR-R1-02.
+    unregistered_tax = (
+        not info.tax_forms
+        and document.kind is not DocumentKind.TAX_FORM
+        and info.payslip is None
+        and info.loan is None
+        and not any(s.parser is not None for s in result.statements)
+        and not any(i.parser is not None for i in result.investments)
+        and carries_tax_identity(result)
+    )
+    if info.tax_forms or document.kind is DocumentKind.TAX_FORM or unregistered_tax:
+        # Identity boxes (SSN/TIN/EIN, names, addresses, account numbers) of
+        # a tax form are masked in the stored pages and the search index
+        # (app.ingestion.parsers.tax_forms.redact_identity).
+        result = redact_identity(result, info.tax_forms)
+        if unregistered_tax or info.receipt is not None:
+            # Not a receipt: read from the unredacted pages, its "merchant"
+            # would be the taxpayer's name.
+            info = info.model_copy(
+                update={
+                    "receipt": None,
+                    "warnings": [*info.warnings, "tax_identity_redacted"][-WARNINGS_MAX:],
+                }
+            )
+            result = result.model_copy(update={"parse": info})
+            if document.kind is DocumentKind.RECEIPT:
+                document.kind = DocumentKind.UNKNOWN
+        document.extraction = result.model_dump(mode="json")
+        update_search_index(db, document)
     document.extraction = result.model_dump(mode="json")
     facts: dict[str, Any] = {
         "parser": info.parser.name if info.parser else None,
@@ -314,9 +368,14 @@ def _parse_document(
         return result, facts
     document.parser_version = f"{info.parser.name}/{info.parser.version}"[:64]
     parsed = [s for s in result.statements if s.parser is not None]
-    if parsed and any(s.transactions for s in parsed):
+    brokerage = [i for i in result.investments if i.parser is not None]
+    read: list[Statement | InvestmentStatement] = [
+        *(s for s in parsed if s.transactions),
+        *(i for i in brokerage if i.positions or i.activity),
+    ]
+    if read:
         document.kind = DocumentKind.STATEMENT
-        first = parsed[0]
+        first = read[0]
         if (
             first.period_start is not None
             and first.period_end is not None
@@ -336,6 +395,10 @@ def _parse_document(
             ),
             "payslip": info.payslip.confidence if info.payslip else None,
             "receipt": info.receipt.confidence if info.receipt else None,
+            "investments": [i.confidence for i in brokerage],
+            "investment_reconciliation": [
+                i.reconciliation.status for i in brokerage if i.reconciliation
+            ],
         },
     }
     if info.skipped_lines:
@@ -346,6 +409,22 @@ def _parse_document(
             {"reason": "lines_skipped", "count": info.skipped_lines, "parser": info.parser.name},
         )
     return result, facts
+
+
+def _loan_outcome(db: Session, document: Document, loan: LoanStatement) -> ImportOutcome:
+    """A loan statement records its payment on the matching loan (``app.domain.loans``)."""
+    done = import_loan_statement(db, document, loan)
+    status = DocumentStatus.NEEDS_REVIEW if done.review else DocumentStatus.PROCESSED
+    return ImportOutcome(status, done.summary)
+
+
+def _tax_form_outcome(
+    db: Session, document: Document, forms: Sequence[TaxFormRead]
+) -> ImportOutcome:
+    """Tax forms go to the tax vault (``app.domain.tax.ingest``: amounts, checklist)."""
+    done = import_tax_forms(db, document, forms)
+    status = DocumentStatus.NEEDS_REVIEW if done.review else DocumentStatus.PROCESSED
+    return ImportOutcome(status, done.summary)
 
 
 def _payslip_outcome(
@@ -663,6 +742,12 @@ def ingest_document(
         stage.finish(**parse_facts, **outcome.summary)
     elif result.parse is not None and result.parse.payslip is not None:
         outcome = _payslip_outcome(db, document, result.parse.payslip, deps.confidence_threshold)
+        stage.finish(**parse_facts, **outcome.summary)
+    elif result.parse is not None and result.parse.loan is not None:
+        outcome = _loan_outcome(db, document, result.parse.loan)
+        stage.finish(**parse_facts, **outcome.summary)
+    elif result.parse is not None and result.parse.tax_forms:
+        outcome = _tax_form_outcome(db, document, result.parse.tax_forms)
         stage.finish(**parse_facts, **outcome.summary)
     elif importer is None:
         stage.finish(importer=None, **parse_facts)

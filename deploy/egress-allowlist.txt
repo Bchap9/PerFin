@@ -22,3 +22,10 @@
 #
 # ClamAV signature updates (profile av)
 # database.clamav.net:443
+#
+# Price feed (PERFIN_PRICE_PROVIDER=http_json): the host of
+# PERFIN_PRICE_PROVIDER_URL (docs/security/integrations.md)
+# quotes.example.com:443
+#
+# FX reference rates (PERFIN_FX_PROVIDER=ecb)
+# www.ecb.europa.eu:443

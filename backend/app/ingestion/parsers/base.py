@@ -32,10 +32,13 @@ from app.ingestion.parsers.text import MAX_LINE, normalise
 from app.ingestion.sandbox.protocol import (
     IMAGE_KINDS,
     ExtractResult,
+    InvestmentStatement,
+    LoanStatement,
     Page,
     Payslip,
     Receipt,
     Statement,
+    TaxFormRead,
 )
 
 #: Words closer than this many word heights belong to the same cell.
@@ -43,7 +46,7 @@ CELL_GAP_FACTOR: Final = 0.9
 #: Lines a parser reads at most (bounded work on any extraction).
 MAX_LINES: Final = 200_000
 
-ParserKind = Literal["statement", "payslip", "receipt"]
+ParserKind = Literal["statement", "payslip", "receipt", "tax_form"]
 
 
 @dataclass(frozen=True)
@@ -165,8 +168,14 @@ class DocumentView:
 @dataclass
 class ParseOutcome:
     statements: list[Statement] = field(default_factory=list)
+    #: Brokerage statements (``app.ingestion.parsers.brokerage``).
+    investments: list[InvestmentStatement] = field(default_factory=list)
     payslip: Payslip | None = None
     receipt: Receipt | None = None
+    #: A loan statement (``app.ingestion.parsers.loan_statement``).
+    loan: LoanStatement | None = None
+    #: Tax forms (``app.ingestion.parsers.tax_forms``; amounts only).
+    tax_forms: list[TaxFormRead] = field(default_factory=list)
     pending_items: int = 0
     skipped_lines: int = 0
     warnings: list[str] = field(default_factory=list)
@@ -176,7 +185,10 @@ class ParseOutcome:
         return (
             not self.payslip
             and not self.receipt
+            and not self.loan
+            and not self.tax_forms
             and not any(s.transactions for s in self.statements)
+            and not any(i.positions or i.activity for i in self.investments)
         )
 
 

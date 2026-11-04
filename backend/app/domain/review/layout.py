@@ -129,7 +129,7 @@ def with_layout_tables(result: ExtractResult) -> ExtractResult:
     statement and that carry no structured table; anything else is
     returned unchanged.
     """
-    if result.statements or result.tables or not result.pages:
+    if result.statements or result.investments or result.tables or not result.pages:
         return result
     if result.parse is not None and (
         result.parse.receipt is not None or result.parse.payslip is not None

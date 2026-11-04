@@ -151,6 +151,34 @@ PARAM_KINDS: Final[Mapping[str, ParamKind]] = MappingProxyType(
         # matrix blob store. The path names the archive's job id.
         "export_archive": ParamKind("export_archive", "export-not-found"),
         "import_archive": ParamKind("import_archive", "import-not-found"),
+        # Investments (Phase 5): a security without activity (visible to every
+        # role), a buy of it on a fresh brokerage account (member ``edit``,
+        # viewer ``view``), and a manual price of the security built for the
+        # same path.
+        "security": ParamKind("security", "security-not-found"),
+        "investment_txn": ParamKind("investment_txn", "investment-transaction-not-found"),
+        "price": ParamKind("price", "price-not-found"),
+        # Loans and manual assets (Phase 5): a loan on a fresh mortgage account
+        # and a manual asset on a fresh property account (member ``edit``,
+        # viewer ``view``); a payment / rate change of the path's loan, a
+        # valuation of the path's asset.
+        "loan": ParamKind("loan", "loan-not-found"),
+        "loan_payment": ParamKind("loan_payment", "loan-payment-not-found"),
+        "loan_rate_change": ParamKind("loan_rate_change", "loan-rate-change-not-found"),
+        "manual_asset": ParamKind("manual_asset", "asset-not-found"),
+        "asset_valuation": ParamKind("asset_valuation", "valuation-not-found"),
+        # Tax vault (Phase 6): a tax year of the matrix household (a fresh
+        # random year per path), a checklist item of the path's year, and an
+        # accountant export of the path's year requested by the caller (the
+        # victim's for outsiders), ready, its bytes in the matrix blob store.
+        "tax_year": ParamKind("tax_year", "tax-year-not-found"),
+        "tax_checklist_item": ParamKind("tax_checklist_item", "tax-checklist-item-not-found"),
+        "tax_export": ParamKind("tax_export", "tax-export-not-found"),
+        # A manual exchange rate of the matrix household (household-wide).
+        "fx_rate": ParamKind("fx_rate", "fx-rate-not-found"),
+        # A manual recurring transaction (scheduled_transaction) on a fresh
+        # account granted to the matrix member (edit) and viewer (view).
+        "scheduled_transaction": ParamKind("scheduled_transaction", "schedule-not-found"),
     }
 )
 OWN_KINDS: Final = frozenset(k for k in PARAM_KINDS if k.startswith("own_"))
@@ -162,6 +190,11 @@ HOUSEHOLD_OBJECT_KINDS: Final = frozenset(
     | {"document", "import_mapping"}
     | {"stored_document", "review_item"}
     | {"export_archive", "import_archive"}
+    | {"security", "investment_txn", "price"}
+    | {"loan", "loan_payment", "loan_rate_change", "manual_asset", "asset_valuation"}
+    | {"fx_rate"}
+    | {"scheduled_transaction"}
+    | {"tax_year", "tax_checklist_item", "tax_export"}
 )
 
 
@@ -270,6 +303,12 @@ DOC = {"document_id": "document"}
 IMAP = {"mapping_id": "import_mapping"}
 SDOC = {"document_id": "stored_document"}
 ITEM = {"item_id": "review_item"}
+SEC = {"security_id": "security"}
+ITXN = {"txn_id": "investment_txn"}
+LOAN = {"loan_id": "loan"}
+TAXY = {"year": "tax_year"}
+ASSET = {"asset_id": "manual_asset"}
+SCHED = {"schedule_id": "scheduled_transaction"}
 #: A member's grants on one account (the path names a fresh member).
 GRANT = {**HH, "user_id": "member", "account_id": "account"}
 
@@ -295,7 +334,7 @@ POLICIES: Final[Mapping[str, Policy]] = MappingProxyType(
         # --- outside /api/v1 ------------------------------------------------
         "GET /healthz": public(),
         "GET /readyz": public(),
-        "MOUNT /assets": public(),
+        "MOUNT /static": public(),
         # Dev mode only (PERFIN_DEV_MODE); absent in production.
         f"GET {API}/openapi.json": public(),
         f"GET {API}/docs": public(),
@@ -491,11 +530,136 @@ POLICIES: Final[Mapping[str, Policy]] = MappingProxyType(
             role=M,
             params={**GOAL, "contribution_id": "goal_contribution"},
         ),
+        # --- investments (Phase 5): the catalogue follows activity on visible
+        # accounts; transactions, holdings and performance follow account
+        # visibility, writes need an edit grant ----------------------------
+        f"GET {API}/securities": scoped("investments:read", role=V),
+        f"POST {API}/securities": scoped("investments:write", role=M),
+        f"GET {API}/securities/{{security_id}}": scoped("investments:read", role=V, params=SEC),
+        f"PATCH {API}/securities/{{security_id}}": scoped("investments:write", role=M, params=SEC),
+        f"DELETE {API}/securities/{{security_id}}": scoped("investments:write", role=M, params=SEC),
+        f"GET {API}/securities/{{security_id}}/prices": scoped(
+            "investments:read", role=V, params=SEC
+        ),
+        f"POST {API}/securities/{{security_id}}/prices": scoped(
+            "investments:write", role=M, params=SEC
+        ),
+        f"DELETE {API}/securities/{{security_id}}/prices/{{price_id}}": scoped(
+            "investments:write", role=M, params={**SEC, "price_id": "price"}
+        ),
+        f"GET {API}/investments/transactions": scoped("investments:read", role=V),
+        f"POST {API}/investments/transactions": scoped("investments:write", role=M),
+        f"GET {API}/investments/transactions/{{txn_id}}": scoped(
+            "investments:read", role=V, params=ITXN
+        ),
+        f"PATCH {API}/investments/transactions/{{txn_id}}": scoped(
+            "investments:write", role=M, params=ITXN
+        ),
+        f"DELETE {API}/investments/transactions/{{txn_id}}": scoped(
+            "investments:write", role=M, params=ITXN
+        ),
+        f"GET {API}/investments/holdings": scoped("investments:read", role=V),
+        f"GET {API}/investments/performance": scoped("investments:read", role=V),
+        f"GET {API}/investments/accounts/{{account_id}}/cost-method": scoped(
+            "investments:read", role=V, params=ACCT
+        ),
+        f"PUT {API}/investments/accounts/{{account_id}}/cost-method": scoped(
+            "investments:write", role=M, params=ACCT
+        ),
+        # --- exchange rates: household-wide, every role reads; they change
+        # converted totals over accounts members cannot see, so only
+        # owner/admin write them -------------------------------------------
+        f"GET {API}/fx-rates": scoped("accounts:read", role=V),
+        f"POST {API}/fx-rates": scoped("accounts:write", role=A),
+        f"DELETE {API}/fx-rates/{{rate_id}}": scoped(
+            "accounts:write", role=A, params={"rate_id": "fx_rate"}
+        ),
+        # --- loans (Phase 5): loans follow their account's visibility; writes
+        # need an edit grant; simulate stores nothing (a read) ---------------
+        f"GET {API}/loans": scoped("loans:read", role=V),
+        f"POST {API}/loans": scoped("loans:write", role=M),
+        f"GET {API}/loans/{{loan_id}}": scoped("loans:read", role=V, params=LOAN),
+        f"PATCH {API}/loans/{{loan_id}}": scoped("loans:write", role=M, params=LOAN),
+        f"DELETE {API}/loans/{{loan_id}}": scoped("loans:write", role=M, params=LOAN),
+        f"GET {API}/loans/{{loan_id}}/schedule": scoped("loans:read", role=V, params=LOAN),
+        f"POST {API}/loans/{{loan_id}}/simulate": scoped("loans:read", role=V, params=LOAN),
+        f"GET {API}/loans/{{loan_id}}/payments": scoped("loans:read", role=V, params=LOAN),
+        f"POST {API}/loans/{{loan_id}}/payments": scoped("loans:write", role=M, params=LOAN),
+        f"DELETE {API}/loans/{{loan_id}}/payments/{{payment_id}}": scoped(
+            "loans:write", role=M, params={**LOAN, "payment_id": "loan_payment"}
+        ),
+        f"GET {API}/loans/{{loan_id}}/rate-changes": scoped("loans:read", role=V, params=LOAN),
+        f"POST {API}/loans/{{loan_id}}/rate-changes": scoped("loans:write", role=M, params=LOAN),
+        f"DELETE {API}/loans/{{loan_id}}/rate-changes/{{change_id}}": scoped(
+            "loans:write", role=M, params={**LOAN, "change_id": "loan_rate_change"}
+        ),
+        # --- manual assets (Phase 5): accounts scopes, account visibility -----
+        f"GET {API}/assets": scoped("accounts:read", role=V),
+        f"POST {API}/assets": scoped("accounts:write", role=M),
+        f"GET {API}/assets/{{asset_id}}": scoped("accounts:read", role=V, params=ASSET),
+        f"PATCH {API}/assets/{{asset_id}}": scoped("accounts:write", role=M, params=ASSET),
+        f"DELETE {API}/assets/{{asset_id}}": scoped("accounts:write", role=M, params=ASSET),
+        f"GET {API}/assets/{{asset_id}}/valuations": scoped("accounts:read", role=V, params=ASSET),
+        f"POST {API}/assets/{{asset_id}}/valuations": scoped(
+            "accounts:write", role=M, params=ASSET
+        ),
+        f"DELETE {API}/assets/{{asset_id}}/valuations/{{valuation_id}}": scoped(
+            "accounts:write", role=M, params={**ASSET, "valuation_id": "asset_valuation"}
+        ),
         # --- reports (any role; amounts from visible accounts only) ---------
         f"GET {API}/reports/spending": scoped("transactions:read", role=V),
         f"GET {API}/reports/income": scoped("transactions:read", role=V),
         f"GET {API}/reports/trends": scoped("transactions:read", role=V),
         f"GET {API}/reports/cashflow": scoped("transactions:read", role=V),
+        # --- net worth (Phase 5): any role; members/viewers who cannot see
+        # every account get figures over their visible accounts only -------
+        f"GET {API}/networth": scoped("networth:read", role=V),
+        f"GET {API}/networth/latest": scoped("networth:read", role=V),
+        f"GET {API}/networth/projection": scoped("networth:read", role=V),
+        # --- recurring transactions and the cash-flow calendar (Phase 5):
+        # schedules follow their account's visibility; writes need edit ---
+        f"GET {API}/recurring": scoped("transactions:read", role=V),
+        f"POST {API}/recurring": scoped("transactions:write", role=M),
+        f"GET {API}/recurring/candidates": scoped("transactions:read", role=V),
+        f"POST {API}/recurring/detect": scoped("transactions:write", role=M),
+        f"GET {API}/recurring/{{schedule_id}}": scoped("transactions:read", role=V, params=SCHED),
+        f"PATCH {API}/recurring/{{schedule_id}}": scoped(
+            "transactions:write", role=M, params=SCHED
+        ),
+        f"DELETE {API}/recurring/{{schedule_id}}": scoped(
+            "transactions:write", role=M, params=SCHED
+        ),
+        f"GET {API}/cashflow/calendar": scoped("transactions:read", role=V),
+        # --- tax vault (Phase 6): household-wide years and checklists, any
+        # role reads (roll-ups over visible accounts only), members write,
+        # owner/admin delete a year; the accountant export is the full
+        # export's rule (owner/admin session, step-up, requester only) ------
+        f"GET {API}/tax-years": scoped("tax:read", role=V),
+        f"POST {API}/tax-years": scoped("tax:write", role=M),
+        f"GET {API}/tax-years/{{year}}": scoped("tax:read", role=V, params=TAXY),
+        f"PATCH {API}/tax-years/{{year}}": scoped("tax:write", role=M, params=TAXY),
+        f"DELETE {API}/tax-years/{{year}}": scoped("tax:write", role=A, params=TAXY),
+        f"GET {API}/tax-years/{{year}}/checklist": scoped("tax:read", role=V, params=TAXY),
+        f"POST {API}/tax-years/{{year}}/checklist": scoped("tax:write", role=M, params=TAXY),
+        f"POST {API}/tax-years/{{year}}/checklist/learn": scoped("tax:write", role=M, params=TAXY),
+        f"PATCH {API}/tax-years/{{year}}/checklist/{{item_id}}": scoped(
+            "tax:write", role=M, params={**TAXY, "item_id": "tax_checklist_item"}
+        ),
+        f"DELETE {API}/tax-years/{{year}}/checklist/{{item_id}}": scoped(
+            "tax:write", role=M, params={**TAXY, "item_id": "tax_checklist_item"}
+        ),
+        f"GET {API}/tax-years/{{year}}/forms": scoped("tax:read", role=V, params=TAXY),
+        f"GET {API}/tax-years/{{year}}/summary": scoped("tax:read", role=V, params=TAXY),
+        f"GET {API}/tax-category-map": scoped("tax:read", role=V),
+        f"PUT {API}/tax-category-map/{{category_id}}": scoped("tax:write", role=M, params=CAT),
+        f"DELETE {API}/tax-category-map/{{category_id}}": scoped("tax:write", role=M, params=CAT),
+        f"POST {API}/tax-years/{{year}}/export": session(role=A, step_up=True, params=TAXY),
+        f"GET {API}/tax-years/{{year}}/export/{{job_id}}": session(
+            role=A, params={**TAXY, "job_id": "tax_export"}
+        ),
+        f"GET {API}/tax-years/{{year}}/export/{{job_id}}/download": session(
+            role=A, step_up=True, params={**TAXY, "job_id": "tax_export"}
+        ),
         # --- documents (Phase 2): visibility follows the document's account;
         # downloading needs member or above (I1: viewers only where the
         # household allows it, 403 by default) -----------------------------

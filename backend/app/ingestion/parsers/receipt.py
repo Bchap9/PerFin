@@ -183,6 +183,8 @@ _NOT_MERCHANT: Final = re.compile(
     r"|\bfax\b|\bwww\b|\bhttp|\b\w+ (?:com|net|org|invalid)\b|\border\b|\bcashier\b"
     r"|\bvat\b|\btax\b|\breg\b|\bcustomer copy\b|\bmerchant copy\b|\bduplicate\b"
 )
+#: SSN/ITIN (``123-45-6789``) and EIN (``12-3456789``) shapes (P56-SR-R1-02).
+_TIN_LIKE: Final = re.compile(r"(?<!\d)(?:\d{3}-\d{2}-\d{4}|\d{2}-\d{7})(?!\d)")
 #: Address shapes (only checked on lines with a digit: "PINE STREET DELI" is a name).
 _ADDRESS: Final = re.compile(
     r"^\d+\s+\w+|\b(?:st|street|ave|avenue|road|rd|lane|ln|blvd|way|drive|dr|suite|unit)\b"
@@ -710,7 +712,8 @@ def _merchant_lines(typed: Sequence[_Line]) -> list[tuple[str, float | None]]:
             any(ch.isdigit() for ch in text) and _ADDRESS.search(label)
         ):
             continue
-        if re.search(r"\d{3}[\s.-]?\d{4}", text):
+        if re.search(r"\d{3}[\s.-]?\d{4}", text) or _TIN_LIKE.search(text):
+            # Phone numbers; SSN/EIN-shaped tokens are identity, never a merchant.
             continue
         cleaned = re.sub(r"^\W+|\W+$", "", text)
         if cleaned:

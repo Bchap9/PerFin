@@ -37,6 +37,12 @@ The flow (INGESTION.md "Parse", "Match and deduplicate", "Commit"):
      does not reconcile (``app.ingestion.reconcile``) has all its rows
      pending, a ``reconciliation_failed``/``reconciliation_unavailable``
      item with the figures, and writes no balance snapshot (SECURITY.md C12).
+   * Brokerage statements (``result.investments``: OFX ``INVSTMTRS``,
+     PDFs read by ``app.ingestion.parsers.brokerage``) go to
+     ``app.domain.investments.statement_import`` (securities, activity,
+     lots, holdings, prices, snapshot; held back when they do not
+     reconcile); their cash deposits and withdrawals come back here as
+     ledger rows.
    * The document is ``processed`` when nothing is left open for it in the
      review queue, ``needs_review`` otherwise.
 
@@ -109,6 +115,7 @@ from app.domain.imports.schemas import (
     PreviewTable,
     PreviewTransaction,
 )
+from app.domain.investments.statement_import import import_investment_statements
 from app.domain.review.layout import with_layout_tables
 from app.domain.rules.service import apply_rules_to
 from app.domain.transactions import repo as transactions_repo
@@ -1053,8 +1060,28 @@ def import_extraction(
         _import_statements(run, result, account_id=account_id)
     elif result.tables:
         _import_table(run, result, mapping_id=mapping_id, account_id=account_id)
-    else:
+    elif not result.investments:
         run.review(ReviewKind.UNPARSED, {"reason": "no_records"})
+    investments: dict[str, Any] | None = None
+    if result.investments:
+        # Brokerage statements (app.domain.investments.statement_import);
+        # their cash deposits/withdrawals are ledger rows committed here.
+        done = import_investment_statements(
+            db,
+            document,
+            result.investments,
+            allowed=run.allowed,
+            review=run.review,
+            commit_cash=lambda statement, account: _commit_statement(
+                run, from_statement(statement), account, statement_index=None
+            ),
+            account_id=account_id,
+            user_id=user_id,
+        )
+        for investment_account in done.accounts:
+            if investment_account not in run.accounts:
+                run.accounts.append(investment_account)
+        investments = done.summary()
     if document.account_id is None and len(run.accounts) == 1:
         document.account_id = run.accounts[0]
     if document.institution_id is None and len(run.accounts) == 1:
@@ -1063,7 +1090,10 @@ def import_extraction(
             document.institution_id = account.institution_id
     db.flush()
     status = DocumentStatus.NEEDS_REVIEW if _open_items(db, document) else DocumentStatus.PROCESSED
-    return ImportResult(status, run.summary())
+    summary = run.summary()
+    if investments is not None:
+        summary["investments"] = investments
+    return ImportResult(status, summary)
 
 
 # ---------------------------------------------------------------------------
@@ -1075,7 +1105,7 @@ def _importable(document: Document) -> ExtractResult:
     if document.status not in IMPORTABLE_STATUSES:
         raise _not_applicable("The document is not ready to import.")
     result = _stored_result(document)
-    if result is None or not (result.tables or result.statements):
+    if result is None or not (result.tables or result.statements or result.investments):
         raise _not_applicable("The document has no extracted records.")
     return result
 

@@ -3,7 +3,8 @@
 
 * :func:`pg_enum`: a native Postgres enum from a ``StrEnum`` (stores values).
 * :data:`AMOUNT`/:data:`RATE` and :func:`currency_check`: money columns are
-  ``NUMERIC(20, 6)`` plus a ``CHAR(3)`` currency (DATA_MODEL.md).
+  ``NUMERIC(20, 6)`` plus a ``CHAR(3)`` currency (DATA_MODEL.md);
+  :data:`QUANTITY`/:data:`UNIT_PRICE` are ``NUMERIC(28, 10)`` (Phase 5).
 * :func:`household_fk` and :func:`household_ref_fk`: **household-consistent
   references** (SECURITY.md F3). A plain foreign key is checked by Postgres
   without row-level security, so a row of household A could otherwise point
@@ -35,6 +36,10 @@ from sqlalchemy import CHAR, CheckConstraint, Enum, ForeignKeyConstraint, Numeri
 AMOUNT: Final = Numeric(20, 6, asdecimal=True)
 #: ``NUMERIC(24, 12)`` for exchange rates (``JPY -> USD`` needs the digits).
 RATE: Final = Numeric(24, 12, asdecimal=True)
+#: ``NUMERIC(28, 10)`` for security quantities (shares, units, fractional coins).
+QUANTITY: Final = Numeric(28, 10, asdecimal=True)
+#: ``NUMERIC(28, 10)`` for per-unit prices and costs (sub-cent unit prices).
+UNIT_PRICE: Final = Numeric(28, 10, asdecimal=True)
 #: ``NUMERIC(5, 4)`` for confidence scores in ``[0, 1]``.
 CONFIDENCE: Final = Numeric(5, 4, asdecimal=True)
 #: ``CHAR(3)`` ISO 4217 code.

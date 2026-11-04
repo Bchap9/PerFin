@@ -141,6 +141,7 @@ services:
       PERFIN_SECRET_KEY: ""
       PERFIN_OIDC_CLIENT_SECRET: ""
       PERFIN_SMTP_PASSWORD: ""
+      PERFIN_PRICE_PROVIDER_API_KEY: ""
       POSTGRES_PASSWORD: ""
       POSTGRES_OWNER_PASSWORD: ""
       POSTGRES_APP_PASSWORD: ""
@@ -162,6 +163,8 @@ services:
     environment:
       PERFIN_ROLE: api
       PERFIN_MIGRATION_DATABASE_URL: ""
+      # Only the worker's refresh_prices job calls the price feed.
+      PERFIN_PRICE_PROVIDER_API_KEY: ""
       POSTGRES_PASSWORD: ""
       POSTGRES_OWNER_PASSWORD: ""
       POSTGRES_APP_PASSWORD: ""

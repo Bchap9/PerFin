@@ -14,7 +14,8 @@
   **last four digits** of the account id (the full number never leaves the
   sandbox), currency, period, ledger and available balances, transactions
   (``FITID``, type, posted and user dates, amount, name/payee, memo, check
-  number). Investment statements are reported as a warning (later phase).
+  number). Investment statements (``INVSTMTRS``: positions, activity, cash)
+  are read by :mod:`app.ingestion.extract.ofx_invest` on the same tree.
 * Caps: nesting depth, element count, transactions (``max_transactions``,
   then ``truncated``). Text fields are whitespace-collapsed, cut and
   formula-neutralised (C7).
@@ -40,6 +41,7 @@ from app.ingestion.extract.common import (
     last4,
     parse_amount,
 )
+from app.ingestion.extract.ofx_invest import investment_statements
 from app.ingestion.extract.registry import register
 from app.ingestion.sandbox.protocol import (
     Balance,
@@ -54,7 +56,7 @@ if TYPE_CHECKING:
     # Type only: parsing goes through defusedxml.
     from xml.etree.ElementTree import Element  # nosec B405
 
-VERSION: Final = "ofx/1"
+VERSION: Final = "ofx/2"
 MAX_DEPTH: Final = 64
 MAX_ELEMENTS: Final = 2_000_000
 
@@ -323,15 +325,15 @@ def extract_ofx(data: bytes, options: ExtractOptions, kind: str) -> ExtractResul
         for name in ("STMTRS", "CCSTMTRS")
         for node in root.iter(name)
     ]
-    if any(True for _ in root.iter("INVSTMTRS")):
-        warnings.add("investment_statement_skipped")
-    if not statements:
-        raise ExtractFailure("no_statements", "no bank or credit card statement found")
+    investments = investment_statements(root, kind, options, budget, warnings, institution)
+    if not statements and not investments:
+        raise ExtractFailure("no_statements", "no bank, credit card or investment statement found")
     return ExtractResult(
         kind=kind,
         ok=True,
         extractor_version=VERSION,
         statements=statements,
+        investments=investments,
         warnings=sorted(warnings),
     )
 

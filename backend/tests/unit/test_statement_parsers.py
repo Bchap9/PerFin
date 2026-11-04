@@ -322,8 +322,7 @@ def test_institution_parsers_cover_the_shipped_statement_fingerprints() -> None:
     keys = {p.institution for p in PARSERS if p.institution}
     names = {p.name for p in PARSERS}
     for fingerprint in builtin_fingerprints():
-        # Brokerage statements (holdings, trades) get their parser in Phase 5.
-        if fingerprint.spec.kind != "statement" or "brokerage" in fingerprint.spec.parser:
+        if fingerprint.spec.kind != "statement":
             continue
         assert fingerprint.spec.parser in names, fingerprint.key
         assert fingerprint.key in keys, fingerprint.key

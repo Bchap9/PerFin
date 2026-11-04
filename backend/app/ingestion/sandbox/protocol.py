@@ -198,7 +198,7 @@ class ParserRef(_Strict):
     version: Code
     #: The fake-or-real institution key the parser is written for (None: generic).
     institution: Code | None = None
-    kind: Literal["statement", "payslip", "receipt"]
+    kind: Literal["statement", "payslip", "receipt", "tax_form"]
 
 
 class Reconciliation(_Strict):
@@ -283,6 +283,164 @@ class Statement(_Strict):
     #: Per-field confidence of the statement's own facts (0..1).
     confidence: dict[Code, Confidence01] = Field(default_factory=dict, max_length=50)
     reconciliation: Reconciliation | None = None
+
+
+# ---------------------------------------------------------------------------
+# Investment (brokerage) statements: OFX ``INVSTMTRS`` from the child, PDF
+# holdings and activity sections from the worker's brokerage parser
+# (``app.ingestion.parsers.brokerage``; INGESTION.md "Brokerage statements").
+# ---------------------------------------------------------------------------
+
+#: Largest quantity or unit price accepted (``NUMERIC(28, 10)``: 18 integer digits).
+MAX_ABS_QUANTITY: Final = Decimal(10) ** 18
+MAX_POSITIONS: Final = 10_000
+
+
+def _bounded_quantity(value: Decimal) -> Decimal:
+    if not value.is_finite() or abs(value) >= MAX_ABS_QUANTITY:
+        raise ValueError("quantity out of range")
+    exponent = value.as_tuple().exponent
+    if isinstance(exponent, int) and exponent < -10:
+        value = value.quantize(Decimal("1e-10"))
+    return value
+
+
+Quantity = Annotated[Decimal, AfterValidator(_bounded_quantity)]
+InvestmentActivityType = Literal[
+    "buy",
+    "sell",
+    "dividend",
+    "interest",
+    "fee",
+    "split",
+    "transfer_in",
+    "transfer_out",
+    "reinvest",
+    "corporate_action",
+    "deposit",
+    "withdrawal",
+]
+AssetClassCode = Literal[
+    "equity",
+    "etf",
+    "mutual_fund",
+    "bond",
+    "cash_equivalent",
+    "option",
+    "crypto",
+    "real_estate",
+    "commodity",
+    "other",
+]
+
+
+class SecurityRef(_Strict):
+    """How a statement names an instrument (no holder identity, ever)."""
+
+    symbol: Annotated[str, Field(pattern=r"^[A-Za-z0-9.^/:_-]{1,32}$")] | None = None
+    cusip: Annotated[str, Field(pattern=r"^[0-9A-Z*@#]{9}$")] | None = None
+    isin: Annotated[str, Field(pattern=r"^[A-Z]{2}[A-Z0-9]{9}[0-9]$")] | None = None
+    name: Annotated[str, Field(max_length=200)] | None = None
+    asset_class: AssetClassCode | None = None
+
+    @model_validator(mode="after")
+    def _named(self) -> SecurityRef:
+        if not (self.symbol or self.cusip or self.isin):
+            raise ValueError("a security needs a symbol, CUSIP or ISIN")
+        return self
+
+
+class InvestmentPosition(_Strict):
+    """One holding as the statement reports it on ``InvestmentStatement.as_of``."""
+
+    security: SecurityRef
+    #: Units held (negative for a short position).
+    quantity: Quantity
+    unit_price: Quantity | None = None
+    market_value: Amount | None = None
+    cost_basis: Amount | None = None
+    price_as_of: date | None = None
+    # -- set by the worker's document parsers -----------------------------------
+    confidence: Confidence01 | None = None
+    low_confidence: list[Code] = Field(default_factory=list, max_length=20)
+    page: int | None = Field(default=None, ge=1, le=MAX_PAGES_CEILING)
+    bbox: BBox | None = None
+
+
+class InvestmentActivity(_Strict):
+    """One activity row. ``amount`` is the signed cash effect on the account.
+
+    A buy, fee, withdrawal or reinvestment is negative, a sale, dividend,
+    interest or deposit positive (``fees`` >= 0 is part of it). ``quantity``
+    is in units (positive); a ``split`` carries ``split_ratio`` instead.
+    """
+
+    type: InvestmentActivityType
+    trade_date: date
+    settle_date: date | None = None
+    security: SecurityRef | None = None
+    quantity: Quantity | None = None
+    unit_price: Quantity | None = None
+    #: A split's ``(new, old)`` units (``(2, 1)`` for a 2-for-1 split).
+    split_ratio: tuple[Quantity, Quantity] | None = None
+    amount: Amount
+    fees: Amount = Decimal(0)
+    fitid: Annotated[str, Field(max_length=255)] | None = None
+    memo: ShortText | None = None
+    # -- set by the worker's document parsers -----------------------------------
+    confidence: Confidence01 | None = None
+    low_confidence: list[Code] = Field(default_factory=list, max_length=20)
+    page: int | None = Field(default=None, ge=1, le=MAX_PAGES_CEILING)
+    bbox: BBox | None = None
+
+
+class InvestmentReconciliation(_Strict):
+    """The brokerage checks (SECURITY.md C12; ``app.ingestion.parsers.brokerage``).
+
+    ``positions``: quantity x price = market value for each position;
+    ``holdings_total``: the positions add up to the reported holdings value;
+    ``cash``: opening cash + activity = closing cash; ``total_value``:
+    holdings + closing cash = the reported account value. ``checks`` lists
+    those that could run, ``failed`` those that did not hold.
+    """
+
+    status: Literal["ok", "mismatch", "unavailable"]
+    checks: list[Code] = Field(default_factory=list, max_length=10)
+    failed: list[Code] = Field(default_factory=list, max_length=10)
+    #: Indices of positions whose quantity x price is not their market value.
+    position_mismatches: list[int] = Field(default_factory=list, max_length=MAX_POSITIONS)
+    positions_total: Amount | None = None
+    reported_positions_total: Amount | None = None
+    cash_opening: Amount | None = None
+    cash_closing: Amount | None = None
+    cash_activity: Amount | None = None
+    cash_difference: Amount | None = None
+    total_value: Amount | None = None
+    reported_total_value: Amount | None = None
+    tolerance: Amount
+
+
+class InvestmentStatement(_Strict):
+    """A brokerage statement: positions on ``as_of`` and the period's activity."""
+
+    source_format: Literal["ofx", "qfx", "pdf", "image"]
+    account: StatementAccount = StatementAccount()
+    period_start: date | None = None
+    period_end: date | None = None
+    #: The day the positions are valued (OFX ``INVPOSLIST``/``DTASOF``).
+    as_of: date | None = None
+    positions: list[InvestmentPosition] = Field(default_factory=list, max_length=MAX_POSITIONS)
+    activity: list[InvestmentActivity] = Field(default_factory=list, max_length=MAX_ROWS_CEILING)
+    cash_opening: Balance | None = None
+    cash_closing: Balance | None = None
+    #: Totals the statement prints (holdings, and holdings plus cash).
+    positions_value: Balance | None = None
+    total_value: Balance | None = None
+    truncated: bool = False
+    # -- set by the worker's document parsers -----------------------------------
+    parser: ParserRef | None = None
+    confidence: dict[Code, Confidence01] = Field(default_factory=dict, max_length=50)
+    reconciliation: InvestmentReconciliation | None = None
 
 
 class Word(_Strict):
@@ -500,6 +658,47 @@ class Payslip(_Strict):
     low_confidence: list[Code] = Field(default_factory=list, max_length=50)
 
 
+class LoanReconciliation(_Strict):
+    """The loan statement checks (SECURITY.md C12; ``app.ingestion.parsers.loan_statement``).
+
+    ``parts``: principal + interest + escrow + fees = the total paid;
+    ``balance``: previous principal balance - principal = new balance.
+    ``checks`` lists those that could run, ``failed`` those that did not hold.
+    """
+
+    status: Literal["ok", "mismatch", "unavailable"]
+    checks: list[Code] = Field(default_factory=list, max_length=10)
+    failed: list[Code] = Field(default_factory=list, max_length=10)
+
+
+class LoanStatement(_Strict):
+    """A loan or mortgage statement read by the worker's loan parser (worker-written).
+
+    One payment's split and the principal balance before and after it. No
+    loan number (identity data): only its last four digits, for matching.
+    """
+
+    lender: Annotated[str, Field(max_length=200)] | None = None
+    last4: Annotated[str, Field(pattern=r"^[0-9]{4}$")] | None = None
+    currency: Annotated[str, Field(pattern=r"^[A-Z]{3}$")] | None = None
+    statement_date: date | None = None
+    paid_on: date | None = None
+    principal: Amount | None = None
+    interest: Amount | None = None
+    escrow: Amount | None = None
+    fees: Amount | None = None
+    total: Amount | None = None
+    previous_balance: Amount | None = None
+    balance: Amount | None = None
+    #: Annual rate as a fraction (``0.06125``).
+    rate: Annotated[Decimal, Field(ge=0, lt=1, max_digits=12, decimal_places=10)] | None = None
+    next_due_date: date | None = None
+    next_amount_due: Amount | None = None
+    reconciliation: LoanReconciliation | None = None
+    confidence: dict[Code, Confidence01] = Field(default_factory=dict, max_length=50)
+    low_confidence: list[Code] = Field(default_factory=list, max_length=50)
+
+
 class ReceiptLine(_Strict):
     """One item line of a receipt (best effort)."""
 
@@ -549,6 +748,28 @@ class Receipt(_Strict):
     low_confidence: list[Code] = Field(default_factory=list, max_length=50)
 
 
+class TaxFormRead(_Strict):
+    """One tax form read by the worker's tax form parser (worker-written).
+
+    **Amounts only** (``app.ingestion.parsers.tax_forms``): ``boxes`` maps
+    stored box keys of the jurisdiction's form set (``"1"``, ``"12_D"``,
+    ``"cov_JAN"``) to amounts. Identity boxes (SSN/TIN/EIN, names,
+    addresses, account and control numbers) are never read into it; the
+    issuer's display name is the only text.
+    """
+
+    jurisdiction: Annotated[str, Field(pattern=r"^[A-Z]{2}(-[A-Z0-9]{1,3})?$")]
+    form_type: Annotated[str, Field(pattern=r"^[A-Z0-9][A-Za-z0-9-]{0,31}$")]
+    form_index: int = Field(default=0, ge=0, le=1000)
+    tax_year: int | None = Field(default=None, ge=1900, le=2200)
+    issuer_name: Annotated[str, Field(max_length=200)] | None = None
+    boxes: dict[Annotated[str, Field(pattern=r"^[A-Za-z0-9_]{1,32}$")], Amount] = Field(
+        default_factory=dict, max_length=128
+    )
+    confidence: dict[Code, Confidence01] = Field(default_factory=dict, max_length=50)
+    low_confidence: list[Code] = Field(default_factory=list, max_length=50)
+
+
 class ParserScore(_Strict):
     name: Code
     score: Confidence01
@@ -571,6 +792,10 @@ class ParseInfo(_Strict):
     skipped_lines: int = Field(default=0, ge=0)
     payslip: Payslip | None = None
     receipt: Receipt | None = None
+    #: A loan or mortgage statement (``app.ingestion.parsers.loan_statement``).
+    loan: LoanStatement | None = None
+    #: Tax forms (``app.ingestion.parsers.tax_forms``; amounts only).
+    tax_forms: list[TaxFormRead] = Field(default_factory=list, max_length=50)
     warnings: list[Code] = Field(default_factory=list, max_length=WARNINGS_MAX)
 
 
@@ -588,6 +813,8 @@ class ExtractResult(_Strict):
     extractor_version: Annotated[str, Field(max_length=32)] = ""
     tables: list[Table] = Field(default_factory=list, max_length=100)
     statements: list[Statement] = Field(default_factory=list, max_length=100)
+    #: Brokerage statements (OFX ``INVSTMTRS``; PDF ones are worker-written).
+    investments: list[InvestmentStatement] = Field(default_factory=list, max_length=100)
     #: Documents (PDF pages, image frames), previews and container contents.
     pages: list[Page] = Field(default_factory=list, max_length=MAX_PAGES_CEILING)
     previews: list[Preview] = Field(default_factory=list, max_length=MAX_PAGES_CEILING)
@@ -623,5 +850,14 @@ class ExtractResult(_Strict):
                 or s.parser is not None
                 or s.reconciliation is not None
                 for s in self.statements
+            )
+            or any(
+                i.source_format in DOCUMENT_STATEMENT_FORMATS
+                or i.parser is not None
+                or i.reconciliation is not None
+                or bool(i.confidence)
+                or any(p.confidence is not None or p.low_confidence for p in i.positions)
+                or any(a.confidence is not None or a.low_confidence for a in i.activity)
+                for i in self.investments
             )
         )

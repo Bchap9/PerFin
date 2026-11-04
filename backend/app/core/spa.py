@@ -4,8 +4,10 @@
 The image copies ``frontend/dist`` to ``/app/static`` and sets
 ``PERFIN_STATIC_DIR``. When that directory holds an ``index.html``:
 
-* ``/assets/*`` (Vite's content-hashed bundles) is served by ``StaticFiles``
-  without following symlinks; the headers middleware gives successful
+* ``/static/*`` (Vite's content-hashed bundles, ``build.assetsDir`` in
+  ``frontend/vite.config.ts``) is served by ``StaticFiles`` without following
+  symlinks (not Vite's default ``/assets/``: ``/assets`` and
+  ``/assets/<id>`` are the SPA's Assets pages); the headers middleware gives successful
   responses a one-year ``immutable`` cache and everything else ``no-store``.
 * Top-level files of the build (``favicon.ico``, ``robots.txt``, ...) are
   served by exact name only, from a list made at startup.
@@ -33,9 +35,9 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from app.core.errors import ProblemError
 
-ASSETS_PREFIX = "/assets"
-NON_SPA_PREFIXES: tuple[str, ...] = ("/api/", "/assets/")
-NON_SPA_PATHS: frozenset[str] = frozenset({"/api", "/assets", "/healthz", "/readyz"})
+ASSETS_PREFIX = "/static"
+NON_SPA_PREFIXES: tuple[str, ...] = ("/api/", "/static/")
+NON_SPA_PATHS: frozenset[str] = frozenset({"/api", "/static", "/healthz", "/readyz"})
 
 ExceptionHandler = Callable[[Request, Any], Response | Awaitable[Response]]
 
@@ -69,7 +71,7 @@ def install_spa(app: FastAPI, static_dir: Path | None) -> bool:
     if not index.is_file():
         return False
     index_html = index.read_bytes()
-    assets = static_dir / "assets"
+    assets = static_dir / ASSETS_PREFIX.lstrip("/")
     if assets.is_dir():
         app.mount(
             ASSETS_PREFIX,

@@ -16,6 +16,7 @@ from decimal import Decimal
 from sqlalchemy import CheckConstraint, Date, String, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column
 
+from app.core.dates import min_date_check
 from app.db.base import Base, HouseholdScoped, Timestamps, UUIDPk
 from app.db.types import CURRENCY, RATE, currency_check
 
@@ -32,6 +33,7 @@ class FxRate(UUIDPk, Timestamps, HouseholdScoped, Base):
         currency_check("quote"),
         CheckConstraint("base <> quote", name="distinct_pair"),
         CheckConstraint("rate > 0", name="rate_positive"),
+        CheckConstraint(min_date_check("rate_date"), name="rate_date_min"),
     )
 
     base: Mapped[str] = mapped_column(CURRENCY, nullable=False)

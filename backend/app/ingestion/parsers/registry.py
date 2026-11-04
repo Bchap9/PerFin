@@ -8,15 +8,16 @@ one extraction (:func:`parse_extraction`):
    layout on the pages (``detect`` above 0): first a parser written for the
    matched fingerprint's ``key`` (the institution parsers), then the parser
    the fingerprint names (``parser``, e.g. ``statement_generic``), then the
-   payslip (receipt) parser for a ``payslip`` (``receipt``) kind. The fingerprint's ``date_order``
+   payslip (receipt, tax form) parser for a ``payslip`` (``receipt``,
+   ``tax_form``) kind. The fingerprint's ``date_order``
    is handed to a generic parser.
 2. Otherwise every parser scores the pages (``detect``); the best score of
    at least :data:`MIN_SCORE` wins (ties: the order of :data:`PARSERS`, so
    an institution parser beats the generic one).
 
-The chosen parser's statements replace any statements an earlier parser run
-left in the result (``source_format`` ``pdf``/``image``); structured
-statements from the sandbox (OFX, QFX, QIF) are never touched. What happened
+The chosen parser's statements (and brokerage ``investments``) replace any
+an earlier parser run left in the result (``source_format`` ``pdf``/``image``);
+structured statements from the sandbox (OFX, QFX, QIF) are never touched. What happened
 is recorded in ``ExtractResult.parse`` (:class:`ParseInfo`: parser and
 version, all scores, the threshold, pending and skipped line counts,
 warnings, a payslip), so a later parser version re-runs from the stored
@@ -28,11 +29,14 @@ from __future__ import annotations
 from typing import Final
 
 from app.ingestion.parsers.base import DocumentParser, DocumentView, ParseOutcome
+from app.ingestion.parsers.brokerage import BROKERAGE_PARSERS
 from app.ingestion.parsers.confidence import DEFAULT_THRESHOLD
 from app.ingestion.parsers.institutions import INSTITUTION_PARSERS
+from app.ingestion.parsers.loan_statement import LoanStatementParser
 from app.ingestion.parsers.payslip import PayslipParser
 from app.ingestion.parsers.receipt import ReceiptParser
 from app.ingestion.parsers.table_statement import CardStatementParser, TableStatementParser
+from app.ingestion.parsers.tax_forms import TaxFormParser
 from app.ingestion.sandbox.protocol import (
     DOCUMENT_STATEMENT_FORMATS,
     IMAGE_KINDS,
@@ -47,7 +51,12 @@ DOCUMENT_KINDS: Final = frozenset({"pdf", *IMAGE_KINDS})
 MIN_SCORE: Final = 0.35
 
 PARSERS: Final[tuple[DocumentParser, ...]] = (
+    # A "Form W-2"/"Form 1099-INT" heading with its box labels is unambiguous,
+    # even on a bank's letterhead (tax forms first).
+    TaxFormParser(),
     *(cls() for cls in INSTITUTION_PARSERS),
+    *(cls() for cls in BROKERAGE_PARSERS),
+    LoanStatementParser(),
     PayslipParser(),
     ReceiptParser(),
     CardStatementParser(),
@@ -79,7 +88,7 @@ def _hinted(
         named = parser_named(parser_name)
         if named is not None:
             candidates.append(named)
-    if kind in ("payslip", "receipt"):
+    if kind in ("payslip", "receipt", "tax_form"):
         candidates.extend(p for p in PARSERS if p.kind == kind)
     # A hint only picks a parser that sees its layout on the pages at all.
     return next((p for p in candidates if scores.get(p.name, 0.0) > 0), None)
@@ -107,6 +116,9 @@ def parse_extraction(
     else:
         outcome.warnings.append("no_parser")
     kept = [s for s in result.statements if s.source_format not in DOCUMENT_STATEMENT_FORMATS]
+    kept_investments = [
+        i for i in result.investments if i.source_format not in DOCUMENT_STATEMENT_FORMATS
+    ]
     info = ParseInfo(
         parser=_ref(chosen) if chosen is not None else None,
         scores=[
@@ -118,9 +130,17 @@ def parse_extraction(
         skipped_lines=outcome.skipped_lines,
         payslip=outcome.payslip,
         receipt=outcome.receipt,
+        loan=outcome.loan,
+        tax_forms=outcome.tax_forms,
         warnings=outcome.warnings[:100],
     )
-    return result.model_copy(update={"statements": [*kept, *outcome.statements], "parse": info})
+    return result.model_copy(
+        update={
+            "statements": [*kept, *outcome.statements],
+            "investments": [*kept_investments, *outcome.investments],
+            "parse": info,
+        }
+    )
 
 
 def reparse(result: ExtractResult, *, threshold: float = DEFAULT_THRESHOLD) -> ExtractResult:
