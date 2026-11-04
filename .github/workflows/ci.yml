@@ -98,7 +98,10 @@ jobs:
   backend:
     name: Backend (ruff, mypy, bandit, pytest)
     runs-on: ubuntu-24.04
-    timeout-minutes: 20
+    # The full suite (7400+ tests, OCR, sandbox and restore runs) took longer
+    # than 20 minutes on a hosted runner (run 41870347026 was cancelled at the
+    # limit), so the limit is 45 and pytest uses every logical CPU.
+    timeout-minutes: 45
     services:
       postgres:
         image: postgres:16
@@ -130,6 +133,27 @@ jobs:
           cache-dependency-glob: backend/uv.lock
       - name: Install locked dependencies
         run: uv sync --frozen
+      # The same system packages the worker image installs (deploy/Dockerfile):
+      # Tesseract's English language data for the in-process OCR tests and
+      # libseccomp for the extraction sandbox's filter. postgresql-client (16
+      # on ubuntu-24.04): pg_dump/pg_restore/psql for the restore
+      # verification test (tests/integration/test_backup_restore.py runs
+      # scripts/backup.sh and scripts/restore.sh).
+      - name: Install OCR language data, libseccomp and the PostgreSQL client
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends tesseract-ocr tesseract-ocr-eng libseccomp2 postgresql-client
+      # helm for tests/unit/test_helm_chart.py (renders deploy/helm/perfin),
+      # built from its checksum-pinned module (scripts/install-chart-tools.sh).
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: "1.24"
+          cache: false
+      - name: Install helm and kubeconform (checksum-pinned)
+        working-directory: .
+        run: |
+          scripts/install-chart-tools.sh "$RUNNER_TEMP/chart-tools"
+          echo "$RUNNER_TEMP/chart-tools" >> "$GITHUB_PATH"
       - name: Ruff lint
         run: |
           uv run ruff check .
@@ -141,11 +165,13 @@ jobs:
       - name: mypy --strict
         run: |
           uv run mypy
-          uv run mypy --strict ../scripts/check_spdx.py ../deploy/egress/egress_proxy.py
+          uv run mypy --strict ../scripts/check_spdx.py ../scripts/release_notes.py ../scripts/seed_dev.py ../deploy/egress/egress_proxy.py
       - name: Bandit
         run: uv run bandit -q -c pyproject.toml -r app ../scripts ../deploy/egress
+      # `-n auto` counts physical cores and started a single worker on the
+      # hosted runner; `-n logical` uses all of its vCPUs.
       - name: pytest (unit, integration, security)
-        run: uv run pytest -n auto
+        run: uv run pytest -n logical
       - name: OpenAPI schema is up to date
         run: |
           uv run perfin openapi > "$RUNNER_TEMP/openapi.json"
@@ -219,3 +245,59 @@ jobs:
             --tmpfs /tmp --entrypoint tesseract perfin:ci --version
       - name: Build egress image
         run: docker build -t perfin-egress:ci deploy/egress
+
+  docs:
+    name: Documentation site (mkdocs build --strict)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+      # Exact versions and hashes (requirements-docs.txt); only mkdocs and the
+      # Material theme, no analytics or network plugins.
+      - name: Install the pinned documentation toolchain
+        run: |
+          python -m venv "$RUNNER_TEMP/docs-venv"
+          "$RUNNER_TEMP/docs-venv/bin/pip" install --require-hashes -r requirements-docs.txt
+      # Fails on any broken link or anchor between pages, a page missing from
+      # the build, or a theme warning.
+      - name: mkdocs build --strict
+        env:
+          NO_MKDOCS_2_WARNING: "1"
+        run: |
+          "$RUNNER_TEMP/docs-venv/bin/mkdocs" build --strict --site-dir "$RUNNER_TEMP/site"
+      - name: The site loads nothing from third-party hosts
+        run: |
+          if grep -rEl 'fonts\.(googleapis|gstatic)\.com|google-analytics|googletagmanager' "$RUNNER_TEMP/site"; then
+            echo "::error::the built site references a third-party host"; exit 1
+          fi
+
+  helm:
+    name: Helm chart (lint, template, kubeconform)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: "1.24"
+          cache: false
+      - name: Install helm and kubeconform (checksum-pinned)
+        run: |
+          scripts/install-chart-tools.sh "$RUNNER_TEMP/chart-tools"
+          echo "$RUNNER_TEMP/chart-tools" >> "$GITHUB_PATH"
+      - name: helm lint --strict, helm template | kubeconform (every CI values file)
+        run: |
+          for values in deploy/helm/perfin/ci/*.yaml; do
+            echo "::group::${values}"
+            helm lint --strict -f "$values" deploy/helm/perfin
+            helm template perfin deploy/helm/perfin -f "$values" --kube-version 1.31.0 \
+              | kubeconform -strict -summary -kubernetes-version 1.31.0 -
+            echo "::endgroup::"
+          done

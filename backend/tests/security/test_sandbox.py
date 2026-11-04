@@ -354,6 +354,20 @@ def test_drops_to_dedicated_uid_when_root() -> None:
         assert found["uid"] == str(os.getuid())
 
 
+def test_unprivileged_child_can_start_threads() -> None:
+    """Threads work in an unprivileged child (CI failure 2026-11-04).
+
+    ``RLIMIT_NPROC`` counts every task of the UID and binds only non-root
+    processes, so the old limit of 0 passed as root but failed every PDF on an
+    unprivileged worker. Run as root, the child drops to 65534 here, so the
+    test binds on every host.
+    """
+    config = replace(EVIL, uid=65534, gid=65534)
+    found = _warnings("threads", config=config)
+    assert found == {"threads": "4"}
+    assert _warnings("whoami", config=config)["uid"] != "0"
+
+
 def test_input_over_the_limit_is_refused() -> None:
     config = replace(EVIL, max_input_bytes=1000)
     with pytest.raises(SandboxError) as caught:

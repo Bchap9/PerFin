@@ -19,8 +19,14 @@ the child **refuses to run** if any step fails:
 1. ``setrlimit``: ``RLIMIT_AS`` (address space, default 1 GiB),
    ``RLIMIT_CPU`` (soft limit sends ``SIGXCPU``, hard limit one second later
    ``SIGKILL``), ``RLIMIT_NOFILE``, ``RLIMIT_FSIZE`` (default 0: a backstop
-   for ``write()``; changing files is stopped by steps 3 and 4),
-   ``RLIMIT_NPROC`` 0 and ``RLIMIT_CORE`` 0.
+   for ``write()``; changing files is stopped by steps 3 and 4) and
+   ``RLIMIT_CORE`` 0. ``RLIMIT_NPROC`` is deliberately *not* set: it counts
+   every task (threads included) of the UID, which the child shares with the
+   worker, so any value low enough to matter stops the child's own threads
+   (PyMuPDF's table detection and Tesseract start threads; a non-root child
+   with ``RLIMIT_NPROC`` 0 failed every PDF). New processes are stopped by
+   seccomp instead (``fork``/``vfork``/non-thread ``clone`` ``EPERM``,
+   ``clone3`` ``ENOSYS``, step 4).
 2. ``prctl(PR_SET_DUMPABLE, 0)`` and ``prctl(PR_SET_NO_NEW_PRIVS, 1)``.
 3. Landlock (:func:`install_landlock`): every filesystem access right the
    kernel's Landlock ABI knows is handled, and only *reading* is granted,
@@ -466,7 +472,6 @@ def apply_rlimits(limits: SandboxLimits) -> None:
         (resource.RLIMIT_CPU, cpu, cpu + 1),
         (resource.RLIMIT_NOFILE, limits.max_open_files, limits.max_open_files),
         (resource.RLIMIT_FSIZE, limits.max_file_bytes, limits.max_file_bytes),
-        (resource.RLIMIT_NPROC, 0, 0),
         (resource.RLIMIT_CORE, 0, 0),
     )
     for which, soft, hard in settings:

@@ -39,6 +39,12 @@ paths = ['''^backend/tests/unit/test_email_policy\.py$''']
 regexes = ['''^k7q2m4x9t3b5n6pa$''']
 
 [[allowlists]]
+description = "Synthetic master key (base64 of the bytes 0x00..0x1f) in the config-check test; history only, the file now builds it at runtime"
+condition = "AND"
+paths = ['''^backend/tests/unit/test_market_data\.py$''']
+regexes = ['''^AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8=$''']
+
+[[allowlists]]
 description = "Cipher name in prose flagged as a key (not a secret)"
 condition = "AND"
 paths = ['''^docs/ARCHITECTURE\.md$''']

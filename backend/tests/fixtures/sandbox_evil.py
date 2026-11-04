@@ -20,6 +20,7 @@ import signal
 import socket
 import struct
 import sys
+import threading
 import time
 from collections.abc import Callable
 
@@ -256,6 +257,24 @@ def unlisted_syscall(data: bytes, options: ExtractOptions, kind: str) -> Extract
     return _result(kind, "setpriority:ok")
 
 
+def threads(data: bytes, options: ExtractOptions, kind: str) -> ExtractResult:
+    """Not hostile: start and join a few threads, as PyMuPDF and Tesseract do.
+
+    A per-UID task limit (``RLIMIT_NPROC`` 0) or a seccomp rule that stopped
+    ``clone(CLONE_THREAD)`` would make this fail for an unprivileged child.
+    """
+    results: list[int] = []
+    workers = [threading.Thread(target=results.append, args=(n,)) for n in range(4)]
+    try:
+        for worker in workers:
+            worker.start()
+    except RuntimeError as exc:
+        return _result(kind, f"threads:{type(exc).__name__}")
+    for worker in workers:
+        worker.join()
+    return _result(kind, f"threads:{len(results)}")
+
+
 def echo(data: bytes, options: ExtractOptions, kind: str) -> ExtractResult:
     return _result(kind, f"input:{len(data)}")
 
@@ -314,6 +333,7 @@ EXTRACTORS = {
     "bigoutput": bigoutput,
     "whoami": whoami,
     "echo": echo,
+    "threads": threads,
     "unlisted_syscall": unlisted_syscall,
     "bad_shape": bad_shape,
 }
