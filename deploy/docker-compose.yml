@@ -29,8 +29,11 @@
 #   edge      proxy only; the published ports live here. Fixed subnet so
 #             its gateway (the address host-local clients such as an SSH
 #             tunnel arrive from) is predictable for PERFIN_BREAKGLASS_CIDRS
-#   web       proxy <-> api (and mcp); fixed subnet so the API trusts
+#   web       proxy <-> api; fixed subnet so the API trusts
 #             X-Forwarded-* from the proxy's address only
+#   ai        mcp <-> api only: the MCP container reaches nothing else
+#             (no db, worker or egress; AI_ACCESS.md M7)
+#   mcp_edge  proxy -> mcp, for the optional streamable-HTTP transport
 #   backend   api, worker, migrate, db (and clamav)
 #   egress    api, worker (and clamav) <-> egress proxy
 #   outbound  egress proxy only; the single path to the internet
@@ -100,6 +103,8 @@ services:
       edge: {}
       web:
         ipv4_address: ${PROXY_WEB_IP:-172.30.80.10}
+      # Only for the optional MCP HTTP transport (Caddyfile.example).
+      mcp_edge: {}
     depends_on:
       proxy-init:
         condition: service_completed_successfully
@@ -173,7 +178,7 @@ services:
       - quarantine:/var/lib/perfin/quarantine
     # `egress` only matters with the egress profile: OIDC discovery, JWKS and
     # token exchange with an IdP listed in egress-allowlist.txt.
-    networks: [web, backend, egress]
+    networks: [web, backend, egress, ai]
     # Image HEALTHCHECK: `perfin healthcheck` probes 127.0.0.1:8000/healthz.
     stop_grace_period: 40s
     depends_on:
@@ -339,26 +344,38 @@ services:
 
   # ------------------------------------------------------------------ mcp --
   # Optional read-only MCP server for AI assistants (profile `mcp`,
-  # AI_ACCESS.md). It holds one scoped API token and talks only to the API:
-  # it does not read .env, so it never sees the database URL, the master key
-  # or the secret key, and it mounts no volumes (M7). The HTTP transport is
-  # served only through the proxy with TLS and an origin allowlist.
+  # AI_ACCESS.md, `perfin mcp`). It holds one scoped `ai:read` API token and
+  # talks only to the API over the `ai` network: it does not read .env
+  # (no env_file), so it never sees the database URL, the master key or the
+  # secret key, and `perfin mcp` refuses to start if it is given one (M7). No
+  # volumes, read-only root, every capability dropped (x-hardened). The
+  # streamable-HTTP transport listens on 8001 for the proxy only (`mcp_edge`,
+  # see Caddyfile.example); every request needs the MCP_HTTP_TOKEN bearer and an
+  # Origin, when sent, from PERFIN_MCP_HTTP_ALLOWED_ORIGINS. PERFIN_MCP_ENABLED
+  # is the operator's switch: unless it is true the container exits at once.
+  # For stdio instead: `docker compose run --rm -T -e PERFIN_MCP_TRANSPORT=stdio mcp`.
   mcp:
     <<: [*hardened, *perfin-image]
     command: ["mcp"]
     profiles: [mcp]
     environment:
       PERFIN_ROLE: mcp
-      PERFIN_PUBLIC_URL: ${PERFIN_PUBLIC_URL:?set PERFIN_PUBLIC_URL in .env}
-      PERFIN_MCP_ENABLED: "true"
+      PERFIN_MCP_ENABLED: ${PERFIN_MCP_ENABLED:-false}
+      PERFIN_MCP_API_URL: http://api:8000
+      PERFIN_MCP_TOKEN: ${MCP_API_TOKEN:-}
       PERFIN_MCP_TRANSPORT: http
+      PERFIN_MCP_HTTP_HOST: 0.0.0.0
+      PERFIN_MCP_HTTP_PORT: "8001"
       PERFIN_MCP_HTTP_ALLOWED_ORIGINS: ${PERFIN_MCP_HTTP_ALLOWED_ORIGINS:-}
+      PERFIN_MCP_HTTP_TOKEN: ${MCP_HTTP_TOKEN:-}
+      PERFIN_MCP_RATE_PER_MINUTE: ${MCP_RATE_PER_MINUTE:-30}
       PERFIN_LOG_LEVEL: ${PERFIN_LOG_LEVEL:-INFO}
     mem_limit: 256m
     memswap_limit: 256m
+    pids_limit: 64
     healthcheck:
       disable: true
-    networks: [web]
+    networks: [ai, mcp_edge]
     depends_on:
       api:
         condition: service_healthy
@@ -399,6 +416,10 @@ networks:
       config:
         - subnet: ${WEB_SUBNET:-172.30.80.0/24}
   backend:
+    internal: true
+  ai:
+    internal: true
+  mcp_edge:
     internal: true
   egress:
     internal: true

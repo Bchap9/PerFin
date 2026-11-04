@@ -100,6 +100,9 @@ perfin.example.com {
 
 	# Optional MCP streamable-HTTP transport (profile `mcp`). Uncomment only
 	# if an AI client must reach it over the network; stdio is preferred.
+	# The mcp container answers only requests carrying its bearer secret
+	# (MCP_HTTP_TOKEN in .env) and refuses an Origin outside
+	# PERFIN_MCP_HTTP_ALLOWED_ORIGINS; TLS ends here, on the proxy.
 	# handle /mcp* {
 	#     reverse_proxy mcp:8001 {
 	#         flush_interval -1
