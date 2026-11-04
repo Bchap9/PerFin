@@ -1,0 +1,12 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Values for `helm lint` / `helm template` in CI (.github/workflows/ci.yml)
+# and backend/tests/unit/test_helm_chart.py. Synthetic placeholders only.
+secrets:
+  existingSecret: perfin-secrets
+config:
+  PERFIN_PUBLIC_URL: https://perfin.example.com
+  PERFIN_TRUSTED_PROXIES: 10.42.0.0/16
+externalDatabase:
+  networkPeers:
+    - ipBlock:
+        cidr: 10.0.12.5/32

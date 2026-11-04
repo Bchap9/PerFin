@@ -1,0 +1,345 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+#
+# Release pipeline (SECURITY.md H4, docs/UPGRADING.md "Verifying a release").
+# Runs only when a version tag v<MAJOR>.<MINOR>.<PATCH>[-pre] is pushed; never
+# on branches or pull requests.
+#
+#   1. check     tag is semver and matches every version string in the repo;
+#                the CHANGELOG has a section for it (the release notes).
+#   2. image     per image (perfin, perfin-egress): multi-arch build
+#                (linux/amd64 + linux/arm64, buildx + QEMU) pushed by digest
+#                only, so nothing carries a tag before it passed the scan;
+#                Trivy scan of both platforms (fails on fixable
+#                HIGH/CRITICAL); CycloneDX + SPDX SBOMs; then the semver tags
+#                are added, the digest is signed with cosign (keyless,
+#                Sigstore OIDC), the SBOM is attached as a signed cosign
+#                attestation and as a GitHub attestation, and SLSA build
+#                provenance is attested (actions/attest-build-provenance).
+#   3. chart     the Helm chart is packaged, pushed to
+#                oci://ghcr.io/bchap9/charts and its digest signed.
+#   4. release   GitHub release with the CHANGELOG section, the SBOMs, the
+#                chart package, and a cosign bundle for every asset.
+#
+# Third-party actions are pinned to full commit SHAs (tag in the trailing
+# comment); scanner and tool binaries are version-pinned and checksum-verified.
+# Each job gets only the permissions it needs; id-token: write (Sigstore
+# keyless signing) is granted only to the jobs that sign.
+name: release
+
+on:
+  push:
+    tags: ["v*"]
+
+# Nothing by default; every job lists what it needs.
+permissions: {}
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAMESPACE: ghcr.io/bchap9
+  CHART_REPOSITORY: oci://ghcr.io/bchap9/charts
+  TRIVY_VERSION: "0.76.1"
+  TRIVY_SHA256: "c7cbe3137fb8a48a17574bede3dd6beb16742d1e9772929940fc90082c39d9c0"
+  COSIGN_VERSION: "v3.0.6"
+
+jobs:
+  check:
+    name: Tag, versions and release notes
+    # Defence in depth: the trigger already admits tags only.
+    if: github.ref_type == 'tag' && startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      prerelease: ${{ steps.version.outputs.prerelease }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Tag is semver and matches the versions in the repository
+        id: version
+        env:
+          TAG: ${{ github.ref_name }}
+        run: python3 -I scripts/release_notes.py check "$TAG" >> "$GITHUB_OUTPUT"
+      - name: Release notes from CHANGELOG.md
+        env:
+          TAG: ${{ github.ref_name }}
+        run: python3 -I scripts/release_notes.py notes "$TAG" > release-notes.md
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: release-notes
+          path: release-notes.md
+          if-no-files-found: error
+          retention-days: 7
+
+  image:
+    name: Image ${{ matrix.image.name }} (build, scan, sign, attest)
+    needs: check
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    permissions:
+      contents: read
+      packages: write # push to ghcr.io
+      id-token: write # Sigstore keyless signing (cosign, attestations)
+      attestations: write # GitHub attestations (SBOM, SLSA provenance)
+    strategy:
+      fail-fast: true
+      matrix:
+        image:
+          - name: perfin
+            context: .
+            dockerfile: deploy/Dockerfile
+          - name: perfin-egress
+            context: deploy/egress
+            dockerfile: deploy/egress/Dockerfile
+    env:
+      IMAGE: ghcr.io/bchap9/${{ matrix.image.name }}
+      VERSION: ${{ needs.check.outputs.version }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: docker/setup-qemu-action@99012661954931238ded8c8b007157a8430204e1 # v4.4.0
+        with:
+          platforms: arm64
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+      - uses: docker/login-action@81c6f93d4bc991e510b342a00b419b3bb4efc5c6 # v4.7.0
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Image tags and labels
+        id: meta
+        uses: docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411302 # v6.2.0
+        with:
+          images: ${{ env.IMAGE }}
+          flavor: |
+            latest=auto
+          tags: |
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=semver,pattern={{major}},enable=${{ !startsWith(github.ref, 'refs/tags/v0.') }}
+          labels: |
+            org.opencontainers.image.licenses=AGPL-3.0-or-later
+      # Pushed by digest only: no tag points at the image until the scan
+      # below has passed.
+      - name: Build and push (linux/amd64, linux/arm64) by digest
+        id: build
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: ${{ matrix.image.context }}
+          file: ${{ matrix.image.dockerfile }}
+          platforms: linux/amd64,linux/arm64
+          pull: true
+          no-cache: true
+          labels: ${{ steps.meta.outputs.labels }}
+          outputs: type=image,name=${{ env.IMAGE }},push-by-digest=true,name-canonical=true,push=true
+          # Provenance is attested below with actions/attest-build-provenance;
+          # BuildKit's own unsigned attestation manifests are not needed.
+          provenance: false
+          sbom: false
+      - name: Install trivy ${{ env.TRIVY_VERSION }}
+        run: |
+          curl -sSfL -o "$RUNNER_TEMP/trivy.tgz" \
+            "https://github.com/aquasecurity/trivy/releases/download/v${TRIVY_VERSION}/trivy_${TRIVY_VERSION}_Linux-64bit.tar.gz"
+          echo "${TRIVY_SHA256}  $RUNNER_TEMP/trivy.tgz" | sha256sum --check --strict
+          tar -xzf "$RUNNER_TEMP/trivy.tgz" -C "$RUNNER_TEMP" trivy
+      - name: Scan both platforms (fail on fixable HIGH/CRITICAL)
+        env:
+          DIGEST: ${{ steps.build.outputs.digest }}
+        run: |
+          for platform in linux/amd64 linux/arm64; do
+            echo "::group::trivy image ${platform}"
+            "$RUNNER_TEMP/trivy" image --platform "$platform" \
+              --scanners vuln,secret --severity HIGH,CRITICAL --ignore-unfixed \
+              --exit-code 1 "${IMAGE}@${DIGEST}"
+            echo "::endgroup::"
+          done
+      - name: SBOMs (CycloneDX and SPDX, per platform)
+        env:
+          DIGEST: ${{ steps.build.outputs.digest }}
+          NAME: ${{ matrix.image.name }}
+        run: |
+          for arch in amd64 arm64; do
+            for format in cyclonedx:cdx spdx-json:spdx; do
+              "$RUNNER_TEMP/trivy" image --platform "linux/${arch}" --format "${format%%:*}" \
+                --output "${NAME}-${VERSION}-linux-${arch}.${format##*:}.json" "${IMAGE}@${DIGEST}"
+            done
+          done
+      - name: Tag the scanned digest
+        env:
+          DIGEST: ${{ steps.build.outputs.digest }}
+          TAGS: ${{ steps.meta.outputs.tags }}
+        run: |
+          args=()
+          while IFS= read -r tag; do
+            [ -n "$tag" ] && args+=(--tag "$tag")
+          done <<< "$TAGS"
+          docker buildx imagetools create "${args[@]}" "${IMAGE}@${DIGEST}"
+          docker buildx imagetools inspect "${IMAGE}:${VERSION}"
+      - uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
+        with:
+          cosign-release: ${{ env.COSIGN_VERSION }}
+      - name: Sign the image digest and attest the SBOMs (cosign keyless)
+        env:
+          DIGEST: ${{ steps.build.outputs.digest }}
+          NAME: ${{ matrix.image.name }}
+        run: |
+          cosign sign --yes "${IMAGE}@${DIGEST}"
+          for arch in amd64 arm64; do
+            cosign attest --yes --type cyclonedx \
+              --predicate "${NAME}-${VERSION}-linux-${arch}.cdx.json" "${IMAGE}@${DIGEST}"
+          done
+          for sbom in "${NAME}-${VERSION}"-linux-*.json; do
+            cosign sign-blob --yes --bundle "${sbom}.sigstore.json" "$sbom"
+          done
+      - name: SLSA build provenance (GitHub attestation, pushed to the registry)
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-name: ${{ env.IMAGE }}
+          subject-digest: ${{ steps.build.outputs.digest }}
+          push-to-registry: true
+          create-storage-record: false
+      - name: SBOM attestation linux/amd64 (GitHub attestation, pushed to the registry)
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
+        with:
+          subject-name: ${{ env.IMAGE }}
+          subject-digest: ${{ steps.build.outputs.digest }}
+          sbom-path: ${{ matrix.image.name }}-${{ env.VERSION }}-linux-amd64.spdx.json
+          push-to-registry: true
+          create-storage-record: false
+      - name: SBOM attestation linux/arm64 (GitHub attestation, pushed to the registry)
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
+        with:
+          subject-name: ${{ env.IMAGE }}
+          subject-digest: ${{ steps.build.outputs.digest }}
+          sbom-path: ${{ matrix.image.name }}-${{ env.VERSION }}-linux-arm64.spdx.json
+          push-to-registry: true
+          create-storage-record: false
+      - name: Record the digest
+        env:
+          DIGEST: ${{ steps.build.outputs.digest }}
+        run: |
+          echo "${IMAGE}@${DIGEST}" > "${{ matrix.image.name }}-${VERSION}.digest.txt"
+          {
+            echo "### ${IMAGE}"
+            echo
+            echo "\`${IMAGE}@${DIGEST}\`"
+          } >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: image-${{ matrix.image.name }}
+          path: |
+            ${{ matrix.image.name }}-${{ env.VERSION }}-linux-*.json
+            ${{ matrix.image.name }}-${{ env.VERSION }}.digest.txt
+          if-no-files-found: error
+          retention-days: 7
+
+  chart:
+    name: Helm chart (package, push, sign)
+    needs: [check, image]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      packages: write # push the chart to ghcr.io
+      id-token: write # Sigstore keyless signing
+    env:
+      VERSION: ${{ needs.check.outputs.version }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      # The same pinned Go as ci.yml, so the chart tools are built exactly as
+      # in the CI run that tested them (not with the runner image's Go).
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: "1.24"
+          cache: false
+      - name: Install helm and kubeconform (checksum-pinned)
+        run: scripts/install-chart-tools.sh "$RUNNER_TEMP/bin"
+      - name: Lint and validate the chart
+        run: |
+          export PATH="$RUNNER_TEMP/bin:$PATH"
+          for values in deploy/helm/perfin/ci/*.yaml; do
+            helm lint --strict -f "$values" deploy/helm/perfin
+            helm template perfin deploy/helm/perfin -f "$values" --kube-version 1.31.0 \
+              | kubeconform -strict -summary -kubernetes-version 1.31.0 -
+          done
+      - name: Package and push to ${{ env.CHART_REPOSITORY }}
+        id: push
+        env:
+          REGISTRY_USER: ${{ github.actor }}
+          REGISTRY_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          export PATH="$RUNNER_TEMP/bin:$PATH"
+          helm package deploy/helm/perfin --version "$VERSION" --app-version "$VERSION" \
+            --destination .
+          printf '%s' "$REGISTRY_TOKEN" | helm registry login "$REGISTRY" \
+            --username "$REGISTRY_USER" --password-stdin
+          helm push "perfin-${VERSION}.tgz" "$CHART_REPOSITORY" 2>&1 | tee push.log
+          digest="$(sed -n 's/^Digest: //p' push.log)"
+          test -n "$digest"
+          echo "digest=${digest}" >> "$GITHUB_OUTPUT"
+          helm registry logout "$REGISTRY"
+      - uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
+        with:
+          cosign-release: ${{ env.COSIGN_VERSION }}
+      - uses: docker/login-action@81c6f93d4bc991e510b342a00b419b3bb4efc5c6 # v4.7.0
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Sign the chart (registry digest and package file)
+        env:
+          DIGEST: ${{ steps.push.outputs.digest }}
+        run: |
+          cosign sign --yes "ghcr.io/bchap9/charts/perfin@${DIGEST}"
+          cosign sign-blob --yes --bundle "perfin-${VERSION}.tgz.sigstore.json" "perfin-${VERSION}.tgz"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: chart
+          path: |
+            perfin-${{ env.VERSION }}.tgz
+            perfin-${{ env.VERSION }}.tgz.sigstore.json
+          if-no-files-found: error
+          retention-days: 7
+
+  release:
+    name: GitHub release
+    needs: [check, image, chart]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: write # create the release and upload its assets
+    env:
+      VERSION: ${{ needs.check.outputs.version }}
+      PRERELEASE: ${{ needs.check.outputs.prerelease }}
+    steps:
+      - uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
+        with:
+          path: dist
+          merge-multiple: true
+      - name: Checksums
+        working-directory: dist
+        run: |
+          find . -maxdepth 1 -type f ! -name release-notes.md -printf '%f\n' | sort \
+            | xargs sha256sum > "SHA256SUMS"
+          cat SHA256SUMS
+      - name: Create the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          flags=(--verify-tag --title "PerFin ${VERSION}" --notes-file dist/release-notes.md)
+          if [ "$PRERELEASE" = "true" ]; then flags+=(--prerelease); fi
+          assets=()
+          while IFS= read -r -d '' f; do assets+=("$f"); done \
+            < <(find dist -maxdepth 1 -type f ! -name release-notes.md -print0 | sort -z)
+          gh release create "$TAG" "${flags[@]}" "${assets[@]}"

@@ -1,0 +1,20 @@
+PerFin {{ .Chart.AppVersion }} is installed as release {{ .Release.Name }}.
+
+Image: {{ include "perfin.image" . }}
+{{- if not .Values.image.digest }}
+  Pin image.digest to the digest you verified with `cosign verify`
+  (docs/UPGRADING.md "Verifying a release").
+{{- end }}
+
+The api reports ready once `perfin migrate` has brought the database to the
+migration head. Watch it with:
+
+  kubectl -n {{ .Release.Namespace }} get pods -l app.kubernetes.io/instance={{ .Release.Name }}
+
+While no user exists, the one-time setup URL is in the api log:
+
+  kubectl -n {{ .Release.Namespace }} logs deploy/{{ include "perfin.fullname" . }}-api | grep -i setup
+
+Back up the master key (PERFIN_MASTER_KEY in {{ .Values.secrets.existingSecret }}) separately from
+the database and the documents volume, then set
+config.PERFIN_MASTER_KEY_BACKUP_ACKNOWLEDGED=true.

@@ -1,0 +1,59 @@
+{{- /* SPDX-License-Identifier: AGPL-3.0-or-later */ -}}
+{{- /*
+One-shot `perfin migrate` as the owner role (SECURITY.md H3): the only pod
+that receives PERFIN_MIGRATION_DATABASE_URL, and nothing else secret. A Helm
+hook, so an upgrade migrates before the new api/worker pods roll out. With
+the bundled PostgreSQL the database does not exist before the first install,
+so the hook then runs post-install (the api stays unready until it is done).
+*/ -}}
+{{- if .Values.migrate.enabled }}
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ include "perfin.fullname" . }}-migrate
+  labels:
+    {{- include "perfin.componentLabels" (dict "ctx" . "component" "migrate") | nindent 4 }}
+  annotations:
+    helm.sh/hook: {{ ternary "post-install,pre-upgrade" "pre-install,pre-upgrade" .Values.postgresql.enabled }}
+    helm.sh/hook-weight: "0"
+    helm.sh/hook-delete-policy: before-hook-creation,hook-succeeded
+spec:
+  backoffLimit: {{ .Values.migrate.backoffLimit }}
+  activeDeadlineSeconds: {{ .Values.migrate.activeDeadlineSeconds }}
+  ttlSecondsAfterFinished: 3600
+  template:
+    metadata:
+      labels:
+        {{- include "perfin.componentSelector" (dict "ctx" . "component" "migrate") | nindent 8 }}
+        {{- with .Values.podLabels }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+    spec:
+      restartPolicy: Never
+      # Hooks run before the chart's ServiceAccount exists on install.
+      serviceAccountName: default
+      {{- include "perfin.podSecurity" . | nindent 6 }}
+      containers:
+        - name: migrate
+          image: {{ include "perfin.image" . }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          args: ["migrate"]
+          securityContext:
+            {{- toYaml .Values.containerSecurityContext | nindent 12 }}
+          env:
+            - name: PERFIN_DB_APP_ROLE
+              value: {{ default "perfin_app" .Values.config.PERFIN_DB_APP_ROLE | quote }}
+            - name: PERFIN_LOG_LEVEL
+              value: {{ default "INFO" .Values.config.PERFIN_LOG_LEVEL | quote }}
+            {{- include "perfin.secretEnv" (dict "ctx" . "key" "PERFIN_MIGRATION_DATABASE_URL" "optional" false) | nindent 12 }}
+          resources:
+            {{- toYaml .Values.migrate.resources | nindent 12 }}
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: tmp
+          emptyDir:
+            medium: Memory
+            sizeLimit: {{ .Values.tmpSizeLimit }}
+{{- end }}

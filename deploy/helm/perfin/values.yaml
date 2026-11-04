@@ -1,0 +1,296 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+#
+# PerFin Helm chart values. The chart mirrors deploy/docker-compose.yml: the
+# same image runs the api, worker and (optional) mcp roles, a one-shot Job
+# runs `perfin migrate` as the database owner role, and NetworkPolicies give
+# each role only the connections it has in Compose (docs/UPGRADING.md,
+# SECURITY.md H1-H3). Every setting is documented inline; the defaults are
+# the hardened ones.
+#
+# Before installing, create the secret named by secrets.existingSecret
+# (and postgresql.existingSecret / mcp.existingSecret if used), e.g.:
+#
+#   kubectl create secret generic perfin-secrets \
+#     --from-literal=PERFIN_DATABASE_URL='postgresql+psycopg://perfin_app:<app-pw>@<db-host>:5432/perfin' \
+#     --from-literal=PERFIN_MIGRATION_DATABASE_URL='postgresql+psycopg://perfin_owner:<owner-pw>@<db-host>:5432/perfin' \
+#     --from-literal=PERFIN_MASTER_KEY="$(openssl rand -base64 32)" \
+#     --from-literal=PERFIN_SECRET_KEY="$(openssl rand -base64 48)"
+
+# -- Override the chart name used in resource names.
+nameOverride: ""
+# -- Override the full resource name prefix (default: <release>-perfin).
+fullnameOverride: ""
+
+image:
+  # -- Application image (published by .github/workflows/release.yml).
+  repository: ghcr.io/bchap9/perfin
+  # -- Image tag; defaults to the chart's appVersion. Never use "latest".
+  tag: ""
+  # -- Image digest (sha256:...). When set it is used instead of the tag, so
+  #    the exact image verified with `cosign verify` is the one that runs.
+  digest: ""
+  pullPolicy: IfNotPresent
+
+# -- Image pull secrets, if the registry needs credentials.
+imagePullSecrets: []
+
+# -----------------------------------------------------------------------------
+# Secrets. The chart never creates or renders a secret value: it references
+# Kubernetes Secrets you create (or that an operator such as external-secrets
+# or sealed-secrets creates). Each key in the Secret is the environment
+# variable name. Each role receives only the keys it needs, as in Compose:
+#   migrate: PERFIN_MIGRATION_DATABASE_URL
+#   api:     PERFIN_DATABASE_URL, PERFIN_MASTER_KEY, PERFIN_SECRET_KEY,
+#            PERFIN_OIDC_CLIENT_SECRET (optional), PERFIN_SMTP_PASSWORD (optional)
+#   worker:  PERFIN_DATABASE_URL, PERFIN_MASTER_KEY, PERFIN_SECRET_KEY,
+#            PERFIN_OIDC_CLIENT_SECRET (optional), PERFIN_PRICE_PROVIDER_API_KEY (optional)
+#   mcp:     nothing from this Secret (see mcp.existingSecret)
+secrets:
+  # -- Name of an existing Secret holding the keys above. Required.
+  existingSecret: ""
+
+# -----------------------------------------------------------------------------
+# Non-secret configuration: rendered into a ConfigMap and given to the api,
+# worker and migrate containers as environment variables (deploy/.env.example
+# documents every PERFIN_* variable). A key that looks like a secret
+# (PASSWORD, SECRET, *_KEY, DATABASE_URL) is refused at render time: put it
+# in secrets.existingSecret instead.
+config:
+  # -- Public https URL users reach PerFin at. Required.
+  PERFIN_PUBLIC_URL: ""
+  # -- Addresses of the ingress controller pods, the only clients whose
+  #    X-Forwarded-* headers are trusted (pod CIDR of the controller). Never
+  #    0.0.0.0/0. Required when ingress is used.
+  PERFIN_TRUSTED_PROXIES: ""
+  PERFIN_REQUIRE_MFA: "true"
+  PERFIN_SECURE_COOKIES: "true"
+  PERFIN_LOCAL_LOGIN_ENABLED: "true"
+  # -- Break-glass login source networks (kubectl port-forward arrives from
+  #    127.0.0.1 inside the pod).
+  PERFIN_BREAKGLASS_CIDRS: 127.0.0.1/32
+  PERFIN_DB_APP_ROLE: perfin_app
+  PERFIN_MASTER_KEY_BACKUP_ACKNOWLEDGED: "false"
+  # -- The drop folder needs host directories; see dropfolder below.
+  PERFIN_DROPFOLDER_ENABLED: "false"
+  PERFIN_EXTRACT_REQUIRE_LANDLOCK: "true"
+  PERFIN_LOG_LEVEL: INFO
+
+# -----------------------------------------------------------------------------
+# Hardening shared by every PerFin pod (SECURITY.md H1). These are the
+# Kubernetes equivalents of the x-hardened block in docker-compose.yml; the
+# chart's unit test (backend/tests/unit/test_helm_chart.py) fails if they are
+# weakened in the defaults.
+podSecurityContext:
+  runAsNonRoot: true
+  runAsUser: 10001
+  runAsGroup: 10001
+  fsGroup: 10001
+  fsGroupChangePolicy: OnRootMismatch
+  seccompProfile:
+    type: RuntimeDefault
+
+containerSecurityContext:
+  allowPrivilegeEscalation: false
+  readOnlyRootFilesystem: true
+  privileged: false
+  runAsNonRoot: true
+  runAsUser: 10001
+  runAsGroup: 10001
+  capabilities:
+    drop: [ALL]
+  seccompProfile:
+    type: RuntimeDefault
+
+# -- Size of the in-memory /tmp scratch volume of the api, migrate and mcp pods.
+tmpSizeLimit: 128Mi
+
+serviceAccount:
+  # -- Create a ServiceAccount for the api, worker and mcp pods. The pods
+  #    never mount its token (PerFin does not talk to the Kubernetes API).
+  create: true
+  name: ""
+  annotations: {}
+
+# -- Extra labels on every pod.
+podLabels: {}
+# -- Extra annotations on every pod.
+podAnnotations: {}
+
+# -----------------------------------------------------------------------------
+api:
+  replicas: 1
+  resources:
+    requests: {cpu: 100m, memory: 256Mi}
+    limits: {cpu: "1", memory: 1Gi}
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
+  service:
+    type: ClusterIP
+    port: 8000
+
+worker:
+  replicas: 1
+  # -- Scratch for OCR and rendering in the extraction sandbox.
+  tmpSizeLimit: 1Gi
+  resources:
+    requests: {cpu: 100m, memory: 512Mi}
+    limits: {cpu: "2", memory: 2Gi}
+  nodeSelector: {}
+  tolerations: []
+  # -- Default: scheduled on the node running the api, because the documents
+  #    and quarantine volumes are ReadWriteOnce (see persistence).
+  affinity: {}
+
+migrate:
+  # -- Run `perfin migrate` as a Helm hook before every install and upgrade
+  #    (post-install when the bundled PostgreSQL is used, which does not exist
+  #    yet before install). The api reports not ready (/readyz) until the
+  #    database is at the migration head.
+  enabled: true
+  backoffLimit: 3
+  activeDeadlineSeconds: 900
+  resources:
+    requests: {cpu: 50m, memory: 128Mi}
+    limits: {cpu: "1", memory: 512Mi}
+
+# -----------------------------------------------------------------------------
+# Optional read-only MCP server for AI assistants (AI_ACCESS.md M7). It gets
+# no database URL, master key or secret key; only its own Secret.
+mcp:
+  enabled: false
+  # -- Existing Secret with PERFIN_MCP_TOKEN (the AI client's ai:read token)
+  #    and PERFIN_MCP_HTTP_TOKEN (bearer the assistant host sends, >= 32
+  #    characters). Required when mcp.enabled.
+  existingSecret: ""
+  # -- Explicit https origins allowed to call the HTTP transport. Required.
+  allowedOrigins: ""
+  ratePerMinute: 30
+  port: 8001
+  resources:
+    requests: {cpu: 50m, memory: 128Mi}
+    limits: {cpu: 500m, memory: 256Mi}
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
+
+# -----------------------------------------------------------------------------
+persistence:
+  # -- Encrypted document blobs (/var/lib/perfin/documents), shared by api
+  #    and worker. With ReadWriteOnce the worker is scheduled next to the api
+  #    (worker.affinity default); use ReadWriteMany to drop that constraint.
+  documents:
+    existingClaim: ""
+    size: 20Gi
+    storageClass: ""
+    accessModes: [ReadWriteOnce]
+  # -- Quarantine of uploaded files awaiting extraction.
+  quarantine:
+    existingClaim: ""
+    size: 5Gi
+    storageClass: ""
+    accessModes: [ReadWriteOnce]
+
+# -- Drop folder (INGESTION.md): an existing claim for the inbox (mounted
+#    read-only into the worker) and one for processed files. Set
+#    config.PERFIN_DROPFOLDER_ENABLED to "true" as well.
+dropfolder:
+  enabled: false
+  inboxClaim: ""
+  processedClaim: ""
+
+# -----------------------------------------------------------------------------
+# PostgreSQL. By default PerFin expects an external PostgreSQL 16 with the
+# roles deploy/db-init/10-perfin-roles.sh creates (owner and app role, no
+# superuser for the app). Optionally the chart runs a single PostgreSQL pod
+# itself (no third-party chart): same image, init scripts and hardening as
+# the Compose `db` service.
+postgresql:
+  enabled: false
+  image:
+    repository: docker.io/library/postgres
+    tag: 16-alpine
+    digest: ""
+    pullPolicy: IfNotPresent
+  # -- Existing Secret with POSTGRES_PASSWORD (bootstrap superuser, local
+  #    socket only), POSTGRES_OWNER_PASSWORD and POSTGRES_APP_PASSWORD; each
+  #    from `openssl rand -hex 32`. Required when postgresql.enabled. The URLs
+  #    in secrets.existingSecret must then use host <fullname>-db.
+  existingSecret: ""
+  database: perfin
+  ownerRole: perfin_owner
+  appRole: perfin_app
+  persistence:
+    size: 20Gi
+    storageClass: ""
+  resources:
+    requests: {cpu: 100m, memory: 256Mi}
+    limits: {cpu: "1", memory: 1Gi}
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
+
+# -- Where the external database is, for the NetworkPolicies (list of
+#    NetworkPolicy peers: ipBlock / namespaceSelector / podSelector). Required
+#    when postgresql.enabled is false and networkPolicy.enabled is true.
+#    Example: [{ipBlock: {cidr: 10.0.12.5/32}}]
+externalDatabase:
+  networkPeers: []
+  port: 5432
+
+# -----------------------------------------------------------------------------
+# NetworkPolicies mirroring the Compose network isolation (SECURITY.md H2):
+#   - every PerFin pod: deny all ingress and egress by default; DNS allowed;
+#   - api: ingress from the ingress controller (and mcp) on 8000; egress to
+#     the database and egressAllowlist.api;
+#   - worker: no ingress at all; egress to the database and
+#     egressAllowlist.worker only (default: nothing else);
+#   - mcp: ingress from the ingress controller on 8001; egress to the api and
+#     egressAllowlist.mcp only;
+#   - migrate: egress to the database only;
+#   - bundled db: ingress only from api, worker and migrate pods; no egress.
+# Requires a CNI that enforces NetworkPolicy (Calico, Cilium, ...).
+networkPolicy:
+  enabled: true
+  # -- Peers allowed to reach the api (and mcp) Services: your ingress
+  #    controller. Default matches ingress-nginx in namespace ingress-nginx.
+  #    Must not be empty: an empty peer list matches every source, so the
+  #    chart refuses it (as it refuses an empty dns.peers or an allowlist
+  #    rule without a non-empty `to`).
+  ingressFrom:
+    - namespaceSelector:
+        matchLabels:
+          kubernetes.io/metadata.name: ingress-nginx
+      podSelector:
+        matchLabels:
+          app.kubernetes.io/name: ingress-nginx
+  # -- DNS servers the pods may query.
+  dns:
+    peers:
+      - namespaceSelector:
+          matchLabels:
+            kubernetes.io/metadata.name: kube-system
+        podSelector:
+          matchLabels:
+            k8s-app: kube-dns
+  # -- Extra egress per role (NetworkPolicy egress rules: {to: [...], ports:
+  #    [...]}). Empty means no route out, like Compose without the egress
+  #    profile. Typical entries: the OIDC issuer for the api, the price feed,
+  #    IMAP or notification hosts for the worker, or an egress proxy
+  #    (set HTTPS_PROXY in config) for both.
+  egressAllowlist:
+    api: []
+    worker: []
+    mcp: []
+
+# -----------------------------------------------------------------------------
+ingress:
+  enabled: false
+  className: ""
+  annotations: {}
+  # -- Host name (must match PERFIN_PUBLIC_URL).
+  host: ""
+  # -- TLS secret for the host. TLS is required: PerFin sets Secure cookies.
+  tlsSecretName: ""
+  # -- Also route /mcp to the MCP server (needs mcp.enabled).
+  routeMcp: false

@@ -1,0 +1,193 @@
+{{- /* SPDX-License-Identifier: AGPL-3.0-or-later */ -}}
+{{- /*
+Optional single-instance PostgreSQL 16 (postgresql.enabled), equivalent to the
+Compose `db` service (SECURITY.md H3): runs as the image's postgres user
+(UID 70), read-only root filesystem, every capability dropped, SCRAM-SHA-256
+only, and the same deploy/db-init scripts (copied into files/db-init; the
+chart test checks the copies are identical) create the non-superuser owner
+and app roles and confine the bootstrap superuser to the local socket.
+Reachable only from the api, worker and migrate pods (networkpolicy.yaml).
+*/ -}}
+{{- if .Values.postgresql.enabled }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "perfin.fullname" . }}-db-init
+  labels:
+    {{- include "perfin.componentLabels" (dict "ctx" . "component" "db") | nindent 4 }}
+data:
+  {{- (.Files.Glob "files/db-init/*.sh").AsConfig | nindent 2 }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "perfin.fullname" . }}-db
+  labels:
+    {{- include "perfin.componentLabels" (dict "ctx" . "component" "db") | nindent 4 }}
+spec:
+  type: ClusterIP
+  selector:
+    {{- include "perfin.componentSelector" (dict "ctx" . "component" "db") | nindent 4 }}
+  ports:
+    - name: postgres
+      port: 5432
+      targetPort: postgres
+      protocol: TCP
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: {{ include "perfin.fullname" . }}-db
+  labels:
+    {{- include "perfin.componentLabels" (dict "ctx" . "component" "db") | nindent 4 }}
+spec:
+  serviceName: {{ include "perfin.fullname" . }}-db
+  replicas: 1
+  selector:
+    matchLabels:
+      {{- include "perfin.componentSelector" (dict "ctx" . "component" "db") | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "perfin.componentSelector" (dict "ctx" . "component" "db") | nindent 8 }}
+        {{- with .Values.podLabels }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      annotations:
+        checksum/db-init: {{ (.Files.Glob "files/db-init/*.sh").AsConfig | sha256sum }}
+    spec:
+      automountServiceAccountToken: false
+      enableServiceLinks: false
+      serviceAccountName: {{ include "perfin.serviceAccountName" . }}
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 70
+        runAsGroup: 70
+        fsGroup: 70
+        fsGroupChangePolicy: OnRootMismatch
+        seccompProfile:
+          type: RuntimeDefault
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      terminationGracePeriodSeconds: 60
+      containers:
+        - name: postgres
+          image: {{ include "perfin.postgresImage" . }}
+          imagePullPolicy: {{ .Values.postgresql.image.pullPolicy }}
+          args:
+            - postgres
+            - -c
+            - password_encryption=scram-sha-256
+            - -c
+            - listen_addresses=*
+            - -c
+            - log_connections=on
+            - -c
+            - log_disconnections=on
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            privileged: false
+            runAsNonRoot: true
+            runAsUser: 70
+            runAsGroup: 70
+            capabilities:
+              drop: [ALL]
+            seccompProfile:
+              type: RuntimeDefault
+          env:
+            - name: PGDATA
+              value: /var/lib/postgresql/data/pgdata
+            - name: POSTGRES_USER
+              value: postgres
+            - name: POSTGRES_DB
+              value: {{ .Values.postgresql.database | quote }}
+            - name: POSTGRES_INITDB_ARGS
+              value: "--auth-host=scram-sha-256 --auth-local=scram-sha-256"
+            - name: POSTGRES_HOST_AUTH_METHOD
+              value: scram-sha-256
+            - name: PERFIN_DB_OWNER_ROLE
+              value: {{ .Values.postgresql.ownerRole | quote }}
+            - name: PERFIN_DB_APP_ROLE
+              value: {{ .Values.postgresql.appRole | quote }}
+            {{- range $key := list "POSTGRES_PASSWORD" "POSTGRES_OWNER_PASSWORD" "POSTGRES_APP_PASSWORD" }}
+            - name: {{ $key }}
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $.Values.postgresql.existingSecret }}
+                  key: {{ $key }}
+            {{- end }}
+          ports:
+            - name: postgres
+              containerPort: 5432
+              protocol: TCP
+          readinessProbe:
+            exec:
+              command: ["pg_isready", "-U", "postgres", "-d", {{ .Values.postgresql.database | quote }}, "-h", "127.0.0.1"]
+            periodSeconds: 10
+            timeoutSeconds: 5
+          livenessProbe:
+            exec:
+              command: ["pg_isready", "-U", "postgres", "-d", {{ .Values.postgresql.database | quote }}, "-h", "127.0.0.1"]
+            initialDelaySeconds: 30
+            periodSeconds: 30
+            timeoutSeconds: 5
+          resources:
+            {{- toYaml .Values.postgresql.resources | nindent 12 }}
+          volumeMounts:
+            - name: data
+              mountPath: /var/lib/postgresql/data
+            - name: db-init
+              mountPath: /docker-entrypoint-initdb.d
+              readOnly: true
+            - name: run
+              mountPath: /var/run/postgresql
+            - name: tmp
+              mountPath: /tmp
+            - name: shm
+              mountPath: /dev/shm
+      volumes:
+        - name: db-init
+          configMap:
+            name: {{ include "perfin.fullname" . }}-db-init
+            defaultMode: 0555
+        - name: run
+          emptyDir:
+            medium: Memory
+            sizeLimit: 1Mi
+        - name: tmp
+          emptyDir:
+            medium: Memory
+            sizeLimit: 64Mi
+        - name: shm
+          emptyDir:
+            medium: Memory
+            sizeLimit: 128Mi
+      {{- with .Values.postgresql.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.postgresql.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.postgresql.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+        labels:
+          {{- include "perfin.componentSelector" (dict "ctx" . "component" "db") | nindent 10 }}
+      spec:
+        accessModes: [ReadWriteOnce]
+        {{- if .Values.postgresql.persistence.storageClass }}
+        storageClassName: {{ .Values.postgresql.persistence.storageClass | quote }}
+        {{- end }}
+        resources:
+          requests:
+            storage: {{ .Values.postgresql.persistence.size }}
+{{- end }}

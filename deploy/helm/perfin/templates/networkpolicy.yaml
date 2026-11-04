@@ -1,0 +1,150 @@
+{{- /* SPDX-License-Identifier: AGPL-3.0-or-later */ -}}
+{{- /*
+Kubernetes equivalent of the Compose network layout (SECURITY.md H2, see
+values.yaml networkPolicy). A default-deny policy covers every pod of the
+release; each role then gets exactly the connections it has in Compose.
+*/ -}}
+{{- if .Values.networkPolicy.enabled }}
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "perfin.fullname" . }}-default-deny
+  labels:
+    {{- include "perfin.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "perfin.selectorLabels" . | nindent 6 }}
+  policyTypes: [Ingress, Egress]
+---
+# api: from the ingress controller and the mcp server; to the database, DNS
+# and egressAllowlist.api (e.g. the OIDC issuer).
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "perfin.fullname" . }}-api
+  labels:
+    {{- include "perfin.componentLabels" (dict "ctx" . "component" "api") | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "perfin.componentSelector" (dict "ctx" . "component" "api") | nindent 6 }}
+  policyTypes: [Ingress, Egress]
+  ingress:
+    - from:
+        {{- with .Values.networkPolicy.ingressFrom }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+        {{- if .Values.mcp.enabled }}
+        - podSelector:
+            matchLabels:
+              {{- include "perfin.componentSelector" (dict "ctx" . "component" "mcp") | nindent 14 }}
+        {{- end }}
+      ports:
+        - protocol: TCP
+          port: 8000
+  egress:
+    {{- include "perfin.dnsEgress" . | nindent 4 }}
+    {{- include "perfin.dbEgress" . | nindent 4 }}
+    {{- with .Values.networkPolicy.egressAllowlist.api }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+---
+# worker: parses untrusted files. No ingress at all; to the database, DNS
+# and egressAllowlist.worker only.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "perfin.fullname" . }}-worker
+  labels:
+    {{- include "perfin.componentLabels" (dict "ctx" . "component" "worker") | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "perfin.componentSelector" (dict "ctx" . "component" "worker") | nindent 6 }}
+  policyTypes: [Ingress, Egress]
+  ingress: []
+  egress:
+    {{- include "perfin.dnsEgress" . | nindent 4 }}
+    {{- include "perfin.dbEgress" . | nindent 4 }}
+    {{- with .Values.networkPolicy.egressAllowlist.worker }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+---
+# migrate: to the database and DNS only.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "perfin.fullname" . }}-migrate
+  labels:
+    {{- include "perfin.componentLabels" (dict "ctx" . "component" "migrate") | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "perfin.componentSelector" (dict "ctx" . "component" "migrate") | nindent 6 }}
+  policyTypes: [Ingress, Egress]
+  ingress: []
+  egress:
+    {{- include "perfin.dnsEgress" . | nindent 4 }}
+    {{- include "perfin.dbEgress" . | nindent 4 }}
+{{- if .Values.mcp.enabled }}
+---
+# mcp (AI_ACCESS.md M7): from the ingress controller; to the api, DNS and
+# egressAllowlist.mcp only. Never to the database.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "perfin.fullname" . }}-mcp
+  labels:
+    {{- include "perfin.componentLabels" (dict "ctx" . "component" "mcp") | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "perfin.componentSelector" (dict "ctx" . "component" "mcp") | nindent 6 }}
+  policyTypes: [Ingress, Egress]
+  ingress:
+    - from:
+        {{- toYaml .Values.networkPolicy.ingressFrom | nindent 8 }}
+      ports:
+        - protocol: TCP
+          port: {{ .Values.mcp.port }}
+  egress:
+    {{- include "perfin.dnsEgress" . | nindent 4 }}
+    - to:
+        - podSelector:
+            matchLabels:
+              {{- include "perfin.componentSelector" (dict "ctx" . "component" "api") | nindent 14 }}
+      ports:
+        - protocol: TCP
+          port: 8000
+    {{- with .Values.networkPolicy.egressAllowlist.mcp }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+{{- end }}
+{{- if .Values.postgresql.enabled }}
+---
+# bundled db: only from api, worker and migrate; no egress at all.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "perfin.fullname" . }}-db
+  labels:
+    {{- include "perfin.componentLabels" (dict "ctx" . "component" "db") | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "perfin.componentSelector" (dict "ctx" . "component" "db") | nindent 6 }}
+  policyTypes: [Ingress, Egress]
+  ingress:
+    - from:
+        {{- range $c := list "api" "worker" "migrate" }}
+        - podSelector:
+            matchLabels:
+              {{- include "perfin.componentSelector" (dict "ctx" $ "component" $c) | nindent 14 }}
+        {{- end }}
+      ports:
+        - protocol: TCP
+          port: 5432
+  egress: []
+{{- end }}
+{{- end }}

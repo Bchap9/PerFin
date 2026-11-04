@@ -1,0 +1,117 @@
+{{- /* SPDX-License-Identifier: AGPL-3.0-or-later */ -}}
+{{- /*
+Optional read-only MCP server (AI_ACCESS.md M7). It never receives the
+application Secret or ConfigMap: `perfin mcp` refuses to start with a
+database URL, master key or secret key in its environment.
+*/ -}}
+{{- if .Values.mcp.enabled }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "perfin.fullname" . }}-mcp
+  labels:
+    {{- include "perfin.componentLabels" (dict "ctx" . "component" "mcp") | nindent 4 }}
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      {{- include "perfin.componentSelector" (dict "ctx" . "component" "mcp") | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "perfin.componentSelector" (dict "ctx" . "component" "mcp") | nindent 8 }}
+        {{- with .Values.podLabels }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      {{- with .Values.podAnnotations }}
+      annotations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+    spec:
+      serviceAccountName: {{ include "perfin.serviceAccountName" . }}
+      {{- include "perfin.podSecurity" . | nindent 6 }}
+      containers:
+        - name: mcp
+          image: {{ include "perfin.image" . }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          args: ["mcp"]
+          securityContext:
+            {{- toYaml .Values.containerSecurityContext | nindent 12 }}
+          env:
+            - name: PERFIN_ROLE
+              value: mcp
+            - name: PERFIN_MCP_ENABLED
+              value: "true"
+            - name: PERFIN_MCP_API_URL
+              value: {{ printf "http://%s-api:%v" (include "perfin.fullname" .) .Values.api.service.port | quote }}
+            - name: PERFIN_MCP_TRANSPORT
+              value: http
+            - name: PERFIN_MCP_HTTP_HOST
+              value: 0.0.0.0
+            - name: PERFIN_MCP_HTTP_PORT
+              value: {{ .Values.mcp.port | quote }}
+            - name: PERFIN_MCP_HTTP_ALLOWED_ORIGINS
+              value: {{ .Values.mcp.allowedOrigins | quote }}
+            - name: PERFIN_MCP_RATE_PER_MINUTE
+              value: {{ .Values.mcp.ratePerMinute | quote }}
+            - name: PERFIN_LOG_LEVEL
+              value: {{ default "INFO" .Values.config.PERFIN_LOG_LEVEL | quote }}
+            - name: PERFIN_MCP_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.mcp.existingSecret }}
+                  key: PERFIN_MCP_TOKEN
+            - name: PERFIN_MCP_HTTP_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.mcp.existingSecret }}
+                  key: PERFIN_MCP_HTTP_TOKEN
+          ports:
+            - name: mcp
+              containerPort: {{ .Values.mcp.port }}
+              protocol: TCP
+          readinessProbe:
+            tcpSocket: {port: mcp}
+            periodSeconds: 10
+          livenessProbe:
+            tcpSocket: {port: mcp}
+            periodSeconds: 30
+          resources:
+            {{- toYaml .Values.mcp.resources | nindent 12 }}
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: tmp
+          emptyDir:
+            medium: Memory
+            sizeLimit: 16Mi
+      {{- with .Values.mcp.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.mcp.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.mcp.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "perfin.fullname" . }}-mcp
+  labels:
+    {{- include "perfin.componentLabels" (dict "ctx" . "component" "mcp") | nindent 4 }}
+spec:
+  type: ClusterIP
+  selector:
+    {{- include "perfin.componentSelector" (dict "ctx" . "component" "mcp") | nindent 4 }}
+  ports:
+    - name: mcp
+      port: {{ .Values.mcp.port }}
+      targetPort: mcp
+      protocol: TCP
+{{- end }}
