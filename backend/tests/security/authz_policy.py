@@ -117,9 +117,52 @@ PARAM_KINDS: Final[Mapping[str, ParamKind]] = MappingProxyType(
         "own_session": ParamKind("own_session", "session-not-found"),
         "own_token": ParamKind("own_token", "token-not-found"),
         "own_webauthn": ParamKind("own_webauthn", "mfa-method-not-found"),
+        # Ledger objects of the matrix household (Phase 2). The generator
+        # grants the matrix member `edit` and the viewer `view` on the
+        # object's account, so the role columns of the policy decide.
+        "transaction": ParamKind("transaction", "transaction-not-found"),
+        "account": ParamKind("account", "account-not-found"),
+        "category": ParamKind("category", "category-not-found"),
+        "payee": ParamKind("payee", "payee-not-found"),
+        "tag": ParamKind("tag", "tag-not-found"),
+        # Budgets and goals (Phase 2). A goal is on an account granted to the
+        # matrix member (edit) and viewer (view); a contribution belongs to
+        # the goal built for the same path.
+        "budget": ParamKind("budget", "budget-not-found"),
+        "goal": ParamKind("goal", "goal-not-found"),
+        "goal_contribution": ParamKind("goal_contribution", "contribution-not-found"),
+        "rule": ParamKind("rule", "rule-not-found"),
+        # A run_rules job queued in the matrix household (GET /jobs/{id}).
+        "job": ParamKind("job", "job-not-found"),
+        # A document (with an extracted table) on an account granted to the
+        # matrix member (edit) and viewer (view).
+        "document": ParamKind("document", "document-not-found"),
+        # A CSV column mapping tied to an account granted to the matrix
+        # member (edit) and viewer (view).
+        "import_mapping": ParamKind("import_mapping", "import-mapping-not-found"),
+        # A processed document whose encrypted file really is in the matrix
+        # blob store (downloadable), on an account granted to the matrix
+        # member (edit) and viewer (view); a review item of such a document.
+        "stored_document": ParamKind("stored_document", "document-not-found"),
+        "review_item": ParamKind("review_item", "review-item-not-found"),
+        # Full export/import (docs/PORTABILITY.md): an archive belongs to the
+        # user who requested it, so the generator makes it the caller's (the
+        # victim's for outsiders); a ready export's bytes are really in the
+        # matrix blob store. The path names the archive's job id.
+        "export_archive": ParamKind("export_archive", "export-not-found"),
+        "import_archive": ParamKind("import_archive", "import-not-found"),
     }
 )
 OWN_KINDS: Final = frozenset(k for k in PARAM_KINDS if k.startswith("own_"))
+#: Objects that belong to the matrix household (not to one user): the owner
+#: of another household is handed one and must get its ``not_found``.
+HOUSEHOLD_OBJECT_KINDS: Final = frozenset(
+    {"transaction", "account", "category", "payee", "tag", "rule", "job"}
+    | {"budget", "goal", "goal_contribution"}
+    | {"document", "import_mapping"}
+    | {"stored_document", "review_item"}
+    | {"export_archive", "import_archive"}
+)
 
 
 @dataclass(frozen=True)
@@ -214,6 +257,21 @@ A = HouseholdRole.ADMIN
 O = HouseholdRole.OWNER  # noqa: E741 - mirrors the role names
 API = "/api/v1"
 HH = {"household_id": "household"}
+TXN = {"transaction_id": "transaction"}
+M = HouseholdRole.MEMBER
+ACCT = {"account_id": "account"}
+CAT = {"category_id": "category"}
+PAYEE = {"payee_id": "payee"}
+TAG = {"tag_id": "tag"}
+BUDGET = {"budget_id": "budget"}
+GOAL = {"goal_id": "goal"}
+RULE = {"rule_id": "rule"}
+DOC = {"document_id": "document"}
+IMAP = {"mapping_id": "import_mapping"}
+SDOC = {"document_id": "stored_document"}
+ITEM = {"item_id": "review_item"}
+#: A member's grants on one account (the path names a fresh member).
+GRANT = {**HH, "user_id": "member", "account_id": "account"}
 
 #: GET /auth/session is public (the SPA asks it who is logged in) but answers
 #: 401 to anything that is not a live principal.
@@ -312,6 +370,170 @@ POLICIES: Final[Mapping[str, Policy]] = MappingProxyType(
         f"DELETE {API}/households/{{household_id}}/members/{{user_id}}": session(
             role=A, step_up=True, params={**HH, "user_id": "member"}
         ),
+        # --- transactions (Phase 2; account grants applied by the service) --
+        f"GET {API}/transactions": scoped("transactions:read", role=V),
+        f"POST {API}/transactions": scoped("transactions:write", role=HouseholdRole.MEMBER),
+        f"POST {API}/transactions/bulk": scoped("transactions:write", role=HouseholdRole.MEMBER),
+        f"POST {API}/transactions/transfers/auto-pair": scoped(
+            "transactions:write", role=HouseholdRole.MEMBER
+        ),
+        f"GET {API}/transactions/{{transaction_id}}": scoped(
+            "transactions:read", role=V, params=TXN
+        ),
+        f"PATCH {API}/transactions/{{transaction_id}}": scoped(
+            "transactions:write", role=HouseholdRole.MEMBER, params=TXN
+        ),
+        f"DELETE {API}/transactions/{{transaction_id}}": scoped(
+            "transactions:write", role=HouseholdRole.MEMBER, params=TXN
+        ),
+        f"POST {API}/transactions/{{transaction_id}}/split": scoped(
+            "transactions:write", role=HouseholdRole.MEMBER, params=TXN
+        ),
+        f"GET {API}/transactions/{{transaction_id}}/transfer-candidates": scoped(
+            "transactions:read", role=HouseholdRole.MEMBER, params=TXN
+        ),
+        f"POST {API}/transactions/{{transaction_id}}/transfer": scoped(
+            "transactions:write", role=HouseholdRole.MEMBER, params=TXN
+        ),
+        f"DELETE {API}/transactions/{{transaction_id}}/transfer": scoped(
+            "transactions:write", role=HouseholdRole.MEMBER, params=TXN
+        ),
+        # --- accounts and balances (Phase 2; visibility applied by the service:
+        # the generator grants the member edit and the viewer view) ---------
+        f"GET {API}/accounts": scoped("accounts:read", role=V),
+        f"POST {API}/accounts": scoped("accounts:write", role=M),
+        f"GET {API}/accounts/{{account_id}}": scoped("accounts:read", role=V, params=ACCT),
+        f"PATCH {API}/accounts/{{account_id}}": scoped("accounts:write", role=M, params=ACCT),
+        f"DELETE {API}/accounts/{{account_id}}": scoped("accounts:write", role=A, params=ACCT),
+        f"POST {API}/accounts/{{account_id}}/close": scoped("accounts:write", role=M, params=ACCT),
+        f"POST {API}/accounts/{{account_id}}/reopen": scoped("accounts:write", role=M, params=ACCT),
+        f"GET {API}/accounts/{{account_id}}/balances": scoped("accounts:read", role=V, params=ACCT),
+        f"POST {API}/accounts/{{account_id}}/balances": scoped(
+            "accounts:write", role=M, params=ACCT
+        ),
+        # --- account grants -------------------------------------------------
+        f"GET {API}/accounts/{{account_id}}/grants": scoped("accounts:read", role=A, params=ACCT),
+        # Members and viewers read only their own grants; the path names
+        # another member, so they get 403 here.
+        f"GET {API}/households/{{household_id}}/members/{{user_id}}/grants": scoped(
+            "households:read", role=A, params={**HH, "user_id": "member"}
+        ),
+        f"PUT {API}/households/{{household_id}}/members/{{user_id}}/grants/{{account_id}}": session(
+            role=A, step_up=True, params=GRANT
+        ),
+        f"DELETE {API}/households/{{household_id}}/members/{{user_id}}/grants/{{account_id}}": (
+            session(role=A, step_up=True, params=GRANT)
+        ),
+        # --- categories, payees, tags (household-wide) ----------------------
+        f"GET {API}/categories": scoped("transactions:read", role=V),
+        f"POST {API}/categories": scoped("transactions:write", role=M),
+        f"GET {API}/categories/{{category_id}}": scoped("transactions:read", role=V, params=CAT),
+        f"PATCH {API}/categories/{{category_id}}": scoped("transactions:write", role=M, params=CAT),
+        f"DELETE {API}/categories/{{category_id}}": scoped(
+            "transactions:write", role=A, params=CAT
+        ),
+        f"POST {API}/categories/{{category_id}}/merge": scoped(
+            "transactions:write", role=A, params=CAT
+        ),
+        f"GET {API}/payees": scoped("transactions:read", role=V),
+        f"POST {API}/payees": scoped("transactions:write", role=M),
+        f"GET {API}/payees/{{payee_id}}": scoped("transactions:read", role=V, params=PAYEE),
+        f"PATCH {API}/payees/{{payee_id}}": scoped("transactions:write", role=M, params=PAYEE),
+        f"DELETE {API}/payees/{{payee_id}}": scoped("transactions:write", role=A, params=PAYEE),
+        f"POST {API}/payees/{{payee_id}}/merge": scoped("transactions:write", role=A, params=PAYEE),
+        f"GET {API}/tags": scoped("transactions:read", role=V),
+        f"POST {API}/tags": scoped("transactions:write", role=M),
+        f"GET {API}/tags/{{tag_id}}": scoped("transactions:read", role=V, params=TAG),
+        f"PATCH {API}/tags/{{tag_id}}": scoped("transactions:write", role=M, params=TAG),
+        f"DELETE {API}/tags/{{tag_id}}": scoped("transactions:write", role=A, params=TAG),
+        # --- rules (household-wide; they rewrite transactions on every account,
+        # so changing or applying them needs owner/admin; the dry run only
+        # reads the caller's visible accounts) ------------------------------
+        f"GET {API}/rules": scoped("transactions:read", role=V),
+        f"POST {API}/rules": scoped("transactions:write", role=A),
+        f"GET {API}/rules/export": scoped("transactions:read", role=V),
+        f"POST {API}/rules/import": scoped("transactions:write", role=A),
+        f"POST {API}/rules/reorder": scoped("transactions:write", role=A),
+        f"POST {API}/rules/test": scoped("transactions:read", role=V),
+        f"POST {API}/rules/apply": scoped("transactions:write", role=A),
+        f"GET {API}/rules/{{rule_id}}": scoped("transactions:read", role=V, params=RULE),
+        f"PATCH {API}/rules/{{rule_id}}": scoped("transactions:write", role=A, params=RULE),
+        f"DELETE {API}/rules/{{rule_id}}": scoped("transactions:write", role=A, params=RULE),
+        # --- full export and import (owner/admin, browser session; creating
+        # and downloading need step-up; outcomes only for the requester) -----
+        f"POST {API}/export": session(role=A, step_up=True),
+        f"GET {API}/export/{{job_id}}": session(role=A, params={"job_id": "export_archive"}),
+        f"GET {API}/export/{{job_id}}/download": session(
+            role=A, step_up=True, params={"job_id": "export_archive"}
+        ),
+        f"POST {API}/import": session(role=A, step_up=True),
+        f"GET {API}/import/{{job_id}}": session(role=A, params={"job_id": "import_archive"}),
+        # --- background jobs (state only; the token scope follows the job's
+        # family, transactions:read for the run_rules job the matrix builds) --
+        f"GET {API}/jobs/{{job_id}}": scoped("transactions:read", role=V, params={"job_id": "job"}),
+        # --- budgets and goals (Phase 2): household-wide plans; the report's
+        # actuals and the goals follow account visibility ------------------
+        f"GET {API}/budgets": scoped("budgets:read", role=V),
+        f"POST {API}/budgets": scoped("budgets:write", role=M),
+        f"GET {API}/budgets/{{budget_id}}": scoped("budgets:read", role=V, params=BUDGET),
+        f"PATCH {API}/budgets/{{budget_id}}": scoped("budgets:write", role=M, params=BUDGET),
+        f"DELETE {API}/budgets/{{budget_id}}": scoped("budgets:write", role=M, params=BUDGET),
+        f"GET {API}/budgets/{{budget_id}}/report": scoped("budgets:read", role=V, params=BUDGET),
+        f"GET {API}/goals": scoped("budgets:read", role=V),
+        f"POST {API}/goals": scoped("budgets:write", role=M),
+        f"GET {API}/goals/{{goal_id}}": scoped("budgets:read", role=V, params=GOAL),
+        f"PATCH {API}/goals/{{goal_id}}": scoped("budgets:write", role=M, params=GOAL),
+        f"DELETE {API}/goals/{{goal_id}}": scoped("budgets:write", role=M, params=GOAL),
+        f"GET {API}/goals/{{goal_id}}/contributions": scoped("budgets:read", role=V, params=GOAL),
+        f"POST {API}/goals/{{goal_id}}/contributions": scoped("budgets:write", role=M, params=GOAL),
+        f"DELETE {API}/goals/{{goal_id}}/contributions/{{contribution_id}}": scoped(
+            "budgets:write",
+            role=M,
+            params={**GOAL, "contribution_id": "goal_contribution"},
+        ),
+        # --- reports (any role; amounts from visible accounts only) ---------
+        f"GET {API}/reports/spending": scoped("transactions:read", role=V),
+        f"GET {API}/reports/income": scoped("transactions:read", role=V),
+        f"GET {API}/reports/trends": scoped("transactions:read", role=V),
+        f"GET {API}/reports/cashflow": scoped("transactions:read", role=V),
+        # --- documents (Phase 2): visibility follows the document's account;
+        # downloading needs member or above (I1: viewers only where the
+        # household allows it, 403 by default) -----------------------------
+        f"POST {API}/documents": scoped("documents:write", role=M),
+        f"GET {API}/documents": scoped("documents:read", role=V),
+        f"GET {API}/documents/{{document_id}}": scoped("documents:read", role=V, params=SDOC),
+        f"GET {API}/documents/{{document_id}}/download": scoped(
+            "documents:read", role=M, params=SDOC
+        ),
+        f"POST {API}/documents/{{document_id}}/reprocess": scoped(
+            "documents:write", role=M, params=SDOC
+        ),
+        f"POST {API}/documents/{{document_id}}/link": scoped(
+            "documents:write", role=M, params=SDOC
+        ),
+        f"DELETE {API}/documents/{{document_id}}": scoped("documents:write", role=M, params=SDOC),
+        # --- review queue (Phase 2): items of visible documents -------------
+        f"GET {API}/review": scoped("review:read", role=V),
+        f"GET {API}/review/{{item_id}}": scoped("review:read", role=V, params=ITEM),
+        f"POST {API}/review/{{item_id}}/resolve": scoped("review:write", role=M, params=ITEM),
+        f"POST {API}/review/{{item_id}}/dismiss": scoped("review:write", role=M, params=ITEM),
+        # --- live updates (SSE): browser sessions only, any role ------------
+        f"GET {API}/events": session(role=V),
+        # --- structured imports (Phase 2): mappings follow account visibility;
+        # the preview and re-run need the document --------------------------
+        f"GET {API}/imports/mappings": scoped("documents:read", role=V),
+        f"POST {API}/imports/mappings": scoped("documents:write", role=M),
+        f"GET {API}/imports/mappings/{{mapping_id}}": scoped("documents:read", role=V, params=IMAP),
+        f"PATCH {API}/imports/mappings/{{mapping_id}}": scoped(
+            "documents:write", role=M, params=IMAP
+        ),
+        f"DELETE {API}/imports/mappings/{{mapping_id}}": scoped(
+            "documents:write", role=M, params=IMAP
+        ),
+        f"GET {API}/imports/{{document_id}}/preview": scoped("documents:read", role=V, params=DOC),
+        f"POST {API}/imports/{{document_id}}/apply-mapping": scoped(
+            "documents:write", role=M, params=DOC
+        ),
         # --- user settings --------------------------------------------------
         f"GET {API}/settings/user": scoped("settings:read"),
         f"PATCH {API}/settings/user": session(),
@@ -372,9 +594,9 @@ def expected(policy: Policy, who: str) -> Outcome:
     if policy.step_up and who == "stale":
         return STEP_UP
     if who == "other_owner":
-        # Objects of the matrix household's owner, handed to an outsider.
+        # Objects of the matrix household (or its owner), handed to an outsider.
         for kind in policy.params.values():
-            if kind in OWN_KINDS:
+            if kind in OWN_KINDS or kind in HOUSEHOLD_OBJECT_KINDS:
                 return deny(404, str(PARAM_KINDS[kind].not_found))
     return ALLOWED
 

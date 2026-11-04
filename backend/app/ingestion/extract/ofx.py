@@ -9,7 +9,8 @@
   five predefined ones and numeric references, and any markup declaration
   (``<!DOCTYPE``, ``<!ENTITY``, ``<![CDATA[``...) refuses the file.
 * Both are turned into the same small tree and walked for bank
-  (``STMTRS``) and credit card (``CCSTMTRS``) statements: account type, the
+  (``STMTRS``) and credit card (``CCSTMTRS``) statements: the institution
+  (``FI/ORG``, used with the last four digits to match the account), account type, the
   **last four digits** of the account id (the full number never leaves the
   sandbox), currency, period, ledger and available balances, transactions
   (``FITID``, type, posted and user dates, amount, name/payee, memo, check
@@ -26,10 +27,10 @@ import re
 from collections.abc import Iterator
 from dataclasses import dataclass, field
 from datetime import date
-from typing import Final
-from xml.etree.ElementTree import Element, ParseError
+from typing import TYPE_CHECKING, Final
 
 from defusedxml import DefusedXmlException
+from defusedxml.ElementTree import ParseError
 from defusedxml.ElementTree import fromstring as defused_fromstring
 
 from app.ingestion.extract.common import (
@@ -48,6 +49,10 @@ from app.ingestion.sandbox.protocol import (
     Statement,
     StatementAccount,
 )
+
+if TYPE_CHECKING:
+    # Type only: parsing goes through defusedxml.
+    from xml.etree.ElementTree import Element  # nosec B405
 
 VERSION: Final = "ofx/1"
 MAX_DEPTH: Final = 64
@@ -240,7 +245,12 @@ def _transaction(node: Node, warnings: set[str]) -> ExtractedTransaction | None:
 
 
 def _statement(
-    node: Node, source_format: str, options: ExtractOptions, budget: list[int], warnings: set[str]
+    node: Node,
+    source_format: str,
+    options: ExtractOptions,
+    budget: list[int],
+    warnings: set[str],
+    institution: str | None = None,
 ) -> Statement:
     account_node = node.child("BANKACCTFROM") or node.child("CCACCTFROM")
     account_type = "creditcard" if node.name == "CCSTMTRS" else None
@@ -269,7 +279,10 @@ def _statement(
     return Statement(
         source_format="qfx" if source_format == "qfx" else "ofx",
         account=StatementAccount(
-            account_type=account_type, last4=last4(number), currency=_currency(node.text("CURDEF"))
+            account_type=account_type,
+            last4=last4(number),
+            currency=_currency(node.text("CURDEF")),
+            institution=institution,
         ),
         period_start=_date(tranlist.text("DTSTART")) if tranlist is not None else None,
         period_end=_date(tranlist.text("DTEND")) if tranlist is not None else None,
@@ -278,6 +291,15 @@ def _statement(
         transactions=transactions,
         truncated=truncated,
     )
+
+
+def _institution(root: Node) -> str | None:
+    """The ``SIGNONMSGSRSV1/SONRS/FI/ORG`` name (used to tell accounts apart)."""
+    for sonrs in root.iter("SONRS"):
+        fi = sonrs.child("FI")
+        if fi is not None:
+            return clean_text(fi.text("ORG"), limit=200)
+    return None
 
 
 def _parse(data: bytes) -> Node:
@@ -295,8 +317,9 @@ def extract_ofx(data: bytes, options: ExtractOptions, kind: str) -> ExtractResul
     root = _parse(data)
     warnings: set[str] = set()
     budget = [options.max_transactions]
+    institution = _institution(root)
     statements = [
-        _statement(node, kind, options, budget, warnings)
+        _statement(node, kind, options, budget, warnings, institution)
         for name in ("STMTRS", "CCSTMTRS")
         for node in root.iter(name)
     ]

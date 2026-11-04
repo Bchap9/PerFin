@@ -48,6 +48,27 @@ process, `RLIMIT_AS` and `RLIMIT_CPU`, wall-clock timeout, no network (the
 worker has none to begin with), read-only filesystem except a scratch tmpfs,
 seccomp profile. Output is text and structured tables only.
 
+Implementation (`app/ingestion/sandbox/`): the worker starts `python -I -B -m
+app.ingestion.sandbox.child '<job JSON>'` with an empty environment, a private
+temporary working directory, its own process group and the decrypted file on
+stdin. Before reading input the child sets `RLIMIT_AS` (default 1 GiB,
+`PERFIN_EXTRACT_MEMORY_MB`), `RLIMIT_CPU` (`PERFIN_EXTRACT_CPU_SECONDS`),
+`RLIMIT_NOFILE`, `RLIMIT_FSIZE` 0, `RLIMIT_NPROC` 0 and `RLIMIT_CORE` 0,
+`PR_SET_NO_NEW_PRIVS` and a seccomp filter, and refuses to run if any of that
+fails. The filter is **default-allow with a deny list** (`EPERM` for sockets,
+`execve`, `fork`/non-thread `clone`, signals to other processes, `ptrace`,
+mounts and namespaces, BPF, `io_uring`, keyrings, identity changes, ...): an
+allowlist was not chosen yet because CPython and the Phase 3 PDF/OCR
+libraries need a large, version-dependent syscall set; the container's
+`cap_drop: ALL`, read-only root and missing egress are the outer layers.
+When the worker runs as root, `PERFIN_EXTRACT_UID` makes the child switch to
+that UID. The parent kills the process group after
+`PERFIN_EXTRACT_TIMEOUT_SECONDS` or when stdout exceeds
+`PERFIN_EXTRACT_MAX_OUTPUT_MB`, and validates stdout against a strict
+Pydantic schema. Extractors are registered by kind
+(`app/ingestion/extract/registry.py`); Phase 2 ships CSV/TSV, OFX/QFX (SGML
+and XML) and QIF.
+
 - PDF: PyMuPDF (fitz) for text and layout; fall back to OCR (Tesseract via
   `ocrmypdf`/`pytesseract`) when the text layer is missing or looks like
   garbage. PDF JavaScript, embedded files and external links are never
@@ -120,6 +141,52 @@ a review item describing the discrepancy.
 - Rules engine runs on every new transaction for category, tags, renames,
   splits.
 
+Implementation for structured formats (Phase 2; `app/domain/imports/`,
+`app/ingestion/parsers/structured.py`, `app/ingestion/match/`): the worker's
+pipeline hands the validated sandbox output to the structured importer in the
+same database transaction.
+
+- **Account.** An OFX/QFX statement is matched by the last four digits of
+  `ACCTID` and, when several accounts share them, the institution (`FI/ORG`
+  compared with the account's institution name). A single-statement file
+  uploaded to an account uses that account; QIF (no account number) needs
+  one. Only accounts the uploader may **edit** are candidates (owner/admin:
+  all), so a member's file never lands in an account hidden from them. No
+  match, or several, is an `unknown_account` review item.
+- **CSV/TSV.** The header row's fingerprint (case, spacing and a
+  formula-guard quote ignored; for headerless files the shape of the first
+  row) is looked up in the household's saved `import_mapping`s, trying the
+  first rows so a preamble is found. No mapping is an `unparsed`
+  (`mapping_required`) item: the mapping editor reads the stored table
+  through `GET /imports/{document_id}/preview` (never re-parsed; it also
+  proposes a mapping from header names and cell shapes, deterministic, no
+  model) and saves it with `POST /imports/mappings`; `POST
+  /imports/{document_id}/apply-mapping` re-runs the import from the stored
+  extraction as the `imports.apply_mapping` job and resolves the items it
+  answered. The next file with the same header is imported without asking.
+  Mapped rows that do not parse (footers, totals) are skipped and listed in
+  a `low_confidence_field` item; a running-balance column gives the closing
+  balance and a reconciliation check (each balance = previous + amount;
+  mismatches are a `low_confidence_field` item).
+- **Dedupe.** `import_hash` exact matches are skipped (re-imports and
+  overlapping statements); an incoming row with no hash match but an
+  existing, unclaimed transaction on the same date with the same amount
+  (other payee spelling, or typed by hand) is imported as `review_state =
+  pending` with a `possible_duplicate` item naming the candidates.
+- **Commit.** New transactions carry `source_document_id`; the household's
+  rules run on them (categories from a QIF file are protected); QIF splits
+  that add up become `transaction_split`s; the closing balance becomes a
+  `statement` balance snapshot; a statement in another currency than its
+  account is not imported (`unknown_account`, `currency_mismatch`). The
+  worker queues the transfer matcher for the document afterwards. The
+  document is `processed` when nothing is open for it in the review queue,
+  `needs_review` otherwise. Audit rows (`transaction.import`,
+  `document.ingest`/`document.import`) and events (`transaction.created`,
+  `balance.updated`, `document.updated`) carry ids and counts only.
+- Synthetic statements for every format and several bank-like CSV layouts
+  come from `backend/tests/fixtures/synth_statements.py` (also
+  `scripts/synth/statements.py --out DIR`).
+
 ### 7. Commit
 Within one database transaction: write transactions/holdings/payments, link the
 document, update balance snapshots, move the blob from quarantine to permanent,
@@ -139,6 +206,23 @@ the alternatives considered. Resolutions feed back:
 - Confirm a duplicate -> both hashes recorded as equivalent.
 - Assign an owner/account for a drop-folder file -> remember the subfolder
   mapping.
+
+Phase 2 implementation (`app/domain/review/`, API.md "Review notes"): the
+queue lists items of documents the caller can see; resolutions are typed
+per kind. `possible_duplicate`: a byte-identical file is confirmed
+(`rejected`, it stays in quarantine) or released into the pipeline; a near
+match of an imported row is confirmed (the row is deleted and its
+`import_hash` kept for the surviving transaction: on that row when it has
+none, else as an `import_hash_alias`) or kept (`confirmed`).
+`unknown_account`: the chosen account (one the person edits) gets the
+document and the stored extraction is imported again
+(`imports.apply_mapping`); "remember" saves the statement's last four digits
+on the account, or the account on the CSV mapping. `unparsed`: reprocess,
+or re-import with a column mapping saved in the mapping editor. Closing the
+last open item of an accepted document marks it `processed`. Upload and
+download (`POST /documents` streams the multipart body straight into the
+encrypting writer; downloads are attachments of the sniffed type, never
+from quarantine) are in API.md "Documents notes".
 
 ## Drop folder specifics
 

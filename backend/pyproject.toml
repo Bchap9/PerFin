@@ -49,6 +49,7 @@ dev = [
     "pip-audit",
     "types-pyyaml",
     "types-defusedxml",
+    "pytest-xdist>=3.8.0",
 ]
 
 [build-system]

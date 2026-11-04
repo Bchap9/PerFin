@@ -29,6 +29,7 @@ from __future__ import annotations
 import hashlib
 import uuid
 from collections.abc import Iterable, Iterator
+from dataclasses import dataclass
 from typing import Any, BinaryIO, Final
 
 from sqlalchemy.orm import Session
@@ -42,7 +43,7 @@ from app.core.ids import uuid7
 from app.core.logging import get_logger
 from app.domain.accounts.visibility import get_visible_account
 from app.domain.documents import service
-from app.domain.documents.blobstore import BlobStore, EncryptingWriter
+from app.domain.documents.blobstore import BlobStore, EncryptingWriter, SealedBlob
 from app.domain.documents.models import DocumentSource
 from app.ingestion.intake.sniff import SNIFF_BYTES, FileType, Rejected, RejectReason, sniff
 
@@ -99,22 +100,29 @@ def _read_head(chunks: Iterator[bytes], max_bytes: int) -> bytes:
     return bytes(head)
 
 
-def receive_stream(
-    db: Session,
+@dataclass(frozen=True)
+class StoredUpload:
+    """A file sniffed, hashed and encrypted into the quarantine area (not yet recorded)."""
+
+    sealed: SealedBlob
+    sha256: str
+    file_type: FileType
+
+
+def store_stream(
     *,
     store: BlobStore,
     keyring: Keyring,
-    household_id: uuid.UUID,
     chunks: Iterable[bytes],
     max_bytes: int,
-    source: DocumentSource,
-    source_meta: dict[str, Any] | None = None,
-    original_filename: str | None = None,
-    uploaded_by: uuid.UUID | None = None,
-    account_id: uuid.UUID | None = None,
-    request: HTTPConnection | None = None,
-) -> service.ReceivedDocument:
-    """Sniff, hash, encrypt into quarantine and record a received file (module doc)."""
+) -> StoredUpload:
+    """Steps 1-4 of the module doc: sniff, hash and encrypt into quarantine.
+
+    Nothing is written to the database. The caller records the object with
+    :func:`record_stored` or deletes it (``store.delete(sealed.area,
+    sealed.key)``); the upload route uses the digest to check an
+    ``Idempotency-Key`` before recording.
+    """
     stream = iter(chunks)
     head = _read_head(stream, max_bytes)
     verdict = sniff(head)
@@ -132,13 +140,30 @@ def receive_stream(
             digest.update(chunk)
             writer.write(chunk)
         sealed = writer.finish()
+    return StoredUpload(sealed, digest.hexdigest(), file_type)
+
+
+def record_stored(
+    db: Session,
+    stored: StoredUpload,
+    *,
+    store: BlobStore,
+    household_id: uuid.UUID,
+    source: DocumentSource,
+    source_meta: dict[str, Any] | None = None,
+    original_filename: str | None = None,
+    uploaded_by: uuid.UUID | None = None,
+    account_id: uuid.UUID | None = None,
+    request: HTTPConnection | None = None,
+) -> service.ReceivedDocument:
+    """Step 5: record a stored object (the object is deleted if recording fails)."""
     try:
         return service.record_received(
             db,
             household_id=household_id,
-            sealed=sealed,
-            sha256=digest.hexdigest(),
-            mime_detected=str(file_type),
+            sealed=stored.sealed,
+            sha256=stored.sha256,
+            mime_detected=str(stored.file_type),
             source=source,
             source_meta=source_meta,
             original_filename=original_filename,
@@ -147,8 +172,39 @@ def receive_stream(
             request=request,
         )
     except BaseException:
-        store.delete(sealed.area, sealed.key)
+        store.delete(stored.sealed.area, stored.sealed.key)
         raise
+
+
+def receive_stream(
+    db: Session,
+    *,
+    store: BlobStore,
+    keyring: Keyring,
+    household_id: uuid.UUID,
+    chunks: Iterable[bytes],
+    max_bytes: int,
+    source: DocumentSource,
+    source_meta: dict[str, Any] | None = None,
+    original_filename: str | None = None,
+    uploaded_by: uuid.UUID | None = None,
+    account_id: uuid.UUID | None = None,
+    request: HTTPConnection | None = None,
+) -> service.ReceivedDocument:
+    """Sniff, hash, encrypt into quarantine and record a received file (module doc)."""
+    stored = store_stream(store=store, keyring=keyring, chunks=chunks, max_bytes=max_bytes)
+    return record_stored(
+        db,
+        stored,
+        store=store,
+        household_id=household_id,
+        source=source,
+        source_meta=source_meta,
+        original_filename=original_filename,
+        uploaded_by=uploaded_by,
+        account_id=account_id,
+        request=request,
+    )
 
 
 def receive_upload(

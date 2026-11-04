@@ -23,7 +23,9 @@ class SynthTxn:
     fitid: str
 
 
-def synth_transactions(count: int = 5, *, seed: int = 7, start: date | None = None) -> list[SynthTxn]:
+def synth_transactions(
+    count: int = 5, *, seed: int = 7, start: date | None = None
+) -> list[SynthTxn]:
     rng = random.Random(seed)
     day = start or date(2026, 1, 3)
     out = []
@@ -134,9 +136,7 @@ def qif_bytes(txns: list[SynthTxn], *, date_style: str = "mdy", kind: str = "Ban
     return ("\n".join(lines) + "\n").encode("utf-8")
 
 
-XXE_PROLOG = (
-    '<!DOCTYPE OFX [<!ENTITY xxe SYSTEM "file:///etc/passwd">]>\n'
-)
+XXE_PROLOG = '<!DOCTYPE OFX [<!ENTITY xxe SYSTEM "file:///etc/passwd">]>\n'
 BILLION_LAUGHS_PROLOG = (
     "<!DOCTYPE lolz [\n"
     '<!ENTITY lol "lol">\n'

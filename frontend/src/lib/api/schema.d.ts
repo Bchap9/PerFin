@@ -4,6 +4,112 @@
  */
 
 export interface paths {
+    "/api/v1/accounts": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Accounts I can see */
+        get: operations["get_accounts_api_v1_accounts_get"];
+        put?: never;
+        /** Create an account (member or above) */
+        post: operations["post_account_api_v1_accounts_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/accounts/{account_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** One account */
+        get: operations["get_account_api_v1_accounts__account_id__get"];
+        put?: never;
+        post?: never;
+        /** Delete an account and everything on it (owner/admin) */
+        delete: operations["delete_account_api_v1_accounts__account_id__delete"];
+        options?: never;
+        head?: never;
+        /** Change an account (edit access) */
+        patch: operations["patch_account_api_v1_accounts__account_id__patch"];
+        trace?: never;
+    };
+    "/api/v1/accounts/{account_id}/balances": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** End-of-day balance history */
+        get: operations["get_account_balances_api_v1_accounts__account_id__balances_get"];
+        put?: never;
+        /** Record a manual balance (edit access) */
+        post: operations["post_account_balance_api_v1_accounts__account_id__balances_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/accounts/{account_id}/close": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Close an account (edit access) */
+        post: operations["post_account_close_api_v1_accounts__account_id__close_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/accounts/{account_id}/grants": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Who has a grant on this account (owner/admin) */
+        get: operations["get_account_grants_api_v1_accounts__account_id__grants_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/accounts/{account_id}/reopen": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Reopen a closed account (edit access) */
+        post: operations["post_account_reopen_api_v1_accounts__account_id__reopen_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/admin/users": {
         parameters: {
             query?: never;
@@ -556,6 +662,341 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/budgets": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Budgets of the household */
+        get: operations["get_budgets_api_v1_budgets_get"];
+        put?: never;
+        /** Create a budget (member or above) */
+        post: operations["post_budget_api_v1_budgets_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/budgets/{budget_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** One budget */
+        get: operations["get_budget_api_v1_budgets__budget_id__get"];
+        put?: never;
+        post?: never;
+        /** Delete a budget (member or above) */
+        delete: operations["delete_budget_api_v1_budgets__budget_id__delete"];
+        options?: never;
+        head?: never;
+        /** Change a budget; lines replace the whole set (member or above) */
+        patch: operations["patch_budget_api_v1_budgets__budget_id__patch"];
+        trace?: never;
+    };
+    "/api/v1/budgets/{budget_id}/report": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Budgeted vs actual vs forecast for one period */
+        get: operations["get_budget_report_api_v1_budgets__budget_id__report_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/categories": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Categories of the household */
+        get: operations["get_categories_api_v1_categories_get"];
+        put?: never;
+        /** Create a category (member or above) */
+        post: operations["post_category_api_v1_categories_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/categories/{category_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** One category */
+        get: operations["get_category_api_v1_categories__category_id__get"];
+        put?: never;
+        post?: never;
+        /** Delete a category without subcategories (owner/admin) */
+        delete: operations["delete_category_api_v1_categories__category_id__delete"];
+        options?: never;
+        head?: never;
+        /** Rename, move or re-kind a category (member or above) */
+        patch: operations["patch_category_api_v1_categories__category_id__patch"];
+        trace?: never;
+    };
+    "/api/v1/categories/{category_id}/merge": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Merge a category into another (owner/admin) */
+        post: operations["post_category_merge_api_v1_categories__category_id__merge_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/documents": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Documents */
+        get: operations["get_documents_api_v1_documents_get"];
+        put?: never;
+        /** Upload a document (multipart, streamed into encrypted quarantine) */
+        post: operations["post_document_api_v1_documents_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/documents/{document_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** One document (metadata only) */
+        get: operations["get_document_api_v1_documents__document_id__get"];
+        put?: never;
+        post?: never;
+        /** Delete a document (its key is destroyed first) */
+        delete: operations["delete_document_api_v1_documents__document_id__delete"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/documents/{document_id}/download": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Download the original (member or above; decrypted as it streams) */
+        get: operations["download_document_api_v1_documents__document_id__download_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/documents/{document_id}/link": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Attach a document to a transaction or account */
+        post: operations["post_link_api_v1_documents__document_id__link_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/documents/{document_id}/reprocess": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Run the import pipeline again */
+        post: operations["post_reprocess_api_v1_documents__document_id__reprocess_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/events": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Live updates (Server-Sent Events; browser sessions) */
+        get: operations["get_events_api_v1_events_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/export": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Request a full export (job; owner/admin, step-up) */
+        post: operations["post_export_api_v1_export_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/export/{job_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** State of one of my exports */
+        get: operations["get_export_api_v1_export__job_id__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/export/{job_id}/download": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Download an export once (owner/admin, step-up; decrypted as it streams) */
+        get: operations["download_export_api_v1_export__job_id__download_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/goals": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Savings goals I can see */
+        get: operations["get_goals_api_v1_goals_get"];
+        put?: never;
+        /** Create a savings goal (member or above) */
+        post: operations["post_goal_api_v1_goals_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/goals/{goal_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** One goal */
+        get: operations["get_goal_api_v1_goals__goal_id__get"];
+        put?: never;
+        post?: never;
+        /** Delete a goal and its contributions (member or above) */
+        delete: operations["delete_goal_api_v1_goals__goal_id__delete"];
+        options?: never;
+        head?: never;
+        /** Change a goal (member or above) */
+        patch: operations["patch_goal_api_v1_goals__goal_id__patch"];
+        trace?: never;
+    };
+    "/api/v1/goals/{goal_id}/contributions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Contributions to a goal */
+        get: operations["get_contributions_api_v1_goals__goal_id__contributions_get"];
+        put?: never;
+        /** Add a contribution (member or above) */
+        post: operations["post_contribution_api_v1_goals__goal_id__contributions_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/goals/{goal_id}/contributions/{contribution_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /** Remove a contribution (member or above) */
+        delete: operations["delete_contribution_api_v1_goals__goal_id__contributions__contribution_id__delete"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/households": {
         parameters: {
             query?: never;
@@ -629,6 +1070,475 @@ export interface paths {
         patch: operations["patch_member_api_v1_households__household_id__members__user_id__patch"];
         trace?: never;
     };
+    "/api/v1/households/{household_id}/members/{user_id}/grants": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** A member's account grants (owner/admin, or one's own) */
+        get: operations["get_member_grants_api_v1_households__household_id__members__user_id__grants_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/households/{household_id}/members/{user_id}/grants/{account_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /** Set a member's access to an account (owner/admin, step-up) */
+        put: operations["put_member_grant_api_v1_households__household_id__members__user_id__grants__account_id__put"];
+        post?: never;
+        /** Remove a member's grant on an account (owner/admin, step-up) */
+        delete: operations["delete_member_grant_api_v1_households__household_id__members__user_id__grants__account_id__delete"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/import": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Import a full export into this household (job; owner/admin, step-up) */
+        post: operations["post_import_api_v1_import_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/import/{job_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** State and outcome of one of my imports */
+        get: operations["get_import_api_v1_import__job_id__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/imports/mappings": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Saved column mappings I can see */
+        get: operations["get_mappings_api_v1_imports_mappings_get"];
+        put?: never;
+        /** Save a column mapping (member or above) */
+        post: operations["post_mapping_api_v1_imports_mappings_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/imports/mappings/{mapping_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** One column mapping */
+        get: operations["get_mapping_api_v1_imports_mappings__mapping_id__get"];
+        put?: never;
+        post?: never;
+        /** Delete a column mapping (member or above) */
+        delete: operations["delete_mapping_api_v1_imports_mappings__mapping_id__delete"];
+        options?: never;
+        head?: never;
+        /** Change a column mapping (member or above) */
+        patch: operations["patch_mapping_api_v1_imports_mappings__mapping_id__patch"];
+        trace?: never;
+    };
+    "/api/v1/imports/{document_id}/apply-mapping": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Re-run a document's import with a mapping and/or account (job) */
+        post: operations["post_apply_mapping_api_v1_imports__document_id__apply_mapping_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/imports/{document_id}/preview": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Extracted rows of a document, for the mapping editor */
+        get: operations["get_preview_api_v1_imports__document_id__preview_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/jobs/{job_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Job status */
+        get: operations["get_job_api_v1_jobs__job_id__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/payees": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Payees of the household */
+        get: operations["get_payees_api_v1_payees_get"];
+        put?: never;
+        /** Create a payee (member or above) */
+        post: operations["post_payee_api_v1_payees_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/payees/{payee_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** One payee */
+        get: operations["get_payee_api_v1_payees__payee_id__get"];
+        put?: never;
+        post?: never;
+        /** Delete a payee (owner/admin) */
+        delete: operations["delete_payee_api_v1_payees__payee_id__delete"];
+        options?: never;
+        head?: never;
+        /** Change a payee (member or above) */
+        patch: operations["patch_payee_api_v1_payees__payee_id__patch"];
+        trace?: never;
+    };
+    "/api/v1/payees/{payee_id}/merge": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Merge a payee into another (owner/admin) */
+        post: operations["post_payee_merge_api_v1_payees__payee_id__merge_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/reports/cashflow": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Money in, money out and net per month */
+        get: operations["get_cashflow_api_v1_reports_cashflow_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/reports/income": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Income by category, payee, month or account */
+        get: operations["get_income_api_v1_reports_income_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/reports/spending": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Spending by category, payee, month or account */
+        get: operations["get_spending_api_v1_reports_spending_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/reports/trends": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Month-on-month and year-on-year trends */
+        get: operations["get_trends_api_v1_reports_trends_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/review": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Review queue */
+        get: operations["get_review_api_v1_review_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/review/{item_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Review item */
+        get: operations["get_review_item_api_v1_review__item_id__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/review/{item_id}/dismiss": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Dismiss a review item */
+        post: operations["post_dismiss_api_v1_review__item_id__dismiss_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/review/{item_id}/resolve": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Resolve a review item */
+        post: operations["post_resolve_api_v1_review__item_id__resolve_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/rules": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Rules in evaluation order */
+        get: operations["get_rules_api_v1_rules_get"];
+        put?: never;
+        /** Create a rule (owner/admin); it runs after the existing ones */
+        post: operations["post_rule_api_v1_rules_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/rules/apply": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Re-run the rules over existing transactions as a job (owner/admin) */
+        post: operations["post_rules_apply_api_v1_rules_apply_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/rules/export": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** All rules as a portable JSON document */
+        get: operations["get_rules_export_api_v1_rules_export_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/rules/import": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Import rules from an export document (owner/admin) */
+        post: operations["post_rules_import_api_v1_rules_import_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/rules/reorder": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Set the evaluation order (owner/admin) */
+        post: operations["post_rules_reorder_api_v1_rules_reorder_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/rules/test": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Dry-run rules against history (writes nothing) */
+        post: operations["post_rules_test_api_v1_rules_test_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/rules/{rule_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** One rule */
+        get: operations["get_rule_api_v1_rules__rule_id__get"];
+        put?: never;
+        post?: never;
+        /** Delete a rule (owner/admin) */
+        delete: operations["delete_rule_api_v1_rules__rule_id__delete"];
+        options?: never;
+        head?: never;
+        /** Change a rule (owner/admin) */
+        patch: operations["patch_rule_api_v1_rules__rule_id__patch"];
+        trace?: never;
+    };
     "/api/v1/settings/user": {
         parameters: {
             query?: never;
@@ -681,6 +1591,166 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/tags": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Tags of the household */
+        get: operations["get_tags_api_v1_tags_get"];
+        put?: never;
+        /** Create a tag (member or above) */
+        post: operations["post_tag_api_v1_tags_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/tags/{tag_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** One tag */
+        get: operations["get_tag_api_v1_tags__tag_id__get"];
+        put?: never;
+        post?: never;
+        /** Delete a tag (owner/admin) */
+        delete: operations["delete_tag_api_v1_tags__tag_id__delete"];
+        options?: never;
+        head?: never;
+        /** Rename a tag */
+        patch: operations["patch_tag_api_v1_tags__tag_id__patch"];
+        trace?: never;
+    };
+    "/api/v1/transactions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List transactions (filters, cursor pagination) */
+        get: operations["list_transactions_api_v1_transactions_get"];
+        put?: never;
+        /** Create a manual transaction */
+        post: operations["post_transaction_api_v1_transactions_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/transactions/bulk": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Categorise, tag, untag, delete or confirm many transactions */
+        post: operations["post_bulk_api_v1_transactions_bulk_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/transactions/transfers/auto-pair": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Pair unlinked transfers among the accounts I may edit */
+        post: operations["post_auto_pair_api_v1_transactions_transfers_auto_pair_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/transactions/{transaction_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** One transaction */
+        get: operations["get_transaction_api_v1_transactions__transaction_id__get"];
+        put?: never;
+        post?: never;
+        /** Delete a transaction (the audit trail keeps it) */
+        delete: operations["delete_transaction_api_v1_transactions__transaction_id__delete"];
+        options?: never;
+        head?: never;
+        /** Change a transaction */
+        patch: operations["patch_transaction_api_v1_transactions__transaction_id__patch"];
+        trace?: never;
+    };
+    "/api/v1/transactions/{transaction_id}/split": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Replace a transaction's splits (they must add up to its amount) */
+        post: operations["post_split_api_v1_transactions__transaction_id__split_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/transactions/{transaction_id}/transfer": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Link this transaction and another as one transfer */
+        post: operations["post_transfer_api_v1_transactions__transaction_id__transfer_post"];
+        /** Unlink the transfer this transaction belongs to */
+        delete: operations["delete_transfer_api_v1_transactions__transaction_id__transfer_delete"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/transactions/{transaction_id}/transfer-candidates": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Transactions that could be the other leg of this transfer */
+        get: operations["get_transfer_candidates_api_v1_transactions__transaction_id__transfer_candidates_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
@@ -694,6 +1764,187 @@ export interface components {
              */
             status: "accepted";
         };
+        /**
+         * AccountClose
+         * @description ``POST /accounts/{id}/close``: the closing date (default today).
+         */
+        AccountClose: {
+            /** Closed On */
+            closed_on?: string | null;
+        };
+        /** AccountCondition */
+        AccountCondition: {
+            /** Account Ids */
+            account_ids: string[];
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            type: "account";
+        };
+        /**
+         * AccountCreate
+         * @description ``POST /accounts``.
+         *
+         *     ``currency`` defaults to the household's base currency; ``is_asset`` and
+         *     ``manual_balance`` default from ``type``. ``asset_kind`` is required for
+         *     (and only for) ``manual_asset``. ``opening_balance`` records a manual
+         *     balance snapshot on ``opening_balance_date`` (default ``opened_on``, else
+         *     today); its currency must be the account's.
+         */
+        AccountCreate: {
+            asset_kind?: components["schemas"]["AssetKind"] | null;
+            /** Currency */
+            currency?: string | null;
+            /**
+             * Include In Net Worth
+             * @default true
+             */
+            include_in_net_worth: boolean;
+            /** Institution Id */
+            institution_id?: string | null;
+            /** Is Asset */
+            is_asset?: boolean | null;
+            /** Manual Balance */
+            manual_balance?: boolean | null;
+            /** Name */
+            name: string;
+            /** Nickname */
+            nickname?: string | null;
+            /** Number Last4 */
+            number_last4?: string | null;
+            /** Opened On */
+            opened_on?: string | null;
+            opening_balance?: components["schemas"]["MoneyIn"] | null;
+            /** Opening Balance Date */
+            opening_balance_date?: string | null;
+            type: components["schemas"]["AccountType"];
+        };
+        /**
+         * AccountGrantLevelSet
+         * @description ``PUT /households/{id}/members/{user_id}/grants/{account_id}``.
+         */
+        AccountGrantLevelSet: {
+            level: components["schemas"]["GrantLevel"];
+        };
+        /** AccountGrantOut */
+        AccountGrantOut: {
+            /**
+             * Account Id
+             * Format: uuid
+             */
+            account_id: string;
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            level: components["schemas"]["GrantLevel"];
+            /**
+             * Updated At
+             * Format: date-time
+             */
+            updated_at: string;
+            /**
+             * User Id
+             * Format: uuid
+             */
+            user_id: string;
+        };
+        /** AccountOut */
+        AccountOut: {
+            asset_kind: components["schemas"]["AssetKind"] | null;
+            balance: components["schemas"]["Money"];
+            /**
+             * Balance Date
+             * Format: date
+             */
+            balance_date: string;
+            /** Can Edit */
+            can_edit: boolean;
+            /** Closed On */
+            closed_on: string | null;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /** Currency */
+            currency: string;
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /** Include In Net Worth */
+            include_in_net_worth: boolean;
+            /** Institution Id */
+            institution_id: string | null;
+            /** Is Asset */
+            is_asset: boolean;
+            /** Is Closed */
+            is_closed: boolean;
+            /** Manual Balance */
+            manual_balance: boolean;
+            /** Name */
+            name: string;
+            /** Nickname */
+            nickname: string | null;
+            /** Number Last4 */
+            number_last4: string | null;
+            /** Opened On */
+            opened_on: string | null;
+            type: components["schemas"]["AccountType"];
+            /**
+             * Updated At
+             * Format: date-time
+             */
+            updated_at: string;
+        };
+        /** AccountPage */
+        AccountPage: {
+            /** Items */
+            items: components["schemas"]["AccountOut"][];
+            /** Next Cursor */
+            next_cursor: string | null;
+        };
+        /**
+         * AccountType
+         * @enum {string}
+         */
+        AccountType: "checking" | "savings" | "credit_card" | "cash" | "brokerage" | "retirement" | "loan" | "mortgage" | "line_of_credit" | "manual_asset" | "manual_liability";
+        /**
+         * AccountUpdate
+         * @description ``PATCH /accounts/{id}``: only the fields given change.
+         *
+         *     ``null`` clears ``nickname``, ``institution_id``, ``number_last4`` and
+         *     ``opened_on``. Changing ``type`` resets ``is_asset``/``manual_balance`` to
+         *     the new type's defaults unless they are given too. ``currency`` can only
+         *     change while the account has no transactions, balances or schedules.
+         *     Closing and reopening have their own endpoints.
+         */
+        AccountUpdate: {
+            asset_kind?: components["schemas"]["AssetKind"] | null;
+            /** Currency */
+            currency?: string | null;
+            /** Include In Net Worth */
+            include_in_net_worth?: boolean | null;
+            /** Institution Id */
+            institution_id?: string | null;
+            /** Is Asset */
+            is_asset?: boolean | null;
+            /** Manual Balance */
+            manual_balance?: boolean | null;
+            /** Name */
+            name?: string | null;
+            /** Nickname */
+            nickname?: string | null;
+            /** Number Last4 */
+            number_last4?: string | null;
+            /** Opened On */
+            opened_on?: string | null;
+            type?: components["schemas"]["AccountType"] | null;
+        };
         /** ActiveHouseholdOut */
         ActiveHouseholdOut: {
             /**
@@ -704,6 +1955,16 @@ export interface components {
             /** Name */
             name: string;
             role: components["schemas"]["HouseholdRole"];
+        };
+        /** AddTagsAction */
+        AddTagsAction: {
+            /** Tag Ids */
+            tag_ids: string[];
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            type: "add_tags";
         };
         /**
          * AdminUserCreate
@@ -775,10 +2036,880 @@ export interface components {
             /** Is Breakglass */
             is_breakglass?: boolean | null;
         };
+        /** AllCondition */
+        "AllCondition-Input": {
+            /** Conditions */
+            conditions?: (components["schemas"]["PayeeCondition"] | components["schemas"]["MemoCondition"] | components["schemas"]["PayeeIsCondition"] | components["schemas"]["AmountCondition-Input"] | components["schemas"]["SignCondition"] | components["schemas"]["AccountCondition"] | components["schemas"]["CurrencyCondition"] | components["schemas"]["DateCondition"] | components["schemas"]["CategoryIsCondition"] | components["schemas"]["CategoryUnsetCondition"] | components["schemas"]["AllCondition-Input"] | components["schemas"]["AnyCondition-Input"] | components["schemas"]["NotCondition-Input"])[];
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            type: "all";
+        };
+        /** AllCondition */
+        "AllCondition-Output": {
+            /** Conditions */
+            conditions?: (components["schemas"]["PayeeCondition"] | components["schemas"]["MemoCondition"] | components["schemas"]["PayeeIsCondition"] | components["schemas"]["AmountCondition-Output"] | components["schemas"]["SignCondition"] | components["schemas"]["AccountCondition"] | components["schemas"]["CurrencyCondition"] | components["schemas"]["DateCondition"] | components["schemas"]["CategoryIsCondition"] | components["schemas"]["CategoryUnsetCondition"] | components["schemas"]["AllCondition-Output"] | components["schemas"]["AnyCondition-Output"] | components["schemas"]["NotCondition-Output"])[];
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            type: "all";
+        };
+        /** AmountCondition */
+        "AmountCondition-Input": {
+            /**
+             * Absolute
+             * @default false
+             */
+            absolute: boolean;
+            /** Max */
+            max?: number | string | null;
+            /** Min */
+            min?: number | string | null;
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            type: "amount";
+        };
+        /** AmountCondition */
+        "AmountCondition-Output": {
+            /**
+             * Absolute
+             * @default false
+             */
+            absolute: boolean;
+            /** Max */
+            max?: string | null;
+            /** Min */
+            min?: string | null;
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            type: "amount";
+        };
+        /** AnyCondition */
+        "AnyCondition-Input": {
+            /** Conditions */
+            conditions: (components["schemas"]["PayeeCondition"] | components["schemas"]["MemoCondition"] | components["schemas"]["PayeeIsCondition"] | components["schemas"]["AmountCondition-Input"] | components["schemas"]["SignCondition"] | components["schemas"]["AccountCondition"] | components["schemas"]["CurrencyCondition"] | components["schemas"]["DateCondition"] | components["schemas"]["CategoryIsCondition"] | components["schemas"]["CategoryUnsetCondition"] | components["schemas"]["AllCondition-Input"] | components["schemas"]["AnyCondition-Input"] | components["schemas"]["NotCondition-Input"])[];
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            type: "any";
+        };
+        /** AnyCondition */
+        "AnyCondition-Output": {
+            /** Conditions */
+            conditions: (components["schemas"]["PayeeCondition"] | components["schemas"]["MemoCondition"] | components["schemas"]["PayeeIsCondition"] | components["schemas"]["AmountCondition-Output"] | components["schemas"]["SignCondition"] | components["schemas"]["AccountCondition"] | components["schemas"]["CurrencyCondition"] | components["schemas"]["DateCondition"] | components["schemas"]["CategoryIsCondition"] | components["schemas"]["CategoryUnsetCondition"] | components["schemas"]["AllCondition-Output"] | components["schemas"]["AnyCondition-Output"] | components["schemas"]["NotCondition-Output"])[];
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            type: "any";
+        };
+        /**
+         * ApplyMapping
+         * @description ``POST /imports/{document_id}/apply-mapping``.
+         *
+         *     ``mapping_id`` (CSV/TSV) names the mapping to read the table with (else
+         *     the one whose fingerprint matches); ``account_id`` names the account to
+         *     import into (else the document's, the mapping's or, for OFX/QFX/QIF, the
+         *     account matched by its last four digits). The caller must be able to
+         *     edit the target account.
+         */
+        ApplyMapping: {
+            /** Account Id */
+            account_id?: string | null;
+            /** Mapping Id */
+            mapping_id?: string | null;
+        };
+        /**
+         * ArchiveState
+         * @enum {string}
+         */
+        ArchiveState: "pending" | "ready" | "downloaded" | "expired" | "imported" | "failed";
+        /**
+         * AssetKind
+         * @description Kind of a ``manual_asset`` account (NULL for every other type).
+         * @enum {string}
+         */
+        AssetKind: "property" | "vehicle" | "other";
+        /**
+         * AutoPairRequest
+         * @description Pair unlinked transfers among the accounts the caller may edit.
+         *
+         *     ``account_ids`` narrows the accounts (all editable ones by default);
+         *     ``date_from``/``date_to`` bound the posted dates; ``window_days`` is how
+         *     far apart the two legs' dates may be.
+         */
+        AutoPairRequest: {
+            /** Account Ids */
+            account_ids?: string[] | null;
+            /** Date From */
+            date_from?: string | null;
+            /** Date To */
+            date_to?: string | null;
+            /**
+             * Window Days
+             * @default 3
+             */
+            window_days: number;
+        };
+        /** AutoPairResult */
+        AutoPairResult: {
+            /** Ambiguous */
+            ambiguous: number;
+            /** Paired */
+            paired: components["schemas"]["TransferPair"][];
+        };
+        /** BalanceHistoryOut */
+        BalanceHistoryOut: {
+            /**
+             * Account Id
+             * Format: uuid
+             */
+            account_id: string;
+            /** Currency */
+            currency: string;
+            /**
+             * End
+             * Format: date
+             */
+            end: string;
+            /** Items */
+            items: components["schemas"]["BalancePoint"][];
+            /** Snapshots */
+            snapshots: components["schemas"]["SnapshotOut"][];
+            /**
+             * Start
+             * Format: date
+             */
+            start: string;
+        };
+        /** BalancePoint */
+        BalancePoint: {
+            balance: components["schemas"]["Money"];
+            /**
+             * Date
+             * Format: date
+             */
+            date: string;
+        };
+        /**
+         * BalanceSource
+         * @enum {string}
+         */
+        BalanceSource: "statement" | "computed" | "manual";
         /** Body_post_backchannel_logout_api_v1_auth_oidc_backchannel_logout_post */
         Body_post_backchannel_logout_api_v1_auth_oidc_backchannel_logout_post: {
             /** Logout Token */
             logout_token: string;
+        };
+        /**
+         * BudgetCreate
+         * @description ``POST /budgets``.
+         *
+         *     ``period`` monthly or annual: ``start_date`` is the first day of a month
+         *     and there is no ``end_date``; periods are calendar months, or twelve
+         *     months from ``start_date``. ``custom``: one period ``start_date ..
+         *     end_date`` (at most 3660 days). ``currency`` defaults to the household's
+         *     base currency.
+         */
+        BudgetCreate: {
+            /** Currency */
+            currency?: string | null;
+            /** End Date */
+            end_date?: string | null;
+            /** Lines */
+            lines?: components["schemas"]["BudgetLineIn"][];
+            /** Name */
+            name: string;
+            period: components["schemas"]["BudgetPeriod"];
+            /**
+             * Rollover
+             * @default false
+             */
+            rollover: boolean;
+            /**
+             * Start Date
+             * Format: date
+             */
+            start_date: string;
+        };
+        /**
+         * BudgetLineIn
+         * @description The amount per period for one category (``>= 0``, the budget's currency).
+         */
+        BudgetLineIn: {
+            amount: components["schemas"]["MoneyIn"];
+            /**
+             * Category Id
+             * Format: uuid
+             */
+            category_id: string;
+        };
+        /** BudgetLineOut */
+        BudgetLineOut: {
+            amount: components["schemas"]["Money"];
+            /**
+             * Category Id
+             * Format: uuid
+             */
+            category_id: string;
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+        };
+        /** BudgetOut */
+        BudgetOut: {
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /** Currency */
+            currency: string;
+            /** End Date */
+            end_date: string | null;
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /** Lines */
+            lines: components["schemas"]["BudgetLineOut"][];
+            /** Name */
+            name: string;
+            period: components["schemas"]["BudgetPeriod"];
+            /** Rollover */
+            rollover: boolean;
+            /**
+             * Start Date
+             * Format: date
+             */
+            start_date: string;
+            /**
+             * Updated At
+             * Format: date-time
+             */
+            updated_at: string;
+        };
+        /** BudgetPage */
+        BudgetPage: {
+            /** Items */
+            items: components["schemas"]["BudgetOut"][];
+            /** Next Cursor */
+            next_cursor: string | null;
+        };
+        /**
+         * BudgetPeriod
+         * @enum {string}
+         */
+        BudgetPeriod: "monthly" | "annual" | "custom";
+        /**
+         * BudgetReportLine
+         * @description One budget line in one period.
+         *
+         *     ``budgeted`` is the line amount; ``carried_over`` what rollover brings
+         *     from earlier periods (expense lines of a ``rollover`` budget only);
+         *     ``available = budgeted + carried_over``; ``actual`` the money spent
+         *     (expense) or received (income) in the period; ``remaining = available -
+         *     actual``; ``forecast`` the expected actual at the end of the period.
+         */
+        BudgetReportLine: {
+            actual: components["schemas"]["Money"];
+            available: components["schemas"]["Money"];
+            budgeted: components["schemas"]["Money"];
+            carried_over: components["schemas"]["Money"];
+            /**
+             * Category Id
+             * Format: uuid
+             */
+            category_id: string;
+            forecast: components["schemas"]["Money"];
+            kind: components["schemas"]["CategoryKind"] | null;
+            /** Name */
+            name: string | null;
+            remaining: components["schemas"]["Money"];
+        };
+        /** BudgetReportOut */
+        BudgetReportOut: {
+            /**
+             * As Of
+             * Format: date
+             */
+            as_of: string;
+            /**
+             * Budget Id
+             * Format: uuid
+             */
+            budget_id: string;
+            /** Currency */
+            currency: string;
+            expense_totals: components["schemas"]["BudgetTotals"];
+            /** Include Pending */
+            include_pending: boolean;
+            income_totals: components["schemas"]["BudgetTotals"];
+            /** Lines */
+            lines: components["schemas"]["BudgetReportLine"][];
+            /** Name */
+            name: string;
+            period: components["schemas"]["PeriodOut"];
+            /** Unbudgeted */
+            unbudgeted: components["schemas"]["UnbudgetedOut"][];
+            unbudgeted_total: components["schemas"]["Money"];
+            /** Unconverted */
+            unconverted: components["schemas"]["Money"][];
+        };
+        /** BudgetTotals */
+        BudgetTotals: {
+            actual: components["schemas"]["Money"];
+            available: components["schemas"]["Money"];
+            budgeted: components["schemas"]["Money"];
+            carried_over: components["schemas"]["Money"];
+            forecast: components["schemas"]["Money"];
+            remaining: components["schemas"]["Money"];
+        };
+        /**
+         * BudgetUpdate
+         * @description ``PATCH /budgets/{id}``: absent fields stay; ``lines`` replaces the whole set.
+         *
+         *     Changing ``currency`` needs ``lines`` in the same request (their amounts
+         *     are in the new currency).
+         */
+        BudgetUpdate: {
+            /** Currency */
+            currency?: string | null;
+            /** End Date */
+            end_date?: string | null;
+            /** Lines */
+            lines?: components["schemas"]["BudgetLineIn"][] | null;
+            /** Name */
+            name?: string | null;
+            period?: components["schemas"]["BudgetPeriod"] | null;
+            /** Rollover */
+            rollover?: boolean | null;
+            /** Start Date */
+            start_date?: string | null;
+        };
+        /**
+         * BulkAction
+         * @description One action over many transactions; each id is authorised on its own.
+         *
+         *     * ``categorise``: set ``category_id`` (``null`` clears it); split
+         *       transactions are skipped (their categories live on the splits);
+         *     * ``tag`` / ``untag``: add / remove ``tag_ids``;
+         *     * ``delete``: delete (each deletion is audited);
+         *     * ``confirm``: set ``review_state`` to ``confirmed``.
+         */
+        BulkAction: {
+            /**
+             * Action
+             * @enum {string}
+             */
+            action: "categorise" | "tag" | "untag" | "delete" | "confirm";
+            /** Category Id */
+            category_id?: string | null;
+            /** Ids */
+            ids: string[];
+            /** Tag Ids */
+            tag_ids?: string[] | null;
+        };
+        /** BulkItemResult */
+        BulkItemResult: {
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /** Reason */
+            reason?: string | null;
+            /**
+             * Result
+             * @enum {string}
+             */
+            result: "updated" | "deleted" | "unchanged" | "skipped" | "not_found";
+        };
+        /** BulkResult */
+        BulkResult: {
+            /**
+             * Action
+             * @enum {string}
+             */
+            action: "categorise" | "tag" | "untag" | "delete" | "confirm";
+            /** Changed */
+            changed: number;
+            /** Results */
+            results: components["schemas"]["BulkItemResult"][];
+        };
+        /** CashflowMonth */
+        CashflowMonth: {
+            inflow: components["schemas"]["Money"];
+            /** Month */
+            month: string;
+            net: components["schemas"]["Money"];
+            outflow: components["schemas"]["Money"];
+        };
+        /**
+         * CashflowReport
+         * @description ``GET /reports/cashflow``: money in, money out (positive) and net per month.
+         */
+        CashflowReport: {
+            /** Currency */
+            currency: string;
+            /**
+             * Date From
+             * Format: date
+             */
+            date_from: string;
+            /**
+             * Date To
+             * Format: date
+             */
+            date_to: string;
+            /** Include Pending */
+            include_pending: boolean;
+            inflow: components["schemas"]["Money"];
+            /** Months */
+            months: components["schemas"]["CashflowMonth"][];
+            net: components["schemas"]["Money"];
+            outflow: components["schemas"]["Money"];
+            /** Unconverted */
+            unconverted: components["schemas"]["Money"][];
+        };
+        /**
+         * CategoryCreate
+         * @description ``POST /categories``.
+         *
+         *     A child takes its parent's ``kind`` (giving another one is a ``422``); a
+         *     top-level category defaults to ``expense``.
+         */
+        CategoryCreate: {
+            kind?: components["schemas"]["CategoryKind"] | null;
+            /** Name */
+            name: string;
+            /** Parent Id */
+            parent_id?: string | null;
+            tax_treatment?: components["schemas"]["TaxTreatment"] | null;
+        };
+        /** CategoryIsCondition */
+        CategoryIsCondition: {
+            /** Category Ids */
+            category_ids: string[];
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            type: "category_is";
+        };
+        /**
+         * CategoryKind
+         * @enum {string}
+         */
+        CategoryKind: "expense" | "income" | "transfer" | "ignore";
+        /** CategoryOut */
+        CategoryOut: {
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            kind: components["schemas"]["CategoryKind"];
+            /** Name */
+            name: string;
+            /** Parent Id */
+            parent_id: string | null;
+            /** System Key */
+            system_key: string | null;
+            tax_treatment: components["schemas"]["TaxTreatment"] | null;
+            /**
+             * Updated At
+             * Format: date-time
+             */
+            updated_at: string;
+        };
+        /** CategoryPage */
+        CategoryPage: {
+            /** Items */
+            items: components["schemas"]["CategoryOut"][];
+            /** Next Cursor */
+            next_cursor: string | null;
+        };
+        /** CategoryUnsetCondition */
+        CategoryUnsetCondition: {
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            type: "category_unset";
+        };
+        /**
+         * CategoryUpdate
+         * @description ``PATCH /categories/{id}``: rename, move (``parent_id``), kind, tax treatment.
+         *
+         *     Moving under another parent makes the category and its descendants take
+         *     that parent's kind; changing a top-level category's kind changes its
+         *     descendants too.
+         */
+        CategoryUpdate: {
+            kind?: components["schemas"]["CategoryKind"] | null;
+            /** Name */
+            name?: string | null;
+            /** Parent Id */
+            parent_id?: string | null;
+            tax_treatment?: components["schemas"]["TaxTreatment"] | null;
+        };
+        /**
+         * ContributionCreate
+         * @description ``POST /goals/{id}/contributions``.
+         *
+         *     Either ``amount`` (in the goal's currency), or ``transaction_id`` (a
+         *     transaction on one of the goal's accounts; its amount converted into the
+         *     goal's currency on its posted date is the default amount, its posted
+         *     date the default ``contributed_on``), or both. ``contributed_on``
+         *     defaults to today and may not be in the future.
+         */
+        ContributionCreate: {
+            amount?: components["schemas"]["MoneyIn"] | null;
+            /** Contributed On */
+            contributed_on?: string | null;
+            /** Memo */
+            memo?: string | null;
+            /** Transaction Id */
+            transaction_id?: string | null;
+        };
+        /** ContributionOut */
+        ContributionOut: {
+            amount: components["schemas"]["Money"];
+            /**
+             * Contributed On
+             * Format: date
+             */
+            contributed_on: string;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /**
+             * Goal Id
+             * Format: uuid
+             */
+            goal_id: string;
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /** Memo */
+            memo: string | null;
+            /** Transaction Id */
+            transaction_id: string | null;
+        };
+        /** ContributionPage */
+        ContributionPage: {
+            /** Items */
+            items: components["schemas"]["ContributionOut"][];
+            /** Next Cursor */
+            next_cursor: string | null;
+        };
+        /** CurrencyCondition */
+        CurrencyCondition: {
+            /** Currencies */
+            currencies: string[];
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            type: "currency";
+        };
+        /** DateCondition */
+        DateCondition: {
+            /** Date From */
+            date_from?: string | null;
+            /** Date To */
+            date_to?: string | null;
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            type: "date";
+        };
+        /**
+         * DocumentDetailOut
+         * @description ``GET /documents/{id}``: metadata only (never the file or extracted text).
+         *
+         *     ``downloadable`` says whether ``GET /documents/{id}/download`` would
+         *     serve the caller (not quarantined, and member or above, or a viewer in a
+         *     household that allows viewer downloads); ``can_edit`` whether the caller
+         *     may reprocess, link or delete it.
+         */
+        DocumentDetailOut: {
+            /** Account Id */
+            account_id: string | null;
+            /** Can Edit */
+            can_edit: boolean;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /** Downloadable */
+            downloadable: boolean;
+            /** Error */
+            error: string | null;
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /** Institution Id */
+            institution_id: string | null;
+            kind: components["schemas"]["DocumentKind"];
+            /** Links */
+            links: components["schemas"]["DocumentLinkOut"][];
+            /** Mime Detected */
+            mime_detected: string;
+            /** Open Review Items */
+            open_review_items: number;
+            /** Original Filename */
+            original_filename: string | null;
+            /** Parser Version */
+            parser_version: string | null;
+            /** Period End */
+            period_end: string | null;
+            /** Period Start */
+            period_start: string | null;
+            /** Quarantined */
+            quarantined: boolean;
+            /** Sha256 */
+            sha256: string;
+            /** Size */
+            size: number;
+            source: components["schemas"]["DocumentSource"];
+            status: components["schemas"]["DocumentStatus"];
+            /** Tax Year */
+            tax_year: number | null;
+            /**
+             * Updated At
+             * Format: date-time
+             */
+            updated_at: string;
+            /** Uploaded By */
+            uploaded_by: string | null;
+        };
+        /**
+         * DocumentKind
+         * @enum {string}
+         */
+        DocumentKind: "statement" | "receipt" | "invoice" | "tax_form" | "payslip" | "insurance" | "other" | "unknown";
+        /**
+         * DocumentLinkIn
+         * @description ``POST /documents/{id}/link``: attach the document to a transaction or account.
+         *
+         *     Investment transactions, loan payments and tax years arrive with their
+         *     phases (``422 link-target-unsupported`` until then).
+         */
+        DocumentLinkIn: {
+            /**
+             * Target Id
+             * Format: uuid
+             */
+            target_id: string;
+            target_type: components["schemas"]["LinkTarget"];
+        };
+        /** DocumentLinkOut */
+        DocumentLinkOut: {
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /**
+             * Document Id
+             * Format: uuid
+             */
+            document_id: string;
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /**
+             * Target Id
+             * Format: uuid
+             */
+            target_id: string;
+            target_type: components["schemas"]["LinkTarget"];
+        };
+        /**
+         * DocumentOut
+         * @description A document as the API shows it (no blob location or key material).
+         */
+        DocumentOut: {
+            /** Account Id */
+            account_id: string | null;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /** Error */
+            error: string | null;
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /** Institution Id */
+            institution_id: string | null;
+            kind: components["schemas"]["DocumentKind"];
+            /** Mime Detected */
+            mime_detected: string;
+            /** Original Filename */
+            original_filename: string | null;
+            /** Parser Version */
+            parser_version: string | null;
+            /** Period End */
+            period_end: string | null;
+            /** Period Start */
+            period_start: string | null;
+            /** Sha256 */
+            sha256: string;
+            /** Size */
+            size: number;
+            source: components["schemas"]["DocumentSource"];
+            status: components["schemas"]["DocumentStatus"];
+            /** Tax Year */
+            tax_year: number | null;
+            /**
+             * Updated At
+             * Format: date-time
+             */
+            updated_at: string;
+            /** Uploaded By */
+            uploaded_by: string | null;
+        };
+        /**
+         * DocumentPage
+         * @description ``GET /documents``: newest first; ``next_cursor`` is ``null`` on the last page.
+         */
+        DocumentPage: {
+            /** Items */
+            items: components["schemas"]["DocumentOut"][];
+            /** Next Cursor */
+            next_cursor: string | null;
+        };
+        /**
+         * DocumentReceivedOut
+         * @description ``POST /documents`` (``202``): the file is stored; ingestion runs in the worker.
+         *
+         *     ``job_id`` is the ``ingest_document`` job (``GET /jobs/{id}``); it is
+         *     ``null`` when the content is already in the household (``duplicate_of``)
+         *     and the document waits in the review queue instead.
+         */
+        DocumentReceivedOut: {
+            /** Duplicate Of */
+            duplicate_of: string | null;
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /** Job Id */
+            job_id: string | null;
+            status: components["schemas"]["DocumentStatus"];
+        };
+        /**
+         * DocumentReprocessOut
+         * @description ``POST /documents/{id}/reprocess`` (``202``).
+         */
+        DocumentReprocessOut: {
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /**
+             * Job Id
+             * Format: uuid
+             */
+            job_id: string;
+            status: components["schemas"]["DocumentStatus"];
+        };
+        /**
+         * DocumentSource
+         * @enum {string}
+         */
+        DocumentSource: "upload" | "dropfolder" | "email" | "api";
+        /**
+         * DocumentStatus
+         * @enum {string}
+         */
+        DocumentStatus: "received" | "scanning" | "extracting" | "classifying" | "parsing" | "needs_review" | "processed" | "rejected" | "failed";
+        /**
+         * ExportOut
+         * @description An export job of the caller; ``counts`` per entity once ``ready``.
+         */
+        ExportOut: {
+            /** Counts */
+            counts: {
+                [key: string]: number;
+            };
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /** Downloaded At */
+            downloaded_at: string | null;
+            /** Error */
+            error: string | null;
+            /** Expires At */
+            expires_at: string | null;
+            /** Finished At */
+            finished_at: string | null;
+            /**
+             * Job Id
+             * Format: uuid
+             */
+            job_id: string;
+            /** Passphrase Protected */
+            passphrase_protected: boolean;
+            /** Sha256 */
+            sha256: string | null;
+            /** Size */
+            size: number | null;
+            state: components["schemas"]["ArchiveState"];
+        };
+        /** ExportQueuedOut */
+        ExportQueuedOut: {
+            /**
+             * Job Id
+             * Format: uuid
+             */
+            job_id: string;
+            /** Passphrase Protected */
+            passphrase_protected: boolean;
+            state: components["schemas"]["ArchiveState"];
+        };
+        /**
+         * ExportRequest
+         * @description ``POST /export``: an optional passphrase to encrypt the archive with (G3).
+         */
+        ExportRequest: {
+            /** Passphrase */
+            passphrase?: string | null;
         };
         /** FactorAddedOut */
         FactorAddedOut: {
@@ -793,6 +2924,150 @@ export interface components {
             /** Recovery Codes */
             recovery_codes?: string[] | null;
         };
+        /** FlagForReviewAction */
+        FlagForReviewAction: {
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            type: "flag_for_review";
+        };
+        /**
+         * Flow
+         * @enum {string}
+         */
+        Flow: "spending" | "income";
+        /**
+         * FlowReport
+         * @description ``GET /reports/spending`` and ``GET /reports/income``.
+         *
+         *     Spending amounts are positive money out (refunds in an expense category
+         *     reduce them); income amounts are positive money in.
+         */
+        FlowReport: {
+            /** Currency */
+            currency: string;
+            /**
+             * Date From
+             * Format: date
+             */
+            date_from: string;
+            /**
+             * Date To
+             * Format: date
+             */
+            date_to: string;
+            /** Depth */
+            depth: number;
+            flow: components["schemas"]["Flow"];
+            group_by: components["schemas"]["GroupBy"];
+            /** Include Pending */
+            include_pending: boolean;
+            /** Items */
+            items: components["schemas"]["ReportItem"][];
+            total: components["schemas"]["Money"];
+            /** Unconverted */
+            unconverted: components["schemas"]["Money"][];
+        };
+        /**
+         * GoalCreate
+         * @description ``POST /goals``: ``target`` (``> 0``) sets the goal's currency.
+         */
+        GoalCreate: {
+            /** Account Ids */
+            account_ids?: string[];
+            /** Name */
+            name: string;
+            target: components["schemas"]["MoneyIn"];
+            /** Target Date */
+            target_date?: string | null;
+        };
+        /** GoalOut */
+        GoalOut: {
+            /** Account Ids */
+            account_ids: string[];
+            /** Achieved At */
+            achieved_at: string | null;
+            /** Archived */
+            archived: boolean;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /** Name */
+            name: string;
+            progress: components["schemas"]["GoalProgressOut"];
+            target: components["schemas"]["Money"];
+            /** Target Date */
+            target_date: string | null;
+            /**
+             * Updated At
+             * Format: date-time
+             */
+            updated_at: string;
+        };
+        /** GoalPage */
+        GoalPage: {
+            /** Items */
+            items: components["schemas"]["GoalOut"][];
+            /** Next Cursor */
+            next_cursor: string | null;
+        };
+        /**
+         * GoalProgressOut
+         * @description Progress as of ``as_of`` (``app.domain.goals.progress``).
+         *
+         *     ``accounts_balance`` is the balance of the goal's accounts today in the
+         *     goal's currency (``null`` without accounts or when a rate is missing).
+         */
+        GoalProgressOut: {
+            accounts_balance: components["schemas"]["Money"] | null;
+            /**
+             * As Of
+             * Format: date
+             */
+            as_of: string;
+            contributed: components["schemas"]["Money"];
+            monthly_rate: components["schemas"]["Money"] | null;
+            /** On Track */
+            on_track: boolean | null;
+            /** Percent */
+            percent: string;
+            /** Projected Completion */
+            projected_completion: string | null;
+            remaining: components["schemas"]["Money"];
+        };
+        /**
+         * GoalUpdate
+         * @description ``PATCH /goals/{id}``: absent fields stay; ``account_ids`` replaces the set.
+         */
+        GoalUpdate: {
+            /** Account Ids */
+            account_ids?: string[] | null;
+            /** Archived */
+            archived?: boolean | null;
+            /** Name */
+            name?: string | null;
+            target?: components["schemas"]["MoneyIn"] | null;
+            /** Target Date */
+            target_date?: string | null;
+        };
+        /**
+         * GrantLevel
+         * @enum {string}
+         */
+        GrantLevel: "none" | "view" | "edit";
+        /**
+         * GroupBy
+         * @enum {string}
+         */
+        GroupBy: "category" | "payee" | "month" | "account";
         /** HTTPValidationError */
         HTTPValidationError: {
             /** Detail */
@@ -861,6 +3136,155 @@ export interface components {
             /** Name */
             name?: string | null;
         };
+        /** IdChange */
+        IdChange: {
+            /** After */
+            after: string | null;
+            /** Before */
+            before: string | null;
+        };
+        /** ImportAccepted */
+        ImportAccepted: {
+            /**
+             * Document Id
+             * Format: uuid
+             */
+            document_id: string;
+            /**
+             * Job Id
+             * Format: uuid
+             */
+            job_id: string;
+            /** State */
+            state: string;
+        };
+        /**
+         * ImportOut
+         * @description An import job of the caller: created/merged/skipped counts, or why it failed.
+         */
+        ImportOut: {
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /** Error */
+            error: string | null;
+            /** Error Detail */
+            error_detail: string | null;
+            /** Finished At */
+            finished_at: string | null;
+            /**
+             * Job Id
+             * Format: uuid
+             */
+            job_id: string;
+            /** Passphrase Protected */
+            passphrase_protected: boolean;
+            state: components["schemas"]["ArchiveState"];
+            /** Summary */
+            summary: {
+                [key: string]: unknown;
+            };
+        };
+        /**
+         * ImportPreview
+         * @description ``GET /imports/{document_id}/preview``: the stored sandbox output, never re-parsed.
+         */
+        ImportPreview: {
+            /** Account Id */
+            account_id: string | null;
+            /**
+             * Document Id
+             * Format: uuid
+             */
+            document_id: string;
+            /** Kind */
+            kind: string | null;
+            /** Last Import */
+            last_import: {
+                [key: string]: unknown;
+            } | null;
+            /** Matched Mapping Id */
+            matched_mapping_id: string | null;
+            /** Statements */
+            statements: components["schemas"]["PreviewStatement"][];
+            status: components["schemas"]["DocumentStatus"];
+            suggested_spec: components["schemas"]["MappingSpec"] | null;
+            /** Tables */
+            tables: components["schemas"]["PreviewTable"][];
+            /** Warnings */
+            warnings: string[];
+        };
+        /** ImportQueuedOut */
+        ImportQueuedOut: {
+            /**
+             * Job Id
+             * Format: uuid
+             */
+            job_id: string;
+            /** Passphrase Protected */
+            passphrase_protected: boolean;
+            state: components["schemas"]["ArchiveState"];
+        };
+        /** JobAccepted */
+        JobAccepted: {
+            /**
+             * Job Id
+             * Format: uuid
+             */
+            job_id: string;
+            /** State */
+            state: string;
+        };
+        /**
+         * JobOut
+         * @description A job's progress through its life cycle.
+         *
+         *     ``finished`` is true once the job will not run again on its own
+         *     (``succeeded``, ``failed`` or ``dead``). The payload and the last error
+         *     are never returned (they are for operators, not for API callers).
+         */
+        JobOut: {
+            /** Attempts */
+            attempts: number;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /** Finished */
+            finished: boolean;
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /** Max Attempts */
+            max_attempts: number;
+            state: components["schemas"]["JobState"];
+            /** Type */
+            type: string;
+            /**
+             * Updated At
+             * Format: date-time
+             */
+            updated_at: string;
+        };
+        /**
+         * JobState
+         * @description Life cycle of a job row.
+         *
+         *     * ``queued``: waiting; eligible once ``run_after <= now()``.
+         *     * ``running``: leased by ``locked_by`` until ``lease_expires_at``; the
+         *       reaper returns expired leases to ``queued`` (or ``dead``).
+         *     * ``succeeded``: finished.
+         *     * ``failed``: the last attempt failed and the job is not runnable as is
+         *       (terminal unless re-queued explicitly).
+         *     * ``dead``: dead-lettered (``max_attempts`` exhausted or non-retryable).
+         * @enum {string}
+         */
+        JobState: "queued" | "running" | "succeeded" | "failed" | "dead";
         /** LinkOfferOut */
         LinkOfferOut: {
             /** Email */
@@ -871,6 +3295,11 @@ export interface components {
              */
             expires_at: string;
         };
+        /**
+         * LinkTarget
+         * @enum {string}
+         */
+        LinkTarget: "transaction" | "investment_txn" | "loan_payment" | "account" | "tax_year";
         /** LoginIn */
         LoginIn: {
             /** Password */
@@ -907,6 +3336,159 @@ export interface components {
              * @enum {string}
              */
             status: "authenticated" | "mfa_required";
+        };
+        /**
+         * ManualBalanceIn
+         * @description ``POST /accounts/{id}/balances``: the balance at the end of ``as_of_date``.
+         *
+         *     Replaces an earlier manual balance of the same date. The currency must be
+         *     the account's.
+         */
+        ManualBalanceIn: {
+            /**
+             * As Of Date
+             * Format: date
+             */
+            as_of_date: string;
+            balance: components["schemas"]["MoneyIn"];
+        };
+        /**
+         * MappingCreate
+         * @description ``POST /imports/mappings``.
+         *
+         *     The header fingerprint comes from ``document_id`` (the server reads the
+         *     header row ``spec.skip_rows`` of the document's extracted table) or is
+         *     given as ``header_fingerprint``; exactly one of the two.
+         */
+        MappingCreate: {
+            /** Account Id */
+            account_id?: string | null;
+            /** Document Id */
+            document_id?: string | null;
+            /** Header Fingerprint */
+            header_fingerprint?: string | null;
+            /** Institution Id */
+            institution_id?: string | null;
+            /** Name */
+            name: string;
+            spec: components["schemas"]["MappingSpec"];
+        };
+        /** MappingOut */
+        MappingOut: {
+            /** Account Id */
+            account_id: string | null;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /** Created By */
+            created_by: string | null;
+            /** Header Fingerprint */
+            header_fingerprint: string;
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /** Institution Id */
+            institution_id: string | null;
+            /** Last Used At */
+            last_used_at: string | null;
+            /** Name */
+            name: string;
+            spec: components["schemas"]["MappingSpec"];
+            /**
+             * Updated At
+             * Format: date-time
+             */
+            updated_at: string;
+            /** Use Count */
+            use_count: number;
+        };
+        /** MappingPage */
+        MappingPage: {
+            /** Items */
+            items: components["schemas"]["MappingOut"][];
+            /** Next Cursor */
+            next_cursor: string | null;
+        };
+        /**
+         * MappingSpec
+         * @description How to read one delimited layout (module doc).
+         */
+        MappingSpec: {
+            /** Amount Column */
+            amount_column?: number | null;
+            /** Balance Column */
+            balance_column?: number | null;
+            /** Credit Column */
+            credit_column?: number | null;
+            /** Currency */
+            currency?: string | null;
+            /** Currency Column */
+            currency_column?: number | null;
+            /** Date Column */
+            date_column: number;
+            /**
+             * Date Format
+             * @enum {string}
+             */
+            date_format: "YYYY-MM-DD" | "YYYY/MM/DD" | "YYYY.MM.DD" | "YYYYMMDD" | "MM/DD/YYYY" | "MM/DD/YY" | "MM-DD-YYYY" | "DD/MM/YYYY" | "DD/MM/YY" | "DD-MM-YYYY" | "DD.MM.YYYY" | "DD.MM.YY" | "DD MMM YYYY" | "DD-MMM-YYYY" | "MMM DD, YYYY";
+            /** Debit Column */
+            debit_column?: number | null;
+            /**
+             * Decimal Separator
+             * @default .
+             * @enum {string}
+             */
+            decimal_separator: "." | ",";
+            /**
+             * Has Header
+             * @default true
+             */
+            has_header: boolean;
+            /** Indicator Column */
+            indicator_column?: number | null;
+            /** Memo Column */
+            memo_column?: number | null;
+            /** Outflow Values */
+            outflow_values?: string[];
+            /** Payee Column */
+            payee_column?: number | null;
+            /** @default inflow_positive */
+            sign: components["schemas"]["Sign"];
+            /**
+             * Skip Rows
+             * @default 0
+             */
+            skip_rows: number;
+            /**
+             * Version
+             * @default 1
+             * @constant
+             */
+            version: 1;
+        };
+        /**
+         * MappingUpdate
+         * @description ``PATCH /imports/mappings/{id}``: only the named fields change.
+         *
+         *     ``null`` clears ``account_id`` / ``institution_id``; ``document_id`` (or
+         *     ``header_fingerprint``) recomputes (sets) the fingerprint.
+         */
+        MappingUpdate: {
+            /** Account Id */
+            account_id?: string | null;
+            /** Document Id */
+            document_id?: string | null;
+            /** Header Fingerprint */
+            header_fingerprint?: string | null;
+            /** Institution Id */
+            institution_id?: string | null;
+            /** Name */
+            name?: string | null;
+            spec?: components["schemas"]["MappingSpec"] | null;
         };
         /**
          * MemberAdd
@@ -946,6 +3528,32 @@ export interface components {
          */
         MemberUpdate: {
             role: components["schemas"]["HouseholdRole"];
+        };
+        /** MemoCondition */
+        MemoCondition: {
+            /**
+             * Op
+             * @enum {string}
+             */
+            op: "contains" | "equals" | "starts_with" | "ends_with" | "glob";
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            type: "memo";
+            /** Value */
+            value: string;
+        };
+        /**
+         * MergeInto
+         * @description ``POST /categories/{id}/merge``, ``POST /payees/{id}/merge``: the survivor.
+         */
+        MergeInto: {
+            /**
+             * Into
+             * Format: uuid
+             */
+            into: string;
         };
         /** MfaMethodOut */
         MfaMethodOut: {
@@ -1001,6 +3609,26 @@ export interface components {
             recovery_codes_remaining?: number | null;
         };
         /**
+         * Money
+         * @description Money in a response body; build with :meth:`of`.
+         */
+        Money: {
+            /** Amount */
+            amount: string;
+            /** Currency */
+            currency: string;
+        };
+        /**
+         * MoneyIn
+         * @description Money in a request body: ``{"amount": "12.34", "currency": "USD"}``.
+         */
+        MoneyIn: {
+            /** Amount */
+            amount: number | string;
+            /** Currency */
+            currency: string;
+        };
+        /**
          * NewLocalUser
          * @description A local account created for an invited member (or by an instance admin).
          */
@@ -1013,6 +3641,26 @@ export interface components {
             password: string;
             /** Username */
             username: string;
+        };
+        /** NotCondition */
+        "NotCondition-Input": {
+            /** Condition */
+            condition: components["schemas"]["PayeeCondition"] | components["schemas"]["MemoCondition"] | components["schemas"]["PayeeIsCondition"] | components["schemas"]["AmountCondition-Input"] | components["schemas"]["SignCondition"] | components["schemas"]["AccountCondition"] | components["schemas"]["CurrencyCondition"] | components["schemas"]["DateCondition"] | components["schemas"]["CategoryIsCondition"] | components["schemas"]["CategoryUnsetCondition"] | components["schemas"]["AllCondition-Input"] | components["schemas"]["AnyCondition-Input"] | components["schemas"]["NotCondition-Input"];
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            type: "not";
+        };
+        /** NotCondition */
+        "NotCondition-Output": {
+            /** Condition */
+            condition: components["schemas"]["PayeeCondition"] | components["schemas"]["MemoCondition"] | components["schemas"]["PayeeIsCondition"] | components["schemas"]["AmountCondition-Output"] | components["schemas"]["SignCondition"] | components["schemas"]["AccountCondition"] | components["schemas"]["CurrencyCondition"] | components["schemas"]["DateCondition"] | components["schemas"]["CategoryIsCondition"] | components["schemas"]["CategoryUnsetCondition"] | components["schemas"]["AllCondition-Output"] | components["schemas"]["AnyCondition-Output"] | components["schemas"]["NotCondition-Output"];
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            type: "not";
         };
         /** OidcLogoutIn */
         OidcLogoutIn: {
@@ -1043,6 +3691,183 @@ export interface components {
             /** Sessions Revoked */
             sessions_revoked: number;
         };
+        /** PayeeCondition */
+        PayeeCondition: {
+            /**
+             * Op
+             * @enum {string}
+             */
+            op: "contains" | "equals" | "starts_with" | "ends_with" | "glob";
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            type: "payee";
+            /** Value */
+            value: string;
+        };
+        /**
+         * PayeeCreate
+         * @description ``POST /payees``: a canonical name, the statement spellings that mean it, a default.
+         */
+        PayeeCreate: {
+            /** Aliases */
+            aliases?: string[];
+            /** Default Category Id */
+            default_category_id?: string | null;
+            /** Name */
+            name: string;
+        };
+        /** PayeeIsCondition */
+        PayeeIsCondition: {
+            /** Payee Ids */
+            payee_ids: string[];
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            type: "payee_is";
+        };
+        /** PayeeOut */
+        PayeeOut: {
+            /** Aliases */
+            aliases: string[];
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /** Default Category Id */
+            default_category_id: string | null;
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /** Name */
+            name: string;
+            /** Normalized Name */
+            normalized_name: string;
+            /**
+             * Updated At
+             * Format: date-time
+             */
+            updated_at: string;
+        };
+        /** PayeePage */
+        PayeePage: {
+            /** Items */
+            items: components["schemas"]["PayeeOut"][];
+            /** Next Cursor */
+            next_cursor: string | null;
+        };
+        /**
+         * PayeeUpdate
+         * @description ``PATCH /payees/{id}``; ``aliases`` replaces the whole list.
+         */
+        PayeeUpdate: {
+            /** Aliases */
+            aliases?: string[] | null;
+            /** Default Category Id */
+            default_category_id?: string | null;
+            /** Name */
+            name?: string | null;
+        };
+        /** PeriodOut */
+        PeriodOut: {
+            /**
+             * End
+             * Format: date
+             */
+            end: string;
+            /**
+             * Start
+             * Format: date
+             */
+            start: string;
+            /** State */
+            state: string;
+        };
+        /** PreviewBalance */
+        PreviewBalance: {
+            /** Amount */
+            amount: string;
+            /** As Of */
+            as_of: string | null;
+            /** Currency */
+            currency: string | null;
+        };
+        /** PreviewStatement */
+        PreviewStatement: {
+            /** Account Type */
+            account_type: string | null;
+            /** Currency */
+            currency: string | null;
+            /** Index */
+            index: number;
+            /** Institution */
+            institution: string | null;
+            /** Last4 */
+            last4: string | null;
+            ledger_balance: components["schemas"]["PreviewBalance"] | null;
+            /** Offset */
+            offset: number;
+            /** Period End */
+            period_end: string | null;
+            /** Period Start */
+            period_start: string | null;
+            /** Source Format */
+            source_format: string;
+            /** Transaction Count */
+            transaction_count: number;
+            /** Transactions */
+            transactions: components["schemas"]["PreviewTransaction"][];
+            /** Truncated */
+            truncated: boolean;
+        };
+        /** PreviewTable */
+        PreviewTable: {
+            /** Column Count */
+            column_count: number;
+            /** Delimiter */
+            delimiter: string;
+            /** Encoding */
+            encoding: string;
+            /** Has Header */
+            has_header: boolean;
+            /** Header Fingerprint */
+            header_fingerprint: string | null;
+            /** Index */
+            index: number;
+            /** Offset */
+            offset: number;
+            /** Row Count */
+            row_count: number;
+            /** Rows */
+            rows: string[][];
+            /** Truncated */
+            truncated: boolean;
+        };
+        /** PreviewTransaction */
+        PreviewTransaction: {
+            /** Amount */
+            amount: string;
+            /** Category */
+            category: string | null;
+            /** Check Number */
+            check_number: string | null;
+            /** Currency */
+            currency: string | null;
+            /** Memo */
+            memo: string | null;
+            /** Payee */
+            payee: string | null;
+            /**
+             * Posted Date
+             * Format: date
+             */
+            posted_date: string;
+        };
         /** RecoveryCodesOut */
         RecoveryCodesOut: {
             /** Codes */
@@ -1058,6 +3883,47 @@ export interface components {
              */
             method: "recovery";
         };
+        /**
+         * Reference
+         * @description The name of a referenced object, so an export can be imported elsewhere.
+         *
+         *     Categories are named by their path (``"Food / Groceries"``).
+         */
+        Reference: {
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /** Name */
+            name: string;
+        };
+        /** References */
+        References: {
+            /** Accounts */
+            accounts?: components["schemas"]["Reference"][];
+            /** Categories */
+            categories?: components["schemas"]["Reference"][];
+            /** Payees */
+            payees?: components["schemas"]["Reference"][];
+            /** Tags */
+            tags?: components["schemas"]["Reference"][];
+        };
+        /**
+         * ReportItem
+         * @description One group: ``key`` is a category, payee or account id, or ``YYYY-MM``.
+         *
+         *     ``key`` is ``null`` for uncategorised lines (``group_by=category``) and
+         *     lines without a payee (``group_by=payee``); ``name`` is the category,
+         *     payee or account name (``null`` for a month or a missing one).
+         */
+        ReportItem: {
+            amount: components["schemas"]["Money"];
+            /** Key */
+            key: string | null;
+            /** Name */
+            name: string | null;
+        };
         /** ResetConfirmIn */
         ResetConfirmIn: {
             /** New Password */
@@ -1070,10 +3936,421 @@ export interface components {
             /** Identifier */
             identifier: string;
         };
+        /** ResolveDuplicate */
+        ResolveDuplicate: {
+            /**
+             * Decision
+             * @enum {string}
+             */
+            decision: "confirm" | "reject";
+            /** Duplicate Of */
+            duplicate_of?: string | null;
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            kind: "possible_duplicate";
+        };
+        /** ResolveUnknownAccount */
+        ResolveUnknownAccount: {
+            /**
+             * Account Id
+             * Format: uuid
+             */
+            account_id: string;
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            kind: "unknown_account";
+            /**
+             * Remember
+             * @default false
+             */
+            remember: boolean;
+        };
+        /** ResolveUnparsed */
+        ResolveUnparsed: {
+            /** Account Id */
+            account_id?: string | null;
+            /**
+             * Action
+             * @enum {string}
+             */
+            action: "reprocess" | "apply_mapping";
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            kind: "unparsed";
+            /** Mapping Id */
+            mapping_id?: string | null;
+        };
+        /** ReviewChange */
+        ReviewChange: {
+            after: components["schemas"]["ReviewState"];
+            before: components["schemas"]["ReviewState"];
+        };
+        /**
+         * ReviewItemOut
+         * @description One review item. ``payload`` carries ids and short facts, never file content.
+         *
+         *     ``next_step`` names what the UI should offer; ``can_resolve`` whether the
+         *     caller may resolve or dismiss it.
+         */
+        ReviewItemOut: {
+            /** Can Resolve */
+            can_resolve: boolean;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /** Document Id */
+            document_id: string | null;
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            kind: components["schemas"]["ReviewKind"];
+            /** Next Step */
+            next_step: ("confirm_duplicate" | "choose_account" | "column_mapping" | "reprocess") | null;
+            /** Payload */
+            payload: {
+                [key: string]: unknown;
+            };
+            /** Resolution */
+            resolution: {
+                [key: string]: unknown;
+            } | null;
+            /** Resolved At */
+            resolved_at: string | null;
+            /** Resolved By */
+            resolved_by: string | null;
+            state: components["schemas"]["ReviewItemState"];
+        };
+        /**
+         * ReviewItemState
+         * @enum {string}
+         */
+        ReviewItemState: "open" | "resolved" | "dismissed";
+        /**
+         * ReviewKind
+         * @enum {string}
+         */
+        ReviewKind: "unknown_owner" | "unknown_account" | "low_confidence_field" | "possible_duplicate" | "unparsed" | "new_institution" | "rejected_email";
+        /**
+         * ReviewPage
+         * @description Oldest first (a queue); ``next_cursor`` is ``null`` on the last page.
+         */
+        ReviewPage: {
+            /** Items */
+            items: components["schemas"]["ReviewItemOut"][];
+            /** Next Cursor */
+            next_cursor: string | null;
+        };
+        /**
+         * ReviewState
+         * @enum {string}
+         */
+        ReviewState: "none" | "pending" | "confirmed";
         /** RevokedOut */
         RevokedOut: {
             /** Revoked */
             revoked: number;
+        };
+        /**
+         * RuleApply
+         * @description Re-run the enabled rules (or the enabled ones among ``rule_ids``) as a job.
+         */
+        RuleApply: {
+            /** Account Ids */
+            account_ids?: string[] | null;
+            /** Date From */
+            date_from?: string | null;
+            /** Date To */
+            date_to?: string | null;
+            /** Rule Ids */
+            rule_ids?: string[] | null;
+        };
+        /**
+         * RuleBody
+         * @description What a rule does: shared by create, import and the inline dry run.
+         */
+        RuleBody: {
+            /** Actions */
+            actions: (components["schemas"]["SetCategoryAction"] | components["schemas"]["AddTagsAction"] | components["schemas"]["SetPayeeAction"] | components["schemas"]["SplitPercentAction-Input"] | components["schemas"]["SplitAmountAction-Input"] | components["schemas"]["FlagForReviewAction"] | components["schemas"]["SetNoteAction"])[];
+            /** Conditions */
+            conditions: components["schemas"]["PayeeCondition"] | components["schemas"]["MemoCondition"] | components["schemas"]["PayeeIsCondition"] | components["schemas"]["AmountCondition-Input"] | components["schemas"]["SignCondition"] | components["schemas"]["AccountCondition"] | components["schemas"]["CurrencyCondition"] | components["schemas"]["DateCondition"] | components["schemas"]["CategoryIsCondition"] | components["schemas"]["CategoryUnsetCondition"] | components["schemas"]["AllCondition-Input"] | components["schemas"]["AnyCondition-Input"] | components["schemas"]["NotCondition-Input"];
+            /**
+             * Stop Processing
+             * @default false
+             */
+            stop_processing: boolean;
+        };
+        /**
+         * RuleCreate
+         * @description A new rule; it is appended after the existing ones (reorder to move it).
+         */
+        RuleCreate: {
+            /** Actions */
+            actions: (components["schemas"]["SetCategoryAction"] | components["schemas"]["AddTagsAction"] | components["schemas"]["SetPayeeAction"] | components["schemas"]["SplitPercentAction-Input"] | components["schemas"]["SplitAmountAction-Input"] | components["schemas"]["FlagForReviewAction"] | components["schemas"]["SetNoteAction"])[];
+            /** Conditions */
+            conditions: components["schemas"]["PayeeCondition"] | components["schemas"]["MemoCondition"] | components["schemas"]["PayeeIsCondition"] | components["schemas"]["AmountCondition-Input"] | components["schemas"]["SignCondition"] | components["schemas"]["AccountCondition"] | components["schemas"]["CurrencyCondition"] | components["schemas"]["DateCondition"] | components["schemas"]["CategoryIsCondition"] | components["schemas"]["CategoryUnsetCondition"] | components["schemas"]["AllCondition-Input"] | components["schemas"]["AnyCondition-Input"] | components["schemas"]["NotCondition-Input"];
+            /**
+             * Enabled
+             * @default true
+             */
+            enabled: boolean;
+            /** Name */
+            name: string;
+            /**
+             * Stop Processing
+             * @default false
+             */
+            stop_processing: boolean;
+        };
+        /**
+         * RuleDiff
+         * @description What applying the rules would change (fields that stay the same are ``null``).
+         */
+        RuleDiff: {
+            /** Added Tag Ids */
+            added_tag_ids?: string[];
+            category_id?: components["schemas"]["IdChange"] | null;
+            notes?: components["schemas"]["TextChange"] | null;
+            payee_id?: components["schemas"]["IdChange"] | null;
+            review_state?: components["schemas"]["ReviewChange"] | null;
+            splits?: components["schemas"]["SplitChange"] | null;
+        };
+        /**
+         * RuleExport
+         * @description ``GET /rules/export``; also the body of ``POST /rules/import``.
+         */
+        RuleExport: {
+            /**
+             * Format
+             * @default perfin-rules
+             * @constant
+             */
+            format: "perfin-rules";
+            references?: components["schemas"]["References"];
+            /** Rules */
+            rules: components["schemas"]["RuleExportItem-Output"][];
+            /**
+             * Version
+             * @default 1
+             * @constant
+             */
+            version: 1;
+        };
+        /**
+         * RuleExportItem
+         * @description One rule of an export document (no ids, no statistics).
+         */
+        "RuleExportItem-Input": {
+            /** Actions */
+            actions: (components["schemas"]["SetCategoryAction"] | components["schemas"]["AddTagsAction"] | components["schemas"]["SetPayeeAction"] | components["schemas"]["SplitPercentAction-Input"] | components["schemas"]["SplitAmountAction-Input"] | components["schemas"]["FlagForReviewAction"] | components["schemas"]["SetNoteAction"])[];
+            /** Conditions */
+            conditions: components["schemas"]["PayeeCondition"] | components["schemas"]["MemoCondition"] | components["schemas"]["PayeeIsCondition"] | components["schemas"]["AmountCondition-Input"] | components["schemas"]["SignCondition"] | components["schemas"]["AccountCondition"] | components["schemas"]["CurrencyCondition"] | components["schemas"]["DateCondition"] | components["schemas"]["CategoryIsCondition"] | components["schemas"]["CategoryUnsetCondition"] | components["schemas"]["AllCondition-Input"] | components["schemas"]["AnyCondition-Input"] | components["schemas"]["NotCondition-Input"];
+            /**
+             * Enabled
+             * @default true
+             */
+            enabled: boolean;
+            /** Name */
+            name: string;
+            /**
+             * Stop Processing
+             * @default false
+             */
+            stop_processing: boolean;
+        };
+        /**
+         * RuleExportItem
+         * @description One rule of an export document (no ids, no statistics).
+         */
+        "RuleExportItem-Output": {
+            /** Actions */
+            actions: (components["schemas"]["SetCategoryAction"] | components["schemas"]["AddTagsAction"] | components["schemas"]["SetPayeeAction"] | components["schemas"]["SplitPercentAction-Output"] | components["schemas"]["SplitAmountAction-Output"] | components["schemas"]["FlagForReviewAction"] | components["schemas"]["SetNoteAction"])[];
+            /** Conditions */
+            conditions: components["schemas"]["PayeeCondition"] | components["schemas"]["MemoCondition"] | components["schemas"]["PayeeIsCondition"] | components["schemas"]["AmountCondition-Output"] | components["schemas"]["SignCondition"] | components["schemas"]["AccountCondition"] | components["schemas"]["CurrencyCondition"] | components["schemas"]["DateCondition"] | components["schemas"]["CategoryIsCondition"] | components["schemas"]["CategoryUnsetCondition"] | components["schemas"]["AllCondition-Output"] | components["schemas"]["AnyCondition-Output"] | components["schemas"]["NotCondition-Output"];
+            /**
+             * Enabled
+             * @default true
+             */
+            enabled: boolean;
+            /** Name */
+            name: string;
+            /**
+             * Stop Processing
+             * @default false
+             */
+            stop_processing: boolean;
+        };
+        /**
+         * RuleImport
+         * @description An export document plus how to combine it with the existing rules.
+         *
+         *     ``append`` adds the rules after the existing ones; ``replace`` deletes
+         *     the existing rules first. Every id is kept when it names an object of
+         *     this household, else resolved by its name in ``references`` (``422
+         *     rule-reference-unresolved`` when that fails).
+         */
+        RuleImport: {
+            /**
+             * Format
+             * @default perfin-rules
+             * @constant
+             */
+            format: "perfin-rules";
+            /**
+             * Mode
+             * @default append
+             * @enum {string}
+             */
+            mode: "append" | "replace";
+            references?: components["schemas"]["References"];
+            /** Rules */
+            rules: components["schemas"]["RuleExportItem-Input"][];
+            /**
+             * Version
+             * @default 1
+             * @constant
+             */
+            version: 1;
+        };
+        /**
+         * RuleList
+         * @description All rules of the household in evaluation order (at most :data:`RULES_MAX`).
+         */
+        RuleList: {
+            /** Items */
+            items: components["schemas"]["RuleOut"][];
+        };
+        /**
+         * RuleOut
+         * @description A rule. ``redacted``: accounts the reader cannot see show as the nil UUID.
+         */
+        RuleOut: {
+            /** Actions */
+            actions: (components["schemas"]["SetCategoryAction"] | components["schemas"]["AddTagsAction"] | components["schemas"]["SetPayeeAction"] | components["schemas"]["SplitPercentAction-Output"] | components["schemas"]["SplitAmountAction-Output"] | components["schemas"]["FlagForReviewAction"] | components["schemas"]["SetNoteAction"])[];
+            /** Conditions */
+            conditions: components["schemas"]["PayeeCondition"] | components["schemas"]["MemoCondition"] | components["schemas"]["PayeeIsCondition"] | components["schemas"]["AmountCondition-Output"] | components["schemas"]["SignCondition"] | components["schemas"]["AccountCondition"] | components["schemas"]["CurrencyCondition"] | components["schemas"]["DateCondition"] | components["schemas"]["CategoryIsCondition"] | components["schemas"]["CategoryUnsetCondition"] | components["schemas"]["AllCondition-Output"] | components["schemas"]["AnyCondition-Output"] | components["schemas"]["NotCondition-Output"];
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /** Enabled */
+            enabled: boolean;
+            /** Hit Count */
+            hit_count: number;
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /** Last Hit At */
+            last_hit_at: string | null;
+            /** Name */
+            name: string;
+            /**
+             * Redacted
+             * @default false
+             */
+            redacted: boolean;
+            /** Sort Order */
+            sort_order: number;
+            /** Stop Processing */
+            stop_processing: boolean;
+            /**
+             * Updated At
+             * Format: date-time
+             */
+            updated_at: string;
+        };
+        /**
+         * RuleReorder
+         * @description Every rule id of the household, in the new evaluation order.
+         */
+        RuleReorder: {
+            /** Rule Ids */
+            rule_ids: string[];
+        };
+        /**
+         * RuleTest
+         * @description Dry run against history; nothing is written.
+         *
+         *     ``rule_id`` tests one saved rule on its own (also a disabled one),
+         *     ``rule`` an unsaved one; neither runs the household's enabled rules in
+         *     order, exactly as ``POST /rules/apply`` would.
+         */
+        RuleTest: {
+            /** Account Ids */
+            account_ids?: string[] | null;
+            /** Cursor */
+            cursor?: string | null;
+            /** Date From */
+            date_from?: string | null;
+            /** Date To */
+            date_to?: string | null;
+            /**
+             * Limit
+             * @default 100
+             */
+            limit: number;
+            /**
+             * Only Changes
+             * @default false
+             */
+            only_changes: boolean;
+            rule?: components["schemas"]["RuleBody"] | null;
+            /** Rule Id */
+            rule_id?: string | null;
+        };
+        /** RuleTestItem */
+        RuleTestItem: {
+            changes: components["schemas"]["RuleDiff"];
+            /** Matched Rule Ids */
+            matched_rule_ids: string[];
+            /** Skipped */
+            skipped: components["schemas"]["SkippedAction"][];
+            transaction: components["schemas"]["TransactionOut"];
+        };
+        /**
+         * RuleTestResult
+         * @description One page of matches; continue with ``next_cursor`` (``null``: history exhausted).
+         *
+         *     ``scanned`` counts the transactions examined for this page (at most
+         *     ``app.domain.rules.service.TEST_SCAN_MAX``), ``matched`` the items.
+         */
+        RuleTestResult: {
+            /** Items */
+            items: components["schemas"]["RuleTestItem"][];
+            /** Matched */
+            matched: number;
+            /** Next Cursor */
+            next_cursor: string | null;
+            /** Scanned */
+            scanned: number;
+        };
+        /**
+         * RuleUpdate
+         * @description Change any of the fields; ``null`` is not a value for any of them.
+         */
+        RuleUpdate: {
+            /** Actions */
+            actions?: (components["schemas"]["SetCategoryAction"] | components["schemas"]["AddTagsAction"] | components["schemas"]["SetPayeeAction"] | components["schemas"]["SplitPercentAction-Input"] | components["schemas"]["SplitAmountAction-Input"] | components["schemas"]["FlagForReviewAction"] | components["schemas"]["SetNoteAction"])[] | null;
+            /** Conditions */
+            conditions?: (components["schemas"]["PayeeCondition"] | components["schemas"]["MemoCondition"] | components["schemas"]["PayeeIsCondition"] | components["schemas"]["AmountCondition-Input"] | components["schemas"]["SignCondition"] | components["schemas"]["AccountCondition"] | components["schemas"]["CurrencyCondition"] | components["schemas"]["DateCondition"] | components["schemas"]["CategoryIsCondition"] | components["schemas"]["CategoryUnsetCondition"] | components["schemas"]["AllCondition-Input"] | components["schemas"]["AnyCondition-Input"] | components["schemas"]["NotCondition-Input"]) | null;
+            /** Enabled */
+            enabled?: boolean | null;
+            /** Name */
+            name?: string | null;
+            /** Stop Processing */
+            stop_processing?: boolean | null;
         };
         /** ScopeCatalogOut */
         ScopeCatalogOut: {
@@ -1187,6 +4464,42 @@ export interface components {
             /** Username */
             username: string;
         };
+        /** SetCategoryAction */
+        SetCategoryAction: {
+            /**
+             * Category Id
+             * Format: uuid
+             */
+            category_id: string;
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            type: "set_category";
+        };
+        /** SetNoteAction */
+        SetNoteAction: {
+            /** Note */
+            note: string;
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            type: "set_note";
+        };
+        /** SetPayeeAction */
+        SetPayeeAction: {
+            /**
+             * Payee Id
+             * Format: uuid
+             */
+            payee_id: string;
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            type: "set_payee";
+        };
         /** SetupHouseholdOut */
         SetupHouseholdOut: {
             /** Base Currency */
@@ -1242,6 +4555,250 @@ export interface components {
             is_instance_admin: boolean;
             /** Username */
             username: string;
+        };
+        /**
+         * Sign
+         * @enum {string}
+         */
+        Sign: "inflow_positive" | "outflow_positive";
+        /** SignCondition */
+        SignCondition: {
+            /**
+             * Sign
+             * @enum {string}
+             */
+            sign: "outflow" | "inflow";
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            type: "sign";
+        };
+        /** SkippedAction */
+        SkippedAction: {
+            /** Action */
+            action: string;
+            /** Reason */
+            reason: string;
+            /**
+             * Rule Id
+             * Format: uuid
+             */
+            rule_id: string;
+        };
+        /** SnapshotOut */
+        SnapshotOut: {
+            /**
+             * As Of Date
+             * Format: date
+             */
+            as_of_date: string;
+            balance: components["schemas"]["Money"];
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            source: components["schemas"]["BalanceSource"];
+            /**
+             * Updated At
+             * Format: date-time
+             */
+            updated_at: string;
+        };
+        /** SplitAmountAction */
+        "SplitAmountAction-Input": {
+            /** Lines */
+            lines: components["schemas"]["SplitAmountLine-Input"][];
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            type: "split_amount";
+        };
+        /** SplitAmountAction */
+        "SplitAmountAction-Output": {
+            /** Lines */
+            lines: components["schemas"]["SplitAmountLine-Output"][];
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            type: "split_amount";
+        };
+        /**
+         * SplitAmountLine
+         * @description ``amount`` is a positive magnitude; ``null`` takes the remainder.
+         */
+        "SplitAmountLine-Input": {
+            /** Amount */
+            amount?: number | string | null;
+            /** Category Id */
+            category_id?: string | null;
+            /** Memo */
+            memo?: string | null;
+        };
+        /**
+         * SplitAmountLine
+         * @description ``amount`` is a positive magnitude; ``null`` takes the remainder.
+         */
+        "SplitAmountLine-Output": {
+            /** Amount */
+            amount?: string | null;
+            /** Category Id */
+            category_id?: string | null;
+            /** Memo */
+            memo?: string | null;
+        };
+        /** SplitChange */
+        SplitChange: {
+            /** After */
+            after: components["schemas"]["SplitPreview"][];
+            /** Before */
+            before: components["schemas"]["SplitPreview"][];
+        };
+        /** SplitIn */
+        SplitIn: {
+            amount: components["schemas"]["MoneyIn"];
+            /** Category Id */
+            category_id?: string | null;
+            /** Memo */
+            memo?: string | null;
+            /**
+             * Tax Flag
+             * @default false
+             */
+            tax_flag: boolean;
+        };
+        /** SplitOut */
+        SplitOut: {
+            amount: components["schemas"]["Money"];
+            /** Category Id */
+            category_id: string | null;
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /** Memo */
+            memo: string | null;
+            /** Tax Flag */
+            tax_flag: boolean;
+        };
+        /** SplitPercentAction */
+        "SplitPercentAction-Input": {
+            /** Lines */
+            lines: components["schemas"]["SplitPercentLine-Input"][];
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            type: "split_percent";
+        };
+        /** SplitPercentAction */
+        "SplitPercentAction-Output": {
+            /** Lines */
+            lines: components["schemas"]["SplitPercentLine-Output"][];
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            type: "split_percent";
+        };
+        /** SplitPercentLine */
+        "SplitPercentLine-Input": {
+            /** Category Id */
+            category_id?: string | null;
+            /** Memo */
+            memo?: string | null;
+            /** Percent */
+            percent: number | string;
+        };
+        /** SplitPercentLine */
+        "SplitPercentLine-Output": {
+            /** Category Id */
+            category_id?: string | null;
+            /** Memo */
+            memo?: string | null;
+            /** Percent */
+            percent: string;
+        };
+        /** SplitPreview */
+        SplitPreview: {
+            amount: components["schemas"]["Money"];
+            /** Category Id */
+            category_id: string | null;
+            /** Memo */
+            memo: string | null;
+        };
+        /**
+         * SplitSet
+         * @description Replace a transaction's splits.
+         *
+         *     ``splits`` is empty (remove the splits; the transaction is uncategorised
+         *     unless ``category_id`` is given) or holds at least two lines whose amounts,
+         *     in the transaction's currency, add up exactly to the transaction amount.
+         */
+        SplitSet: {
+            /** Category Id */
+            category_id?: string | null;
+            /** Splits */
+            splits: components["schemas"]["SplitIn"][];
+        };
+        /** TagCreate */
+        TagCreate: {
+            /** Name */
+            name: string;
+        };
+        /** TagOut */
+        TagOut: {
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /** Name */
+            name: string;
+            /**
+             * Updated At
+             * Format: date-time
+             */
+            updated_at: string;
+        };
+        /** TagPage */
+        TagPage: {
+            /** Items */
+            items: components["schemas"]["TagOut"][];
+            /** Next Cursor */
+            next_cursor: string | null;
+        };
+        /** TagUpdate */
+        TagUpdate: {
+            /** Name */
+            name: string;
+        };
+        /**
+         * TaxTreatment
+         * @description Hint for the tax vault; NULL means not tax relevant / unknown.
+         * @enum {string}
+         */
+        TaxTreatment: "taxable_income" | "tax_exempt_income" | "deductible" | "tax_payment";
+        /** TextChange */
+        TextChange: {
+            /** After */
+            after: string | null;
+            /** Before */
+            before: string | null;
         };
         /** TokenCreate */
         TokenCreate: {
@@ -1375,6 +4932,225 @@ export interface components {
              */
             method: "totp";
         };
+        /**
+         * TransactionCreate
+         * @description A manual transaction. ``amount.currency`` must be the account's currency.
+         */
+        TransactionCreate: {
+            /**
+             * Account Id
+             * Format: uuid
+             */
+            account_id: string;
+            amount: components["schemas"]["MoneyIn"];
+            /** Category Id */
+            category_id?: string | null;
+            /** Effective Date */
+            effective_date?: string | null;
+            /** Memo */
+            memo?: string | null;
+            /** Notes */
+            notes?: string | null;
+            /** Payee Id */
+            payee_id?: string | null;
+            /**
+             * Posted Date
+             * Format: date
+             */
+            posted_date: string;
+            /** Raw Payee */
+            raw_payee?: string | null;
+            /** @default cleared */
+            status: components["schemas"]["TransactionStatus"];
+            /** Tag Ids */
+            tag_ids?: string[];
+        };
+        /** TransactionOut */
+        TransactionOut: {
+            /**
+             * Account Id
+             * Format: uuid
+             */
+            account_id: string;
+            amount: components["schemas"]["Money"];
+            /** Category Id */
+            category_id: string | null;
+            /** Confidence */
+            confidence: string | null;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /** Effective Date */
+            effective_date: string | null;
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /** Memo */
+            memo: string | null;
+            /** Notes */
+            notes: string | null;
+            /** Payee Id */
+            payee_id: string | null;
+            /**
+             * Posted Date
+             * Format: date
+             */
+            posted_date: string;
+            /** Raw Payee */
+            raw_payee: string | null;
+            review_state: components["schemas"]["ReviewState"];
+            /** Source Document Id */
+            source_document_id: string | null;
+            /** Splits */
+            splits: components["schemas"]["SplitOut"][];
+            status: components["schemas"]["TransactionStatus"];
+            /** Tag Ids */
+            tag_ids: string[];
+            transfer: components["schemas"]["TransferOut"] | null;
+            /**
+             * Updated At
+             * Format: date-time
+             */
+            updated_at: string;
+        };
+        /** TransactionPage */
+        TransactionPage: {
+            /** Items */
+            items: components["schemas"]["TransactionOut"][];
+            /** Next Cursor */
+            next_cursor: string | null;
+        };
+        /**
+         * TransactionStatus
+         * @enum {string}
+         */
+        TransactionStatus: "pending" | "cleared" | "reconciled";
+        /**
+         * TransactionUpdate
+         * @description Fields to change; an absent field is left alone, ``null`` clears it.
+         *
+         *     The account and currency of a transaction never change (delete and
+         *     re-create instead). ``tag_ids`` replaces the whole tag set.
+         */
+        TransactionUpdate: {
+            amount?: components["schemas"]["MoneyIn"] | null;
+            /** Category Id */
+            category_id?: string | null;
+            /** Effective Date */
+            effective_date?: string | null;
+            /** Memo */
+            memo?: string | null;
+            /** Notes */
+            notes?: string | null;
+            /** Payee Id */
+            payee_id?: string | null;
+            /** Posted Date */
+            posted_date?: string | null;
+            /** Raw Payee */
+            raw_payee?: string | null;
+            review_state?: components["schemas"]["ReviewState"] | null;
+            status?: components["schemas"]["TransactionStatus"] | null;
+            /** Tag Ids */
+            tag_ids?: string[] | null;
+        };
+        /**
+         * TransferLink
+         * @description Pair the path transaction with ``counterpart_id`` as one transfer.
+         */
+        TransferLink: {
+            /**
+             * Counterpart Id
+             * Format: uuid
+             */
+            counterpart_id: string;
+        };
+        /**
+         * TransferOut
+         * @description The transfer a transaction belongs to.
+         *
+         *     ``counterpart_id`` is the other leg when the caller may see its account,
+         *     else ``null`` (the transfer exists, the hidden account is not revealed).
+         */
+        TransferOut: {
+            /** Counterpart Id */
+            counterpart_id: string | null;
+            /**
+             * Group Id
+             * Format: uuid
+             */
+            group_id: string;
+        };
+        /** TransferPair */
+        TransferPair: {
+            /**
+             * Group Id
+             * Format: uuid
+             */
+            group_id: string;
+            /** Transaction Ids */
+            transaction_ids: string[];
+        };
+        /** TrendPoint */
+        TrendPoint: {
+            amount: components["schemas"]["Money"];
+            /** Month */
+            month: string;
+        };
+        /** TrendReport */
+        TrendReport: {
+            /** Categories */
+            categories: components["schemas"]["TrendRow"][];
+            /** Currency */
+            currency: string;
+            /** Depth */
+            depth: number;
+            flow: components["schemas"]["Flow"];
+            /** Include Pending */
+            include_pending: boolean;
+            /** Month */
+            month: string;
+            /** Months */
+            months: number;
+            /** Series */
+            series: components["schemas"]["TrendPoint"][];
+            total: components["schemas"]["TrendRow"];
+            /** Unconverted */
+            unconverted: components["schemas"]["Money"][];
+        };
+        /**
+         * TrendRow
+         * @description One category (or the total): this month against last month and a year ago.
+         */
+        TrendRow: {
+            amount: components["schemas"]["Money"];
+            /** Key */
+            key: string | null;
+            mom_change: components["schemas"]["Money"];
+            /** Mom Percent */
+            mom_percent: string | null;
+            /** Name */
+            name: string | null;
+            previous: components["schemas"]["Money"];
+            year_ago: components["schemas"]["Money"];
+            yoy_change: components["schemas"]["Money"];
+            /** Yoy Percent */
+            yoy_percent: string | null;
+        };
+        /**
+         * UnbudgetedOut
+         * @description Spending in a category without a line (``null``: uncategorised).
+         */
+        UnbudgetedOut: {
+            actual: components["schemas"]["Money"];
+            /** Category Id */
+            category_id: string | null;
+            /** Name */
+            name: string | null;
+        };
         /** UserPreferencesOut */
         UserPreferencesOut: {
             /** Display Name */
@@ -1446,6 +5222,583 @@ export interface components {
 }
 export type $defs = Record<string, never>;
 export interface operations {
+    get_accounts_api_v1_accounts_get: {
+        parameters: {
+            query?: {
+                cursor?: string | null;
+                limit?: number;
+                closed?: boolean | null;
+                type?: components["schemas"]["AccountType"] | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AccountPage"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    post_account_api_v1_accounts_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description Optional. Repeating a request with the same key returns the first answer instead of creating again (24 hours; 1-255 visible ASCII characters). */
+                "Idempotency-Key"?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AccountCreate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AccountOut"];
+                };
+            };
+            /** @description Problem details */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Problem details */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Problem details */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Problem details */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+        };
+    };
+    get_account_api_v1_accounts__account_id__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                account_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AccountOut"];
+                };
+            };
+            /** @description Problem details */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Problem details */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Problem details */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Problem details */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+        };
+    };
+    delete_account_api_v1_accounts__account_id__delete: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                account_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Problem details */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Problem details */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Problem details */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Problem details */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+        };
+    };
+    patch_account_api_v1_accounts__account_id__patch: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                account_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AccountUpdate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AccountOut"];
+                };
+            };
+            /** @description Problem details */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Problem details */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Problem details */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Problem details */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+        };
+    };
+    get_account_balances_api_v1_accounts__account_id__balances_get: {
+        parameters: {
+            query?: {
+                start?: string | null;
+                end?: string | null;
+            };
+            header?: never;
+            path: {
+                account_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BalanceHistoryOut"];
+                };
+            };
+            /** @description Problem details */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Problem details */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Problem details */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Problem details */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+        };
+    };
+    post_account_balance_api_v1_accounts__account_id__balances_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description Optional. Repeating a request with the same key returns the first answer instead of creating again (24 hours; 1-255 visible ASCII characters). */
+                "Idempotency-Key"?: string | null;
+            };
+            path: {
+                account_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ManualBalanceIn"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SnapshotOut"];
+                };
+            };
+            /** @description Problem details */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Problem details */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Problem details */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Problem details */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+        };
+    };
+    post_account_close_api_v1_accounts__account_id__close_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                account_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: {
+            content: {
+                "application/json": components["schemas"]["AccountClose"] | null;
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AccountOut"];
+                };
+            };
+            /** @description Problem details */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Problem details */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Problem details */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Problem details */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+        };
+    };
+    get_account_grants_api_v1_accounts__account_id__grants_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                account_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AccountGrantOut"][];
+                };
+            };
+            /** @description Problem details */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Problem details */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Problem details */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Problem details */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+        };
+    };
+    post_account_reopen_api_v1_accounts__account_id__reopen_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                account_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AccountOut"];
+                };
+            };
+            /** @description Problem details */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Problem details */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Problem details */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Problem details */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+        };
+    };
     get_users_api_v1_admin_users_get: {
         parameters: {
             query?: {
@@ -2983,6 +7336,1831 @@ export interface operations {
             };
         };
     };
+    get_budgets_api_v1_budgets_get: {
+        parameters: {
+            query?: {
+                cursor?: string | null;
+                limit?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetPage"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    post_budget_api_v1_budgets_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description Optional. Repeating a request with the same key returns the first answer instead of creating again (24 hours; 1-255 visible ASCII characters). */
+                "Idempotency-Key"?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["BudgetCreate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetOut"];
+                };
+            };
+            /** @description Problem details */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Problem details */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Problem details */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Problem details */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+        };
+    };
+    get_budget_api_v1_budgets__budget_id__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                budget_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetOut"];
+                };
+            };
+            /** @description Problem details */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Problem details */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Problem details */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Problem details */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+        };
+    };
+    delete_budget_api_v1_budgets__budget_id__delete: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                budget_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Problem details */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Problem details */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Problem details */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Problem details */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+        };
+    };
+    patch_budget_api_v1_budgets__budget_id__patch: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                budget_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["BudgetUpdate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetOut"];
+                };
+            };
+            /** @description Problem details */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Problem details */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Problem details */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Problem details */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+        };
+    };
+    get_budget_report_api_v1_budgets__budget_id__report_get: {
+        parameters: {
+            query?: {
+                period?: string | null;
+                include_pending?: boolean | null;
+            };
+            header?: never;
+            path: {
+                budget_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetReportOut"];
+                };
+            };
+            /** @description Problem details */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Problem details */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Problem details */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Problem details */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+        };
+    };
+    get_categories_api_v1_categories_get: {
+        parameters: {
+            query?: {
+                cursor?: string | null;
+                limit?: number;
+                kind?: components["schemas"]["CategoryKind"] | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CategoryPage"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    post_category_api_v1_categories_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description Optional. Repeating a request with the same key returns the first answer instead of creating again (24 hours; 1-255 visible ASCII characters). */
+                "Idempotency-Key"?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CategoryCreate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CategoryOut"];
+                };
+            };
+            /** @description Problem details */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Problem details */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Problem details */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Problem details */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+        };
+    };
+    get_category_api_v1_categories__category_id__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                category_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CategoryOut"];
+                };
+            };
+            /** @description Problem details */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Problem details */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Problem details */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Problem details */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+        };
+    };
+    delete_category_api_v1_categories__category_id__delete: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                category_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Problem details */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Problem details */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Problem details */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Problem details */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+        };
+    };
+    patch_category_api_v1_categories__category_id__patch: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                category_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CategoryUpdate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CategoryOut"];
+                };
+            };
+            /** @description Problem details */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Problem details */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Problem details */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Problem details */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+        };
+    };
+    post_category_merge_api_v1_categories__category_id__merge_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                category_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["MergeInto"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CategoryOut"];
+                };
+            };
+            /** @description Problem details */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Problem details */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Problem details */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Problem details */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+        };
+    };
+    get_documents_api_v1_documents_get: {
+        parameters: {
+            query?: {
+                cursor?: string | null;
+                limit?: number;
+                kind?: components["schemas"]["DocumentKind"] | null;
+                status?: components["schemas"]["DocumentStatus"] | null;
+                account?: string | null;
+                tax_year?: number | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DocumentPage"];
+                };
+            };
+            /** @description Problem details */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Problem details */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Problem details */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Problem details */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+        };
+    };
+    post_document_api_v1_documents_post: {
+        parameters: {
+            query?: {
+                account_id?: string | null;
+            };
+            header?: {
+                /** @description Optional. Repeating a request with the same key returns the first answer instead of creating again (24 hours; 1-255 visible ASCII characters). */
+                "Idempotency-Key"?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "multipart/form-data": {
+                    /** Format: binary */
+                    file: string;
+                };
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DocumentReceivedOut"];
+                };
+            };
+            /** @description Problem details */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Problem details */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Problem details */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Problem details */
+            413: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Problem details */
+            415: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Problem details */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+        };
+    };
+    get_document_api_v1_documents__document_id__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                document_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DocumentDetailOut"];
+                };
+            };
+            /** @description Problem details */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Problem details */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Problem details */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Problem details */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+        };
+    };
+    delete_document_api_v1_documents__document_id__delete: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                document_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Problem details */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Problem details */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Problem details */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Problem details */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+        };
+    };
+    download_document_api_v1_documents__document_id__download_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                document_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The original file, as an attachment */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Problem details */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Problem details */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Problem details */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+            /** @description Problem details */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+        };
+    };
+    post_link_api_v1_documents__document_id__link_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description Optional. Repeating a request with the same key returns the first answer instead of creating again (24 hours; 1-255 visible ASCII characters). */
+                "Idempotency-Key"?: string | null;
+            };
+            path: {
+                document_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["DocumentLinkIn"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DocumentLinkOut"];
+                };
+            };
+            /** @description Problem details */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Problem details */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Problem details */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Problem details */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+        };
+    };
+    post_reprocess_api_v1_documents__document_id__reprocess_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                document_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DocumentReprocessOut"];
+                };
+            };
+            /** @description Problem details */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Problem details */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Problem details */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Problem details */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+        };
+    };
+    get_events_api_v1_events_get: {
+        parameters: {
+            query?: {
+                last_event_id?: string | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description An event stream */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "text/event-stream": unknown;
+                };
+            };
+            /** @description Problem details */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+            /** @description Problem details */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Problem details */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+        };
+    };
+    post_export_api_v1_export_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description Optional. Repeating a request with the same key returns the first answer instead of creating again (24 hours; 1-255 visible ASCII characters). */
+                "Idempotency-Key"?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ExportRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ExportQueuedOut"];
+                };
+            };
+            /** @description Problem details */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Problem details */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Problem details */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Problem details */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+        };
+    };
+    get_export_api_v1_export__job_id__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                job_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ExportOut"];
+                };
+            };
+            /** @description Problem details */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Problem details */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Problem details */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Problem details */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+        };
+    };
+    download_export_api_v1_export__job_id__download_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                job_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The archive, as an attachment */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Problem details */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Problem details */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Problem details */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Problem details */
+            410: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+            /** @description Problem details */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+        };
+    };
+    get_goals_api_v1_goals_get: {
+        parameters: {
+            query?: {
+                cursor?: string | null;
+                limit?: number;
+                archived?: boolean | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GoalPage"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    post_goal_api_v1_goals_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description Optional. Repeating a request with the same key returns the first answer instead of creating again (24 hours; 1-255 visible ASCII characters). */
+                "Idempotency-Key"?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["GoalCreate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GoalOut"];
+                };
+            };
+            /** @description Problem details */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Problem details */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Problem details */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Problem details */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+        };
+    };
+    get_goal_api_v1_goals__goal_id__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                goal_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GoalOut"];
+                };
+            };
+            /** @description Problem details */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Problem details */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Problem details */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Problem details */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+        };
+    };
+    delete_goal_api_v1_goals__goal_id__delete: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                goal_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Problem details */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Problem details */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Problem details */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Problem details */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+        };
+    };
+    patch_goal_api_v1_goals__goal_id__patch: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                goal_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["GoalUpdate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GoalOut"];
+                };
+            };
+            /** @description Problem details */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Problem details */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Problem details */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Problem details */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+        };
+    };
+    get_contributions_api_v1_goals__goal_id__contributions_get: {
+        parameters: {
+            query?: {
+                cursor?: string | null;
+                limit?: number;
+            };
+            header?: never;
+            path: {
+                goal_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ContributionPage"];
+                };
+            };
+            /** @description Problem details */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Problem details */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Problem details */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Problem details */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+        };
+    };
+    post_contribution_api_v1_goals__goal_id__contributions_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description Optional. Repeating a request with the same key returns the first answer instead of creating again (24 hours; 1-255 visible ASCII characters). */
+                "Idempotency-Key"?: string | null;
+            };
+            path: {
+                goal_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ContributionCreate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ContributionOut"];
+                };
+            };
+            /** @description Problem details */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Problem details */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Problem details */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Problem details */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+        };
+    };
+    delete_contribution_api_v1_goals__goal_id__contributions__contribution_id__delete: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                goal_id: string;
+                contribution_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Problem details */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Problem details */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Problem details */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Problem details */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+        };
+    };
     get_households_api_v1_households_get: {
         parameters: {
             query?: never;
@@ -3479,6 +9657,2132 @@ export interface operations {
             };
         };
     };
+    get_member_grants_api_v1_households__household_id__members__user_id__grants_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                household_id: string;
+                user_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AccountGrantOut"][];
+                };
+            };
+            /** @description Problem details */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Problem details */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Problem details */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Problem details */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+        };
+    };
+    put_member_grant_api_v1_households__household_id__members__user_id__grants__account_id__put: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                household_id: string;
+                user_id: string;
+                account_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AccountGrantLevelSet"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AccountGrantOut"];
+                };
+            };
+            /** @description Problem details */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Problem details */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Problem details */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Problem details */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+        };
+    };
+    delete_member_grant_api_v1_households__household_id__members__user_id__grants__account_id__delete: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                household_id: string;
+                user_id: string;
+                account_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Problem details */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Problem details */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Problem details */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Problem details */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+        };
+    };
+    post_import_api_v1_import_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                "X-Archive-Passphrase"?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "multipart/form-data": {
+                    /** Format: binary */
+                    file: string;
+                };
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ImportQueuedOut"];
+                };
+            };
+            /** @description Problem details */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Problem details */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Problem details */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Problem details */
+            413: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Problem details */
+            415: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Problem details */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+        };
+    };
+    get_import_api_v1_import__job_id__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                job_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ImportOut"];
+                };
+            };
+            /** @description Problem details */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Problem details */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Problem details */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Problem details */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+        };
+    };
+    get_mappings_api_v1_imports_mappings_get: {
+        parameters: {
+            query?: {
+                cursor?: string | null;
+                limit?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MappingPage"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    post_mapping_api_v1_imports_mappings_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description Optional. Repeating a request with the same key returns the first answer instead of creating again (24 hours; 1-255 visible ASCII characters). */
+                "Idempotency-Key"?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["MappingCreate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MappingOut"];
+                };
+            };
+            /** @description Problem details */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Problem details */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Problem details */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Problem details */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+        };
+    };
+    get_mapping_api_v1_imports_mappings__mapping_id__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                mapping_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MappingOut"];
+                };
+            };
+            /** @description Problem details */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Problem details */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Problem details */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Problem details */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+        };
+    };
+    delete_mapping_api_v1_imports_mappings__mapping_id__delete: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                mapping_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Problem details */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Problem details */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Problem details */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Problem details */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+        };
+    };
+    patch_mapping_api_v1_imports_mappings__mapping_id__patch: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                mapping_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["MappingUpdate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MappingOut"];
+                };
+            };
+            /** @description Problem details */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Problem details */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Problem details */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Problem details */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+        };
+    };
+    post_apply_mapping_api_v1_imports__document_id__apply_mapping_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description Optional. Repeating a request with the same key returns the first answer instead of creating again (24 hours; 1-255 visible ASCII characters). */
+                "Idempotency-Key"?: string | null;
+            };
+            path: {
+                document_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ApplyMapping"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ImportAccepted"];
+                };
+            };
+            /** @description Problem details */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Problem details */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Problem details */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Problem details */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+        };
+    };
+    get_preview_api_v1_imports__document_id__preview_get: {
+        parameters: {
+            query?: {
+                offset?: number;
+                limit?: number;
+            };
+            header?: never;
+            path: {
+                document_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ImportPreview"];
+                };
+            };
+            /** @description Problem details */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Problem details */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Problem details */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Problem details */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+        };
+    };
+    get_job_api_v1_jobs__job_id__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                job_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["JobOut"];
+                };
+            };
+            /** @description Problem details */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Problem details */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Problem details */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Problem details */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+        };
+    };
+    get_payees_api_v1_payees_get: {
+        parameters: {
+            query?: {
+                cursor?: string | null;
+                limit?: number;
+                q?: string | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PayeePage"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    post_payee_api_v1_payees_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description Optional. Repeating a request with the same key returns the first answer instead of creating again (24 hours; 1-255 visible ASCII characters). */
+                "Idempotency-Key"?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PayeeCreate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PayeeOut"];
+                };
+            };
+            /** @description Problem details */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Problem details */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Problem details */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Problem details */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+        };
+    };
+    get_payee_api_v1_payees__payee_id__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                payee_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PayeeOut"];
+                };
+            };
+            /** @description Problem details */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Problem details */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Problem details */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Problem details */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+        };
+    };
+    delete_payee_api_v1_payees__payee_id__delete: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                payee_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Problem details */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Problem details */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Problem details */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Problem details */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+        };
+    };
+    patch_payee_api_v1_payees__payee_id__patch: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                payee_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PayeeUpdate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PayeeOut"];
+                };
+            };
+            /** @description Problem details */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Problem details */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Problem details */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Problem details */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+        };
+    };
+    post_payee_merge_api_v1_payees__payee_id__merge_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                payee_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["MergeInto"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PayeeOut"];
+                };
+            };
+            /** @description Problem details */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Problem details */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Problem details */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Problem details */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+        };
+    };
+    get_cashflow_api_v1_reports_cashflow_get: {
+        parameters: {
+            query?: {
+                date_from?: string | null;
+                date_to?: string | null;
+                account?: string[] | null;
+                include_pending?: boolean | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CashflowReport"];
+                };
+            };
+            /** @description Problem details */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Problem details */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Problem details */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Problem details */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+        };
+    };
+    get_income_api_v1_reports_income_get: {
+        parameters: {
+            query?: {
+                date_from?: string | null;
+                date_to?: string | null;
+                group_by?: components["schemas"]["GroupBy"];
+                depth?: number;
+                account?: string[] | null;
+                include_pending?: boolean | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["FlowReport"];
+                };
+            };
+            /** @description Problem details */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Problem details */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Problem details */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Problem details */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+        };
+    };
+    get_spending_api_v1_reports_spending_get: {
+        parameters: {
+            query?: {
+                date_from?: string | null;
+                date_to?: string | null;
+                group_by?: components["schemas"]["GroupBy"];
+                depth?: number;
+                account?: string[] | null;
+                include_pending?: boolean | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["FlowReport"];
+                };
+            };
+            /** @description Problem details */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Problem details */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Problem details */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Problem details */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+        };
+    };
+    get_trends_api_v1_reports_trends_get: {
+        parameters: {
+            query?: {
+                flow?: components["schemas"]["Flow"];
+                month?: string | null;
+                months?: number;
+                depth?: number;
+                account?: string[] | null;
+                include_pending?: boolean | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TrendReport"];
+                };
+            };
+            /** @description Problem details */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Problem details */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Problem details */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Problem details */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+        };
+    };
+    get_review_api_v1_review_get: {
+        parameters: {
+            query?: {
+                state?: components["schemas"]["ReviewItemState"] | "all";
+                kind?: components["schemas"]["ReviewKind"] | null;
+                document?: string | null;
+                cursor?: string | null;
+                limit?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ReviewPage"];
+                };
+            };
+            /** @description Problem details */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Problem details */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Problem details */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Problem details */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+        };
+    };
+    get_review_item_api_v1_review__item_id__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                item_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ReviewItemOut"];
+                };
+            };
+            /** @description Problem details */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Problem details */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Problem details */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Problem details */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+        };
+    };
+    post_dismiss_api_v1_review__item_id__dismiss_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                item_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ReviewItemOut"];
+                };
+            };
+            /** @description Problem details */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Problem details */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Problem details */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Problem details */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+        };
+    };
+    post_resolve_api_v1_review__item_id__resolve_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                item_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ResolveDuplicate"] | components["schemas"]["ResolveUnknownAccount"] | components["schemas"]["ResolveUnparsed"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ReviewItemOut"];
+                };
+            };
+            /** @description Problem details */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Problem details */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Problem details */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Problem details */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+        };
+    };
+    get_rules_api_v1_rules_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RuleList"];
+                };
+            };
+        };
+    };
+    post_rule_api_v1_rules_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description Optional. Repeating a request with the same key returns the first answer instead of creating again (24 hours; 1-255 visible ASCII characters). */
+                "Idempotency-Key"?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RuleCreate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RuleOut"];
+                };
+            };
+            /** @description Problem details */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Problem details */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Problem details */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Problem details */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+        };
+    };
+    post_rules_apply_api_v1_rules_apply_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description Optional. Repeating a request with the same key returns the first answer instead of creating again (24 hours; 1-255 visible ASCII characters). */
+                "Idempotency-Key"?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RuleApply"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["JobAccepted"];
+                };
+            };
+            /** @description Problem details */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Problem details */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Problem details */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Problem details */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+        };
+    };
+    get_rules_export_api_v1_rules_export_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RuleExport"];
+                };
+            };
+        };
+    };
+    post_rules_import_api_v1_rules_import_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description Optional. Repeating a request with the same key returns the first answer instead of creating again (24 hours; 1-255 visible ASCII characters). */
+                "Idempotency-Key"?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RuleImport"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RuleList"];
+                };
+            };
+            /** @description Problem details */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Problem details */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Problem details */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Problem details */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+        };
+    };
+    post_rules_reorder_api_v1_rules_reorder_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RuleReorder"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RuleList"];
+                };
+            };
+            /** @description Problem details */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Problem details */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Problem details */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Problem details */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+        };
+    };
+    post_rules_test_api_v1_rules_test_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RuleTest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RuleTestResult"];
+                };
+            };
+            /** @description Problem details */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Problem details */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Problem details */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Problem details */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+        };
+    };
+    get_rule_api_v1_rules__rule_id__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                rule_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RuleOut"];
+                };
+            };
+            /** @description Problem details */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Problem details */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Problem details */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Problem details */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+        };
+    };
+    delete_rule_api_v1_rules__rule_id__delete: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                rule_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Problem details */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Problem details */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Problem details */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Problem details */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+        };
+    };
+    patch_rule_api_v1_rules__rule_id__patch: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                rule_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RuleUpdate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RuleOut"];
+                };
+            };
+            /** @description Problem details */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Problem details */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Problem details */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Problem details */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+        };
+    };
     get_user_settings_api_v1_settings_user_get: {
         parameters: {
             query?: never;
@@ -3635,6 +11939,946 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["SetupStatusOut"];
+                };
+            };
+        };
+    };
+    get_tags_api_v1_tags_get: {
+        parameters: {
+            query?: {
+                cursor?: string | null;
+                limit?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TagPage"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    post_tag_api_v1_tags_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description Optional. Repeating a request with the same key returns the first answer instead of creating again (24 hours; 1-255 visible ASCII characters). */
+                "Idempotency-Key"?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["TagCreate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TagOut"];
+                };
+            };
+            /** @description Problem details */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Problem details */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Problem details */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Problem details */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+        };
+    };
+    get_tag_api_v1_tags__tag_id__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                tag_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TagOut"];
+                };
+            };
+            /** @description Problem details */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Problem details */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Problem details */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Problem details */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+        };
+    };
+    delete_tag_api_v1_tags__tag_id__delete: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                tag_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Problem details */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Problem details */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Problem details */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Problem details */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+        };
+    };
+    patch_tag_api_v1_tags__tag_id__patch: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                tag_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["TagUpdate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TagOut"];
+                };
+            };
+            /** @description Problem details */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Problem details */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Problem details */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Problem details */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+        };
+    };
+    list_transactions_api_v1_transactions_get: {
+        parameters: {
+            query?: {
+                account?: string[] | null;
+                date_from?: string | null;
+                date_to?: string | null;
+                category?: string[] | null;
+                uncategorized?: boolean | null;
+                payee?: string[] | null;
+                tag?: string[] | null;
+                review_state?: components["schemas"]["ReviewState"][] | null;
+                status?: components["schemas"]["TransactionStatus"][] | null;
+                transfer?: boolean | null;
+                q?: string | null;
+                cursor?: string | null;
+                limit?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TransactionPage"];
+                };
+            };
+            /** @description Problem details */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Problem details */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Problem details */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Problem details */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+        };
+    };
+    post_transaction_api_v1_transactions_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description Optional. Repeating a request with the same key returns the first answer instead of creating again (24 hours; 1-255 visible ASCII characters). */
+                "Idempotency-Key"?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["TransactionCreate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TransactionOut"];
+                };
+            };
+            /** @description Problem details */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Problem details */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Problem details */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Problem details */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+        };
+    };
+    post_bulk_api_v1_transactions_bulk_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["BulkAction"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BulkResult"];
+                };
+            };
+            /** @description Problem details */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Problem details */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Problem details */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Problem details */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+        };
+    };
+    post_auto_pair_api_v1_transactions_transfers_auto_pair_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AutoPairRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AutoPairResult"];
+                };
+            };
+            /** @description Problem details */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Problem details */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Problem details */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Problem details */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+        };
+    };
+    get_transaction_api_v1_transactions__transaction_id__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                transaction_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TransactionOut"];
+                };
+            };
+            /** @description Problem details */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Problem details */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Problem details */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Problem details */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+        };
+    };
+    delete_transaction_api_v1_transactions__transaction_id__delete: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                transaction_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Problem details */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Problem details */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Problem details */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Problem details */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+        };
+    };
+    patch_transaction_api_v1_transactions__transaction_id__patch: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                transaction_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["TransactionUpdate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TransactionOut"];
+                };
+            };
+            /** @description Problem details */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Problem details */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Problem details */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Problem details */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+        };
+    };
+    post_split_api_v1_transactions__transaction_id__split_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                transaction_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SplitSet"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TransactionOut"];
+                };
+            };
+            /** @description Problem details */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Problem details */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Problem details */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Problem details */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+        };
+    };
+    post_transfer_api_v1_transactions__transaction_id__transfer_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                transaction_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["TransferLink"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TransactionOut"];
+                };
+            };
+            /** @description Problem details */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Problem details */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Problem details */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Problem details */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+        };
+    };
+    delete_transfer_api_v1_transactions__transaction_id__transfer_delete: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                transaction_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Problem details */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Problem details */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Problem details */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Problem details */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+        };
+    };
+    get_transfer_candidates_api_v1_transactions__transaction_id__transfer_candidates_get: {
+        parameters: {
+            query?: {
+                window_days?: number;
+            };
+            header?: never;
+            path: {
+                transaction_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TransactionOut"][];
+                };
+            };
+            /** @description Problem details */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Problem details */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Problem details */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Problem details */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
                 };
             };
         };

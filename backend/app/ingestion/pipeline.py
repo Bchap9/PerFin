@@ -20,12 +20,15 @@ Phase 2 routes only **structured** formats (CSV, TSV, OFX, QFX, QIF):
   ``needs_review`` with an ``unparsed`` item (``format_not_supported``) until
   its extractor lands.
 * **classify**: kind ``statement``; period from the statements; the account
-  from the statement's last four digits when exactly one account of the
-  household matches (and the document has none yet).
-* **parse/match/commit**: delegated to the structured importer registered
-  with :func:`register_structured_importer` (the Phase 2 import service:
-  column mapping, ``import_hash`` dedupe, review items). Without one, the
-  document waits in ``needs_review`` (``unparsed``/``import_pending``).
+  from the statement's last four digits (and OFX institution) when exactly
+  one account of the household matches among those the uploader may edit
+  (``app.ingestion.match.accounts``; the document has none yet).
+* **parse/match/commit**: delegated to the structured importer in
+  ``PipelineDeps.importer`` or registered with
+  :func:`register_structured_importer`. The worker installs
+  :func:`structured_import` (``app.domain.imports.service``: column mappings,
+  ``import_hash`` dedupe, rules, balance snapshots, review items). Without
+  one, the document waits in ``needs_review`` (``unparsed``/``import_pending``).
 * Accepted documents (``processed`` or ``needs_review`` after a successful
   extraction) move from quarantine to the permanent area
   (:func:`app.domain.documents.service.promote_blob`); failed ones stay in
@@ -42,7 +45,6 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any, Protocol
 
-from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.core import clock
@@ -50,7 +52,6 @@ from app.core.audit import audit
 from app.core.crypto import DecryptionError, Keyring
 from app.core.events import emit
 from app.core.logging import get_logger, scrub_text
-from app.domain.accounts.models import Account
 from app.domain.documents import repo
 from app.domain.documents.blobstore import BlobStore, BlobStoreError
 from app.domain.documents.models import (
@@ -63,7 +64,9 @@ from app.domain.documents.models import (
     ReviewKind,
 )
 from app.domain.documents.service import open_plaintext, promote_blob
+from app.domain.imports.service import import_extraction
 from app.ingestion.intake.sniff import FileType
+from app.ingestion.match.accounts import importable_account_ids, match_account
 from app.ingestion.sandbox.protocol import ExtractOptions, ExtractResult
 from app.ingestion.sandbox.runner import SandboxConfig, SandboxError, run_extraction
 
@@ -183,18 +186,24 @@ def _classify(db: Session, document: Document, result: ExtractResult) -> dict[st
     if document.account_id is None:
         last4s = {s.account.last4 for s in result.statements if s.account.last4}
         if len(last4s) == 1:
-            matches = list(
-                db.execute(
-                    select(Account.id).where(
-                        Account.household_id == document.household_id,
-                        Account.number_last4 == next(iter(last4s)),
-                    )
-                ).scalars()
+            institutions = {s.account.institution for s in result.statements}
+            match = match_account(
+                db,
+                document.household_id,
+                last4=next(iter(last4s)),
+                institution=next(iter(institutions)) if len(institutions) == 1 else None,
+                allowed=importable_account_ids(db, document.household_id, document.uploaded_by),
             )
-            facts["account_candidates"] = len(matches)
-            if len(matches) == 1:
-                document.account_id = matches[0]
+            facts["account_candidates"] = max(len(match.candidates), 1 if match.account_id else 0)
+            if match.account_id is not None:
+                document.account_id = match.account_id
     return facts
+
+
+def structured_import(db: Session, document: Document, result: ExtractResult) -> ImportOutcome:
+    """The Phase 2 structured importer (:func:`app.domain.imports.service.import_extraction`)."""
+    outcome = import_extraction(db, document, result)
+    return ImportOutcome(outcome.status, outcome.summary)
 
 
 def ingest_document(

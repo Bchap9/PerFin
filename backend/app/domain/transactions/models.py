@@ -35,7 +35,8 @@ Conventions the services rely on:
   deletes the children first. ``system_key`` identifies the default set
   (``app.domain.transactions.categories``).
 * ``rule.conditions``/``rule.actions`` are JSON documents owned by the rules
-  engine; ``sort_order`` orders evaluation (``order`` is an SQL keyword).
+  engine (``app.domain.rules.schemas``); ``sort_order`` orders evaluation
+  (``order`` is an SQL keyword) and ``stop_processing`` ends it after a match.
 """
 
 from __future__ import annotations
@@ -301,6 +302,10 @@ class Rule(UUIDPk, Timestamps, HouseholdScoped, Base):
     sort_order: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     enabled: Mapped[bool] = mapped_column(
         Boolean, nullable=False, default=True, server_default=text("true")
+    )
+    #: Stop evaluating later rules once this one matches ("first match" for this rule).
+    stop_processing: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default=text("false")
     )
     conditions: Mapped[Any] = mapped_column(JSONB, nullable=False)
     actions: Mapped[Any] = mapped_column(JSONB, nullable=False)

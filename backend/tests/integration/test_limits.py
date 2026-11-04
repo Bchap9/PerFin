@@ -45,7 +45,14 @@ def client(settings: Settings) -> Iterator[TestClient]:
             total += len(chunk)
         return {"length": total}
 
+    # The real POST /documents (authenticated, multipart) is shadowed by the
+    # counting stub above (routes match in order) so only the body cap of
+    # that exact path is measured.
+    before = len(app.router.routes)
     app.include_router(router, prefix=API_PREFIX)
+    added = app.router.routes[before:]
+    del app.router.routes[before:]
+    app.router.routes[:0] = added
     with TestClient(app, headers=BEARER) as test_client:
         yield test_client
 

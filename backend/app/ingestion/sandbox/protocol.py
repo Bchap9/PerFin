@@ -123,6 +123,8 @@ class StatementAccount(_Strict):
     last4: Annotated[str, Field(pattern=r"^[0-9]{4}$")] | None = None
     currency: Annotated[str, Field(pattern=r"^[A-Z]{3}$")] | None = None
     name: ShortText | None = None
+    #: The financial institution named by the file (OFX ``FI/ORG``), free text.
+    institution: Annotated[str, Field(max_length=200)] | None = None
 
 
 class Statement(_Strict):

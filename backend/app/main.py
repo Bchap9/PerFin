@@ -68,6 +68,8 @@ def include_routers(app: FastAPI, package: ModuleType = routers_package) -> list
 
 
 UPLOAD_PATHS = (f"{API_PREFIX}/documents",)
+#: Full import (``POST /import``): capped at ``PERFIN_IMPORT_MAX_MB``.
+IMPORT_PATH = f"{API_PREFIX}/import"
 
 
 def _csrf_key(settings: Settings) -> bytes:
@@ -109,6 +111,8 @@ def _install_middleware(app: FastAPI, settings: Settings) -> None:
         api_prefix=API_PREFIX,
     )
     body_limits = dict.fromkeys(UPLOAD_PATHS, settings.upload_max_bytes)
+    # The multipart framing around the archive is a few hundred bytes.
+    body_limits[IMPORT_PATH] = settings.import_max_bytes + 64 * 1024
     app.state.body_limit_overrides = body_limits
     app.add_middleware(
         BodySizeLimitMiddleware, default_limit=DEFAULT_MAX_BODY_BYTES, overrides=body_limits

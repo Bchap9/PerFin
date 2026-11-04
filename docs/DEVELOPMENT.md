@@ -62,6 +62,7 @@ app/
     audit.py         audit(...) helper writing audit_log
     events.py        emit(session, household_id, type, payload) -> event row + NOTIFY
     money.py         Money schema, Decimal helpers, currency validation
+    idempotency.py   Idempotency-Key for creating POSTs: IdempotencyKeyHeader + idempotent(...)
     metrics.py       Prometheus registry and internal metrics server
     request_context.py  request id, client IP/scheme from trusted proxies only
     limits.py        request body size limits
@@ -86,6 +87,20 @@ app/
                      (token scope catalog and role ceilings: a new scope goes there
                      before `require_scope("...")` can name it)
   domain/<context>/  models.py, schemas.py, repo.py, service.py (one per bounded context)
+                     (taxonomy/ has no models: categories, payees and tags are
+                     tables of transactions/models.py; it holds their API logic;
+                     rules/ likewise for `rule`, plus engine.py (pure evaluation);
+                     jobs/ reads `job` rows for GET /jobs/{id};
+                     imports/ holds `import_mapping` and the structured
+                     importer the worker's pipeline calls;
+                     documents/manage.py holds the documents API rules on top
+                     of documents/service.py (storage); review/ lists and
+                     resolves `review_item` rows and owns `import_hash_alias`;
+                     events/ is the SSE stream behind GET /events;
+                     portability/ is the full export/import: entities.py lists
+                     the exported tables (a new household-scoped table goes
+                     there or in NOT_EXPORTED), codec.py, zipsafe.py,
+                     export.py, import_.py, service.py)
   ingestion/         intake/, sandbox/, extract/, classify/, parsers/, match/, pipeline.py
   integrations/      prices, fx, notifications, antivirus
   mcp/               MCP server role
@@ -137,7 +152,11 @@ app/
 - Account-derived data (transactions, balances, budgets spent, goals,
   reports) is filtered with `app.domain.accounts.visibility`
   (`visible_account_filter`, `get_visible_account`); a hidden account is
-  `404 account-not-found`.
+  `404 account-not-found`. Sums over the ledger (reports, budget actuals)
+  start from `app.domain.reports.ledger.ledger_lines` (visibility, splits,
+  transfers and pending review rows already handled), aggregate with its
+  `aggregate` in SQL, and convert with its `Accumulator` (rate per posting
+  day, missing rates reported as `unconverted`).
 - Per-request context is set with
   `set_config('perfin.household_id', :id, true)` (transaction-local) by
   `app.db.rls.set_context`. Code never builds SQL strings; bound parameters
@@ -158,7 +177,12 @@ app/
   `alembic upgrade head` as the owner role (`PERFIN_MIGRATION_DATABASE_URL`). `tests/integration/test_migrations.py`
   upgrades a fresh database to head, asserts `alembic check` reports no
   drift, asserts every `HouseholdScoped` table has RLS enabled and forced,
-  and downgrades to base.
+  and downgrades to base and to each previous revision. Revisions so far:
+  `0001_phase0_foundations`, `0002_phase1_identity`, `0003_phase2_ledger`
+  (27 household-scoped ledger, document, import and platform tables; the
+  `account_grant -> account` key, deleting orphan Phase 1 grants first; a
+  data step that needs to see every household's rows of a forced-RLS table
+  lifts `FORCE ROW LEVEL SECURITY` for that statement only, as 0003 does).
 
 ### Tests
 
@@ -201,11 +225,70 @@ app/
   `make_account(db, household_id, type=..., currency=...)`,
   `make_transaction(db, account, amount=..., posted_date=...)`,
   `make_category`, `make_payee`, `make_tag`, `make_split`,
-  `make_snapshot`, `make_fx_rate`, `make_rule`, `make_budget`, `make_goal`,
+  `make_snapshot`, `make_fx_rate`, `make_rule` (by default a valid rule
+  document: `all` of nothing, `flag_for_review`), `make_budget`, `make_goal`,
   `seed_categories(db, household_id)` (households from the identity
   factories have no categories until this runs), and the committing `ledger`
   fixture (`ledger.account(household_id, ...)`, `ledger.grant(household_id,
   user_id, account, level)`, `ledger.run(make_x, ...)`).
+  `tests/fixtures/report_ledger.py` builds a fixed multi-account,
+  multi-currency ledger (splits, a transfer, a pending row, a hidden
+  account, a currency without a rate) whose report and budget totals are
+  written down exactly in `tests/integration/test_reports_api.py` and
+  `test_budgets_api.py`; tests freeze "today" by patching the `today`
+  function of `app.domain.reports.service`, `app.domain.budgets.service` or
+  `app.domain.goals.service`.
+- Documents and ingestion: `tests/fixtures/statements.py` generates
+  synthetic CSV/TSV, OFX (SGML and XML), QFX and QIF files (plus XXE and
+  entity-bomb prologs); tests build a `LocalFSBlobStore` under `tmp_path`.
+  Extractors may be called in-process in tests; production code reaches
+  them only through `app.ingestion.sandbox.runner.run_extraction` (the
+  child is the only module that imports `app.ingestion.extract`, enforced
+  by `tests/unit/test_sandbox_boundaries.py`). Sandbox hardening is tested
+  with hostile extractors in `tests/fixtures/sandbox_evil.py`, run through
+  the real child code path with `SandboxConfig(module="tests.fixtures.sandbox_evil")`.
+- Documents API, review queue and SSE: `tests/fixtures/documents.py` has
+  flush-only `make_document(db, store, keyring, household_id, ...)` (the
+  synthetic `data` really encrypted into the given `LocalFSBlobStore`,
+  `processed` with a permanent blob by default, no job queued) and
+  `make_review_item(db, document, kind, payload)`. API tests copy the
+  `settings` with `documents_dir`/`quarantine_dir` under `tmp_path` and open
+  an `Actors` app on them. `GET /events` streams until
+  `sse_max_stream_seconds` (a `TestClient` reads a response to its end), so
+  SSE tests set it to about a second and emit committed events from a
+  thread meanwhile; the authz matrix uses 0.2 s and a temporary blob store
+  (parameter kinds `stored_document`, `review_item`).
+- Structured imports: `tests/fixtures/synth_statements.py` (standard library
+  only; also `scripts/synth/statements.py --out DIR` for the dev seed)
+  generates invented institutions, merchants and account numbers: a seeded
+  history (`synth_ledger`), statement windows with opening/closing balances
+  (`statement`, `sample_statement`; overlapping windows share rows), CSV/TSV
+  in the bank-like `LAYOUTS` (each with the `MappingSpec` JSON that reads
+  it), OFX SGML/XML, QFX and QIF. `tests/fixtures/imports.py` has
+  flush-only `make_extracted_document` (a document whose `extraction` is a
+  given sandbox result, no file behind it), `make_import_mapping`, and
+  `run_jobs(factories, household_id, job_type, done=...)`, which runs the
+  household's queued jobs of a type through their registered handlers (each
+  in its own committed transaction). End-to-end import tests patch
+  `app.workers.handlers.ingest.get_settings` to tmp blob directories and use
+  the real `default_deps()` (sandbox and structured importer).
+- The Phase 2 end-to-end test (`tests/integration/test_phase2_end_to_end.py`)
+  drives one household through the real app over HTTP and the real
+  `app.workers.runner.Worker` (`run_once` until idle): OFX and CSV uploads,
+  rules, `/transactions`, `/review` resolutions and a live `/events`
+  stream. The test database is shared, so it holds back other households'
+  queued jobs (`run_after` pushed out under `queue_scope`, restored after);
+  copy that pattern for any test that runs the real worker loop.
+- Export and import: `tests/fixtures/portability.py` has `build_rich_ledger`
+  (the report ledger plus one of everything an export carries, including
+  formula-looking text cells and a document), flush-only
+  `make_ready_export(db, store, keyring, household_id, requested_by)` /
+  `make_import_record(...)`, `rezip(data, mutate, manifest=...)` to derive
+  hostile archives from a real one, `run_portability_jobs(...)` (the real
+  handlers with test dependencies) and `CHEAP_KDF` (patch
+  `app.domain.portability.service.EXPORT_KDF` with it so passphrase tests
+  are fast). The authz matrix kinds `export_archive` / `import_archive`
+  build an archive requested by the caller.
 - Tests that drive the login, setup or reset endpoints use
   `tests/fixtures/auth_clients.py`: `browser(app, ip=None)` is a
   `TestClient` on `https://testserver` (so `Secure` cookies round-trip) with
@@ -274,9 +357,16 @@ app/
     `household_object=True` when the body names a household;
   - `params={"name": kind}` for every path parameter, with a kind from
     `PARAM_KINDS` (`household`, `member`, `user`, `own_session`,
-    `own_token`, `own_webauthn`); add a kind (and its generator in
-    `build_object`, and its `not_found` problem) for a new object type, so
-    cross-household access is checked to be `404`;
+    `own_token`, `own_webauthn`, and household objects such as
+    `transaction`); add a kind (and its generator in `build_object`, and its
+    `not_found` problem) for a new object type, so cross-household access is
+    checked to be `404`. A household object (listed in
+    `HOUSEHOLD_OBJECT_KINDS`) is created on an account on which the matrix
+    member holds `edit` and the viewer `view`, so the role columns decide;
+    grant-specific outcomes are tested in the domain's own tests. A
+    nested object receives the objects built for the earlier parameters of
+    the same path (`build_object(..., built)`; a `goal_contribution`
+    belongs to the path's `goal`);
   - `body={...}` only when a check runs inside the handler after body
     validation (an empty body is sent otherwise).
   Never loosen an entry to make the matrix pass; fix the guard.
@@ -296,8 +386,21 @@ As in [API.md](API.md): `/api/v1`, problem-details errors raised with
 `POST`s, `Cache-Control: no-store` everywhere except static assets.
 
 Input and output schemas are separate Pydantic models
-(`XCreate`/`XUpdate`/`XOut`, `extra="forbid"` on inputs). Routers call
-services; services call repos; nothing in `app/api` or `app/domain` imports
+(`XCreate`/`XUpdate`/`XOut`, `extra="forbid"` on inputs). A creating `POST`
+takes `idempotency_key: IdempotencyKeyHeader = None` and returns
+`idempotent(db, principal, idempotency_key, scope="POST /things",
+payload=payload_of(body, **path_params), run=lambda: service.create(...))`
+(`app.core.idempotency`; the replay is a `JSONResponse`, so annotate the
+handler `-> Any` and keep `response_model`). Ledger routers build guards
+with `app.api.routers.accounts.scoped_role(scope, minimum_role)`; a route
+with a request body and an object in its path checks the object in a
+dependency (`require_account_writer`, `require_category_writer`, ...), so a
+foreign or hidden object is its `404` before the body is validated (the
+authz matrix sends empty bodies). Code that creates transactions (manual
+create, importers) calls `app.domain.rules.service.apply_rules_to(session,
+household_id, rows, protect=...)` after flushing them, in the same
+transaction, passing in `protect` the fields a person entered by hand.
+Routers call services; services call repos; nothing in `app/api` or `app/domain` imports
 `app/ingestion/extract` (enforced by `tests/unit/test_import_boundaries.py`).
 
 ## Frontend layout

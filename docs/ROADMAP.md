@@ -75,19 +75,21 @@ roles. Still no finance features.
 Goal: a usable manual finance tracker. Accounts, transactions, categories,
 rules, budgets, basic dashboard. Import of **structured** formats only.
 
-- [ ] Accounts (all types), manual balances, balance history
-- [ ] Transactions with splits, transfers, payees, categories, tags, notes
-- [ ] Rules engine with dry-run and re-apply
-- [ ] Budgets (monthly/annual) and spending reports
-- [ ] Savings goals
+- [x] Accounts (all types), manual balances, balance history (API)
+- [x] Transactions with splits, transfers, payees, categories, tags, notes (API)
+- [x] Rules engine with dry-run and re-apply
+- [x] Budgets (monthly/annual/custom, rollover, forecast) and spending, income, trend and cash-flow reports (API)
+- [x] Savings goals (accounts, contributions, progress, projected completion; API)
 - [ ] Structured import: CSV (with column mapping UI and saved mappings),
       OFX/QFX, QIF, with `import_hash` dedupe and the review queue for
-      duplicates
-- [ ] Document store with envelope encryption; uploaded CSV/OFX kept as
+      duplicates (backend done and covered end to end through the real app
+      and worker in `backend/tests/integration/test_phase2_end_to_end.py`;
+      open: the column mapping and review UI)
+- [x] Document store with envelope encryption; uploaded CSV/OFX kept as
       documents
 - [ ] SPA: dashboard, accounts, transactions grid with inline edit, rules,
       budgets, review queue, settings; SSE-driven refresh
-- [ ] Full export/import (JSON + CSV + documents zip)
+- [x] Full export/import (JSON + CSV + documents zip; docs/PORTABILITY.md)
 
 ## Phase 3: Smart ingestion I (v0.3)
 
@@ -185,6 +187,9 @@ premises. See AI_ACCESS.md.
 - Mobile receipt capture via PWA camera (upload path already covers it)
 - Plugin API for community parsers delivered as signed packages
 - Read-only "advisor" share links with expiry
+- S3-compatible blob store (`app.domain.documents.blobstore.S3BlobStore` is an
+  interface that refuses to run; documents are stored on the local
+  filesystem, encrypted per object, until it is implemented)
 
 ## Milestone cadence
 

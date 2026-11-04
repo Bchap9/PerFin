@@ -51,6 +51,7 @@ import os
 import resource
 import sys
 from collections.abc import Callable, Mapping, Sequence
+from types import ModuleType
 from typing import Final
 
 from pydantic import ValidationError
@@ -64,6 +65,16 @@ from app.ingestion.sandbox.protocol import (
 )
 
 Extractor = Callable[[bytes, ExtractOptions, str], ExtractResult]
+
+# Loaded before hardening: finding libseccomp may spawn ``ldconfig``, which
+# the limits and the filter rightly forbid later.
+_SECCOMP: ModuleType | None
+try:
+    import pyseccomp as _pyseccomp
+
+    _SECCOMP = _pyseccomp
+except (ImportError, OSError):  # pragma: no cover - the image ships libseccomp2
+    _SECCOMP = None
 
 EXIT_OK: Final = 0
 EXIT_USAGE: Final = 64
@@ -202,8 +213,9 @@ def apply_rlimits(limits: SandboxLimits) -> None:
 
 
 def install_seccomp() -> None:
-    import pyseccomp
-
+    pyseccomp = _SECCOMP
+    if pyseccomp is None:
+        raise HardenError("libseccomp is not available")
     eperm = pyseccomp.ERRNO(errno.EPERM)
     pid = os.getpid()
     filt = pyseccomp.SyscallFilter(defaction=pyseccomp.ALLOW)

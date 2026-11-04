@@ -12,7 +12,11 @@ run as the owner, exactly like ``perfin migrate`` in production, and then:
   or TRUNCATE it, and the owner cannot either (trigger);
 * the application role can read ``alembic_version`` (``/readyz``);
 * ``downgrade base`` removes every table, function and enum type it created,
-  and the database can be upgraded again.
+  and the database can be upgraded again;
+* each revision downgrades to the previous one removing exactly its own
+  tables and enum types (0003 also its ``account_grant`` foreign key);
+* the Phase 2 ledger tables (0003) refuse another household's rows and
+  references to another household's objects, as the application role.
 """
 
 from __future__ import annotations
@@ -66,6 +70,50 @@ PHASE1_TABLES = frozenset(
         "household_member",
         "account_grant",
         "api_token",
+    }
+)
+#: Phase 2 ledger, document, import and platform tables (revision 0003), all
+#: household-scoped (forced RLS, ``household_isolation`` only).
+PHASE2_TABLES = frozenset(
+    {
+        "institution",
+        "account",
+        "balance_snapshot",
+        "payee",
+        "category",
+        "tag",
+        "transaction",
+        "transaction_split",
+        "transaction_tag",
+        "rule",
+        "scheduled_transaction",
+        "budget",
+        "budget_line",
+        "goal",
+        "goal_account",
+        "goal_contribution",
+        "fx_rate",
+        "blob",
+        "document",
+        "document_link",
+        "review_item",
+        "parser_fingerprint",
+        "ingest_job",
+        "import_mapping",
+        "import_hash_alias",
+        "idempotency_key",
+        "portability_archive",
+    }
+)
+#: Enum types created by revision 0002 (identity).
+PHASE1_ENUM_TYPES = frozenset(
+    {
+        "grant_level",
+        "household_role",
+        "identity_provider",
+        "login_method",
+        "mfa_type",
+        "session_stage",
     }
 )
 #: Identity tables deliberately without RLS: not household-scoped and reached
@@ -219,8 +267,13 @@ def test_single_head_and_linear_history() -> None:
     assert len(script.get_heads()) == 1
     assert script.get_base() == "0001"
     # One revision per phase, each on top of the previous one.
-    assert [rev.revision for rev in script.walk_revisions("base", "heads")] == ["0002", "0001"]
+    assert [rev.revision for rev in script.walk_revisions("base", "heads")] == [
+        "0003",
+        "0002",
+        "0001",
+    ]
     assert script.get_revision("0002").down_revision == "0001"
+    assert script.get_revision("0003").down_revision == "0002"
 
 
 def test_upgrade_head_matches_models_without_drift(migrated: Scratch) -> None:
@@ -233,7 +286,7 @@ def test_upgrade_head_matches_models_without_drift(migrated: Scratch) -> None:
     finally:
         engine.dispose()
     assert {t.name for t in Base.metadata.sorted_tables} | {"alembic_version"} == tables
-    assert tables >= PHASE0_TABLES | PHASE1_TABLES
+    assert tables >= PHASE0_TABLES | PHASE1_TABLES | PHASE2_TABLES
 
 
 def test_check_detects_drift(migrated: Scratch) -> None:
@@ -273,6 +326,7 @@ def test_every_household_scoped_table_has_forced_rls(migrated: Scratch) -> None:
     finally:
         engine.dispose()
     assert {"household_member", "account_grant", "api_token"} <= set(scoped)
+    assert set(scoped) >= PHASE2_TABLES
     for table in scoped:
         assert rows[table] == (True, True), table
         assert (table, "household_isolation") in policies
@@ -457,7 +511,7 @@ def test_app_role_privileges_are_least(migrated: Scratch) -> None:
         app.dispose()
     assert {p for t, p in privileges if t == "audit_log"} == {"SELECT", "INSERT"}
     assert {p for t, p in privileges if t == "alembic_version"} == {"SELECT"}
-    for table in sorted((PHASE0_TABLES | PHASE1_TABLES) - {"audit_log"}):
+    for table in sorted((PHASE0_TABLES | PHASE1_TABLES | PHASE2_TABLES) - {"audit_log"}):
         assert {p for t, p in privileges if t == table} == {
             "SELECT",
             "INSERT",
@@ -711,5 +765,198 @@ def test_phase1_rls_on_migrated_database(migrated: Scratch) -> None:
                 text("INSERT INTO rate_limit_event (scope, key_hash) VALUES ('test', :k)"),
                 {"k": "0" * 64},
             )
+    finally:
+        app.dispose()
+
+
+def _phase1_member_with_grant(conn: Connection, household: uuid.UUID, account: uuid.UUID) -> None:
+    """A household, a user, its membership and a grant on ``account``."""
+    user = uuid.uuid4()
+    conn.execute(
+        text(
+            "INSERT INTO app_user (id, username, display_name) "
+            "VALUES (:id, :name, 'Synthetic User')"
+        ),
+        {"id": user, "name": f"synthetic-{user.hex[:8]}"},
+    )
+    set_context(conn, household)
+    conn.execute(
+        text("INSERT INTO household (id, name) VALUES (:id, 'Synthetic')"), {"id": household}
+    )
+    conn.execute(
+        text(
+            "INSERT INTO household_member (id, household_id, user_id, role) "
+            "VALUES (:id, :h, :u, 'member')"
+        ),
+        {"id": uuid.uuid4(), "h": household, "u": user},
+    )
+    conn.execute(
+        text(
+            "INSERT INTO account_grant (id, household_id, user_id, account_id, level) "
+            "VALUES (:id, :h, :u, :a, 'view')"
+        ),
+        {"id": uuid.uuid4(), "h": household, "u": user, "a": account},
+    )
+
+
+def _insert_account(conn: Connection, household: uuid.UUID, currency: str = "USD") -> uuid.UUID:
+    account = uuid.uuid4()
+    conn.execute(
+        text(
+            "INSERT INTO account (id, household_id, type, name, currency, is_asset) "
+            "VALUES (:id, :h, 'checking', 'Synthetic checking', :c, true)"
+        ),
+        {"id": account, "h": household, "c": currency},
+    )
+    return account
+
+
+def _grant_foreign_keys(conn: Connection) -> set[str]:
+    return set(
+        conn.execute(
+            text(
+                "SELECT conname FROM pg_constraint "
+                "WHERE conrelid = 'account_grant'::regclass AND contype = 'f'"
+            )
+        ).scalars()
+    )
+
+
+def test_0003_deletes_orphan_grants_and_adds_the_account_fk(
+    scratch_factory: Callable[[], Scratch],
+) -> None:
+    """Phase 1 grants named accounts that did not exist yet; 0003 removes them."""
+    scratch = scratch_factory()
+    cfg = scratch.config()
+    command.upgrade(cfg, "0002")
+    app = scratch.app_engine()
+    owner = scratch.owner_engine()
+    household = uuid.uuid4()
+    try:
+        with app.begin() as conn:
+            _phase1_member_with_grant(conn, household, uuid.uuid4())
+        command.upgrade(cfg, "head")
+        command.check(cfg)
+        with owner.connect() as conn:
+            assert "fk_account_grant_account_id_hh_account" in _grant_foreign_keys(conn)
+            forced = conn.execute(
+                text("SELECT relforcerowsecurity FROM pg_class WHERE relname = 'account_grant'")
+            ).scalar_one()
+            assert forced is True
+        with app.begin() as conn:
+            set_context(conn, household)
+            assert conn.execute(text("SELECT count(*) FROM account_grant")).scalar_one() == 0
+            # The membership itself is untouched.
+            assert conn.execute(text("SELECT count(*) FROM household_member")).scalar_one() == 1
+            # A grant now needs a real account of the same household.
+            with pytest.raises(DBAPIError, match="foreign key"), conn.begin_nested():
+                conn.execute(
+                    text(
+                        "INSERT INTO account_grant (id, household_id, user_id, account_id, level) "
+                        "SELECT :id, :h, user_id, :a, 'view' FROM household_member"
+                    ),
+                    {"id": uuid.uuid4(), "h": household, "a": uuid.uuid4()},
+                )
+    finally:
+        app.dispose()
+        owner.dispose()
+
+
+def test_downgrade_0003_leaves_phase1_and_upgrades_again(migrated: Scratch) -> None:
+    """0003 removes exactly its own tables, enum types and the grant FK."""
+    cfg = migrated.config()
+    command.downgrade(cfg, "0002")
+    engine = migrated.owner_engine()
+    try:
+        assert _public_tables(engine) == PHASE0_TABLES | PHASE1_TABLES | {"alembic_version"}
+        with engine.connect() as conn:
+            types = set(
+                conn.execute(
+                    text(
+                        "SELECT typname FROM pg_type "
+                        "WHERE typnamespace = 'public'::regnamespace AND typtype = 'e'"
+                    )
+                ).scalars()
+            )
+            assert types == PHASE1_ENUM_TYPES | {"job_state", "setting_scope"}
+            assert _grant_foreign_keys(conn) == {
+                "fk_account_grant_household_id_household",
+                "fk_account_grant_user_id_app_user",
+            }
+            assert conn.execute(text("SELECT version_num FROM alembic_version")).scalar_one() == (
+                "0002"
+            )
+        command.upgrade(cfg, "head")
+        command.check(cfg)
+        assert _public_tables(engine) >= PHASE2_TABLES
+    finally:
+        engine.dispose()
+
+
+def test_phase2_rls_and_household_consistent_fks_on_migrated_database(
+    migrated: Scratch,
+) -> None:
+    """Ledger rows are invisible across households and cannot reference them.
+
+    As the application role on the schema the revisions build: household B
+    neither sees A's account nor can attach a transaction, a balance snapshot
+    or a grant to it (ADR-0008), and a transaction's currency must be its
+    account's.
+    """
+    app = migrated.app_engine()
+    a, b = uuid.uuid4(), uuid.uuid4()
+    try:
+        for household in (a, b):
+            with app.begin() as conn:
+                set_context(conn, household)
+                conn.execute(
+                    text("INSERT INTO household (id, name) VALUES (:id, 'Synthetic')"),
+                    {"id": household},
+                )
+        with app.begin() as conn:
+            set_context(conn, a)
+            account_a = _insert_account(conn, a)
+            conn.execute(
+                text(
+                    "INSERT INTO transaction (id, household_id, account_id, posted_date, amount, "
+                    "currency) VALUES (:id, :h, :acc, DATE '2026-01-15', -12.34, 'USD')"
+                ),
+                {"id": uuid.uuid4(), "h": a, "acc": account_a},
+            )
+        with app.begin() as conn:
+            set_context(conn, b)
+            for statement in ("SELECT count(*) FROM account", "SELECT count(*) FROM transaction"):
+                assert conn.execute(text(statement)).scalar_one() == 0
+            account_b = _insert_account(conn, b)
+        foreign_rows = (
+            "INSERT INTO transaction (id, household_id, account_id, posted_date, amount, currency) "
+            "VALUES (:id, :h, :acc, DATE '2026-01-16', 1, 'USD')",
+            "INSERT INTO balance_snapshot (id, household_id, account_id, as_of_date, balance, "
+            "currency, source) VALUES (:id, :h, :acc, DATE '2026-01-16', 1, 'USD', 'manual')",
+        )
+        for statement in foreign_rows:
+            with app.connect() as conn, conn.begin():
+                set_context(conn, b)
+                with pytest.raises(DBAPIError, match="foreign key"):
+                    conn.execute(text(statement), {"id": uuid.uuid4(), "h": b, "acc": account_a})
+        # Writing a row for household A from B's context is refused by RLS.
+        with app.connect() as conn, conn.begin():
+            set_context(conn, b)
+            with pytest.raises(DBAPIError, match="row-level security"):
+                _insert_account(conn, a)
+        # A transaction's currency must equal its account's.
+        with app.connect() as conn, conn.begin():
+            set_context(conn, b)
+            with pytest.raises(DBAPIError, match="foreign key"):
+                conn.execute(
+                    text(foreign_rows[0].replace("'USD'", "'EUR'")),
+                    {"id": uuid.uuid4(), "h": b, "acc": account_b},
+                )
+        with app.begin() as conn:
+            set_context(conn, a)
+            assert conn.execute(text("SELECT count(*) FROM transaction")).scalar_one() == 1
+            # Deleting the account cascades to its transactions.
+            conn.execute(text("DELETE FROM account WHERE id = :id"), {"id": account_a})
+            assert conn.execute(text("SELECT count(*) FROM transaction")).scalar_one() == 0
     finally:
         app.dispose()

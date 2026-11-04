@@ -190,6 +190,24 @@ class Settings(BaseSettings):
     # runs as root; ignored otherwise (the image already runs as 10001).
     extract_uid: Annotated[int, Field(ge=1, le=2**31 - 1)] | None = None
 
+    # ---- Full export and import (docs/PORTABILITY.md) -----------------------
+    # A finished export can be downloaded once within this many minutes; then
+    # its encrypted archive is destroyed.
+    export_ttl_minutes: Annotated[int, Field(ge=5, le=1440)] = 60
+    # Largest archive accepted by POST /import (held in the worker's memory
+    # while it is validated and applied).
+    import_max_mb: Annotated[int, Field(ge=1, le=4096)] = 512
+
+    # ---- Live updates (Server-Sent Events, ``GET /events``) -----------------
+    # Comment line sent when nothing else was, so proxies keep the stream open.
+    sse_heartbeat_seconds: Annotated[float, Field(gt=0, le=300)] = 15
+    # A stream ends after this long; the browser reconnects with Last-Event-ID.
+    sse_max_stream_seconds: Annotated[float, Field(gt=0, le=86400)] = 600
+    # How often a stream re-checks its session, role and account grants.
+    sse_revalidate_seconds: Annotated[float, Field(gt=0, le=3600)] = 30
+    # Concurrent streams per user (per API process); more are 429.
+    sse_max_streams_per_user: Annotated[int, Field(ge=1, le=100)] = 5
+
     # ---- Integrations -------------------------------------------------------
     price_provider: str = "none"
     antivirus: Literal["none", "clamav"] = "none"
@@ -282,6 +300,10 @@ class Settings(BaseSettings):
     @property
     def upload_max_bytes(self) -> int:
         return self.upload_max_mb * 1024 * 1024
+
+    @property
+    def import_max_bytes(self) -> int:
+        return self.import_max_mb * 1024 * 1024
 
     def load_master_key(self) -> bytes:
         """Return the 32-byte master key from ``PERFIN_MASTER_KEY`` or ``..._FILE``.

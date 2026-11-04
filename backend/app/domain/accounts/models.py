@@ -23,7 +23,9 @@ keys without RLS.
   account's currency cannot change while it has any).
 * ``balance_snapshot``: the balance at the **end** of ``as_of_date``, from a
   statement, a manual entry or a computation. At most one per account, date
-  and source.
+  and source. ``source_document_id`` is the statement ``document`` it came
+  from (``SET NULL`` on delete, plus the deferred household-consistent check of
+  ADR-0008).
 """
 
 from __future__ import annotations
@@ -193,6 +195,7 @@ class BalanceSnapshot(UUIDPk, Timestamps, HouseholdScoped, Base):
             "account_id", "as_of_date", "source", name="uq_balance_snapshot_account_date_source"
         ),
         Index("ix_balance_snapshot_account_date", "account_id", "as_of_date"),
+        household_ref_fk("balance_snapshot", "source_document_id", "document"),
         currency_check(),
     )
 
@@ -203,5 +206,12 @@ class BalanceSnapshot(UUIDPk, Timestamps, HouseholdScoped, Base):
     source: Mapped[BalanceSource] = mapped_column(
         pg_enum(BalanceSource, "balance_source"), nullable=False
     )
-    # FK to ``document`` arrives with the documents foundation.
-    source_document_id: Mapped[uuid.UUID | None] = mapped_column(Uuid(as_uuid=True))
+    #: The statement the balance came from (``SET NULL`` when it is deleted).
+    source_document_id: Mapped[uuid.UUID | None] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("document.id", ondelete="SET NULL"), index=True
+    )
+
+
+# ``balance_snapshot.source_document_id`` references ``document``, whose module
+# imports this one: import it last so the FK target is always in the metadata.
+import app.domain.documents.models  # noqa: E402, F401

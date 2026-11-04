@@ -78,7 +78,7 @@ def network(data: bytes, options: ExtractOptions, kind: str) -> ExtractResult:
 
 def execve(data: bytes, options: ExtractOptions, kind: str) -> ExtractResult:
     true = "/bin/true" if os.path.exists("/bin/true") else "/usr/bin/true"
-    return _result(kind, "execve:" + _errno_of(lambda: os.execv(true, [true])))
+    return _result(kind, "execve:" + _errno_of(lambda: os.execv(true, [true])))  # noqa: S606
 
 
 def kill_others(data: bytes, options: ExtractOptions, kind: str) -> ExtractResult:
@@ -108,13 +108,11 @@ def bigoutput(data: bytes, options: ExtractOptions, kind: str) -> ExtractResult:
 
 def whoami(data: bytes, options: ExtractOptions, kind: str) -> ExtractResult:
     with open("/proc/self/status", encoding="ascii") as handle:
-        status = dict(
-            line.split(":", 1) for line in handle.read().splitlines() if ":" in line
-        )
+        status = dict(line.split(":", 1) for line in handle.read().splitlines() if ":" in line)
     return _result(
         kind,
         f"uid:{os.getuid()}",
-        f"env:{len(os.environ)}",
+        f"env:{','.join(sorted(os.environ))}",
         f"cwd:{os.getcwd()}",
         f"nnp:{status.get('NoNewPrivs', '').strip()}",
         f"seccomp:{status.get('Seccomp', '').strip()}",

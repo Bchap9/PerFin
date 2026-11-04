@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""Platform tables: household, job, event, audit_log, setting.
+"""Platform tables: household, job, event, audit_log, setting, idempotency_key.
 
 Row-level security for these tables is declared in ``app.db.rls``:
 
@@ -14,6 +14,7 @@ Row-level security for these tables is declared in ``app.db.rls``:
   (grants plus triggers) and hash-chained.
 * ``setting`` has scope-aware policies (system readable by all, writable by an
   instance admin; household/user settings follow the context).
+* ``idempotency_key`` is ``HouseholdScoped`` (``app.core.idempotency``).
 * ``job`` has forced RLS: a household context sees only that household's
   jobs; the queue machinery works across households inside
   ``app.db.rls.queue_scope``. A trigger keeps ``id``, ``queue``, ``type``,
@@ -282,4 +283,39 @@ class Setting(UUIDPk, Timestamps, Base):
     __table_args__ = (
         UniqueConstraint("scope", "scope_id", "key", postgresql_nulls_not_distinct=True),
         CheckConstraint("(scope = 'system') = (scope_id IS NULL)", name="scope_id_matches_scope"),
+    )
+
+
+# ---------------------------------------------------------------------------
+# idempotency_key: replayable responses of creating POSTs (API.md)
+# ---------------------------------------------------------------------------
+
+
+class IdempotencyKey(UUIDPk, HouseholdScoped, Base):
+    """A creating ``POST`` answered under an ``Idempotency-Key`` (``app.core.idempotency``).
+
+    Unique per household, user and key. ``request_hash`` is SHA-256 over the
+    route and the request (path parameters and body), so reusing a key for
+    another request is refused. ``status_code``/``response_body`` hold the
+    first answer, written in the same transaction as the change itself: a
+    failed request leaves no row and may be retried with the same key.
+    ``user_id`` has no foreign key (the row expires after
+    ``app.core.idempotency.KEY_TTL`` anyway).
+    """
+
+    __tablename__ = "idempotency_key"
+
+    user_id: Mapped[uuid.UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
+    key: Mapped[str] = mapped_column(String(255), nullable=False)
+    request_hash: Mapped[str] = mapped_column(CHAR(64), nullable=False)
+    status_code: Mapped[int | None] = mapped_column(Integer)
+    response_body: Mapped[Any] = mapped_column(JSONB, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=utcnow, server_default=func.now()
+    )
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+    __table_args__ = (
+        UniqueConstraint("household_id", "user_id", "key", name="uq_idempotency_key_scope"),
+        Index("ix_idempotency_key_household_expires", "household_id", "expires_at"),
     )

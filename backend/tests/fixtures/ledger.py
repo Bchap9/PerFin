@@ -312,7 +312,10 @@ def make_rule(
     conditions: Any = None,
     actions: Any = None,
     enabled: bool = True,
+    stop_processing: bool = False,
 ) -> Rule:
+    """A rule; by default a valid document matching everything (``all`` of nothing)
+    that flags for review (``app.domain.rules.schemas``)."""
     return _add(
         db,
         household_id,
@@ -321,8 +324,9 @@ def make_rule(
             name=name or unique_name("Rule"),
             sort_order=sort_order,
             enabled=enabled,
-            conditions=conditions if conditions is not None else {"all": []},
-            actions=actions if actions is not None else [],
+            stop_processing=stop_processing,
+            conditions=conditions if conditions is not None else {"type": "all", "conditions": []},
+            actions=actions if actions is not None else [{"type": "flag_for_review"}],
         ),
     )
 

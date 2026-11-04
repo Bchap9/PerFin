@@ -463,7 +463,13 @@ viewer          -> read-only on granted accounts; no documents download by defau
   - Account grants: service functions (`set_account_grant`,
     `revoke_account_grant`, `list_account_grants`) for owner/admin; only
     members and viewers get grants (owners and admins see every account),
-    viewers at most `view`. The endpoints come with accounts in Phase 2.
+    viewers at most `view`. Endpoints (Phase 2, router `account_grants`):
+    `GET /households/{id}/members/{user_id}/grants` (owner/admin, or one's
+    own), `PUT`/`DELETE .../grants/{account_id}` (owner/admin, browser
+    session, step-up: a grant widens what a member sees, I2) and `GET
+    /accounts/{id}/grants`. Account routes and everything derived from
+    accounts apply `app.domain.accounts.visibility`; a member who creates
+    an account gets an `edit` grant on it.
   - Instance admin (`/admin/users`, browser session; every change with
     step-up): list, create local users (never instance admin or
     break-glass), deactivate (revokes every session and token), set the

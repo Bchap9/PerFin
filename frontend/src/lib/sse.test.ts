@@ -85,6 +85,8 @@ describe("event type mapping", () => {
       ["transactions"],
       ["accounts"],
       ["budgets"],
+      ["goals"],
+      ["reports"],
       ["dashboard"],
     ]);
   });
@@ -106,6 +108,14 @@ describe("event type mapping", () => {
     const keys = allMappedKeys(DEFAULT_EVENT_MAPPING).map((key) => JSON.stringify(key));
     expect(new Set(keys).size).toBe(keys.length);
     expect(keys).toContain('["net-worth"]');
+  });
+
+  it("maps the Phase 2 ledger event families", () => {
+    expect(invalidationsFor("rule.created")).toEqual([["rules"]]);
+    expect(invalidationsFor("goal.updated")).toEqual([["goals"], ["dashboard"]]);
+    expect(invalidationsFor("category.changed")).toContainEqual(["taxonomy"]);
+    expect(invalidationsFor("transaction.rules_applied")).toContainEqual(["reports"]);
+    expect(invalidationsFor("account_grant.changed")).toContainEqual(["transactions"]);
   });
 
   it("reads the type from unnamed message data", () => {

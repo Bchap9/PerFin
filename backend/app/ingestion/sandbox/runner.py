@@ -33,7 +33,7 @@ import contextlib
 import os
 import shutil
 import signal
-import subprocess
+import subprocess  # nosec B404
 import sys
 import tempfile
 import threading
@@ -133,7 +133,8 @@ def _kill_group(proc: subprocess.Popen[bytes]) -> None:
 
 def _feed(proc: subprocess.Popen[bytes], data: Iterable[bytes], limit: int, pumps: _Pumps) -> None:
     stdin = proc.stdin
-    assert stdin is not None  # noqa: S101 - Popen(stdin=PIPE)
+    if stdin is None:  # pragma: no cover - Popen(stdin=PIPE)
+        return
     sent = 0
     try:
         for chunk in data:
@@ -151,7 +152,8 @@ def _feed(proc: subprocess.Popen[bytes], data: Iterable[bytes], limit: int, pump
 
 def _drain_stdout(proc: subprocess.Popen[bytes], limit: int, pumps: _Pumps) -> None:
     stream = proc.stdout
-    assert stream is not None  # noqa: S101 - Popen(stdout=PIPE)
+    if stream is None:  # pragma: no cover - Popen(stdout=PIPE)
+        return
     fd = stream.fileno()
     while chunk := os.read(fd, _READ_CHUNK):
         if len(pumps.stdout) + len(chunk) > limit:
@@ -187,7 +189,8 @@ def _spawn(config: SandboxConfig, job: SandboxJob, workdir: str) -> subprocess.P
     command = [config.python, "-I", "-B", "-m", config.module, job.model_dump_json()]
     drop = config.drops_privileges()
     gid = config.gid if config.gid is not None else config.uid
-    return subprocess.Popen(  # noqa: S603 - fixed argv, no shell, our own interpreter
+    # Fixed argv (our interpreter, our module, a validated JSON job), no shell.
+    return subprocess.Popen(  # noqa: S603  # nosec B603
         command,
         stdin=subprocess.PIPE,
         stdout=subprocess.PIPE,
@@ -223,11 +226,11 @@ def run_extraction(
     pumps = _Pumps()
     timed_out = False
     try:
-        if config.drops_privileges():
-            assert config.uid is not None  # noqa: S101 - drops_privileges checked it
+        if config.drops_privileges() and config.uid is not None:
             os.chown(workdir, config.uid, config.gid if config.gid is not None else config.uid)
         proc = _spawn(config, job, workdir)
-        assert proc.stderr is not None  # noqa: S101 - Popen(stderr=PIPE)
+        if proc.stderr is None:  # pragma: no cover - Popen(stderr=PIPE)
+            raise SandboxError("crashed", "no stderr pipe")
         threads = [
             threading.Thread(
                 target=_feed, args=(proc, chunks, config.max_input_bytes, pumps), daemon=True

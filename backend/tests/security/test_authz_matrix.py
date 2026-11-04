@@ -35,7 +35,7 @@ from __future__ import annotations
 import re
 import secrets
 import uuid
-from collections.abc import Callable, Iterator
+from collections.abc import Callable, Iterator, Mapping
 from dataclasses import dataclass, field
 from datetime import timedelta
 from pathlib import Path
@@ -46,7 +46,14 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from starlette.routing import BaseRoute, Mount, Route
 
-from app.auth.models import ApiToken, MfaMethod, MfaType, SessionStage, UserSession
+from app.auth.models import (
+    ApiToken,
+    GrantLevel,
+    MfaMethod,
+    MfaType,
+    SessionStage,
+    UserSession,
+)
 from app.auth.scopes import GRANTABLE_SCOPES
 from app.auth.sessions import cookie_name
 from app.core import clock
@@ -54,17 +61,37 @@ from app.core.csrf import CSRF_HEADER, DEFAULT_EXEMPT_PATHS, SAFE_METHODS, CSRFP
 from app.core.errors import PROBLEM_MEDIA_TYPE, PROBLEM_TYPE_PREFIX
 from app.core.settings import Settings
 from app.db.models import Household
+from app.db.queue import enqueue
 from app.db.rls import set_context
 from app.db.session import make_sessionmaker
+from app.domain.documents.blobstore import LocalFSBlobStore
+from app.domain.goals.models import Goal
+from app.domain.rules.schemas import RUN_RULES_JOB_TYPE, RunRulesJob
 from tests.fixtures.auth_clients import SAME_ORIGIN, random_ip
+from tests.fixtures.documents import make_document, make_review_item
 from tests.fixtures.factories import (
     Factories,
     LoggedIn,
     UserRecord,
+    grant_account,
     make_api_token,
     make_household,
     make_user,
 )
+from tests.fixtures.imports import make_extracted_document, make_import_mapping
+from tests.fixtures.ledger import (
+    household_context,
+    make_account,
+    make_budget,
+    make_category,
+    make_goal,
+    make_goal_contribution,
+    make_payee,
+    make_rule,
+    make_tag,
+    make_transaction,
+)
+from tests.fixtures.portability import make_import_record, make_ready_export
 from tests.security.authz_policy import (
     DENIAL_TYPES,
     OWN_KINDS,
@@ -164,7 +191,17 @@ def matrix_settings(settings: Settings, tmp_path_factory: pytest.TempPathFactory
     (static / "index.html").write_text("<!doctype html><title>PerFin</title>\n")
     (static / "assets").mkdir()
     (static / "assets" / ASSET).write_text("export {};\n")
-    return settings.model_copy(update={"static_dir": static})
+    blobs: Path = tmp_path_factory.mktemp("matrix-blobs")
+    return settings.model_copy(
+        update={
+            "static_dir": static,
+            # Documents the matrix downloads live in a real (temporary) store.
+            "documents_dir": blobs / "documents",
+            "quarantine_dir": blobs / "quarantine",
+            # GET /events streams until this lifetime ends; keep it short.
+            "sse_max_stream_seconds": 0.2,
+        }
+    )
 
 
 @pytest.fixture(scope="module")
@@ -311,8 +348,19 @@ def object_owner(world: World, caller: Caller, kind: str) -> UserRecord:
     return record
 
 
-def build_object(factories: Factories, world: World, kind: str, owner: UserRecord) -> str:
-    """Create a fresh object of ``kind``; return its id for the path."""
+def build_object(
+    factories: Factories,
+    world: World,
+    kind: str,
+    owner: UserRecord,
+    built: Mapping[str, str] | None = None,
+) -> str:
+    """Create a fresh object of ``kind``; return its id for the path.
+
+    ``built`` holds the objects already built for earlier parameters of the
+    same path (kind -> id), so a nested object (a goal's contribution) can
+    belong to its parent.
+    """
     if kind == "household":
         return str(world.household.id)
     if kind == "member":
@@ -339,7 +387,142 @@ def build_object(factories: Factories, world: World, kind: str, owner: UserRecor
             db.add(method)
             db.flush()
             return str(method.id)
+    if kind in ("transaction", "account"):
+        return str(make_ledger_object(factories, world, kind).id)
+    if kind in ("category", "payee", "tag"):
+        return str(make_taxonomy_object(factories, world, kind).id)
+    if kind == "rule":
+        with factories.transaction() as db:
+            return str(make_rule(db, world.household.id).id)
+    if kind in ("budget", "goal", "goal_contribution"):
+        return str(make_budget_object(factories, world, kind, built or {}).id)
+    if kind in ("document", "import_mapping"):
+        return str(make_import_object(factories, world, kind).id)
+    if kind in ("stored_document", "review_item"):
+        return str(make_stored_document_object(factories, world, kind).id)
+    if kind in ("export_archive", "import_archive"):
+        return str(make_portability_object(factories, world, kind, owner).job_id)
+    if kind == "job":
+        household_id = world.household.id
+        with factories.transaction() as db, household_context(db, household_id):
+            return str(enqueue(db, RUN_RULES_JOB_TYPE, RunRulesJob(), household_id=household_id))
     raise AssertionError(f"no generator for parameter kind {kind!r}")
+
+
+def make_ledger_object(factories: Factories, world: World, kind: str) -> Any:
+    """A ledger object of the matrix household on a fresh account.
+
+    The matrix member gets ``edit`` and the viewer ``view`` on the account,
+    so what they may do is decided by the route's role, not by a missing
+    grant (grant-specific outcomes are tested per domain).
+    """
+    household_id = world.household.id
+    with factories.transaction() as db:
+        account = make_account(db, household_id)
+        grant_account(db, household_id, world.users["member"].id, account.id, GrantLevel.EDIT)
+        grant_account(db, household_id, world.users["viewer"].id, account.id, GrantLevel.VIEW)
+        if kind == "transaction":
+            return make_transaction(db, account, amount="-25.00")
+        if kind == "account":
+            return account
+    raise AssertionError(f"no ledger generator for {kind!r}")
+
+
+def make_budget_object(
+    factories: Factories, world: World, kind: str, built: Mapping[str, str]
+) -> Any:
+    """A budget (one line), a goal on a fresh account (member ``edit``, viewer
+    ``view``) or a contribution to the goal built for the same path."""
+    household_id = world.household.id
+    with factories.transaction() as db:
+        if kind == "budget":
+            category = make_category(db, household_id)
+            return make_budget(db, household_id, lines={category.id: "100.00"})
+        if kind == "goal":
+            account = make_account(db, household_id)
+            grant_account(db, household_id, world.users["member"].id, account.id, GrantLevel.EDIT)
+            grant_account(db, household_id, world.users["viewer"].id, account.id, GrantLevel.VIEW)
+            return make_goal(db, household_id, accounts=[account])
+        if kind == "goal_contribution":
+            goal_id = uuid.UUID(built["goal"]) if "goal" in built else None
+            if goal_id is None:
+                goal = make_goal(db, household_id)
+            else:
+                with household_context(db, household_id):
+                    found = db.get(Goal, goal_id)
+                assert found is not None
+                goal = found
+            return make_goal_contribution(db, goal)
+    raise AssertionError(f"no budget generator for {kind!r}")
+
+
+def make_import_object(factories: Factories, world: World, kind: str) -> Any:
+    """A document with an extracted table, or a column mapping, on a fresh
+    account (member ``edit``, viewer ``view``)."""
+    household_id = world.household.id
+    with factories.transaction() as db:
+        account = make_account(db, household_id)
+        grant_account(db, household_id, world.users["member"].id, account.id, GrantLevel.EDIT)
+        grant_account(db, household_id, world.users["viewer"].id, account.id, GrantLevel.VIEW)
+        if kind == "document":
+            return make_extracted_document(db, household_id, account=account)
+        if kind == "import_mapping":
+            return make_import_mapping(db, household_id, account=account)
+    raise AssertionError(f"no import generator for {kind!r}")
+
+
+def make_stored_document_object(factories: Factories, world: World, kind: str) -> Any:
+    """A processed document whose ciphertext is in the matrix blob store, on a
+    fresh account (member ``edit``, viewer ``view``), or an open review item
+    of such a document."""
+    household_id = world.household.id
+    store = LocalFSBlobStore.from_settings(factories.settings)
+    with factories.transaction() as db:
+        account = make_account(db, household_id)
+        grant_account(db, household_id, world.users["member"].id, account.id, GrantLevel.EDIT)
+        grant_account(db, household_id, world.users["viewer"].id, account.id, GrantLevel.VIEW)
+        document = make_document(
+            db,
+            store,
+            factories.keyring,
+            household_id,
+            account_id=account.id,
+            uploaded_by=world.users["owner"].id,
+        )
+        if kind == "stored_document":
+            return document
+        if kind == "review_item":
+            return make_review_item(db, document)
+    raise AssertionError(f"no document generator for {kind!r}")
+
+
+def make_portability_object(
+    factories: Factories, world: World, kind: str, owner: UserRecord
+) -> Any:
+    """A ready export (bytes in the matrix blob store) or a finished import of
+    ``owner`` in the matrix household (the requester is the only one who may
+    see it, so the generator makes the caller the requester)."""
+    household_id = world.household.id
+    store = LocalFSBlobStore.from_settings(factories.settings)
+    with factories.transaction() as db:
+        if kind == "export_archive":
+            return make_ready_export(db, store, factories.keyring, household_id, owner.id)
+        if kind == "import_archive":
+            return make_import_record(db, household_id, owner.id)
+    raise AssertionError(f"no portability generator for {kind!r}")
+
+
+def make_taxonomy_object(factories: Factories, world: World, kind: str) -> Any:
+    """A household-wide category, payee or tag of the matrix household."""
+    household_id = world.household.id
+    with factories.transaction() as db:
+        if kind == "category":
+            return make_category(db, household_id)
+        if kind == "payee":
+            return make_payee(db, household_id)
+        if kind == "tag":
+            return make_tag(db, household_id)
+    raise AssertionError(f"no taxonomy generator for {kind!r}")
 
 
 def _owner_for(world: World, caller: Caller) -> Callable[[str], UserRecord]:
@@ -360,9 +543,12 @@ def resolve_url(
     if method == "MOUNT":
         return f"{path}/{ASSET}"
 
+    built: dict[str, str] = {}
+
     def fill(match: re.Match[str]) -> str:
         kind = policy.params[match.group(1)]
-        return build_object(factories, world, kind, owner_of(kind))
+        built[kind] = build_object(factories, world, kind, owner_of(kind), built)
+        return built[kind]
 
     return _PARAM.sub(fill, path)
 

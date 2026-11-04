@@ -26,6 +26,14 @@ NON_MODEL_BODIES: dict[tuple[str, str], str] = {
     # OpenID Connect Back-Channel Logout 1.0 mandates a form post with a single
     # `logout_token` field, which the handler reads by name.
     ("post", "/api/v1/auth/oidc/backchannel-logout"): "application/x-www-form-urlencoded",
+    # Document upload: one binary part named `file`, streamed by the handler
+    # (app.ingestion.intake.multipart) into the encrypted store; the declared
+    # schema is closed (additionalProperties false) and nothing else is read.
+    ("post", "/api/v1/documents"): "multipart/form-data",
+    # Full import: one binary part named `file` (a PerFin export archive),
+    # streamed by the handler into the encrypted quarantine area; nothing
+    # else is read (the passphrase of an encrypted archive is a header).
+    ("post", "/api/v1/import"): "multipart/form-data",
 }
 
 #: ``(model, field)`` pairs that are deliberately free-form JSON objects.

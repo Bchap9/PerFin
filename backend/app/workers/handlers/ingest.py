@@ -7,7 +7,11 @@ context; the pipeline's writes and the job's completion commit together.
 Deterministic failures (sandbox limits, malformed files) are recorded on the
 document (``failed`` plus a review item) and the job succeeds; database or
 storage errors raise and are retried. The handler timeout leaves room for
-the sandbox's own wall-clock limit.
+the sandbox's own wall-clock limit. The structured importer
+(``pipeline.structured_import``: mappings, dedupe, rules, snapshots) runs in
+the same transaction. A document whose import went through
+(``processed`` or ``needs_review``) also enqueues the transfer matcher
+(``transactions.auto_pair``, seeded with the document's transactions).
 """
 
 from __future__ import annotations
@@ -18,7 +22,9 @@ from app.core.crypto import Keyring
 from app.core.logging import get_logger
 from app.core.settings import get_settings
 from app.domain.documents.blobstore import LocalFSBlobStore
+from app.domain.documents.models import DocumentStatus
 from app.domain.documents.schemas import INGEST_JOB_TYPE, IngestDocumentPayload
+from app.domain.transactions.transfers import request_auto_pair
 from app.ingestion import pipeline
 from app.ingestion.sandbox.runner import SandboxConfig
 from app.workers.registry import JobContext, PermanentJobError, job_handler
@@ -37,6 +43,7 @@ def default_deps() -> pipeline.PipelineDeps:
         keyring=Keyring.from_settings(settings),
         sandbox=SandboxConfig.from_settings(settings),
         antivirus=settings.antivirus,
+        importer=pipeline.structured_import,
     )
 
 
@@ -50,6 +57,8 @@ def ingest_document(ctx: JobContext, payload: IngestDocumentPayload) -> None:
     status = pipeline.ingest_document(
         ctx.session, ctx.household_id, payload.document_id, default_deps(), attempt=ctx.attempt
     )
+    if status in (DocumentStatus.PROCESSED, DocumentStatus.NEEDS_REVIEW):
+        request_auto_pair(ctx.session, ctx.household_id, source_document_id=payload.document_id)
     log.info(
         "document ingested",
         extra={"document_id": str(payload.document_id), "status": str(status)},

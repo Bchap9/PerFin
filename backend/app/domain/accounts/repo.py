@@ -9,10 +9,18 @@ from collections.abc import Collection
 from datetime import date
 from decimal import Decimal
 
-from sqlalchemy import select
+from sqlalchemy import ColumnElement, delete, exists, or_, select
 from sqlalchemy.orm import Session
 
-from app.domain.accounts.models import Account, BalanceSnapshot, BalanceSource
+from app.auth.models import AccountGrant
+from app.domain.accounts.models import (
+    Account,
+    AccountType,
+    BalanceSnapshot,
+    BalanceSource,
+    Institution,
+)
+from app.domain.transactions.models import ScheduledTransaction, Transaction
 
 
 def get_account(
@@ -84,3 +92,105 @@ def upsert_snapshot(
         existing.source_document_id = source_document_id
     db.flush()
     return existing
+
+
+# ---------------------------------------------------------------------------
+# Listing and lookups for the accounts API
+# ---------------------------------------------------------------------------
+
+
+def list_accounts(
+    db: Session,
+    household_id: uuid.UUID,
+    *,
+    visible: ColumnElement[bool],
+    after: uuid.UUID | None,
+    limit: int,
+    closed: bool | None = None,
+    account_type: AccountType | None = None,
+) -> list[Account]:
+    """Accounts in id (creation) order after ``after``, filtered by ``visible``.
+
+    Returns up to ``limit`` rows; callers ask for one more to know whether a
+    next page exists.
+    """
+    stmt = select(Account).where(Account.household_id == household_id, visible)
+    if after is not None:
+        stmt = stmt.where(Account.id > after)
+    if closed is True:
+        stmt = stmt.where(Account.closed_on.is_not(None))
+    elif closed is False:
+        stmt = stmt.where(Account.closed_on.is_(None))
+    if account_type is not None:
+        stmt = stmt.where(Account.type == account_type)
+    return list(db.execute(stmt.order_by(Account.id).limit(limit)).scalars())
+
+
+def institution_exists(db: Session, household_id: uuid.UUID, institution_id: uuid.UUID) -> bool:
+    found = db.execute(
+        select(Institution.id).where(
+            Institution.household_id == household_id, Institution.id == institution_id
+        )
+    ).scalar_one_or_none()
+    return found is not None
+
+
+def has_ledger_rows(db: Session, account: Account) -> bool:
+    """Whether transactions, balance snapshots or schedules reference ``account``.
+
+    They carry the account's currency in their foreign key, so the currency
+    cannot change while any exists.
+    """
+    household_id = account.household_id
+    query = select(
+        or_(
+            exists().where(
+                Transaction.household_id == household_id, Transaction.account_id == account.id
+            ),
+            exists().where(
+                BalanceSnapshot.household_id == household_id,
+                BalanceSnapshot.account_id == account.id,
+            ),
+            exists().where(
+                ScheduledTransaction.household_id == household_id,
+                ScheduledTransaction.account_id == account.id,
+            ),
+        )
+    )
+    return bool(db.execute(query).scalar_one())
+
+
+def list_snapshots(db: Session, account: Account, start: date, end: date) -> list[BalanceSnapshot]:
+    return list(
+        db.execute(
+            select(BalanceSnapshot)
+            .where(
+                BalanceSnapshot.household_id == account.household_id,
+                BalanceSnapshot.account_id == account.id,
+                BalanceSnapshot.as_of_date >= start,
+                BalanceSnapshot.as_of_date <= end,
+            )
+            .order_by(BalanceSnapshot.as_of_date, BalanceSnapshot.source)
+        ).scalars()
+    )
+
+
+def delete_account(db: Session, account: Account) -> None:
+    """Delete ``account``; its transactions, snapshots, schedules and grants cascade."""
+    db.execute(
+        delete(Account).where(
+            Account.household_id == account.household_id, Account.id == account.id
+        )
+    )
+
+
+def grants_on_account(
+    db: Session, household_id: uuid.UUID, account_id: uuid.UUID
+) -> list[AccountGrant]:
+    return list(
+        db.execute(
+            select(AccountGrant)
+            .where(AccountGrant.household_id == household_id, AccountGrant.account_id == account_id)
+            .order_by(AccountGrant.user_id)
+        ).scalars()
+    )

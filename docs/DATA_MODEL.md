@@ -132,8 +132,8 @@ category              (household, parent_id?, name, kind: expense|income|transfe
                        tax_treatment?: taxable_income|tax_exempt_income|deductible|
                        tax_payment, system_key?)
 tag                   (household, name)   + transaction_tag (m:n)
-rule                  (household, name, sort_order, enabled, conditions JSONB,
-                       actions JSONB, hit_count, last_hit_at)
+rule                  (household, name, sort_order, enabled, stop_processing,
+                       conditions JSONB, actions JSONB, hit_count, last_hit_at)
 scheduled_transaction (household, account, name, cadence: daily|weekly|monthly|
                        quarterly|yearly, interval_count, next_due, amount_min,
                        amount_max, currency, payee?, category?, origin: detected|manual,
@@ -211,9 +211,29 @@ is `HouseholdScoped` with forced RLS):
   keeps at least the currency's minor-unit decimals and drops further
   trailing zeros (`"12.34"`, `"1500"` JPY, `"0.1234"`).
 - `rule.sort_order` is the evaluation order (`order` is an SQL keyword);
-  `conditions` and `actions` are owned by the rules engine.
-- `source_document_id` (transaction, balance snapshot) is a plain UUID until
-  the documents foundation adds its foreign key to `document`.
+  `conditions` and `actions` are owned by the rules engine
+  (`app/domain/rules/`): they hold exactly the JSON form of the Pydantic
+  discriminated unions in `app.domain.rules.schemas` (conditions `payee`,
+  `memo` with `contains|equals|starts_with|ends_with|glob`, `payee_is`,
+  `amount`, `sign`, `account`, `currency`, `date`, `category_is`,
+  `category_unset`, combinators `all|any|not`, at most 5 levels and 50
+  nodes; actions `set_category`, `split_percent`, `split_amount`,
+  `add_tags`, `set_payee`, `flag_for_review`, `set_note`, at most one of
+  each). There are no regular expressions: `glob` (`*`, `?`) is matched in
+  bounded linear-time-per-star code, so a pattern cannot cause ReDoS.
+  Evaluation (`app.domain.rules.engine`, pure): enabled rules in
+  `(sort_order, id)` order, each against the working state left by the
+  earlier matches; the first matching rule wins per field
+  (categorisation, payee, notes), tags accumulate, `flag_for_review` moves
+  `none` to `pending` only; a matching rule with `stop_processing` ends the
+  run. `hit_count`/`last_hit_at` count matches when rules are applied (not in
+  a dry run). Ids a rule names must exist when it is saved; an object
+  deleted later leaves a dangling id that never matches and whose actions
+  are skipped. At most 500 rules per household.
+- `source_document_id` (transaction, balance snapshot) references `document`
+  `ON DELETE SET NULL`, plus the deferred household-consistent key of
+  ADR-0008 (`household_ref_fk`); deleting a statement keeps the rows it
+  produced.
 
 - `import_hash` is a stable hash of (account, date, amount, normalised payee,
   running index within day) used for cross-statement deduplication:
@@ -229,6 +249,21 @@ is `HouseholdScoped` with forced RLS):
   `tests/unit/test_import_hash.py`.
 - Transfers are two transactions sharing a `transfer_group_id`; the matcher
   pairs them by amount, opposite sign, and date proximity across accounts.
+  Rules (`app/domain/transactions/transfers.py`): automatic pairing needs
+  two unlinked transactions on different accounts, in the same currency,
+  with exactly equal and opposite non-zero amounts and posted dates at most
+  `window_days` apart (default 3, at most 14); the closest dates win, and a
+  leg with two equally close candidates on *different* accounts is left
+  unpaired (counted as ambiguous) rather than guessed. A person may link
+  two legs by hand regardless of the window, also across currencies (an
+  exchange: any amounts of opposite sign). Unlinking or deleting a leg
+  dissolves the whole group. A user-triggered run only touches accounts the
+  user may edit; the run after an import (`transactions.auto_pair` job,
+  seeded with the document's transactions) covers the whole household.
+- Reports leave out transactions with `review_state = pending` (still in
+  the review queue) unless the household setting
+  `reports.include_pending_review` is `true`
+  (`app.domain.transactions.service.reportable_clause`).
 
 ## Budgets and goals
 
@@ -245,9 +280,38 @@ goal_contribution (goal, contributed_on, amount, currency, transaction_id?, memo
 Phase 2 notes (`app/domain/budgets/models.py`, `app/domain/goals/models.py`;
 `HouseholdScoped`, household-consistent references as in the ledger):
 `end_date` is set exactly for a `custom` budget; a budget line is in the
-budget's currency, one per category, and goes with its category; a goal's
-progress is shown to a member or viewer only if they can see every account
-of the goal.
+budget's currency, one per category, and goes with its category.
+
+- **Budget periods** (`app/domain/budgets/reports.py`): monthly and annual
+  budgets start on the first day of a month; periods are calendar months,
+  or twelve months from `start_date` (a fiscal year); a custom budget is the
+  single period `start_date..end_date` (at most 3660 days). A line on a
+  category counts that category and its subcategories that have no line of
+  their own (nearest line wins). Line amounts are not versioned: rollover
+  applies today's amounts to earlier periods.
+- **Rollover**: expense lines of a `rollover` budget carry `available -
+  actual` (negative when overspent) into the next period, starting from the
+  budget's first period and looking back at most ten years.
+- **Forecast**: a past period's forecast is its actual; the current one adds
+  the linear projection of the lines that do not match an active
+  `scheduled_transaction` (same account, payee and category) plus the
+  occurrences of active schedules due after today (at the midpoint of
+  `amount_min..amount_max`); a future period is actual plus scheduled.
+- **Goal visibility**: a goal (with its progress and contributions) is
+  visible to a member or viewer only if they can see every account of the
+  goal **and** every account of a transaction linked to one of its
+  contributions; otherwise it is `404 goal-not-found` as a whole (stricter
+  than hiding only the progress, so a goal never reveals a hidden account's
+  money). `goal_contribution.currency` always equals the goal's (the goal's
+  currency is locked while it has contributions); a linked transaction is on
+  one of the goal's accounts when linked and is linked once per goal.
+  `achieved_at` is maintained by the service (set when the contributions
+  first reach the target, cleared when they fall below it).
+- **Report lines** (`app/domain/reports/ledger.py`): reports and budget
+  actuals read one line per unsplit transaction or per split, on visible
+  accounts, without transfer legs and `transfer`/`ignore` categories;
+  uncategorised lines count as expense when negative and income otherwise.
+  Dates are posted dates; foreign amounts are converted per posting day.
 
 ## Investments
 
@@ -301,7 +365,9 @@ document          (household, kind: statement|receipt|invoice|tax_form|payslip|
                    uploaded_by?, account_id?, institution_id?,
                    period_start?, period_end?, tax_year?, extracted_text (tsvector),
                    extraction JSONB, confidence JSONB, parser_version)
-blob              (store, key, size, enc_alg, wrapped_dek, nonce, created)
+blob              (household, store, key, area: quarantine|permanent, size, stored_size,
+                   enc_alg, key_version, wrap_nonce, wrapped_dek, nonce, shredded_at?,
+                   created)
 document_link     (document, target_type: transaction|investment_txn|loan_payment|
                    account|tax_year, target_id)
 review_item       (household, document?, kind: unknown_owner|unknown_account|
@@ -311,7 +377,76 @@ review_item       (household, document?, kind: unknown_owner|unknown_account|
 parser_fingerprint(institution, kind, match rules JSONB, parser name, version,
                    learned_from_document_id?)
 ingest_job        (document, stage, attempt, started, finished, error, log JSONB)
+import_mapping    (household, name, institution_id?, account_id?, header_fingerprint,
+                   spec JSONB, created_by?, use_count, last_used_at?)
+import_hash_alias (household, account, transaction, import_hash)
 ```
+
+Notes on the documents foundation (`app/domain/documents/`):
+
+- Every table above is household-scoped (forced RLS) with household-consistent
+  references (ADR-0008); `document.blob_id` is `NO ACTION` (a blob cannot go
+  while a document uses it); links, review items and ingest history cascade
+  with their document; `transaction.source_document_id` references `document`
+  `ON DELETE SET NULL`.
+- `blob` locates the ciphertext (`store`, random UUIDv4 `key`, `area`) and
+  holds the per-object data key wrapped by the master key (`key_version`,
+  `wrap_nonce`, `wrapped_dek`, associated data = the blob id). The payload is
+  a libsodium secretstream (XChaCha20-Poly1305, 64 KiB chunks); `nonce` is
+  its 24-byte header (`enc_alg = xchacha20poly1305-secretstream-64k`). `size`
+  is the plaintext size, `stored_size` the ciphertext size. Deleting a
+  document nulls the wrapped key (`shredded_at`) and then deletes the rows;
+  the files are unlinked after commit.
+- `document.mime_detected` is the magic-byte sniff result
+  (`app.ingestion.intake.sniff.FileType` values); `document.error` is a short
+  machine-readable failure (`extraction failed: <code>`). `extraction` is the
+  validated sandbox output (`app.ingestion.sandbox.protocol.ExtractResult`),
+  which only ever carries the last four digits of an account number.
+- `review_item.state` is `open` exactly while `resolved_at` is NULL.
+- `import_hash_alias` (`app/domain/review/models.py`) records "these two
+  imported rows are the same transaction": confirming a `near_match`
+  `possible_duplicate` deletes the imported row and keeps its `import_hash`
+  for the transaction that stays (on the kept row itself when it has no
+  hash, else as an alias row; unique per household, account and hash;
+  household-consistent references to `account` and `transaction` that
+  cascade). `app.domain.review.repo.alias_rows` lists the aliases of an
+  account in a date range for the deduplicator.
+- Review resolutions are typed per kind (`app.domain.review.schemas`; API.md
+  "Review notes") and stored in `review_item.resolution` as ids and
+  decisions only.
+
+Notes on structured imports (`app/domain/imports/`, Phase 2):
+
+- `import_mapping` is a saved column mapping for one CSV/TSV layout. `spec`
+  is `app.domain.imports.schemas.MappingSpec` (zero-based columns for the
+  date and its format, the amount as one signed column with a sign
+  convention, an unsigned column plus a debit/credit indicator, or debit and
+  credit columns; payee, memo, running balance, currency column or fixed
+  currency; decimal separator; preamble rows to skip; header or not),
+  validated on every write. `header_fingerprint` is SHA-256 over the
+  version, column count and normalised header cells (or, without a header,
+  the shape of the first row) of row `spec.skip_rows`
+  (`app.ingestion.parsers.structured.header_fingerprint`): a new table with
+  that fingerprint is imported with the mapping automatically.
+  `account_id`/`institution_id` are optional household-consistent `SET NULL`
+  references (ADR-0008); the account is where files of this layout go when
+  the upload names none. Name unique per household. A mapping on an account
+  the caller cannot see is invisible to them (`404`).
+- Imported transactions carry `source_document_id` and `import_hash`; a near
+  duplicate (same account, date and amount, no hash match) is written with
+  `review_state = pending` next to a `possible_duplicate` review item. A
+  statement's closing balance (OFX `LEDGERBAL`, the last running balance of a
+  CSV) becomes a `balance_snapshot` with `source = statement` and
+  `source_document_id`.
+- Review item payloads of the importer (ids, counts and row numbers only):
+  `unparsed` (`mapping_required`, `mapping_ambiguous`, `mapping_failed`,
+  `no_records`), `unknown_account` (`account_not_found`,
+  `account_ambiguous` with candidate ids, `account_required`,
+  `currency_mismatch`), `possible_duplicate` (`near_match`:
+  `transaction_id`, `candidates`), `low_confidence_field` (`rows_skipped`,
+  `balance_mismatch`, `date_order_assumed`, `currency_mismatch`,
+  `truncated`). The latest import's counts are the `log` of the document's
+  last finished `parse` `ingest_job`.
 
 ## Tax vault
 
@@ -335,6 +470,13 @@ audit_log         (seq, household?, user?, action, target_type, target_id, befor
                                                                -- append-only, hash-chained
 notification_channel (household, type, config (encrypted), enabled)   -- Phase 7
 setting           (scope: system|household|user, scope_id?, key, value JSONB)
+idempotency_key   (household, user_id, key, request_hash, status_code?, response_body JSONB?,
+                   created_at, expires_at)                     -- Phase 2
+portability_archive (household, kind: export|import, state: pending|ready|downloaded|
+                   expired|imported|failed, job_id (unique), requested_by?, blob?,
+                   passphrase_protected, passphrase_key? (encrypted), size?, sha256?,
+                   expires_at?, finished_at?, downloaded_at?, error?, summary JSONB)
+                                                               -- Phase 2
 ```
 
 Phase 0 notes (migration `0001_phase0_foundations`, `app/db/models.py`,
@@ -367,6 +509,25 @@ Phase 0 notes (migration `0001_phase0_foundations`, `app/db/models.py`,
 - `setting` is unique on `(scope, scope_id, key)` with NULLs not distinct;
   `scope_id` is NULL exactly for `system`. System settings are readable by
   everyone and writable only in an instance-admin context.
+- `idempotency_key` (Phase 2, `app.core.idempotency`) is household-scoped
+  (forced RLS) and unique on `(household_id, user_id, key)`; `request_hash`
+  is SHA-256 over the route, path parameters and body. The row is inserted
+  before a creating `POST` runs and completed with its status and response
+  body in the same transaction, so a failed request leaves nothing and a
+  concurrent duplicate waits on the unique index. Rows live 24 hours;
+  expired rows of a household are deleted whenever it stores a new key.
+  `user_id` has no foreign key (the row is short-lived).
+- `portability_archive` (Phase 2, `app/domain/portability/`,
+  [PORTABILITY.md](PORTABILITY.md)) is household-scoped (forced RLS): one
+  full export or import, keyed by the job that does it. `blob_id` is a
+  household-consistent `SET NULL` reference to the archive bytes in the
+  blob store (`permanent` for a ready export, `quarantine` for an uploaded
+  import) and becomes NULL once the archive was downloaded, expired or
+  imported (the blob's key is destroyed first). `passphrase_key` holds the
+  Argon2id key derived from an export's or import's passphrase, as an
+  envelope under the master key bound to the row id (column info
+  `secret`), only until the job has used it. `summary` holds counts and,
+  for a failed import, a short `error_detail`; never file content.
 
 ## Encryption at the column level
 
@@ -378,6 +539,7 @@ hashes and WebAuthn public keys are not encrypted (they are not secrets).
 ## Retention and deletion
 
 Deleting a document deletes the blob and dependent rows; deleting a transaction
-keeps the audit row. A household owner can run a full export then a full purge.
+keeps the audit row. A household owner can run a full export
+([PORTABILITY.md](PORTABILITY.md)) then a full purge.
 Purge zero-fills nothing; it relies on encryption: destroying the wrapped DEKs
 renders blobs unreadable even on media that cannot be securely erased.

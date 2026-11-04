@@ -26,8 +26,7 @@ does) and the Authentik guide box waits for a walk-through against a live
 Authentik. Status per control: `docs/security/CONTROLS.md` (A1, A6, A8, F3,
 I2 and G1 stay partial for later-phase reasons stated in each row).
 
-Next: Phase 2 (Ledger). Open items carried over: `Idempotency-Key` is not
-implemented (docs/API.md says so); the pre-auth CSRF cookie
+Next: Phase 2 (Ledger). Open items carried over: the pre-auth CSRF cookie
 (`__Host-perfin-pre`) and the OIDC cookies are always `Secure`, so dev mode
 over plain http works only on `localhost` (where browsers allow `Secure`
 cookies), unlike the session cookie, which has a `perfin-session-dev`
@@ -39,7 +38,161 @@ ships it, checked with `zoneinfo.ZoneInfo("Europe/Berlin")` in that image.)
 ## [Unreleased]
 
 ### Added
+- Phase 2 integration: Alembic revision `0003` (`0003_phase2_ledger`) creates
+  the 27 Phase 2 tables (ledger, documents and ingestion, imports,
+  `idempotency_key`, `portability_archive`), each with forced RLS
+  (`household_isolation`) and DML grants for the application role, and the
+  20 enum types they use; adds `account_grant (household_id, account_id) ->
+  account` `ON DELETE CASCADE` (orphan Phase 1 grants are deleted first) and
+  the `source_document_id -> document` keys of `transaction` and
+  `balance_snapshot` (the latter is new: `SET NULL` plus the deferred
+  household-consistent key). The downgrade removes exactly those tables,
+  types and the grant key. `test_migrations.py` covers 0003 (drift, RLS,
+  grants, orphan grants, downgrade to 0002, cross-household references on
+  the migrated schema). `tests/integration/test_phase2_end_to_end.py` runs
+  OFX and CSV uploads through `POST /documents`, the real worker loop, the
+  sandbox and the importer, then `/transactions` (rules applied), `/review`
+  (column mapping, near duplicate confirmed), reports with and without
+  pending rows, and `/events` live and resumed.
+- Manual transactions (`POST /transactions`) now run through the
+  household's rules (`apply_rules_to`); category, payee, notes and tags
+  given in the request are protected.
+- The structured importer's deduplication reads `import_hash_alias`: a
+  statement line confirmed as a duplicate of a transaction that had its own
+  hash now matches that transaction exactly on the next import instead of
+  raising the same review question again.
+- `GET /jobs/{id}` accepts tokens with `documents:read` for
+  `imports.apply_mapping` jobs.
+- SPA live updates: `rule.*`, `goal.*`, `category.*`, `payee.*`, `tag.*`,
+  `account_grant.*`, `member.*` and `household.*` events invalidate their
+  query families (new roots `goals`, `reports`, `rules`, `taxonomy`);
+  `transaction.*` also refreshes goals and reports.
+- Full export and import (Phase 2, docs/PORTABILITY.md): `POST /export`
+  (owner/admin browser session with step-up; optional passphrase),
+  `GET /export/{job_id}`, `GET /export/{job_id}/download` (once, within
+  `PERFIN_EXPORT_TTL_MINUTES`; the stored archive's key is destroyed before
+  the first byte is sent), `POST /import` (streamed multipart upload, at most
+  `PERFIN_IMPORT_MAX_MB`) and `GET /import/{job_id}`; jobs
+  `portability.export`, `portability.import`, `portability.expire`. The
+  archive is a zip of `data/<entity>.json` for every ledger table,
+  formula-neutralised `csv/transactions.csv` and `csv/accounts.csv` (C7),
+  the decrypted document originals and a manifest with the SHA-256 of every
+  member; it is built as a stream straight into an encrypted blob (G1).
+  `app.core.archive_crypto`: "PerFin encrypted archive" v1 (libsodium
+  secretstream under an Argon2id passphrase key; G3, reusable for backups).
+  Import validates the zip (C2/C3: names, links, member count, sizes,
+  compression ratio, overlaps), the manifest version and hashes and every
+  row, then applies all or nothing into the current household with new ids,
+  merging institutions, categories, payees and tags and recomputing
+  `import_hash` for the new accounts. New table `portability_archive`
+  (created by revision `0003`).
+- Documents API, review queue API and live updates (Phase 2):
+  `POST /documents` streams the multipart body straight into the encrypted
+  quarantine area (no spooled plaintext; `Idempotency-Key` fingerprinted
+  with the content hash; account must be editable); `GET /documents`
+  (filters `kind`, `status`, `account`, `tax_year`; cursor),
+  `GET /documents/{id}` (metadata only), `GET /documents/{id}/download`
+  (member or above, viewers only with the household setting
+  `documents.viewer_download`; never from quarantine; attachment with the
+  sniffed type, RFC 5987 name, `nosniff`, `sandbox` CSP), `POST
+  /documents/{id}/reprocess`, `POST /documents/{id}/link` (transaction or
+  account), `DELETE /documents/{id}` (crypto-shredding).
+  `GET /review`, `GET /review/{id}`, `POST /review/{id}/resolve` with typed
+  resolutions (`possible_duplicate` confirm/reject recording the duplicate's
+  `import_hash` on the kept transaction or in the new `import_hash_alias`
+  table; `unknown_account` assign with "remember" (last four digits or the
+  CSV mapping's account) and re-import; `unparsed` reprocess or apply a
+  column mapping) and `POST /review/{id}/dismiss`. `GET /events`
+  (Server-Sent Events for browser sessions): `LISTEN perfin_events` per
+  stream, household-scoped, filtered to visible accounts and documents,
+  ids and types only, `Last-Event-ID` resume within retention, heartbeats,
+  session re-check, per-user stream cap (`PERFIN_SSE_*` settings). Authz
+  matrix kinds `stored_document` and `review_item`; controls C4 and I1
+  implemented.
 
+- Structured imports (Phase 2, `app.domain.imports`,
+  `app.ingestion.parsers.structured`, `app.ingestion.match`): the ingest
+  worker now turns extracted OFX/QFX/QIF statements and CSV/TSV tables into
+  transactions in the job's transaction. OFX/QFX accounts are matched by the
+  last four digits plus the institution (`FI/ORG`, new optional
+  `StatementAccount.institution` in the sandbox protocol), only among
+  accounts the uploader may edit; CSV/TSV layouts by a header fingerprint
+  against saved column mappings (`import_mapping`: date column and format,
+  signed amount with a sign convention, amount plus DR/CR indicator, or
+  debit/credit columns, payee, memo, running balance, currency, decimal
+  comma, preamble rows). Dedupe by `import_hash` (re-imports and overlapping
+  statements skip known rows); near matches (same date and amount) are
+  imported as pending with a `possible_duplicate` review item. Rules run on
+  new rows (QIF categories protected, QIF splits kept), OFX `LEDGERBAL` / the
+  last CSV running balance becomes a `statement` balance snapshot, the CSV
+  running balance is reconciled, and the transfer matcher is queued.
+  Problems become review items and leave the document `needs_review`. API:
+  `GET/POST /imports/mappings`, `GET/PATCH/DELETE /imports/mappings/{id}`,
+  `GET /imports/{document_id}/preview` (stored sandbox output, never
+  re-parsed, plus the matching mapping and a suggested one) and `POST
+  /imports/{document_id}/apply-mapping` (`imports.apply_mapping` job: re-run
+  from the stored extraction with a chosen mapping and/or account). New
+  authz matrix kinds `document`, `import_mapping`. Synthetic statement
+  generator `tests/fixtures/synth_statements.py` (several bank-like CSV
+  layouts, OFX SGML/XML, QFX, QIF for invented institutions), also
+  `scripts/synth/statements.py`.
+- Budgets, goals and reports (Phase 2). `/budgets`: monthly, annual
+  (twelve months from any first-of-month start) and custom budgets with
+  lines per expense or income category, rollover of what is left (or
+  overspent) per period, and `GET /budgets/{id}/report?period=` with
+  budgeted, carried over, available, actual, remaining and forecast per
+  line (forecast: linear projection of the period so far, without lines
+  matching an active schedule, plus scheduled occurrences until the period
+  end), unbudgeted spending and totals, converted into the budget's
+  currency per posting day. `/goals`: savings goals over accounts with a
+  target amount and date, manual or transaction-linked contributions
+  (withdrawals negative), progress, accounts balance, observed monthly rate,
+  projected completion and on-track flag; a goal is visible only to callers
+  who can see all of its accounts. `/reports/spending|income` (group by
+  category with depth roll-up, payee, month or account), `/reports/trends`
+  (month-on-month and year-on-year per category, monthly series) and
+  `/reports/cashflow` (monthly in, out, net). All amounts come from the
+  caller's visible accounts only, read splits, leave out transfers and
+  pending review rows by default, are aggregated in SQL and bounded (F8).
+  New authz matrix kinds `budget`, `goal`, `goal_contribution`.
+- Rules engine (Phase 2, `app.domain.rules`): ordered rules with
+  `stop_processing` (new `rule` column) whose conditions (payee/memo text
+  with `contains|equals|starts_with|ends_with|glob`, canonical payee,
+  amount range, sign, account, currency, date range, category is/unset,
+  `all|any|not`) and actions (set category, split by percentages or
+  amounts, add tags, rename to a canonical payee, flag for review, set
+  note) are Pydantic discriminated unions stored as JSONB. A pure,
+  deterministic engine (first matching rule wins per field, tags
+  accumulate, later rules see earlier changes). No regular expressions:
+  `glob` is matched by a bounded iterative matcher (no ReDoS). API: `GET/
+  POST /rules`, `GET/PATCH/DELETE /rules/{id}`, `POST /rules/reorder`,
+  `POST /rules/test` (paginated dry run over the caller's visible history
+  in a `READ ONLY` transaction), `POST /rules/apply` (`run_rules` job,
+  `202` with the job id), `GET /rules/export` and `POST /rules/import`
+  (portable: ids resolved by name in another household). Changing rules
+  needs owner/admin; account ids hidden from a reader are redacted. Hook
+  for new transactions: `app.domain.rules.service.apply_rules_to(session,
+  household_id, transactions, protect=...)`; hit counts and `last_hit_at`.
+- `GET /jobs/{id}` (`app.domain.jobs`): state of a job of the active
+  household (no payload or error text); tokens need the job family's read
+  scope.
+- Accounts API (Phase 2): `GET/POST /accounts`, `GET/PATCH/DELETE
+  /accounts/{id}`, `POST /accounts/{id}/close|reopen`, `GET/POST
+  /accounts/{id}/balances` (daily history, manual balance). Lists and
+  object routes apply account visibility (hidden accounts are `404`,
+  view-only `403`); a member who creates an account gets an `edit` grant.
+  Account grant endpoints: `GET /households/{id}/members/{user_id}/grants`,
+  `PUT/DELETE .../grants/{account_id}` (owner/admin, step-up), `GET
+  /accounts/{id}/grants`.
+- Categories, payees and tags API (`app.domain.taxonomy`): CRUD with cursor
+  pagination; category tree rules (depth 3, no cycles, kinds follow the
+  parent), category and payee merge with reassignment of transactions,
+  splits, schedules, payee defaults and budget lines; payee aliases unique
+  across payees.
+- `Idempotency-Key` on creating `POST`s (`app.core.idempotency`, table
+  `idempotency_key`): replay of the first answer for 24 hours, `422` when a
+  key is reused for another request, concurrent duplicates wait for the
+  first; used by accounts, balances, categories, payees and tags.
 - Ledger core (Phase 2): household-scoped models with forced RLS for
   `institution`, `account` (every VISION.md type, `manual_asset` kinds,
   `number_last4` as identity data, `is_asset`, `manual_balance`),
@@ -58,6 +211,50 @@ ships it, checked with `zoneinfo.ZoneInfo("Europe/Berlin")` in that image.)
   half-even), balances from snapshots and transactions,
   `app.core.money` (Decimal parsing, half-even rounding, `{amount,
   currency}` API shapes), test factories in `tests/fixtures/ledger.py`.
+- Transactions API (Phase 2): `GET /transactions` with explicit filters
+  (account, date range, category including splits, uncategorized, payee,
+  tag, review state, status, transfer, and `q` as an escaped `ILIKE`
+  substring; no query language) and a keyset cursor (max 500, stable while
+  rows are added); `POST` (manual, `Idempotency-Key`), `GET/PATCH/DELETE
+  /transactions/{id}`, `POST /transactions/{id}/split` (lines must add up
+  exactly, in the transaction's currency), `POST /transactions/bulk`
+  (categorise/tag/untag/delete/confirm, each id authorised alone). Account
+  grants apply everywhere (hidden, foreign or missing transactions are `404
+  transaction-not-found`; F3); every write is audited without free text and
+  emits a `transaction.*` event; deleting keeps the audit row. Transfers
+  (`app.domain.transactions.transfers`): a conservative matcher (different
+  accounts, same currency, equal and opposite amounts, closest dates within
+  a window, ambiguous legs left alone), manual link/unlink and candidates,
+  `POST /transactions/transfers/auto-pair`, and a `transactions.auto_pair`
+  job enqueued after each import. Reports exclude `review_state=pending`
+  unless the household setting `reports.include_pending_review` is set
+  (`reportable_clause`). The authz matrix gained the `transaction` object
+  kind.
+- Document store and extraction sandbox (Phase 2): household-scoped `blob`,
+  `document`, `document_link`, `review_item`, `parser_fingerprint` and
+  `ingest_job` with forced RLS; `transaction.source_document_id` references
+  `document`. `LocalFSBlobStore` (random UUIDv4 keys, two-level fan-out,
+  `0600` files, atomic writes, quarantine and permanent areas, promotion
+  without re-encryption; `S3BlobStore` is an interface that refuses to run)
+  with streamed per-object envelope encryption (secretstream
+  XChaCha20-Poly1305, DEK wrapped by the master key, bound to the blob id;
+  `Keyring.new_data_key`/`unwrap_data_key`/`rewrap_data_key`) and
+  crypto-shredding on delete (G1, G5). Upload intake
+  (`app.ingestion.intake.upload`): streaming size cap, magic-byte sniffing
+  (SVG/HTML/polyglots refused, C4/C5), SHA-256, encrypted quarantine write,
+  `document(status=received)` and the `ingest_document` job in one
+  transaction, duplicate content to the review queue. Sandboxed extraction
+  (`app.ingestion.sandbox`, ADR-0006, C1/C2): child process with empty
+  environment, private working directory, rlimits, no-new-privs and a
+  seccomp deny list, parent-side timeout and output cap, strict JSON
+  contract; CSV/TSV (dialect and encoding detection, formula neutralisation,
+  C7), OFX/QFX SGML and XML (`defusedxml`, no DTDs or entities, C6) and QIF
+  extractors. Pipeline skeleton (`app.ingestion.pipeline`) with stage
+  history and a hook for the structured importer; `ingest_document` worker
+  handler. Settings `PERFIN_DOCUMENTS_DIR`, `PERFIN_QUARANTINE_DIR`,
+  `PERFIN_EXTRACT_MEMORY_MB`, `PERFIN_EXTRACT_CPU_SECONDS`,
+  `PERFIN_EXTRACT_TIMEOUT_SECONDS`, `PERFIN_EXTRACT_MAX_OUTPUT_MB`,
+  `PERFIN_EXTRACT_UID`.
 
 - Licence: GNU AGPL-3.0-or-later (`LICENSE`), SPDX header on every source
   file enforced by `scripts/check_spdx.py`.

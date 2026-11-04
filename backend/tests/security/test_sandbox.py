@@ -111,7 +111,8 @@ def test_output_must_match_the_schema() -> None:
 
 def test_child_environment_is_empty_private_and_filtered() -> None:
     found = _warnings("whoami", data=b"abc")
-    assert found["env"] == "0"
+    # Nothing inherited; CPython itself may set LC_CTYPE (PEP 538 locale coercion).
+    assert set(filter(None, found["env"].split(","))) <= {"LC_CTYPE"}
     assert found["nnp"] == "1"
     assert found["seccomp"] == "2"  # filter mode
     assert found["input"] == "3"  # stdin carried the bytes
@@ -178,7 +179,25 @@ def test_runner_reports_harden_failure_code() -> None:
 
 
 def test_deny_list_covers_the_essentials() -> None:
-    for name in ("socket", "connect", "bind", "execve", "execveat", "fork", "vfork", "ptrace",
-                 "mount", "unshare", "setns", "bpf", "io_uring_setup", "keyctl",
-                 "process_vm_readv", "init_module", "kexec_load", "setuid", "chroot"):
+    for name in (
+        "socket",
+        "connect",
+        "bind",
+        "execve",
+        "execveat",
+        "fork",
+        "vfork",
+        "ptrace",
+        "mount",
+        "unshare",
+        "setns",
+        "bpf",
+        "io_uring_setup",
+        "keyctl",
+        "process_vm_readv",
+        "init_module",
+        "kexec_load",
+        "setuid",
+        "chroot",
+    ):
         assert name in DENIED_SYSCALLS
