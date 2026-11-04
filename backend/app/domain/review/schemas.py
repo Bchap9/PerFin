@@ -25,6 +25,21 @@ A resolution is a typed body whose ``kind`` must equal the item's kind
   editor works on ``GET /imports/{document_id}/preview``; ``next_step`` is
   ``column_mapping`` for such items).
 
+* ``unknown_owner`` (a drop-folder file nobody could be found for, held in
+  ``needs_review``): ``{"kind", "user_id", "account_id"?, "remember"}``
+  assigns the document to that member (a member, admin or owner; the
+  account, if given, one the caller edits and the member may import into)
+  and sends it through the pipeline. ``remember`` routes the item's
+  subfolder (payload ``folder``) to that member and account.
+
+* ``receipt_match`` ("attach this receipt to ...": a receipt the matcher
+  could not link with confidence; payload ``reason`` and ranked
+  ``suggestions`` of ``{transaction_id, account_id, score, amount, days,
+  already_linked}``): ``{"kind", "transaction_id"}`` attaches the receipt to
+  that transaction (one the caller edits; any transaction, not only a
+  suggested one) as a ``document_link``; ``{"kind", "transaction_id":
+  null}`` records that no transaction applies (a cash purchase, a gift).
+
 Other kinds (Phase 3 and later) can only be dismissed for now
 (``409 review-resolution-unsupported``).
 """
@@ -42,7 +57,14 @@ from app.domain.documents.models import ReviewItemState, ReviewKind
 MAX_PAGE: Final = 500
 DEFAULT_PAGE: Final = 100
 
-NextStep = Literal["confirm_duplicate", "choose_account", "column_mapping", "reprocess"]
+NextStep = Literal[
+    "confirm_duplicate",
+    "choose_account",
+    "column_mapping",
+    "reprocess",
+    "choose_owner",
+    "attach_receipt",
+]
 
 
 class _Input(BaseModel):
@@ -70,8 +92,30 @@ class ResolveUnparsed(_Input):
     account_id: uuid.UUID | None = None
 
 
+class ResolveUnknownOwner(_Input):
+    """A held drop-folder file: who it belongs to (and, optionally, its account)."""
+
+    kind: Literal["unknown_owner"]
+    user_id: uuid.UUID
+    account_id: uuid.UUID | None = None
+    #: Route the file's subfolder to this member/account from now on.
+    remember: bool = False
+
+
+class ResolveReceiptMatch(_Input):
+    """Attach the receipt to a transaction (``null``: none applies)."""
+
+    kind: Literal["receipt_match"]
+    transaction_id: uuid.UUID | None
+
+
 ReviewResolution = Annotated[
-    ResolveDuplicate | ResolveUnknownAccount | ResolveUnparsed, Field(discriminator="kind")
+    ResolveDuplicate
+    | ResolveUnknownAccount
+    | ResolveUnparsed
+    | ResolveUnknownOwner
+    | ResolveReceiptMatch,
+    Field(discriminator="kind"),
 ]
 
 

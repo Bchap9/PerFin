@@ -64,7 +64,9 @@ def in_local_list(password: str) -> bool:
 
 def _sha1_hex(password: str) -> str:
     # SHA-1 is what the HIBP range API is keyed on; it is not used for security here.
-    return hashlib.sha1(password.encode("utf-8"), usedforsecurity=False).hexdigest().upper()
+    # nosemgrep: python.lang.security.insecure-hash-algorithms.insecure-hash-algorithm-sha1
+    digest = hashlib.sha1(password.encode("utf-8"), usedforsecurity=False)
+    return digest.hexdigest().upper()
 
 
 def _fetch_range(prefix: str, client: httpx.Client) -> str | None:

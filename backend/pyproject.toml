@@ -28,10 +28,10 @@ dependencies = [
     "openpyxl",
     "pillow",
     "pillow-heif",
-    "pytesseract",
     "mcp",
     "reportlab",
     "pyseccomp",
+    "tesserocr>=2.12.0",
 ]
 
 [project.scripts]
@@ -94,7 +94,7 @@ init_typed = true
 warn_required_dynamic_aliases = true
 
 [[tool.mypy.overrides]]
-module = ["pytesseract.*", "pyseccomp.*", "fitz.*", "pymupdf.*", "pillow_heif.*", "reportlab.*", "openpyxl.*"]
+module = ["tesserocr.*", "pyseccomp.*", "fitz.*", "pymupdf.*", "pillow_heif.*", "reportlab.*", "openpyxl.*"]
 ignore_missing_imports = true
 
 [tool.bandit]

@@ -113,7 +113,9 @@ def test_structured_types_map_to_extractor_kinds() -> None:
     assert FileType.OFX.extract_kind == "ofx"
     assert FileType.QFX.extract_kind == "qfx"
     assert FileType.QIF.extract_kind == "qif"
-    assert FileType.PDF.extract_kind is None
+    assert FileType.XLSX.extract_kind == "xlsx"
+    assert FileType.PDF.extract_kind == "pdf"
+    assert FileType.TEXT.extract_kind is None
 
 
 @pytest.mark.parametrize("split", range(1, 11))

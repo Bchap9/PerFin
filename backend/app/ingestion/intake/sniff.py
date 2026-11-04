@@ -63,20 +63,33 @@ class FileType(enum.StrEnum):
 
     @property
     def extract_kind(self) -> str | None:
-        """The sandbox extractor kind for structured formats (Phase 2), else None."""
+        """The sandbox extractor kind for this type, else None (no extractor yet)."""
         return _EXTRACT_KINDS.get(self)
 
 
-_EXTRACT_KINDS: Final[dict[FileType, str]] = {
+_STRUCTURED_KINDS: Final[dict[FileType, str]] = {
     FileType.CSV: "csv",
     FileType.TSV: "tsv",
     FileType.OFX: "ofx",
     FileType.QFX: "qfx",
     FileType.QIF: "qif",
+    # XLSX: worksheets as tables (values only, formulas never evaluated).
+    FileType.XLSX: "xlsx",
+}
+_EXTRACT_KINDS: Final[dict[FileType, str]] = {
+    **_STRUCTURED_KINDS,
+    # Phases 3-4: documents (PDF text layer and OCR, images), mail, archives.
+    FileType.PDF: "pdf",
+    FileType.PNG: "png",
+    FileType.JPEG: "jpeg",
+    FileType.TIFF: "tiff",
+    FileType.HEIC: "heic",
+    FileType.EML: "eml",
+    FileType.ZIP: "zip",
 }
 
-#: Structured formats the Phase 2 pipeline routes to the sandbox.
-STRUCTURED_TYPES: Final = frozenset(_EXTRACT_KINDS)
+#: Structured formats (records the structured importer reads directly).
+STRUCTURED_TYPES: Final = frozenset(_STRUCTURED_KINDS)
 #: Text types scanned for active markup over the whole file (module doc).
 TEXT_TYPES: Final = frozenset(
     {FileType.CSV, FileType.TSV, FileType.OFX, FileType.QFX, FileType.QIF, FileType.TEXT}

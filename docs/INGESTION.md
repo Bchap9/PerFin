@@ -39,11 +39,13 @@ received ─▶ scanning ─▶ extracting ─▶ classifying ─▶ parsing ─
   logically separate and never linked from the UI as a downloadable file).
 
 Phase 2 status (`app/ingestion/intake/`): browser and token uploads
-(`POST /documents`) only; the drop folder and email intake are Phase 3. All
-the types above are accepted by the sniffer and stored, but only CSV/TSV,
-OFX/QFX and QIF are extracted; any other type is kept and waits in review
-(`unparsed`, `format_not_supported`) until its extractor lands. ZIP
-expansion is not built yet (a ZIP is stored as one document). Auto-dedupe is
+(`POST /documents`), the drop folder and email intake (below). All
+the types above are accepted by the sniffer and stored. CSV/TSV, OFX/QFX,
+QIF (Phase 2) and PDF, PNG, JPEG, TIFF, HEIC, EML and ZIP (Phases 3-4, see
+"Extract") are extracted; XLSX is kept and waits in review (`unparsed`,
+`format_not_supported`) until its extractor lands. A ZIP is expanded once
+inside the sandbox and each member becomes a document of its own (below).
+Auto-dedupe is
 not built: a byte-identical upload always becomes a `possible_duplicate`
 item (`payload.reason: same_content`, `duplicate_of` the earlier document).
 
@@ -87,18 +89,92 @@ Pydantic schema. Extractors are registered by kind
 (`app/ingestion/extract/registry.py`); Phase 2 ships CSV/TSV, OFX/QFX (SGML
 and XML) and QIF.
 
-- PDF: PyMuPDF (fitz) for text and layout; fall back to OCR (Tesseract via
-  `ocrmypdf`/`pytesseract`) when the text layer is missing or looks like
-  garbage. PDF JavaScript, embedded files and external links are never
-  followed; the renderer is told to ignore them.
-- Images: deskew, denoise, OCR with layout analysis. Receipt-specific OCR
-  profile (narrow, thermal-print fonts).
+- PDF (`app/ingestion/extract/pdf.py`): PyMuPDF on the in-memory stream.
+  Words with boxes per page (points, origin top left), grouped into lines;
+  tables from ruling lines (`find_tables`, cells filled with the page's
+  words by position) and from aligned columns (`layout.column_tables`: runs
+  of three or more lines sharing a whitespace gutter); title/author/producer
+  metadata; at most `max_pages` pages and `max_pdf_objects` objects. Before
+  anything is read, JavaScript, launch actions, embedded files and links are
+  counted (`meta`) and removed from the in-memory document (MuPDF's JS
+  engine off, `scrub`, catalog `OpenAction`/`AA` cleared, any remaining
+  action dictionaries disarmed); nothing of them is returned and pages render
+  with `annots=False` (C8). A PDF that needs a password is `ok=false`,
+  `encrypted`: the pipeline parks it in review. OCR fallback per page when
+  the text layer is empty (`no_text`), mostly not text (`garbage`: share of
+  letters, digits and common punctuation below 0.75) or sparse (under 2
+  characters per square inch) on a page mostly covered by images
+  (`low_density`); OCR words are converted back to points.
+- Images (`image.py`): PNG, JPEG, TIFF (frames up to `max_pages`) and HEIC
+  (pillow-heif), each decoder restricted to the sniffed format;
+  `Image.MAX_IMAGE_PIXELS` and an explicit header check against
+  `max_image_pixels` before decoding (`too_many_pixels`); EXIF orientation
+  applied, then all metadata dropped (OCR and previews use a fresh image
+  from the pixels; `meta.exif_stripped`).
+- OCR (`ocr.py`): Tesseract **in process** through `tesserocr` (the child
+  may not `execve`; ADR-0009 addendum). Preprocessing: grayscale, upscaling
+  of small text (the median text-line height, measured from the row profile
+  of a binarised copy, brought up to 24 px, at most 3x; a narrow receipt
+  whose lines cannot be measured is widened to 1000 px), 3x3 median denoise,
+  deskew (projection profile, +-5 degrees), Otsu binarisation. Both
+  profiles use automatic page segmentation (mode 3); `receipt` (tall,
+  narrow images) also keeps inter-word spaces. The upscaling target and the
+  segmentation mode were tuned on synthetic thermal receipts
+  (`tests/fixtures/synth_receipts.py`, tuning seeds): upscaling every narrow
+  image to 1000 px, as before, and mode 4 ("single column") both read fewer
+  totals and dates (on 40 tuning receipts: all of date, total, subtotal
+  and tax right on 25 before, 30 after). Time caps per page and per document (`ocr_page_seconds`,
+  `ocr_total_seconds`), at most `max_ocr_pages` pages; what is left out is
+  `truncated` with an `ocr_page_cap`/`ocr_time_budget` warning.
+- Previews (`render.py`): every page (up to `max_preview_pages`) rendered to
+  PNG at `preview_dpi` (default 100), the DPI lowered until it fits
+  `max_render_pixels`; written as a new image with no ancillary chunks (the
+  parent's `Preview` model accepts only `IHDR`/`PLTE`/`IDAT`/`IEND`). The
+  worker stores each one as an encrypted blob in the permanent area
+  (`app/domain/documents/previews.py`) and keeps only references in
+  `document.extraction.stored_previews` (page, blob id, size, DPI and
+  `scale`, the factor from page units to preview pixels for region
+  highlight); deleting or re-extracting a document shreds them.
 - CSV/TSV/XLSX: parsed with strict dialect detection; formulas in XLSX are
   never evaluated (values only). Cells beginning with `=`, `+`, `-`, `@` are
   neutralised so a later CSV export cannot carry formula injection.
 - OFX/QFX/QIF: dedicated parsers; XML external entities disabled.
-- EML: headers, text/HTML body (HTML sanitised to text), attachments expanded
-  through the same intake with depth limit 1.
+- EML (`eml.py`): standard-library `email` with `policy.default`. Headers
+  (From, To, Cc, Delivered-To, Reply-To, Subject, Date, Message-ID,
+  Authentication-Results), the text/plain body or else the HTML body
+  converted by `htmltext.html_to_text` (a tokenizer pass on `html.parser`:
+  no rendering, no I/O; script/style/head/iframe/svg content dropped, images
+  dropped with their alt text kept, link targets dropped; remote resources
+  counted, never fetched; D3). Attachments, inline `cid:` images and
+  attached messages come back as child documents (bytes) at depth + 1;
+  attached messages are not descended into, and a message extracted at
+  depth 1 does not hand back its attachments (`depth_limit`; D4).
+- ZIP (`archive.py`): expanded once, in memory, checked on the central
+  directory before any member is decompressed: entry count
+  (`max_children`), declared total (`max_children_total_bytes`), ratio above
+  1 MiB (`max_zip_ratio`) and overlapping members refuse the whole archive
+  (`too_many_members`, `zip_too_large`, `zip_bomb`); large, encrypted,
+  linked, oddly compressed members, directories and `__MACOSX` forks are
+  skipped and reported; reads stop at the declared size. Member names are
+  metadata only (last component; C3). A ZIP at depth 1 is `depth_limit`.
+- Children (`app/ingestion/children.py`): the worker receives each child
+  through the normal intake (`receive_stream`: sniff, upload cap, hash,
+  encryption into quarantine, its own ingest job) with `source_meta`
+  `{parent_document_id, origin, depth, content_id?}`; the pipeline extracts
+  it with `ExtractOptions.depth` from there. A refused child (HTML, SVG,
+  unknown binary, too large) is listed with its reason in the container's
+  `stored_children`, and the container goes to review
+  (`container_incomplete`); otherwise the container is `processed`.
+
+The extraction contract (`app/ingestion/sandbox/protocol.py`) carries
+`pages` (words, lines, tables, text, OCR facts), `previews`, `meta`,
+`email`, `children` and `text`; all bounded and validated in the parent.
+The worker-only fields `stored_previews`/`stored_children` are refused in a
+child's answer (`bad_output`). PDF and image pages are read into statements
+and payslips by the worker's document parsers ("Parse" below); a page with
+nothing they recognise (invoices, tax forms have no parser yet) waits in
+review (`unparsed`, `no_records`); receipts are read by the receipt parser
+and matched to their transaction ("Receipts" below).
 
 ### 4. Classify
 Determine `kind` (statement, receipt, invoice, tax form, payslip, insurance,
@@ -109,7 +185,7 @@ Order of attempts, each producing a confidence score:
    logos' OCR text, account-number masks, column layouts. These are shipped as
    data (YAML) and can be added by the user from the review UI ("remember this
    layout").
-2. **Heuristic classifier.** Small gradient-boosted or logistic model over
+2. **Heuristic classifier.** Small multinomial naive Bayes model over
    token features; trained offline on synthetic and contributed samples; runs
    locally with no network.
 3. **Column-mapping review.** No model is consulted. If neither stage reaches
@@ -125,6 +201,78 @@ confidence.
 period" strings when present; otherwise inferred as `[min(txn date),
 max(txn date)]` with a flag that it was inferred. Receipts use the printed
 date; tax forms use the tax year printed on the form.
+
+Implementation (Phases 3-4, `app/ingestion/classify/`; runs in the worker on
+the validated sandbox output, never on file content):
+
+- **View** (`text.py`): at most 4000 lines of at most 300 characters; the
+  header is the first 15 lines of page 1 (or the mail subject and body
+  start); table headers are the first row of each extracted table.
+- **Fingerprints** (`fingerprints.py`, shipped files in
+  `classify/fingerprints/*.yaml`): `schema`, `key`, `institution`,
+  `country?`, `kind`, `parser`, `version`, `date_order?` and `match` with
+  `all` rules (every one must hold), `any` rules and `min_any`. A rule is
+  one of `header` (substring of the header), `text` (substring of any
+  line), `regex` (`region: header|text`, `ignore_case`), `account_mask`
+  (`XXXX-XXXX-####`: `X`/`*` masked or any digit, `#` kept digit) or
+  `columns` (a table header row starting with these cells). Confidence is
+  0.85 plus up to 0.14 for the share of `any` rules that hold; two
+  institutions matching equally strongly is no match. YAML is read with
+  `yaml.safe_load` after refusing anchors and aliases and files over 64 KiB,
+  then validated by a strict schema (unknown keys refused, bounded lists).
+  Regexes accept only a linear-time subset (no backreferences, lookarounds,
+  inline flags, lazy quantifiers, nested quantifiers or quantified
+  alternations; at most 256 characters, 12 quantifiers, repeat counts up to
+  100) and are compiled with **possessive** quantifiers, then run over one
+  line of at most 300 characters (`safe_regex.py`). A user's "remember this
+  layout" is a `parser_fingerprint` row (`remember_layout`: same `match`
+  schema, version incremented per institution, kind and parser); household
+  fingerprints are tried with the shipped ones and win ties; a stored row
+  that no longer validates is skipped. Six fictional institutions ship
+  (Example Federal Credit Union, Sample National Bank (checking and
+  1099-INT), Demo Card Services, Placeholder Brokerage, Fictional Mutual
+  Insurance, Mock Savings and Loan with day-first dates).
+- **Classifier** (`model.py`, artefact `classify/artefacts/kind_nb_v1.json`):
+  binarised multinomial naive Bayes over unigram and bigram tokens (digits
+  by shape), class score = log prior + 3 x (sum of known features' log
+  likelihoods) / max(features, 30), softmax as confidence; a kind below 0.6
+  stays `unknown` (`low_confidence_kind`). `scripts/train_classifier.py`
+  trains it deterministically on `backend/tests/fixtures/synth_classify.py`
+  (1540 synthetic documents, 40% with OCR-like noise); a test retrains it
+  and requires the shipped bytes. Held-out accuracy (unseen seed, 420
+  documents, classifier alone): 100% on this synthetic set, which comes from
+  the same generator and so overstates accuracy on real documents.
+- **Period, date, tax year** (`period.py`, `dates.py`): labelled periods
+  ("Statement period", "Billing period", "For the period", "Pay period",
+  "Policy period", ...; also on the next line), "Opening/Closing date"
+  pairs, else the inferred `[min, max]` of parsed transaction dates or of
+  dates that start a line (`inferred` flag, lower confidence). Dates: ISO,
+  numeric month-first or day-first (a component above 12 decides, then the
+  fingerprint's `date_order`, then the separator, marked ambiguous with
+  lower confidence), month names in both orders, two-digit years, ranges
+  sharing a year ("Jan 1 - Jan 31, 2026"); periods longer than 400 days or
+  reversed are refused. Receipts and invoices: labelled printed date, else
+  the first date (stored as `period_start = period_end`). Tax forms: "Tax
+  year 2025", "2025 Form 1098", "Form W-2 ... 2025", "For calendar year".
+- **Account** (`accounts.py`, `service.py`): last four digits from a
+  structured statement, the fingerprint's mask, generic masks ("ending in
+  1234", `****1234`, `xxxx-1234`) or a labelled number cut to its last four
+  digits (nothing longer is kept); a document naming two different accounts
+  has none. Statements and tax forms are matched with
+  `match_account(last4, institution)` among `importable_account_ids` of the
+  uploader; an account given at upload is never replaced. The institution
+  is resolved by name among the household's institutions (none is created).
+- **Output**: `document.kind`, `institution_id`, `account_id`,
+  `period_start`/`period_end`, `tax_year` (fields below 0.5 confidence are
+  not written) and `document.confidence` = `{version, method:
+  structured|fingerprint|classifier|none, kind, fields: {kind, institution,
+  last4, account, period, printed_date, tax_year}, fingerprint?: {key,
+  origin, version, parser, id?}, institution_name?, period?: {source,
+  inferred}, classifier?: {model, scores}, review?: [...]}`. Structured
+  statements (OFX/QIF/CSV) keep the Phase 2 classify step; containers are
+  not classified. The pipeline does not yet raise a review item for a low
+  classification confidence by itself: those documents already wait in
+  review because no PDF/image parser exists yet.
 
 ### 5. Parse
 Produce structured records appropriate to the kind:
@@ -144,10 +292,91 @@ later parser version can re-run without the original being re-uploaded.
 
 **Reconciliation check.** For statements: opening balance + sum(transactions)
 must equal closing balance within rounding. Failure drops confidence and raises
-a review item describing the discrepancy. (Not built in Phase 2: structured
-statements record their closing balance as a `balance_snapshot`, but the
-opening + transactions = closing check and per-field confidence come with
-the Phase 3 parsers; SECURITY.md C12 partial.)
+a review item describing the discrepancy. (Structured OFX/QIF statements state
+no opening balance and are not reconciled this way; a CSV running balance is
+checked row by row, "Match and deduplicate" below.)
+
+Implementation for PDF and image statements and payslips (Phases 3-4,
+`app/ingestion/parsers/`, `app/ingestion/reconcile.py`). The parsers run in
+the **worker** on the validated pages of `document.extraction` (words with
+boxes from the text layer or OCR); they never see file bytes (ADR-0006), and
+a child answering with parser output is `bad_output`.
+
+- **Choice** (`registry.py`): the classifier's fingerprint match is the hint
+  (`document.confidence.fingerprint`): the parser written for its `key`
+  first, then the parser it names (`statement_generic`,
+  `card_statement_generic`), then the payslip parser for kind `payslip`; the
+  fingerprint's `date_order` goes to a generic parser. Without a usable hint
+  every parser scores the pages (`detect`) and the best at or above 0.35
+  wins. All scores are recorded.
+- **Generic table statement parser** (`table_statement.py`): a header line
+  naming date, description and amount (or debit/credit style) columns, with
+  optional balance and posting date, starts or continues the table (repeated
+  per page); cells of later lines go to the column they overlap most. Dated
+  lines with an amount are rows; table rows labelled opening/closing balance
+  give the balances; a following description-only line without an amount is
+  the previous row's memo; section headings type rows (`fee`, `int`, `div`)
+  or start a **pending** section, whose rows are counted
+  (`parse.pending_items`) and not imported (not posted, outside the
+  balances); totals, footers and "continued" lines are skipped; dated lines
+  without a readable amount are counted (`skipped_lines`, a
+  `low_confidence_field` `lines_skipped` item). Outside the rows: the period,
+  the account's last four digits (masked numbers, "ending in"; never more),
+  the currency and labelled opening/closing balances. Signs: `bank` (signed
+  amount, debit negative, `CR`/`DR`) or `card` (charges printed positive,
+  credits negative or `CR`; balances owed become negative). Numeric dates
+  whose day/month order the values do not show are guessed `mdy` at low
+  confidence; yearless dates take their year from the period. The card
+  variant (`card_statement_generic`) needs card vocabulary on page 1.
+- **Institution parsers** (`institutions.py`): subclasses for the fictional
+  institutions of the shipped fingerprints (Sample National Bank checking,
+  Example Federal Credit Union, Demo Card Services, Mock Savings and Loan)
+  that pin the date formats, sign convention, currency and institution name,
+  so values read in their declared format score 1.0.
+- **Payslip parser** (`payslip.py`, basic): employer, pay period, pay date,
+  earnings and deduction lines, gross, total deductions, net; checked
+  `gross - deductions = net`. Kept in `extraction.parse.payslip`
+  (`kind = payslip`, the period on the document); no ledger rows. One that
+  does not add up is a `low_confidence_field` item
+  (`payslip_does_not_add_up`).
+- **Receipt parser** (`receipt.py`; "Receipts" below): merchant, date and
+  time, subtotal, tax, tip, discount, total, item lines, payment method and
+  card last four, currency, each with a confidence. Kept in
+  `extraction.parse.receipt` (`kind = receipt`, the date as the period).
+- **Reconciliation** (`reconcile.py`, SECURITY.md C12): opening + sum =
+  closing within less than one cent, and each printed running balance =
+  previous + amount. A statement that does not reconcile (`mismatch`), or
+  has neither balances nor a running balance (`unavailable`), has every row
+  capped below the threshold (`reconciliation` field); the importer then
+  imports all its rows pending, raises a `low_confidence_field` item
+  (`reconciliation_failed`/`reconciliation_unavailable` with opening,
+  closing, total, difference and the rows whose running balance disagrees)
+  and writes **no** balance snapshot from it. An amount confirmed by the
+  running balance scores 1.0.
+- **Confidence** (`confidence.py`): per field (`posted_date`, `amount`,
+  `payee`, `reconciliation`; statement: `period`, `opening_balance`,
+  `closing_balance`, `account_number`, `currency`, `reconciliation`): 1.0 in
+  an institution's declared format, 0.95 for the generic parsers, 0.9 for a
+  balance derived from the running balance, 0.7 for an inferred period, 0.6
+  for a guessed day/month order, 0.5 for a missing value or an unreconciled
+  statement, 0.4 for an amount the running balance contradicts; OCR scales
+  by the lowest Tesseract word confidence of the cell. Fields below
+  `PERFIN_INGEST_CONFIDENCE_THRESHOLD` (default 0.85, at least 0.5) are
+  listed per row (`low_confidence`).
+- **Stored output**: parsed statements are `extraction.statements` with
+  `source_format` `pdf`/`image`, each row with its `confidence`,
+  `low_confidence`, `page` and `bbox` (region highlight), the statement with
+  `opening_balance`, `parser` (name, version, institution key), per-field
+  `confidence` and `reconciliation`; `extraction.parse` records the parser,
+  every score, the threshold, pending/skipped counts, warnings and a
+  payslip. `document.parser_version` is `name/version` and
+  `document.confidence.parse` summarises it. Re-importing (choosing an
+  account in review, `imports.apply_mapping`) uses the stored statements;
+  `registry.reparse` runs a newer parser on the stored pages, so neither
+  needs the file again. A statement then goes through the structured
+  importer like an OFX one (account by last four digits and institution,
+  `import_hash` dedupe, rules, provenance), with the confidence rules of
+  "Commit".
 
 ### 6. Match and deduplicate
 - Each parsed transaction gets an `import_hash`. Existing rows with the same
@@ -158,7 +387,8 @@ the Phase 3 parsers; SECURITY.md C12 partial.)
 - Transfer pairing runs across accounts.
 - Receipt -> transaction linking: match on amount, date within +/- 3 days,
   merchant alias. Confident match links the document; otherwise a review item
-  "attach this receipt to…" with suggestions.
+  "attach this receipt to…" with suggestions (implementation: "Receipts"
+  below).
 - Rules engine runs on every new transaction for category, tags, renames,
   splits.
 
@@ -208,6 +438,104 @@ same database transaction.
   come from `backend/tests/fixtures/synth_statements.py` (also
   `scripts/synth/statements.py --out DIR`).
 
+#### Receipts (Phases 3-4)
+
+Receipts arrive as photos or scans of thermal prints (PNG, JPEG, TIFF,
+HEIC: OCR in the sandbox), e-receipt PDFs (text layer) and receipt mails
+(the HTML or plain body of an EML; an attached PDF or image is a child
+document and is read on its own). The parser runs in the worker on the
+stored extraction, the matcher in the same transaction; neither sees file
+bytes or calls a model (ADR-0006, ADR-0007).
+
+**Parser** (`app/ingestion/parsers/receipt.py`, `receipt_basic`, chosen by
+detection or the classifier's `receipt` kind; a mail body is read when it
+scores at least 0.5):
+
+- Labels are folded for OCR (digits Tesseract confuses with letters inside
+  words, `T0TAL` -> `total`; keywords OCR runs together, `AMOUNTDUE`; near
+  misses, `TOTAI`). Amounts need two decimals after a point or a comma, with
+  an optional symbol or ISO code, minus/parentheses/trailing minus, a tax
+  letter, OCR noise around them, or a colon that cannot be a time (`94:29`).
+- Lines are typed (subtotal, tax/VAT/GST, tip, discount, total, change,
+  tender, item); a keyword whose amount OCR put on the next line takes it.
+  The **consistent set** is looked for: a total (strong labels such as
+  "amount due" first, then the later line, then the card payment) for which
+  subtotal + tax (+ tip - discount) = total, or the items add up, or (VAT
+  included) subtotal = total. A figure whose currency symbol OCR read as a
+  leading digit (`8116.83` for `£116.83`) and digits whose decimal point was
+  lost (`6778` on a TOTAL line) are tried only as variants that make the set
+  consistent, never on their own. A missing subtotal or tax is derived.
+- Date: every format of `classify/dates.py` plus `14-MAR-26`; a labelled
+  date or one next to a time first; expiry, return-by and due dates are
+  ignored; an ambiguous numeric date follows the currency (GBP, EUR and
+  other day-first currencies: `dmy`; USD/CAD: `mdy`) at 0.85, without one it
+  is a guess (0.6). A mail without a date in its body takes the `Date`
+  header (0.9).
+- Merchant: the first header line that is not an address (when it has
+  digits), phone, date, URL or receipt boilerplate; a mail's sender display
+  name first. Payment: brand (or cash) and the last four digits of a masked
+  card number; a printed full number is cut to its last four. The digits are
+  identity data: stored in `extraction.parse.receipt`, never logged, audited
+  or put in a review item (SECURITY.md H8).
+- Confidence per field (`merchant`, `date`, `total`, `subtotal`, `tax`,
+  `currency` when printed, `payment_last4`, `lines`): a consistent total,
+  subtotal and tax score 1.0 whatever OCR's own confidence (three figures
+  read independently agree, as a running balance confirms a statement row);
+  a labelled total that cannot be checked 0.8, one that contradicts the
+  others 0.6; otherwise the field's base score times the Tesseract
+  confidence of the cell it was read from.
+
+**Matcher** (`app/ingestion/match/receipts.py`): the merchant candidates are
+first looked up among the household's payees (name and aliases; a known
+payee becomes the merchant at confidence 1.0). Candidates are transactions
+(not transfers) on accounts the uploader may edit (owner/admin and mail
+without an uploader: all; member: `edit` grants; viewer: none), only the
+receipt's account when it was filed under one (F3), posted within 3 days
+of the receipt date (undated: the 60 days before it arrived, exact amounts
+only), in the printed currency, for exactly the total (purchase, or a
+refund) or up to 30% above it (a tip). Score `0.5 amount + 0.2 date + 0.3
+merchant` (amount: exact 1.0, refund 0.6, tip 0.6 down to 0; date: 1.0,
+0.9, 0.75, 0.6 for 0-3 days; merchant: payee identity 1.0, equal keys 1.0,
+word containment 0.9 ("POS CORNER MARKET 0412" / "Corner Market"),
+otherwise character similarity). The best candidate is **linked**
+(`document_link`, audit `document.link` with `auto: true`, event
+`document.linked`) when the amount is exact, the receipt's total is at or
+above the threshold and it has a date, the score is at least 0.85, it leads
+the next candidate by at least 0.1, and the transaction carries no other
+receipt (documents from the same mail do not count). Otherwise a
+`receipt_match` review item (`reason`: `ambiguous`, `not_confident`,
+`receipt_uncertain`, `already_has_receipt`, `no_candidates`, `no_total`)
+lists up to five `suggestions` (`transaction_id`, `account_id`, `score`,
+`amount`, `days`, `already_linked`), best first. Resolving it
+(`POST /review/{id}/resolve` with `{"kind": "receipt_match",
+"transaction_id"}`) links the chosen transaction through the document
+link checks; `transaction_id: null` records that none applies. When a later
+import (worker `ingest_document`, `imports.apply_mapping`) adds
+transactions, open `receipt_match` items are matched again against them
+and resolved automatically (`auto_link`) when the match is now confident
+and unique.
+
+**Field accuracy** on the held-out synthetic set (40 receipts each,
+`tests/unit/test_receipt_accuracy.py`, seeds never used for tuning;
+Tesseract 5 with the Ubuntu `eng` data; precision = share of right values
+among those scored at or above 0.85):
+
+| Field | Thermal photos (OCR): accuracy / precision | PDF and mail e-receipts |
+|---|---|---|
+| total | 85.0% / 100% (33 confident) | 100% / 100% |
+| date | 85.0% / 100% (23 confident) | 100% / 100% |
+| merchant | 87.5% / 100% | 100% / 100% |
+| subtotal | 82.5% / 96.8% | 100% / 100% |
+| tax | 82.5% / 100% | 100% / 100% |
+| card last four | 87.5% / (none confident) | 100% / 100% |
+| currency | 90.0% / 100% | 100% / 100% |
+
+The test fails below 80% accuracy for an OCR total or 97% precision for a
+confident one (no wrong total may be linked automatically), and below 100%
+for e-receipts. The synthetic photos are deliberately hard (58 mm prints
+at 16-20 px text, faded ink, noise, specks, blur, +-3 degrees of skew);
+most OCR misses are single digits in dates and a lost decimal point.
+
 ### 7. Commit
 Within one database transaction: write transactions/holdings/payments, link the
 document, update balance snapshots, move the blob from quarantine to permanent,
@@ -215,6 +543,14 @@ set `document.status`, emit events. Anything below the configured confidence
 threshold (default 0.85 per field) is written with `review_state=pending` and a
 `review_item`, so it is visible but marked and excluded from reports until
 confirmed (configurable).
+
+Implementation (`app/domain/imports/service.py`): a parsed row with any field
+below the threshold (`PERFIN_INGEST_CONFIDENCE_THRESHOLD`) is written with
+`review_state = pending` and its `confidence`; the statement's such rows share
+one `low_confidence_field` item (`low_confidence`: the fields, the parser,
+and per row the transaction id, fields, confidence and page). Confirming them
+is a transaction change (`PATCH /transactions/{id}` or the bulk `confirm`
+action); resolving the item itself is only "dismiss" so far.
 
 ## Review queue
 
@@ -260,6 +596,69 @@ from quarantine) are in API.md "Documents notes".
 - A per-run cap on files processed and total bytes prevents a runaway copy
   from exhausting storage.
 
+How it is built (`app/ingestion/intake/dropfolder.py`, the
+`watch_dropfolder` job in `app/workers/handlers/dropfolder.py`,
+attribution in `app/domain/dropfolder/`):
+
+- `PERFIN_DROPFOLDER_ENABLED` turns it on. `watch_dropfolder` is a recurring
+  instance-level job (one per minute, one run at a time through an advisory
+  lock) for one household: `PERFIN_DROPFOLDER_HOUSEHOLD_ID`, else the only
+  household (with several and none set it stays idle and logs why). A run
+  watches for up to `PERFIN_DROPFOLDER_WATCH_SECONDS` (inotify through a
+  small `ctypes` binding, polling where inotify is unavailable) while files
+  settle, and returns as soon as it has taken something so its writes
+  commit promptly.
+- Walking: directories are opened relative to their parent with
+  `O_NOFOLLOW | O_DIRECTORY` (at most four levels, 10 000 entries a pass);
+  every entry is `lstat`-ed and only regular files are candidates
+  (symlinks, FIFOs, sockets and devices are never opened). Ignored names:
+  hidden (leading `.`), `~$`, and `.part`, `.partial`, `.crdownload`,
+  `.download`, `.tmp`, `.temp`, `.swp`, `~`, `.ready`.
+- Complete means: neither `mtime` nor `ctime` moved for
+  `PERFIN_DROPFOLDER_SETTLE_SECONDS`; not open for writing where the kernel
+  can tell (a read lease is refused while a writer has it open; needs the
+  file's owner or `CAP_LEASE`, otherwise the settle time is the signal);
+  with `PERFIN_DROPFOLDER_READY_SIDECAR`, a regular `<name>.ready` exists.
+- The file is opened by descriptor (`O_NOFOLLOW | O_NONBLOCK`), must still
+  be the listed regular file, have one link (a hard link may reach outside
+  the inbox: refused) and fit `PERFIN_UPLOAD_MAX_MB`, then goes through the
+  same intake as an upload (sniff, SHA-256, size cap, encryption into
+  quarantine). If size, `mtime` or the bytes read changed during the copy,
+  the copy is discarded and the file is tried again later.
+- Provenance: `source = dropfolder`, `source_meta` = relative path, folder
+  slug, `mtime`, size and how it was attributed; `original_filename` is the
+  cleaned last component.
+- Attribution: a remembered route for `<member>/<account>`, then
+  `<member>`; else a `<member>` folder named like a member's username (slug
+  comparison) and below it an `<account>` folder named like exactly one
+  account that member may edit. Routes and names that no longer hold (a
+  viewer, a lost grant) are ignored. A member without an account goes
+  through the pipeline as their upload (account matching among the
+  accounts they edit). Nobody found: the document is held in
+  `needs_review` behind an `unknown_owner` item ("Who does this belong
+  to?", visible to owners and admins), whose resolution assigns it and can
+  remember the subfolder.
+- After-modes (`PERFIN_DROPFOLDER_AFTER`), applied only once the run has
+  committed (a `dropfolder.finish` job, or the next run after a crash):
+  `move` renames the original into `processed/` (refused files into
+  `PERFIN_DROPFOLDER_FAILED`, default `processed/failed/`) under
+  `<UTC stamp>-<entry id>-<sanitised name>`, copying through descriptors
+  when the two are on different filesystems; `delete` unlinks taken files
+  and keeps refused ones; `keep` leaves them. The original is found again by
+  listing the inbox and matching its ledger key, never by a stored path. A
+  read-only inbox (the default compose mount) makes `move` and `delete`
+  act like `keep`, which is why `deploy/.env.example` ships `keep`.
+- Idempotency: every taken or refused file has a `dropfolder_entry` keyed by
+  its path hash, size, `mtime` and inode, so nothing is taken twice, across
+  restarts too; in `keep` mode the same content under another name is
+  skipped by its SHA-256 as well.
+- Caps: `PERFIN_DROPFOLDER_MAX_FILES_PER_RUN` files (taken or refused) and
+  `PERFIN_DROPFOLDER_MAX_MB_PER_RUN` per run; the rest waits for the next.
+- `perfin config check` (worker role) warns about a read-only inbox with
+  `move`/`delete`, a writable one with `keep`, a missing inbox, a
+  non-writable `processed/`, and a settle time under 2 s without the
+  sidecar; `processed/` or `failed/` inside the inbox is an error.
+
 ## Email intake specifics
 
 - Dedicated mailbox strongly recommended; PerFin asks for IMAPS and a mailbox
@@ -278,6 +677,64 @@ from quarantine) are in API.md "Documents notes".
 - HTML bodies are converted to text; remote images and scripts are never
   fetched. Inline `cid:` images are extracted as attachments.
 
+Phase 4 status (`app/ingestion/intake/email.py`, `app/workers/handlers/mailbox.py`,
+`app/domain/intake_settings/`, `/settings/intake`):
+
+- **Settings.** Per household (`mail_intake`): host, port (993), username
+  and app password (both column-encrypted; the password is write-only),
+  inbox / `PerFin/Processed` / `PerFin/Rejected` folder names, the alias
+  token (16 characters of lower-case base32, encrypted, rotatable),
+  `member_addresses` (members', admins' and owners' own addresses are
+  allowed senders, on by default), `allowed_senders` (extra addresses,
+  each mapped to a member whose document the mail becomes),
+  `require_auth_results` (on) and an optional `authserv_id`. Owners and
+  admins manage them; changes and rotation need step-up. The instance
+  switch is `PERFIN_EMAIL_INTAKE_ENABLED`.
+- **Connection.** `IMAP4_SSL` only (implicit TLS, no `STARTTLS`),
+  certificate and host name verified against the system store (a private
+  CA via `SSL_CERT_FILE`), TLS 1.2+. With `HTTPS_PROXY` the connection is a
+  `CONNECT host:993` tunnel through the egress proxy (add the host to
+  `deploy/egress-allowlist.txt`); without one, every resolved address is
+  vetted like the SSRF-safe HTTP client (private addresses only with
+  `PERFIN_EMAIL_INTAKE_ALLOW_PRIVATE_HOSTS`).
+- **What the worker parses.** Only the header block (at most 64 KiB, with
+  the standard library's `BytesHeaderParser` in `compat32` mode: no MIME
+  decoding, values and counts capped) and `RFC822.SIZE`, which is all the
+  acceptance policy needs. A rejected message's body is never fetched. An
+  accepted message is fetched whole and goes through the normal intake as
+  an `.eml` document (`source=email`, `source_meta`: `sender`,
+  `message_id`, `subject`, `auth: {present, spf, dkim}`, owner: the
+  member the sender maps to); its body, HTML and attachments are parsed
+  only by the sandboxed EML extractor, which returns attachments and
+  `cid:` images as child documents (depth 1).
+- **Policy details.** The token must be the local part or a `+` tag of an
+  address in `To`, `Cc`, `Delivered-To` or `X-Original-To`. Exactly one
+  `From` address. Only the topmost `Authentication-Results` header (or the
+  topmost from `authserv_id`) is read, since anyone can add such headers
+  further down; comments are ignored; `spf=pass` and `dkim=pass` are both
+  required, and a DKIM pass that names its signing domain must be aligned
+  with the `From` domain (equal, or one a subdomain of the other).
+- **Two-phase move and dedupe.** Each decision is recorded in
+  `mail_intake_message` (key: SHA-256 of `Message-ID` plus `From`, or of
+  the header block) in the job's transaction; a message is moved only by a
+  later run that finds it recorded, and the handler queues that follow-up
+  run whenever a run recorded something. A second copy of a recorded
+  message is moved without being imported again. Servers without `MOVE`
+  get `COPY`, `\Deleted` and `UID EXPUNGE`.
+- **Caps.** Per run `PERFIN_EMAIL_INTAKE_MAX_MESSAGES_PER_RUN` new
+  messages (50), `PERFIN_EMAIL_INTAKE_MAX_MB_PER_RUN` (200) fetched;
+  messages over `PERFIN_EMAIL_INTAKE_MAX_MESSAGE_MB` (25, and never over
+  the upload cap) are rejected from their declared size. Polls run every 5
+  minutes (`poll_mailboxes` dispatches `poll_mailbox` per enabled
+  household).
+- **Digest.** Rejections add to one open `rejected_email` review item per
+  household and UTC day (no document, owners and admins only): `day`,
+  `count`, `reasons` (`no_alias`, `sender_invalid`, `sender_not_allowed`,
+  `auth_failed`, `too_large`, `unsupported`), up to 50 `messages`
+  (`sender`, `subject`, `reason`, `at`) and `omitted`. Dismissing it starts
+  a new item with the next rejection that day.
+- **Not built:** IMAP IDLE (polling only) and OAuth mailbox login.
+
 ## No models in the pipeline
 
 PerFin does not call a language model at any stage of ingestion, local or
@@ -293,8 +750,36 @@ artefact in the image.
 
 ## Parser contribution model
 
-Institution fingerprints and parsers live in `backend/app/ingestion/parsers/`
-as code plus YAML, with a test fixture format that uses **synthetic**
-statements (never real ones). A contributor adds a fixture, a fingerprint and,
-if needed, a parser subclass. A CLI `perfin ingest --dry-run file.pdf` prints
-every stage's output for debugging without writing to the database.
+Institution fingerprints live in `backend/app/ingestion/classify/fingerprints/`
+(YAML) and parsers in `backend/app/ingestion/parsers/` (code), with a test
+fixture format that uses **synthetic** statements (never real ones). A
+contributor adds a fixture, a fingerprint and, if needed, a parser subclass.
+A CLI `perfin ingest --dry-run file.pdf` prints every stage's output for
+debugging without writing to the database.
+
+The steps, the parser contract and the review checklist are in
+[CONTRIBUTING-parsers.md](CONTRIBUTING-parsers.md). In short:
+
+1. **Fixture.** A generator in `backend/tests/fixtures/synth_pdf_statements.py`
+   (reportlab) that draws the layout from a `SynthStatement` of invented
+   rows, including what makes the layout hard (several pages, pending
+   items, fees and interest, debit/credit columns) and a `tamper` variant
+   that does not reconcile. Never a real statement, never a redacted real
+   one.
+2. **Fingerprint.** A YAML file in `classify/fingerprints/` whose `key` the
+   parser declares and whose `parser` names the generic parser to fall
+   back on.
+3. **Parser.** Usually a `TableStatementParser` (or `CardStatementParser`)
+   subclass that only declares facts: `name`, `version`, `institution` (the
+   fingerprint key), `display_name`, `fingerprints`, `date_styles`,
+   `period_styles`, `sign`, `default_currency`, `account_type`, extra
+   `headers`/labels/`sections`. Code only when the layout needs it. Listed
+   in `INSTITUTION_PARSERS`.
+4. **Version.** Bump `version` whenever the output for the same pages may
+   change; the stored `parser` reference says which version read a
+   statement, and `reparse` re-runs from the stored pages.
+5. **Tests.** The unit test parametrisation in
+   `tests/unit/test_statement_parsers.py` (exact rows, balances, period,
+   last four, currency, full confidence, reconciliation, the tampered
+   variant failing) and, for a new kind of layout, an end-to-end case in
+   `tests/integration/test_pdf_statement_pipeline.py`.

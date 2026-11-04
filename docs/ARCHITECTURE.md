@@ -104,7 +104,15 @@ SECURITY.md "Container hardening"). Pulls jobs from a Postgres table using
 - `portability.export`, `portability.import`, `portability.expire`: full
   export and import archives (Phase 2, PORTABILITY.md).
 - `watch_dropfolder`: long-running; inotify where available, polling fallback.
-- `poll_mailbox`: IMAP IDLE/poll on a schedule.
+  (Built in Phase 3 as a recurring instance-level job, one bounded run a
+  minute that watches while files settle and commits what it took;
+  originals are moved or deleted afterwards by `dropfolder.finish`.
+  INGESTION.md "Drop folder specifics".)
+- `poll_mailbox`: IMAP IDLE/poll on a schedule. (Built in Phase 4 as a
+  poll: the instance-level `poll_mailboxes` runs every 5 minutes and queues
+  `poll_mailbox` for each household whose mailbox is enabled; a run that
+  recorded messages queues a follow-up that moves them out of the inbox
+  after the commit. No IDLE yet. INGESTION.md "Email intake specifics".)
 - `snapshot_net_worth`: daily.
 - `refresh_prices`: scheduled, only if a price provider is enabled.
 - `run_rules`: re-apply rules after a rule change.

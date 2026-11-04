@@ -375,7 +375,8 @@ document_link     (document, target_type: transaction|investment_txn|loan_paymen
                    account|tax_year, target_id)
 review_item       (household, document?, kind: unknown_owner|unknown_account|
                    low_confidence_field|possible_duplicate|unparsed|new_institution|
-                   rejected_email, payload JSONB, state: open|resolved|dismissed,
+                   rejected_email|receipt_match, payload JSONB,
+                   state: open|resolved|dismissed,
                    resolved_by?, resolution JSONB)
 parser_fingerprint(institution, kind, match rules JSONB, parser name, version,
                    learned_from_document_id?)
@@ -383,7 +384,20 @@ ingest_job        (document, stage, attempt, started, finished, error, log JSONB
 import_mapping    (household, name, institution_id?, account_id?, header_fingerprint,
                    spec JSONB, created_by?, use_count, last_used_at?)
 import_hash_alias (household, account, transaction, import_hash)
+dropfolder_route  (household, folder slug, user, account?)
+dropfolder_entry  (household, path_key sha256, rel_path, size, mtime_ns, inode,
+                   sha256?, document?, outcome: accepted|rejected|skipped, reason?,
+                   after_state: pending|done|kept|error, after_result?)
 ```
+
+`dropfolder_route` and `dropfolder_entry` (`app/domain/dropfolder/models.py`)
+are the drop folder's attribution and idempotency ledger (INGESTION.md "Drop
+folder specifics"): a route says who files under a subfolder slug belong to
+(written by the `unknown_owner` resolution with `remember`); an entry is one
+inbox file the watcher took or refused, unique by (path hash, size, mtime,
+inode), with the move/delete still to do (`after_state = pending`) until the
+transaction that recorded it has committed. `rel_path` is metadata only.
+Neither is exported (household-specific mount state).
 
 Notes on the documents foundation (`app/domain/documents/`):
 
@@ -405,6 +419,19 @@ Notes on the documents foundation (`app/domain/documents/`):
   machine-readable failure (`extraction failed: <code>`). `extraction` is the
   validated sandbox output (`app.ingestion.sandbox.protocol.ExtractResult`),
   which only ever carries the last four digits of an account number.
+  For PDFs and images it holds the pages (words with boxes, lines, tables,
+  text, OCR facts) but never image bytes: page previews are separate blobs
+  (permanent area, encrypted like any document) listed in
+  `extraction.stored_previews` (page, blob id, width, height, DPI, `scale`
+  from page units to preview pixels; `app/domain/documents/previews.py`).
+  These blobs have no `document` row of their own; deleting or re-extracting
+  the document shreds and removes them. For EML and ZIP it lists the
+  children in `extraction.stored_children` (origin, name, size, the child's
+  `document_id` or the intake's rejection reason).
+- `document.source_meta` of a document found inside an EML or ZIP is
+  `{parent_document_id, origin: attachment|inline|zip_member, depth,
+  content_id?}`; `depth` (1) is what the pipeline extracts it at, so a
+  container inside a container is not expanded (SECURITY.md D4).
 - `review_item.state` is `open` exactly while `resolved_at` is NULL.
 - `import_hash_alias` (`app/domain/review/models.py`) records "these two
   imported rows are the same transaction": confirming a `near_match`
@@ -450,6 +477,24 @@ Notes on structured imports (`app/domain/imports/`, Phase 2):
   `balance_mismatch`, `date_order_assumed`, `currency_mismatch`,
   `truncated`). The latest import's counts are the `log` of the document's
   last finished `parse` `ingest_job`.
+- PDF and image statements (document parsers, Phases 3-4; INGESTION.md
+  "Parse"): the parsed statements are `extraction.statements` with
+  `source_format` `pdf`/`image` (rows with `confidence`, `low_confidence`,
+  `page`, `bbox`; the statement with `opening_balance`, `parser`,
+  per-field `confidence`, `reconciliation`), and `extraction.parse` records
+  the parser run (parser and version, scores, threshold, pending and skipped
+  line counts, warnings, a `payslip`). `document.parser_version` is the
+  parser's `name/version`; `document.confidence.parse` summarises the run
+  next to the classifier's fields. Rows below the confidence threshold, or
+  of a statement that does not reconcile, are `transaction.review_state =
+  pending` with `transaction.confidence` (0..1, the row's lowest field).
+  Their review payloads are `low_confidence_field` with `low_confidence`
+  (`fields`, `parser`, `count`, `transactions`: id, fields, confidence,
+  page), `reconciliation_failed`/`reconciliation_unavailable` (`opening`,
+  `closing`, `total`, `difference` as decimal strings, `running_mismatches`
+  count and row indices), `lines_skipped` (`count`) and, for payslips,
+  `payslip_does_not_add_up`/`low_confidence` (`fields`, `adds_up`). A
+  statement that does not reconcile writes no balance snapshot.
 
 ## Tax vault
 
@@ -473,6 +518,13 @@ audit_log         (seq, household?, user?, action, target_type, target_id, befor
                                                                -- append-only, hash-chained
 notification_channel (household, type, config (encrypted), enabled)   -- Phase 7
 setting           (scope: system|household|user, scope_id?, key, value JSONB)
+mail_intake       (household (unique), enabled, host?, port, username_encrypted?,
+                   password_encrypted?, inbox_folder, processed_folder, rejected_folder,
+                   alias_encrypted, alias_rotated_at, allowed_senders JSONB,
+                   member_addresses, require_auth_results, authserv_id?,
+                   last_poll_at?, last_poll_outcome?, last_poll_counts JSONB)   -- Phase 4
+mail_intake_message (household, message_key (unique per household), outcome:
+                   accepted|rejected, reason?, document?)                       -- Phase 4
 idempotency_key   (household, user_id, key, request_hash, status_code?, response_body JSONB?,
                    created_at, expires_at)                     -- Phase 2
 portability_archive (household, kind: export|import, state: pending|ready|downloaded|
@@ -531,6 +583,18 @@ Phase 0 notes (migration `0001_phase0_foundations`, `app/db/models.py`,
   envelope under the master key bound to the row id (column info
   `secret`), only until the job has used it. `summary` holds counts and,
   for a failed import, a short `error_detail`; never file content.
+
+- `mail_intake` and `mail_intake_message` (Phase 4,
+  `app/domain/intake_settings/models.py`) are household-scoped (forced RLS).
+  `mail_intake` holds one household's receipts mailbox: the username, app
+  password and alias token are envelopes under the master key bound to
+  `column_ad("mail_intake", <column>, id)` (column info `secret`); enabling
+  requires host and credentials (check constraint). `allowed_senders` is a
+  JSON array of `{"address", "user_id"}`. `mail_intake_message` is the
+  mailbox ledger and dedupe index: `message_key` is SHA-256 over the
+  `Message-ID` and `From` (or the whole header block), `document_id` a
+  household-consistent `SET NULL` reference to the `.eml` document of an
+  accepted message. Neither table is exported (instance state, secrets).
 
 ## Encryption at the column level
 

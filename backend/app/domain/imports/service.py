@@ -29,6 +29,14 @@ The flow (INGESTION.md "Parse", "Match and deduplicate", "Commit"):
      ``LEDGERBAL``, the last running balance of a CSV) becomes a
      ``statement`` balance snapshot. The ingest worker then queues the
      transfer matcher for the document.
+   * Statements read by the document parsers (PDF, scans;
+     ``app.ingestion.parsers``) go the same way. A row with a field below
+     the confidence threshold is written with ``review_state = pending``
+     (and its ``confidence``) next to one ``low_confidence_field`` item
+     (``low_confidence``: fields, transaction ids, pages); a statement that
+     does not reconcile (``app.ingestion.reconcile``) has all its rows
+     pending, a ``reconciliation_failed``/``reconciliation_unavailable``
+     item with the figures, and writes no balance snapshot (SECURITY.md C12).
    * The document is ``processed`` when nothing is left open for it in the
      review queue, ``needs_review`` otherwise.
 
@@ -115,6 +123,7 @@ from app.ingestion.match.accounts import importable_account_ids, match_account
 from app.ingestion.match.dedupe import dedupe
 from app.ingestion.parsers.structured import (
     ParsedStatement,
+    ParsedTransaction,
     candidate_fingerprints,
     from_statement,
     from_table,
@@ -544,6 +553,7 @@ class _Run:
     rules_changed: int = 0
     review_items: int = 0
     statements: int = 0
+    low_confidence: int = 0
     accounts: list[uuid.UUID] = field(default_factory=list)
     mapping_id: uuid.UUID | None = None
     _payees: dict[str, uuid.UUID] | None = None
@@ -597,6 +607,7 @@ class _Run:
             "rules_changed": self.rules_changed,
             "review_items": self.review_items,
             "statements": self.statements,
+            "low_confidence": self.low_confidence,
             "accounts": [str(a) for a in self.accounts],
             "mapping_id": str(self.mapping_id) if self.mapping_id else None,
         }
@@ -663,6 +674,69 @@ def _row_problems(run: _Run, parsed: ParsedStatement, account: Account) -> None:
             ReviewKind.LOW_CONFIDENCE_FIELD,
             {"reason": "truncated", "account_id": str(account.id)},
         )
+    if not parsed.reconciled and parsed.reconciliation is not None:
+        # SECURITY.md C12: the statement's own figures disagree (or cannot be
+        # checked); its rows are imported pending and no snapshot is written.
+        check = parsed.reconciliation
+        run.review(
+            ReviewKind.LOW_CONFIDENCE_FIELD,
+            {
+                "reason": (
+                    "reconciliation_failed"
+                    if check.status == "mismatch"
+                    else "reconciliation_unavailable"
+                ),
+                "field": "reconciliation",
+                "account_id": str(account.id),
+                "parser": parsed.parser,
+                "opening": _decimal_text(check.opening),
+                "closing": _decimal_text(check.closing),
+                "total": _decimal_text(check.total),
+                "difference": _decimal_text(check.difference),
+                "running_mismatches": len(check.running_mismatches),
+                "rows": check.running_mismatches[:IDS_MAX],
+            },
+        )
+
+
+def _decimal_text(value: Decimal | None) -> str | None:
+    return f"{value:f}" if value is not None else None
+
+
+def _confidence(value: float | None) -> Decimal | None:
+    return Decimal(str(round(value, 4))) if value is not None else None
+
+
+def _low_confidence_review(
+    run: _Run,
+    parsed: ParsedStatement,
+    account: Account,
+    low: list[tuple[Transaction, ParsedTransaction]],
+) -> None:
+    """One ``low_confidence_field`` item for the rows a document parser was unsure of."""
+    if not low:
+        return
+    run.low_confidence += len(low)
+    fields = sorted({name for _, txn in low for name in txn.low_confidence})
+    run.review(
+        ReviewKind.LOW_CONFIDENCE_FIELD,
+        {
+            "reason": "low_confidence",
+            "fields": fields,
+            "account_id": str(account.id),
+            "parser": parsed.parser,
+            "count": len(low),
+            "transactions": [
+                {
+                    "transaction_id": str(row.id),
+                    "fields": list(txn.low_confidence),
+                    "confidence": txn.confidence,
+                    "page": txn.page,
+                }
+                for row, txn in low[:IDS_MAX]
+            ],
+        },
+    )
 
 
 def _commit_statement(
@@ -725,7 +799,12 @@ def _commit_statement(
             status=TransactionStatus.CLEARED,
             source_document_id=run.document.id,
             import_hash=plan.hashes[index],
-            review_state=ReviewState.PENDING if index in plan.near else ReviewState.NONE,
+            review_state=(
+                ReviewState.PENDING
+                if index in plan.near or txn.low_confidence
+                else ReviewState.NONE
+            ),
+            confidence=_confidence(txn.confidence),
         )
         db.add(row)
         lines = _split_lines(run, txn.amount, txn.splits)
@@ -761,7 +840,17 @@ def _commit_statement(
         )
     run.imported += len(created)
     run.possible_duplicates += len(plan.near)
-    if parsed.closing_balance is not None:
+    _low_confidence_review(
+        run,
+        parsed,
+        account,
+        [
+            (created[positions[index]][0], rows[index])
+            for index in plan.to_insert
+            if rows[index].low_confidence
+        ],
+    )
+    if parsed.closing_balance is not None and parsed.reconciled:
         accounts_repo.upsert_snapshot(
             db,
             account,

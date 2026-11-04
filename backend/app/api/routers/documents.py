@@ -61,6 +61,7 @@ from app.domain.documents.schemas import (
     DocumentReceivedOut,
     DocumentReprocessOut,
 )
+from app.domain.documents.search import Q_MAX as SEARCH_Q_MAX
 from app.ingestion.intake.multipart import MultipartFile, boundary_of
 
 router = APIRouter(tags=["documents"])
@@ -166,13 +167,16 @@ def post_document(
 def get_documents(
     db: DbSession,
     principal: Reader,
-    cursor: Annotated[uuid.UUID | None, Query()] = None,
+    cursor: Annotated[str | None, Query(max_length=128)] = None,
     limit: Annotated[int, Query(ge=1, le=DOCUMENTS_MAX_PAGE)] = DOCUMENTS_DEFAULT_PAGE,
     kind: Annotated[DocumentKind | None, Query()] = None,
     document_status: Annotated[DocumentStatus | None, Query(alias="status")] = None,
     account: Annotated[uuid.UUID | None, Query()] = None,
     tax_year: Annotated[int | None, Query(ge=1900, le=2200)] = None,
+    q: Annotated[str | None, Query(min_length=1, max_length=SEARCH_Q_MAX)] = None,
 ) -> DocumentPage:
+    """``q`` searches the extracted text (best match first; snippets only for
+    callers who may download documents, I1)."""
     return manage.list_documents(
         db,
         principal,
@@ -182,6 +186,7 @@ def get_documents(
         status=document_status,
         account_id=account,
         tax_year=tax_year,
+        q=q,
     )
 
 

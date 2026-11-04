@@ -164,5 +164,9 @@ NOT_EXPORTED: Final[Mapping[str, str]] = MappingProxyType(
         "idempotency_key": "request replay cache",
         "event": "live-update stream",
         "portability_archive": "the export and import jobs themselves",
+        "dropfolder_entry": "which inbox files this instance has taken",
+        "dropfolder_route": "drop-folder subfolders of this instance's mount, by user id",
+        "mail_intake": "mailbox credentials of this instance (secrets are not exported)",
+        "mail_intake_message": "which mailbox messages this instance has taken",
     }
 )

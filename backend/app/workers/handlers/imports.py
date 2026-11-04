@@ -7,15 +7,18 @@ column mapping or chose the account. Runs in the job's household context;
 reads ``document.extraction`` (nothing is re-parsed, no sandbox needed),
 imports with the chosen mapping/account, resolves the review items it
 answered and, when transactions were written, queues the transfer matcher
-seeded with the document's transactions.
+seeded with the document's transactions and links receipts waiting for them
+(``app.ingestion.match.receipts.rematch_receipts``).
 """
 
 from __future__ import annotations
 
 from app.core.logging import get_logger
+from app.core.settings import get_settings
 from app.domain.imports import service
 from app.domain.imports.schemas import APPLY_MAPPING_JOB_TYPE, ApplyMappingJob
 from app.domain.transactions.transfers import request_auto_pair
+from app.ingestion.match.receipts import rematch_receipts
 from app.workers.registry import JobContext, PermanentJobError, job_handler
 
 log = get_logger(__name__)
@@ -34,6 +37,12 @@ def apply_mapping(ctx: JobContext, payload: ApplyMappingJob) -> None:
         return
     if outcome.summary.get("imported"):
         request_auto_pair(ctx.session, ctx.household_id, source_document_id=payload.document_id)
+        rematch_receipts(
+            ctx.session,
+            ctx.household_id,
+            payload.document_id,
+            threshold=get_settings().ingest_confidence_threshold,
+        )
     log.info(
         "import re-run",
         extra={

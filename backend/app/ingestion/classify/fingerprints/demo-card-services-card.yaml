@@ -1,0 +1,21 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Fictional institution (invented for PerFin tests and examples; not a real
+# company). Layout produced by backend/tests/fixtures/synth_classify.py.
+schema: 1
+key: demo-card-services-card
+institution: Demo Card Services
+country: US
+kind: statement
+parser: card_statement_generic
+version: 1
+date_order: mdy
+match:
+  all:
+    - header: Demo Card Services
+    - regex: 'card ending in \d{4}'
+      region: header
+  any:
+    - text: Minimum Payment Due
+    - columns: [Trans Date, Post Date, Description, Amount]
+    - text: Annual percentage rate
+  min_any: 1

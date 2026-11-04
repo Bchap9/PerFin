@@ -37,7 +37,7 @@ from typing import Final
 
 from app.core.money import AMOUNT_PLACES, MAX_ABS_AMOUNT
 from app.domain.imports.schemas import DATE_FORMATS, DateFormat, MappingSpec, Sign
-from app.ingestion.sandbox.protocol import Statement, Table
+from app.ingestion.sandbox.protocol import Reconciliation, Statement, Table
 
 FINGERPRINT_VERSION: Final = "perfin-header-v1"
 #: How many leading rows are tried as the header when looking for a mapping.
@@ -69,6 +69,12 @@ class ParsedTransaction:
     splits: tuple[ParsedSplit, ...] = ()
     #: Index of the source row in the table (CSV/TSV), for problem reports.
     row: int | None = None
+    #: Document parsers (PDF, scans): the row's lowest field confidence, the
+    #: fields below the threshold (imported as ``review_state = pending``)
+    #: and the page it was read from.
+    confidence: float | None = None
+    low_confidence: tuple[str, ...] = ()
+    page: int | None = None
 
 
 @dataclass(frozen=True)
@@ -97,6 +103,17 @@ class ParsedStatement:
     #: The date order was guessed (QIF dates that fit both M/D and D/M).
     date_order_assumed: bool = False
     truncated: bool = False
+    #: Document parsers: the printed opening balance and the reconciliation
+    #: of opening + transactions = closing (``app.ingestion.reconcile``).
+    opening_balance: Decimal | None = None
+    reconciliation: Reconciliation | None = None
+    #: Which parser read it (``name/version``), for review items.
+    parser: str | None = None
+
+    @property
+    def reconciled(self) -> bool:
+        """False for a parsed document statement whose figures do not agree."""
+        return self.reconciliation is None or self.reconciliation.status == "ok"
 
 
 # ---------------------------------------------------------------------------
@@ -105,7 +122,7 @@ class ParsedStatement:
 
 
 def from_statement(statement: Statement) -> ParsedStatement:
-    """A statement extracted from OFX, QFX or QIF, as is."""
+    """A statement extracted from OFX, QFX or QIF, or read by a document parser, as is."""
     closing: ClosingBalance | None = None
     ledger = statement.ledger_balance
     if ledger is not None:
@@ -122,9 +139,13 @@ def from_statement(statement: Statement) -> ParsedStatement:
             category=t.category,
             check_number=t.check_number,
             splits=tuple(ParsedSplit(s.amount, s.category, s.memo) for s in t.splits),
+            confidence=t.confidence,
+            low_confidence=tuple(t.low_confidence),
+            page=t.page,
         )
         for t in statement.transactions
     ]
+    parser = statement.parser
     return ParsedStatement(
         source_format=statement.source_format,
         transactions=transactions,
@@ -137,6 +158,9 @@ def from_statement(statement: Statement) -> ParsedStatement:
         closing_balance=closing,
         date_order_assumed=statement.date_order == "mdy_assumed",
         truncated=statement.truncated,
+        opening_balance=statement.opening_balance.amount if statement.opening_balance else None,
+        reconciliation=statement.reconciliation,
+        parser=f"{parser.name}/{parser.version}" if parser is not None else None,
     )
 
 

@@ -537,6 +537,11 @@ POLICIES: Final[Mapping[str, Policy]] = MappingProxyType(
         # --- user settings --------------------------------------------------
         f"GET {API}/settings/user": scoped("settings:read"),
         f"PATCH {API}/settings/user": session(),
+        # --- intake settings (receipts mailbox; credentials, so no tokens) ----
+        f"GET {API}/settings/intake": session(role=A),
+        f"PATCH {API}/settings/intake": session(role=A, step_up=True),
+        f"POST {API}/settings/intake/email/test": session(role=A),
+        f"POST {API}/settings/intake/email/rotate-alias": session(role=A, step_up=True),
         # --- instance administration ---------------------------------------
         f"GET {API}/admin/users": instance_admin(),
         f"GET {API}/admin/users/{{user_id}}": instance_admin(params={"user_id": "user"}),

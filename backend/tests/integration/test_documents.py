@@ -543,12 +543,13 @@ def test_pipeline_parks_unsupported_types_for_review(
     factories: Factories, store: LocalFSBlobStore, keyring: Keyring, tmp_path: Path
 ) -> None:
     owner = factories.user(role="owner")
-    pdf = b"%PDF-1.7\n1 0 obj << >> endobj\ntrailer << >>\n%%EOF\n"
-    document_id = _receive_committed(factories, owner, store, keyring, pdf)
+    # Plain text has no extractor (every other accepted type has one).
+    data = b"Notes about nothing in particular\nand a second line\n"
+    document_id = _receive_committed(factories, owner, store, keyring, data)
     status = _ingest(factories, owner, document_id, _deps(store, keyring))
     assert status is DocumentStatus.NEEDS_REVIEW
     (item,) = _review_items(factories, owner, document_id)
-    assert item.payload == {"reason": "format_not_supported", "mime": "application/pdf"}
+    assert item.payload == {"reason": "format_not_supported", "mime": "text/plain"}
     assert len(_files(tmp_path / "documents")) == 1
 
 

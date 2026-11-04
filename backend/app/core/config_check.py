@@ -15,10 +15,12 @@ from __future__ import annotations
 
 import base64
 import binascii
+import os
 import stat
 from collections.abc import Iterable
 from dataclasses import dataclass
 from ipaddress import IPv4Network, IPv6Network, ip_address
+from pathlib import Path
 from typing import Literal
 from urllib.parse import urlsplit
 
@@ -535,10 +537,126 @@ def _check_smtp(settings: Settings, out: list[Finding]) -> None:
         )
 
 
+def _dir_writable(path: Path) -> bool:
+    try:
+        if os.statvfs(path).f_flag & os.ST_RDONLY:
+            return False
+    except OSError:
+        return False
+    return os.access(path, os.W_OK)
+
+
+def _inside(child: Path, parent: Path) -> bool:
+    child, parent = child.resolve(), parent.resolve()
+    return child == parent or parent in child.parents
+
+
+def _check_dropfolder(settings: Settings, out: list[Finding]) -> None:
+    """Drop folder (INGESTION.md "Drop folder specifics", SECURITY.md C3/C10/C11)."""
+    if not settings.dropfolder_enabled:
+        return
+    inbox = settings.dropfolder_inbox
+    processed = settings.dropfolder_processed
+    failed = settings.dropfolder_failed or processed / "failed"
+    for name, path in (("PERFIN_DROPFOLDER_PROCESSED", processed), ("failed/", failed)):
+        if _inside(path, inbox):
+            out.append(
+                Finding(
+                    "error",
+                    "dropfolder.output_in_inbox",
+                    f"{name} must be a sibling of PERFIN_DROPFOLDER_INBOX, not inside it: "
+                    "processed files must never land back in the inbox",
+                )
+            )
+    if settings.dropfolder_settle_seconds < 2 and not settings.dropfolder_ready_sidecar:
+        out.append(
+            Finding(
+                "warning",
+                "dropfolder.settle_short",
+                "PERFIN_DROPFOLDER_SETTLE_SECONDS below 2 without "
+                "PERFIN_DROPFOLDER_READY_SIDECAR: files still being written may be taken",
+            )
+        )
+    if settings.role != "worker":
+        return  # only the worker has the mounts
+    if not inbox.is_dir():
+        out.append(
+            Finding(
+                "warning",
+                "dropfolder.inbox_missing",
+                "PERFIN_DROPFOLDER_INBOX is not a directory in this container; "
+                "the drop folder is idle",
+            )
+        )
+        return
+    inbox_writable = _dir_writable(inbox)
+    if settings.dropfolder_after == "keep" and inbox_writable:
+        out.append(
+            Finding(
+                "warning",
+                "dropfolder.inbox_writable",
+                "the drop-folder inbox is writable but PERFIN_DROPFOLDER_AFTER=keep never "
+                "writes to it: mount it read-only (SECURITY.md deployment checklist)",
+            )
+        )
+    if settings.dropfolder_after != "keep" and not inbox_writable:
+        out.append(
+            Finding(
+                "warning",
+                "dropfolder.inbox_read_only",
+                f"PERFIN_DROPFOLDER_AFTER={settings.dropfolder_after} needs a writable "
+                "inbox; it is read-only, so originals are kept (set "
+                "PERFIN_DROPFOLDER_AFTER=keep, or mount the inbox read-write)",
+            )
+        )
+    if settings.dropfolder_after == "move" and inbox_writable and not _dir_writable(processed):
+        out.append(
+            Finding(
+                "warning",
+                "dropfolder.processed_not_writable",
+                "PERFIN_DROPFOLDER_AFTER=move needs a writable PERFIN_DROPFOLDER_PROCESSED "
+                "directory; originals stay in the inbox until it is",
+            )
+        )
+
+
+def _check_antivirus(settings: Settings, out: list[Finding]) -> None:
+    """ClamAV sidecar (SECURITY.md C9, ``app.integrations.antivirus``)."""
+    if settings.antivirus != "clamav":
+        return
+    from app.integrations.antivirus.clamav import ClamdAddress, ClamdAddressError
+
+    try:
+        ClamdAddress.parse(settings.clamav_address)
+    except ClamdAddressError as exc:
+        out.append(
+            Finding("error", "antivirus.address_invalid", f"PERFIN_CLAMAV_ADDRESS: {exc}")
+        )
+    if settings.antivirus_fail_mode == "open":
+        out.append(
+            Finding(
+                "warning",
+                "antivirus.fail_open",
+                "PERFIN_ANTIVIRUS_FAIL_MODE=open: documents are processed unscanned "
+                "whenever clamd cannot scan them",
+            )
+        )
+    if settings.clamav_max_mb < settings.upload_max_mb:
+        out.append(
+            Finding(
+                "warning",
+                "antivirus.max_below_upload",
+                "PERFIN_CLAMAV_MAX_MB is below PERFIN_UPLOAD_MAX_MB: larger documents "
+                "cannot be scanned (they fail, or go on unscanned when failing open)",
+            )
+        )
+
+
 def _production_checks(settings: Settings) -> list[Finding]:
     out: list[Finding] = []
     _check_master_key(settings, out)
     _check_secret_key(settings, out)
+    _check_antivirus(settings, out)
     _check_database_url("database_url", settings.database_url.get_secret_value(), out)
     if settings.migration_database_url is not None:
         _check_database_url(
@@ -586,6 +704,7 @@ def _production_checks(settings: Settings) -> list[Finding]:
     _check_metrics(settings, out)
     _check_mcp(settings, out)
     _check_smtp(settings, out)
+    _check_dropfolder(settings, out)
     if not settings.master_key_backup_acknowledged:
         out.append(
             Finding(

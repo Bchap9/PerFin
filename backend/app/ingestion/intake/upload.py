@@ -46,7 +46,7 @@ from app.core.logging import get_logger
 from app.domain.accounts.visibility import get_visible_account
 from app.domain.documents import service
 from app.domain.documents.blobstore import BlobStore, EncryptingWriter, SealedBlob
-from app.domain.documents.models import DocumentSource
+from app.domain.documents.models import DocumentSource, ReviewKind
 from app.ingestion.intake.sniff import (
     SNIFF_BYTES,
     TEXT_TYPES,
@@ -143,8 +143,11 @@ def store_stream(
     digest = hashlib.sha256()
     # Text types: active markup anywhere in the file makes it a polyglot (C4).
     scanner = MarkupScanner() if file_type in TEXT_TYPES else None
-    if scanner is not None:
-        scanner.feed(head)
+    # The head may be longer than the sniff window (the first chunk is kept
+    # whole): markup past the window but inside it is a polyglot as well.
+    if scanner is not None and scanner.feed(head):
+        log.info("upload rejected", extra={"reason": str(RejectReason.POLYGLOT)})
+        raise UploadRejectedError(RejectReason.POLYGLOT)
     with EncryptingWriter(store, keyring, uuid7()) as writer:
         digest.update(head)
         writer.write(head)
@@ -172,8 +175,12 @@ def record_stored(
     uploaded_by: uuid.UUID | None = None,
     account_id: uuid.UUID | None = None,
     request: HTTPConnection | None = None,
+    hold: tuple[ReviewKind, dict[str, Any]] | None = None,
 ) -> service.ReceivedDocument:
-    """Step 5: record a stored object (the object is deleted if recording fails)."""
+    """Step 5: record a stored object (the object is deleted if recording fails).
+
+    ``hold``: see :func:`app.domain.documents.service.record_received`.
+    """
     try:
         return service.record_received(
             db,
@@ -187,6 +194,7 @@ def record_stored(
             uploaded_by=uploaded_by,
             account_id=account_id,
             request=request,
+            hold=hold,
         )
     except BaseException:
         store.delete(stored.sealed.area, stored.sealed.key)

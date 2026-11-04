@@ -183,8 +183,9 @@ GET/PATCH       /settings/system               (instance admin; OIDC, intake, in
 GET/POST        /admin/users                   (instance admin; POST step-up)
 GET/PATCH       /admin/users/{id}              (instance admin; PATCH step-up)
 POST            /admin/users/{id}/mfa-reset    (instance admin, step-up)
+GET/PATCH       /settings/intake               receipts mailbox (owner/admin session; PATCH step-up)
 POST            /settings/intake/email/test
-POST            /settings/intake/email/rotate-alias
+POST            /settings/intake/email/rotate-alias  (step-up)
 GET/POST/PATCH/DELETE /settings/notifications/channels
 
 GET/POST/DELETE /settings/ai/clients            MCP clients (owner, step-up)
@@ -333,7 +334,8 @@ Review notes (`app.domain.review.service`, router `review`; INGESTION.md
 "payload", "resolution", "resolved_by", "resolved_at", "created_at",
 "next_step", "can_resolve"}` (`payload` holds ids and short facts written by
 the pipeline or importer, never file content; `next_step` is
-`confirm_duplicate`, `choose_account`, `column_mapping` or `reprocess`).
+`confirm_duplicate`, `choose_account`, `column_mapping`, `reprocess`,
+`choose_owner` or `attach_receipt`).
 `GET /review?state=&kind=&document=&cursor=&limit=` (any role; `state`
 defaults to `open`, `all` for every state; oldest first, `limit` 1-500)
 lists items of documents the caller can see whose payload `account_id`, if
@@ -356,7 +358,19 @@ four digits on the account, `409 account-last4-conflict` if it records
 others, or the account on the item's CSV mapping); `{"kind": "unparsed",
 "action": "reprocess"}` or `{"kind": "unparsed", "action": "apply_mapping",
 "mapping_id"?, "account_id"?}` (`409 document-not-importable` without a
-stored extraction). Other kinds can only be dismissed for now (`409
+stored extraction); `{"kind": "unknown_owner", "user_id", "account_id"?,
+"remember"}` (a held drop-folder file: assigned to that member, admin or
+owner and the account, which the caller must edit and the member may import
+into, `422 invalid-resolution` otherwise; the document goes through the
+pipeline; `remember` routes the item's `folder` to them; `next_step` is
+`choose_owner`); `{"kind": "receipt_match", "transaction_id"}` ("attach this
+receipt to ...": payload `reason` and ranked `suggestions` of
+`{transaction_id, account_id, score, amount, days, already_linked}`;
+attaches the receipt to that transaction, which need not be a suggestion,
+with the checks of `POST /documents/{id}/links`: a transaction the caller
+cannot edit is `404 transaction-not-found`; `"transaction_id": null`
+records that none applies; `next_step` is `attach_receipt`; INGESTION.md
+"Receipts"). Other kinds can only be dismissed for now (`409
 review-resolution-unsupported`). Closing the last open item of an accepted
 `needs_review` document makes it `processed`. Audit `review.resolve` /
 `review.dismiss`; events `review.resolved` / `review.dismissed` (`{"id",
@@ -770,6 +784,27 @@ User settings notes: `GET /settings/user` returns `{"display_name", "locale",
 of them (locale a BCP 47 tag, theme `system|light|dark`, timezone an IANA
 name) and needs a browser session. A token reads them only with the
 `settings:read` scope (`403 insufficient-scope` otherwise).
+
+Intake settings notes (INGESTION.md "Email intake specifics"): every
+`/settings/intake` route needs a browser session of an owner or admin
+(tokens: `403 session-required`). `GET /settings/intake` returns
+`{"configured", "instance_enabled", "enabled", "host", "port", "username",
+"password_set", "inbox_folder", "processed_folder", "rejected_folder",
+"alias_token", "alias_rotated_at", "allowed_senders": [{"address",
+"user_id"}], "member_addresses", "require_auth_results", "authserv_id",
+"last_poll_at", "last_poll_outcome", "last_poll_counts"}`; the password is
+never returned, and `configured` is `false` with no alias until the first
+change. `PATCH` (step-up) takes any of the writable fields plus the
+write-only `password`; `422 mail-intake-incomplete` when enabling without
+host, username and password, `422 invalid-sender-user` when an allowed
+sender maps to someone who is not a member, admin or owner. `POST
+/settings/intake/email/test` logs in and examines the inbox read-only:
+`{"ok", "outcome", "messages", "move_supported"}` with `outcome` one of
+`ok`, `blocked`, `connect_failed`, `tls_failed`, `auth_failed`,
+`folder_missing`, `protocol_error`, `timeout` (`409
+mail-intake-not-configured` without stored credentials). `POST
+/settings/intake/email/rotate-alias` (step-up) returns `{"alias_token",
+"alias_rotated_at"}`; mail to the old token is rejected from then on.
 
 Admin users notes: `GET /admin/users?cursor=&limit=` (max 500) returns
 `{"items": [...], "next_cursor"}` with `id`, `username`, `display_name`,

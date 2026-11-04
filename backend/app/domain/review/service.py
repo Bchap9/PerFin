@@ -30,6 +30,13 @@ editable by the caller as well. A closed item is ``409 review-item-closed``.
   account on the CSV mapping the item names.
 * ``unparsed``: ``reprocess`` (pipeline again) or ``apply_mapping``
   (re-import with a saved column mapping).
+* ``receipt_match``: the receipt is attached to the chosen transaction
+  (``app.ingestion.match.receipts.resolve_receipt_item`` through
+  ``documents.manage.link``: the caller edits the document and the
+  transaction), or the item records that no transaction applies.
+* ``unknown_owner``: the held drop-folder document is assigned to the chosen
+  member (and account) and goes through the pipeline; ``remember`` routes
+  its subfolder (``app.domain.dropfolder.service.resolve_unknown_owner``).
 
 When the last open item of a ``needs_review`` document that the pipeline
 accepted is closed, the document becomes ``processed``. Every resolution is
@@ -70,25 +77,35 @@ from app.domain.documents.models import (
     ReviewKind,
 )
 from app.domain.documents.service import visible_document_filter
+from app.domain.dropfolder import service as dropfolder_service
 from app.domain.imports import service as imports_service
 from app.domain.imports.schemas import ApplyMapping, MappingUpdate
 from app.domain.review import repo
 from app.domain.review.schemas import (
     NextStep,
     ResolveDuplicate,
+    ResolveReceiptMatch,
     ResolveUnknownAccount,
+    ResolveUnknownOwner,
     ResolveUnparsed,
     ReviewItemOut,
     ReviewPage,
 )
 from app.domain.transactions import service as transactions_service
 from app.domain.transactions.models import ReviewState, Transaction
+from app.ingestion.match import receipts as receipts_match
 
 #: ``unparsed`` reasons the column-mapping editor answers.
 MAPPING_REASONS: Final = frozenset({"mapping_required", "mapping_ambiguous", "mapping_failed"})
 #: Kinds with a typed resolution (the others can only be dismissed for now).
 RESOLVABLE: Final = frozenset(
-    {ReviewKind.POSSIBLE_DUPLICATE, ReviewKind.UNKNOWN_ACCOUNT, ReviewKind.UNPARSED}
+    {
+        ReviewKind.POSSIBLE_DUPLICATE,
+        ReviewKind.UNKNOWN_ACCOUNT,
+        ReviewKind.UNPARSED,
+        ReviewKind.UNKNOWN_OWNER,
+        ReviewKind.RECEIPT_MATCH,
+    }
 )
 #: Document statuses whose stored extraction the importer can run again.
 REIMPORTABLE: Final = frozenset({DocumentStatus.NEEDS_REVIEW, DocumentStatus.PROCESSED})
@@ -185,6 +202,10 @@ def _next_step(item: ReviewItem) -> NextStep | None:
         return "confirm_duplicate"
     if item.kind is ReviewKind.UNKNOWN_ACCOUNT:
         return "choose_account"
+    if item.kind is ReviewKind.UNKNOWN_OWNER:
+        return "choose_owner"
+    if item.kind is ReviewKind.RECEIPT_MATCH:
+        return "attach_receipt"
     if item.kind is ReviewKind.UNPARSED:
         reason = item.payload.get("reason")
         return "column_mapping" if reason in MAPPING_REASONS else "reprocess"
@@ -551,7 +572,11 @@ def resolve(
     db: Session,
     principal: Principal,
     item_id: uuid.UUID,
-    body: ResolveDuplicate | ResolveUnknownAccount | ResolveUnparsed,
+    body: ResolveDuplicate
+    | ResolveUnknownAccount
+    | ResolveUnparsed
+    | ResolveUnknownOwner
+    | ResolveReceiptMatch,
     *,
     request: HTTPConnection | None,
 ) -> ReviewItemOut:
@@ -570,6 +595,21 @@ def resolve(
         resolution = _resolve_account(db, principal, item, body, request)
     elif isinstance(body, ResolveUnparsed):
         resolution = _resolve_unparsed(db, principal, item, body, request)
+    elif isinstance(body, ResolveUnknownOwner):
+        resolution = dropfolder_service.resolve_unknown_owner(
+            db,
+            principal,
+            item,
+            _document(db, item),
+            user_id=body.user_id,
+            account_id=body.account_id,
+            remember=body.remember,
+            request=request,
+        )
+    elif isinstance(body, ResolveReceiptMatch):
+        resolution = receipts_match.resolve_receipt_item(
+            db, principal, item, transaction_id=body.transaction_id, request=request
+        )
     else:  # pragma: no cover - the union is exhaustive
         raise unsupported(item.kind)
     _close(db, principal, item, ReviewItemState.RESOLVED, resolution, request=request)

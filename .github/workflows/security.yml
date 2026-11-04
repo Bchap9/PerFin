@@ -174,13 +174,9 @@ jobs:
           retention-days: 30
 
   semgrep:
-    name: Semgrep (p/python, p/typescript) - advisory
+    name: Semgrep (p/python, p/typescript)
     runs-on: ubuntu-24.04
     timeout-minutes: 15
-    # Advisory until the registry rule sets have been baselined against the
-    # codebase; Ruff (S rules), Bandit and the ESLint security plugins are
-    # the blocking SAST gates.
-    continue-on-error: true
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:

@@ -59,6 +59,139 @@ system tz database; the `python:3.12-slim` runtime base ships it.)
 
 ### Added
 
+#### Phase 4: email intake
+
+- Email intake (Phase 4, INGESTION.md "Email intake specifics", SECURITY.md
+  D1, D2, D5, C10): `poll_mailboxes`/`poll_mailbox` worker jobs poll each
+  household's receipts mailbox over IMAPS (`imaplib.IMAP4_SSL`, verified
+  certificate, no STARTTLS; through the egress proxy as a `CONNECT` tunnel
+  when `HTTPS_PROXY` is set, otherwise with every resolved address vetted).
+  Acceptance: the household's secret alias token in `To`/`Cc`/`Delivered-To`/
+  `X-Original-To` (constant-time compare), exactly one allowed `From`
+  (members' own addresses plus `allowed_senders` mapped to members), and
+  `spf=pass` plus an aligned `dkim=pass` in the topmost (or `authserv_id`'s)
+  `Authentication-Results` when present. The worker reads only the header
+  block; accepted mail becomes an `.eml` document (`source=email`, sender,
+  message id, subject and auth results in `source_meta`) whose body and
+  attachments the sandboxed EML extractor handles; rejected mail is never
+  fetched, goes to `PerFin/Rejected` and is counted in one `rejected_email`
+  digest item per day. Messages move only after their decision committed
+  (`mail_intake_message` ledger, also the `Message-ID` dedupe); per-run
+  caps. New tables `mail_intake` (credentials and alias column-encrypted)
+  and `mail_intake_message`; settings `PERFIN_EMAIL_INTAKE_MAX_MESSAGES_PER_RUN`,
+  `_MAX_MB_PER_RUN`, `_MAX_MESSAGE_MB`, `_TIMEOUT_SECONDS`,
+  `_ALLOW_PRIVATE_HOSTS`. API: `GET/PATCH /settings/intake` (owner/admin
+  session; `PATCH` step-up), `POST /settings/intake/email/test`, `POST
+  /settings/intake/email/rotate-alias` (step-up).
+
+#### Phase 3: drop folder
+
+- `watch_dropfolder` (`app/workers/handlers/dropfolder.py`,
+  `app/ingestion/intake/dropfolder.py`): a recurring worker job (one bounded
+  run a minute, one at a time) that watches the inbox with inotify (a small
+  `ctypes` binding; polling fallback), takes files once settled (`mtime` and
+  `ctime` stable for `PERFIN_DROPFOLDER_SETTLE_SECONDS`, not open for writing
+  where a read lease can tell, optional `.ready` sidecar), ignores hidden and
+  partial-download names, never follows symlinks (directories and files
+  opened by descriptor with `O_NOFOLLOW`; FIFOs, devices and hard links
+  refused) and copies each file into quarantine through the upload intake
+  (sniff, hash, size cap, encryption), discarding a copy whose source changed
+  meanwhile (SECURITY.md C3, C11). Documents get `source = dropfolder` and
+  the relative path, folder, size and `mtime` as metadata.
+- Subfolder attribution (`app/domain/dropfolder/`): `inbox/<member>/<account>/`
+  maps to a member by username and one of their editable accounts by name,
+  or by a remembered `dropfolder_route`; anything else is held in
+  `needs_review` behind an `unknown_owner` item ("Who does this belong
+  to?"), resolved with `POST /review/{id}/resolve` `{"kind":
+  "unknown_owner", "user_id", "account_id"?, "remember"}`
+  (`next_step = choose_owner`).
+- After-modes `move` (into `processed/`, refused files into
+  `processed/failed/` or `PERFIN_DROPFOLDER_FAILED`, under generated names),
+  `delete` and `keep`, applied only after the run committed
+  (`dropfolder.finish`, or the next run after a crash); a read-only inbox
+  acts like `keep`. `dropfolder_entry` is the idempotency ledger (path hash,
+  size, `mtime`, inode; content hash in `keep` mode), so nothing is taken
+  twice across restarts. Per-run caps on files and bytes (C10).
+- Settings `PERFIN_DROPFOLDER_ENABLED`, `_FAILED`, `_READY_SIDECAR`,
+  `_MAX_FILES_PER_RUN`, `_MAX_MB_PER_RUN`, `_WATCH_SECONDS`,
+  `_HOUSEHOLD_ID`; `perfin config check` drop-folder findings
+  (`dropfolder.output_in_inbox` error; `inbox_read_only`, `inbox_writable`,
+  `inbox_missing`, `processed_not_writable`, `settle_short` warnings).
+  `deploy/.env.example` enables the drop folder with `keep`, matching the
+  read-only inbox mount.
+
+#### Phases 3-4: statement parsers, reconciliation and confidence
+
+- `app/ingestion/parsers/`: document parsers running in the worker on the
+  stored PDF/image pages (never on file bytes): a generic table statement
+  parser (header-defined columns over words and boxes, multi-page tables,
+  wrapped lines, pending sections left out, fee/interest/dividend rows,
+  signed, debit/credit and card `CR` conventions, yearless dates, period,
+  last four digits, currency, labelled and in-table balances), a generic
+  card variant, institution parsers for the fictional institutions of the
+  shipped fingerprints (Sample National Bank, Example Federal Credit Union,
+  Demo Card Services, Mock Savings and Loan) and a basic payslip parser.
+  Chosen by the classifier's fingerprint hint, else by detection score;
+  versioned; output kept in `document.extraction` (`statements` with
+  `source_format` `pdf`/`image`, `parse`), so re-imports and `reparse` need
+  no new upload or extraction.
+- `app/ingestion/reconcile.py`: opening + transactions = closing (less than
+  one cent) and running-balance checks (SECURITY.md C12).
+- Per-field confidence (`PERFIN_INGEST_CONFIDENCE_THRESHOLD`, default 0.85):
+  rows below it, and every row of a statement that does not reconcile, are
+  imported `review_state = pending` with `transaction.confidence` and
+  `low_confidence_field` items (`low_confidence`, `reconciliation_failed`/
+  `reconciliation_unavailable` with the figures, `lines_skipped`); an
+  unreconciled statement writes no balance snapshot. Payslips are kept on
+  the document (`kind = payslip`) and go to review when they do not add up.
+- The sandbox runner refuses a child answer carrying parser output
+  (`bad_output`).
+- `tests/fixtures/synth_pdf_statements.py` (reportlab layouts of every
+  institution, multi-page, pending items, fees/interest, debit/credit,
+  tampered non-reconciling variants, an unknown bank, a payslip);
+  `docs/CONTRIBUTING-parsers.md`.
+
+#### Phases 3-4: classification (kind, institution, account, period)
+
+- `app/ingestion/classify/`: fingerprints (shipped YAML for six fictional
+  institutions plus the household's `parser_fingerprint` rows from
+  "remember this layout"; strict schema, anchors/aliases refused, ReDoS-safe
+  regex subset compiled with possessive quantifiers), then a pure-Python
+  naive Bayes kind classifier (statement, receipt, invoice, tax form,
+  payslip, insurance, other) shipped as a versioned JSON artefact trained by
+  `scripts/train_classifier.py` on synthetic documents
+  (`backend/tests/fixtures/synth_classify.py`), then review. Period
+  detection from labelled periods in many date formats, else inferred from
+  transaction dates; receipts' printed date; tax forms' tax year; last four
+  digits and account matching by last four and institution within the
+  uploader's editable accounts; per-field confidence in
+  `document.confidence`. The pipeline classifies PDFs, images and text with
+  it.
+
+#### Phases 3-4: document extraction (PDF, images, OCR, EML, ZIP)
+
+- Sandbox extractors for PDF (PyMuPDF: words with boxes, lines, tables from
+  rulings and aligned columns, metadata; JavaScript, launch actions,
+  embedded files and links counted and stripped, C8; password-protected
+  PDFs to review), PNG/JPEG/TIFF/HEIC (format-restricted decoders, pixel
+  caps before decoding, EXIF dropped), OCR (Tesseract in process through
+  `tesserocr`, so the child still cannot `execve`; ADR-0009 addendum;
+  grayscale, upscaling, denoise, deskew, Otsu binarisation, a receipt
+  profile, per-page and per-document time caps; OCR fallback for PDF pages
+  with no, garbage or sparse text), EML (stdlib `email` with
+  `policy.default`, strict HTML-to-text converter without fetches, D3;
+  attachments and `cid:` images as child documents) and ZIP (central
+  directory checks against bombs, names as metadata, depth 1, D4). Page
+  previews are rendered in the sandbox (bounded DPI and pixels, plain PNG)
+  and stored by the worker as encrypted blobs referenced from
+  `document.extraction.stored_previews`; children of mails and archives go
+  through the upload intake as documents of their own with their depth.
+  `pytesseract` was replaced by `tesserocr`. Synthetic fixtures:
+  `backend/tests/fixtures/synth_documents.py`.
+- `.gitignore`: `backend/app/domain/documents/` was matched by the
+  `documents/` data pattern and therefore never committed; it is now
+  explicitly included.
+
 #### Phase 2: Ledger (v0.2)
 
 - Security review round 1 fixes. P2-SR-01 (high, C1): the extraction child

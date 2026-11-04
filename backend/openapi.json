@@ -851,6 +851,25 @@
         "title": "AdminUserUpdate",
         "type": "object"
       },
+      "AliasOut": {
+        "properties": {
+          "alias_rotated_at": {
+            "format": "date-time",
+            "title": "Alias Rotated At",
+            "type": "string"
+          },
+          "alias_token": {
+            "title": "Alias Token",
+            "type": "string"
+          }
+        },
+        "required": [
+          "alias_token",
+          "alias_rotated_at"
+        ],
+        "title": "AliasOut",
+        "type": "object"
+      },
       "AllCondition-Input": {
         "additionalProperties": false,
         "properties": {
@@ -1007,6 +1026,29 @@
           }
         },
         "title": "AllCondition",
+        "type": "object"
+      },
+      "AllowedSender": {
+        "additionalProperties": false,
+        "description": "An extra sender address and the member its mail belongs to.",
+        "properties": {
+          "address": {
+            "maxLength": 254,
+            "minLength": 3,
+            "title": "Address",
+            "type": "string"
+          },
+          "user_id": {
+            "format": "uuid",
+            "title": "User Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "address",
+          "user_id"
+        ],
+        "title": "AllowedSender",
         "type": "object"
       },
       "AmountCondition-Input": {
@@ -2900,8 +2942,8 @@
         "title": "DocumentLinkOut",
         "type": "object"
       },
-      "DocumentOut": {
-        "description": "A document as the API shows it (no blob location or key material).",
+      "DocumentListItem": {
+        "description": "A row of ``GET /documents``; with ``q``: the rank and, for callers who\nmay download documents (I1), a highlighted snippet of the extracted text.",
         "properties": {
           "account_id": {
             "anyOf": [
@@ -3001,6 +3043,17 @@
             ],
             "title": "Period Start"
           },
+          "rank": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Rank"
+          },
           "sha256": {
             "title": "Sha256",
             "type": "string"
@@ -3008,6 +3061,20 @@
           "size": {
             "title": "Size",
             "type": "integer"
+          },
+          "snippet": {
+            "anyOf": [
+              {
+                "items": {
+                  "$ref": "#/components/schemas/SnippetPart"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Snippet"
           },
           "source": {
             "$ref": "#/components/schemas/DocumentSource"
@@ -3064,15 +3131,15 @@
           "created_at",
           "updated_at"
         ],
-        "title": "DocumentOut",
+        "title": "DocumentListItem",
         "type": "object"
       },
       "DocumentPage": {
-        "description": "``GET /documents``: newest first; ``next_cursor`` is ``null`` on the last page.",
+        "description": "``GET /documents``: newest first, or best match first with ``q``.\n\n``next_cursor`` is opaque and ``null`` on the last page.",
         "properties": {
           "items": {
             "items": {
-              "$ref": "#/components/schemas/DocumentOut"
+              "$ref": "#/components/schemas/DocumentListItem"
             },
             "title": "Items",
             "type": "array"
@@ -3080,7 +3147,6 @@
           "next_cursor": {
             "anyOf": [
               {
-                "format": "uuid",
                 "type": "string"
               },
               {
@@ -4417,6 +4483,368 @@
           "mfa"
         ],
         "title": "LoginOut",
+        "type": "object"
+      },
+      "MailIntakeOut": {
+        "properties": {
+          "alias_rotated_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Alias Rotated At"
+          },
+          "alias_token": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Alias Token"
+          },
+          "allowed_senders": {
+            "items": {
+              "$ref": "#/components/schemas/AllowedSender"
+            },
+            "title": "Allowed Senders",
+            "type": "array"
+          },
+          "authserv_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Authserv Id"
+          },
+          "configured": {
+            "title": "Configured",
+            "type": "boolean"
+          },
+          "enabled": {
+            "title": "Enabled",
+            "type": "boolean"
+          },
+          "host": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Host"
+          },
+          "inbox_folder": {
+            "title": "Inbox Folder",
+            "type": "string"
+          },
+          "instance_enabled": {
+            "title": "Instance Enabled",
+            "type": "boolean"
+          },
+          "last_poll_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Poll At"
+          },
+          "last_poll_counts": {
+            "additionalProperties": true,
+            "title": "Last Poll Counts",
+            "type": "object"
+          },
+          "last_poll_outcome": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Poll Outcome"
+          },
+          "member_addresses": {
+            "title": "Member Addresses",
+            "type": "boolean"
+          },
+          "password_set": {
+            "title": "Password Set",
+            "type": "boolean"
+          },
+          "port": {
+            "title": "Port",
+            "type": "integer"
+          },
+          "processed_folder": {
+            "title": "Processed Folder",
+            "type": "string"
+          },
+          "rejected_folder": {
+            "title": "Rejected Folder",
+            "type": "string"
+          },
+          "require_auth_results": {
+            "title": "Require Auth Results",
+            "type": "boolean"
+          },
+          "username": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Username"
+          }
+        },
+        "required": [
+          "configured",
+          "instance_enabled",
+          "enabled",
+          "host",
+          "port",
+          "username",
+          "password_set",
+          "inbox_folder",
+          "processed_folder",
+          "rejected_folder",
+          "alias_token",
+          "alias_rotated_at",
+          "allowed_senders",
+          "member_addresses",
+          "require_auth_results",
+          "authserv_id",
+          "last_poll_at",
+          "last_poll_outcome",
+          "last_poll_counts"
+        ],
+        "title": "MailIntakeOut",
+        "type": "object"
+      },
+      "MailIntakeUpdate": {
+        "additionalProperties": false,
+        "description": "``PATCH /settings/intake``: only the fields given change.",
+        "properties": {
+          "allowed_senders": {
+            "anyOf": [
+              {
+                "items": {
+                  "$ref": "#/components/schemas/AllowedSender"
+                },
+                "maxItems": 100,
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Allowed Senders"
+          },
+          "authserv_id": {
+            "anyOf": [
+              {
+                "maxLength": 253,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Authserv Id"
+          },
+          "enabled": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Enabled"
+          },
+          "host": {
+            "anyOf": [
+              {
+                "maxLength": 253,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Host"
+          },
+          "inbox_folder": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Inbox Folder"
+          },
+          "member_addresses": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Member Addresses"
+          },
+          "password": {
+            "anyOf": [
+              {
+                "maxLength": 1024,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Password"
+          },
+          "port": {
+            "anyOf": [
+              {
+                "maximum": 65535.0,
+                "minimum": 1.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Port"
+          },
+          "processed_folder": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Processed Folder"
+          },
+          "rejected_folder": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Rejected Folder"
+          },
+          "require_auth_results": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Require Auth Results"
+          },
+          "username": {
+            "anyOf": [
+              {
+                "maxLength": 320,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Username"
+          }
+        },
+        "title": "MailIntakeUpdate",
+        "type": "object"
+      },
+      "MailTestOut": {
+        "properties": {
+          "messages": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Messages"
+          },
+          "move_supported": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Move Supported"
+          },
+          "ok": {
+            "title": "Ok",
+            "type": "boolean"
+          },
+          "outcome": {
+            "enum": [
+              "ok",
+              "not_configured",
+              "blocked",
+              "connect_failed",
+              "tls_failed",
+              "auth_failed",
+              "folder_missing",
+              "protocol_error",
+              "timeout"
+            ],
+            "title": "Outcome",
+            "type": "string"
+          }
+        },
+        "required": [
+          "ok",
+          "outcome"
+        ],
+        "title": "MailTestOut",
         "type": "object"
       },
       "ManualBalanceIn": {
@@ -6316,6 +6744,35 @@
         "title": "ResolveDuplicate",
         "type": "object"
       },
+      "ResolveReceiptMatch": {
+        "additionalProperties": false,
+        "description": "Attach the receipt to a transaction (``null``: none applies).",
+        "properties": {
+          "kind": {
+            "const": "receipt_match",
+            "title": "Kind",
+            "type": "string"
+          },
+          "transaction_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Transaction Id"
+          }
+        },
+        "required": [
+          "kind",
+          "transaction_id"
+        ],
+        "title": "ResolveReceiptMatch",
+        "type": "object"
+      },
       "ResolveUnknownAccount": {
         "additionalProperties": false,
         "properties": {
@@ -6340,6 +6797,45 @@
           "account_id"
         ],
         "title": "ResolveUnknownAccount",
+        "type": "object"
+      },
+      "ResolveUnknownOwner": {
+        "additionalProperties": false,
+        "description": "A held drop-folder file: who it belongs to (and, optionally, its account).",
+        "properties": {
+          "account_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Account Id"
+          },
+          "kind": {
+            "const": "unknown_owner",
+            "title": "Kind",
+            "type": "string"
+          },
+          "remember": {
+            "default": false,
+            "title": "Remember",
+            "type": "boolean"
+          },
+          "user_id": {
+            "format": "uuid",
+            "title": "User Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "kind",
+          "user_id"
+        ],
+        "title": "ResolveUnknownOwner",
         "type": "object"
       },
       "ResolveUnparsed": {
@@ -6445,7 +6941,9 @@
                   "confirm_duplicate",
                   "choose_account",
                   "column_mapping",
-                  "reprocess"
+                  "reprocess",
+                  "choose_owner",
+                  "attach_receipt"
                 ],
                 "type": "string"
               },
@@ -6533,7 +7031,8 @@
           "possible_duplicate",
           "unparsed",
           "new_institution",
-          "rejected_email"
+          "rejected_email",
+          "receipt_match"
         ],
         "title": "ReviewKind",
         "type": "string"
@@ -8441,6 +8940,25 @@
           "updated_at"
         ],
         "title": "SnapshotOut",
+        "type": "object"
+      },
+      "SnippetPart": {
+        "description": "A piece of a search snippet: plain text, ``match`` for a highlighted term.\n\nNever markup: clients render ``text`` as text (``app.domain.documents.search``).",
+        "properties": {
+          "match": {
+            "title": "Match",
+            "type": "boolean"
+          },
+          "text": {
+            "title": "Text",
+            "type": "string"
+          }
+        },
+        "required": [
+          "text",
+          "match"
+        ],
+        "title": "SnippetPart",
         "type": "object"
       },
       "SplitAmountAction-Input": {
@@ -13382,6 +13900,7 @@
     },
     "/api/v1/documents": {
       "get": {
+        "description": "``q`` searches the extracted text (best match first; snippets only for\ncallers who may download documents, I1).",
         "operationId": "get_documents_api_v1_documents_get",
         "parameters": [
           {
@@ -13391,7 +13910,7 @@
             "schema": {
               "anyOf": [
                 {
-                  "format": "uuid",
+                  "maxLength": 128,
                   "type": "string"
                 },
                 {
@@ -13478,6 +13997,24 @@
                 }
               ],
               "title": "Tax Year"
+            }
+          },
+          {
+            "in": "query",
+            "name": "q",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 200,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Q"
             }
           }
         ],
@@ -17354,7 +17891,9 @@
                 "discriminator": {
                   "mapping": {
                     "possible_duplicate": "#/components/schemas/ResolveDuplicate",
+                    "receipt_match": "#/components/schemas/ResolveReceiptMatch",
                     "unknown_account": "#/components/schemas/ResolveUnknownAccount",
+                    "unknown_owner": "#/components/schemas/ResolveUnknownOwner",
                     "unparsed": "#/components/schemas/ResolveUnparsed"
                   },
                   "propertyName": "kind"
@@ -17368,6 +17907,12 @@
                   },
                   {
                     "$ref": "#/components/schemas/ResolveUnparsed"
+                  },
+                  {
+                    "$ref": "#/components/schemas/ResolveUnknownOwner"
+                  },
+                  {
+                    "$ref": "#/components/schemas/ResolveReceiptMatch"
                   }
                 ],
                 "title": "Body"
@@ -17960,6 +18505,194 @@
         "summary": "Change a rule (owner/admin)",
         "tags": [
           "rules"
+        ]
+      }
+    },
+    "/api/v1/settings/intake": {
+      "get": {
+        "operationId": "get_intake_api_v1_settings_intake_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MailIntakeOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {}
+            },
+            "description": "Problem details"
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {}
+            },
+            "description": "Problem details"
+          },
+          "409": {
+            "content": {
+              "application/problem+json": {}
+            },
+            "description": "Problem details"
+          },
+          "422": {
+            "content": {
+              "application/problem+json": {}
+            },
+            "description": "Problem details"
+          }
+        },
+        "summary": "Receipts mailbox settings",
+        "tags": [
+          "settings"
+        ]
+      },
+      "patch": {
+        "operationId": "patch_intake_api_v1_settings_intake_patch",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/MailIntakeUpdate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MailIntakeOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {}
+            },
+            "description": "Problem details"
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {}
+            },
+            "description": "Problem details"
+          },
+          "409": {
+            "content": {
+              "application/problem+json": {}
+            },
+            "description": "Problem details"
+          },
+          "422": {
+            "content": {
+              "application/problem+json": {}
+            },
+            "description": "Problem details"
+          }
+        },
+        "summary": "Change the receipts mailbox settings (step-up)",
+        "tags": [
+          "settings"
+        ]
+      }
+    },
+    "/api/v1/settings/intake/email/rotate-alias": {
+      "post": {
+        "operationId": "rotate_alias_api_v1_settings_intake_email_rotate_alias_post",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AliasOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {}
+            },
+            "description": "Problem details"
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {}
+            },
+            "description": "Problem details"
+          },
+          "409": {
+            "content": {
+              "application/problem+json": {}
+            },
+            "description": "Problem details"
+          },
+          "422": {
+            "content": {
+              "application/problem+json": {}
+            },
+            "description": "Problem details"
+          }
+        },
+        "summary": "Replace the alias token (step-up)",
+        "tags": [
+          "settings"
+        ]
+      }
+    },
+    "/api/v1/settings/intake/email/test": {
+      "post": {
+        "operationId": "check_intake_email_api_v1_settings_intake_email_test_post",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MailTestOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {}
+            },
+            "description": "Problem details"
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {}
+            },
+            "description": "Problem details"
+          },
+          "409": {
+            "content": {
+              "application/problem+json": {}
+            },
+            "description": "Problem details"
+          },
+          "422": {
+            "content": {
+              "application/problem+json": {}
+            },
+            "description": "Problem details"
+          }
+        },
+        "summary": "Log in to the receipts mailbox and report the outcome",
+        "tags": [
+          "settings"
         ]
       }
     },

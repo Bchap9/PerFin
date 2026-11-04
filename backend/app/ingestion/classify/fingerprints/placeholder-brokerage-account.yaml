@@ -1,0 +1,20 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Fictional institution (invented for PerFin tests and examples; not a real
+# company). Layout produced by backend/tests/fixtures/synth_classify.py.
+schema: 1
+key: placeholder-brokerage-account
+institution: Placeholder Brokerage
+country: US
+kind: statement
+parser: brokerage_statement_generic
+version: 1
+date_order: mdy
+match:
+  all:
+    - header: Placeholder Brokerage
+    - header: Investment Account Statement
+  any:
+    - account_mask: 'XXXX-####'
+    - text: Portfolio Summary
+    - columns: [Date, Activity, Description, Quantity, Price, Amount]
+  min_any: 1

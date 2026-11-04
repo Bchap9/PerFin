@@ -292,6 +292,15 @@ _SYSTEM_READ_ROOTS: Final = (
     "/lib64",
     "/etc/ld.so.cache",
 )
+#: Tesseract language data (read-only) for in-process OCR (ADR-0009 "OCR");
+#: mirrors :data:`app.ingestion.extract.ocr.TESSDATA_DIRS` (not imported:
+#: the extractors are loaded only after hardening).
+TESSDATA_READ_ROOTS: Final = (
+    "/usr/share/tesseract-ocr",
+    "/usr/share/tessdata",
+    "/usr/local/share/tessdata",
+    "/usr/share/tesseract",
+)
 
 
 class _LandlockRulesetAttr(ctypes.Structure):
@@ -349,6 +358,7 @@ def readable_roots() -> list[str]:
         sys.exec_prefix,
         sys.base_exec_prefix,
         *_SYSTEM_READ_ROOTS,
+        *TESSDATA_READ_ROOTS,
     ]
     roots: list[str] = []
     for candidate in candidates:

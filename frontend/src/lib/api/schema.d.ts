@@ -777,7 +777,11 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** Documents */
+        /**
+         * Documents
+         * @description ``q`` searches the extracted text (best match first; snippets only for
+         *     callers who may download documents, I1).
+         */
         get: operations["get_documents_api_v1_documents_get"];
         put?: never;
         /** Upload a document (multipart, streamed into encrypted quarantine) */
@@ -1539,6 +1543,58 @@ export interface paths {
         patch: operations["patch_rule_api_v1_rules__rule_id__patch"];
         trace?: never;
     };
+    "/api/v1/settings/intake": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Receipts mailbox settings */
+        get: operations["get_intake_api_v1_settings_intake_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        /** Change the receipts mailbox settings (step-up) */
+        patch: operations["patch_intake_api_v1_settings_intake_patch"];
+        trace?: never;
+    };
+    "/api/v1/settings/intake/email/rotate-alias": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Replace the alias token (step-up) */
+        post: operations["rotate_alias_api_v1_settings_intake_email_rotate_alias_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/settings/intake/email/test": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Log in to the receipts mailbox and report the outcome */
+        post: operations["check_intake_email_api_v1_settings_intake_email_test_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/settings/user": {
         parameters: {
             query?: never;
@@ -2036,6 +2092,16 @@ export interface components {
             /** Is Breakglass */
             is_breakglass?: boolean | null;
         };
+        /** AliasOut */
+        AliasOut: {
+            /**
+             * Alias Rotated At
+             * Format: date-time
+             */
+            alias_rotated_at: string;
+            /** Alias Token */
+            alias_token: string;
+        };
         /** AllCondition */
         "AllCondition-Input": {
             /** Conditions */
@@ -2055,6 +2121,19 @@ export interface components {
              * @enum {string}
              */
             type: "all";
+        };
+        /**
+         * AllowedSender
+         * @description An extra sender address and the member its mail belongs to.
+         */
+        AllowedSender: {
+            /** Address */
+            address: string;
+            /**
+             * User Id
+             * Format: uuid
+             */
+            user_id: string;
         };
         /** AmountCondition */
         "AmountCondition-Input": {
@@ -2753,10 +2832,11 @@ export interface components {
             target_type: components["schemas"]["LinkTarget"];
         };
         /**
-         * DocumentOut
-         * @description A document as the API shows it (no blob location or key material).
+         * DocumentListItem
+         * @description A row of ``GET /documents``; with ``q``: the rank and, for callers who
+         *     may download documents (I1), a highlighted snippet of the extracted text.
          */
-        DocumentOut: {
+        DocumentListItem: {
             /** Account Id */
             account_id: string | null;
             /**
@@ -2784,10 +2864,14 @@ export interface components {
             period_end: string | null;
             /** Period Start */
             period_start: string | null;
+            /** Rank */
+            rank?: number | null;
             /** Sha256 */
             sha256: string;
             /** Size */
             size: number;
+            /** Snippet */
+            snippet?: components["schemas"]["SnippetPart"][] | null;
             source: components["schemas"]["DocumentSource"];
             status: components["schemas"]["DocumentStatus"];
             /** Tax Year */
@@ -2802,11 +2886,13 @@ export interface components {
         };
         /**
          * DocumentPage
-         * @description ``GET /documents``: newest first; ``next_cursor`` is ``null`` on the last page.
+         * @description ``GET /documents``: newest first, or best match first with ``q``.
+         *
+         *     ``next_cursor`` is opaque and ``null`` on the last page.
          */
         DocumentPage: {
             /** Items */
-            items: components["schemas"]["DocumentOut"][];
+            items: components["schemas"]["DocumentListItem"][];
             /** Next Cursor */
             next_cursor: string | null;
         };
@@ -3336,6 +3422,93 @@ export interface components {
              * @enum {string}
              */
             status: "authenticated" | "mfa_required";
+        };
+        /** MailIntakeOut */
+        MailIntakeOut: {
+            /** Alias Rotated At */
+            alias_rotated_at: string | null;
+            /** Alias Token */
+            alias_token: string | null;
+            /** Allowed Senders */
+            allowed_senders: components["schemas"]["AllowedSender"][];
+            /** Authserv Id */
+            authserv_id: string | null;
+            /** Configured */
+            configured: boolean;
+            /** Enabled */
+            enabled: boolean;
+            /** Host */
+            host: string | null;
+            /** Inbox Folder */
+            inbox_folder: string;
+            /** Instance Enabled */
+            instance_enabled: boolean;
+            /** Last Poll At */
+            last_poll_at: string | null;
+            /** Last Poll Counts */
+            last_poll_counts: {
+                [key: string]: unknown;
+            };
+            /** Last Poll Outcome */
+            last_poll_outcome: string | null;
+            /** Member Addresses */
+            member_addresses: boolean;
+            /** Password Set */
+            password_set: boolean;
+            /** Port */
+            port: number;
+            /** Processed Folder */
+            processed_folder: string;
+            /** Rejected Folder */
+            rejected_folder: string;
+            /** Require Auth Results */
+            require_auth_results: boolean;
+            /** Username */
+            username: string | null;
+        };
+        /**
+         * MailIntakeUpdate
+         * @description ``PATCH /settings/intake``: only the fields given change.
+         */
+        MailIntakeUpdate: {
+            /** Allowed Senders */
+            allowed_senders?: components["schemas"]["AllowedSender"][] | null;
+            /** Authserv Id */
+            authserv_id?: string | null;
+            /** Enabled */
+            enabled?: boolean | null;
+            /** Host */
+            host?: string | null;
+            /** Inbox Folder */
+            inbox_folder?: string | null;
+            /** Member Addresses */
+            member_addresses?: boolean | null;
+            /** Password */
+            password?: string | null;
+            /** Port */
+            port?: number | null;
+            /** Processed Folder */
+            processed_folder?: string | null;
+            /** Rejected Folder */
+            rejected_folder?: string | null;
+            /** Require Auth Results */
+            require_auth_results?: boolean | null;
+            /** Username */
+            username?: string | null;
+        };
+        /** MailTestOut */
+        MailTestOut: {
+            /** Messages */
+            messages?: number | null;
+            /** Move Supported */
+            move_supported?: boolean | null;
+            /** Ok */
+            ok: boolean;
+            /**
+             * Outcome
+             * @enum {string}
+             */
+            outcome: "ok" | "not_configured" | "blocked" | "connect_failed" | "tls_failed" | "auth_failed" | "folder_missing" | "protocol_error" | "timeout";
         };
         /**
          * ManualBalanceIn
@@ -3951,6 +4124,19 @@ export interface components {
              */
             kind: "possible_duplicate";
         };
+        /**
+         * ResolveReceiptMatch
+         * @description Attach the receipt to a transaction (``null``: none applies).
+         */
+        ResolveReceiptMatch: {
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            kind: "receipt_match";
+            /** Transaction Id */
+            transaction_id: string | null;
+        };
         /** ResolveUnknownAccount */
         ResolveUnknownAccount: {
             /**
@@ -3968,6 +4154,29 @@ export interface components {
              * @default false
              */
             remember: boolean;
+        };
+        /**
+         * ResolveUnknownOwner
+         * @description A held drop-folder file: who it belongs to (and, optionally, its account).
+         */
+        ResolveUnknownOwner: {
+            /** Account Id */
+            account_id?: string | null;
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            kind: "unknown_owner";
+            /**
+             * Remember
+             * @default false
+             */
+            remember: boolean;
+            /**
+             * User Id
+             * Format: uuid
+             */
+            user_id: string;
         };
         /** ResolveUnparsed */
         ResolveUnparsed: {
@@ -4015,7 +4224,7 @@ export interface components {
             id: string;
             kind: components["schemas"]["ReviewKind"];
             /** Next Step */
-            next_step: ("confirm_duplicate" | "choose_account" | "column_mapping" | "reprocess") | null;
+            next_step: ("confirm_duplicate" | "choose_account" | "column_mapping" | "reprocess" | "choose_owner" | "attach_receipt") | null;
             /** Payload */
             payload: {
                 [key: string]: unknown;
@@ -4039,7 +4248,7 @@ export interface components {
          * ReviewKind
          * @enum {string}
          */
-        ReviewKind: "unknown_owner" | "unknown_account" | "low_confidence_field" | "possible_duplicate" | "unparsed" | "new_institution" | "rejected_email";
+        ReviewKind: "unknown_owner" | "unknown_account" | "low_confidence_field" | "possible_duplicate" | "unparsed" | "new_institution" | "rejected_email" | "receipt_match";
         /**
          * ReviewPage
          * @description Oldest first (a queue); ``next_cursor`` is ``null`` on the last page.
@@ -4610,6 +4819,18 @@ export interface components {
              * Format: date-time
              */
             updated_at: string;
+        };
+        /**
+         * SnippetPart
+         * @description A piece of a search snippet: plain text, ``match`` for a highlighted term.
+         *
+         *     Never markup: clients render ``text`` as text (``app.domain.documents.search``).
+         */
+        SnippetPart: {
+            /** Match */
+            match: boolean;
+            /** Text */
+            text: string;
         };
         /** SplitAmountAction */
         "SplitAmountAction-Input": {
@@ -8011,6 +8232,7 @@ export interface operations {
                 status?: components["schemas"]["DocumentStatus"] | null;
                 account?: string | null;
                 tax_year?: number | null;
+                q?: string | null;
             };
             header?: never;
             path?: never;
@@ -11207,7 +11429,7 @@ export interface operations {
         };
         requestBody: {
             content: {
-                "application/json": components["schemas"]["ResolveDuplicate"] | components["schemas"]["ResolveUnknownAccount"] | components["schemas"]["ResolveUnparsed"];
+                "application/json": components["schemas"]["ResolveDuplicate"] | components["schemas"]["ResolveUnknownAccount"] | components["schemas"]["ResolveUnparsed"] | components["schemas"]["ResolveUnknownOwner"] | components["schemas"]["ResolveReceiptMatch"];
             };
         };
         responses: {
@@ -11743,6 +11965,234 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["RuleOut"];
+                };
+            };
+            /** @description Problem details */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Problem details */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Problem details */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Problem details */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+        };
+    };
+    get_intake_api_v1_settings_intake_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MailIntakeOut"];
+                };
+            };
+            /** @description Problem details */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Problem details */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Problem details */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Problem details */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+        };
+    };
+    patch_intake_api_v1_settings_intake_patch: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["MailIntakeUpdate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MailIntakeOut"];
+                };
+            };
+            /** @description Problem details */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Problem details */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Problem details */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Problem details */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+        };
+    };
+    rotate_alias_api_v1_settings_intake_email_rotate_alias_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AliasOut"];
+                };
+            };
+            /** @description Problem details */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Problem details */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Problem details */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Problem details */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+        };
+    };
+    check_intake_email_api_v1_settings_intake_email_test_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MailTestOut"];
                 };
             };
             /** @description Problem details */

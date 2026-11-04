@@ -78,8 +78,10 @@ LABEL org.opencontainers.image.title="PerFin" \
       org.opencontainers.image.source="https://github.com/Bchap9/PerFin"
 
 # Only what the worker's extraction sandbox needs (INGESTION.md, ADR-0006):
-# Tesseract OCR with English data, and libseccomp for the subprocess filter.
-# PyMuPDF and pillow-heif wheels bundle their native libraries. Pending
+# Tesseract's English language data (read by libtesseract in process via
+# tesserocr, whose wheel bundles the library; ADR-0009 addendum), and
+# libseccomp for the subprocess filter. PyMuPDF and pillow-heif wheels bundle
+# their native libraries. Pending
 # security updates for the base are applied at build time; weekly rebuilds
 # (security.yml) pick up new ones.
 RUN apt-get update --error-on=any \

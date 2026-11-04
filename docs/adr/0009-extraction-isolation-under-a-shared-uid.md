@@ -81,3 +81,42 @@ there the child also switches UID.
   (a root-started worker with `PERFIN_EXTRACT_UID`).
 - A worker that is non-dumpable has unreadable `/proc/self/{environ,fd,...}`
   for its own non-root UID; nothing in PerFin reads them.
+
+## Addendum (Phases 3-4): OCR inside the same sandbox
+
+Status: Accepted. Date: 2026-11-04.
+
+The PDF, image, EML and ZIP extractors run in the same hardened child as the
+structured ones. OCR was the one library that did not fit: `pytesseract`
+starts the `tesseract` program, and the child's seccomp filter denies
+`execve`, `fork` and non-thread `clone` (and `RLIMIT_NPROC` is 0).
+
+**Decision.** Tesseract runs **in process** through `tesserocr` (the C++ API
+of libtesseract, linked into the child; its manylinux wheel bundles
+libtesseract and leptonica). `pytesseract` was removed from the dependencies.
+The child's guarantees are unchanged: no `execve`, no new processes, no
+sockets, no file writes; Landlock gains one more read-only root, the system
+tessdata directories (`TESSDATA_READ_ROOTS` in
+`app/ingestion/sandbox/child.py`: `/usr/share/tesseract-ocr`,
+`/usr/share/tessdata`, ...; the image keeps `tesseract-ocr-eng` for the
+language data). OCR time is bounded per page and per document by
+Tesseract's own deadline (`Recognize(timeout=...)`,
+`ExtractOptions.ocr_page_seconds`/`ocr_total_seconds`), with `RLIMIT_CPU`,
+`RLIMIT_AS` and the runner's wall clock as the outer bounds.
+`tests/security/test_sandbox_documents.py::test_ocr_runs_inside_the_hardened_child`
+OCRs a scanned PDF through the real runner.
+
+**Alternatives considered.**
+- *A second sandboxed invocation that execs `tesseract`*: a launcher child
+  that hardens itself but keeps `execve` allowed (Landlock `EXECUTE` limited
+  to the binary), fed preprocessed page images by the worker, with its TSV
+  output parsed by a third child. It keeps the parsing child exec-free, but
+  needs a filter variant that allows `execve`, three process round trips per
+  OCR'd document and page images passing through the worker; rejected as
+  more moving parts for the same isolation.
+- *Allowing `execve` in the parsing child*: rejected; it is the most useful
+  primitive for an exploit of PyMuPDF, Pillow or libheif.
+
+**Consequences.** libtesseract's parsers run with the same rlimits, Landlock
+and seccomp as PyMuPDF; a tesserocr wheel update is a native-library update
+and goes through the same dependency review (F-controls).

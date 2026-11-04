@@ -170,11 +170,44 @@ class Settings(BaseSettings):
 
     # ---- Intake -------------------------------------------------------------
     upload_max_mb: Annotated[int, Field(ge=1, le=1024)] = 50
+    # Drop folder (INGESTION.md "Drop folder specifics",
+    # app.ingestion.intake.dropfolder): the worker watches the inbox and
+    # copies settled files into quarantine.
+    dropfolder_enabled: bool = False
     dropfolder_inbox: Path = Path("./inbox")
     dropfolder_processed: Path = Path("./processed")
-    dropfolder_settle_seconds: Annotated[int, Field(ge=0)] = 10
+    # Where refused files go in "move" mode; unset means <processed>/failed.
+    dropfolder_failed: Path | None = None
+    # A file is complete when it has not changed for this long (C11).
+    dropfolder_settle_seconds: Annotated[int, Field(ge=0, le=3600)] = 10
+    # Also require a "<name>.ready" sidecar before a file is taken (C11).
+    dropfolder_ready_sidecar: bool = False
+    # move | delete need a writable inbox; with a read-only inbox they act
+    # like keep (processed files are remembered by path, size, mtime, hash).
     dropfolder_after: Literal["move", "delete", "keep"] = "move"
+    # Per-run caps (C10): files taken and bytes copied per watcher run.
+    dropfolder_max_files_per_run: Annotated[int, Field(ge=1, le=10000)] = 100
+    dropfolder_max_mb_per_run: Annotated[int, Field(ge=1, le=102400)] = 1024
+    # How long one watcher run keeps watching (inotify, else polling) for
+    # files still settling; 0 means a single pass. Runs start every minute.
+    dropfolder_watch_seconds: Annotated[int, Field(ge=0, le=50)] = 45
+    # The household drop-folder files belong to; unset means the instance's
+    # only household (the watcher does nothing while there are several).
+    dropfolder_household_id: uuid.UUID | None = None
+    # Email intake (INGESTION.md "Email intake specifics",
+    # app.ingestion.intake.email): with it on, the worker polls each
+    # household's configured mailbox over IMAPS (port 993, implicit TLS,
+    # certificate verified; through HTTPS_PROXY when that names a proxy).
     email_intake_enabled: bool = False
+    # Per-run caps (C10): new messages taken and bytes fetched per poll.
+    email_intake_max_messages_per_run: Annotated[int, Field(ge=1, le=1000)] = 50
+    email_intake_max_mb_per_run: Annotated[int, Field(ge=1, le=10240)] = 200
+    # Largest message fetched (also capped by upload_max_mb).
+    email_intake_max_message_mb: Annotated[int, Field(ge=1, le=1024)] = 25
+    email_intake_timeout_seconds: Annotated[int, Field(ge=1, le=300)] = 30
+    # Allow IMAP servers on private (RFC 1918, ULA) addresses for a direct
+    # connection; without a proxy every other address must be public.
+    email_intake_allow_private_hosts: bool = False
 
     # ---- Document store and extraction sandbox -----------------------------
     # Encrypted blobs (ADR-0003): processed documents and the quarantine area
@@ -194,6 +227,10 @@ class Settings(BaseSettings):
     # flag are then the only layers between a parser exploit and the files
     # the worker's UID can read.
     extract_require_landlock: bool = True
+    # Document parsers (INGESTION.md "Commit", SECURITY.md C12): a parsed field
+    # below this confidence is imported with review_state=pending and a
+    # low_confidence_field review item. Never below 0.5 (a guess would pass).
+    ingest_confidence_threshold: Annotated[float, Field(ge=0.5, le=1.0)] = 0.85
 
     # ---- Full export and import (docs/PORTABILITY.md) -----------------------
     # A finished export can be downloaded once within this many minutes; then
@@ -216,6 +253,14 @@ class Settings(BaseSettings):
     # ---- Integrations -------------------------------------------------------
     price_provider: str = "none"
     antivirus: Literal["none", "clamav"] = "none"
+    # clamd on the internal network: tcp://host:port or unix:///path (SECURITY.md C9).
+    clamav_address: str = "tcp://clamav:3310"
+    clamav_timeout_seconds: Annotated[int, Field(ge=1, le=600)] = 30
+    # Largest document streamed to clamd (keep clamd's StreamMaxLength at least this).
+    clamav_max_mb: Annotated[int, Field(ge=1, le=4096)] = 50
+    # What a document does when the scan cannot run (scanner down, too large):
+    # "closed" stops it (retried, then failed), "open" goes on unscanned.
+    antivirus_fail_mode: Literal["closed", "open"] = "closed"
 
     # ---- AI access (MCP role) ----------------------------------------------
     mcp_enabled: bool = False
@@ -264,6 +309,8 @@ class Settings(BaseSettings):
         "oidc_household_id",
         "oidc_private_key_file",
         "extract_uid",
+        "dropfolder_failed",
+        "dropfolder_household_id",
         mode="before",
     )
     @classmethod

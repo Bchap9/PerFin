@@ -473,6 +473,49 @@ def cmd_openapi(args: argparse.Namespace) -> int:
     return EXIT_OK
 
 
+def cmd_ingest(args: argparse.Namespace) -> int:
+    """``perfin ingest --dry-run FILE``: every stage's JSON, nothing written.
+
+    See :mod:`app.ingestion.dryrun`. Real ingestion goes through the API, the
+    drop folder or email; this command only ever dry-runs.
+    """
+    import uuid
+
+    from app.core.settings import get_settings
+    from app.ingestion.dryrun import from_settings
+
+    if not args.dry_run or not args.path:
+        print("perfin ingest: usage: perfin ingest --dry-run FILE", file=sys.stderr)
+        print("(documents are ingested through the API, drop folder or email)", file=sys.stderr)
+        return EXIT_UNAVAILABLE
+    path = Path(args.path)
+    if not path.is_file():
+        print(f"perfin ingest: not a regular file: {path}", file=sys.stderr)
+        return EXIT_FAIL
+    household_id = None
+    if args.household:
+        try:
+            household_id = uuid.UUID(args.household)
+        except ValueError:
+            print("perfin ingest: --household must be a UUID", file=sys.stderr)
+            return EXIT_FAIL
+    try:
+        settings: Settings | None = get_settings()
+    except ValidationError as exc:
+        if household_id is not None:
+            _print_validation_error(exc)
+            return EXIT_FAIL
+        settings = None  # extract/classify/parse need no configuration
+    from sqlalchemy.exc import SQLAlchemyError
+
+    run = from_settings(path, sys.stdout, settings, household_id=household_id, pretty=args.pretty)
+    try:
+        return run.run()
+    except SQLAlchemyError as exc:
+        print(f"perfin ingest: database error ({type(exc).__name__})", file=sys.stderr)
+        return EXIT_FAIL
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="perfin", description="PerFin personal finance")
     sub = parser.add_subparsers(dest="command", required=True, metavar="COMMAND")
@@ -517,7 +560,11 @@ def build_parser() -> argparse.ArgumentParser:
     ingest = sub.add_parser("ingest", help="run the ingestion pipeline on a file")
     ingest.add_argument("path", nargs="?")
     ingest.add_argument("--dry-run", action="store_true")
-    ingest.set_defaults(func=_unavailable("ingest", "Phase 3"))
+    ingest.add_argument(
+        "--household", help="household id: also read its fingerprints and match an account"
+    )
+    ingest.add_argument("--pretty", action="store_true", help="indent each stage's JSON")
+    ingest.set_defaults(func=cmd_ingest)
     sub.add_parser(
         "bootstrap-url", help="print a new one-time setup URL (only while no user exists)"
     ).set_defaults(func=cmd_bootstrap_url)

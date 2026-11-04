@@ -9,21 +9,39 @@ type Schemas = components["schemas"];
 export type ReviewItem = Schemas["ReviewItemOut"];
 export type ReviewKind = Schemas["ReviewKind"];
 export type ReviewItemState = Schemas["ReviewItemState"];
-export type ResolveBody = Schemas["ResolveDuplicate"] | Schemas["ResolveUnknownAccount"] | Schemas["ResolveUnparsed"];
+export type ResolveBody =
+  | Schemas["ResolveDuplicate"]
+  | Schemas["ResolveUnknownAccount"]
+  | Schemas["ResolveUnparsed"]
+  | Schemas["ResolveReceiptMatch"];
 
 export const reviewKeys = {
-  list: (state: ReviewItemState | "all") => [...queryRoots.review, "list", state],
+  list: (state: ReviewItemState | "all") => [
+    ...queryRoots.review,
+    "list",
+    state,
+  ],
 } as const;
 
 export type ReviewFilter = ReviewItemState | "all";
 
-export async function listReviewItems(state: ReviewFilter): Promise<ReviewItem[]> {
+export async function listReviewItems(
+  state: ReviewFilter,
+): Promise<ReviewItem[]> {
   const out: ReviewItem[] = [];
   let cursor: string | null = null;
   for (let page = 0; page < 20; page += 1) {
     const current: string | null = cursor;
     const data: Schemas["ReviewPage"] = await unwrap(
-      api.GET("/api/v1/review", { params: { query: { state, limit: 200, ...(current === null ? {} : { cursor: current }) } } }),
+      api.GET("/api/v1/review", {
+        params: {
+          query: {
+            state,
+            limit: 200,
+            ...(current === null ? {} : { cursor: current }),
+          },
+        },
+      }),
     );
     out.push(...data.items);
     cursor = data.next_cursor;
@@ -34,12 +52,24 @@ export async function listReviewItems(state: ReviewFilter): Promise<ReviewItem[]
   return out;
 }
 
-export function resolveItem(id: string, body: ResolveBody): Promise<ReviewItem> {
-  return unwrap(api.POST("/api/v1/review/{item_id}/resolve", { params: { path: { item_id: id } }, body }));
+export function resolveItem(
+  id: string,
+  body: ResolveBody,
+): Promise<ReviewItem> {
+  return unwrap(
+    api.POST("/api/v1/review/{item_id}/resolve", {
+      params: { path: { item_id: id } },
+      body,
+    }),
+  );
 }
 
 export function dismissItem(id: string): Promise<ReviewItem> {
-  return unwrap(api.POST("/api/v1/review/{item_id}/dismiss", { params: { path: { item_id: id } } }));
+  return unwrap(
+    api.POST("/api/v1/review/{item_id}/dismiss", {
+      params: { path: { item_id: id } },
+    }),
+  );
 }
 
 // ---- payload readers ----------------------------------------------------------
@@ -51,7 +81,52 @@ export function payloadString(item: ReviewItem, key: string): string | null {
 
 export function payloadIds(item: ReviewItem, key: string): string[] {
   const value: unknown = new Map(Object.entries(item.payload)).get(key);
-  return Array.isArray(value) ? value.filter((entry): entry is string => typeof entry === "string") : [];
+  return Array.isArray(value)
+    ? value.filter((entry): entry is string => typeof entry === "string")
+    : [];
+}
+
+/** A ranked transaction the receipt matcher suggests (``receipt_match`` items). */
+export interface ReceiptSuggestion {
+  transactionId: string;
+  score: number;
+  amount: string;
+  days: number | null;
+  alreadyLinked: boolean;
+}
+
+function field(entry: object, key: string): unknown {
+  return new Map(Object.entries(entry)).get(key);
+}
+
+export function payloadSuggestions(item: ReviewItem): ReceiptSuggestion[] {
+  const value: unknown = new Map(Object.entries(item.payload)).get(
+    "suggestions",
+  );
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  const out: ReceiptSuggestion[] = [];
+  for (const entry of value) {
+    if (typeof entry !== "object" || entry === null) {
+      continue;
+    }
+    const id = field(entry, "transaction_id");
+    const score = field(entry, "score");
+    const amount = field(entry, "amount");
+    const days = field(entry, "days");
+    if (typeof id !== "string" || typeof score !== "number") {
+      continue;
+    }
+    out.push({
+      transactionId: id,
+      score,
+      amount: typeof amount === "string" ? amount : "",
+      days: typeof days === "number" ? days : null,
+      alreadyLinked: field(entry, "already_linked") === true,
+    });
+  }
+  return out;
 }
 
 // ---- resolution builders ---------------------------------------------------------
@@ -63,14 +138,32 @@ export function duplicateResolution(
   chosenCandidate: string | null,
 ): Schemas["ResolveDuplicate"] {
   const candidates = payloadIds(item, "candidates");
-  const duplicateOf = decision === "confirm" ? (chosenCandidate ?? (candidates.length === 1 ? (candidates[0] ?? null) : null)) : null;
-  return { kind: "possible_duplicate", decision, ...(duplicateOf === null ? {} : { duplicate_of: duplicateOf }) };
+  const duplicateOf =
+    decision === "confirm"
+      ? (chosenCandidate ??
+        (candidates.length === 1 ? (candidates[0] ?? null) : null))
+      : null;
+  return {
+    kind: "possible_duplicate",
+    decision,
+    ...(duplicateOf === null ? {} : { duplicate_of: duplicateOf }),
+  };
 }
 
-export function accountResolution(accountId: string, remember: boolean): Schemas["ResolveUnknownAccount"] {
+export function accountResolution(
+  accountId: string,
+  remember: boolean,
+): Schemas["ResolveUnknownAccount"] {
   return { kind: "unknown_account", account_id: accountId, remember };
 }
 
 export function reprocessResolution(): Schemas["ResolveUnparsed"] {
   return { kind: "unparsed", action: "reprocess" };
+}
+
+/** Attach the receipt to a transaction, or (``null``) record that none applies. */
+export function receiptResolution(
+  transactionId: string | null,
+): Schemas["ResolveReceiptMatch"] {
+  return { kind: "receipt_match", transaction_id: transactionId };
 }

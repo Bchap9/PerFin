@@ -33,6 +33,8 @@ quarantine/
 backups/
 # Shipped reference data inside the source tree (not user data).
 !backend/app/auth/data/
+# Source packages whose names match the data patterns above.
+!backend/app/domain/documents/
 
 # Editors / OS
 .idea/

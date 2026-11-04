@@ -97,6 +97,9 @@ app/
                      of documents/service.py (storage); review/ lists and
                      resolves `review_item` rows and owns `import_hash_alias`;
                      events/ is the SSE stream behind GET /events;
+                     dropfolder/ holds drop-folder routes and the
+                     processed-file ledger (the watcher itself is
+                     ingestion/intake/dropfolder.py);
                      portability/ is the full export/import: entities.py lists
                      the exported tables (a new household-scoped table goes
                      there or in NOT_EXPORTED), codec.py, zipsafe.py,
@@ -252,9 +255,35 @@ app/
   Extractors may be called in-process in tests; production code reaches
   them only through `app.ingestion.sandbox.runner.run_extraction` (the
   child is the only module that imports `app.ingestion.extract`, enforced
-  by `tests/unit/test_sandbox_boundaries.py`). Sandbox hardening is tested
+  by `tests/unit/test_sandbox_boundaries.py`). PDFs (reportlab; PyMuPDF
+  only to add hostile active content), scans, receipts, EXIF JPEGs, TIFF,
+  HEIC, pixel and zip bombs, nested archives and receipt mails with HTML,
+  `cid:` images and attachments come from `tests/fixtures/synth_documents.py`
+  (OCR tests need Tesseract's English data in a standard tessdata
+  directory, e.g. Debian/Ubuntu `tesseract-ocr-eng`). Sandbox hardening is tested
   with hostile extractors in `tests/fixtures/sandbox_evil.py`, run through
   the real child code path with `SandboxConfig(module="tests.fixtures.sandbox_evil")`.
+- Statement parsers: `tests/fixtures/synth_pdf_statements.py` draws PDF
+  statements (reportlab) in the layout of each fictional institution of the
+  shipped fingerprints from a `SynthStatement` (multi-page, pending items,
+  fees/interest, debit/credit columns, a card, `tamper="extra_row"` /
+  `"closing"` variants that do not reconcile, an unknown bank with
+  ambiguous dates) and a payslip; `expected(stmt)` gives the rows a parser
+  must return. Unit tests extract them in process
+  (`app.ingestion.extract.pdf.extract_pdf`), classify and parse
+  (`tests/unit/test_statement_parsers.py`); end-to-end tests go through the
+  worker like the structured imports
+  (`tests/integration/test_pdf_statement_pipeline.py`). Adding a layout:
+  `docs/CONTRIBUTING-parsers.md`.
+- Drop folder: `tests/integration/test_dropfolder.py` builds the inbox and
+  `processed/` under `tmp_path` and calls
+  `app.ingestion.intake.dropfolder.watch(...)` in a committed transaction
+  with `watcher_factory=PollingWatcher` and a `now` shifted an hour ahead
+  (so files count as settled without sleeping); `finish_pending` runs the
+  after-actions as the `dropfolder.finish` job would. The handlers read
+  settings through `app.workers.handlers.dropfolder.get_settings` (patch
+  it); with several households in the test database a run needs
+  `dropfolder_household_id`.
 - Documents API, review queue and SSE: `tests/fixtures/documents.py` has
   flush-only `make_document(db, store, keyring, household_id, ...)` (the
   synthetic `data` really encrypted into the given `LocalFSBlobStore`,

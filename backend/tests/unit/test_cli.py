@@ -15,7 +15,6 @@ from app.cli import EXIT_UNAVAILABLE, main
     ("argv", "phase"),
     [
         (["mcp"], "Phase 6b"),
-        (["ingest", "--dry-run", "x.pdf"], "Phase 3"),
         (["rotate-key"], "Phase 7"),
     ],
 )

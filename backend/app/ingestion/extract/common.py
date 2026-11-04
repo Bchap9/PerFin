@@ -88,3 +88,20 @@ def last4(account_number: str | None) -> str | None:
         return None
     digits = re.sub(r"\D", "", account_number)
     return digits[-4:] if len(digits) >= 4 else None
+
+
+_NAME_MAX: Final = 255
+
+
+def metadata_name(raw: str | None) -> str | None:
+    """A file name kept as metadata only (C3): last path component, printable, 255 chars.
+
+    Never used to build a path; the intake stores content under random keys.
+    """
+    if not raw:
+        return None
+    last = re.split(r"[/\\]", raw)[-1]
+    printable = "".join(ch for ch in last if ch.isprintable()).strip()
+    if printable in ("", ".", ".."):
+        return None
+    return printable[:_NAME_MAX]

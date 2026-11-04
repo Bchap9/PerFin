@@ -4,5 +4,11 @@ import { createRoute, type AnyRoute } from "@tanstack/react-router";
 import { ReviewPage } from "./ReviewPage";
 
 export function routes(parent: AnyRoute): AnyRoute[] {
-  return [createRoute({ getParentRoute: () => parent, path: "/review", component: ReviewPage })];
+  return [
+    createRoute({
+      getParentRoute: () => parent,
+      path: "/review",
+      component: ReviewPage,
+    }),
+  ];
 }

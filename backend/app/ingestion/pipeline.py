@@ -10,8 +10,17 @@ attempt; each stage run is recorded as an ``ingest_job`` row.
 
 Phase 2 routes only **structured** formats (CSV, TSV, OFX, QFX, QIF):
 
-* **scan**: antivirus is Phase 3 (``PERFIN_ANTIVIRUS=clamav`` is recorded as
-  "not available" in the stage log; nothing is rejected).
+* **scan** (SECURITY.md C9): with ``PERFIN_ANTIVIRUS=clamav`` the
+  quarantined plaintext is streamed to the ClamAV sidecar
+  (``app.integrations.antivirus``) before anything parses it. A positive
+  result makes the document ``rejected`` with the signature name recorded
+  (``document.error``, stage log, audit); the blob stays in quarantine and
+  is never served. When the scan cannot run (clamd down, timeout, file
+  above ``PERFIN_CLAMAV_MAX_MB``), ``PERFIN_ANTIVIRUS_FAIL_MODE=closed`` (the
+  default) retries a retryable failure through the job queue
+  (:class:`ScanUnavailableError`) and on the last attempt, or for a
+  non-retryable one, marks the document ``failed`` with an ``unparsed``
+  item (``scan_failed``); ``open`` goes on unscanned and logs it.
 * **extract**: the blob is decrypted as a stream and fed to the sandboxed
   child (``app.ingestion.sandbox.runner``); the validated result is kept in
   ``document.extraction``. A sandbox failure (limits, crash, bad output) or an
@@ -29,6 +38,16 @@ Phase 2 routes only **structured** formats (CSV, TSV, OFX, QFX, QIF):
   :func:`structured_import` (``app.domain.imports.service``: column mappings,
   ``import_hash`` dedupe, rules, balance snapshots, review items). Without
   one, the document waits in ``needs_review`` (``unparsed``/``import_pending``).
+* **parse (PDF, images)**: the document parsers (``app.ingestion.parsers``)
+  read the stored pages in the worker, hinted by the classifier's
+  fingerprint (institution key, parser name, date order): statements with
+  per-field confidence and a reconciliation (``app.ingestion.reconcile``)
+  go through the structured importer like an OFX statement (rows below
+  ``confidence_threshold`` or of a statement that does not reconcile are
+  imported pending, with ``low_confidence_field`` items; SECURITY.md C12);
+  a payslip is kept on the document (``kind = payslip``, period) and goes to
+  review when its figures do not add up. Parser output stays in
+  ``document.extraction`` (``statements``, ``parse``).
 * Accepted documents (``processed`` or ``needs_review`` after a successful
   extraction) move from quarantine to the permanent area
   (:func:`app.domain.documents.service.promote_blob`); failed ones stay in
@@ -45,6 +64,7 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any, Protocol
 
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.core import clock
@@ -56,19 +76,43 @@ from app.domain.documents import repo
 from app.domain.documents.blobstore import BlobStore, BlobStoreError
 from app.domain.documents.models import (
     TERMINAL_STATUSES,
+    Blob,
     Document,
     DocumentKind,
     DocumentStatus,
     IngestJob,
     IngestStage,
+    ReviewItem,
+    ReviewItemState,
     ReviewKind,
 )
+from app.domain.documents.previews import discard_previews, store_previews
+from app.domain.documents.search import clear_search_index, update_search_index
 from app.domain.documents.service import open_plaintext, promote_blob
 from app.domain.imports.service import import_extraction
+from app.ingestion.children import document_depth, receive_children
+from app.ingestion.classify.fingerprints import builtin_fingerprints
+from app.ingestion.classify.service import classify_document
 from app.ingestion.intake.sniff import FileType
 from app.ingestion.match.accounts import importable_account_ids, match_account
-from app.ingestion.sandbox.protocol import ExtractOptions, ExtractResult
+from app.ingestion.match.receipts import apply_receipt
+from app.ingestion.parsers.confidence import DEFAULT_THRESHOLD
+from app.ingestion.parsers.receipt import PARSER_NAME as RECEIPT_PARSER
+from app.ingestion.parsers.receipt import PARSER_VERSION as RECEIPT_PARSER_VERSION
+from app.ingestion.parsers.receipt import parse_email_receipt
+from app.ingestion.parsers.registry import DOCUMENT_KINDS, parse_extraction
+from app.ingestion.sandbox.protocol import (
+    CONTAINER_KINDS,
+    REVIEW_ERROR_CODES,
+    ExtractOptions,
+    ExtractResult,
+    ParseInfo,
+    ParserRef,
+    Payslip,
+    Receipt,
+)
 from app.ingestion.sandbox.runner import SandboxConfig, SandboxError, run_extraction
+from app.integrations.antivirus import Scanner
 
 log = get_logger(__name__)
 
@@ -114,8 +158,23 @@ class PipelineDeps:
     sandbox: SandboxConfig = field(default_factory=SandboxConfig)
     options: ExtractOptions = field(default_factory=ExtractOptions)
     antivirus: str = "none"
+    #: The antivirus scanner (None: scanning off) and what happens when it fails.
+    scanner: Scanner | None = None
+    antivirus_fail_mode: str = "closed"
     extract: Extract = run_extraction
     importer: StructuredImporter | None = None
+    #: Size cap for documents found inside an EML or ZIP (the upload cap).
+    child_max_bytes: int = 50 * 1024 * 1024
+    #: Parsed fields below this confidence are imported pending (C12).
+    confidence_threshold: float = DEFAULT_THRESHOLD
+
+
+class ScanUnavailableError(RuntimeError):
+    """The antivirus scan could not run and the pipeline fails closed: retry the job."""
+
+    def __init__(self, code: str) -> None:
+        super().__init__(f"antivirus scan unavailable: {code}")
+        self.code = code
 
 
 class _Stage:
@@ -177,8 +236,12 @@ def _review(db: Session, document: Document, kind: ReviewKind, payload: dict[str
 
 
 def _classify(db: Session, document: Document, result: ExtractResult) -> dict[str, Any]:
+    if not (result.statements or result.tables) and result.kind not in CONTAINER_KINDS:
+        # PDFs, images and text: fingerprints, then the heuristic classifier.
+        return classify_document(db, document, result)
     facts: dict[str, Any] = {}
-    document.kind = DocumentKind.STATEMENT
+    if result.statements or result.tables:
+        document.kind = DocumentKind.STATEMENT
     starts = [s.period_start for s in result.statements if s.period_start]
     ends = [s.period_end for s in result.statements if s.period_end]
     if starts and ends and min(starts) <= max(ends):
@@ -200,6 +263,207 @@ def _classify(db: Session, document: Document, result: ExtractResult) -> dict[st
     return facts
 
 
+def _parse_hints(document: Document) -> dict[str, str | None]:
+    """The classifier's fingerprint match (``document.confidence``) as parser hints."""
+    facts = document.confidence or {}
+    fingerprint = facts.get("fingerprint") if isinstance(facts, dict) else None
+    hints: dict[str, str | None] = {
+        "kind": str(document.kind) if document.kind is not DocumentKind.UNKNOWN else None
+    }
+    if isinstance(fingerprint, dict):
+        key = fingerprint.get("key")
+        hints["institution"] = key if isinstance(key, str) else None
+        parser = fingerprint.get("parser")
+        hints["parser_name"] = parser if isinstance(parser, str) else None
+        if fingerprint.get("origin") == "builtin" and isinstance(key, str):
+            spec = next((f.spec for f in builtin_fingerprints() if f.key == key), None)
+            hints["date_order"] = spec.date_order if spec is not None else None
+    return hints
+
+
+def _parse_document(
+    db: Session, document: Document, result: ExtractResult, threshold: float
+) -> tuple[ExtractResult, dict[str, Any]]:
+    """Run the document parsers (``app.ingestion.parsers``) on a PDF's or image's pages.
+
+    The parsed statements and :class:`ParseInfo` are kept in
+    ``document.extraction`` next to the pages they were read from, so a
+    re-import or a newer parser needs no new upload or extraction.
+    """
+    hints = _parse_hints(document)
+    result = parse_extraction(
+        result,
+        threshold=threshold,
+        parser_name=hints.get("parser_name"),
+        institution=hints.get("institution"),
+        kind=hints.get("kind"),
+        date_order=hints.get("date_order"),
+    )
+    info = result.parse
+    if info is None:  # pragma: no cover - parse_extraction always records it
+        return result, {}
+    document.extraction = result.model_dump(mode="json")
+    facts: dict[str, Any] = {
+        "parser": info.parser.name if info.parser else None,
+        "parser_version": info.parser.version if info.parser else None,
+        "pending_items": info.pending_items,
+        "skipped_lines": info.skipped_lines,
+        "parse_warnings": list(info.warnings),
+    }
+    if info.parser is None:
+        return result, facts
+    document.parser_version = f"{info.parser.name}/{info.parser.version}"[:64]
+    parsed = [s for s in result.statements if s.parser is not None]
+    if parsed and any(s.transactions for s in parsed):
+        document.kind = DocumentKind.STATEMENT
+        first = parsed[0]
+        if (
+            first.period_start is not None
+            and first.period_end is not None
+            and first.confidence.get("period", 0.0) >= threshold
+        ):
+            document.period_start, document.period_end = first.period_start, first.period_end
+    document.confidence = {
+        **(document.confidence or {}),
+        "parse": {
+            "parser": info.parser.name,
+            "version": info.parser.version,
+            "threshold": threshold,
+            "statements": [s.confidence for s in parsed],
+            "reconciliation": [s.reconciliation.status for s in parsed if s.reconciliation],
+            "low_confidence_rows": sum(
+                1 for s in parsed for t in s.transactions if t.low_confidence
+            ),
+            "payslip": info.payslip.confidence if info.payslip else None,
+            "receipt": info.receipt.confidence if info.receipt else None,
+        },
+    }
+    if info.skipped_lines:
+        _review(
+            db,
+            document,
+            ReviewKind.LOW_CONFIDENCE_FIELD,
+            {"reason": "lines_skipped", "count": info.skipped_lines, "parser": info.parser.name},
+        )
+    return result, facts
+
+
+def _payslip_outcome(
+    db: Session, document: Document, payslip: Payslip, threshold: float
+) -> ImportOutcome:
+    """A payslip is kept on the document (no ledger rows); doubtful figures go to review."""
+    document.kind = DocumentKind.PAYSLIP
+    if (
+        payslip.period_start is not None
+        and payslip.period_end is not None
+        and payslip.confidence.get("period", 0.0) >= threshold
+    ):
+        document.period_start, document.period_end = payslip.period_start, payslip.period_end
+    if payslip.low_confidence:
+        _review(
+            db,
+            document,
+            ReviewKind.LOW_CONFIDENCE_FIELD,
+            {
+                "reason": (
+                    "payslip_does_not_add_up" if payslip.adds_up is False else "low_confidence"
+                ),
+                "fields": list(payslip.low_confidence),
+                "adds_up": payslip.adds_up,
+            },
+        )
+    open_items = db.execute(
+        select(func.count(ReviewItem.id)).where(
+            ReviewItem.household_id == document.household_id,
+            ReviewItem.document_id == document.id,
+            ReviewItem.state == ReviewItemState.OPEN,
+        )
+    ).scalar_one()
+    status = DocumentStatus.NEEDS_REVIEW if open_items else DocumentStatus.PROCESSED
+    return ImportOutcome(status, {"payslip": True, "low_confidence": len(payslip.low_confidence)})
+
+
+def _scan(
+    db: Session,
+    document: Document,
+    blob: Blob,
+    deps: PipelineDeps,
+    stage: _Stage,
+    *,
+    final_attempt: bool,
+) -> DocumentStatus | None:
+    """The antivirus stage; a status ends the pipeline, None goes on (module doc)."""
+    scanner = deps.scanner
+    if scanner is None:
+        stage.finish(antivirus=deps.antivirus, scanned=False)
+        return None
+    try:
+        verdict = scanner.scan(open_plaintext(deps.store, deps.keyring, blob), size=blob.size)
+    except (DecryptionError, BlobStoreError) as exc:
+        stage.finish(error="blob_unreadable", antivirus=scanner.name)
+        return _finish(
+            db, document, DocumentStatus.FAILED, error=f"blob unreadable ({type(exc).__name__})"
+        )
+    if verdict.infected:
+        signature = verdict.signature or "unknown"
+        stage.finish(antivirus=scanner.name, scanned=True, verdict="infected", signature=signature)
+        log.warning(
+            "antivirus: document rejected",
+            extra={"document_id": str(document.id), "signature": signature},
+        )
+        return _finish(
+            db,
+            document,
+            DocumentStatus.REJECTED,
+            error=f"malware detected: {signature}",
+            facts={"signature": signature, "antivirus": scanner.name},
+        )
+    if verdict.status == "clean":
+        stage.finish(antivirus=scanner.name, scanned=True, verdict="clean")
+        return None
+    code = verdict.error or "scanner_error"
+    if deps.antivirus_fail_mode == "open":
+        log.warning(
+            "antivirus: scan failed, continuing unscanned (fail open)",
+            extra={"document_id": str(document.id), "code": code},
+        )
+        stage.finish(antivirus=scanner.name, scanned=False, scan_error=code, fail_mode="open")
+        return None
+    if verdict.retryable and not final_attempt:
+        raise ScanUnavailableError(code)
+    stage.finish(error=f"scan_{code}", antivirus=scanner.name, scanned=False, fail_mode="closed")
+    _review(db, document, ReviewKind.UNPARSED, {"reason": "scan_failed", "code": code})
+    return _finish(db, document, DocumentStatus.FAILED, error=f"antivirus scan failed: {code}")
+
+
+def _receipt_outcome(
+    db: Session, document: Document, result: ExtractResult, receipt: Receipt, threshold: float
+) -> tuple[ExtractResult, ImportOutcome]:
+    """A receipt is linked to the transaction that paid it, or queued for a person.
+
+    ``app.ingestion.match.receipts.apply_receipt`` matches it (amount, date
+    window, merchant alias) among the transactions the uploader may edit;
+    the receipt, its merchant resolved to a payee, stays in the extraction.
+    """
+    outcome = apply_receipt(db, document, receipt, threshold=threshold)
+    info = result.parse or ParseInfo(threshold=threshold)
+    if info.parser is None:
+        info = info.model_copy(
+            update={
+                "parser": ParserRef(
+                    name=RECEIPT_PARSER, version=RECEIPT_PARSER_VERSION, kind="receipt"
+                )
+            }
+        )
+    result = result.model_copy(
+        update={"parse": info.model_copy(update={"receipt": outcome.receipt})}
+    )
+    document.extraction = result.model_dump(mode="json")
+    if document.parser_version is None or not document.parser_version.startswith(RECEIPT_PARSER):
+        document.parser_version = f"{RECEIPT_PARSER}/{RECEIPT_PARSER_VERSION}"
+    return result, ImportOutcome(outcome.status, outcome.summary)
+
+
 def structured_import(db: Session, document: Document, result: ExtractResult) -> ImportOutcome:
     """The Phase 2 structured importer (:func:`app.domain.imports.service.import_extraction`)."""
     outcome = import_extraction(db, document, result)
@@ -213,8 +477,14 @@ def ingest_document(
     deps: PipelineDeps,
     *,
     attempt: int = 1,
+    final_attempt: bool = True,
 ) -> DocumentStatus | None:
-    """Run the pipeline for one document; return its final status (None: it is gone)."""
+    """Run the pipeline for one document; return its final status (None: it is gone).
+
+    ``final_attempt`` is False while the job queue would still retry: a
+    retryable scan failure then raises :class:`ScanUnavailableError` (the
+    transaction rolls back) instead of failing the document.
+    """
     document = repo.get_document(db, household_id, document_id, lock=True)
     if document is None:
         log.info("ingest: document no longer exists", extra={"document_id": str(document_id)})
@@ -228,7 +498,9 @@ def ingest_document(
     # ---- scan ---------------------------------------------------------------
     _set_status(document, DocumentStatus.SCANNING)
     stage = _Stage(db, document, IngestStage.SCAN, attempt)
-    stage.finish(antivirus=deps.antivirus, scanned=False)
+    scanned = _scan(db, document, blob, deps, stage, final_attempt=final_attempt)
+    if scanned is not None:
+        return scanned
 
     try:
         file_type = FileType(document.mime_detected)
@@ -249,12 +521,15 @@ def ingest_document(
     _set_status(document, DocumentStatus.EXTRACTING)
     stage = _Stage(db, document, IngestStage.EXTRACT, attempt)
     started: datetime = clock.utcnow()
+    # A document that came out of an EML or ZIP is extracted at its depth (D4).
+    options = deps.options.model_copy(update={"depth": document_depth(document)})
+    clear_search_index(db, document)
     try:
         result = deps.extract(
             kind,
             open_plaintext(deps.store, deps.keyring, blob),
             config=deps.sandbox,
-            options=deps.options,
+            options=options,
         )
     except SandboxError as exc:
         log.warning(
@@ -279,15 +554,56 @@ def ingest_document(
     if not result.ok:
         code = result.error.code if result.error else "unknown"
         stage.finish(error=code, kind=kind, seconds=round(elapsed, 3))
+        if code in REVIEW_ERROR_CODES:
+            # Not broken, but a person must look (a password-protected PDF,
+            # an archive nested too deep): kept and parked for review.
+            _review(db, document, ReviewKind.UNPARSED, {"reason": code, "kind": kind})
+            promote_blob(db, deps.store, blob)
+            return _finish(db, document, DocumentStatus.NEEDS_REVIEW, facts={"routed": code})
         _review(db, document, ReviewKind.UNPARSED, {"reason": "extraction_failed", "code": code})
         return _finish(db, document, DocumentStatus.FAILED, error=f"extraction failed: {code}")
+    # Previews become encrypted blobs and children new documents; the stored
+    # extraction keeps references only, never their bytes.
+    discard_previews(
+        db, deps.store, household_id=document.household_id, extraction=document.extraction
+    )
+    previews = store_previews(
+        db,
+        deps.store,
+        deps.keyring,
+        household_id=document.household_id,
+        previews=result.previews,
+    )
+    children = receive_children(
+        db,
+        store=deps.store,
+        keyring=deps.keyring,
+        parent=document,
+        children=result.children,
+        max_bytes=deps.child_max_bytes,
+    )
+    result = result.model_copy(
+        update={
+            "previews": [],
+            "children": [],
+            "stored_previews": previews,
+            "stored_children": children,
+        }
+    )
     document.extraction = result.model_dump(mode="json")
     document.parser_version = result.extractor_version
+    db.flush()
+    indexed = update_search_index(db, document)
     stage.finish(
         kind=kind,
         seconds=round(elapsed, 3),
         tables=len(result.tables),
         statements=len(result.statements),
+        pages=len(result.pages),
+        previews=len(previews),
+        children=sum(1 for c in children if c.document_id),
+        children_rejected=sum(1 for c in children if c.rejected),
+        indexed_chars=indexed,
         warnings=list(result.warnings),
     )
 
@@ -300,13 +616,61 @@ def ingest_document(
     _set_status(document, DocumentStatus.PARSING)
     stage = _Stage(db, document, IngestStage.PARSE, attempt)
     importer = deps.importer or structured_importer()
-    if importer is None:
-        stage.finish(importer=None)
+    parse_facts: dict[str, Any] = {}
+    if kind in DOCUMENT_KINDS:
+        # PDF and image pages -> statements or a payslip (worker side, on the
+        # stored pages; INGESTION.md "Parse").
+        result, parse_facts = _parse_document(db, document, result, deps.confidence_threshold)
+    if kind in CONTAINER_KINDS:
+        # An archive or mail is done once its contents are documents of
+        # their own; refused or left-out contents need a look.
+        rejected = [c.rejected for c in result.stored_children if c.rejected]
+        incomplete = bool(rejected) or result.truncated or "depth_limit" in result.warnings
+        if incomplete:
+            _review(
+                db,
+                document,
+                ReviewKind.UNPARSED,
+                {
+                    "reason": "container_incomplete",
+                    "rejected": len(rejected),
+                    "truncated": result.truncated,
+                    "depth_limit": "depth_limit" in result.warnings,
+                },
+            )
+        summary: dict[str, Any] = {"children": len(result.stored_children) - len(rejected)}
+        status = DocumentStatus.NEEDS_REVIEW if incomplete else DocumentStatus.PROCESSED
+        # A receipt mail's body is a receipt itself (its attachments are
+        # documents of their own and are matched on their own).
+        mail_receipt = (
+            parse_email_receipt(result, threshold=deps.confidence_threshold)
+            if kind == "eml"
+            else None
+        )
+        if mail_receipt is not None:
+            result, matched = _receipt_outcome(
+                db, document, result, mail_receipt, deps.confidence_threshold
+            )
+            summary.update(matched.summary)
+            if matched.status is DocumentStatus.NEEDS_REVIEW:
+                status = DocumentStatus.NEEDS_REVIEW
+        stage.finish(**summary)
+        outcome = ImportOutcome(status, summary)
+    elif result.parse is not None and result.parse.receipt is not None:
+        result, outcome = _receipt_outcome(
+            db, document, result, result.parse.receipt, deps.confidence_threshold
+        )
+        stage.finish(**parse_facts, **outcome.summary)
+    elif result.parse is not None and result.parse.payslip is not None:
+        outcome = _payslip_outcome(db, document, result.parse.payslip, deps.confidence_threshold)
+        stage.finish(**parse_facts, **outcome.summary)
+    elif importer is None:
+        stage.finish(importer=None, **parse_facts)
         _review(db, document, ReviewKind.UNPARSED, {"reason": "import_pending", "kind": kind})
         outcome = ImportOutcome(DocumentStatus.NEEDS_REVIEW, {"routed": "import_pending"})
     else:
         outcome = importer(db, document, result)
-        stage.finish(**outcome.summary)
+        stage.finish(**parse_facts, **outcome.summary)
     if outcome.status not in (DocumentStatus.PROCESSED, DocumentStatus.NEEDS_REVIEW):
         return _finish(db, document, outcome.status, facts=outcome.summary)
     stage = _Stage(db, document, IngestStage.COMMIT, attempt)

@@ -49,6 +49,7 @@ PHASE1_PREFIXES = (
     f"{API_PREFIX}/setup",
     f"{API_PREFIX}/households",
     f"{API_PREFIX}/settings/user",
+    f"{API_PREFIX}/settings/intake",
     f"{API_PREFIX}/admin/users",
 )
 #: Browser navigations: answer with a redirect, never an error body.

@@ -237,6 +237,10 @@ services:
         condition: service_healthy
       migrate:
         condition: service_completed_successfully
+      # Only with the `av` profile (PERFIN_ANTIVIRUS=clamav); ignored otherwise.
+      clamav:
+        condition: service_healthy
+        required: false
     restart: unless-stopped
 
   # ------------------------------------------------------------------- db --
@@ -293,7 +297,10 @@ services:
 
   # --------------------------------------------------------------- clamav --
   # Optional antivirus for quarantined files (profile `av`, PERFIN_ANTIVIRUS=
-  # clamav). Signature updates (freshclam) reach the internet only through
+  # clamav, SECURITY.md C9). The worker streams each document's plaintext to
+  # clamd INSTREAM on tcp://clamav:3310 over the internal `backend` network
+  # (PERFIN_CLAMAV_ADDRESS); nothing publishes the port. Keep clamd's
+  # StreamMaxLength at least PERFIN_CLAMAV_MAX_MB. Signature updates (freshclam) reach the internet only through
   # the egress proxy: add database.clamav.net to egress-allowlist.txt and set
   # HTTPProxyServer egress / HTTPProxyPort 3128 in freshclam.conf.
   clamav:
@@ -316,6 +323,14 @@ services:
     volumes:
       - clamav_db:/var/lib/clamav
     networks: [backend, egress]
+    healthcheck:
+      # The image's own probe (clamdscan PING); the first signature download
+      # can take minutes.
+      test: ["CMD", "clamdcheck.sh"]
+      interval: 30s
+      timeout: 10s
+      start_period: 300s
+      retries: 3
     restart: unless-stopped
     logging: *logging
 

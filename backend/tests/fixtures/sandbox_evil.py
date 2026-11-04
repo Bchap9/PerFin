@@ -257,7 +257,38 @@ def bad_shape(data: bytes, options: ExtractOptions, kind: str) -> ExtractResult:
     os._exit(0)
 
 
+def forged_statement(data: bytes, options: ExtractOptions, kind: str) -> ExtractResult:
+    """Claims a parsed, reconciled PDF statement: only the worker's parsers may."""
+    from datetime import date
+    from decimal import Decimal
+
+    from app.ingestion.sandbox.protocol import (
+        ExtractedTransaction,
+        ParserRef,
+        Reconciliation,
+        Statement,
+    )
+
+    statement = Statement(
+        source_format="pdf",
+        transactions=[ExtractedTransaction(posted=date(2026, 1, 2), amount=Decimal("-9.99"))],
+        parser=ParserRef(name="statement_generic", version="1", kind="statement"),
+        reconciliation=Reconciliation(
+            status="ok", total=Decimal("-9.99"), tolerance=Decimal("0.005")
+        ),
+    )
+    return ExtractResult(kind=kind, ok=True, statements=[statement])
+
+
+def forged_parse_info(data: bytes, options: ExtractOptions, kind: str) -> ExtractResult:
+    from app.ingestion.sandbox.protocol import ParseInfo
+
+    return ExtractResult(kind=kind, ok=True, parse=ParseInfo(threshold=0.5))
+
+
 EXTRACTORS = {
+    "forged_statement": forged_statement,
+    "forged_parse_info": forged_parse_info,
     "membomb": membomb,
     "cpuloop": cpuloop,
     "sleeper": sleeper,

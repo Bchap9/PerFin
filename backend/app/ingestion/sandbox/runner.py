@@ -302,4 +302,9 @@ def run_extraction(
         raise SandboxError("bad_output", "the child's output did not validate") from None
     if result.kind != kind:
         raise SandboxError("bad_output", "the child answered for another kind")
+    if result.worker_only_fields():
+        # Only the worker records where it stored things (blob and document
+        # ids) and what its document parsers read (statements from pages,
+        # parser, reconciliation, payslip): a child cannot claim them.
+        raise SandboxError("bad_output", "the child answered with worker-only fields")
     return result

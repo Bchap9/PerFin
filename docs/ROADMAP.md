@@ -157,7 +157,7 @@ Goal: scanned documents, receipts, email intake.
 - [ ] OCR pipeline (ocrmypdf/Tesseract), image preprocessing, receipt profile
 - [ ] Receipt parsing (merchant, date, total, tax, line items) and
       receipt-to-transaction matching with suggestions
-- [ ] Email intake: IMAPS poller, alias token, sender policy, SPF/DKIM check,
+- [x] Email intake: IMAPS poller, alias token, sender policy, SPF/DKIM check,
       rejected digest, `.eml` provenance, attachment expansion
 - [ ] Full-text search over extracted text
 - [ ] Column-mapping editor in review that produces reusable fingerprints

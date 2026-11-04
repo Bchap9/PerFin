@@ -24,6 +24,11 @@ BUILTIN_MODULES: Final = (
     "app.ingestion.extract.delimited",
     "app.ingestion.extract.ofx",
     "app.ingestion.extract.qif",
+    "app.ingestion.extract.pdf",
+    "app.ingestion.extract.image",
+    "app.ingestion.extract.eml",
+    "app.ingestion.extract.archive",
+    "app.ingestion.extract.xlsx",
 )
 
 _EXTRACTORS: dict[str, Extractor] = {}
