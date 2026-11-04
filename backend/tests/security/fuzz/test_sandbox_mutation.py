@@ -157,7 +157,11 @@ def test_mutated_inputs_in_process() -> None:
         try:
             result = extractors[kind](data, OPTIONS, kind)
         except ExtractFailure as failure:
-            assert failure.code
+            failure_code: str | None = failure.code
+        else:
+            failure_code = None
+        if failure_code is not None:
+            assert failure_code, "an extractor failure always carries a code"
             return
         _validated(result, kind)
 
@@ -187,9 +191,13 @@ def test_mutated_inputs_through_the_sandbox() -> None:
         try:
             result = run_extraction(kind, data, config=SANDBOX, options=OPTIONS)
         except SandboxError as exc:
+            contained: str | None = exc.code
+        else:
+            contained = None
+        if contained is not None:
             # Contained: a resource limit, or a native crash of a parser
             # inside the child. Never output the parent had to refuse.
-            assert exc.code in LIMIT_CODES | {"crashed"}, exc.code
+            assert contained in LIMIT_CODES | {"crashed"}, contained
             return
         _validated(result, kind)
 

@@ -15,6 +15,13 @@
 * **Query**: ``websearch_to_tsquery('simple', :q)`` (quoted phrases, ``or``,
   ``-word``; never a syntax error), ranked by ``ts_rank_cd``; the keyset
   cursor is the integer score and the id (:func:`encode_cursor`).
+* **Metadata-only search** (I1): a caller who may not download documents
+  (a viewer without the household's download grant) never searches the
+  extracted text: their ``q`` matches and ranks only the document's
+  ``original_filename`` (:func:`metadata_matches`, :func:`metadata_score`),
+  metadata they already see in the list. Otherwise every query would be a
+  yes/no oracle over the text of documents they may not open (account
+  numbers, tax ids, salaries guessed token by token).
 * **Snippets** (I1): only for callers who may download the document
   (member or above, or a viewer where the household allows downloads):
   ``ts_headline`` over the stored text with private-use markers, turned into
@@ -50,9 +57,9 @@ Q_MAX: Final = 200
 #: Rank to integer score (keyset cursor; equality is exact on integers).
 _SCORE_SCALE: Final = 1_000_000
 
-_START, _STOP, _FRAGMENT = "", "", ""
+_START, _STOP, _FRAGMENT = "\ue000", "\ue001", "\ue002"
 _MARKERS: Final = re.compile(f"[{_START}{_STOP}{_FRAGMENT}]")
-_CONTROL: Final = re.compile(r"[\x00-\x08\x0b-\x1f\x7f​-‏‪-‮⁦-⁩]")
+_CONTROL: Final = re.compile("[\x00-\x08\x0b-\x1f\x7f\u200b-\u200f\u202a-\u202e\u2066-\u2069]")
 _WS: Final = re.compile(r"\s+")
 _HEADLINE_OPTIONS: Final = (
     f"StartSel={_START}, StopSel={_STOP}, MaxWords=24, MinWords=8, "
@@ -149,6 +156,25 @@ def matches(q: str) -> ColumnElement[bool]:
 
 def score(q: str) -> ColumnElement[int]:
     rank = func.ts_rank_cd(Document.extracted_text, ts_query(q))
+    return cast(rank * _SCORE_SCALE, BigInteger)
+
+
+def _metadata_vector() -> ColumnElement[Any]:
+    # "statement_2026-04.pdf" -> "statement 2026 04 pdf": the parser would
+    # otherwise keep a filename as one "file" token.
+    words = func.regexp_replace(
+        func.coalesce(Document.original_filename, ""), "[^[:alnum:]]+", " ", "g"
+    )
+    return func.to_tsvector(_config(), words)
+
+
+def metadata_matches(q: str) -> ColumnElement[bool]:
+    """``q`` against the original filename only (callers who may not download, I1)."""
+    return _metadata_vector().op("@@")(ts_query(q))
+
+
+def metadata_score(q: str) -> ColumnElement[int]:
+    rank = func.ts_rank_cd(_metadata_vector(), ts_query(q))
     return cast(rank * _SCORE_SCALE, BigInteger)
 
 

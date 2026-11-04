@@ -236,7 +236,8 @@ def list_documents(
 
     With ``q``: only documents whose extracted text matches
     (``websearch_to_tsquery``), best match first (keyset on score and id),
-    each with its rank; snippets only for callers who may download (I1).
+    each with its rank and a snippet. A caller who may not download (I1)
+    searches the original filename only and gets no snippet.
     """
     household_id = _household(principal)
     query = select(Document).where(service.visible_document_filter(principal))
@@ -261,8 +262,15 @@ def list_documents(
             items=[DocumentListItem.model_validate(row) for row in rows],
             next_cursor=search.encode_cursor(None, rows[-1].id) if more and rows else None,
         )
-    score = search.score(q).label("score")
-    ranked = query.add_columns(score).where(search.matches(q))
+    # I1: without the download right, q never touches the extracted text
+    # (it would be a yes/no oracle over documents the caller may not open).
+    full_text = may_download(db, principal)
+    if full_text:
+        score = search.score(q).label("score")
+        ranked = query.add_columns(score).where(search.matches(q))
+    else:
+        score = search.metadata_score(q).label("score")
+        ranked = query.add_columns(score).where(search.metadata_matches(q))
     if cursor:
         points, after_id = search.decode_cursor(cursor, ranked=True)
         ranked = ranked.where(tuple_(score, Document.id) < tuple_(points, after_id))
@@ -270,7 +278,7 @@ def list_documents(
     more = len(found) > limit
     found = found[:limit]
     snippets: dict[uuid.UUID, list[SnippetPart]] | None = None
-    if may_download(db, principal):
+    if full_text:
         snippets = {
             row_id: [SnippetPart(**part) for part in parts]
             for row_id, parts in search.snippets(

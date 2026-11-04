@@ -78,7 +78,7 @@ def test_ocr_folding_reads_confusable_digits_as_letters() -> None:
     assert rp.fold("$UB T0TAL") == "sub total"
     assert rp.fold("TOTAI DUE") == "total due"
     assert rp.fold("AMOUNTDUE") == "amount due"
-    assert rp.fold("SALESTAX8%", ocr=False) == "sales tax8"
+    assert rp.fold("SALESTAX8%", ocr=False) == "sales tax 8"
 
 
 def test_basic_receipt_fields_and_consistency() -> None:
@@ -233,7 +233,10 @@ def test_card_last_four_only(line: str) -> None:
 
 
 def test_merchant_skips_address_phone_and_boilerplate() -> None:
-    text = "*** RECEIPT ***\nWelcome!\n55 Sample Ave\nTel (555) 010-2233\nPINE STREET DELI\nTOTAL 3.00\n"
+    text = (
+        "*** RECEIPT ***\nWelcome!\n55 Sample Ave\nTel (555) 010-2233\n"
+        "PINE STREET DELI\nTOTAL 3.00\n"
+    )
     receipt = _read(text)
     assert receipt.merchant == "PINE STREET DELI"
     assert receipt.merchant_candidates[0] == "PINE STREET DELI"

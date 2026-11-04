@@ -195,6 +195,7 @@ def test_thermal_receipt_photo_is_ocrd_parsed_and_linked(
     assert receipt.total == spec.total
     assert receipt.payment.last4 == LAST4  # stored ...
     assert env.links(doc_id) == [paid.id]
+    assert document.confidence is not None
     assert document.confidence["receipt"]["match"] == "linked"
     stored = ExtractResult.model_validate(document.extraction)
     assert stored.pages[0].text_source == "ocr"
@@ -287,6 +288,7 @@ def test_receipt_without_a_transaction_waits_and_links_when_the_statement_arrive
     assert env.links(receipt_id) == [paid.id]
     (item,) = env.items(receipt_id)
     assert item.state is ReviewItemState.RESOLVED
+    assert item.resolution is not None
     assert item.resolution["action"] == "auto_link"
     assert env.document(receipt_id).status is DocumentStatus.PROCESSED
 

@@ -109,6 +109,7 @@ from app.domain.imports.schemas import (
     PreviewTable,
     PreviewTransaction,
 )
+from app.domain.review.layout import with_layout_tables
 from app.domain.rules.service import apply_rules_to
 from app.domain.transactions import repo as transactions_repo
 from app.domain.transactions.import_hash import HashInput, normalize_payee
@@ -617,9 +618,11 @@ def _stored_result(document: Document) -> ExtractResult | None:
     if not document.extraction:
         return None
     try:
-        return ExtractResult.model_validate(document.extraction)
+        result = ExtractResult.model_validate(document.extraction)
     except ValidationError:
         return None
+    # A PDF/image no parser read offers its page table to the mapping editor.
+    return with_layout_tables(result)
 
 
 def _usable_account(run: _Run, account_id: uuid.UUID | None) -> Account | None:
@@ -1037,6 +1040,9 @@ def import_extraction(
     are their choices. Runs in the caller's transaction and RLS context.
     """
     actor = user_id or document.uploaded_by
+    # A PDF/image no parser read: its page table goes through the saved
+    # column mappings like a CSV (app.domain.review.layout).
+    result = with_layout_tables(result)
     run = _Run(
         db=db,
         document=document,

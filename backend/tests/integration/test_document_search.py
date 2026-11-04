@@ -4,7 +4,8 @@
 The worker writes ``document.extracted_text`` from the validated extraction;
 the API ranks with ``websearch_to_tsquery`` and keeps the usual visibility
 rules. Snippets are plain-text segments and only reach callers who may
-download documents: a viewer gets matches without text.
+download documents; a viewer without that right searches filenames only, so
+the search is no oracle over text they may not open.
 """
 
 from __future__ import annotations
@@ -184,8 +185,12 @@ def test_snippets_are_plain_segments_for_members_only(
     member_items = home["member"].get(DOCS, params={"q": "premium"}).json()["items"]
     assert {i["id"] for i in member_items} == {str(corpus["insurance"]), str(corpus["statement"])}
     assert all(i["snippet"] for i in member_items)
-    # The viewer finds the documents but gets no text (I1).
-    viewer_items = home["viewer"].get(DOCS, params={"q": "premium"}).json()["items"]
+    # A viewer who may not download never searches the extracted text (I1):
+    # no token of a document they cannot open is confirmed or denied ...
+    for guess in ("premium", "northwind", "HX-1", "120.00", "grocery", '"home insurance"'):
+        assert _ids(home["viewer"].get(DOCS, params={"q": guess})) == []
+    # ... their query matches the filename they already see, without text.
+    viewer_items = home["viewer"].get(DOCS, params={"q": "statement"}).json()["items"]
     assert {i["id"] for i in viewer_items} == {str(corpus["insurance"]), str(corpus["statement"])}
     assert all(i["snippet"] is None for i in viewer_items)
     assert all(i["rank"] is not None for i in viewer_items)

@@ -505,6 +505,14 @@ POLICIES: Final[Mapping[str, Policy]] = MappingProxyType(
         f"GET {API}/documents/{{document_id}}/download": scoped(
             "documents:read", role=M, params=SDOC
         ),
+        # Phase 3: page previews follow the download rule (I1); word boxes
+        # any role that sees the document (text only where downloads are allowed).
+        f"GET {API}/documents/{{document_id}}/preview": scoped(
+            "documents:read", role=M, params=SDOC
+        ),
+        f"GET {API}/documents/{{document_id}}/regions": scoped(
+            "documents:read", role=V, params=SDOC
+        ),
         f"POST {API}/documents/{{document_id}}/reprocess": scoped(
             "documents:write", role=M, params=SDOC
         ),
@@ -517,6 +525,12 @@ POLICIES: Final[Mapping[str, Policy]] = MappingProxyType(
         f"GET {API}/review/{{item_id}}": scoped("review:read", role=V, params=ITEM),
         f"POST {API}/review/{{item_id}}/resolve": scoped("review:write", role=M, params=ITEM),
         f"POST {API}/review/{{item_id}}/dismiss": scoped("review:write", role=M, params=ITEM),
+        # Phase 3 review tools: like resolve; the rule draft for rule authors.
+        f"POST {API}/review/{{item_id}}/correct": scoped("review:write", role=M, params=ITEM),
+        f"POST {API}/review/{{item_id}}/remember-layout": scoped(
+            "review:write", role=M, params=ITEM
+        ),
+        f"GET {API}/review/{{item_id}}/rule-draft": scoped("review:read", role=A, params=ITEM),
         # --- live updates (SSE): browser sessions only, any role ------------
         f"GET {API}/events": session(role=V),
         # --- structured imports (Phase 2): mappings follow account visibility;

@@ -246,6 +246,16 @@ def whoami(data: bytes, options: ExtractOptions, kind: str) -> ExtractResult:
     )
 
 
+def unlisted_syscall(data: bytes, options: ExtractOptions, kind: str) -> ExtractResult:
+    """A harmless call outside the allowlist: ``setpriority`` (lowering its own priority).
+
+    Without a seccomp allowlist this succeeds; with it the child is killed
+    (``SIGSYS``) before it can report anything.
+    """
+    os.setpriority(os.PRIO_PROCESS, 0, 19)
+    return _result(kind, "setpriority:ok")
+
+
 def echo(data: bytes, options: ExtractOptions, kind: str) -> ExtractResult:
     return _result(kind, f"input:{len(data)}")
 
@@ -304,6 +314,7 @@ EXTRACTORS = {
     "bigoutput": bigoutput,
     "whoami": whoami,
     "echo": echo,
+    "unlisted_syscall": unlisted_syscall,
     "bad_shape": bad_shape,
 }
 

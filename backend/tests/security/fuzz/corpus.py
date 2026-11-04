@@ -88,7 +88,8 @@ def _page_objects(content: bytes, *, filter_: bytes = b"") -> list[bytes]:
         b"<< /Type /Catalog /Pages 2 0 R >>",
         b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
         b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents 4 0 R "
-        b"/Resources << /Font << /F1 << /Type /Font /Subtype /Type1 /BaseFont /Helvetica >> >> >> >>",
+        b"/Resources << /Font << /F1 << /Type /Font /Subtype /Type1 "
+        b"/BaseFont /Helvetica >> >> >> >>",
         b"<< /Length "
         + str(len(content)).encode()
         + filter_
@@ -429,7 +430,8 @@ def eml_deep_multipart(depth: int = 2000) -> bytes:
 def eml_bad_base64() -> bytes:
     return (
         _HEADERS
-        + b'Content-Type: multipart/mixed; boundary="B"\r\n\r\n--B\r\nContent-Type: text/plain\r\n\r\nhi\r\n'
+        + b'Content-Type: multipart/mixed; boundary="B"\r\n\r\n'
+        + b"--B\r\nContent-Type: text/plain\r\n\r\nhi\r\n"
         + b'--B\r\nContent-Type: application/pdf; name="a.pdf"\r\nContent-Disposition: attachment; '
         + b'filename="../../../etc/passwd.pdf"\r\nContent-Transfer-Encoding: base64\r\n\r\n'
         + b"!!!!not*base64@@@@\r\n=====\r\n--B--\r\n"
@@ -452,7 +454,8 @@ def eml_encoded_word_garbage() -> bytes:
         _HEADERS.replace(
             b"Subject: Receipt", b"Subject: =?utf-8?B?////////?= =?x-unknown?Q?=FF=FE?="
         )
-        + b"Content-Type: text/html; charset=x-made-up\r\n\r\n<p>caf\xe9 \xff\xfe <script>bad()</script></p>\r\n"
+        + b"Content-Type: text/html; charset=x-made-up\r\n\r\n"
+        + b"<p>caf\xe9 \xff\xfe <script>bad()</script></p>\r\n"
     )
 
 

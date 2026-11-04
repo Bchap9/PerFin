@@ -36,33 +36,43 @@ the child **refuses to run** if any step fails:
    (``PERFIN_EXTRACT_REQUIRE_LANDLOCK=false``, :attr:`SandboxLimits.
    require_landlock`), which leaves seccomp and the parent's non-dumpable
    flag as the only layers.
-4. A seccomp filter (libseccomp via ``pyseccomp``). **Choice: default-allow
-   with a deny list**, each denied call failing with ``EPERM`` (``ENOSYS``
-   for ``clone3`` so the C library falls back to the filtered ``clone``). A
-   default-kill allowlist was rejected for now: the CPython runtime and the
-   Phase 3 PDF/OCR libraries use a large and version-dependent set of
-   syscalls, and an incomplete allowlist fails in production in ways tests
-   do not see. The deny list removes what matters for a parser exploit:
-   networking (``socket``, ``connect``, ``bind``, ...), running programs
-   (``execve``, ``execveat``), new processes (``fork``, ``vfork``, ``clone``
-   without ``CLONE_THREAD``), signals to other processes (``kill``/``tgkill``/
-   ``rt_sigqueueinfo``/``rt_tgsigqueueinfo`` with another pid, ``tkill``,
+4. A seccomp filter (libseccomp via ``pyseccomp``). **Default-kill
+   allowlist** (``KILL_PROCESS``, so the child dies with ``SIGSYS`` and the
+   runner reports ``syscall_denied``): only the calls in
+   :data:`ALLOWED_SYSCALLS` run, plus a few with argument checks
+   (:func:`install_seccomp`): ``clone`` only with ``CLONE_THREAD`` (threads),
+   ``kill``/``tgkill``/``rt_sigqueueinfo``/``rt_tgsigqueueinfo`` only at the
+   child's own pid, ``prlimit64`` only on itself, ``fcntl`` and ``ioctl``
+   only with the commands in :data:`FCNTL_ALLOWED_COMMANDS` and
+   :data:`IOCTL_ALLOWED_COMMANDS`, ``open``/``openat`` only without
+   ``O_WRONLY``, ``O_RDWR``, ``O_CREAT`` or ``O_TRUNC``. The allowlist was
+   derived from ``strace`` of every extractor (structured formats, PDF, OCR,
+   images, EML, ZIP, the fuzz corpus) and kept to what CPython, PyMuPDF,
+   Pillow and Tesseract need; anything else, including a call a library
+   update starts to make, kills the child (a visible ``syscall_denied``
+   failure, never a silent success). On top, the calls a parser exploit
+   would want fail with ``EPERM`` instead of a kill, so the hostile-input
+   tests can tell which layer stopped them: networking (``socket``,
+   ``connect``, ``bind``, ...), running programs (``execve``, ``execveat``),
+   new processes (``fork``, ``vfork``, ``clone`` without ``CLONE_THREAD``;
+   ``clone3`` ``ENOSYS`` so the C library falls back to ``clone``), signals
+   to other processes (the four calls above with another pid, ``tkill``,
    ``pidfd_*``, ``fcntl`` ``F_SETOWN``/``F_SETOWN_EX``/``F_SETSIG``; review
    finding P2-SR-R2-01: Landlock only scopes signals from ABI 6, so seccomp
    must stop them on its own), debugging and other processes' memory
    (``ptrace``, ``process_vm_*``), namespaces and mounts, kernel modules,
-   BPF, keyrings, ``io_uring`` (which would bypass the filter),
-   ``userfaultfd``, ``perf_event_open`` and identity changes. Every call that
-   changes the filesystem is denied as well (:data:`FILESYSTEM_DENIED_SYSCALLS`:
+   BPF, keyrings, ``io_uring``, ``userfaultfd``, ``perf_event_open`` and
+   identity changes (:data:`DENIED_SYSCALLS`). Every call that changes the
+   filesystem fails with ``EPERM`` as well (:data:`FILESYSTEM_DENIED_SYSCALLS`:
    ``unlink``/``rename``/``truncate``/``chmod``/``chown``/``mkdir``/``rmdir``/
    ``link``/``symlink``/``utimensat``/xattrs/``fallocate``/``creat`` and
-   their ``*at`` forms), ``open``/``openat`` with ``O_WRONLY``, ``O_RDWR``,
-   ``O_CREAT`` or ``O_TRUNC`` fail with ``EPERM`` (no file, nor
-   ``/proc/<pid>/mem``, can be opened for writing) and ``openat2``, whose
-   flags seccomp cannot inspect, with ``ENOSYS``. Syscalls of a
+   their ``*at`` forms), as do ``open``/``openat`` with a write flag (no
+   file, nor ``/proc/<pid>/mem``, can be opened for writing); ``openat2``,
+   whose flags seccomp cannot inspect, fails with ``ENOSYS``. Syscalls of a
    non-native architecture are killed (libseccomp's bad-arch default). The
-   argument checks on ``clone``, the signal calls and ``fcntl`` assume the
-   x86-64/arm64 argument order.
+   argument checks assume the x86-64/arm64 argument order. libseccomp
+   refuses overlapping rules with different actions, so every allow rule
+   with an argument check is disjoint from its deny rule.
 
 The worker container adds the outer layers (read-only root filesystem,
 ``cap_drop: ALL``, ``no-new-privileges``, no inbound ports, no egress).
@@ -120,6 +130,8 @@ EXIT_CODES: Final[Mapping[int, str]] = {
 _PR_SET_DUMPABLE: Final = 4
 _PR_SET_NO_NEW_PRIVS: Final = 38
 _CLONE_THREAD: Final = 0x00010000
+#: ``__NR_SCMP_ERROR``: what libseccomp resolves an unknown syscall name to.
+_UNKNOWN_SYSCALL: Final = -1
 _READ_CHUNK: Final = 64 * 1024
 
 #: Signal-sending calls whose first argument (a pid or thread-group id) must
@@ -131,6 +143,127 @@ _F_SETSIG: Final = 10
 _F_SETOWN_EX: Final = 15
 #: ``fcntl`` commands that direct signals at a process (``EPERM``).
 FCNTL_DENIED_COMMANDS: Final = (_F_SETOWN, _F_SETSIG, _F_SETOWN_EX)
+#: ``fcntl`` commands allowed (descriptor flags, duplication, status flags,
+#: record locks and seals queries; ``linux/fcntl.h``). Any other is killed.
+FCNTL_ALLOWED_COMMANDS: Final = (
+    0,  # F_DUPFD
+    1,  # F_GETFD
+    2,  # F_SETFD
+    3,  # F_GETFL
+    4,  # F_SETFL
+    5,  # F_GETLK
+    6,  # F_SETLK
+    7,  # F_SETLKW
+    9,  # F_GETOWN
+    1030,  # F_DUPFD_CLOEXEC
+    1034,  # F_GET_SEALS
+)
+#: ``ioctl`` requests allowed: the terminal queries CPython makes on its
+#: standard streams (``isatty``, window size), close-on-exec and bytes
+#: readable. Any other request is killed.
+IOCTL_ALLOWED_COMMANDS: Final = (
+    0x5401,  # TCGETS
+    0x5413,  # TIOCGWINSZ
+    0x541B,  # FIONREAD
+    0x5450,  # FIONCLEX
+    0x5451,  # FIOCLEX
+)
+#: Allowed without argument checks (module doc, step 4). Names missing on an
+#: architecture (``open``, ``stat``, ``arch_prctl`` on arm64) are skipped.
+ALLOWED_SYSCALLS: Final = (
+    # memory
+    "brk",
+    "mmap",
+    "munmap",
+    "mremap",
+    "mprotect",
+    "madvise",
+    # reading files and descriptors (opening is checked; Landlock limits where)
+    "read",
+    "readv",
+    "pread64",
+    "preadv",
+    "preadv2",
+    "write",
+    "writev",
+    "lseek",
+    "close",
+    "close_range",
+    "dup",
+    "dup2",
+    "dup3",
+    "pipe",
+    "pipe2",
+    "fstat",
+    "stat",
+    "lstat",
+    "newfstatat",
+    "statx",
+    "fstatfs",
+    "statfs",
+    "getdents",
+    "getdents64",
+    "access",
+    "faccessat",
+    "faccessat2",
+    "readlink",
+    "readlinkat",
+    "getcwd",
+    "fadvise64",
+    "poll",
+    "ppoll",
+    "select",
+    "pselect6",
+    # time
+    "clock_gettime",
+    "clock_getres",
+    "gettimeofday",
+    "time",
+    "nanosleep",
+    "clock_nanosleep",
+    # threads and synchronisation (thread creation: ``clone`` below)
+    "futex",
+    "set_robust_list",
+    "get_robust_list",
+    "set_tid_address",
+    "rseq",
+    "sched_yield",
+    "sched_getaffinity",
+    "membarrier",
+    # own process facts
+    "getpid",
+    "gettid",
+    "getppid",
+    "getpgrp",
+    "getpgid",
+    "getsid",
+    "getuid",
+    "geteuid",
+    "getgid",
+    "getegid",
+    "getresuid",
+    "getresgid",
+    "getgroups",
+    "uname",
+    "sysinfo",
+    "getrlimit",
+    "getrusage",
+    "times",
+    "arch_prctl",
+    "getrandom",
+    # signals to itself (sending: the checked calls below)
+    "rt_sigaction",
+    "rt_sigprocmask",
+    "rt_sigreturn",
+    "rt_sigpending",
+    "rt_sigtimedwait",
+    "rt_sigsuspend",
+    "sigaltstack",
+    "restart_syscall",
+    # leaving
+    "exit",
+    "exit_group",
+)
 
 #: Denied with EPERM regardless of arguments.
 DENIED_SYSCALLS: Final = (
@@ -450,19 +583,51 @@ def deny_filesystem_changes(filt: object, pyseccomp: ModuleType) -> None:
     add_rule(pyseccomp.ERRNO(errno.ENOSYS), "openat2")
 
 
+def _add_optional(
+    filt: object, pyseccomp: ModuleType, action: int, name: str, *args: object
+) -> None:
+    """``filt.add_rule``, skipping a name libseccomp does not know at all.
+
+    A known syscall this architecture lacks (``open``, ``fcntl64`` on arm64 or
+    x86-64) resolves to a pseudo number that libseccomp accepts and ignores.
+    Any other failure, such as a rule overlapping one with another action,
+    raises: the child then refuses to run instead of loading a weaker filter.
+    """
+    if pyseccomp.resolve_syscall(pyseccomp.Arch.NATIVE, name) == _UNKNOWN_SYSCALL:
+        return
+    filt.add_rule(action, name, *args)  # type: ignore[attr-defined]
+
+
+def allow_readonly_opens(filt: object, pyseccomp: ModuleType) -> None:
+    """``open``/``openat`` without a write flag (write forms: :func:`deny_filesystem_changes`)."""
+    mask = 0
+    for flag in WRITE_OPEN_FLAGS:
+        mask |= flag
+    for syscall, flags_arg in (("open", 1), ("openat", 2)):
+        _add_optional(
+            filt,
+            pyseccomp,
+            pyseccomp.ALLOW,
+            syscall,
+            pyseccomp.Arg(flags_arg, pyseccomp.MASKED_EQ, mask, 0),
+        )
+
+
 def install_seccomp() -> None:
     pyseccomp = _SECCOMP
     if pyseccomp is None:
         raise HardenError("libseccomp is not available")
+    allow = pyseccomp.ALLOW
     eperm = pyseccomp.ERRNO(errno.EPERM)
     pid = os.getpid()
-    filt = pyseccomp.SyscallFilter(defaction=pyseccomp.ALLOW)
+    filt = pyseccomp.SyscallFilter(defaction=pyseccomp.KILL_PROCESS)
+    for name in ALLOWED_SYSCALLS:
+        _add_optional(filt, pyseccomp, allow, name)
     for name in DENIED_SYSCALLS:
-        try:
-            filt.add_rule(eperm, name)
-        except (OSError, ValueError):
-            continue  # not a syscall on this architecture
+        _add_optional(filt, pyseccomp, eperm, name)
     # New processes: clone without CLONE_THREAD (threads stay possible).
+    thread = pyseccomp.Arg(0, pyseccomp.MASKED_EQ, _CLONE_THREAD, _CLONE_THREAD)
+    filt.add_rule(allow, "clone", thread)
     filt.add_rule(eperm, "clone", pyseccomp.Arg(0, pyseccomp.MASKED_EQ, _CLONE_THREAD, 0))
     filt.add_rule(pyseccomp.ERRNO(errno.ENOSYS), "clone3")
     # Signals only to ourselves (review finding P2-SR-R2-01): every call whose
@@ -471,16 +636,22 @@ def install_seccomp() -> None:
     # same-UID process be signalled by ``rt_sigqueueinfo`` and
     # ``rt_tgsigqueueinfo`` (negative ``si_code``) as well as by ``kill``.
     for name in SIGNAL_SELF_ONLY_SYSCALLS:
+        filt.add_rule(allow, name, pyseccomp.Arg(0, pyseccomp.EQ, pid))
         filt.add_rule(eperm, name, pyseccomp.Arg(0, pyseccomp.NE, pid))
+    # Resource limits of this process only (0 = self): never the worker's.
+    for target in (0, pid):
+        filt.add_rule(allow, "prlimit64", pyseccomp.Arg(0, pyseccomp.EQ, target))
     # Signals by file ownership: ``F_SETOWN``/``F_SETOWN_EX`` would make the
     # kernel send ``SIGIO`` (or the ``F_SETSIG`` signal) to another process
     # when the worker reads or writes the child's pipes.
-    for cmd in FCNTL_DENIED_COMMANDS:
-        for syscall in ("fcntl", "fcntl64"):
-            try:
-                filt.add_rule(eperm, syscall, pyseccomp.Arg(1, pyseccomp.EQ, cmd))
-            except (OSError, ValueError):
-                continue  # ``fcntl64`` exists only on 32-bit architectures
+    for syscall in ("fcntl", "fcntl64"):
+        for cmd in FCNTL_DENIED_COMMANDS:
+            _add_optional(filt, pyseccomp, eperm, syscall, pyseccomp.Arg(1, pyseccomp.EQ, cmd))
+        for cmd in FCNTL_ALLOWED_COMMANDS:
+            _add_optional(filt, pyseccomp, allow, syscall, pyseccomp.Arg(1, pyseccomp.EQ, cmd))
+    for request in IOCTL_ALLOWED_COMMANDS:
+        filt.add_rule(allow, "ioctl", pyseccomp.Arg(1, pyseccomp.EQ, request))
+    allow_readonly_opens(filt, pyseccomp)
     deny_filesystem_changes(filt, pyseccomp)
     filt.load()
 

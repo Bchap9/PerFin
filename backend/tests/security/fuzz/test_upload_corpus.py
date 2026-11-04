@@ -52,10 +52,14 @@ def check_sample(sample: Sample, tmp_path: Path) -> str:
     try:
         stored = store_stream(store=store, keyring=keyring, chunks=(data,), max_bytes=MAX_UPLOAD)
     except UploadRejectedError as exc:
-        assert sample.expect == "rejected", f"{sample.name} refused at intake: {exc.reason}"
-        assert str(exc.reason) in sample.codes, f"{sample.name}: {exc.reason}"
+        reason: str | None = str(exc.reason)
+    else:
+        reason = None
+    if reason is not None:
+        assert sample.expect == "rejected", f"{sample.name} refused at intake: {reason}"
+        assert reason in sample.codes, f"{sample.name}: {reason}"
         assert _files(tmp_path) == [], "a refused upload leaves nothing behind"
-        return f"rejected:{exc.reason}"
+        return f"rejected:{reason}"
     assert sample.expect != "rejected", f"{sample.name} was accepted as {stored.file_type}"
     assert len(_files(tmp_path / "quarantine")) == 1
     kind = stored.file_type.extract_kind
@@ -64,11 +68,15 @@ def check_sample(sample: Sample, tmp_path: Path) -> str:
     try:
         result = run_extraction(kind, data, config=SANDBOX, options=ExtractOptions())
     except SandboxError as exc:
+        sandbox_code: str | None = exc.code
+    else:
+        sandbox_code = None
+    if sandbox_code is not None:
         elapsed = time.monotonic() - started
         assert elapsed < BUDGET_SECONDS
-        assert sample.expect in ("contained", "extract_error"), f"{sample.name}: {exc.code}"
-        assert exc.code in LIMIT_CODES | {"crashed"}, f"{sample.name}: sandbox {exc.code}"
-        return f"sandbox:{exc.code}"
+        assert sample.expect in ("contained", "extract_error"), f"{sample.name}: {sandbox_code}"
+        assert sandbox_code in LIMIT_CODES | {"crashed"}, f"{sample.name}: sandbox {sandbox_code}"
+        return f"sandbox:{sandbox_code}"
     assert time.monotonic() - started < BUDGET_SECONDS
     assert result.kind == kind
     dumped = result.model_dump_json()

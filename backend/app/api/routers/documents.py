@@ -23,8 +23,15 @@
   /documents/{id}/link``, ``DELETE /documents/{id}`` (crypto-shredding, G5):
   member or above who can change the document.
 
-Tokens need ``documents:read`` / ``documents:write``. ``GET
-/documents/{id}/preview`` is Phase 3.
+* ``GET /documents/{id}/preview?page=``: the sandbox-rendered PNG of a page
+  (stored encrypted; ``app.domain.review.assist``): the download rule (I1),
+  never a quarantined document; ``image/png`` inline with ``nosniff``, a
+  ``sandbox`` CSP and ``no-store``.
+* ``GET /documents/{id}/regions?page=``: the page's word boxes for review
+  highlighting (any role that can see the document; the words only where
+  the download rule allows, else page geometry with no words).
+
+Tokens need ``documents:read`` / ``documents:write``.
 
 The upload and the download end the request's database transaction before
 the (possibly slow) transfer, so no connection or row lock is held while
@@ -62,7 +69,10 @@ from app.domain.documents.schemas import (
     DocumentReprocessOut,
 )
 from app.domain.documents.search import Q_MAX as SEARCH_Q_MAX
+from app.domain.review import assist as review_assist
+from app.domain.review.schemas import DocumentRegions
 from app.ingestion.intake.multipart import MultipartFile, boundary_of
+from app.ingestion.sandbox.protocol import MAX_PAGES_CEILING
 
 router = APIRouter(tags=["documents"])
 
@@ -175,8 +185,8 @@ def get_documents(
     tax_year: Annotated[int | None, Query(ge=1900, le=2200)] = None,
     q: Annotated[str | None, Query(min_length=1, max_length=SEARCH_Q_MAX)] = None,
 ) -> DocumentPage:
-    """``q`` searches the extracted text (best match first; snippets only for
-    callers who may download documents, I1)."""
+    """``q`` searches the extracted text (best match first, with snippets) for
+    callers who may download documents; for others only the filename (I1)."""
     return manage.list_documents(
         db,
         principal,
@@ -228,6 +238,50 @@ def download_document(
     headers = attachment_headers(download.filename, download.media_type)
     headers["Content-Length"] = str(download.size)
     return StreamingResponse(download.chunks, headers=headers)
+
+
+@router.get(
+    "/documents/{document_id}/preview",
+    response_class=Response,
+    responses={
+        200: {"description": "The page as a PNG", "content": {"image/png": {}}},
+        **PROBLEMS,
+        500: {"description": "Problem details", "content": {"application/problem+json": {}}},
+    },
+    summary="A page preview (sandbox-rendered PNG; member or above)",
+)
+def get_preview(
+    document_id: uuid.UUID,
+    request: Request,
+    db: DbSession,
+    principal: Reader,
+    page: Annotated[int, Query(ge=1, le=MAX_PAGES_CEILING)] = 1,
+) -> Response:
+    data = review_assist.read_preview(
+        db,
+        principal,
+        document_id,
+        page,
+        store=manage.blob_store(get_app_settings(request)),
+        keyring=get_keyring(request),
+        request=request,
+    )
+    return Response(content=data, headers=dict(review_assist.PREVIEW_HEADERS))
+
+
+@router.get(
+    "/documents/{document_id}/regions",
+    response_model=DocumentRegions,
+    responses=PROBLEMS,
+    summary="Word boxes of a page (for review highlighting)",
+)
+def get_regions(
+    document_id: uuid.UUID,
+    db: DbSession,
+    principal: Reader,
+    page: Annotated[int, Query(ge=1, le=MAX_PAGES_CEILING)] = 1,
+) -> DocumentRegions:
+    return review_assist.regions(db, principal, document_id, page)
 
 
 @router.post(

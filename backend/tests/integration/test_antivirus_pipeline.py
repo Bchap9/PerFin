@@ -152,11 +152,15 @@ def test_infected_document_is_rejected_with_its_signature(
     assert stages[0].log["signature"] == SIGNATURE
     with factories.transaction() as db:
         set_context(db, owner.household_id)
-        audit_row = db.execute(
-            select(AuditLog)
-            .where(AuditLog.action == "document.ingest", AuditLog.target_id == str(document_id))
-            .order_by(AuditLog.id.desc())
-        ).scalars().first()
+        audit_row = (
+            db.execute(
+                select(AuditLog)
+                .where(AuditLog.action == "document.ingest", AuditLog.target_id == str(document_id))
+                .order_by(AuditLog.id.desc())
+            )
+            .scalars()
+            .first()
+        )
         assert audit_row is not None
         assert audit_row.after is not None
         assert audit_row.after["signature"] == SIGNATURE

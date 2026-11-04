@@ -1051,6 +1051,69 @@
         "title": "AllowedSender",
         "type": "object"
       },
+      "Alternative": {
+        "description": "A value the caller may pick for ``field`` (``value`` as a string or id).",
+        "properties": {
+          "field": {
+            "title": "Field",
+            "type": "string"
+          },
+          "label": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Label"
+          },
+          "score": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Score"
+          },
+          "source": {
+            "enum": [
+              "document",
+              "ledger",
+              "household"
+            ],
+            "title": "Source",
+            "type": "string"
+          },
+          "transaction_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Transaction Id"
+          },
+          "value": {
+            "title": "Value",
+            "type": "string"
+          }
+        },
+        "required": [
+          "field",
+          "value",
+          "source"
+        ],
+        "title": "Alternative",
+        "type": "object"
+      },
       "AmountCondition-Input": {
         "additionalProperties": false,
         "properties": {
@@ -2613,6 +2676,37 @@
         "title": "ContributionPage",
         "type": "object"
       },
+      "Correction": {
+        "additionalProperties": false,
+        "description": "``POST /review/{id}/correct``: fix the item's document and rows (``resolve`` closes it).",
+        "properties": {
+          "document": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/DocumentFix"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "resolve": {
+            "default": false,
+            "title": "Resolve",
+            "type": "boolean"
+          },
+          "transactions": {
+            "items": {
+              "$ref": "#/components/schemas/TransactionFix"
+            },
+            "maxItems": 200,
+            "title": "Transactions",
+            "type": "array"
+          }
+        },
+        "title": "Correction",
+        "type": "object"
+      },
       "CurrencyCondition": {
         "additionalProperties": false,
         "properties": {
@@ -2870,6 +2964,85 @@
           "can_edit"
         ],
         "title": "DocumentDetailOut",
+        "type": "object"
+      },
+      "DocumentFix": {
+        "additionalProperties": false,
+        "description": "Corrected document facts; ``null`` clears institution, period and tax year.",
+        "properties": {
+          "account_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Account Id"
+          },
+          "institution_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Institution Id"
+          },
+          "kind": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/DocumentKind"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "period_end": {
+            "anyOf": [
+              {
+                "format": "date",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Period End"
+          },
+          "period_start": {
+            "anyOf": [
+              {
+                "format": "date",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Period Start"
+          },
+          "tax_year": {
+            "anyOf": [
+              {
+                "maximum": 2200.0,
+                "minimum": 1900.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Tax Year"
+          }
+        },
+        "title": "DocumentFix",
         "type": "object"
       },
       "DocumentKind": {
@@ -3206,6 +3379,89 @@
           "job_id"
         ],
         "title": "DocumentReceivedOut",
+        "type": "object"
+      },
+      "DocumentRegions": {
+        "description": "``GET /documents/{id}/regions?page=``: word boxes of one page.",
+        "properties": {
+          "document_id": {
+            "format": "uuid",
+            "title": "Document Id",
+            "type": "string"
+          },
+          "height": {
+            "title": "Height",
+            "type": "number"
+          },
+          "page": {
+            "title": "Page",
+            "type": "integer"
+          },
+          "page_count": {
+            "title": "Page Count",
+            "type": "integer"
+          },
+          "preview": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/PreviewInfo"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "text_included": {
+            "title": "Text Included",
+            "type": "boolean"
+          },
+          "text_source": {
+            "enum": [
+              "text_layer",
+              "ocr",
+              "none"
+            ],
+            "title": "Text Source",
+            "type": "string"
+          },
+          "unit": {
+            "enum": [
+              "pt",
+              "px"
+            ],
+            "title": "Unit",
+            "type": "string"
+          },
+          "width": {
+            "title": "Width",
+            "type": "number"
+          },
+          "words": {
+            "items": {
+              "$ref": "#/components/schemas/RegionWord"
+            },
+            "title": "Words",
+            "type": "array"
+          },
+          "words_truncated": {
+            "title": "Words Truncated",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "document_id",
+          "page",
+          "page_count",
+          "width",
+          "height",
+          "unit",
+          "text_source",
+          "text_included",
+          "words_truncated",
+          "preview",
+          "words"
+        ],
+        "title": "DocumentRegions",
         "type": "object"
       },
       "DocumentReprocessOut": {
@@ -5340,6 +5596,40 @@
         "title": "MappingUpdate",
         "type": "object"
       },
+      "MatchSpec": {
+        "additionalProperties": false,
+        "properties": {
+          "all": {
+            "items": {
+              "$ref": "#/components/schemas/Rule"
+            },
+            "maxItems": 32,
+            "minItems": 1,
+            "title": "All",
+            "type": "array"
+          },
+          "any": {
+            "items": {
+              "$ref": "#/components/schemas/Rule"
+            },
+            "maxItems": 32,
+            "title": "Any",
+            "type": "array"
+          },
+          "min_any": {
+            "default": 0,
+            "maximum": 32.0,
+            "minimum": 0.0,
+            "title": "Min Any",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "all"
+        ],
+        "title": "MatchSpec",
+        "type": "object"
+      },
       "MemberAdd": {
         "additionalProperties": false,
         "description": "``POST /households/{id}/members``: exactly one of ``user_id``, ``username``, ``new_user``.",
@@ -6256,6 +6546,34 @@
         "title": "PreviewBalance",
         "type": "object"
       },
+      "PreviewInfo": {
+        "properties": {
+          "dpi": {
+            "title": "Dpi",
+            "type": "integer"
+          },
+          "height": {
+            "title": "Height",
+            "type": "integer"
+          },
+          "scale": {
+            "title": "Scale",
+            "type": "number"
+          },
+          "width": {
+            "title": "Width",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "width",
+          "height",
+          "dpi",
+          "scale"
+        ],
+        "title": "PreviewInfo",
+        "type": "object"
+      },
       "PreviewStatement": {
         "properties": {
           "account_type": {
@@ -6632,6 +6950,220 @@
         "title": "References",
         "type": "object"
       },
+      "Region": {
+        "description": "A box on a page (page units, origin top left) the review UI highlights.",
+        "properties": {
+          "bbox": {
+            "items": {
+              "type": "number"
+            },
+            "maxItems": 4,
+            "minItems": 4,
+            "title": "Bbox",
+            "type": "array"
+          },
+          "fields": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Fields",
+            "type": "array"
+          },
+          "label": {
+            "enum": [
+              "transaction",
+              "account_number",
+              "page"
+            ],
+            "title": "Label",
+            "type": "string"
+          },
+          "page": {
+            "title": "Page",
+            "type": "integer"
+          },
+          "transaction_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Transaction Id"
+          }
+        },
+        "required": [
+          "page",
+          "bbox",
+          "label"
+        ],
+        "title": "Region",
+        "type": "object"
+      },
+      "RegionWord": {
+        "properties": {
+          "bbox": {
+            "items": {
+              "type": "number"
+            },
+            "maxItems": 4,
+            "minItems": 4,
+            "title": "Bbox",
+            "type": "array"
+          },
+          "conf": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Conf"
+          },
+          "line": {
+            "title": "Line",
+            "type": "integer"
+          },
+          "text": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Text"
+          }
+        },
+        "required": [
+          "bbox",
+          "line",
+          "text",
+          "conf"
+        ],
+        "title": "RegionWord",
+        "type": "object"
+      },
+      "RememberLayout": {
+        "additionalProperties": false,
+        "description": "``POST /review/{id}/remember-layout``: a household fingerprint from this document.\n\n``match`` (the fingerprint rules, the same schema as a shipped\nfingerprint's ``match``) is derived from the document's header and\ntable layout when absent; ``kind`` defaults to the document's and\n``parser`` to the one that read it (else the generic parser of the kind).",
+        "properties": {
+          "institution_id": {
+            "format": "uuid",
+            "title": "Institution Id",
+            "type": "string"
+          },
+          "kind": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/DocumentKind"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "match": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/MatchSpec"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "parser": {
+            "anyOf": [
+              {
+                "maxLength": 64,
+                "minLength": 1,
+                "pattern": "^[a-z][a-z0-9_]{0,63}$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Parser"
+          },
+          "reprocess_similar": {
+            "default": true,
+            "title": "Reprocess Similar",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "institution_id"
+        ],
+        "title": "RememberLayout",
+        "type": "object"
+      },
+      "RememberLayoutOut": {
+        "description": "The stored fingerprint and what was sent through the pipeline again.",
+        "properties": {
+          "ambiguous": {
+            "title": "Ambiguous",
+            "type": "boolean"
+          },
+          "fingerprint_id": {
+            "format": "uuid",
+            "title": "Fingerprint Id",
+            "type": "string"
+          },
+          "institution_id": {
+            "format": "uuid",
+            "title": "Institution Id",
+            "type": "string"
+          },
+          "item": {
+            "$ref": "#/components/schemas/ReviewItemOut"
+          },
+          "kind": {
+            "$ref": "#/components/schemas/DocumentKind"
+          },
+          "match": {
+            "additionalProperties": true,
+            "title": "Match",
+            "type": "object"
+          },
+          "parser": {
+            "title": "Parser",
+            "type": "string"
+          },
+          "reprocessed": {
+            "items": {
+              "format": "uuid",
+              "type": "string"
+            },
+            "title": "Reprocessed",
+            "type": "array"
+          },
+          "version": {
+            "title": "Version",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "fingerprint_id",
+          "version",
+          "institution_id",
+          "kind",
+          "parser",
+          "match",
+          "ambiguous",
+          "reprocessed",
+          "item"
+        ],
+        "title": "RememberLayoutOut",
+        "type": "object"
+      },
       "ReportItem": {
         "description": "One group: ``key`` is a category, payee or account id, or ``YYYY-MM``.\n\n``key`` is ``null`` for uncategorised lines (``group_by=category``) and\nlines without a payee (``group_by=payee``); ``name`` is the category,\npayee or account name (``null`` for a month or a missing one).",
         "properties": {
@@ -6742,6 +7274,35 @@
           "decision"
         ],
         "title": "ResolveDuplicate",
+        "type": "object"
+      },
+      "ResolveLowConfidence": {
+        "additionalProperties": false,
+        "description": "Correct the doubtful rows and (``confirm``) accept the item's pending rows.",
+        "properties": {
+          "confirm": {
+            "default": true,
+            "title": "Confirm",
+            "type": "boolean"
+          },
+          "kind": {
+            "const": "low_confidence_field",
+            "title": "Kind",
+            "type": "string"
+          },
+          "transactions": {
+            "items": {
+              "$ref": "#/components/schemas/TransactionFix"
+            },
+            "maxItems": 200,
+            "title": "Transactions",
+            "type": "array"
+          }
+        },
+        "required": [
+          "kind"
+        ],
+        "title": "ResolveLowConfidence",
         "type": "object"
       },
       "ResolveReceiptMatch": {
@@ -6905,6 +7466,20 @@
       "ReviewItemOut": {
         "description": "One review item. ``payload`` carries ids and short facts, never file content.\n\n``next_step`` names what the UI should offer; ``can_resolve`` whether the\ncaller may resolve or dismiss it.",
         "properties": {
+          "alternatives": {
+            "anyOf": [
+              {
+                "items": {
+                  "$ref": "#/components/schemas/Alternative"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Alternatives"
+          },
           "can_resolve": {
             "title": "Can Resolve",
             "type": "boolean"
@@ -6943,7 +7518,8 @@
                   "column_mapping",
                   "reprocess",
                   "choose_owner",
-                  "attach_receipt"
+                  "attach_receipt",
+                  "correct_fields"
                 ],
                 "type": "string"
               },
@@ -6957,6 +7533,20 @@
             "additionalProperties": true,
             "title": "Payload",
             "type": "object"
+          },
+          "regions": {
+            "anyOf": [
+              {
+                "items": {
+                  "$ref": "#/components/schemas/Region"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Regions"
           },
           "resolution": {
             "anyOf": [
@@ -7087,6 +7677,97 @@
           "revoked"
         ],
         "title": "RevokedOut",
+        "type": "object"
+      },
+      "Rule": {
+        "additionalProperties": false,
+        "properties": {
+          "account_mask": {
+            "anyOf": [
+              {
+                "maxLength": 40,
+                "minLength": 4,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Account Mask"
+          },
+          "columns": {
+            "anyOf": [
+              {
+                "items": {
+                  "maxLength": 64,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                "maxItems": 20,
+                "minItems": 2,
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Columns"
+          },
+          "header": {
+            "anyOf": [
+              {
+                "maxLength": 200,
+                "minLength": 2,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Header"
+          },
+          "ignore_case": {
+            "default": true,
+            "title": "Ignore Case",
+            "type": "boolean"
+          },
+          "regex": {
+            "anyOf": [
+              {
+                "maxLength": 256,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Regex"
+          },
+          "region": {
+            "default": "text",
+            "enum": [
+              "header",
+              "text"
+            ],
+            "title": "Region",
+            "type": "string"
+          },
+          "text": {
+            "anyOf": [
+              {
+                "maxLength": 200,
+                "minLength": 2,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Text"
+          }
+        },
+        "title": "Rule",
         "type": "object"
       },
       "RuleApply": {
@@ -7474,6 +8155,31 @@
           }
         },
         "title": "RuleDiff",
+        "type": "object"
+      },
+      "RuleDraftOut": {
+        "description": "A pre-filled rule (not saved) for ``POST /rules``, from one of the item's rows.\n\nThe schema is the request body's (``RuleCreate``): the client sends\n``rule`` back to ``POST /rules`` as it is, so OpenAPI keeps a single\n``RuleCreate`` instead of separate input and output variants.",
+        "properties": {
+          "item_id": {
+            "format": "uuid",
+            "title": "Item Id",
+            "type": "string"
+          },
+          "rule": {
+            "$ref": "#/components/schemas/RuleCreate"
+          },
+          "transaction_id": {
+            "format": "uuid",
+            "title": "Transaction Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "item_id",
+          "transaction_id",
+          "rule"
+        ],
+        "title": "RuleDraftOut",
         "type": "object"
       },
       "RuleExport": {
@@ -9963,6 +10669,68 @@
           "amount"
         ],
         "title": "TransactionCreate",
+        "type": "object"
+      },
+      "TransactionFix": {
+        "additionalProperties": false,
+        "description": "New values for one imported row; absent fields are left alone.",
+        "properties": {
+          "amount": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/MoneyIn"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "memo": {
+            "anyOf": [
+              {
+                "maxLength": 1000,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Memo"
+          },
+          "posted_date": {
+            "anyOf": [
+              {
+                "format": "date",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Posted Date"
+          },
+          "raw_payee": {
+            "anyOf": [
+              {
+                "maxLength": 500,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Raw Payee"
+          },
+          "transaction_id": {
+            "format": "uuid",
+            "title": "Transaction Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "transaction_id"
+        ],
+        "title": "TransactionFix",
         "type": "object"
       },
       "TransactionOut": {
@@ -13900,7 +14668,7 @@
     },
     "/api/v1/documents": {
       "get": {
-        "description": "``q`` searches the extracted text (best match first; snippets only for\ncallers who may download documents, I1).",
+        "description": "``q`` searches the extracted text (best match first, with snippets) for\ncallers who may download documents; for others only the filename (I1).",
         "operationId": "get_documents_api_v1_documents_get",
         "parameters": [
           {
@@ -14418,6 +15186,146 @@
           }
         },
         "summary": "Attach a document to a transaction or account",
+        "tags": [
+          "documents"
+        ]
+      }
+    },
+    "/api/v1/documents/{document_id}/preview": {
+      "get": {
+        "operationId": "get_preview_api_v1_documents__document_id__preview_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "document_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Document Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "page",
+            "required": false,
+            "schema": {
+              "default": 1,
+              "maximum": 2000,
+              "minimum": 1,
+              "title": "Page",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "image/png": {}
+            },
+            "description": "The page as a PNG"
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {}
+            },
+            "description": "Problem details"
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {}
+            },
+            "description": "Problem details"
+          },
+          "409": {
+            "content": {
+              "application/problem+json": {}
+            },
+            "description": "Problem details"
+          },
+          "422": {
+            "content": {
+              "application/problem+json": {}
+            },
+            "description": "Problem details"
+          },
+          "500": {
+            "content": {
+              "application/problem+json": {}
+            },
+            "description": "Problem details"
+          }
+        },
+        "summary": "A page preview (sandbox-rendered PNG; member or above)",
+        "tags": [
+          "documents"
+        ]
+      }
+    },
+    "/api/v1/documents/{document_id}/regions": {
+      "get": {
+        "operationId": "get_regions_api_v1_documents__document_id__regions_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "document_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Document Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "page",
+            "required": false,
+            "schema": {
+              "default": 1,
+              "maximum": 2000,
+              "minimum": 1,
+              "title": "Page",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DocumentRegions"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {}
+            },
+            "description": "Problem details"
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {}
+            },
+            "description": "Problem details"
+          },
+          "409": {
+            "content": {
+              "application/problem+json": {}
+            },
+            "description": "Problem details"
+          },
+          "422": {
+            "content": {
+              "application/problem+json": {}
+            },
+            "description": "Problem details"
+          }
+        },
+        "summary": "Word boxes of a page (for review highlighting)",
         "tags": [
           "documents"
         ]
@@ -17812,6 +18720,73 @@
         ]
       }
     },
+    "/api/v1/review/{item_id}/correct": {
+      "post": {
+        "operationId": "post_correct_api_v1_review__item_id__correct_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "item_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Item Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/Correction"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReviewItemOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {}
+            },
+            "description": "Problem details"
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {}
+            },
+            "description": "Problem details"
+          },
+          "409": {
+            "content": {
+              "application/problem+json": {}
+            },
+            "description": "Problem details"
+          },
+          "422": {
+            "content": {
+              "application/problem+json": {}
+            },
+            "description": "Problem details"
+          }
+        },
+        "summary": "Correct the document and rows of a review item",
+        "tags": [
+          "review"
+        ]
+      }
+    },
     "/api/v1/review/{item_id}/dismiss": {
       "post": {
         "operationId": "post_dismiss_api_v1_review__item_id__dismiss_post",
@@ -17869,6 +18844,73 @@
         ]
       }
     },
+    "/api/v1/review/{item_id}/remember-layout": {
+      "post": {
+        "operationId": "post_remember_layout_api_v1_review__item_id__remember_layout_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "item_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Item Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RememberLayout"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RememberLayoutOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {}
+            },
+            "description": "Problem details"
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {}
+            },
+            "description": "Problem details"
+          },
+          "409": {
+            "content": {
+              "application/problem+json": {}
+            },
+            "description": "Problem details"
+          },
+          "422": {
+            "content": {
+              "application/problem+json": {}
+            },
+            "description": "Problem details"
+          }
+        },
+        "summary": "Remember this layout (household parser fingerprint)",
+        "tags": [
+          "review"
+        ]
+      }
+    },
     "/api/v1/review/{item_id}/resolve": {
       "post": {
         "operationId": "post_resolve_api_v1_review__item_id__resolve_post",
@@ -17890,6 +18932,7 @@
               "schema": {
                 "discriminator": {
                   "mapping": {
+                    "low_confidence_field": "#/components/schemas/ResolveLowConfidence",
                     "possible_duplicate": "#/components/schemas/ResolveDuplicate",
                     "receipt_match": "#/components/schemas/ResolveReceiptMatch",
                     "unknown_account": "#/components/schemas/ResolveUnknownAccount",
@@ -17913,6 +18956,9 @@
                   },
                   {
                     "$ref": "#/components/schemas/ResolveReceiptMatch"
+                  },
+                  {
+                    "$ref": "#/components/schemas/ResolveLowConfidence"
                   }
                 ],
                 "title": "Body"
@@ -17958,6 +19004,63 @@
           }
         },
         "summary": "Resolve a review item",
+        "tags": [
+          "review"
+        ]
+      }
+    },
+    "/api/v1/review/{item_id}/rule-draft": {
+      "get": {
+        "operationId": "get_rule_draft_api_v1_review__item_id__rule_draft_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "item_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Item Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RuleDraftOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {}
+            },
+            "description": "Problem details"
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {}
+            },
+            "description": "Problem details"
+          },
+          "409": {
+            "content": {
+              "application/problem+json": {}
+            },
+            "description": "Problem details"
+          },
+          "422": {
+            "content": {
+              "application/problem+json": {}
+            },
+            "description": "Problem details"
+          }
+        },
+        "summary": "A rule pre-filled from the item (not saved)",
         "tags": [
           "review"
         ]

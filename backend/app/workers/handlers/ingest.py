@@ -78,7 +78,7 @@ def ingest_document(ctx: JobContext, payload: IngestDocumentPayload) -> None:
             ctx.session,
             ctx.household_id,
             payload.document_id,
-            threshold=default_deps().confidence_threshold,
+            threshold=get_settings().ingest_confidence_threshold,
         )
     log.info(
         "document ingested",

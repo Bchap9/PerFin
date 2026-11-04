@@ -42,7 +42,7 @@ from app.ingestion.sandbox.protocol import ExtractResult, ParseInfo, Receipt, Re
 from tests.fixtures.documents import make_document
 from tests.fixtures.factories import AuthedClient, Factories
 from tests.fixtures.households import API, Actors, problem_type
-from tests.fixtures.ledger import LedgerFactories, make_account, make_payee, make_transaction
+from tests.fixtures.ledger import LedgerFactories, make_account
 
 pytestmark = pytest.mark.integration
 

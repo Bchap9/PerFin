@@ -92,6 +92,36 @@ def test_cannot_execve() -> None:
     assert _warnings("execve") == {"execve": EPERM}
 
 
+def test_syscall_outside_the_allowlist_kills_the_child() -> None:
+    """The seccomp filter is a default-kill allowlist (C1), not a deny list.
+
+    ``setpriority`` is harmless and on no deny list: only the allowlist
+    stops it, so a default-allow filter makes this test fail.
+    """
+    assert "setpriority" not in child.ALLOWED_SYSCALLS
+    assert "setpriority" not in DENIED_SYSCALLS
+    with pytest.raises(SandboxError) as caught:
+        run_extraction("unlisted_syscall", b"x", config=EVIL)
+    assert caught.value.code == "syscall_denied"
+
+
+def test_allowlist_still_kills_without_the_filesystem_rules() -> None:
+    config = replace(EVIL, module="tests.fixtures.sandbox_evil_no_fs_seccomp")
+    with pytest.raises(SandboxError) as caught:
+        run_extraction("unlisted_syscall", b"x", config=config)
+    assert caught.value.code == "syscall_denied"
+
+
+def test_allowlist_and_deny_lists_do_not_overlap() -> None:
+    """libseccomp refuses overlapping rules with different actions (the child would not start)."""
+    allowed = set(child.ALLOWED_SYSCALLS)
+    assert not allowed & set(DENIED_SYSCALLS)
+    assert not allowed & set(child.FILESYSTEM_DENIED_SYSCALLS)
+    assert not set(child.FCNTL_ALLOWED_COMMANDS) & set(child.FCNTL_DENIED_COMMANDS)
+    checked = {"clone", "clone3", "prlimit64", "fcntl", "ioctl", "open", "openat", "openat2"}
+    assert not allowed & (checked | set(child.SIGNAL_SELF_ONLY_SYSCALLS))
+
+
 def test_cannot_signal_other_processes() -> None:
     found = _warnings("kill_others")
     assert found["kill_parent"] == EPERM

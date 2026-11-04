@@ -27,7 +27,8 @@ kills the child) and on the stderr kept for logs, and validation of stdout
 against :class:`app.ingestion.sandbox.protocol.ExtractResult`. Any failure is
 a :class:`SandboxError` with a stable ``code``: ``timeout``, ``cpu_limit``,
 ``memory_limit``, ``output_too_large``, ``bad_output``, ``harden_failed``,
-``killed``, ``crashed``, ``usage`` or ``input_too_large``.
+``killed``, ``syscall_denied`` (a syscall outside the seccomp allowlist),
+``crashed``, ``usage`` or ``input_too_large``.
 
 This module never imports ``app.ingestion.extract``: parsing happens only in
 the child.
@@ -209,6 +210,9 @@ def _classify_exit(returncode: int) -> str:
         if sig == signal.SIGKILL:
             # The CPU hard limit (if SIGXCPU was survived) or the kernel's OOM killer.
             return "killed"
+        if sig == signal.SIGSYS:
+            # A syscall outside the child's seccomp allowlist (child.py, step 4).
+            return "syscall_denied"
         return "crashed"
     return _EXIT_CODES.get(returncode, "crashed")
 

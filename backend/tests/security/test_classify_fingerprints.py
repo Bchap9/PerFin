@@ -9,6 +9,7 @@ patterns and for the classifier's own date/account/tax-year patterns.
 
 from __future__ import annotations
 
+import random
 import time
 from collections.abc import Callable
 
@@ -24,6 +25,7 @@ from app.ingestion.classify.fingerprints import (
     parse_match_rules,
 )
 from app.ingestion.classify.safe_regex import (
+    MAX_PATTERN_CHARS,
     MAX_SUBJECT_CHARS,
     UnsafePatternError,
     compile_safe,
@@ -186,7 +188,10 @@ def test_unsafe_patterns_are_rejected(pattern: str) -> None:
         ("statement period \\d{2}", "statement period \\d{2}+"),
         ("card ending in \\d{4}", "card ending in \\d{4}+"),
         ("acct[ -]?no\\.? ?\\d+", "acct[ -]?+no\\.?+ ?+\\d++"),
-        ("(?:member|share) statement", "(?:member|share) statement"),
+        ("(?:member|share) statement", "(?>(?:member|share)) statement"),
+        ("(?P<m>jan|feb) \\d+", "(?>(?P<m>jan|feb)) \\d++"),
+        ("(form|statement) (?:a(?:b|c)d)", "(?>(form|statement)) (?:a(?>(?:b|c))d)"),
+        ("w-2|1099", "(?>w-2|1099)"),
         ("(?P<year>\\d{4}) form", "(?P<year>\\d{4}+) form"),
         ("^[A-Z]{2,10}$", "^[A-Z]{2,10}+$"),
     ],
@@ -219,6 +224,81 @@ ACCEPTED_WORST = [
     ".*.*.*x",
     "\\d+\\d+\\d+x",
 ]
+
+
+def test_alternation_cannot_backtrack_exponentially() -> None:
+    """P34-SR-01: ``(?:a|a)`` x n + ``b`` was 2^n steps with plain groups.
+
+    No quantifier at all, 253 characters: before alternation was compiled
+    atomic this search took about 26 s at n=22 and would never end at n=36.
+    """
+    for n in (16, 22, 36):
+        pattern = "(?:a|a)" * n + "b"
+        assert len(pattern) <= MAX_PATTERN_CHARS
+        compiled = compile_safe(pattern)
+        started = time.perf_counter()
+        assert search_line(compiled, "a" * MAX_SUBJECT_CHARS) is None
+        assert time.perf_counter() - started < 0.5, n
+    # The same shape with capturing, named and nested groups and a top-level "|".
+    for pattern in (
+        "(a|a)" * 36 + "b",
+        "(?P<g>a|a)" + "(?:(?:a|a)(?:a|a)|a)" * 11 + "b",
+        "(?:a|a)" * 30 + "b|c",
+        "(?:(?:a|a)(?:a|a)|(?:a|a)a)" * 9 + "b",
+    ):
+        assert len(pattern) <= MAX_PATTERN_CHARS, pattern
+        compiled = compile_safe(pattern)
+        started = time.perf_counter()
+        search_line(compiled, "a" * MAX_SUBJECT_CHARS)
+        assert time.perf_counter() - started < 0.5, pattern
+
+
+def _random_pattern(rng: random.Random, depth: int = 0) -> str:
+    """A random pattern built from the accepted subset's pieces."""
+    atoms = ["a", "b", ".", "\\w", "\\d", "\\s", "[ab]", "[^b]"]
+    quants = ["", "", "", "*", "+", "?", "{2,5}", "{3}"]
+    parts: list[str] = []
+    for _ in range(rng.randint(1, 4)):
+        if depth < 3 and rng.random() < 0.4:
+            alternatives = [_random_pattern(rng, depth + 1) for _ in range(rng.randint(1, 3))]
+            parts.append("(?:" + "|".join(alternatives) + ")")
+        elif rng.random() < 0.1:
+            parts.append(rng.choice(["^", "$", "\\b"]))
+        else:
+            parts.append(rng.choice(atoms) + rng.choice(quants))
+    return "".join(parts)
+
+
+def test_random_accepted_patterns_stay_fast() -> None:
+    """Any accepted pattern searches a hostile line in bounded time (seeded)."""
+    rng = random.Random(0x5EED)
+    subjects = ["a" * MAX_SUBJECT_CHARS, "ab" * 150, "a " * 150, "1a" * 150]
+    accepted = 0
+    started = time.perf_counter()
+    for _ in range(3000):
+        pattern = "".join(_random_pattern(rng) for _ in range(rng.randint(1, 3))) + "!"
+        try:
+            compiled = compile_safe(pattern)
+        except UnsafePatternError:
+            continue
+        accepted += 1
+        one = time.perf_counter()
+        for subject in subjects:
+            search_line(compiled, subject)
+        assert time.perf_counter() - one < 0.2, pattern
+    assert accepted > 500
+    assert time.perf_counter() - started < 30
+
+
+def test_atomic_alternation_keeps_matching() -> None:
+    assert search_line(compile_safe("(?:member|share) statement"), "Share Statement 2026")
+    match = search_line(compile_safe("(?P<m>jan|feb) (?P<d>\\d+)"), "due feb 12")
+    assert match is not None
+    assert (match.group("m"), match.group("d")) == ("feb", "12")
+    assert search_line(compile_safe("w-2|1099"), "Form 1099-INT")
+    # The first alternative that matches wins: longer alternatives go first.
+    assert search_line(compile_safe("(?:ab|a)c"), "xabc")
+    assert search_line(compile_safe("(?:a|ab)c"), "xabc") is None
 
 
 @pytest.mark.parametrize("pattern", ACCEPTED_WORST)

@@ -11,18 +11,31 @@ everything else with :class:`UnsafePatternError`:
   anchors ``^ $``, plain, non-capturing and named groups and ``|``;
 * quantifiers ``? * + {m} {m,} {m,n}`` (``n <= 100``); **every quantifier is
   compiled possessive** (``*`` becomes ``*+`` ...), so a quantifier never
-  gives back what it consumed and a match attempt is linear in the input;
+  gives back what it consumed;
+* **every alternation is compiled atomic**: a group with ``|`` at its own
+  level becomes ``(?>...)`` (a capturing or named group is wrapped,
+  ``(?>(...))``), and so does a pattern with ``|`` at the top. Once an
+  alternative matched, the engine never returns to try the next one. Without
+  this, ``(?:a|a)`` repeated n times then ``b`` (no quantifier at all) takes
+  2^n steps on a line of ``a`` (security review P34-SR-01);
 * no quantifier on a group that contains a quantifier or an alternation (no
   ``(a+)+``, ``(a|aa)*``), no backreferences, lookarounds, conditionals,
   inline flags, lazy or already-possessive quantifiers, atomic groups or
   ``\\N``/``\\x``/octal escapes; at most :data:`MAX_PATTERN_CHARS`
   characters and :data:`MAX_QUANTIFIERS` quantifiers.
 
-Callers additionally run patterns only over bounded text (one line of at
-most :data:`MAX_SUBJECT_CHARS` characters), so the worst case per pattern is
-quadratic in a small constant. Possessive quantifiers change meaning where a
-pattern relied on giving characters back: ``.+ to .+`` never matches; write
-``[^t]+ to .+`` or name the separator explicitly.
+With no element able to give back what it matched and no group with an
+alternation under a quantifier, every element of the pattern is entered at
+most once per alternative of its enclosing groups, each step consuming
+forward: one match attempt costs at most (pattern length x subject length),
+and a search at most that times the subject length. Callers run patterns
+only over bounded text (one line of at most :data:`MAX_SUBJECT_CHARS`
+characters), so the worst case per pattern is a small constant.
+Possessive quantifiers and atomic alternation change meaning where a pattern
+relied on giving characters back: ``.+ to .+`` never matches (write
+``[^t]+ to .+`` or name the separator explicitly), and in ``(?:a|ab)c`` the
+first alternative that matches wins, so put the longer alternative first:
+``(?:ab|a)c``.
 """
 
 from __future__ import annotations
@@ -49,11 +62,15 @@ class UnsafePatternError(ValueError):
 
 
 class _Group:
-    __slots__ = ("has_alternation", "has_quantifier")
+    __slots__ = ("direct_alternation", "has_alternation", "has_quantifier", "open_index")
 
-    def __init__(self) -> None:
+    def __init__(self, open_index: int = -1) -> None:
         self.has_quantifier = False
         self.has_alternation = False
+        #: ``|`` at this group's own level (not only inside a nested group).
+        self.direct_alternation = False
+        #: Index in the output of this group's opening token.
+        self.open_index = open_index
 
 
 def _read_class(pattern: str, i: int) -> int:
@@ -135,7 +152,7 @@ def rewrite_possessive(pattern: str) -> str:
             else:
                 out.append("(")
                 i += 1
-            stack.append(_Group())
+            stack.append(_Group(len(out) - 1))
             last = None
             continue
         if c == ")":
@@ -146,11 +163,17 @@ def rewrite_possessive(pattern: str) -> str:
             parent.has_quantifier |= group.has_quantifier
             parent.has_alternation |= group.has_alternation
             out.append(")")
+            if group.direct_alternation:
+                # Atomic: once an alternative matched, the engine never comes
+                # back to try the next one (no backtracking across "|").
+                out[group.open_index] = "(?>" + out[group.open_index]
+                out.append(")")
             last = group
             i += 1
             continue
         if c == "|":
             stack[-1].has_alternation = True
+            stack[-1].direct_alternation = True
             out.append("|")
             last = None
             i += 1
@@ -196,6 +219,8 @@ def rewrite_possessive(pattern: str) -> str:
         i += 1
     if len(stack) != 1:
         raise UnsafePatternError("unbalanced '('")
+    if stack[0].direct_alternation:
+        return "(?>" + "".join(out) + ")"
     return "".join(out)
 
 

@@ -21,6 +21,25 @@ Matching (:func:`match_fingerprint`): every rule in ``match.all`` must hold
 The confidence is ``0.85`` plus up to ``0.14`` for the share of ``any`` rules
 that hold, so a fingerprint with more corroborating evidence wins a tie.
 
+Work is bounded in total, not only per pattern (security review
+P34-SR-R2-01). A safe pattern still costs up to (pattern x line^2) per line,
+so 64 rules over 4000 lines of 300 characters took a minute. Hence:
+
+* the pattern rules (``regex``, ``account_mask``) of **household**
+  fingerprints run under a :class:`MatchBudget`, a wall-clock deadline
+  checked before every line searched (one search is at most a few
+  milliseconds, so the deadline is overrun by at most that).
+  :func:`best_match` shares one budget of :data:`HOUSEHOLD_MATCH_SECONDS`
+  between all household fingerprints of a document; a household
+  fingerprint evaluated without a budget gets its own. A fingerprint whose
+  evaluation runs out of budget **does not match** (fail closed: the
+  document goes on to the classifier and review). Shipped fingerprints are
+  reviewed code and are not budgeted;
+* a household has at most :data:`MAX_HOUSEHOLD_FINGERPRINTS` layouts (one
+  per institution, kind and parser); only the latest version of each is
+  used, and :func:`remember_layout` refuses a new layout beyond the cap
+  (:class:`FingerprintLimitError`).
+
 Rules (exactly one key each):
 
 ``header``   case-insensitive substring of the header (first page's top lines)
@@ -33,8 +52,9 @@ Rules (exactly one key each):
 from __future__ import annotations
 
 import re
+import time
 import uuid
-from collections.abc import Iterable, Sequence
+from collections.abc import Callable, Iterable, Sequence
 from dataclasses import dataclass
 from functools import cache
 from importlib import resources
@@ -42,7 +62,8 @@ from typing import Annotated, Any, Final, Literal
 
 import yaml
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator, model_validator
-from sqlalchemy import select
+from sqlalchemy import func, select, text
+from sqlalchemy.dialects.postgresql import distinct_on
 from sqlalchemy.orm import Session
 
 from app.domain.accounts.models import Institution
@@ -58,6 +79,15 @@ MAX_RULES: Final = 32
 MAX_STRING: Final = 200
 BASE_CONFIDENCE: Final = 0.85
 ANY_BONUS: Final = 0.14
+MAX_VERSION: Final = 10_000
+#: Layouts (institution, kind, parser) a household may remember; only the
+#: latest version of each is matched (security review P34-SR-R2-01).
+MAX_HOUSEHOLD_FINGERPRINTS: Final = 100
+#: Wall-clock budget for the pattern rules of all household fingerprints on
+#: one document (P34-SR-R2-01).
+HOUSEHOLD_MATCH_SECONDS: Final = 0.25
+
+_LOCK_LAYOUTS: Final = text("SELECT pg_advisory_xact_lock(hashtextextended(:k, 7307))")
 
 Key = Annotated[
     str, Field(min_length=3, max_length=64, pattern=r"^[a-z0-9][a-z0-9-]{1,62}[a-z0-9]$")
@@ -72,6 +102,41 @@ FingerprintKind = Literal[
 
 class FingerprintError(ValueError):
     """A fingerprint that does not satisfy the schema (shipped file or stored row)."""
+
+
+class FingerprintLimitError(FingerprintError):
+    """The household already has :data:`MAX_HOUSEHOLD_FINGERPRINTS` layouts (or versions)."""
+
+
+class MatchBudget:
+    """A wall-clock deadline shared by pattern-rule evaluations (P34-SR-R2-01).
+
+    :meth:`spent` is checked before each line a pattern rule searches; once
+    the deadline has passed it stays spent. :meth:`child` gives a budget of
+    at most ``seconds`` that also ends with this one.
+    """
+
+    __slots__ = ("_clock", "_deadline", "exhausted")
+
+    def __init__(
+        self,
+        seconds: float,
+        *,
+        clock: Callable[[], float] = time.monotonic,
+        deadline: float | None = None,
+    ) -> None:
+        self._clock = clock
+        own = clock() + seconds
+        self._deadline = own if deadline is None else min(own, deadline)
+        self.exhausted = False
+
+    def spent(self) -> bool:
+        if not self.exhausted and self._clock() >= self._deadline:
+            self.exhausted = True
+        return self.exhausted
+
+    def child(self, seconds: float) -> MatchBudget:
+        return MatchBudget(seconds, clock=self._clock, deadline=self._deadline)
 
 
 class _Strict(BaseModel):
@@ -149,7 +214,7 @@ class _CompiledRule:
     needle: str = ""
     columns: tuple[str, ...] = ()
 
-    def holds(self, view: DocumentView) -> bool:
+    def holds(self, view: DocumentView, budget: MatchBudget | None = None) -> bool:
         rule = self.rule
         if rule.header is not None:
             return any(self.needle in normalise(line) for line in view.header)
@@ -157,7 +222,14 @@ class _CompiledRule:
             return any(self.needle in line for line in view.normalised)
         if self.pattern is not None:
             lines = view.header if rule.region == "header" else view.lines
-            return any(search_line(self.pattern, line) for line in lines)
+            if budget is None:
+                return any(search_line(self.pattern, line) for line in lines)
+            for line in lines:
+                if budget.spent():
+                    return False
+                if search_line(self.pattern, line):
+                    return True
+            return False
         if self.columns:
             width = len(self.columns)
             return any(tuple(h[:width]) == self.columns for h in view.table_headers)
@@ -287,7 +359,40 @@ def builtin_fingerprints() -> tuple[Fingerprint, ...]:
 
 
 def household_fingerprints(db: Session, household_id: uuid.UUID) -> list[Fingerprint]:
-    """The household's own fingerprints; a stored row that fails validation is skipped."""
+    """The household's own fingerprints; a stored row that fails validation is skipped.
+
+    Only the latest version of each layout (institution, kind, parser) is
+    used, and at most :data:`MAX_HOUSEHOLD_FINGERPRINTS` layouts (the most
+    recently learned), so the work of matching a document is bounded
+    (P34-SR-R2-01).
+    """
+    latest = (
+        select(ParserFingerprint.id)
+        .where(ParserFingerprint.household_id == household_id)
+        .ext(
+            distinct_on(
+                ParserFingerprint.institution_id,
+                ParserFingerprint.kind,
+                ParserFingerprint.parser_name,
+            )
+        )
+        .order_by(
+            ParserFingerprint.institution_id,
+            ParserFingerprint.kind,
+            ParserFingerprint.parser_name,
+            ParserFingerprint.version.desc(),
+            ParserFingerprint.created_at.desc(),
+            ParserFingerprint.id.desc(),
+        )
+        .subquery()
+    )
+    newest = (
+        select(ParserFingerprint.id)
+        .where(ParserFingerprint.id.in_(select(latest.c.id)))
+        .order_by(ParserFingerprint.created_at.desc(), ParserFingerprint.id.desc())
+        .limit(MAX_HOUSEHOLD_FINGERPRINTS)
+        .subquery()
+    )
     rows = db.execute(
         select(ParserFingerprint, Institution.name, Institution.country)
         .join(
@@ -295,7 +400,10 @@ def household_fingerprints(db: Session, household_id: uuid.UUID) -> list[Fingerp
             (Institution.household_id == ParserFingerprint.household_id)
             & (Institution.id == ParserFingerprint.institution_id),
         )
-        .where(ParserFingerprint.household_id == household_id)
+        .where(
+            ParserFingerprint.household_id == household_id,
+            ParserFingerprint.id.in_(select(newest.c.id)),
+        )
         .order_by(ParserFingerprint.created_at, ParserFingerprint.id)
     ).all()
     out: list[Fingerprint] = []
@@ -340,7 +448,11 @@ def remember_layout(
 
     The caller (the review API) checks that the institution and document are
     the household's and that the user may edit them; the database refuses
-    cross-household references anyway (ADR-0008).
+    cross-household references anyway (ADR-0008). A new layout beyond
+    :data:`MAX_HOUSEHOLD_FINGERPRINTS`, or a version beyond
+    :data:`MAX_VERSION`, raises :class:`FingerprintLimitError`; the check
+    holds a per-household transaction lock so concurrent calls cannot pass it
+    together.
     """
     if kind is DocumentKind.UNKNOWN:
         raise FingerprintError("a fingerprint names a known kind")
@@ -359,6 +471,7 @@ def remember_layout(
         )
     except ValidationError as exc:
         raise FingerprintError(_summary(exc)) from exc
+    db.execute(_LOCK_LAYOUTS, {"k": f"perfin:fingerprints:{household_id}"})
     existing = db.execute(
         select(ParserFingerprint.version)
         .where(
@@ -370,6 +483,24 @@ def remember_layout(
         .order_by(ParserFingerprint.version.desc())
         .limit(1)
     ).scalar_one_or_none()
+    if existing is None:
+        known = (
+            select(
+                ParserFingerprint.institution_id,
+                ParserFingerprint.kind,
+                ParserFingerprint.parser_name,
+            )
+            .where(ParserFingerprint.household_id == household_id)
+            .distinct()
+            .subquery()
+        )
+        layouts = db.execute(select(func.count()).select_from(known)).scalar_one()
+        if layouts >= MAX_HOUSEHOLD_FINGERPRINTS:
+            raise FingerprintLimitError(
+                f"the household already has {MAX_HOUSEHOLD_FINGERPRINTS} remembered layouts"
+            )
+    elif existing >= MAX_VERSION:
+        raise FingerprintLimitError(f"this layout already has {MAX_VERSION} versions")
     row = ParserFingerprint(
         household_id=household_id,
         institution_id=institution_id,
@@ -384,10 +515,25 @@ def remember_layout(
     return row
 
 
-def match_fingerprint(fingerprint: Fingerprint, view: DocumentView) -> FingerprintMatch | None:
-    if not all(rule.holds(view) for rule in fingerprint.all_rules):
+def match_fingerprint(
+    fingerprint: Fingerprint, view: DocumentView, budget: MatchBudget | None = None
+) -> FingerprintMatch | None:
+    """Match one fingerprint; a household one runs under ``budget`` (else its own).
+
+    An evaluation that runs out of budget is not a match.
+    """
+    if fingerprint.origin == "household":
+        if budget is None:
+            budget = MatchBudget(HOUSEHOLD_MATCH_SECONDS)
+    else:
+        budget = None
+    if budget is not None and budget.spent():
         return None
-    held = sum(1 for rule in fingerprint.any_rules if rule.holds(view))
+    if not all(rule.holds(view, budget) for rule in fingerprint.all_rules):
+        return None
+    held = sum(1 for rule in fingerprint.any_rules if rule.holds(view, budget))
+    if budget is not None and budget.exhausted:
+        return None
     if held < fingerprint.spec.match.min_any:
         return None
     share = held / len(fingerprint.any_rules) if fingerprint.any_rules else 0.0
@@ -395,14 +541,23 @@ def match_fingerprint(fingerprint: Fingerprint, view: DocumentView) -> Fingerpri
 
 
 def best_match(
-    fingerprints: Iterable[Fingerprint], view: DocumentView
+    fingerprints: Iterable[Fingerprint],
+    view: DocumentView,
+    budget: MatchBudget | None = None,
 ) -> tuple[FingerprintMatch | None, Sequence[FingerprintMatch]]:
     """The strongest matching fingerprint and every match (household ones win ties).
 
     Two different institutions matching with the same confidence is not a
-    match: the document goes on to the classifier and review.
+    match: the document goes on to the classifier and review. All household
+    fingerprints share one budget of :data:`HOUSEHOLD_MATCH_SECONDS` (within
+    ``budget`` when given).
     """
-    matches = [m for fp in fingerprints if (m := match_fingerprint(fp, view)) is not None]
+    shared = (
+        MatchBudget(HOUSEHOLD_MATCH_SECONDS)
+        if budget is None
+        else budget.child(HOUSEHOLD_MATCH_SECONDS)
+    )
+    matches = [m for fp in fingerprints if (m := match_fingerprint(fp, view, shared)) is not None]
     if not matches:
         return None, ()
     matches.sort(

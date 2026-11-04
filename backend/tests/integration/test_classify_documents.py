@@ -116,8 +116,11 @@ def test_remembered_layout_is_validated_versioned_and_household_scoped(
                 match_rules=RULES,
                 parser_name="statement_generic",
             )
+        # Only the latest version of a layout is matched (P34-SR-R2-01).
         fps = household_fingerprints(db, _hid(owner))
-        assert [fp.origin for fp in fps] == ["household", "household"]
+        assert [fp.origin for fp in fps] == ["household"]
+        assert fps[0].fingerprint_id == second.id
+        assert fps[0].spec.version == 2
         assert all(fp.institution_id == bank.id for fp in fps)
     with factories.transaction() as db:
         set_context(db, _hid(other))

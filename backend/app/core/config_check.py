@@ -629,9 +629,7 @@ def _check_antivirus(settings: Settings, out: list[Finding]) -> None:
     try:
         ClamdAddress.parse(settings.clamav_address)
     except ClamdAddressError as exc:
-        out.append(
-            Finding("error", "antivirus.address_invalid", f"PERFIN_CLAMAV_ADDRESS: {exc}")
-        )
+        out.append(Finding("error", "antivirus.address_invalid", f"PERFIN_CLAMAV_ADDRESS: {exc}"))
     if settings.antivirus_fail_mode == "open":
         out.append(
             Finding(

@@ -32,6 +32,7 @@ from app.ingestion.intake.email import (
     message_key,
     parse_headers,
     read_auth_results,
+    rejected_key,
 )
 from tests.fixtures.fake_imap import make_mail
 
@@ -154,6 +155,13 @@ def test_passing_auth_results_are_accepted() -> None:
         "mx.perfin.test; spf=softfail; dkim=none",
         # Signed, but by someone else's domain: not aligned with From.
         "mx.perfin.test; spf=pass; dkim=pass header.d=attacker.invalid",
+        # A pass that names no signer could be anyone's signature (P34-SR-03).
+        "mx.perfin.test; spf=pass; dkim=pass",
+        "mx.perfin.test; spf=pass; dkim=pass header.s=sel1",
+        # A signer below the From domain, or a bare TLD, does not vouch for it.
+        "mx.perfin.test; spf=pass; dkim=pass header.d=attacker.home.invalid",
+        "mx.perfin.test; spf=pass; dkim=pass header.d=invalid",
+        "mx.perfin.test; spf=pass; dkim=pass header.d=evilhome.invalid",
         # A comment cannot carry a result.
         "mx.perfin.test; spf=fail (spf=pass dkim=pass); dkim=fail (dkim=pass)",
         "mx.perfin.test; none",
@@ -252,6 +260,17 @@ def test_message_key_uses_message_id_and_sender() -> None:
     assert keys[0] == keys[1]
     assert len({keys[0], keys[2], keys[3], keys[4]}) == 4
     assert all(len(k) == 64 for k in keys)
+
+
+def test_rejected_key_covers_the_whole_header_block() -> None:
+    real = make_mail(message_id="<same@shop.invalid>", auth_results=["mx; dkim=pass"])
+    forged = make_mail(message_id="<same@shop.invalid>", auth_results=["mx; dkim=fail"])
+    assert message_key(parse_headers(real), real) == message_key(parse_headers(forged), forged)
+    header_real = real.split(b"\n\n", 1)[0]
+    header_forged = forged.split(b"\n\n", 1)[0]
+    assert rejected_key(header_real) != rejected_key(header_forged)
+    assert rejected_key(header_real) == rejected_key(header_real)
+    assert rejected_key(header_real) != message_key(parse_headers(real), header_real)
 
 
 # ---------------------------------------------------------------------------

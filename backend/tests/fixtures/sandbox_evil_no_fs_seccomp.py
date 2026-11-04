@@ -15,7 +15,16 @@ from tests.fixtures.sandbox_evil import EXTRACTORS
 
 
 def _allow_filesystem_changes(filt: object, pyseccomp: ModuleType) -> None:
-    return None
+    """Allow what :func:`child.deny_filesystem_changes` refuses (the filter is an allowlist)."""
+    add_rule = filt.add_rule  # type: ignore[attr-defined]
+    for name in child.FILESYSTEM_DENIED_SYSCALLS:
+        if pyseccomp.resolve_syscall(pyseccomp.Arch.NATIVE, name) != -1:
+            add_rule(pyseccomp.ALLOW, name)
+    for syscall, flags_arg in (("open", 1), ("openat", 2)):
+        for flag in child.WRITE_OPEN_FLAGS:
+            add_rule(
+                pyseccomp.ALLOW, syscall, pyseccomp.Arg(flags_arg, pyseccomp.MASKED_EQ, flag, flag)
+            )
 
 
 if __name__ == "__main__":

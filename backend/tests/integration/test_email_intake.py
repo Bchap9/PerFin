@@ -300,6 +300,36 @@ def test_message_id_dedupe(household: Household) -> None:
     assert len(household.rows(Document)) == 1
 
 
+def test_rejected_forgery_does_not_shadow_the_real_message(household: Household) -> None:
+    # Security review P34-SR-R2-02: an outsider's forgery carrying the
+    # Message-ID and From of a later legitimate message is rejected, and the
+    # legitimate message is still evaluated and imported.
+    forged = {
+        "message_id": "<r-future@shop.invalid>",
+        "auth_results": ["mx.perfin.test; spf=fail; dkim=fail header.d=home.invalid"],
+        "subject": "Forged",
+    }
+    household.deliver(**forged)
+    stats = household.poll()
+    assert stats is not None
+    assert stats.reasons == {"auth_failed": 1}
+    household.poll()
+    assert household.server.count(REJECTED) == 1
+    household.deliver(message_id="<r-future@shop.invalid>")
+    stats = household.poll()
+    assert stats is not None
+    assert (stats.accepted, stats.moved) == (1, 0)
+    assert len(household.rows(Document)) == 1
+    household.poll()
+    assert household.server.count(PROCESSED) == 1
+    # An identical copy of the forgery is moved to the rejected folder again.
+    household.deliver(**forged)
+    stats = household.poll()
+    assert stats is not None
+    assert (stats.rejected, stats.moved) == (0, 1)
+    assert household.server.count(REJECTED) == 2
+
+
 def test_extra_allowed_sender_maps_to_its_member(household: Household) -> None:
     sam = household.factories.user(role=None)
     household.factories.member(household.id, sam.user.id, HouseholdRole.MEMBER)
