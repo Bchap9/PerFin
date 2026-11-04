@@ -35,6 +35,7 @@ backups/
 !backend/app/auth/data/
 # Source packages whose names match the data patterns above.
 !backend/app/domain/documents/
+!frontend/src/features/documents/
 
 # Editors / OS
 .idea/

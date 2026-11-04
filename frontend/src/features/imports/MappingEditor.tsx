@@ -16,7 +16,8 @@ import { useToast } from "../../components/Toast";
 import { errorMessage } from "../../lib/api/client";
 import { queryRoots } from "../../lib/queryKeys";
 import { accountLabel, useAccounts, useCanWrite } from "../accounts/api";
-import { applyMapping, createMapping, getPreview, importKeys, type ImportPreview } from "./api";
+import { PageViewer } from "../documents/PageViewer";
+import { applyMapping, createMapping, getDocument, getPreview, importKeys, type ImportPreview } from "./api";
 import {
   COLUMN_ROLES,
   DATE_FORMATS,
@@ -252,6 +253,9 @@ export function MappingEditorPage() {
   const canWrite = useCanWrite();
   const preview = useQuery({ queryKey: importKeys.preview(documentId), queryFn: () => getPreview(documentId) });
   const table = preview.data?.tables[0];
+  const document = useQuery({ queryKey: importKeys.document(documentId), queryFn: () => getDocument(documentId), retry: false });
+  const mime = document.data?.mime_detected ?? "";
+  const hasPages = mime === "application/pdf" || mime.startsWith("image/");
   return (
     <section aria-labelledby="page-title" className="ledger-stack">
       <div className="page-header">
@@ -269,7 +273,14 @@ export function MappingEditorPage() {
       ) : null}
       {preview.isSuccess && table !== undefined && !canWrite ? <p className="ledger-muted">You have read-only access.</p> : null}
       {preview.isSuccess && table !== undefined && canWrite ? (
-        <MappingForm documentId={documentId} preview={preview.data} table={table} />
+        <>
+          {hasPages ? (
+            <Card title="The page the table came from">
+              <PageViewer documentId={documentId} />
+            </Card>
+          ) : null}
+          <MappingForm documentId={documentId} preview={preview.data} table={table} />
+        </>
       ) : null}
     </section>
   );

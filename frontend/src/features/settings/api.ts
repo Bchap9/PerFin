@@ -73,3 +73,27 @@ export async function removeMember(householdId: string, userId: string): Promise
     }),
   );
 }
+
+// ---- receipts mailbox (intake) -------------------------------------------------------
+
+export type MailIntake = Schemas["MailIntakeOut"];
+export type MailIntakeUpdate = Schemas["MailIntakeUpdate"];
+export type MailTest = Schemas["MailTestOut"];
+
+export const intakeKey = [...queryRoots.settings, "intake"] as const;
+
+export function getIntake(): Promise<MailIntake> {
+  return unwrap(api.GET("/api/v1/settings/intake"));
+}
+
+export function patchIntake(body: MailIntakeUpdate): Promise<MailIntake> {
+  return unwrap(api.PATCH("/api/v1/settings/intake", { body }));
+}
+
+export function testIntake(): Promise<MailTest> {
+  return unwrap(api.POST("/api/v1/settings/intake/email/test"));
+}
+
+export function rotateAlias(): Promise<Schemas["AliasOut"]> {
+  return unwrap(api.POST("/api/v1/settings/intake/email/rotate-alias"));
+}

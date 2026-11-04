@@ -779,8 +779,8 @@ export interface paths {
         };
         /**
          * Documents
-         * @description ``q`` searches the extracted text (best match first; snippets only for
-         *     callers who may download documents, I1).
+         * @description ``q`` searches the extracted text (best match first, with snippets) for
+         *     callers who may download documents; for others only the filename (I1).
          */
         get: operations["get_documents_api_v1_documents_get"];
         put?: never;
@@ -838,6 +838,40 @@ export interface paths {
         put?: never;
         /** Attach a document to a transaction or account */
         post: operations["post_link_api_v1_documents__document_id__link_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/documents/{document_id}/preview": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** A page preview (sandbox-rendered PNG; member or above) */
+        get: operations["get_preview_api_v1_documents__document_id__preview_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/documents/{document_id}/regions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Word boxes of a page (for review highlighting) */
+        get: operations["get_regions_api_v1_documents__document_id__regions_get"];
+        put?: never;
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -1387,6 +1421,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/review/{item_id}/correct": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Correct the document and rows of a review item */
+        post: operations["post_correct_api_v1_review__item_id__correct_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/review/{item_id}/dismiss": {
         parameters: {
             query?: never;
@@ -1404,6 +1455,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/review/{item_id}/remember-layout": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Remember this layout (household parser fingerprint) */
+        post: operations["post_remember_layout_api_v1_review__item_id__remember_layout_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/review/{item_id}/resolve": {
         parameters: {
             query?: never;
@@ -1415,6 +1483,23 @@ export interface paths {
         put?: never;
         /** Resolve a review item */
         post: operations["post_resolve_api_v1_review__item_id__resolve_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/review/{item_id}/rule-draft": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** A rule pre-filled from the item (not saved) */
+        get: operations["get_rule_draft_api_v1_review__item_id__rule_draft_get"];
+        put?: never;
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -2135,6 +2220,27 @@ export interface components {
              */
             user_id: string;
         };
+        /**
+         * Alternative
+         * @description A value the caller may pick for ``field`` (``value`` as a string or id).
+         */
+        Alternative: {
+            /** Field */
+            field: string;
+            /** Label */
+            label?: string | null;
+            /** Score */
+            score?: number | null;
+            /**
+             * Source
+             * @enum {string}
+             */
+            source: "document" | "ledger" | "household";
+            /** Transaction Id */
+            transaction_id?: string | null;
+            /** Value */
+            value: string;
+        };
         /** AmountCondition */
         "AmountCondition-Input": {
             /**
@@ -2702,6 +2808,20 @@ export interface components {
             /** Next Cursor */
             next_cursor: string | null;
         };
+        /**
+         * Correction
+         * @description ``POST /review/{id}/correct``: fix the item's document and rows (``resolve`` closes it).
+         */
+        Correction: {
+            document?: components["schemas"]["DocumentFix"] | null;
+            /**
+             * Resolve
+             * @default false
+             */
+            resolve: boolean;
+            /** Transactions */
+            transactions?: components["schemas"]["TransactionFix"][];
+        };
         /** CurrencyCondition */
         CurrencyCondition: {
             /** Currencies */
@@ -2786,6 +2906,23 @@ export interface components {
             updated_at: string;
             /** Uploaded By */
             uploaded_by: string | null;
+        };
+        /**
+         * DocumentFix
+         * @description Corrected document facts; ``null`` clears institution, period and tax year.
+         */
+        DocumentFix: {
+            /** Account Id */
+            account_id?: string | null;
+            /** Institution Id */
+            institution_id?: string | null;
+            kind?: components["schemas"]["DocumentKind"] | null;
+            /** Period End */
+            period_end?: string | null;
+            /** Period Start */
+            period_start?: string | null;
+            /** Tax Year */
+            tax_year?: number | null;
         };
         /**
          * DocumentKind
@@ -2915,6 +3052,42 @@ export interface components {
             /** Job Id */
             job_id: string | null;
             status: components["schemas"]["DocumentStatus"];
+        };
+        /**
+         * DocumentRegions
+         * @description ``GET /documents/{id}/regions?page=``: word boxes of one page.
+         */
+        DocumentRegions: {
+            /**
+             * Document Id
+             * Format: uuid
+             */
+            document_id: string;
+            /** Height */
+            height: number;
+            /** Page */
+            page: number;
+            /** Page Count */
+            page_count: number;
+            preview: components["schemas"]["PreviewInfo"] | null;
+            /** Text Included */
+            text_included: boolean;
+            /**
+             * Text Source
+             * @enum {string}
+             */
+            text_source: "text_layer" | "ocr" | "none";
+            /**
+             * Unit
+             * @enum {string}
+             */
+            unit: "pt" | "px";
+            /** Width */
+            width: number;
+            /** Words */
+            words: components["schemas"]["RegionWord"][];
+            /** Words Truncated */
+            words_truncated: boolean;
         };
         /**
          * DocumentReprocessOut
@@ -3663,6 +3836,18 @@ export interface components {
             name?: string | null;
             spec?: components["schemas"]["MappingSpec"] | null;
         };
+        /** MatchSpec */
+        MatchSpec: {
+            /** All */
+            all: components["schemas"]["Rule"][];
+            /** Any */
+            any?: components["schemas"]["Rule"][];
+            /**
+             * Min Any
+             * @default 0
+             */
+            min_any: number;
+        };
         /**
          * MemberAdd
          * @description ``POST /households/{id}/members``: exactly one of ``user_id``, ``username``, ``new_user``.
@@ -3970,6 +4155,17 @@ export interface components {
             /** Currency */
             currency: string | null;
         };
+        /** PreviewInfo */
+        PreviewInfo: {
+            /** Dpi */
+            dpi: number;
+            /** Height */
+            height: number;
+            /** Scale */
+            scale: number;
+            /** Width */
+            width: number;
+        };
         /** PreviewStatement */
         PreviewStatement: {
             /** Account Type */
@@ -4083,6 +4279,91 @@ export interface components {
             tags?: components["schemas"]["Reference"][];
         };
         /**
+         * Region
+         * @description A box on a page (page units, origin top left) the review UI highlights.
+         */
+        Region: {
+            /** Bbox */
+            bbox: number[];
+            /** Fields */
+            fields?: string[];
+            /**
+             * Label
+             * @enum {string}
+             */
+            label: "transaction" | "account_number" | "page";
+            /** Page */
+            page: number;
+            /** Transaction Id */
+            transaction_id?: string | null;
+        };
+        /** RegionWord */
+        RegionWord: {
+            /** Bbox */
+            bbox: number[];
+            /** Conf */
+            conf: number | null;
+            /** Line */
+            line: number;
+            /** Text */
+            text: string | null;
+        };
+        /**
+         * RememberLayout
+         * @description ``POST /review/{id}/remember-layout``: a household fingerprint from this document.
+         *
+         *     ``match`` (the fingerprint rules, the same schema as a shipped
+         *     fingerprint's ``match``) is derived from the document's header and
+         *     table layout when absent; ``kind`` defaults to the document's and
+         *     ``parser`` to the one that read it (else the generic parser of the kind).
+         */
+        RememberLayout: {
+            /**
+             * Institution Id
+             * Format: uuid
+             */
+            institution_id: string;
+            kind?: components["schemas"]["DocumentKind"] | null;
+            match?: components["schemas"]["MatchSpec"] | null;
+            /** Parser */
+            parser?: string | null;
+            /**
+             * Reprocess Similar
+             * @default true
+             */
+            reprocess_similar: boolean;
+        };
+        /**
+         * RememberLayoutOut
+         * @description The stored fingerprint and what was sent through the pipeline again.
+         */
+        RememberLayoutOut: {
+            /** Ambiguous */
+            ambiguous: boolean;
+            /**
+             * Fingerprint Id
+             * Format: uuid
+             */
+            fingerprint_id: string;
+            /**
+             * Institution Id
+             * Format: uuid
+             */
+            institution_id: string;
+            item: components["schemas"]["ReviewItemOut"];
+            kind: components["schemas"]["DocumentKind"];
+            /** Match */
+            match: {
+                [key: string]: unknown;
+            };
+            /** Parser */
+            parser: string;
+            /** Reprocessed */
+            reprocessed: string[];
+            /** Version */
+            version: number;
+        };
+        /**
          * ReportItem
          * @description One group: ``key`` is a category, payee or account id, or ``YYYY-MM``.
          *
@@ -4123,6 +4404,24 @@ export interface components {
              * @enum {string}
              */
             kind: "possible_duplicate";
+        };
+        /**
+         * ResolveLowConfidence
+         * @description Correct the doubtful rows and (``confirm``) accept the item's pending rows.
+         */
+        ResolveLowConfidence: {
+            /**
+             * Confirm
+             * @default true
+             */
+            confirm: boolean;
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            kind: "low_confidence_field";
+            /** Transactions */
+            transactions?: components["schemas"]["TransactionFix"][];
         };
         /**
          * ResolveReceiptMatch
@@ -4208,6 +4507,8 @@ export interface components {
          *     caller may resolve or dismiss it.
          */
         ReviewItemOut: {
+            /** Alternatives */
+            alternatives?: components["schemas"]["Alternative"][] | null;
             /** Can Resolve */
             can_resolve: boolean;
             /**
@@ -4224,11 +4525,13 @@ export interface components {
             id: string;
             kind: components["schemas"]["ReviewKind"];
             /** Next Step */
-            next_step: ("confirm_duplicate" | "choose_account" | "column_mapping" | "reprocess" | "choose_owner" | "attach_receipt") | null;
+            next_step: ("confirm_duplicate" | "choose_account" | "column_mapping" | "reprocess" | "choose_owner" | "attach_receipt" | "correct_fields") | null;
             /** Payload */
             payload: {
                 [key: string]: unknown;
             };
+            /** Regions */
+            regions?: components["schemas"]["Region"][] | null;
             /** Resolution */
             resolution: {
                 [key: string]: unknown;
@@ -4268,6 +4571,30 @@ export interface components {
         RevokedOut: {
             /** Revoked */
             revoked: number;
+        };
+        /** Rule */
+        Rule: {
+            /** Account Mask */
+            account_mask?: string | null;
+            /** Columns */
+            columns?: string[] | null;
+            /** Header */
+            header?: string | null;
+            /**
+             * Ignore Case
+             * @default true
+             */
+            ignore_case: boolean;
+            /** Regex */
+            regex?: string | null;
+            /**
+             * Region
+             * @default text
+             * @enum {string}
+             */
+            region: "header" | "text";
+            /** Text */
+            text?: string | null;
         };
         /**
          * RuleApply
@@ -4332,6 +4659,27 @@ export interface components {
             payee_id?: components["schemas"]["IdChange"] | null;
             review_state?: components["schemas"]["ReviewChange"] | null;
             splits?: components["schemas"]["SplitChange"] | null;
+        };
+        /**
+         * RuleDraftOut
+         * @description A pre-filled rule (not saved) for ``POST /rules``, from one of the item's rows.
+         *
+         *     The schema is the request body's (``RuleCreate``): the client sends
+         *     ``rule`` back to ``POST /rules`` as it is, so OpenAPI keeps a single
+         *     ``RuleCreate`` instead of separate input and output variants.
+         */
+        RuleDraftOut: {
+            /**
+             * Item Id
+             * Format: uuid
+             */
+            item_id: string;
+            rule: components["schemas"]["RuleCreate"];
+            /**
+             * Transaction Id
+             * Format: uuid
+             */
+            transaction_id: string;
         };
         /**
          * RuleExport
@@ -5185,6 +5533,24 @@ export interface components {
             status: components["schemas"]["TransactionStatus"];
             /** Tag Ids */
             tag_ids?: string[];
+        };
+        /**
+         * TransactionFix
+         * @description New values for one imported row; absent fields are left alone.
+         */
+        TransactionFix: {
+            amount?: components["schemas"]["MoneyIn"] | null;
+            /** Memo */
+            memo?: string | null;
+            /** Posted Date */
+            posted_date?: string | null;
+            /** Raw Payee */
+            raw_payee?: string | null;
+            /**
+             * Transaction Id
+             * Format: uuid
+             */
+            transaction_id: string;
         };
         /** TransactionOut */
         TransactionOut: {
@@ -8617,6 +8983,135 @@ export interface operations {
             };
         };
     };
+    get_preview_api_v1_documents__document_id__preview_get: {
+        parameters: {
+            query?: {
+                page?: number;
+            };
+            header?: never;
+            path: {
+                document_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The page as a PNG */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "image/png": unknown;
+                };
+            };
+            /** @description Problem details */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Problem details */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Problem details */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Problem details */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Problem details */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+        };
+    };
+    get_regions_api_v1_documents__document_id__regions_get: {
+        parameters: {
+            query?: {
+                page?: number;
+            };
+            header?: never;
+            path: {
+                document_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DocumentRegions"];
+                };
+            };
+            /** @description Problem details */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Problem details */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Problem details */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Problem details */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+        };
+    };
     post_reprocess_api_v1_documents__document_id__reprocess_post: {
         parameters: {
             query?: never;
@@ -11360,6 +11855,68 @@ export interface operations {
             };
         };
     };
+    post_correct_api_v1_review__item_id__correct_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                item_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["Correction"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ReviewItemOut"];
+                };
+            };
+            /** @description Problem details */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Problem details */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Problem details */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Problem details */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+        };
+    };
     post_dismiss_api_v1_review__item_id__dismiss_post: {
         parameters: {
             query?: never;
@@ -11418,6 +11975,68 @@ export interface operations {
             };
         };
     };
+    post_remember_layout_api_v1_review__item_id__remember_layout_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                item_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RememberLayout"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RememberLayoutOut"];
+                };
+            };
+            /** @description Problem details */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Problem details */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Problem details */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Problem details */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+        };
+    };
     post_resolve_api_v1_review__item_id__resolve_post: {
         parameters: {
             query?: never;
@@ -11429,7 +12048,7 @@ export interface operations {
         };
         requestBody: {
             content: {
-                "application/json": components["schemas"]["ResolveDuplicate"] | components["schemas"]["ResolveUnknownAccount"] | components["schemas"]["ResolveUnparsed"] | components["schemas"]["ResolveUnknownOwner"] | components["schemas"]["ResolveReceiptMatch"];
+                "application/json": components["schemas"]["ResolveDuplicate"] | components["schemas"]["ResolveUnknownAccount"] | components["schemas"]["ResolveUnparsed"] | components["schemas"]["ResolveUnknownOwner"] | components["schemas"]["ResolveReceiptMatch"] | components["schemas"]["ResolveLowConfidence"];
             };
         };
         responses: {
@@ -11440,6 +12059,64 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ReviewItemOut"];
+                };
+            };
+            /** @description Problem details */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Problem details */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Problem details */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Problem details */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+        };
+    };
+    get_rule_draft_api_v1_review__item_id__rule_draft_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                item_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RuleDraftOut"];
                 };
             };
             /** @description Problem details */

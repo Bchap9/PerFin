@@ -138,6 +138,45 @@ describe("mapping editor", () => {
     expect(api.callsTo("POST", "/api/v1/imports/mappings")).toHaveLength(0);
   });
 
+  it("shows the PDF page above the table and saves a mapping the server fingerprints", async () => {
+    const api = mockApi({
+      "GET /api/v1/auth/session": authedSession({ role: "member" }),
+      ...lookupHandlers([account("a-1", "Everyday")]),
+      "GET /api/v1/imports/:id/preview": () => json({ ...PREVIEW, kind: "pdf" }),
+      "GET /api/v1/documents/:id": () => json({ id: "d-1", original_filename: "thrift.pdf", mime_detected: "application/pdf" }),
+      "GET /api/v1/documents/:id/regions": () =>
+        json({
+          document_id: "d-1",
+          page: 1,
+          page_count: 1,
+          width: 612,
+          height: 792,
+          unit: "pt",
+          preview: null,
+          text_included: true,
+          text_source: "text_layer",
+          words: [],
+          words_truncated: false,
+        }),
+      "POST /api/v1/imports/mappings": () => json({ id: "m-2", header_fingerprint: "f".repeat(64) }, 201),
+      "POST /api/v1/imports/:id/apply-mapping": () => json({ document_id: "d-1", job_id: "j-2", state: "queued" }, 202),
+    });
+    renderApp("/documents/d-1/mapping");
+    expect(await screen.findByAltText("Page 1 of the document")).toHaveAttribute("src", "/api/v1/documents/d-1/preview?page=1");
+    const user = userEvent.setup();
+    await user.selectOptions(screen.getByLabelText("Column 1 holds"), "date");
+    await user.selectOptions(screen.getByLabelText("Column 2 holds"), "payee");
+    await user.selectOptions(screen.getByLabelText("Column 3 holds"), "amount");
+    await user.selectOptions(screen.getByLabelText("Account"), "a-1");
+    await user.click(screen.getByRole("button", { name: "Save mapping and import" }));
+    await waitFor(() => {
+      expect(api.callsTo("POST", "/api/v1/imports/:id/apply-mapping")).toHaveLength(1);
+    });
+    // The document id lets the server derive the table's header fingerprint, so
+    // the next PDF of this layout is imported by this mapping without asking.
+    expect(api.callsTo("POST", "/api/v1/imports/mappings")[0]?.body).toMatchObject({ document_id: "d-1", account_id: "a-1" });
+  });
+
   it("starts from the server's suggested mapping", async () => {
     mockApi({
       "GET /api/v1/auth/session": authedSession({ role: "member" }),

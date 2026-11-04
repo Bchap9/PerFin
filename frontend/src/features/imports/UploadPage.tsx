@@ -106,6 +106,7 @@ export function UploadPage() {
     <section aria-labelledby="page-title" className="ledger-stack">
       <div className="page-header">
         <h1 id="page-title">Documents</h1>
+        <Link to="/documents/library">Document library and search</Link>
       </div>
       {canWrite ? (
         <Card title="Upload statements">

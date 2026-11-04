@@ -322,14 +322,14 @@ describe("review queue", () => {
   });
 
   it("dismisses an item and shows a refusal from the server", async () => {
-    const api = reviewApi([item("r-5", "new_institution", {})], "member", {
+    const api = reviewApi([item("r-5", "rejected_email", {})], "member", {
       "POST /api/v1/review/:id/dismiss": () =>
         problem(409, "review-item-closed"),
     });
     renderApp("/review");
     const user = userEvent.setup();
     expect(
-      await screen.findByText("This item can only be dismissed for now."),
+      await screen.findByText("This email was not accepted. It can only be dismissed."),
     ).toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: "Dismiss" }));
     await waitFor(() => {

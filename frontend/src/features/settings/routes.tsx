@@ -5,6 +5,7 @@ import { CategoriesPage } from "../categories/CategoriesPage";
 import { AccessPage } from "./AccessPage";
 import { DataPage } from "./DataPage";
 import { GeneralPage } from "./GeneralPage";
+import { IntakePage } from "./IntakePage";
 import { HouseholdMembersPage } from "./HouseholdMembersPage";
 import { ProfilePage } from "./ProfilePage";
 import { SecurityPage } from "./SecurityPage";
@@ -23,6 +24,7 @@ export function routes(parent: AnyRoute): AnyRoute[] {
       child("general", GeneralPage),
       child("access", AccessPage),
       child("categories", CategoriesPage),
+      child("intake", IntakePage),
       child("data", DataPage),
     ]),
   ];

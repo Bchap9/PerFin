@@ -7,7 +7,7 @@ import { queryRoots } from "../../lib/queryKeys";
 
 type Schemas = components["schemas"];
 
-export type DocumentRow = Schemas["DocumentOut"];
+export type DocumentRow = Schemas["DocumentListItem"];
 export type DocumentStatus = Schemas["DocumentStatus"];
 export type DocumentReceived = Schemas["DocumentReceivedOut"];
 export type ImportPreview = Schemas["ImportPreview"];

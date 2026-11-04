@@ -37,6 +37,12 @@ import {
   type ReviewFilter,
   type ReviewItem,
 } from "./api";
+import {
+  LowConfidenceTools,
+  NewInstitutionTools,
+  ReceiptPreview,
+  UnknownOwnerTools,
+} from "./ReviewTools";
 
 const KIND_LABELS: Readonly<Record<ReviewItem["kind"], string>> = {
   unknown_owner: "Unknown owner",
@@ -49,16 +55,19 @@ const KIND_LABELS: Readonly<Record<ReviewItem["kind"], string>> = {
   receipt_match: "Attach this receipt",
 };
 
-const RECEIPT_REASONS: Readonly<Record<string, string>> = {
-  ambiguous: "Several transactions fit this receipt equally well.",
-  not_confident:
-    "A transaction may fit this receipt, but not clearly enough to attach it automatically.",
-  receipt_uncertain: "Parts of this receipt could not be read with confidence.",
-  already_has_receipt: "The best fit already has another receipt attached.",
-  no_candidates:
-    "No transaction fits this receipt yet. It is attached automatically when its statement arrives.",
-  no_total: "No total could be read on this receipt.",
-};
+const RECEIPT_REASONS: ReadonlyMap<string, string> = new Map(
+  Object.entries({
+    ambiguous: "Several transactions fit this receipt equally well.",
+    not_confident:
+      "A transaction may fit this receipt, but not clearly enough to attach it automatically.",
+    receipt_uncertain:
+      "Parts of this receipt could not be read with confidence.",
+    already_has_receipt: "The best fit already has another receipt attached.",
+    no_candidates:
+      "No transaction fits this receipt yet. It is attached automatically when its statement arrives.",
+    no_total: "No total could be read on this receipt.",
+  }),
+);
 
 const AMOUNT_LABELS: Readonly<Record<string, string>> = {
   exact: "same amount",
@@ -81,7 +90,7 @@ function ReceiptBody({
   return (
     <div className="ledger-stack">
       <p>
-        {(reason === null ? undefined : RECEIPT_REASONS[reason]) ??
+        {(reason === null ? undefined : RECEIPT_REASONS.get(reason)) ??
           "Choose the transaction this receipt belongs to."}
       </p>
       {suggestions.length === 0 ? null : (
@@ -340,14 +349,23 @@ export function ReviewItemCard({ item }: { item: ReviewItem }) {
           </p>
         ) : null}
         {item.kind === "receipt_match" ? (
-          <ReceiptBody item={item} chosen={chosen} onChoose={setChosen} />
+          <>
+            <ReceiptBody item={item} chosen={chosen} onChoose={setChosen} />
+            <ReceiptPreview item={item} />
+          </>
         ) : null}
-        {item.kind !== "possible_duplicate" &&
-        item.kind !== "unknown_account" &&
-        item.kind !== "unparsed" &&
-        item.kind !== "receipt_match" ? (
+        {item.kind === "low_confidence_field" ? (
+          <LowConfidenceTools item={item} actionable={actionable} />
+        ) : null}
+        {item.kind === "new_institution" ? (
+          <NewInstitutionTools item={item} actionable={actionable} />
+        ) : null}
+        {item.kind === "unknown_owner" ? (
+          <UnknownOwnerTools item={item} actionable={actionable} />
+        ) : null}
+        {item.kind === "rejected_email" ? (
           <p className="ledger-muted">
-            This item can only be dismissed for now.
+            This email was not accepted. It can only be dismissed.
           </p>
         ) : null}
         {error === null ? null : (
@@ -417,8 +435,7 @@ export function ReviewItemCard({ item }: { item: ReviewItem }) {
                 Import into this account
               </Button>
             ) : null}
-            {item.kind === "unparsed" &&
-            item.next_step === "column_mapping" &&
+            {item.next_step === "column_mapping" &&
             item.document_id !== null ? (
               <Link
                 to="/documents/$documentId/mapping"
