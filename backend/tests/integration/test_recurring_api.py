@@ -16,6 +16,7 @@ and a hidden checking account (no grants) with its own monthly subscription.
 
 from __future__ import annotations
 
+import logging
 import uuid
 from collections.abc import Iterator
 from dataclasses import dataclass
@@ -311,6 +312,26 @@ def test_daily_job_detects_every_account(world: World) -> None:
     rows = _schedules(world)
     assert {r.account_id for r in rows} == {world.checking.id, world.hidden.id}
     assert len(rows) == 4
+
+
+def test_daily_job_logs_its_counts_at_info(world: World, caplog: pytest.LogCaptureFixture) -> None:
+    """The log call must not clash with LogRecord attributes (it failed the job at INFO)."""
+    with world.factories.transaction() as db:
+        set_context(db, world.household_id)
+        ctx = JobContext(
+            job_id=uuid.uuid4(),
+            job_type=recurring_handler.DETECT_JOB_TYPE,
+            attempt=1,
+            max_attempts=1,
+            household_id=world.household_id,
+            session=db,
+            deadline=datetime.max.replace(tzinfo=UTC),
+        )
+        with caplog.at_level(logging.INFO, logger=recurring_handler.log.name):
+            recurring_handler.detect_household(
+                ctx, recurring_handler.HouseholdDetectPayload(as_of=TODAY)
+            )
+    assert any(r.getMessage() == "recurring detection" for r in caplog.records)
 
 
 def test_two_plans_of_one_payee_stay_two_schedules(world: World) -> None:

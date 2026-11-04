@@ -425,6 +425,69 @@ def test_specific_lots_and_average_cost(world: World, factories: Factories) -> N
     assert household_events(factories, world.household_id, "investment.cost_method_changed")
 
 
+def test_sale_of_hand_picked_lots_in_performance_and_net_worth(
+    world: World, factories: Factories
+) -> None:
+    """In-memory replays keep the stored lot ids a hand-picked sale names.
+
+    Regression: performance answered ``422 lot-not-available`` and net worth
+    left the pair out, because their replays drew fresh lot ids.
+    """
+    sec = _security(world.member, "SYNP")
+    for day, price in (("2026-01-02", "100"), ("2026-02-02", "200")):
+        _txn(
+            world.member,
+            world.brokerage,
+            "buy",
+            day,
+            security=sec,
+            quantity="10",
+            price=price,
+            amount=f"-{Decimal(price) * 10}",
+        )
+    newest = str(_lots(world, factories, world.brokerage)[1].id)
+    sale = _txn(
+        world.member,
+        world.brokerage,
+        "sell",
+        "2026-03-02",
+        security=sec,
+        quantity="4",
+        amount="1000",
+        lots=[{"lot_id": newest, "quantity": "4"}],
+    )
+    assert sale["lots_specified"] is True
+    from app.domain.investments.models import Security
+
+    with factories.transaction() as db:
+        set_context(db, world.household_id)
+        security_row = db.get(Security, uuid.UUID(sec["id"]))
+        assert security_row is not None
+        db.expunge(security_row)
+    world.ledger.run(make_price, security_row, close="250", price_date=date(2026, 6, 29))
+
+    params = {"range": "max", "account": str(world.brokerage.id)}
+    response = world.member.get(PERFORMANCE, params=params)
+    assert response.status_code == 200, response.text
+    # 4 units of the 200 lot sold for 1000: 200 gain (FIFO would say 600).
+    assert response.json()["realized"]["total"] == _money("200.00")
+
+    def brokerage_value() -> Any:
+        latest = world.owner.get(f"{API}/networth/latest")
+        assert latest.status_code == 200, latest.text
+        values = [
+            a for a in latest.json()["accounts"] if a["account_id"] == str(world.brokerage.id)
+        ]
+        assert len(values) == 1, latest.json()
+        return values[0]["amount"], latest.json()["unpriced_security_ids"]
+
+    picked = brokerage_value()
+    # The same 16 units held without naming lots: net worth must not change.
+    patched = world.member.patch(f"{TXNS}/{sale['id']}", json={"lots": None})
+    assert patched.status_code == 200, patched.text
+    assert brokerage_value() == picked
+
+
 def test_split_dividend_reinvest_and_transfers(world: World, factories: Factories) -> None:
     sec = _security(world.member, "SYNX")
     _txn(

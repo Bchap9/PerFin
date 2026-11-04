@@ -653,6 +653,7 @@ def _replay_positions(
         seeds_by_pair[(lot.account_id, lot.security_id)].append(lot)
         by_pair.setdefault((lot.account_id, lot.security_id), [])
     methods = investments.cost_methods(db, household_id, sorted(by_account, key=lambda u: u.bytes))
+    lot_ids = investments.stored_lot_ids(db, household_id, list(by_account))
     out: dict[uuid.UUID, list[_Position]] = defaultdict(list)
     fx: dict[str, FxConverter] = {}
     for (account_id, security_id), rows in sorted(
@@ -682,6 +683,7 @@ def _replay_positions(
                 ]
                 + (pair_seeds or []),
                 method=methods[account_id],
+                lot_ids=lot_ids,
             )
         except engine.LotError:
             # Writes are replayed first, so stored history always replays; a

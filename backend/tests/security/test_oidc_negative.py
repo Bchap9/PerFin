@@ -14,6 +14,7 @@ import json
 import time
 import uuid
 from collections.abc import Callable, Iterator
+from dataclasses import dataclass
 from datetime import timedelta
 from typing import Any
 from urllib.parse import parse_qs, urlsplit
@@ -160,6 +161,23 @@ def _replace_header(token: str, header: dict[str, Any], signature: bytes = b"") 
 # ---------------------------------------------------------------------------
 
 
+@dataclass(frozen=True)
+class FromNow:
+    """A timestamp claim relative to when the test *runs*, not when it is collected.
+
+    ``int(time.time()) + 600`` in a ``parametrize`` list is evaluated at
+    collection; on a slow single-worker CI run the test executed twelve
+    minutes later and the "future" ``iat``/``nbf`` was already in the past.
+    """
+
+    seconds: int
+
+
+def at_run_time(values: dict[str, Any]) -> dict[str, Any]:
+    now = int(time.time())
+    return {k: now + v.seconds if isinstance(v, FromNow) else v for k, v in values.items()}
+
+
 @pytest.mark.parametrize(
     ("overrides", "reason"),
     [
@@ -169,10 +187,10 @@ def _replace_header(token: str, header: dict[str, Any], signature: bytes = b"") 
         ({"aud": CLIENT_ID, "azp": "some-other-client"}, "invalid-azp"),
         ({"iss": "https://evil.example.test/application/o/perfin/"}, "invalid-iss"),
         ({"iss": ISSUER.rstrip("/")}, "invalid-iss"),  # exact match, no normalising
-        ({"exp": int(time.time()) - 120}, "expired"),
-        ({"iat": int(time.time()) + 600, "exp": int(time.time()) + 900}, "iat-in-future"),
-        ({"iat": int(time.time()) - 3600}, "iat-too-old"),
-        ({"nbf": int(time.time()) + 600}, "not-yet-valid"),
+        ({"exp": FromNow(-120)}, "expired"),
+        ({"iat": FromNow(600), "exp": FromNow(900)}, "iat-in-future"),
+        ({"iat": FromNow(-3600)}, "iat-too-old"),
+        ({"nbf": FromNow(600)}, "not-yet-valid"),
         ({"at_hash": _b64(hashlib.sha256(b"another access token").digest()[:16])}, "bad-at-hash"),
         ({"sub": ""}, "invalid-sub"),
     ],
@@ -184,7 +202,7 @@ def test_bad_id_token_claims_are_refused(
     overrides: dict[str, Any],
     reason: str,
 ) -> None:
-    idp.claim_overrides = overrides
+    idp.claim_overrides = at_run_time(overrides)
     refused(make_app(), idp, admin_engine, expect_public="token-invalid", expect_reason=reason)
 
 
@@ -771,10 +789,10 @@ def _bcl(client: TestClient, token: str) -> Any:
         {"events": {"http://schemas.openid.net/event/other": {}}},
         {"aud": "some-other-client"},
         {"iss": "https://evil.example.test/"},
-        {"iat": int(time.time()) + 600},
-        {"iat": int(time.time()) - 3600},
+        {"iat": FromNow(600)},
+        {"iat": FromNow(-3600)},
         {"sub": None, "sid": None},
-        {"exp": int(time.time()) - 600},
+        {"exp": FromNow(-600)},
         {"jti": None},  # REQUIRED by Back-Channel Logout 1.0 (review P1-SR-03)
         {"jti": ""},
         {"jti": 12345},
@@ -788,7 +806,7 @@ def test_invalid_logout_tokens_are_rejected(
     sub = new_sub()
     with browser(app) as web:
         login_via_idp(web, idp, claims(sub, sid="bcl-sid"))
-        claims_ = {"sub": sub, "sid": "bcl-sid", **mutation}
+        claims_ = {"sub": sub, "sid": "bcl-sid", **at_run_time(mutation)}
         response = _bcl(web, idp.logout_token(**claims_))
         assert response.status_code == 400
         assert response.headers["content-type"] == "application/problem+json"

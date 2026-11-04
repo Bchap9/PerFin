@@ -102,6 +102,8 @@ from app.core.logging import get_logger
 from app.core.request_context import client_ip
 from app.core.settings import IPNetwork, Settings
 from app.db.rls import get_context, restore_context, set_context
+from app.domain.notifications.devices import note_sign_in
+from app.domain.notifications.routing import notify
 
 log = get_logger(__name__)
 
@@ -282,7 +284,8 @@ def notify_account_locked(
         }
         for member in memberships(db, notice.user_id):
             set_context(db, member.household_id)
-            emit(db, member.household_id, "user.locked", payload)
+            event_id = emit(db, member.household_id, "user.locked", payload)
+            notify(db, member.household_id, "user.locked", source_id=event_id)
     for notifier in list(LOCK_NOTIFIERS):
         try:
             notifier(notice)
@@ -525,6 +528,7 @@ def login(
             remember_device=remember_device,
             now=now,
         )
+        note_sign_in(db, issued.row)
         audit_auth(
             db,
             action="user.login",

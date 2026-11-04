@@ -403,6 +403,7 @@ class SafeHttpClient:
         url: str,
         *,
         data: Mapping[str, str] | None = None,
+        content: bytes | None = None,
         headers: Mapping[str, str] | None = None,
     ) -> HttpResult:
         current = httpx.URL(url)
@@ -413,6 +414,7 @@ class SafeHttpClient:
                     method,
                     current,
                     data=dict(data) if data is not None else None,
+                    content=content,
                     headers=dict(headers or {}),
                 )
                 response = self._client.send(request, stream=True)
@@ -452,3 +454,16 @@ class SafeHttpClient:
         self, url: str, data: Mapping[str, str], *, headers: Mapping[str, str] | None = None
     ) -> HttpResult:
         return self._send("POST", url, data=data, headers=headers)
+
+    def send(
+        self,
+        method: str,
+        url: str,
+        *,
+        content: bytes,
+        headers: Mapping[str, str] | None = None,
+    ) -> HttpResult:
+        """``POST``/``PUT`` a raw body (notification channels); never redirected."""
+        if method not in ("POST", "PUT"):
+            raise EgressBlockedError(f"method {method!r} is not allowed")
+        return self._send(method, url, content=content, headers=headers)

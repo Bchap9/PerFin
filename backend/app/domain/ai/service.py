@@ -77,6 +77,7 @@ from app.domain.ai.models import (
 )
 from app.domain.ai.policy import ClientPolicy
 from app.domain.households.repo import list_members
+from app.domain.notifications.routing import notify
 
 AI_SCOPE: Final = "ai:read"
 #: The path prefix of the AI views (``app.auth.deps`` confines AI tokens to it).
@@ -322,6 +323,7 @@ def create_client(
         user_id=principal.user_id,
         request=request,
     )
+    notify(db, household_id, "ai_client.created", source_id=client.id)
     return CreatedClient(client=client, token=token, raw_token=material.raw)
 
 

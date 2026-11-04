@@ -225,12 +225,12 @@ def test_forms_reach_the_vault_and_identity_reaches_nothing(env: Env, admin_engi
     for document in [old, *documents.values()]:
         responses.append(owner.get(f"{API}/documents/{document.id}"))
         responses.append(owner.get(f"{API}/documents/{document.id}/regions"))
-    for token in ("testperson", "imaginary", "nowhereville", "makebelieve"):
+    for token in ("testperson", "quuxwood", "nowhereville", "makebelieve"):
         responses.append(owner.get(f"{API}/documents", params={"q": token}))
     for response in responses:
         assert response.status_code == 200, (response.url, response.text)
         _assert_no_identity(response.text, str(response.url))
-    for token in ("testperson", "imaginary"):
+    for token in ("testperson", "quuxwood"):
         found = owner.get(f"{API}/documents", params={"q": token}).json()
         assert found["items"] == [], token
     # The issuer's name is kept, and the documents are found by it.
@@ -354,7 +354,7 @@ def test_unregistered_tax_documents_keep_no_identity(
     assert parse.get("receipt") is None
     assert "tax_identity_redacted" in parse.get("warnings", [])
     _assert_no_identity(_database_text(admin_engine), "the database")
-    for token in ("testperson", "imaginary", "nowhereville"):
+    for token in ("testperson", "quuxwood", "nowhereville"):
         found = env.owner.get(f"{API}/documents", params={"q": token}).json()
         assert found["items"] == [], token
     detail = env.owner.get(f"{API}/documents/{document.id}")

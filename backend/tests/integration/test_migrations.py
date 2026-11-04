@@ -25,7 +25,10 @@ run as the owner, exactly like ``perfin migrate`` in production, and then:
   downgrade removes exactly those tables and their enum types;
 * 0006 (Phase 6b) creates ``ai_client`` and ``ai_call`` under forced RLS with
   the household-consistent ``ai_call -> ai_client`` key, and its downgrade
-  removes exactly those tables and the ``ai_mode``/``ai_transport`` types.
+  removes exactly those tables and the ``ai_mode``/``ai_transport`` types;
+* 0007 (Phase 7) creates ``notification_channel`` under forced RLS, and its
+  downgrade removes exactly that table and the ``notification_channel_type``
+  enum type.
 """
 
 from __future__ import annotations
@@ -160,6 +163,10 @@ PHASE56_ENUM_TYPES = frozenset(
 PHASE6B_TABLES = frozenset({"ai_client", "ai_call"})
 #: Enum types created by revision 0006.
 PHASE6B_ENUM_TYPES = frozenset({"ai_mode", "ai_transport"})
+#: Phase 7 tables (revision 0007), all household-scoped.
+PHASE7_TABLES = frozenset({"notification_channel"})
+#: Enum types created by revision 0007.
+PHASE7_ENUM_TYPES = frozenset({"notification_channel_type"})
 #: Enum types created by revision 0002 (identity).
 PHASE1_ENUM_TYPES = frozenset(
     {
@@ -323,6 +330,7 @@ def test_single_head_and_linear_history() -> None:
     assert script.get_base() == "0001"
     # One revision per phase, each on top of the previous one.
     assert [rev.revision for rev in script.walk_revisions("base", "heads")] == [
+        "0007",
         "0006",
         "0005",
         "0004",
@@ -335,6 +343,7 @@ def test_single_head_and_linear_history() -> None:
     assert script.get_revision("0004").down_revision == "0003"
     assert script.get_revision("0005").down_revision == "0004"
     assert script.get_revision("0006").down_revision == "0005"
+    assert script.get_revision("0007").down_revision == "0006"
 
 
 def test_upgrade_head_matches_models_without_drift(migrated: Scratch) -> None:
@@ -354,6 +363,7 @@ def test_upgrade_head_matches_models_without_drift(migrated: Scratch) -> None:
         | PHASE34_TABLES
         | PHASE56_TABLES
         | PHASE6B_TABLES
+        | PHASE7_TABLES
     )
 
 
@@ -435,7 +445,10 @@ def test_every_household_scoped_table_has_forced_rls(migrated: Scratch) -> None:
     finally:
         engine.dispose()
     assert {"household_member", "account_grant", "api_token"} <= set(scoped)
-    assert set(scoped) >= PHASE2_TABLES | PHASE34_TABLES | PHASE56_TABLES | PHASE6B_TABLES
+    assert (
+        set(scoped)
+        >= PHASE2_TABLES | PHASE34_TABLES | PHASE56_TABLES | PHASE6B_TABLES | PHASE7_TABLES
+    )
     for table in scoped:
         assert rows[table] == (True, True), table
         assert (table, "household_isolation") in policies
@@ -627,6 +640,7 @@ def test_app_role_privileges_are_least(migrated: Scratch) -> None:
         | PHASE34_TABLES
         | PHASE56_TABLES
         | PHASE6B_TABLES
+        | PHASE7_TABLES
     )
     for table in sorted(all_tables - {"audit_log"}):
         assert {p for t, p in privileges if t == table} == {
@@ -1305,7 +1319,7 @@ def test_downgrade_0005_leaves_phase34_and_upgrades_again(migrated: Scratch) -> 
         assert _public_tables(engine) == (
             PHASE0_TABLES | PHASE1_TABLES | PHASE2_TABLES | PHASE34_TABLES | {"alembic_version"}
         )
-        assert not set(_db_enum_labels(engine)) & PHASE6B_ENUM_TYPES
+        assert not set(_db_enum_labels(engine)) & (PHASE7_ENUM_TYPES | PHASE6B_ENUM_TYPES)
         assert not set(_db_enum_labels(engine)) & PHASE56_ENUM_TYPES
         with engine.connect() as conn:
             assert conn.execute(text("SELECT version_num FROM alembic_version")).scalar_one() == (
@@ -1406,7 +1420,7 @@ def test_downgrade_0006_leaves_phase56_and_upgrades_again(migrated: Scratch) -> 
             | PHASE56_TABLES
             | {"alembic_version"}
         )
-        assert not set(_db_enum_labels(engine)) & PHASE6B_ENUM_TYPES
+        assert not set(_db_enum_labels(engine)) & (PHASE7_ENUM_TYPES | PHASE6B_ENUM_TYPES)
         assert set(_db_enum_labels(engine)) >= PHASE56_ENUM_TYPES
         command.upgrade(cfg, "head")
         command.check(cfg)
@@ -1475,6 +1489,86 @@ def test_phase6b_ai_tables_refuse_other_households_on_migrated_database(
             with pytest.raises(DBAPIError, match="check constraint"):
                 conn.execute(
                     text("UPDATE ai_client SET rounding = 5 WHERE id = :id"), {"id": client_a}
+                )
+    finally:
+        app.dispose()
+
+
+def test_downgrade_0007_leaves_phase6b_and_upgrades_again(migrated: Scratch) -> None:
+    """0007 removes exactly notification_channel and its enum type."""
+    cfg = migrated.config()
+    engine = migrated.owner_engine()
+    try:
+        assert set(_db_enum_labels(engine)) >= PHASE7_ENUM_TYPES
+        command.downgrade(cfg, "0006")
+        assert _public_tables(engine) == (
+            PHASE0_TABLES
+            | PHASE1_TABLES
+            | PHASE2_TABLES
+            | PHASE34_TABLES
+            | PHASE56_TABLES
+            | PHASE6B_TABLES
+            | {"alembic_version"}
+        )
+        assert not set(_db_enum_labels(engine)) & PHASE7_ENUM_TYPES
+        assert set(_db_enum_labels(engine)) >= PHASE6B_ENUM_TYPES
+        command.upgrade(cfg, "head")
+        command.check(cfg)
+        assert _public_tables(engine) >= PHASE7_TABLES
+        assert _db_enum_labels(engine) == _model_enum_labels()
+    finally:
+        engine.dispose()
+
+
+def _insert_channel(conn: Connection, household: uuid.UUID) -> uuid.UUID:
+    channel = uuid.uuid4()
+    conn.execute(
+        text(
+            "INSERT INTO notification_channel (id, household_id, name, type, config_encrypted) "
+            "VALUES (:id, :h, 'Synthetic channel', 'webhook', '\\x00'::bytea)"
+        ),
+        {"id": channel, "h": household},
+    )
+    return channel
+
+
+def test_phase7_notification_channel_refuses_other_households_on_migrated_database(
+    migrated: Scratch,
+) -> None:
+    """Notification channels are invisible across households under forced RLS."""
+    app = migrated.app_engine()
+    a, b = uuid.uuid4(), uuid.uuid4()
+    try:
+        for household in (a, b):
+            with app.begin() as conn:
+                set_context(conn, household)
+                conn.execute(
+                    text("INSERT INTO household (id, name) VALUES (:id, 'Synthetic')"),
+                    {"id": household},
+                )
+        with app.begin() as conn:
+            set_context(conn, a)
+            channel_a = _insert_channel(conn, a)
+        with app.begin() as conn:
+            set_context(conn, b)
+            for table in sorted(PHASE7_TABLES):
+                count = conn.execute(text(f"SELECT count(*) FROM {table}")).scalar_one()  # noqa: S608
+                assert count == 0, table
+            updated = conn.execute(
+                text("UPDATE notification_channel SET enabled = false WHERE id = :id"),
+                {"id": channel_a},
+            )
+            assert updated.rowcount == 0
+        with app.connect() as conn, conn.begin():
+            set_context(conn, b)
+            with pytest.raises(DBAPIError, match="row-level security"):
+                _insert_channel(conn, a)
+        with app.connect() as conn, conn.begin():
+            set_context(conn, a)
+            with pytest.raises(DBAPIError, match="check constraint"):
+                conn.execute(
+                    text("UPDATE notification_channel SET events = '{}'::jsonb WHERE id = :id"),
+                    {"id": channel_a},
                 )
     finally:
         app.dispose()

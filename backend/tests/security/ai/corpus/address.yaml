@@ -27,3 +27,11 @@ cases:
   - {text: "450 Ridge Pkwy Bldg C", secrets: ["450 ridge", "bldg c"]}
   - {text: "REF 3 Maple Ct ref", secrets: ["3 maple"]}
   - {text: "MEMO:31 Spooner St.", secrets: ["31 spooner"]}
+  # v1.0.0 verification run (docs/RELEASE_CHECKLIST.md): a government id or a
+  # dashed number right before the address must not swallow the house number
+  # and leave the street name in the clear.
+  - {text: "SSN 123-45-6789 742 Evergreen Terrace", any_placeholder: true, secrets: ["742", "evergreen"]}
+  - {text: "EIN 12-3456789 15 Quuxwood Lane", any_placeholder: true, secrets: ["15 quuxwood", "quuxwood"]}
+  - {text: "ssn xxx-xx-6789 9 Elm St", any_placeholder: true, secrets: ["9 elm", "elm st"]}
+  - {text: "ssn last 4 6789 12 Oak Ave", any_placeholder: true, secrets: ["12 oak", "oak ave"]}
+  - {text: "123-45-6789 742 Evergreen Terrace", any_placeholder: true, secrets: ["742", "evergreen"]}

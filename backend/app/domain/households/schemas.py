@@ -288,11 +288,66 @@ class AccountGrantOut(_Output):
 # ---------------------------------------------------------------------------
 
 
+DASHBOARD_WIDGETS: Final = (
+    "net_worth",
+    "cash_flow",
+    "spending",
+    "budgets",
+    "goals",
+    "recent_transactions",
+    "review_queue",
+    "upcoming_bills",
+    "holdings",
+    "loans",
+    "tax_documents",
+    "accounts",
+)
+DASHBOARD_LAYOUT_MAX: Final = len(DASHBOARD_WIDGETS)
+DashboardWidget = Literal[
+    "net_worth",
+    "cash_flow",
+    "spending",
+    "budgets",
+    "goals",
+    "recent_transactions",
+    "review_queue",
+    "upcoming_bills",
+    "holdings",
+    "loans",
+    "tax_documents",
+    "accounts",
+]
+DashboardSize = Literal["small", "medium", "large"]
+
+
+class DashboardEntry(_Input):
+    """One widget on the dashboard: which one and how wide (``small``..``large``)."""
+
+    widget: DashboardWidget
+    size: DashboardSize = "medium"
+
+
+def unique_widgets(value: list[DashboardEntry] | None) -> list[DashboardEntry] | None:
+    if value is not None:
+        widgets = [entry.widget for entry in value]
+        if len(set(widgets)) != len(widgets):
+            raise ValueError("a widget can appear only once")
+    return value
+
+
+class DashboardEntryOut(_Output):
+    widget: DashboardWidget
+    size: DashboardSize
+
+
 class UserPreferencesOut(_Output):
     display_name: str
     locale: str
     theme: Theme
     timezone: str
+    # ``None`` until the person customises the dashboard (the web app then
+    # shows its default layout); an empty list is a deliberately empty page.
+    dashboard_layout: list[DashboardEntryOut] | None = None
 
 
 class UserPreferencesUpdate(_Input):
@@ -300,6 +355,14 @@ class UserPreferencesUpdate(_Input):
     locale: Annotated[str, Field(min_length=2, max_length=LOCALE_MAX)] | None = None
     theme: Theme | None = None
     timezone: Annotated[str, Field(min_length=1, max_length=TIMEZONE_MAX)] | None = None
+    dashboard_layout: (
+        Annotated[list[DashboardEntry], Field(max_length=DASHBOARD_LAYOUT_MAX)] | None
+    ) = None
+
+    @field_validator("dashboard_layout")
+    @classmethod
+    def _dashboard_layout(cls, value: list[DashboardEntry] | None) -> list[DashboardEntry] | None:
+        return unique_widgets(value)
 
     @field_validator("display_name")
     @classmethod
@@ -318,7 +381,16 @@ class UserPreferencesUpdate(_Input):
 
     @model_validator(mode="after")
     def _something(self) -> Self:
-        if all(v is None for v in (self.display_name, self.locale, self.theme, self.timezone)):
+        if all(
+            v is None
+            for v in (
+                self.display_name,
+                self.locale,
+                self.theme,
+                self.timezone,
+                self.dashboard_layout,
+            )
+        ):
             raise ValueError("give at least one field to change")
         return self
 

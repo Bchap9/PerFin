@@ -421,6 +421,10 @@ def test_api_boots_on_secure_config_with_json_logging(secure_env: pytest.MonkeyP
         calls.append(kwargs)
 
     secure_env.setattr(uvicorn, "run", record)
+    # No database here: the startup role check (H3) fails closed without one
+    # and is tested against a real database in
+    # tests/integration/test_database_role_gate.py.
+    secure_env.setattr(cli, "_database_role_ok", lambda *_a, **_k: True)
     assert cli.main(["api"]) == cli.EXIT_OK
     (kwargs,) = calls
     assert kwargs["log_config"] is None

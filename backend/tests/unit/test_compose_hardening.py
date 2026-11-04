@@ -189,6 +189,77 @@ def test_root_one_shot_has_no_network() -> None:
     assert init.get("cap_add") == ["CHOWN"]
 
 
+def _run_proxy_init(tmp_path: Path, owner: str) -> list[str]:
+    """Run proxy-init's entrypoint script against two scratch directories.
+
+    ``chown`` is replaced by a recorder on PATH and the target owner by
+    ``owner``; the script is otherwise the one in docker-compose.yml (Compose
+    turns ``$$`` into ``$``).
+    """
+    import os
+    import subprocess  # nosec B404 - runs the compose snippet in a test
+
+    entry = service("proxy-init")["entrypoint"]
+    assert entry[:2] == ["/bin/sh", "-c"]
+    script = entry[2].replace("$$", "$").replace("10002:10002", owner)
+    data, config = tmp_path / "data", tmp_path / "config"
+    data.mkdir()
+    config.mkdir()
+    script = script.replace("/data", str(data)).replace("/config", str(config))
+    bindir = tmp_path / "bin"
+    bindir.mkdir()
+    log = tmp_path / "chown.log"
+    fake = bindir / "chown"
+    fake.write_text(f'#!/bin/sh\necho "$@" >> {log}\n', encoding="utf-8")
+    fake.chmod(0o755)
+    env = {**os.environ, "PATH": f"{bindir}:{os.environ.get('PATH', '')}"}
+    done = subprocess.run(["/bin/sh", "-c", script], env=env, check=False)  # nosec B603
+    assert done.returncode == 0
+    return log.read_text(encoding="utf-8").splitlines() if log.exists() else []
+
+
+def test_proxy_init_leaves_volumes_caddy_already_owns(tmp_path: Path) -> None:
+    """A second `docker compose up` must not re-run `chown -R` (it cannot
+    traverse Caddy's 0700 directories with CHOWN alone and failed, which kept
+    the proxy from starting; v1.0.0 verification run)."""
+    import os
+
+    mine = f"{os.getuid()}:{os.getgid()}"
+    assert _run_proxy_init(tmp_path, mine) == []
+
+
+def test_proxy_init_chowns_fresh_volumes(tmp_path: Path) -> None:
+    calls = _run_proxy_init(tmp_path, "4242:4242")
+    assert len(calls) == 2
+    assert all(c.startswith("-R 4242:4242 ") for c in calls)
+
+
+def test_clamav_runs_read_only_with_own_entrypoint() -> None:
+    """The image's /init re-links /var/lock and edits /etc/clamav in place,
+    which a read-only root refuses (the av profile restarted forever; v1.0.0
+    verification run). The shipped entrypoint writes only to /tmp and the
+    signature volume."""
+    clamav = service("clamav")
+    assert clamav.get("read_only") is True
+    entry = clamav["entrypoint"]
+    assert entry[-1] == "/perfin/clamav-entrypoint.sh"
+    assert "./clamav/entrypoint.sh:/perfin/clamav-entrypoint.sh:ro" in clamav["volumes"]
+    script = (DEPLOY / "clamav" / "entrypoint.sh").read_text(encoding="utf-8")
+    code = [ln for ln in script.splitlines() if ln.strip() and not ln.lstrip().startswith("#")]
+    body = "\n".join(code)
+    assert "/init" not in body
+    assert not re.search(r"\bln\b", body)
+    # Every in-place edit and every redirection targets /tmp.
+    for target in re.findall(r"sed -i [^\n]*?\"?(\S+?)\"?$", body, flags=re.M):
+        assert target.startswith((f"{SCRATCH_DIR}/", "$2")), target
+    for target in re.findall(r">>?\s*\"?([^\s\"&|]+)", body):
+        assert target.startswith((f"{SCRATCH_DIR}/", "&2", "$2", "/dev/null")), target
+    # conf_copy SRC DEST PREFIX ("$2" above) writes only to /tmp copies.
+    for dest in re.findall(r"^conf_copy \S+ (\S+) ", body, flags=re.M):
+        assert dest.startswith(f"{SCRATCH_DIR}/"), dest
+    assert "--config-file=/tmp/clamd.conf" in body
+
+
 def test_dockerfile_runs_as_unprivileged_user() -> None:
     text = (DEPLOY / "Dockerfile").read_text(encoding="utf-8")
     users = re.findall(r"^USER\s+(\S+)", text, flags=re.M)
@@ -410,8 +481,11 @@ def test_env_example_has_no_inline_comments() -> None:
 def test_upload_limits_agree() -> None:
     caddy = (DEPLOY / "Caddyfile.example").read_text(encoding="utf-8")
     sizes = re.findall(r"max_size (\d+)MB", caddy)
-    assert sorted(int(s) for s in sizes) == [1, 52]
+    assert sorted(int(s) for s in sizes) == [1, 52, 514]
     assert int(env_example()["PERFIN_UPLOAD_MAX_MB"]) < 52
+    # The full-import archive route carries PERFIN_IMPORT_MAX_MB (+2 MB framing).
+    assert int(env_example()["PERFIN_IMPORT_MAX_MB"]) + 2 == 514
+    assert re.search(r"@import path /api/v1/import /api/v1/import/\n", caddy)
 
 
 def test_caddyfile_controls() -> None:

@@ -371,6 +371,12 @@ _deny_table(
     "created_at updated_at household_id",
 )
 _deny_table(
+    "notification_channel",
+    R_CREDENTIAL,
+    "name type config_encrypted events enabled last_sent_at last_outcome id created_at "
+    "updated_at household_id",
+)
+_deny_table(
     "mail_intake_message",
     R_INGEST,
     "message_key outcome reason document_id id created_at updated_at household_id",

@@ -277,6 +277,27 @@ def cost_methods(
     return {a: found.get(a, CostMethod.FIFO) for a in account_ids}
 
 
+def stored_lot_ids(
+    db: Session, household_id: uuid.UUID, account_ids: list[uuid.UUID]
+) -> dict[uuid.UUID, uuid.UUID]:
+    """``{opening transaction id: stored lot id}`` for the accounts' lots.
+
+    An in-memory replay passes this as ``lot_ids`` so its lots carry the
+    stored ids, which a sale of hand-picked lots (``lot_links``) names; with
+    fresh ids such a sale would not find its lots.
+    """
+    if not account_ids:
+        return {}
+    rows = db.execute(
+        select(Lot.opening_txn_id, Lot.id).where(
+            Lot.household_id == household_id,
+            Lot.account_id.in_(account_ids),
+            Lot.opening_txn_id.is_not(None),
+        )
+    ).all()
+    return {opening: lot_id for opening, lot_id in rows if opening is not None}
+
+
 #: ``convert(amount, from_currency, on)`` into the account's currency.
 Convert = Callable[[Decimal, str, date], Decimal]
 

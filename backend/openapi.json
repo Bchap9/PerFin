@@ -5625,6 +5625,766 @@
         "title": "CategoryUpdate",
         "type": "object"
       },
+      "ChannelConfigOut": {
+        "description": "The non-secret part of a channel's configuration.",
+        "properties": {
+          "homeserver_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Homeserver Url"
+          },
+          "host": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Host"
+          },
+          "port": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Port"
+          },
+          "priority": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Priority"
+          },
+          "recipients": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Recipients"
+          },
+          "room_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Room Id"
+          },
+          "sender": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Sender"
+          },
+          "server_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Server Url"
+          },
+          "tls": {
+            "anyOf": [
+              {
+                "enum": [
+                  "starttls",
+                  "implicit"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Tls"
+          },
+          "url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Url"
+          },
+          "username": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Username"
+          }
+        },
+        "title": "ChannelConfigOut",
+        "type": "object"
+      },
+      "ChannelConfigPatch": {
+        "additionalProperties": false,
+        "description": "Fields to change in a stored configuration (checked again after merging).",
+        "properties": {
+          "access_token": {
+            "anyOf": [
+              {
+                "maxLength": 1024,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Access Token"
+          },
+          "homeserver_url": {
+            "anyOf": [
+              {
+                "maxLength": 2048,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Homeserver Url"
+          },
+          "host": {
+            "anyOf": [
+              {
+                "maxLength": 253,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Host"
+          },
+          "password": {
+            "anyOf": [
+              {
+                "maxLength": 1024,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Password"
+          },
+          "port": {
+            "anyOf": [
+              {
+                "maximum": 65535.0,
+                "minimum": 1.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Port"
+          },
+          "priority": {
+            "anyOf": [
+              {
+                "maximum": 10.0,
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Priority"
+          },
+          "recipients": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "maxItems": 10,
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Recipients"
+          },
+          "room_id": {
+            "anyOf": [
+              {
+                "maxLength": 400,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Room Id"
+          },
+          "sender": {
+            "anyOf": [
+              {
+                "maxLength": 254,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Sender"
+          },
+          "server_url": {
+            "anyOf": [
+              {
+                "maxLength": 2048,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Server Url"
+          },
+          "tls": {
+            "anyOf": [
+              {
+                "enum": [
+                  "starttls",
+                  "implicit"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Tls"
+          },
+          "token": {
+            "anyOf": [
+              {
+                "maxLength": 1024,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Token"
+          },
+          "topic": {
+            "anyOf": [
+              {
+                "maxLength": 64,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Topic"
+          },
+          "type": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ChannelType"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "url": {
+            "anyOf": [
+              {
+                "maxLength": 2048,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Url"
+          },
+          "username": {
+            "anyOf": [
+              {
+                "maxLength": 320,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Username"
+          }
+        },
+        "title": "ChannelConfigPatch",
+        "type": "object"
+      },
+      "ChannelCreate": {
+        "additionalProperties": false,
+        "properties": {
+          "config": {
+            "discriminator": {
+              "mapping": {
+                "gotify": "#/components/schemas/GotifyConfigIn",
+                "matrix": "#/components/schemas/MatrixConfigIn",
+                "ntfy": "#/components/schemas/NtfyConfigIn",
+                "smtp": "#/components/schemas/SmtpConfigIn",
+                "webhook": "#/components/schemas/WebhookConfigIn"
+              },
+              "propertyName": "type"
+            },
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/SmtpConfigIn"
+              },
+              {
+                "$ref": "#/components/schemas/WebhookConfigIn"
+              },
+              {
+                "$ref": "#/components/schemas/NtfyConfigIn"
+              },
+              {
+                "$ref": "#/components/schemas/GotifyConfigIn"
+              },
+              {
+                "$ref": "#/components/schemas/MatrixConfigIn"
+              }
+            ],
+            "title": "Config"
+          },
+          "enabled": {
+            "default": true,
+            "title": "Enabled",
+            "type": "boolean"
+          },
+          "events": {
+            "items": {
+              "enum": [
+                "account_locked",
+                "recovery_code_used",
+                "mfa_reset",
+                "role_changed",
+                "new_device",
+                "review_waiting",
+                "tax_reminder",
+                "backup_failed",
+                "ai_client_created"
+              ],
+              "type": "string"
+            },
+            "maxItems": 9,
+            "title": "Events",
+            "type": "array"
+          },
+          "name": {
+            "maxLength": 100,
+            "minLength": 1,
+            "title": "Name",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "config"
+        ],
+        "title": "ChannelCreate",
+        "type": "object"
+      },
+      "ChannelOut": {
+        "properties": {
+          "config": {
+            "$ref": "#/components/schemas/ChannelConfigOut"
+          },
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "enabled": {
+            "title": "Enabled",
+            "type": "boolean"
+          },
+          "events": {
+            "items": {
+              "enum": [
+                "account_locked",
+                "recovery_code_used",
+                "mfa_reset",
+                "role_changed",
+                "new_device",
+                "review_waiting",
+                "tax_reminder",
+                "backup_failed",
+                "ai_client_created"
+              ],
+              "type": "string"
+            },
+            "title": "Events",
+            "type": "array"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "last_outcome": {
+            "anyOf": [
+              {
+                "enum": [
+                  "ok",
+                  "blocked",
+                  "tls_failed",
+                  "auth_failed",
+                  "rejected",
+                  "connect_failed",
+                  "timeout",
+                  "server_error",
+                  "protocol_error"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Outcome"
+          },
+          "last_sent_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Sent At"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "secrets_set": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Secrets Set",
+            "type": "array"
+          },
+          "type": {
+            "$ref": "#/components/schemas/ChannelType"
+          },
+          "updated_at": {
+            "format": "date-time",
+            "title": "Updated At",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "type",
+          "enabled",
+          "events",
+          "config",
+          "secrets_set",
+          "last_sent_at",
+          "last_outcome",
+          "created_at",
+          "updated_at"
+        ],
+        "title": "ChannelOut",
+        "type": "object"
+      },
+      "ChannelSavedOut": {
+        "description": "``ChannelOut`` plus the webhook signing secret, only when just made.",
+        "properties": {
+          "config": {
+            "$ref": "#/components/schemas/ChannelConfigOut"
+          },
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "enabled": {
+            "title": "Enabled",
+            "type": "boolean"
+          },
+          "events": {
+            "items": {
+              "enum": [
+                "account_locked",
+                "recovery_code_used",
+                "mfa_reset",
+                "role_changed",
+                "new_device",
+                "review_waiting",
+                "tax_reminder",
+                "backup_failed",
+                "ai_client_created"
+              ],
+              "type": "string"
+            },
+            "title": "Events",
+            "type": "array"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "last_outcome": {
+            "anyOf": [
+              {
+                "enum": [
+                  "ok",
+                  "blocked",
+                  "tls_failed",
+                  "auth_failed",
+                  "rejected",
+                  "connect_failed",
+                  "timeout",
+                  "server_error",
+                  "protocol_error"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Outcome"
+          },
+          "last_sent_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Sent At"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "secrets_set": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Secrets Set",
+            "type": "array"
+          },
+          "signing_secret": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Signing Secret"
+          },
+          "type": {
+            "$ref": "#/components/schemas/ChannelType"
+          },
+          "updated_at": {
+            "format": "date-time",
+            "title": "Updated At",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "type",
+          "enabled",
+          "events",
+          "config",
+          "secrets_set",
+          "last_sent_at",
+          "last_outcome",
+          "created_at",
+          "updated_at"
+        ],
+        "title": "ChannelSavedOut",
+        "type": "object"
+      },
+      "ChannelTestOut": {
+        "properties": {
+          "ok": {
+            "title": "Ok",
+            "type": "boolean"
+          },
+          "outcome": {
+            "enum": [
+              "ok",
+              "blocked",
+              "tls_failed",
+              "auth_failed",
+              "rejected",
+              "connect_failed",
+              "timeout",
+              "server_error",
+              "protocol_error"
+            ],
+            "title": "Outcome",
+            "type": "string"
+          }
+        },
+        "required": [
+          "ok",
+          "outcome"
+        ],
+        "title": "ChannelTestOut",
+        "type": "object"
+      },
+      "ChannelType": {
+        "enum": [
+          "smtp",
+          "webhook",
+          "ntfy",
+          "gotify",
+          "matrix"
+        ],
+        "title": "ChannelType",
+        "type": "string"
+      },
+      "ChannelUpdate": {
+        "additionalProperties": false,
+        "description": "Change some fields; ``config`` is merged into the stored one (same type).",
+        "properties": {
+          "config": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ChannelConfigPatch"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "enabled": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Enabled"
+          },
+          "events": {
+            "anyOf": [
+              {
+                "items": {
+                  "enum": [
+                    "account_locked",
+                    "recovery_code_used",
+                    "mfa_reset",
+                    "role_changed",
+                    "new_device",
+                    "review_waiting",
+                    "tax_reminder",
+                    "backup_failed",
+                    "ai_client_created"
+                  ],
+                  "type": "string"
+                },
+                "maxItems": 9,
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Events"
+          },
+          "name": {
+            "anyOf": [
+              {
+                "maxLength": 100,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Name"
+          },
+          "rotate_secret": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Rotate Secret"
+          }
+        },
+        "title": "ChannelUpdate",
+        "type": "object"
+      },
       "ChecklistCounts": {
         "properties": {
           "expected": {
@@ -6103,6 +6863,82 @@
           "currencies"
         ],
         "title": "CurrencyCondition",
+        "type": "object"
+      },
+      "DashboardEntry": {
+        "additionalProperties": false,
+        "description": "One widget on the dashboard: which one and how wide (``small``..``large``).",
+        "properties": {
+          "size": {
+            "default": "medium",
+            "enum": [
+              "small",
+              "medium",
+              "large"
+            ],
+            "title": "Size",
+            "type": "string"
+          },
+          "widget": {
+            "enum": [
+              "net_worth",
+              "cash_flow",
+              "spending",
+              "budgets",
+              "goals",
+              "recent_transactions",
+              "review_queue",
+              "upcoming_bills",
+              "holdings",
+              "loans",
+              "tax_documents",
+              "accounts"
+            ],
+            "title": "Widget",
+            "type": "string"
+          }
+        },
+        "required": [
+          "widget"
+        ],
+        "title": "DashboardEntry",
+        "type": "object"
+      },
+      "DashboardEntryOut": {
+        "properties": {
+          "size": {
+            "enum": [
+              "small",
+              "medium",
+              "large"
+            ],
+            "title": "Size",
+            "type": "string"
+          },
+          "widget": {
+            "enum": [
+              "net_worth",
+              "cash_flow",
+              "spending",
+              "budgets",
+              "goals",
+              "recent_transactions",
+              "review_queue",
+              "upcoming_bills",
+              "holdings",
+              "loans",
+              "tax_documents",
+              "accounts"
+            ],
+            "title": "Widget",
+            "type": "string"
+          }
+        },
+        "required": [
+          "widget",
+          "size"
+        ],
+        "title": "DashboardEntryOut",
         "type": "object"
       },
       "DateCondition": {
@@ -8017,6 +8853,41 @@
           }
         },
         "title": "GoalUpdate",
+        "type": "object"
+      },
+      "GotifyConfigIn": {
+        "additionalProperties": false,
+        "properties": {
+          "priority": {
+            "default": 5,
+            "maximum": 10.0,
+            "minimum": 0.0,
+            "title": "Priority",
+            "type": "integer"
+          },
+          "server_url": {
+            "maxLength": 2048,
+            "title": "Server Url",
+            "type": "string"
+          },
+          "token": {
+            "maxLength": 1024,
+            "minLength": 1,
+            "title": "Token",
+            "type": "string"
+          },
+          "type": {
+            "const": "gotify",
+            "title": "Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "type",
+          "server_url",
+          "token"
+        ],
+        "title": "GotifyConfigIn",
         "type": "object"
       },
       "GrantLevel": {
@@ -11204,6 +12075,40 @@
         "title": "MatchSpec",
         "type": "object"
       },
+      "MatrixConfigIn": {
+        "additionalProperties": false,
+        "properties": {
+          "access_token": {
+            "maxLength": 1024,
+            "minLength": 1,
+            "title": "Access Token",
+            "type": "string"
+          },
+          "homeserver_url": {
+            "maxLength": 2048,
+            "title": "Homeserver Url",
+            "type": "string"
+          },
+          "room_id": {
+            "pattern": "^![A-Za-z0-9._=/+-]{1,128}:[A-Za-z0-9.:\\[\\]-]{1,255}$",
+            "title": "Room Id",
+            "type": "string"
+          },
+          "type": {
+            "const": "matrix",
+            "title": "Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "type",
+          "homeserver_url",
+          "room_id",
+          "access_token"
+        ],
+        "title": "MatrixConfigIn",
+        "type": "object"
+      },
       "MemberAdd": {
         "additionalProperties": false,
         "description": "``POST /households/{id}/members``: exactly one of ``user_id``, ``username``, ``new_user``.",
@@ -12047,6 +12952,53 @@
           "condition"
         ],
         "title": "NotCondition",
+        "type": "object"
+      },
+      "NtfyConfigIn": {
+        "additionalProperties": false,
+        "properties": {
+          "priority": {
+            "default": 3,
+            "maximum": 5.0,
+            "minimum": 1.0,
+            "title": "Priority",
+            "type": "integer"
+          },
+          "server_url": {
+            "default": "https://ntfy.sh",
+            "maxLength": 2048,
+            "title": "Server Url",
+            "type": "string"
+          },
+          "token": {
+            "anyOf": [
+              {
+                "maxLength": 1024,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Token"
+          },
+          "topic": {
+            "pattern": "^[A-Za-z0-9_-]{1,64}$",
+            "title": "Topic",
+            "type": "string"
+          },
+          "type": {
+            "const": "ntfy",
+            "title": "Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "type",
+          "topic"
+        ],
+        "title": "NtfyConfigIn",
         "type": "object"
       },
       "OidcLogoutIn": {
@@ -17454,6 +18406,84 @@
         "title": "SkippedAction",
         "type": "object"
       },
+      "SmtpConfigIn": {
+        "additionalProperties": false,
+        "properties": {
+          "host": {
+            "maxLength": 253,
+            "title": "Host",
+            "type": "string"
+          },
+          "password": {
+            "anyOf": [
+              {
+                "maxLength": 1024,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Password"
+          },
+          "port": {
+            "default": 587,
+            "maximum": 65535.0,
+            "minimum": 1.0,
+            "title": "Port",
+            "type": "integer"
+          },
+          "recipients": {
+            "items": {
+              "type": "string"
+            },
+            "maxItems": 10,
+            "minItems": 1,
+            "title": "Recipients",
+            "type": "array"
+          },
+          "sender": {
+            "maxLength": 254,
+            "title": "Sender",
+            "type": "string"
+          },
+          "tls": {
+            "default": "starttls",
+            "enum": [
+              "starttls",
+              "implicit"
+            ],
+            "title": "Tls",
+            "type": "string"
+          },
+          "type": {
+            "const": "smtp",
+            "title": "Type",
+            "type": "string"
+          },
+          "username": {
+            "anyOf": [
+              {
+                "maxLength": 320,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Username"
+          }
+        },
+        "required": [
+          "type",
+          "host",
+          "sender",
+          "recipients"
+        ],
+        "title": "SmtpConfigIn",
+        "type": "object"
+      },
       "SnapshotOut": {
         "properties": {
           "as_of_date": {
@@ -20325,6 +21355,20 @@
       },
       "UserPreferencesOut": {
         "properties": {
+          "dashboard_layout": {
+            "anyOf": [
+              {
+                "items": {
+                  "$ref": "#/components/schemas/DashboardEntryOut"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Dashboard Layout"
+          },
           "display_name": {
             "title": "Display Name",
             "type": "string"
@@ -20359,6 +21403,21 @@
       "UserPreferencesUpdate": {
         "additionalProperties": false,
         "properties": {
+          "dashboard_layout": {
+            "anyOf": [
+              {
+                "items": {
+                  "$ref": "#/components/schemas/DashboardEntry"
+                },
+                "maxItems": 12,
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Dashboard Layout"
+          },
           "display_name": {
             "anyOf": [
               {
@@ -20597,6 +21656,27 @@
         "title": "WebAuthnRegisterIn",
         "type": "object"
       },
+      "WebhookConfigIn": {
+        "additionalProperties": false,
+        "properties": {
+          "type": {
+            "const": "webhook",
+            "title": "Type",
+            "type": "string"
+          },
+          "url": {
+            "maxLength": 2048,
+            "title": "Url",
+            "type": "string"
+          }
+        },
+        "required": [
+          "type",
+          "url"
+        ],
+        "title": "WebhookConfigIn",
+        "type": "object"
+      },
       "app__domain__loans__schemas__ScheduleOut": {
         "description": "``GET /loans/{id}/schedule``.\n\n``basis=original``: from origination over the original principal (rate\nchanges applied); ``basis=projected``: from the balance owed today.",
         "properties": {
@@ -20737,7 +21817,7 @@
   },
   "info": {
     "title": "PerFin",
-    "version": "0.0.0"
+    "version": "1.0.0"
   },
   "openapi": "3.1.0",
   "paths": {
@@ -35140,6 +36220,280 @@
           }
         },
         "summary": "Log in to the receipts mailbox and report the outcome",
+        "tags": [
+          "settings"
+        ]
+      }
+    },
+    "/api/v1/settings/notifications/channels": {
+      "get": {
+        "operationId": "list_channels_api_v1_settings_notifications_channels_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/ChannelOut"
+                  },
+                  "title": "Response List Channels Api V1 Settings Notifications Channels Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {}
+            },
+            "description": "Problem details"
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {}
+            },
+            "description": "Problem details"
+          },
+          "409": {
+            "content": {
+              "application/problem+json": {}
+            },
+            "description": "Problem details"
+          },
+          "422": {
+            "content": {
+              "application/problem+json": {}
+            },
+            "description": "Problem details"
+          }
+        },
+        "summary": "Notification channels",
+        "tags": [
+          "settings"
+        ]
+      },
+      "post": {
+        "operationId": "create_channel_api_v1_settings_notifications_channels_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ChannelCreate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ChannelSavedOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {}
+            },
+            "description": "Problem details"
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {}
+            },
+            "description": "Problem details"
+          },
+          "409": {
+            "content": {
+              "application/problem+json": {}
+            },
+            "description": "Problem details"
+          },
+          "422": {
+            "content": {
+              "application/problem+json": {}
+            },
+            "description": "Problem details"
+          }
+        },
+        "summary": "Add a notification channel (step-up)",
+        "tags": [
+          "settings"
+        ]
+      }
+    },
+    "/api/v1/settings/notifications/channels/{channel_id}": {
+      "delete": {
+        "operationId": "delete_channel_api_v1_settings_notifications_channels__channel_id__delete",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "channel_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Channel Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {}
+            },
+            "description": "Problem details"
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {}
+            },
+            "description": "Problem details"
+          },
+          "409": {
+            "content": {
+              "application/problem+json": {}
+            },
+            "description": "Problem details"
+          },
+          "422": {
+            "content": {
+              "application/problem+json": {}
+            },
+            "description": "Problem details"
+          }
+        },
+        "summary": "Remove a notification channel (step-up)",
+        "tags": [
+          "settings"
+        ]
+      },
+      "patch": {
+        "operationId": "update_channel_api_v1_settings_notifications_channels__channel_id__patch",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "channel_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Channel Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ChannelUpdate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ChannelSavedOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {}
+            },
+            "description": "Problem details"
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {}
+            },
+            "description": "Problem details"
+          },
+          "409": {
+            "content": {
+              "application/problem+json": {}
+            },
+            "description": "Problem details"
+          },
+          "422": {
+            "content": {
+              "application/problem+json": {}
+            },
+            "description": "Problem details"
+          }
+        },
+        "summary": "Change a notification channel (step-up)",
+        "tags": [
+          "settings"
+        ]
+      }
+    },
+    "/api/v1/settings/notifications/channels/{channel_id}/test": {
+      "post": {
+        "operationId": "test_channel_api_v1_settings_notifications_channels__channel_id__test_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "channel_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Channel Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ChannelTestOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {}
+            },
+            "description": "Problem details"
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {}
+            },
+            "description": "Problem details"
+          },
+          "409": {
+            "content": {
+              "application/problem+json": {}
+            },
+            "description": "Problem details"
+          },
+          "422": {
+            "content": {
+              "application/problem+json": {}
+            },
+            "description": "Problem details"
+          }
+        },
+        "summary": "Send a test notification through a channel",
         "tags": [
           "settings"
         ]

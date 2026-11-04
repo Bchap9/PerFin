@@ -702,6 +702,31 @@ def _check_market_data(settings: Settings, out: list[Finding]) -> None:
         )
 
 
+def _check_notifications(settings: Settings, out: list[Finding]) -> None:
+    """Notification channels (docs/security/notifications.md, SECURITY.md B5/H2)."""
+    if settings.notifications_allow_private_hosts and not settings.notifications_allowed_hosts:
+        out.append(
+            Finding(
+                "warning",
+                "notifications.private_without_allowlist",
+                "PERFIN_NOTIFICATIONS_ALLOW_PRIVATE_HOSTS has no effect without "
+                "PERFIN_NOTIFICATIONS_ALLOWED_HOSTS: private addresses are allowed only for "
+                "the hosts listed there",
+            )
+        )
+    for entry in settings.notifications_allowed_hosts:
+        host, _, port = entry.rpartition(":") if entry.count(":") == 1 else (entry, "", "")
+        if not host or (port and not port.isdigit()) or "/" in entry or "@" in entry:
+            out.append(
+                Finding(
+                    "error",
+                    "notifications.allowed_host_invalid",
+                    f"PERFIN_NOTIFICATIONS_ALLOWED_HOSTS entry {entry!r} is not a host or "
+                    "host:port",
+                )
+            )
+
+
 def _production_checks(settings: Settings) -> list[Finding]:
     out: list[Finding] = []
     _check_master_key(settings, out)
@@ -756,6 +781,7 @@ def _production_checks(settings: Settings) -> list[Finding]:
     _check_smtp(settings, out)
     _check_dropfolder(settings, out)
     _check_market_data(settings, out)
+    _check_notifications(settings, out)
     if not settings.master_key_backup_acknowledged:
         out.append(
             Finding(

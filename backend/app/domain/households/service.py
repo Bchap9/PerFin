@@ -64,6 +64,7 @@ from app.domain.accounts.visibility import account_not_found
 from app.domain.households import repo
 from app.domain.households.schemas import HouseholdCreate, HouseholdUpdate, MemberAdd
 from app.domain.households.users import create_local_user, user_not_found
+from app.domain.notifications.routing import notify
 from app.domain.transactions.categories import seed_default_categories
 
 if TYPE_CHECKING:
@@ -237,7 +238,8 @@ def _record(
         request=request,
     )
     if event is not None:
-        emit(db, household_id, event, payload or {})
+        event_id = emit(db, household_id, event, payload or {})
+        notify(db, household_id, event, source_id=event_id)
 
 
 # ---------------------------------------------------------------------------

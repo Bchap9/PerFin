@@ -59,11 +59,13 @@ from app.domain.households.schemas import (
     AdminUserOut,
     AdminUserPage,
     AdminUserUpdate,
+    DashboardEntry,
     NewLocalUser,
     UserPreferencesOut,
     UserPreferencesUpdate,
     clean_locale,
     clean_timezone,
+    unique_widgets,
 )
 
 if TYPE_CHECKING:
@@ -383,12 +385,15 @@ def reset_mfa(
 # ---------------------------------------------------------------------------
 
 
-def _stored_preferences(db: Session, user_id: uuid.UUID) -> dict[str, str]:
+def _stored_preferences(db: Session, user_id: uuid.UUID) -> dict[str, Any]:
     """Stored values that are still valid; anything else falls back to the default."""
     raw = repo.get_user_setting(db, user_id, PREFERENCES_KEY)
-    stored: dict[str, str] = {}
+    stored: dict[str, Any] = {}
     if not isinstance(raw, dict):
         return stored
+    layout = _clean_layout(raw.get("dashboard_layout"))
+    if layout is not None:
+        stored["dashboard_layout"] = layout
     checks = {"locale": clean_locale, "timezone": clean_timezone}
     for key, check in checks.items():
         value = raw.get(key)
@@ -401,6 +406,18 @@ def _stored_preferences(db: Session, user_id: uuid.UUID) -> dict[str, str]:
     return stored
 
 
+def _clean_layout(raw: object) -> list[dict[str, str]] | None:
+    """A stored layout that still validates; anything else counts as never set."""
+    if not isinstance(raw, list):
+        return None
+    try:
+        entries = [DashboardEntry.model_validate(item) for item in raw]
+        unique_widgets(entries)
+    except (ValueError, TypeError):
+        return None
+    return [{"widget": e.widget, "size": e.size} for e in entries]
+
+
 def get_preferences(db: Session, principal: Principal) -> UserPreferencesOut:
     """The caller's preferences (``perfin.user_id`` context, set by the principal)."""
     stored = _stored_preferences(db, principal.user_id)
@@ -410,6 +427,7 @@ def get_preferences(db: Session, principal: Principal) -> UserPreferencesOut:
         locale=stored.get("locale", DEFAULT_LOCALE),
         theme=theme,
         timezone=stored.get("timezone", DEFAULT_TIMEZONE),
+        dashboard_layout=stored.get("dashboard_layout"),
     )
 
 
@@ -421,7 +439,7 @@ def update_preferences(
     request: HTTPConnection | None,
 ) -> UserPreferencesOut:
     now = clock.utcnow()
-    changed: dict[str, str] = {}
+    changed: dict[str, Any] = {}
     user = principal.user
     if data.display_name is not None and data.display_name != user.display_name:
         user.display_name = data.display_name
@@ -435,6 +453,11 @@ def update_preferences(
         if value is not None and stored.get(key) != value:
             updated[key] = value
             changed[key] = value
+    if data.dashboard_layout is not None:
+        layout = [{"widget": e.widget, "size": e.size} for e in data.dashboard_layout]
+        if stored.get("dashboard_layout") != layout:
+            updated["dashboard_layout"] = layout
+            changed["dashboard_layout"] = layout
     if updated != stored:
         repo.put_user_setting(db, principal.user_id, PREFERENCES_KEY, updated, now=now)
     if changed:

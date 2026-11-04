@@ -26,6 +26,7 @@ from pydantic import ValidationError
 
 if TYPE_CHECKING:
     from alembic.config import Config
+    from sqlalchemy import Engine
     from sqlalchemy.orm import Session
 
     from app.core.settings import Settings
@@ -114,6 +115,8 @@ def cmd_api(_args: argparse.Namespace) -> int:
     from app.core.settings import get_settings
 
     settings = get_settings()
+    if not _database_role_ok(settings, "api"):
+        return EXIT_FAIL
     # First boot with no user: publish the one-time setup URL (A10).
     _announce_bootstrap(settings)
     # Internal-only Prometheus endpoint on PERFIN_METRICS_PORT (H7).
@@ -138,6 +141,45 @@ def cmd_api(_args: argparse.Namespace) -> int:
         access_log=True,
     )
     return EXIT_OK
+
+
+def _database_role_ok(settings: Settings, command: str, *, engine: Engine | None = None) -> bool:
+    """Refuse to serve as a superuser, BYPASSRLS or table-owning role (H3).
+
+    ``PERFIN_DATABASE_URL`` must be the unprivileged app role, or row-level
+    security stops being a control (``app.db.role_check``). Fails closed when
+    the database cannot be asked; dev mode only warns.
+    """
+    from sqlalchemy.exc import SQLAlchemyError
+
+    from app.db.role_check import privileged_role_problems
+    from app.db.session import make_app_engine
+
+    own = engine is None
+    probe = make_app_engine(settings, pool_size=1) if engine is None else engine
+    try:
+        problems = privileged_role_problems(probe)
+    except SQLAlchemyError as exc:
+        print(
+            f"perfin {command}: could not check the database role of PERFIN_DATABASE_URL "
+            f"({type(exc).__name__}); refusing to start",
+            file=sys.stderr,
+        )
+        return False
+    finally:
+        if own:
+            probe.dispose()
+    if not problems:
+        return True
+    message = (
+        f"the PERFIN_DATABASE_URL role {', '.join(problems)}; it must be the "
+        "unprivileged app role (perfin_app), see deploy/db-init (SECURITY.md H3)"
+    )
+    if settings.dev_mode:
+        print(f"perfin {command}: WARNING {message}", file=sys.stderr)
+        return True
+    print(f"perfin {command}: ERROR {message}; refusing to start", file=sys.stderr)
+    return False
 
 
 def _announce_bootstrap(settings: Settings) -> None:
@@ -207,6 +249,13 @@ def cmd_bootstrap_url(_args: argparse.Namespace) -> int:
     return EXIT_OK
 
 
+def cmd_notify(_args: argparse.Namespace) -> int:
+    """Route ``backup.failed`` to every household's channels (notifications.md)."""
+    from app.domain.notifications.backup import run_cli
+
+    return run_cli()
+
+
 def cmd_worker(args: argparse.Namespace) -> int:
     """Run the job worker (ADR-0002) until SIGTERM/SIGINT.
 
@@ -242,6 +291,8 @@ def cmd_worker(args: argparse.Namespace) -> int:
     # Application role with statement_timeout and lock_timeout (F8).
     engine = make_app_engine(settings, pool_size=config.concurrency + 2)
     try:
+        if not _database_role_ok(settings, "worker", engine=engine):
+            return EXIT_FAIL
         return run_worker(engine, config=config, install_signal_handlers=True)
     finally:
         engine.dispose()
@@ -632,6 +683,11 @@ def build_parser() -> argparse.ArgumentParser:
     openapi = sub.add_parser("openapi", help="print the OpenAPI schema as JSON")
     openapi.add_argument("-o", "--output", help="write to this file instead of stdout")
     openapi.set_defaults(func=cmd_openapi)
+    notify = sub.add_parser("notify", help="send a household notification from a script")
+    notify_sub = notify.add_subparsers(dest="notify_command", required=True, metavar="EVENT")
+    notify_sub.add_parser(
+        "backup-failed", help="tell every household's channels that a backup failed"
+    ).set_defaults(func=cmd_notify)
 
     ingest = sub.add_parser("ingest", help="run the ingestion pipeline on a file")
     ingest.add_argument("path", nargs="?")
@@ -662,9 +718,11 @@ def build_parser() -> argparse.ArgumentParser:
         )
         cmd.add_argument("username", help="the local account")
     breakglass.set_defaults(func=cmd_breakglass)
-    sub.add_parser("rotate-key", help="rewrap data keys under a new master key").set_defaults(
-        func=_unavailable("rotate-key", "Phase 7")
-    )
+    # rotate-key, backup-encrypt, backup-decrypt, backup-info, restore-check
+    # (docs/BACKUP_RESTORE.md).
+    from app.ops.commands import register as register_ops_commands
+
+    register_ops_commands(sub)
     return parser
 
 

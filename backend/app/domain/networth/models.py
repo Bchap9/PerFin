@@ -14,7 +14,8 @@ liabilities`` (check constraint).
 "unconverted": [...]}``). Because it names every account, a snapshot is shown
 only to principals who see every account of the household (owners, admins,
 or members/viewers granted every account); everyone else gets figures
-recomputed over their visible accounts. It is not exported (recomputed).
+recomputed over their visible accounts. It is exported as stored history
+(docs/PORTABILITY.md; the importer re-maps the ids in ``breakdown``).
 """
 
 from __future__ import annotations

@@ -48,7 +48,7 @@ BOLD: Final = "Helvetica-Bold"
 FAKE_SSN: Final = "000-00-0000"
 FAKE_EIN: Final = "00-0000000"
 RECIPIENT: Final = "Jordan Quill Testperson"
-RECIPIENT_STREET: Final = "742 Imaginary Lane"
+RECIPIENT_STREET: Final = "742 Quuxwood Lane"
 RECIPIENT_CITY: Final = "Nowhereville ZZ 00000"
 ISSUER_STREET: Final = "1 Makebelieve Plaza"
 ISSUER_CITY: Final = "Faketown ZZ 00000"
@@ -67,7 +67,7 @@ IDENTITY_TOKENS: Final = (
     FAKE_EIN,
     "testperson",
     "quill",
-    "imaginary",
+    "quuxwood",  # unique: a token shared with another fixture made the scan order-dependent
     "nowhereville",
     "makebelieve",
     "faketown",

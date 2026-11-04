@@ -35,6 +35,7 @@ def test_defaults(actors: Actors) -> None:
         "locale": "en-US",
         "theme": "system",
         "timezone": "UTC",
+        "dashboard_layout": None,
     }
 
 
@@ -59,6 +60,7 @@ def test_update_and_read_back(actors: Actors, factories: Factories) -> None:
         "locale": "de-DE",
         "theme": "dark",
         "timezone": "Europe/Berlin",
+        "dashboard_layout": None,
     }
     assert response.json() == expected
     assert me.get(URL).json() == expected
@@ -66,7 +68,85 @@ def test_update_and_read_back(actors: Actors, factories: Factories) -> None:
     # Partial update keeps the rest.
     assert me.patch(URL, json={"theme": "light"}).json() == {**expected, "theme": "light"}
     rows = instance_audit(factories, "user.preferences_update", me.user.id)
-    assert [r.after for r in rows] == [expected, {"theme": "light"}]
+    assert [r.after for r in rows] == [
+        {k: v for k, v in expected.items() if k != "dashboard_layout"},
+        {"theme": "light"},
+    ]
+
+
+LAYOUT = [
+    {"widget": "cash_flow", "size": "large"},
+    {"widget": "net_worth", "size": "small"},
+]
+
+
+def test_dashboard_layout_round_trip(actors: Actors, factories: Factories) -> None:
+    me = actors.new(role="member")
+    assert me.get(URL).json()["dashboard_layout"] is None
+    response = me.patch(URL, json={"dashboard_layout": LAYOUT})
+    assert response.status_code == 200, response.text
+    assert response.json()["dashboard_layout"] == LAYOUT
+    assert me.get(URL).json()["dashboard_layout"] == LAYOUT
+    # Other preferences are untouched, and the layout survives them changing.
+    assert me.patch(URL, json={"theme": "dark"}).json()["dashboard_layout"] == LAYOUT
+    # An empty list is a deliberately empty dashboard, not "never set".
+    assert me.patch(URL, json={"dashboard_layout": []}).json()["dashboard_layout"] == []
+    rows = instance_audit(factories, "user.preferences_update", me.user.id)
+    assert [r.after for r in rows] == [
+        {"dashboard_layout": LAYOUT},
+        {"theme": "dark"},
+        {"dashboard_layout": []},
+    ]
+
+
+def test_dashboard_layout_is_per_user(actors: Actors) -> None:
+    alice = actors.new(role="owner")
+    bob = actors.new(role="member", household=alice.record.household)
+    assert alice.patch(URL, json={"dashboard_layout": LAYOUT}).status_code == 200
+    assert bob.get(URL).json()["dashboard_layout"] is None
+
+
+@pytest.mark.parametrize(
+    "layout",
+    [
+        [{"widget": "crypto_ticker", "size": "small"}],
+        [{"widget": "goals", "size": "huge"}],
+        [{"widget": "goals"}, {"widget": "goals"}],
+        [{"widget": "goals", "size": "small", "html": "<b>"}],
+        [{"widget": "goals"}] * 13,
+        "goals",
+    ],
+)
+def test_invalid_dashboard_layout_is_422(actors: Actors, layout: object) -> None:
+    me = actors.new(role="member")
+    assert me.patch(URL, json={"dashboard_layout": layout}).status_code == 422
+    assert me.get(URL).json()["dashboard_layout"] is None
+
+
+def test_invalid_stored_layout_falls_back_to_default(actors: Actors, factories: Factories) -> None:
+    me = actors.new(role="member")
+    me.patch(URL, json={"theme": "dark"})
+    with factories.transaction() as db:
+        set_context(db, me.record.household_id, me.user.id)
+        row = db.execute(
+            select(Setting).where(
+                Setting.scope == SettingScope.USER,
+                Setting.scope_id == me.user.id,
+                Setting.key == PREFERENCES_KEY,
+            )
+        ).scalar_one()
+        row.value = {"theme": "dark", "dashboard_layout": [{"widget": "nope"}]}
+    body = me.get(URL).json()
+    assert (body["theme"], body["dashboard_layout"]) == ("dark", None)
+
+
+def test_dashboard_layout_needs_a_session(actors: Actors, factories: Factories) -> None:
+    record = actors.user(role="member")
+    raw = factories.token(record, scopes=("settings:read",))
+    response = actors.anonymous().patch(
+        URL, json={"dashboard_layout": LAYOUT}, headers={"Authorization": f"Bearer {raw}"}
+    )
+    assert (response.status_code, problem_type(response)) == (403, "session-required")
 
 
 def test_preferences_are_per_user(actors: Actors, factories: Factories) -> None:

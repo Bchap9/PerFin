@@ -17,11 +17,12 @@ reused for another object either.
 
 **Key versions.** :class:`Keyring` holds master keys by integer version; the
 version used is stored in the envelope so that rotation (``perfin
-rotate-key``, Phase 7) can rewrap DEKs under a new master key while old
-envelopes stay readable; :meth:`Keyring.rewrap` replaces only the wrapped DEK
-and keeps the payload byte for byte (SECURITY.md G4). The key version is
-authenticated through the wrap's associated data. Phase 1 has exactly one
-key, version 1.
+rotate-key``, ``app.ops.keyrotation``) can rewrap DEKs under a new master
+key while old envelopes stay readable; :meth:`Keyring.rewrap` replaces only
+the wrapped DEK and keeps the payload byte for byte (SECURITY.md G4). The key
+version is authenticated through the wrap's associated data. A running
+instance holds exactly one key, under ``PERFIN_MASTER_KEY_VERSION``
+(default 1); only the rotation command holds two.
 
 Envelope layout (:class:`Envelope`, ``bytes(envelope)``), all big-endian::
 
@@ -193,8 +194,8 @@ class Keyring:
 
     @classmethod
     def from_settings(cls, settings: Settings) -> Keyring:
-        """Version 1 is the configured master key (``Settings.load_master_key``)."""
-        return cls.from_master_key(settings.load_master_key(), version=1)
+        """The configured master key under ``PERFIN_MASTER_KEY_VERSION`` (default 1)."""
+        return cls.from_master_key(settings.load_master_key(), version=settings.master_key_version)
 
     # ---- envelope operations -------------------------------------------------
     def encrypt(self, plaintext: bytes, *, ad: bytes) -> Envelope:

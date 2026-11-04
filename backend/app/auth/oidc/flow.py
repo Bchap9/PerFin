@@ -83,6 +83,7 @@ from app.core.audit import RequestMeta
 from app.core.crypto import Keyring
 from app.core.logging import get_logger
 from app.core.settings import Settings
+from app.domain.notifications.devices import note_sign_in
 
 log = get_logger(__name__)
 
@@ -360,6 +361,7 @@ def _start_session(
         user_agent=request.headers.get("user-agent"),
         now=now,
     )
+    note_sign_in(db, issued.row)
     if stage is SessionStage.AUTHENTICATED:
         mark_mfa_from_idp(
             db,

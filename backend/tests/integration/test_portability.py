@@ -510,7 +510,7 @@ def test_export_contents_and_csv_neutralisation(
     members = members_of(data)
     manifest = json.loads(members["manifest.json"])
     assert manifest["format"] == "perfin-export"
-    assert manifest["format_version"] == 1
+    assert manifest["format_version"] == 2
     assert manifest["household"]["base_currency"] == "USD"
     assert set(manifest["members"]) == set(members) - {"manifest.json"}
     for name, entry in manifest["members"].items():

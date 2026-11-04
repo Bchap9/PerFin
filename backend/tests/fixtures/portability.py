@@ -29,25 +29,41 @@ from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import date, timedelta
+from decimal import Decimal
 from typing import Any
 from unittest.mock import patch
 
-from sqlalchemy import insert
+from sqlalchemy import insert, select
 from sqlalchemy.orm import Session
 
 from app.core import clock
 from app.core.archive_crypto import KdfParams
 from app.core.crypto import Keyring
 from app.core.ids import uuid7
-from app.domain.accounts.models import Account
+from app.domain.accounts.models import Account, AccountType
+from app.domain.ai.models import AiMode
 from app.domain.documents.blobstore import BlobStore, EncryptingWriter
-from app.domain.documents.models import Blob, BlobArea, Document, DocumentLink, LinkTarget
+from app.domain.documents.models import (
+    Blob,
+    BlobArea,
+    Document,
+    DocumentKind,
+    DocumentLink,
+    LinkTarget,
+)
+from app.domain.investments.statement_import import activity_hash
+from app.domain.networth.service import snapshot_household
 from app.domain.portability.import_ import blob_row
 from app.domain.portability.models import ArchiveKind, ArchiveState, PortabilityArchive
 from app.domain.portability.service import PortabilityDeps
+from app.domain.tax.models import ChecklistStatus, TaxChecklistItem, TaxYear
 from app.domain.transactions.models import Transaction
+from app.ingestion.classify.fingerprints import remember_layout
+from app.ingestion.sandbox.protocol import InvestmentActivity
+from tests.fixtures.ai import make_ai_client
 from tests.fixtures.documents import make_document
-from tests.fixtures.factories import Factories
+from tests.fixtures.factories import AuthedClient, Factories
+from tests.fixtures.households import API
 from tests.fixtures.imports import make_import_mapping, run_jobs
 from tests.fixtures.ledger import (
     LedgerFactories,
@@ -58,6 +74,8 @@ from tests.fixtures.ledger import (
     tag_transaction,
 )
 from tests.fixtures.report_ledger import ReportLedger, build
+from tests.fixtures.tax import make_form_data
+from tests.fixtures.wealth import make_investment_txn
 
 CHEAP_KDF = KdfParams(1, 8 * 1024)
 
@@ -297,3 +315,313 @@ def run_portability_jobs(
 
     with portability_deps(deps):
         return run_jobs(factories, household_id, job_type, done=done)
+
+
+# ---------------------------------------------------------------------------
+# Every Phase 3-6 domain (format version 2)
+# ---------------------------------------------------------------------------
+
+#: A second synthetic original: the tax form the form data was read from.
+TAX_FORM_BYTES = b"Form,Box,Amount\nW-2,1,61234.50\nW-2,2,7348.14\n"
+FINGERPRINT_RULES = {"all": [{"header": "SYNTHETIC SAVINGS BANK"}]}
+
+
+@dataclass(frozen=True)
+class Wealth:
+    brokerage: Account
+    ira: Account
+    mortgage: Account
+    house: Account
+    tax_document: Document
+    security_ids: list[str]
+    #: The AI client's bearer token (must never appear in an archive).
+    ai_token: str
+
+
+def _created(response: Any) -> dict[str, Any]:
+    assert response.status_code in (200, 201), response.text
+    body: dict[str, Any] = response.json()
+    return body
+
+
+def _usd(amount: str) -> dict[str, str]:
+    return {"amount": amount, "currency": "USD"}
+
+
+def build_wealth(
+    factories: Factories,
+    ledger: LedgerFactories,
+    store: BlobStore,
+    owner: AuthedClient,
+    book: RichLedger,
+) -> Wealth:
+    """One of everything the Phase 3-6 tables hold, mostly through the real API.
+
+    Investments (two securities, prices, buys, a sale of a chosen lot, a
+    split, a dividend, an average-cost account), a variable-rate mortgage
+    with payments (one linked to a ledger transaction) and a rate change, a
+    manual asset with valuations, stored net worth snapshots, a tax year
+    with checklist items, a category map and form data read from a
+    document linked to the year, a learned parser fingerprint and an AI
+    client. All values are invented.
+    """
+
+    hid = book.book.household_id
+    brokerage = ledger.account(hid, type=AccountType.BROKERAGE, name="Brokerage")
+    ira = ledger.account(hid, type=AccountType.RETIREMENT, name="Retirement")
+    mortgage = ledger.account(hid, type=AccountType.MORTGAGE, name="Home loan")
+    house = ledger.account(hid, type=AccountType.MANUAL_ASSET, name="House", asset_kind="property")
+
+    # ---- investments ------------------------------------------------------
+    securities = [
+        _created(
+            owner.post(
+                f"{API}/securities",
+                json={
+                    "symbol": symbol,
+                    "name": f"Synthetic {symbol}",
+                    "asset_class": kind,
+                    "currency": "USD",
+                },
+            )
+        )
+        for symbol, kind in (("SYNAAA", "equity"), ("SYNBBB", "etf"))
+    ]
+    syn_a, syn_b = securities
+    for security, closes in ((syn_a, ("101.50", "64.25")), (syn_b, ("49.10", "52.75"))):
+        for day, close in zip(("2026-03-31", "2026-06-30"), closes, strict=True):
+            _created(
+                owner.post(
+                    f"{API}/securities/{security['id']}/prices",
+                    json={"price_date": day, "close": close},
+                )
+            )
+    txns = f"{API}/investments/transactions"
+
+    def txn(account: Account, kind: str, day: str, amount: str, **extra: Any) -> dict[str, Any]:
+        body = {
+            "account_id": str(account.id),
+            "type": kind,
+            "trade_date": day,
+            "amount": _usd(amount),
+            **extra,
+        }
+        return _created(owner.post(txns, json=body))
+
+    txn(
+        brokerage,
+        "buy",
+        "2026-01-05",
+        "-1000.00",
+        security_id=syn_a["id"],
+        quantity="10",
+        price="100",
+        fees=_usd("0.00"),
+    )
+    second = txn(
+        brokerage,
+        "buy",
+        "2026-02-05",
+        "-605.00",
+        security_id=syn_a["id"],
+        quantity="5",
+        price="120",
+        fees=_usd("5.00"),
+    )
+    lots = second["lots"]
+    assert lots, second
+    txn(
+        brokerage,
+        "sell",
+        "2026-03-10",
+        "540.00",
+        security_id=syn_a["id"],
+        quantity="4",
+        price="135",
+        lots=[{"lot_id": lots[0]["lot_id"], "quantity": "4"}],
+    )
+    txn(
+        brokerage,
+        "split",
+        "2026-04-01",
+        "0",
+        security_id=syn_a["id"],
+        ratio={"new": "2", "old": "1"},
+    )
+    txn(brokerage, "dividend", "2026-05-15", "12.34", security_id=syn_a["id"])
+    txn(brokerage, "fee", "2026-05-31", "-3.00")
+    # A statement row: its import hash embeds the account (re-computed on import).
+    statement_row = InvestmentActivity.model_construct(
+        type="interest", trade_date=date(2026, 6, 1), quantity=None, amount=Decimal("1.25")
+    )
+    with factories.transaction() as db:
+        make_investment_txn(
+            db,
+            brokerage,
+            type="interest",
+            trade_date=date(2026, 6, 1),
+            quantity=None,
+            price=None,
+            amount="1.25",
+            import_hash=activity_hash(brokerage.id, statement_row, None, 0),
+        )
+    _created(
+        owner.put(f"{API}/investments/accounts/{ira.id}/cost-method", json={"method": "average"})
+    )
+    txn(ira, "buy", "2026-01-10", "-1000.00", security_id=syn_b["id"], quantity="20", price="50")
+    txn(ira, "buy", "2026-02-10", "-1100.00", security_id=syn_b["id"], quantity="20", price="55")
+    txn(ira, "sell", "2026-04-20", "1560.00", security_id=syn_b["id"], quantity="30", price="52")
+    txn(
+        ira,
+        "reinvest",
+        "2026-05-20",
+        "-49.10",
+        security_id=syn_b["id"],
+        quantity="1",
+        price="49.10",
+    )
+
+    # ---- loans ------------------------------------------------------------
+    loan = _created(
+        owner.post(
+            f"{API}/loans",
+            json={
+                "account_id": str(mortgage.id),
+                "principal_original": _usd("240000.00"),
+                "rate": "0.05875",
+                "rate_type": "variable",
+                "term_months": 360,
+                "origination_date": "2025-11-01",
+                "payment_day": 1,
+                "escrow_amount": _usd("310.00"),
+                "lender": "Placeholder Lending",
+            },
+        )
+    )
+    paid = ledger.transaction(
+        book.book.checking, posted_date=date(2026, 1, 2), amount="-1729.70", raw_payee="MORTGAGE"
+    )
+    for day, principal, interest, link in (
+        ("2025-12-01", "244.70", "1175.00", None),
+        ("2026-01-01", "245.90", "1173.80", str(paid.id)),
+    ):
+        _created(
+            owner.post(
+                f"{API}/loans/{loan['id']}/payments",
+                json={
+                    "paid_on": day,
+                    "principal": _usd(principal),
+                    "interest": _usd(interest),
+                    "escrow": _usd("310.00"),
+                    "transaction_id": link,
+                },
+            )
+        )
+    _created(
+        owner.post(
+            f"{API}/loans/{loan['id']}/rate-changes",
+            json={"effective_date": "2026-05-01", "new_rate": "0.0625"},
+        )
+    )
+
+    # ---- manual assets ----------------------------------------------------
+    asset = _created(
+        owner.post(
+            f"{API}/assets",
+            json={
+                "account_id": str(house.id),
+                "description": "Synthetic house",
+                "value": _usd("410000.00"),
+                "valued_on": "2026-01-01",
+            },
+        )
+    )
+    _created(
+        owner.post(
+            f"{API}/assets/{asset['id']}/valuations",
+            json={"valued_on": "2026-06-01", "value": _usd("425000.00")},
+        )
+    )
+
+    # ---- tax --------------------------------------------------------------
+    _created(owner.post(f"{API}/tax-years", json={"year": 2025, "filing_status": "single"}))
+    _created(
+        owner.post(
+            f"{API}/tax-years/2025/checklist",
+            json={"expected_form": "1099-INT", "issuer": "Synthetic Savings Bank"},
+        )
+    )
+    _created(
+        owner.put(
+            f"{API}/tax-category-map/{book.book.rent.id}",
+            json={"schedule": "Schedule E", "line": "19"},
+        )
+    )
+    with factories.transaction() as db, household_context(db, hid):
+        year = db.execute(
+            select(TaxYear).where(TaxYear.household_id == hid, TaxYear.year == 2025)
+        ).scalar_one()
+        tax_document = make_document(
+            db,
+            store,
+            factories.keyring,
+            hid,
+            data=TAX_FORM_BYTES,
+            filename="W-2 2025.csv",
+            kind=DocumentKind.TAX_FORM,
+        )
+        make_form_data(db, tax_document, tax_year=2025, tax_year_row=year)
+        db.add(
+            TaxChecklistItem(
+                household_id=hid,
+                tax_year_id=year.id,
+                expected_form="W-2",
+                issuer="Synthetic Employer Inc",
+                status=ChecklistStatus.RECEIVED,
+                document_id=tax_document.id,
+            )
+        )
+        db.add(
+            DocumentLink(
+                household_id=hid,
+                document_id=tax_document.id,
+                target_type=LinkTarget.TAX_YEAR,
+                target_id=year.id,
+            )
+        )
+        # ---- learned layout and net worth history -------------------------
+        savings = db.get(Account, book.book.savings.id)
+        assert savings is not None
+        assert savings.institution_id is not None
+        remember_layout(
+            db,
+            hid,
+            institution_id=savings.institution_id,
+            kind=DocumentKind.STATEMENT,
+            match_rules=FINGERPRINT_RULES,
+            parser_name="csv_generic",
+            document_id=book.document.id,
+        )
+        snapshot_household(db, hid, date(2026, 6, 30), max_days=5)
+        db.flush()
+
+    # ---- AI client --------------------------------------------------------
+    with factories.transaction() as db:
+        _, ai_token = make_ai_client(
+            db,
+            owner.record,
+            factories.settings,
+            name="Synthetic assistant",
+            mode=AiMode.AGGREGATES,
+            rounding=10,
+            custom_denylist=["Synthetic School"],
+        )
+    return Wealth(
+        brokerage=brokerage,
+        ira=ira,
+        mortgage=mortgage,
+        house=house,
+        tax_document=tax_document,
+        security_ids=[syn_a["id"], syn_b["id"]],
+        ai_token=ai_token,
+    )

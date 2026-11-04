@@ -250,11 +250,15 @@ GOVID_KEYWORD_RE: Final = re.compile(
     + _NUMBER_WORD
     + r"(?:last\s*(?:4|four)\b"
     + _SEP
-    + r")?(?:"
+    + r")?(?P<value>(?:"
     + _MASK
-    + r"[\s\-]{0,2}+)?[\dX*][\dX*\-\s]{0,14}\d",
+    + r"[\s\-]{0,2}+)?[\dX*][\dX*\-\s]{0,14}\d)",
     _I,
 )
+#: Most digits in an SSN, ITIN or EIN (a masked position counts as one).
+GOVID_MAX_DIGITS: Final = 9
+_GOVID_MASK_CHARS: Final = frozenset("xX*•·.#")
+_LAST_FOUR: Final = re.compile(r"last\s*(?:4|four)\b", _I)
 # An IBAN: country code, check digits, 11-30 alphanumerics (spaces allowed),
 # at least 8 digits in all (checked in code).
 IBAN_RE: Final = re.compile(r"\b[A-Z]{2}\d{2}(?:\s?[A-Z0-9]){11,30}+\b", _I)
@@ -271,7 +275,9 @@ _DIRECTION = (
 )
 _UNIT = r"(?:apt|apartment|unit|ste|suite|fl|floor|rm|room|bldg|building|#)"
 STREET_RE: Final = re.compile(
-    r"\b\d{1,6}[a-z]?(?:-\d{1,4})?\s+"  # house number (12, 12B, 12-14)
+    # Not the tail of a dashed number ("123-45-6789 742 Elm St": the house
+    # number is 742, and the SSN stays whole for the digit-run rules).
+    r"(?<!\d-)\b\d{1,6}[a-z]?(?:-\d{1,4})?\s+"  # house number (12, 12B, 12-14)
     r"(?:" + _DIRECTION + r"\.?\s+)?"
     r"(?:[a-z0-9][a-z0-9'.\-]{0,30}+\s+){0,4}"  # street name words (bounded)
      + _SUFFIX + r"\b\.?"
@@ -670,7 +676,7 @@ class Scrubber:
         out = _sub(SPACED_EMAIL_RE, self._spaced_email, out)
         out = _sub(EMAIL_RE, EMAIL, out)
         out = _sub(SPELLED_EMAIL_RE, EMAIL, out)
-        out = _sub(GOVID_KEYWORD_RE, GOVID, out)
+        out = _sub(GOVID_KEYWORD_RE, self._govid_keyword, out)
         out = _sub(PO_BOX_RE, ADDRESS, out)
         out = _sub(STREET_RE, ADDRESS, out)
         out = UNIT_AFTER_ADDRESS_RE.sub(ADDRESS, out)
@@ -691,6 +697,24 @@ class Scrubber:
         if self._numbers is not None:
             out = _sub(self._numbers, ACCT, out)
         return out
+
+    @staticmethod
+    def _govid_keyword(match: re.Match[str]) -> str:
+        # A government id has at most GOVID_MAX_DIGITS digits. The value part
+        # may run on over spaces ("SSN 123 45 6789"), so a number after the
+        # id ("SSN 123-45-6789 742 Evergreen Terrace") is handed back to the
+        # later rules instead of being eaten: otherwise the house number
+        # vanishes into [GOVID] and the street name is left in the clear
+        # (v1.0.0 verification run, docs/RELEASE_CHECKLIST.md).
+        value = match.group("value")
+        limit = 4 if _LAST_FOUR.search(match.group(0)) else GOVID_MAX_DIGITS
+        seen = 0
+        for i, ch in enumerate(value):
+            if ch.isdigit() or ch in _GOVID_MASK_CHARS:
+                seen += 1
+                if seen == limit:
+                    return GOVID + value[i + 1 :]
+        return GOVID
 
     @staticmethod
     def _acct_keyword(match: re.Match[str]) -> str:

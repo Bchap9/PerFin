@@ -97,6 +97,34 @@ def test_root_files_by_exact_name(spa_client: TestClient) -> None:
     assert response.text.startswith("User-agent")
 
 
+def test_pwa_files_are_served_from_the_root_under_the_strict_csp(
+    settings: Settings, static_dir: Path
+) -> None:
+    """Manifest, service worker and icons live at the root (the worker's scope is ``/``)."""
+    (static_dir / "manifest.webmanifest").write_text('{"name": "PerFin"}', encoding="utf-8")
+    (static_dir / "sw.js").write_text("self.addEventListener('fetch', () => {});", encoding="utf-8")
+    (static_dir / "icon-192.png").write_bytes(b"\x89PNG\r\n\x1a\n")
+    configured = settings.model_copy(update={"static_dir": static_dir})
+    with TestClient(create_app(configured)) as client:
+        manifest = client.get("/manifest.webmanifest")
+        worker = client.get("/sw.js")
+        icon = client.get("/icon-192.png")
+        csp = manifest.headers["content-security-policy"]
+    assert manifest.status_code == worker.status_code == icon.status_code == 200
+    assert manifest.headers["content-type"].startswith("application/manifest+json")
+    assert worker.headers["content-type"].split(";")[0] in {
+        "text/javascript",
+        "application/javascript",
+    }
+    assert icon.headers["content-type"] == "image/png"
+    # The worker script is never cached by the browser's HTTP cache, so an update ships at once.
+    assert worker.headers["cache-control"] == "no-store"
+    assert "manifest-src 'self'" in csp
+    assert "worker-src 'self'" in csp
+    assert "script-src 'self'" in csp
+    assert "'unsafe-inline'" not in csp
+
+
 def test_api_paths_keep_problem_404(spa_client: TestClient) -> None:
     response = spa_client.get("/api/v1/does-not-exist")
     assert response.status_code == 404

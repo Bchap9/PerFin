@@ -168,6 +168,7 @@ def performance(
         )
     }
     methods = service.cost_methods(db, household_id, account_ids)
+    lot_ids = service.stored_lot_ids(db, household_id, account_ids)
     book = PriceBook(db, household_id, security_ids, until=end, trades=txns)
     to_base = Converter(db, household_id, base, until=end)
     unpriced: set[uuid.UUID] = set()
@@ -203,6 +204,7 @@ def performance(
                 ]
                 + (seeds or []),
                 method=methods[acct_id],
+                lot_ids=lot_ids,
             )
         except engine.LotError as exc:  # pragma: no cover - writes are replayed first
             raise service.lot_problem(exc) from exc

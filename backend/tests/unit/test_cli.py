@@ -8,20 +8,16 @@ from pathlib import Path
 
 import pytest
 
-from app.cli import EXIT_UNAVAILABLE, main
+from app.cli import main
 
 
-@pytest.mark.parametrize(
-    ("argv", "phase"),
-    [
-        (["rotate-key"], "Phase 7"),
-    ],
-)
-def test_unavailable_commands_exit_2(
-    argv: list[str], phase: str, capsys: pytest.CaptureFixture[str]
+def test_rotate_key_without_a_master_key_fails_cleanly(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    assert main(argv) == EXIT_UNAVAILABLE
-    assert phase in capsys.readouterr().err
+    monkeypatch.delenv("PERFIN_MASTER_KEY", raising=False)
+    monkeypatch.delenv("PERFIN_MASTER_KEY_FILE", raising=False)
+    assert main(["rotate-key", "--new-key-file", "/nonexistent"]) == 1
+    assert "no master key configured" in capsys.readouterr().err
 
 
 def test_openapi_prints_json(capsys: pytest.CaptureFixture[str]) -> None:

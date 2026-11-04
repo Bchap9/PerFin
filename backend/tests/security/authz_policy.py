@@ -183,6 +183,9 @@ PARAM_KINDS: Final[Mapping[str, ParamKind]] = MappingProxyType(
         # An AI client of the matrix household, created by its owner through
         # the AI-client flow (Phase 6b).
         "ai_client": ParamKind("ai_client", "ai-client-not-found"),
+        # A notification channel of the matrix household (a webhook to an
+        # address that never resolves, so a test send goes nowhere).
+        "notification_channel": ParamKind("notification_channel", "notification-channel-not-found"),
     }
 )
 OWN_KINDS: Final = frozenset(k for k in PARAM_KINDS if k.startswith("own_"))
@@ -200,6 +203,7 @@ HOUSEHOLD_OBJECT_KINDS: Final = frozenset(
     | {"scheduled_transaction"}
     | {"tax_year", "tax_checklist_item", "tax_export"}
     | {"ai_client"}
+    | {"notification_channel"}
 )
 
 
@@ -326,6 +330,7 @@ TAXY = {"year": "tax_year"}
 ASSET = {"asset_id": "manual_asset"}
 SCHED = {"schedule_id": "scheduled_transaction"}
 AIC = {"client_id": "ai_client"}
+NCH = {"channel_id": "notification_channel"}
 #: A member's grants on one account (the path names a fresh member).
 GRANT = {**HH, "user_id": "member", "account_id": "account"}
 
@@ -738,6 +743,18 @@ POLICIES: Final[Mapping[str, Policy]] = MappingProxyType(
         f"PATCH {API}/settings/intake": session(role=A, step_up=True),
         f"POST {API}/settings/intake/email/test": session(role=A),
         f"POST {API}/settings/intake/email/rotate-alias": session(role=A, step_up=True),
+        # --- notification channels (credentials, so no tokens; changes step-up) ---
+        f"GET {API}/settings/notifications/channels": session(role=A),
+        f"POST {API}/settings/notifications/channels": session(role=A, step_up=True),
+        f"PATCH {API}/settings/notifications/channels/{{channel_id}}": session(
+            role=A, step_up=True, params=NCH
+        ),
+        f"DELETE {API}/settings/notifications/channels/{{channel_id}}": session(
+            role=A, step_up=True, params=NCH
+        ),
+        f"POST {API}/settings/notifications/channels/{{channel_id}}/test": session(
+            role=A, params=NCH
+        ),
         # --- AI views (Phase 6b, AI_ACCESS.md): an AI client's token only ----
         f"GET {API}/ai/v1/policy": ai(),
         f"GET {API}/ai/v1/overview": ai(),

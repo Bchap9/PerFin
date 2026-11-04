@@ -29,6 +29,7 @@ from sqlalchemy.orm import Session
 
 from app.core.audit import audit
 from app.core.events import emit
+from app.domain.notifications.routing import notify
 from app.domain.tax.models import TaxYear, TaxYearState
 from app.domain.tax.service import checklist_counts
 
@@ -74,12 +75,13 @@ def send_reminders(db: Session, household_id: uuid.UUID, day: date, setting: str
         missing = checklist_counts(db, tax_year).expected
         if missing <= 0:
             continue
-        emit(
+        event_id = emit(
             db,
             household_id,
             REMINDER_EVENT,
             {"year": tax_year.year, "missing": missing, "message": message(missing)},
         )
+        notify(db, household_id, REMINDER_EVENT, source_id=event_id)
         audit(
             db,
             action="tax.reminder",

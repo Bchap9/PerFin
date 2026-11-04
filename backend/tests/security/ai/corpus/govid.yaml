@@ -27,3 +27,6 @@ cases:
   # Security review P6B-SR-R1-02: an SSN written with thousands separators.
   - {text: "123,456,789", secrets: ["123456789"]}
   - {text: "ssn 123,456,789", secrets: ["123456789"]}
+  # v1.0.0 verification run: the id stays whole when an address follows.
+  - {text: "123-45-6789 742 Evergreen Terrace", any_placeholder: true, secrets: ["123456789", "123"]}
+  - {text: "SSN 123-45-6789 742 Evergreen Terrace", any_placeholder: true, secrets: ["123456789"]}

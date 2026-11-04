@@ -69,6 +69,7 @@ from app.core.events import emit
 from app.core.logging import get_logger
 from app.core.settings import Settings
 from app.db.rls import get_context, restore_context, set_context
+from app.domain.notifications.routing import notify
 
 log = get_logger(__name__)
 
@@ -182,7 +183,8 @@ def notify_households(
         households = [m.household_id for m in memberships(db, user_id)]
         for household_id in households:
             set_context(db, household_id, user_id)
-            emit(db, household_id, event_type, dict(payload))
+            event_id = emit(db, household_id, event_type, dict(payload))
+            notify(db, household_id, event_type, source_id=event_id)
     finally:
         restore_context(db, saved)
     return len(households)

@@ -259,3 +259,74 @@ def test_encoding_round_trips() -> None:
 def test_member_filenames_are_sanitised(original: str | None, expected: str) -> None:
     document = Document(original_filename=original)
     assert member_filename(document) == expected
+
+
+def test_not_exported_only_holds_justified_tables() -> None:
+    """Secrets, per-instance identity, caches and job history only; each with a reason."""
+    allowed = {
+        "api_token",
+        "account_grant",
+        "household_member",
+        "mail_intake",
+        "dropfolder_route",
+        "blob",
+        "idempotency_key",
+        "event",
+        "holding",
+        "import_hash_alias",
+        "portability_archive",
+        "tax_export",
+        "review_item",
+        "ingest_job",
+        "dropfolder_entry",
+        "mail_intake_message",
+        "ai_call",
+        "notification_channel",
+    }
+    assert set(NOT_EXPORTED) <= allowed
+    assert all(len(reason) >= 15 for reason in NOT_EXPORTED.values())
+    # Secret columns of exported tables are excluded.
+    assert {"token_id", "created_by"} <= BY_NAME["ai_clients"].exclude
+
+
+def test_version_1_entities_are_the_original_ones() -> None:
+    from app.domain.portability.entities import entities_for
+
+    v1 = [spec.name for spec in entities_for(1)]
+    assert "securities" not in v1
+    assert "transactions" in v1
+    assert entities_for(2) == ENTITIES
+
+
+def test_investment_hashes_are_recomputed_for_the_new_ids() -> None:
+    from app.domain.investments.models import InvestmentTxnType
+    from app.domain.investments.statement_import import HASH_VERSION, activity_hash
+    from app.domain.portability.import_ import recover_investment_hash
+    from app.ingestion.sandbox.protocol import InvestmentActivity
+
+    old_acct, new_acct, old_sec, new_sec = (uuid.uuid4() for _ in range(4))
+    day, units, amount = date(2026, 2, 3), Decimal("3.5000000000"), Decimal("-350.000000")
+    row: dict[str, Any] = {
+        "type": InvestmentTxnType.BUY,
+        "trade_date": day,
+        "quantity": units,
+        "amount": amount,
+    }
+    activity = InvestmentActivity.model_construct(
+        type="buy", trade_date=day, quantity=units, amount=amount
+    )
+    stored = activity_hash(old_acct, activity, old_sec, 2)
+    assert recover_investment_hash(stored, old_acct, new_acct, old_sec, new_sec, row) == (
+        activity_hash(new_acct, activity, new_sec, 2)
+    )
+    import hashlib
+
+    def opening(account: uuid.UUID, security: uuid.UUID) -> str:
+        parts = (HASH_VERSION, str(account), "opening", str(security), "2026-02-03")
+        return hashlib.sha256("\x1f".join(parts).encode()).hexdigest()
+
+    transfer = {**row, "type": InvestmentTxnType.TRANSFER_IN, "amount": Decimal(0)}
+    assert recover_investment_hash(
+        opening(old_acct, old_sec), old_acct, new_acct, old_sec, new_sec, transfer
+    ) == opening(new_acct, new_sec)
+    assert recover_investment_hash("0" * 64, old_acct, new_acct, old_sec, new_sec, row) is None

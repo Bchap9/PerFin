@@ -60,6 +60,7 @@ from app.auth.sessions import cookie_name
 from app.core import clock
 from app.core.csrf import CSRF_HEADER, DEFAULT_EXEMPT_PATHS, SAFE_METHODS, CSRFProtect
 from app.core.errors import PROBLEM_MEDIA_TYPE, PROBLEM_TYPE_PREFIX
+from app.core.http import EgressError
 from app.core.settings import Settings
 from app.db.models import Household
 from app.db.queue import enqueue
@@ -74,6 +75,7 @@ from app.domain.investments.service import replay_position
 from app.domain.loans.models import Loan
 from app.domain.rules.schemas import RUN_RULES_JOB_TYPE, RunRulesJob
 from app.domain.tax.models import TaxYear
+from app.integrations.notifications.base import DeliveryOptions
 from tests.fixtures.ai import ai_client
 from tests.fixtures.auth_clients import SAME_ORIGIN, random_ip
 from tests.fixtures.documents import make_document, make_review_item
@@ -101,6 +103,7 @@ from tests.fixtures.ledger import (
     make_tag,
     make_transaction,
 )
+from tests.fixtures.notifications import make_channel
 from tests.fixtures.portability import make_import_record, make_ready_export
 from tests.fixtures.tax import free_tax_year, make_checklist_item, make_tax_export, make_tax_year
 from tests.fixtures.wealth import (
@@ -231,8 +234,14 @@ def matrix_app(matrix_settings: Settings) -> Iterator[FastAPI]:
     from app.main import create_app
 
     app = create_app(matrix_settings)
+    # A test send of a notification channel resolves nothing and uses no proxy.
+    app.state.notification_options = DeliveryOptions(proxy=None, resolver=_no_dns)
     yield app
     app.state.engine.dispose()
+
+
+def _no_dns(host: str, port: int) -> list[Any]:
+    raise EgressError(f"{host} does not resolve in the matrix")
 
 
 @pytest.fixture(scope="module")
@@ -447,6 +456,9 @@ def build_object(
         # is handed this one and must get 404.
         client, _raw = ai_client(factories, world.users["owner"])
         return str(client.id)
+    if kind == "notification_channel":
+        with factories.transaction() as db:
+            return str(make_channel(db, world.household.id, factories.keyring).id)
     if kind in ("export_archive", "import_archive"):
         return str(make_portability_object(factories, world, kind, owner).job_id)
     if kind in ("tax_year", "tax_checklist_item", "tax_export"):

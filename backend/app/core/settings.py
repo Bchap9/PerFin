@@ -69,6 +69,11 @@ class Settings(BaseSettings):
     # G4: the operator confirms the master key is backed up separately from
     # the data. Until then every startup logs a warning (config check G4).
     master_key_backup_acknowledged: bool = False
+    # G4: the version number of the configured master key. Every wrapped data
+    # key records the version that wrapped it; ``perfin rotate-key`` rewraps
+    # them under a new key and version, then the operator sets the new key
+    # and this version together (docs/BACKUP_RESTORE.md, "Key rotation").
+    master_key_version: Annotated[int, Field(ge=1, le=0xFFFFFFFF)] = 1
 
     # ---- Database -----------------------------------------------------------
     # The application role (non-owner, RLS applies) and the owner role used
@@ -122,6 +127,19 @@ class Settings(BaseSettings):
     smtp_password: SecretStr | None = None
     smtp_from: str = ""
     smtp_timeout_seconds: Annotated[int, Field(ge=1, le=120)] = 10
+
+    # ---- Notification channels (docs/security/notifications.md) -----------
+    # Household channels (SMTP, webhook, ntfy, Gotify, Matrix) send a generic
+    # message through app.core.http.SafeHttpClient / a vetted SMTP socket.
+    # Optional instance allowlist of destination hosts ("host" or
+    # "host:port", comma separated); empty: any host whose addresses are
+    # public. In Compose the destination must also be in
+    # deploy/egress-allowlist.txt (HTTPS_PROXY).
+    notifications_allowed_hosts: Annotated[list[str], NoDecode] = Field(default_factory=list)
+    # Allow private (RFC 1918, ULA) addresses, only for hosts listed in
+    # PERFIN_NOTIFICATIONS_ALLOWED_HOSTS (a LAN Gotify or ntfy).
+    notifications_allow_private_hosts: bool = False
+    notifications_timeout_seconds: Annotated[int, Field(ge=1, le=60)] = 10
 
     # ---- OIDC ---------------------------------------------------------------
     oidc_issuer: str = ""
@@ -316,6 +334,11 @@ class Settings(BaseSettings):
     @field_validator("mcp_http_allowed_origins", "oidc_post_logout_redirect_uris", mode="before")
     @classmethod
     def _parse_origins(cls, value: object) -> object:
+        return _split(value, ",")
+
+    @field_validator("notifications_allowed_hosts", mode="before")
+    @classmethod
+    def _parse_notification_hosts(cls, value: object) -> object:
         return _split(value, ",")
 
     @field_validator("oidc_scopes", mode="before")

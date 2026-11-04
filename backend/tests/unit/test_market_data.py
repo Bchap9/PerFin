@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import base64
 import os
 from collections.abc import Iterator
 from datetime import date
@@ -229,7 +230,8 @@ def test_cross_rates_to_the_base_currency() -> None:
 
 _SECURE_ENV = {
     "PERFIN_PUBLIC_URL": "https://perfin.example.test",
-    "PERFIN_MASTER_KEY": "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8=",
+    # Synthetic: the bytes 0x00..0x1f, built here so no key-shaped literal sits in the file.
+    "PERFIN_MASTER_KEY": base64.b64encode(bytes(range(32))).decode("ascii"),
     "PERFIN_SECRET_KEY": "synthetic-" + "Qm9vVnB4c2Y3Ukx1aFdOZ0pEelR5S2hBcFZkUWJ3RXo",
     "PERFIN_DATABASE_URL": "postgresql+psycopg://perfin:synthetic-db-pw-Zq9xW2@db:5432/perfin",
     "PERFIN_TRUSTED_PROXIES": "172.16.0.0/12",

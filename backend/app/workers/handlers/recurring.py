@@ -72,7 +72,8 @@ def detect_household(ctx: JobContext, payload: HouseholdDetectPayload) -> None:
     if ctx.household_id is None:
         raise PermanentJobError("recurring.detect needs a household")
     counts = service.detect_household(ctx.session, ctx.household_id, payload.as_of)
-    log.info("recurring detection", extra=dict(counts.__dict__))
+    # Prefixed: a bare ``created`` collides with a LogRecord attribute (KeyError at INFO).
+    log.info("recurring detection", extra={f"detect_{k}": v for k, v in counts.__dict__.items()})
 
 
 recurring(DISPATCH_JOB_TYPE, DETECT_INTERVAL, DetectRecurringPayload())
