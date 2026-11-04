@@ -166,7 +166,14 @@ QIF since Phase 2; PDF, images (with OCR), EML, ZIP and XLSX since Phases
 - CSV/TSV/XLSX: parsed with strict dialect detection; formulas in XLSX are
   never evaluated (values only). Cells beginning with `=`, `+`, `-`, `@` are
   neutralised so a later CSV export cannot carry formula injection.
-- OFX/QFX/QIF: dedicated parsers; XML external entities disabled.
+- OFX/QFX/QIF: dedicated parsers; XML external entities disabled. OFX
+  investment statements (`INVSTMTRS`, `extract/ofx_invest.py`, extractor
+  `ofx/2`) are read from the same hardened tree: positions (`INVPOSLIST`),
+  activity (`INVTRANLIST`: buys, sells, income, reinvestments, expenses,
+  transfers, splits, cash `INVBANKTRAN`), closing cash (`INVBAL/AVAILCASH`)
+  and the `SECLIST` names; only the account's last four digits and
+  instrument identifiers leave the child (`ExtractResult.investments`,
+  "Brokerage statements" below).
 - EML (`eml.py`): standard-library `email` with `policy.default`. Headers
   (From, To, Cc, Delivered-To, Reply-To, Subject, Date, Message-ID,
   Authentication-Results), the text/plain body or else the HTML body
@@ -200,7 +207,7 @@ The extraction contract (`app/ingestion/sandbox/protocol.py`) carries
 The worker-only fields `stored_previews`/`stored_children` are refused in a
 child's answer (`bad_output`). PDF and image pages are read into statements
 and payslips by the worker's document parsers ("Parse" below); a page with
-nothing they recognise (invoices, tax forms have no parser yet) waits in
+nothing they recognise (invoices have no parser yet) waits in
 review (`unparsed`, `no_records`); receipts are read by the receipt parser
 and matched to their transaction ("Receipts" below).
 
@@ -331,7 +338,51 @@ Produce structured records appropriate to the kind:
 - Receipt -> merchant, date, total, tax, line items (best effort), payment
   method last-4.
 - Tax form -> form type, tax year, issuer, key boxes (W-2 boxes 1-6, 1099-INT
-  box 1, etc.).
+  box 1, etc.). Built in Phase 6 as `app/ingestion/parsers/tax_forms.py`
+  (`tax_forms`, kind `tax_form`, first in the registry: a `Form <type>`
+  heading with its box labels is unambiguous even on a bank's letterhead).
+  It reads the forms of every registered jurisdiction form set
+  (`app.domain.tax.forms`; US: W-2, 1099-INT/DIV/B/MISC/NEC/R/G/SA, 1098,
+  1098-E, 1098-T, 1095-A/B/C): one form per `Form <type>` heading (a
+  consolidated 1099 gives several, numbered per type; identical copies are
+  kept once), the tax year (`Tax year 2025`, `For calendar year 2025`, or the
+  year on the heading line), amount boxes by label (a cell starting with the
+  box id and the first words of its label; the amount below it in its
+  column, or right after it), W-2 box 12 per code (`12_D`), the sum of the
+  "Other" lines of W-2 box 14 (`14t`) and 1098 box 10 (`10t`, e.g. property
+  tax), the 1095-A Part III monthly table, 1095-B/C covered months (`cov_<MON>`
+  / `cov_ALL` from `X` marks under a month header) and 1095-C line 15, and
+  the issuer's display name from the form's issuer box (W-2 box c, the 1099
+  payer box, the 1098 lender box). **Identity boxes are never read**: the
+  result (`extraction.parse.tax_forms`, `TaxFormRead`) holds amounts by box
+  id and the issuer name only. Because the stored pages would still carry
+  the SSN, EIN, names and addresses, the worker then masks the stored
+  extraction of a tax form (`redact_identity`: pages, words, lines, layout
+  tables and text keep only form vocabulary, amounts, years, box ids and
+  codes; everything else becomes `***`; the forms read are appended to the
+  text so the document is found by issuer and form type) before
+  `document.extraction` and the search index are written. The same masking
+  covers tax documents outside the registered set (a prior-year Form 1040,
+  an unrecognised form) whatever the classifier called them: a document no
+  statement, brokerage, loan or payslip parser read whose text holds an
+  SSN/ITIN-shaped token, a labelled EIN or a tax-return heading
+  (`carries_tax_identity`) is redacted too, with the parse warning
+  `tax_identity_redacted`; a receipt read from the unredacted pages of any
+  redacted document is dropped (its "merchant" would be a name) and a
+  `receipt` kind becomes `unknown`. The receipt parser never takes a
+  merchant from a line with an SSN/EIN-shaped token (security review
+  P56-SR-R1-02). Statements and payslips keep their page text (their review
+  tools need it). Word regions,
+  snippets and search therefore never see identity text; the original file
+  (encrypted, I1 rules) and its page previews (images) still show the form
+  as printed. `app.domain.tax.ingest.import_tax_forms` then records each
+  form (`record_form_data`), opens the tax year if needed (checklist learned
+  from the year before) and ticks the checklist off (the expected item of
+  that form and issuer, else a `detected` one). A form without a year, or
+  with a field below the threshold, raises `low_confidence_field`
+  (`tax_form_low_confidence` / `tax_form_unread`, field names only) and the
+  document stays `needs_review`. Unit tests: `tests/unit/test_tax_form_parser.py`;
+  end to end: `tests/integration/test_tax_form_pipeline.py`.
 - Payslip -> gross, net, deductions, period, employer.
 
 Parsers are versioned. Raw parser output is kept in `document.extraction` so a
@@ -424,6 +475,121 @@ a child answering with parser output is `bad_output`.
   importer like an OFX one (account by last four digits and institution,
   `import_hash` dedupe, rules, provenance), with the confidence rules of
   "Commit".
+
+#### Brokerage statements (Phase 5)
+
+Live check (Phases 5+6 finalization): a synthetic brokerage PDF (January)
+and OFX (February), two mortgage statement PDFs, a W-2 and a 1099-INT were
+uploaded to a live `perfin api` and processed by a live `perfin worker`
+through the sandbox on a database migrated to `0005`; every one was
+`processed` with no review item, the holdings equalled the February
+positions, the payment splits equalled the statements (`schedule_check`
+`ok`), the checklist showed both forms received, and no identity value of
+the tax forms was found in a dump of the database.
+
+Brokerage statements are `ExtractResult.investments`
+(`InvestmentStatement`: account, period, `as_of`, positions, activity,
+opening/closing cash, the printed holdings total and account value), from
+OFX `INVSTMTRS` in the sandbox or from a PDF/scan's pages in the worker.
+
+- **Parser** (`app/ingestion/parsers/brokerage.py`): a **holdings** table
+  (header naming a quantity, a market value and a symbol or security name;
+  optional price, cost basis; `Total ...` lines give the printed holdings
+  total) and an **activity** table (date, activity/action and amount;
+  optional settle date, description, symbol, quantity, price, fees), each
+  repeated per page; outside them the period, last four digits, currency,
+  opening/closing cash, holdings total, account value and the holdings'
+  "as of" date by label. The activity word types a row (buy, sell,
+  dividend, interest, fee, reinvest, split with its ratio from the
+  description, transfer in/out, deposit, withdrawal, corporate action); an
+  unsigned amount takes the type's direction; a symbol is read from its
+  column, from the description's first word when the row needs a security
+  or the symbol is held, or from `(SYMBOL)`. `brokerage_statement_generic`
+  scores 0.5-0.7 when it sees these tables (above the bank parsers'
+  0.4-0.45 for the same activity table); `placeholder_brokerage` pins the
+  fictional Placeholder Brokerage (`MM/DD/YYYY`, USD) and needs the
+  institution's name on page 1.
+- **Reconciliation** (`reconcile_investment`, SECURITY.md C12), for every
+  source: each position's quantity x price = market value (within half a
+  unit of the price's last printed decimal per unit plus 0.005), the
+  positions add up to the printed holdings total, opening cash + activity =
+  closing cash, holdings + closing cash = the printed account value. Any
+  failure is `mismatch`; none checkable is `unavailable`. The parser caps
+  every row and position of a `mismatch` at 0.5 (`unavailable`: 0.8) and a
+  position whose value disagrees at 0.4; values read in an institution's
+  declared format score 1.0, the generic parser 0.95, OCR scales them.
+- **Commit** (`app/domain/investments/statement_import.py`, called by the
+  structured importer): the account as for bank statements (document's,
+  chosen on re-run, else last four digits + institution among the
+  accounts the uploader may edit) and of type brokerage or retirement in
+  the statement's currency, else `unknown_account` (`account_not_found`,
+  `account_ambiguous`, `account_type_mismatch`, `currency_mismatch`). A
+  statement that does not reconcile, or has any row or position below the
+  threshold, writes **nothing** (investment rows have no pending state) and
+  raises `low_confidence_field` `investment_reconciliation_failed` (checks,
+  failed checks, mismatched positions, cash and totals) or
+  `investment_low_confidence`; a statement with any date before
+  1900-01-01 is held the same way (`investment_date_out_of_range`,
+  SECURITY.md F8); OFX with nothing to check is imported like
+  an OFX bank statement. Otherwise: securities by CUSIP, ISIN, then symbol
+  (created in the account currency, identifiers filled in later);
+  activity as `investment_txn` with `import_hash` = sha256 of
+  `perfin-invest-v1`, account, trade date, type, security, units, amount
+  and the running index among identical rows (the same month as OFX and
+  PDF is imported once); cash deposits/withdrawals as ledger transactions
+  on the account through the structured importer. Units the history does
+  not explain become one opening `transfer_in` per security on the
+  period's first day (memo `Opening position from statement`, cost per
+  unit from the printed cost basis, else the price); history holding more
+  than reported raises `position_mismatch`. Lots, `lot_links` and holdings
+  are then written by the investments lot engine
+  (`service.replay_position`); a history it refuses rolls the statement
+  back (savepoint) with `investment_lot_conflict`. Position prices become
+  `price` rows (`source = statement`) unless another source has that day;
+  holdings + closing cash on `as_of` is a `statement` balance snapshot when
+  reconciled. New rows of a statement older than activity already recorded
+  are not written (`investment_out_of_order`): import statements oldest
+  first. Audit `investment.import`; events `investment.imported` and
+  `balance.updated` (both with `account_id`).
+
+#### Loan statements (Phase 5)
+
+A loan or mortgage statement is one payment and the balances around it,
+kept in `extraction.parse.loan` (`LoanStatement`: lender, the loan
+number's last four digits only, currency, statement date, payment date,
+principal, interest, escrow, fees, total received, previous and new
+principal balance, interest rate as a fraction, next due date and amount,
+reconciliation, per-field confidence).
+
+- **Parser** (`app/ingestion/parsers/loan_statement.py`,
+  `loan_statement_generic`, kind `statement`): recognised by "mortgage
+  statement"/"loan statement" or at least four loan labels (principal
+  balance, escrow, interest rate, payment received, next payment due, total
+  payment received, loan number); reads labelled lines, the amount being
+  the last one on the line (year-to-date and escrow-balance lines are left
+  out). Synthetic layouts: `tests/fixtures/synth_loans.py`.
+- **Reconciliation** (SECURITY.md C12): `parts` (principal + interest +
+  escrow + fees = total received) and `balance` (previous - principal =
+  new), within the reconciliation tolerance. Figures a check confirmed
+  score 1.0, unchecked ones 0.8 (below the default threshold), all of a
+  statement that does not reconcile 0.5.
+- **Commit** (`app/domain/loans/statement_import.py`, called by the
+  pipeline): the loan of the document's account, else the loan account
+  with the last four digits (lender breaks ties) among those the uploader
+  may edit (F3); none is an `unparsed` item `loan_unmatched` (describe the
+  loan with `POST /loans`, then reprocess). A statement that does not
+  reconcile, has nothing to check, has a field below the threshold, is in
+  another currency or is dated outside the loan's life writes **nothing**
+  and raises `low_confidence_field` (`loan_reconciliation_failed`,
+  `loan_low_confidence`, `loan_currency_mismatch`,
+  `loan_payment_out_of_range`). Otherwise a `loan_payment` with the split
+  and `source_document_id` (reprocessing replaces the document's payment;
+  the same day, principal and interest already recorded is not added
+  again), `statement` balance snapshots of the previous balance (the day
+  before the payment) and the new one (the payment day), then the loan
+  account's `computed` balances are rebuilt. A printed rate other than the
+  rate in force raises `loan_rate_differs` (the payment is still recorded).
+  Audit `loan.payment_import`; event `loan.updated` (with `account_id`).
 
 ### 6. Match and deduplicate
 - Each parsed transaction gets an `import_hash`. Existing rows with the same

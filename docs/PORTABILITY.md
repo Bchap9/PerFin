@@ -75,7 +75,14 @@ Entities, in dependency order (`app/domain/portability/entities.py`):
 are left out. Not exported, by design: blobs (originals are exported
 decrypted), the review queue, ingestion history, learned parser
 fingerprints, `import_hash_alias` (see below), members, grants, tokens,
-events and the export/import jobs themselves.
+events and the export/import jobs themselves. The Phase 5/6 tables
+(securities, prices, investment transactions, lots, per-account
+investment settings (`investment_account`), loans and their
+payments and rate changes, manual assets and valuations, tax years,
+checklist items, category-to-schedule maps and tax form data) are **not in
+format version 1 yet** (listed in `NOT_EXPORTED` until the archive gains
+them); the `holding` cache and `net_worth_snapshot` are derived and will
+stay out.
 
 Values (`app/domain/portability/codec.py`): UUIDs, dates and timestamps
 (ISO 8601 with offset) as strings, decimals as plain decimal strings

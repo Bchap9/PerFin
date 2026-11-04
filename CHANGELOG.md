@@ -84,9 +84,273 @@ real IMAPS provider. Open: parsers for invoices, tax forms, insurance and
 brokerage statements; an API and UI for drop-folder and antivirus status.
 Next: Phase 5 (investments, loans, net worth).
 
+Phases 5+6 (Investments, loans, net worth; Tax vault, v0.5/v0.6) are
+finalized: Alembic head is `0005` (`0005_phase5_6_wealth_tax`, 17
+household-scoped tables under forced RLS with grants, 11 enum types).
+`make check` passes from the repo root (SPDX; backend ruff, format, mypy
+--strict, bandit, 6078 pytest tests with `-n auto`, OpenAPI drift;
+frontend eslint, tsc, 333 vitest tests, build; `pip-audit` no known
+vulnerabilities; `npm audit --audit-level=high` passes with 14 moderate
+advisories in dev tooling, none high). Live run on a fresh database
+migrated by `perfin migrate`, with `perfin api`, `perfin worker` and the
+built SPA (dev mode): setup and TOTP login; a brokerage PDF and OFX, two
+mortgage statements, a W-2 and a 1099-INT processed through the sandbox
+with no review item; holdings equal to the statement positions,
+performance (TWR/MWR), the loan payment split (`schedule_check` `ok`),
+schedule and extra-payment simulation, a manual asset valuation, recurring
+detection and the cash-flow calendar, the `snapshot_net_worth` job storing
+and backfilling snapshots, the 2025 checklist ticked off with exact box
+amounts and no identity value in a database dump, and the accountant export
+(refused to a personal access token, one-time download after step-up);
+then every Phase 5/6 page in headless Chrome. The run found two real bugs,
+fixed with regression tests: request transactions committed after the
+response was sent (`DbSession` is now `scope="function"`), and the
+`/assets` client route colliding with Vite's `/assets/` bundle mount
+(bundles now under `/static/`). Every Phase 5 and 6 roadmap box is ticked.
+Deferred (ROADMAP Phase 5 "Deferred"): the Phase 5/6 tables in the
+portability export, screens for `/fx-rates`, cost methods, specific-lot
+sales, loan-term edits and held-statement resolution, mergers/spin-offs,
+external feeds against real services (H2 partial), UTC days, one tax year
+per calendar year, and delivery of `tax.reminder` (Phase 7
+notifications). `manual_asset.description` is not an encrypted column yet
+(G1). Next: Phase 6b (AI access boundary).
+
 ## [Unreleased]
 
 ### Added
+
+#### Phases 5+6: finalization (live run, wealth screens)
+
+- Wealth screens (`frontend/src/features/{investments,loans,networth,assets,calendar}/`):
+  `/investments` (holdings with lots, gains, short/long term and allocation
+  by asset class, sector and account; performance with TWR/MWR over eight
+  ranges; transaction list and entry for all ten types with exact decimal
+  arithmetic; manual prices and new securities), `/loans` and
+  `/loans/<id>` (summary and payoff projection, schedule as originated or
+  from today, extra-payment simulator, payments with the schedule check,
+  rate changes), `/net-worth` (history chart, breakdown by class and
+  account, projection, "Your accounts only" when the scope is partial),
+  `/assets` and `/assets/<id>` (valuation history and chart), `/calendar`
+  (cash-flow calendar, recurring items, detection). Navigation gains Assets
+  and Calendar; SSE invalidation covers `asset.*`, `schedule.*`,
+  `networth.*`, `security.*` and `fx.*`. Charts plot display-only numbers;
+  every figure is formatted from the API's decimal strings.
+- Live verification of Phases 5+6 on a fresh database migrated to `0005`
+  with `perfin api`, `perfin worker` and the built SPA (ROADMAP Phase 5
+  "Live verification"): brokerage PDF and OFX, two mortgage statements, a
+  W-2 and a 1099-INT through the sandbox; holdings, performance, payment
+  split, schedule and simulation, manual asset, recurring detection and
+  calendar, the `snapshot_net_worth` job, the tax checklist and the
+  accountant export over HTTP; then every Phase 5/6 page in headless
+  Chrome.
+- `tests/integration/test_commit_before_response.py`: an ASGI probe checks
+  that a `POST /accounts` row is committed by the time the last byte of its
+  response is sent.
+- `src/app/shell.test.tsx`: every navigation section is served by a
+  feature route (none falls back to the "Not built yet" placeholder).
+- Tax vault screens (`frontend/src/features/tax/`): `/tax` years list with the missing-documents reminder, `/tax/<year>` with the checklist (status changes, linked documents, issuer, amounts by box label), deductible roll-up by category and schedule hint, accountant export with step-up and progress, `/tax/mapping` schedule-hint editor, and a dashboard card for missing tax documents.
+
+#### Phases 5+6 integration
+
+- Alembic revision `0005_phase5_6_wealth_tax`: `security`, `price`,
+  `investment_account`, `investment_txn`, `lot`, `holding`, `loan`,
+  `loan_payment`, `loan_rate_change`, `manual_asset`, `asset_valuation`,
+  `net_worth_snapshot`, `tax_year`, `tax_checklist_item`,
+  `tax_category_map`, `tax_form_data` and `tax_export`, with forced RLS and
+  application-role grants listed explicitly; the downgrade drops them and
+  their 11 enum types. `test_migrations.py` covers the 0005 downgrade and
+  cross-household isolation of the new tables on a migrated database.
+- `tests/integration/test_phase5_6_end_to_end.py` (see "Resume here").
+- `backend/openapi.json` and `frontend/src/lib/api/schema.d.ts` regenerated
+  with every Phase 5/6 route.
+
+#### Phase 6: tax vault
+
+- Tax form parser (`app/ingestion/parsers/tax_forms.py`, first in the
+  parser registry): form type, tax year, issuer name and amount boxes of
+  every form of the registered jurisdiction form sets (US: W-2 boxes 1-6,
+  12 per code, 14 and 16-19, the 1099 family, 1098 interest/points/property
+  tax, 1098-E/T, 1095-A monthly amounts, 1095-B/C coverage months and
+  1095-C line 15); consolidated statements give one form per heading.
+  Identity boxes are never read, and the stored pages, words, layout
+  tables and search index of a tax form are masked (`redact_identity`).
+  New stored boxes `14t`, `10t` and `cov` (`app/domain/tax/forms/us.py`)
+  and `FormDef.issuer_box`.
+- Parsed forms go to the tax vault (`app/domain/tax/ingest.py`): form data,
+  the tax year opened when its first form arrives, the checklist ticked off
+  (expected item received, or a `detected` one).
+- Tax vault API (`app/api/routers/tax.py`, `app/domain/tax/service.py`):
+  tax years (open/filed/closed), a checklist learned from the year before
+  and editable, parsed form amounts, schedule/line hints per category
+  (`/tax-category-map`) and a yearly roll-up by category and hint of
+  deductible tagging (`category.tax_treatment`, `transaction_split.tax_flag`;
+  visible accounts only, `partial` otherwise; `app/domain/tax/rollup.py`).
+  `ledger_lines` exposes `tax_flag`.
+- Accountant export (`app/domain/tax/export.py`, job `tax.export`, table
+  `tax_export`): zip of the year's originals plus `summary.csv` (C7) and
+  `summary.pdf` (reportlab), owner/admin with step-up, encrypted at rest,
+  downloadable once, shredded after `PERFIN_EXPORT_TTL_MINUTES`.
+- Reminders as a year closes (`app/domain/tax/reminders.py`, daily
+  `tax_reminders` -> `tax.reminders`): a `tax.reminder` event ("3 expected
+  documents still missing") on the days of `PERFIN_TAX_REMINDER_DATES`.
+- Synthetic tax forms (`tests/fixtures/synth_tax_forms.py`, reportlab) with
+  obviously fake identity values, and a test that none of them reaches any
+  database column or API response.
+
+#### Phase 5: net worth, recurring transactions and the cash-flow calendar
+
+- Net worth engine (`app/domain/networth/compute.py`): values every account
+  on any day from balance snapshots, ledger transactions, investment
+  positions x prices (lot engine replay, no look-ahead), loan balances and
+  manual valuations, converted to the base currency; breakdown by asset /
+  liability class, account type and account (version 1 JSON).
+- Daily `snapshot_net_worth` job (`app/workers/handlers/networth.py`): one
+  `networth.snapshot` per household and day (dedupe key), upserting the day's
+  `net_worth_snapshot` and backfilling missing days (up to ten years).
+- Net worth API (`GET /networth?range=&granularity=`, `/networth/latest`,
+  `/networth/projection`; scope `networth:read`): stored snapshots only for
+  principals who see every account, figures recomputed over visible
+  accounts for everyone else; projections by least-squares trend and by
+  average monthly savings (`app/domain/networth/projection.py`).
+- Recurring detection (`app/domain/recurring/detection.py`): payee + amount
+  clustering, weekly/biweekly/monthly/quarterly/annual cadences with
+  tolerance windows, confidence from regularity, amount stability and
+  count. Feeds `scheduled_transaction` (`origin = detected`) through
+  `POST /recurring/detect` and the daily `detect_recurring` job; manual
+  schedules win, a detected schedule keeps a person's name and `active`.
+- Recurring API (`/recurring`, `/recurring/candidates`, `/recurring/{id}`;
+  scopes `transactions:read|write`, account visibility, edit grants for
+  writes) and the cash-flow calendar (`GET /cashflow/calendar?days=`):
+  expected income and bills per day with a running balance of the visible
+  liquid accounts.
+- `schedule.*` and `networth.*` events are account-scoped in the event
+  stream (dropped for members/viewers when they name no visible account).
+
+#### Phase 5: loans and manual assets
+
+- Amortisation engine (`app/domain/loans/amortization.py`, pure `Decimal`):
+  fixed and variable schedules (a variable loan re-amortises at each rate
+  change), interest rounded to the minor unit per period with the final
+  payment absorbing the rounding, escrow, one-off and recurring extra
+  principal, payoff projections and extra-payment comparisons. Property
+  tests (hypothesis): principal parts sum to the principal exactly, zero-rate
+  loans, rate changes mid-term, extras never cost more.
+- Loans API (`/loans`, `/loans/{id}/schedule?basis=original|projected`,
+  `POST /loans/{id}/simulate`, `/loans/{id}/payments`,
+  `/loans/{id}/rate-changes`; scopes `loans:read|write`, account
+  visibility, edit grants for writes): terms with a default level payment,
+  payment splits checked against the schedule, payoff projection from the
+  balance owed. The loan account's balance is kept in sync with the
+  principal owed (`computed` balance snapshots rebuilt on every change).
+- Manual assets API (`/assets`, `/assets/{id}/valuations`; scopes
+  `accounts:read|write`): kind (property, vehicle, other, the account's
+  `asset_kind`), description, valuation method and manual valuation
+  history; each manual valuation is also the account's manual balance of
+  that day. `manual_asset.description` is now `classification: identity`
+  (it may hold an address): kept out of audit rows, events and `ai:read`.
+- Loan statement parser (`app/ingestion/parsers/loan_statement.py`) and
+  commit (`app/domain/loans/statement_import.py`): payment split, previous
+  and new principal balance, rate and next due date, reconciled (parts vs
+  total, previous - principal vs new) and held for review when they do not
+  reconcile (C12); matched to a loan the uploader may edit (F3); statement
+  balance snapshots; rate differences flagged. Synthetic statements:
+  `tests/fixtures/synth_loans.py`.
+- Events `loan.*` and `asset.*` are account-scoped for members and viewers.
+
+#### Phase 5: price and FX feeds
+
+- Price providers (`app/integrations/prices/`): a provider protocol, the
+  always-on manual provider and one opt-in external provider,
+  `PERFIN_PRICE_PROVIDER=http_json`, a generic JSON-over-HTTPS adapter
+  configured by a URL template with one `{symbol}` placeholder and dotted
+  JSON paths (no vendor or API key built in; an optional credential header).
+- FX providers (`app/integrations/fx/`): manual rates and the opt-in ECB
+  daily reference rates (`PERFIN_FX_PROVIDER=ecb`, parsed with `defusedxml`,
+  crossed to each household's base currency).
+- `refresh_prices` worker job (every 6 hours; a no-op while both feeds are
+  `none`, the default): one request per distinct symbol of the instance,
+  only symbols leave the host; manual prices and rates are never replaced.
+  Both feeds use the SSRF-safe client with an allowlist of their own host
+  and the egress proxy when `HTTPS_PROXY` is set.
+- `GET/POST /fx-rates` (history; manual rate of a pair and day, owner or
+  admin) and `DELETE /fx-rates/{id}`.
+- `perfin config check`: `prices.provider_enabled` / `fx.provider_enabled`
+  warnings naming the destination, `prices.provider_invalid` error,
+  `prices.url_unused` warning.
+- docs/security/integrations.md: what leaves the host for each feed.
+
+#### Phase 5: brokerage statement parsing
+
+- OFX/QFX investment statements (`INVSTMTRS`: `INVPOSLIST`, `INVTRANLIST`,
+  `INVBAL`, `SECLIST`) are extracted in the sandbox
+  (`app/ingestion/extract/ofx_invest.py`, extractor `ofx/2`; previously a
+  warning) into `ExtractResult.investments`.
+- Brokerage PDF/scan parser (`app/ingestion/parsers/brokerage.py`):
+  holdings and activity tables, cash and totals by label;
+  `brokerage_statement_generic` and `placeholder_brokerage` (the fictional
+  Placeholder Brokerage of the shipped fingerprint).
+- Reconciliation for every brokerage statement: positions x prices vs
+  market values, holdings total, cash, account value (SECURITY.md C12).
+- Importer (`app/domain/investments/statement_import.py`): securities,
+  `investment_txn` rows with a cross-format `import_hash`, opening
+  positions, lots and holdings through the investments lot engine, prices
+  (`source = statement`), a balance snapshot, cash transfers as ledger
+  transactions; statements that do not reconcile or are out of order are
+  held in review.
+- Synthetic fixtures `tests/fixtures/synth_brokerage.py` (PDF and OFX),
+  unit tests and end-to-end tests through the worker.
+
+#### Phase 5: investments API, lot engine and performance
+
+- `GET/POST/PATCH/DELETE /securities` (household catalogue; securities used
+  only on hidden accounts are `404` for members and viewers) and manual
+  prices (`GET/POST /securities/{id}/prices`, `DELETE
+  .../prices/{price_id}`).
+- `GET/POST/PATCH/DELETE /investments/transactions`, `GET
+  /investments/holdings?account=`, `GET /investments/performance?range=&account=`,
+  `GET/PUT /investments/accounts/{id}/cost-method` (`fifo` | `average`).
+- Lot engine (`app/domain/investments/lots.py`): FIFO with specific-lot
+  selection, average cost per account, buys, sells, reinvestments,
+  transfers, splits and ratio corporate actions (exact ratios), statement
+  seed lots; lots, `lot_links` and the holding row of a pair are replayed on
+  every change (`service.replay_position`). Realised and unrealised gains
+  split short/long term by holding period.
+- Performance (`performance.py`, `returns.py`): daily valuation chain TWR
+  with external flows, MWR by XIRR (Newton with a bisection fallback on
+  `ln(1 + x)`, `Decimal` only), allocation by asset class, sector and
+  account in the base currency.
+- New table `investment_account` (cost method) and column
+  `investment_txn.lots_specified`; the Phase 5/6 Alembic revision must
+  create them (enum `cost_method`).
+- Property tests: unit and cost conservation of lots, split invariance,
+  TWR = MWR without flows (`tests/unit/test_investment_lots.py`,
+  `test_investment_returns.py`); API tests
+  `tests/integration/test_investments_api.py`; authz matrix kinds
+  `security`, `investment_txn`, `price`.
+
+#### Phases 5+6: investment, loan, asset, net worth and tax vault models
+
+- Household-scoped models with forced RLS and household-consistent keys:
+  `security`, `price`, `investment_txn` (`lot_links` JSON), `lot`, the
+  `holding` cache (`app/domain/investments/`), `loan`, `loan_payment`,
+  `loan_rate_change` (`app/domain/loans/`), `manual_asset`,
+  `asset_valuation` (`app/domain/assets/`), `net_worth_snapshot`
+  (`app/domain/networth/`), `tax_year`, `tax_checklist_item`,
+  `tax_category_map` and `tax_form_data` (`app/domain/tax/`). Quantities
+  and unit prices are `NUMERIC(28, 10)` (`app.db.types.QUANTITY`,
+  `UNIT_PRICE`).
+- Pluggable tax form sets (`app/domain/tax/forms/`): the `FormSet`
+  protocol and registry, and `US` with W-2, 1099-INT/DIV/B/MISC/NEC/R/G/SA,
+  1098, 1098-E, 1098-T and 1095-A/B/C box definitions. `tax_form_data`
+  keeps amounts only: identity boxes (SSN/EIN/TIN, names, addresses,
+  account numbers) are discarded by `sanitize_boxes` before storage, and a
+  check constraint refuses non-amount box values.
+- Service building blocks for the Phase 5/6 tracks (visible holdings, lots,
+  investment transactions, loans and manual assets; holdings rebuild from
+  lots; latest price, rate on a day, latest valuation; household-totals
+  visibility; `record_form_data`), factories in `tests/fixtures/wealth.py`
+  and `tests/fixtures/tax.py`. No Alembic revision yet (written at phase
+  integration); the tables are not in the export archive yet.
 
 #### Phases 3-4: finalization (live run, seccomp allowlist, ingestion security page)
 
@@ -999,6 +1263,31 @@ Next: Phase 5 (investments, loans, net worth).
 
 ### Security
 
+- Security review round 1 fixes (Phases 5+6). P56-SR-R1-01 (medium, F8):
+  a member could record a trade dated 0001-01-02, after which
+  `GET /investments/performance?range=max` valued 739 796 days (17 s per
+  request) and `GET /networth?range=max` was a permanent `422`. Every
+  client-supplied business date (trade/settle dates, prices, loan
+  origination/payment/rate-change/simulation dates, asset valuations, FX
+  rates, recurring due dates) must now be on or after 1900-01-01
+  (`app/core/dates.py`: `422` at the API, `*_min` CHECKs in revision 0005,
+  brokerage statements with an older date held as
+  `investment_date_out_of_range`, older feed quotes dropped); performance is
+  valued over at most 3660 days (`max` starts there) and `max` net worth
+  without a granularity starts at most 1000 months back. P56-SR-R1-02 (low,
+  E1): tax documents outside the registered form set (a prior-year 1040,
+  an unrecognised form) kept the SSN, name and address in their extraction,
+  search index and a parsed receipt's merchant when the classifier did not
+  call them tax forms; any document no statement/brokerage/loan/payslip
+  parser read whose text holds an SSN/ITIN, a labelled EIN or a tax-return
+  heading is now redacted like a tax form, a receipt read from a redacted
+  document is dropped, and the receipt parser never takes a merchant from a
+  line with an SSN/EIN-shaped token.
+- Phases 5+6: a request's database transaction now commits before its
+  response is sent. Before, FastAPI ended the `DbSession` dependency after
+  the response, so a success could be reported for a write whose commit
+  then failed (a revoked token, a logout, a grant change) and a client could
+  briefly read the state from before its own write.
 - Phases 3-4: the extraction child's seccomp filter is now a **default-kill
   allowlist** (C1 implemented; ADR-0006 addendum). Only the syscalls
   CPython, PyMuPDF, Pillow, pillow-heif and libtesseract need are allowed,
@@ -1145,6 +1434,26 @@ Next: Phase 5 (investments, loans, net worth).
 
 ### Changed
 
+- Phases 5+6 finalize: the SPA's hashed bundles are built into and served
+  from `/static/` (`build.assetsDir`, `app/core/spa.py`, the immutable
+  cache rule in `app/core/headers.py`) instead of Vite's default
+  `/assets/`, which is the Assets page's client route. Docs:
+  `docs/ROADMAP.md` (Phase 5 net worth and recurring boxes ticked, live-run
+  record, deferrals), `docs/API.md` (read-your-writes convention, live-run
+  status), `docs/ARCHITECTURE.md` (job status, SPA paths),
+  `docs/INGESTION.md` (live check), `docs/security/integrations.md` (feeds
+  off in the live run; not run against real services), `docs/VISION.md`
+  (status notes on corporate actions and the export),
+  `docs/security/CONTROLS.md` (A6 accountant export step-up, F1/F9 static
+  path, F3 stale revision text and tax vault visibility, F8 Phase 5/6
+  bounds, G1 `manual_asset.description` not encrypted).
+- `app/domain/portability/entities.py`: the `api_token` reason is a named
+  constant instead of a literal under `# nosec B105`, which bandit applied
+  to the whole `NOT_EXPORTED` dict and reported as 63 "nosec encountered"
+  warnings.
+- The tax checklist's status select is wide enough for its labels, and a
+  wide table scrolls inside its card instead of widening the page
+  (`.app-main { min-width: 0 }`).
 - Phases 3+4 finalize: `docs/INGESTION.md` (seccomp allowlist, the review
   UI), `docs/ARCHITECTURE.md` (sandbox status), `docs/API.md` (the
   document `error` values from the sandbox, including `syscall_denied`),
@@ -1202,6 +1511,23 @@ Next: Phase 5 (investments, loans, net worth).
 
 ### Fixed
 
+- `DbSession` (`app/auth/deps.py`) is a `scope="function"` dependency, so
+  the transaction commits before the response is sent. The live run saw 1
+  failed read in 300 `POST /accounts` then `GET /accounts/{id}` pairs (0 in
+  1000 after the fix) and once a `401` right after `POST /auth/step-up`
+  rotated the session. Regression test:
+  `tests/integration/test_commit_before_response.py`.
+- Reloading `/assets` or opening `/assets/<id>` directly answered a problem
+  `404`: the path belonged to the SPA bundle mount. Bundles now live under
+  `/static/`; `tests/integration/test_spa.py` serves `index.html` for both.
+- `src/app/shell.test.tsx` expected the Tax section to be a placeholder
+  after the tax screens replaced it.
+- `security.symbol`'s CHECK constraint: the character class `[...:_-]`
+  contained `:_`, which SQLAlchemy parses as a bind parameter in a CHECK
+  string and rendered as `NULL`, so the database refused symbols with `:` or
+  `_` that the API accepts. The class is reordered (`_:-`) in the model and
+  in revision `0005`; `test_phase56_tables_refuse_other_households_on_migrated_database`
+  inserts such a symbol on a migrated database.
 - Migration `0004` adds the `receipt_match` label to the `review_kind`
   enum. Without it, on a migrated database (tests build the schema from
   the models, so they passed) every document that reached the matching

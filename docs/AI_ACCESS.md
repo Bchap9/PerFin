@@ -24,7 +24,7 @@ any mode, in any field, to any client:
 | Government identifiers | SSN, ITIN, EIN, passport, driver's licence numbers | Never stored in exposable columns; pattern scrubber on free text |
 | Account identifiers | Full account numbers, last-4 digits, routing numbers, card numbers, IBAN, loan numbers, policy numbers | Fields excluded from the `ai:read` serialisers; pattern scrubber on free text |
 | Personal identity | Legal names of household members, usernames, email addresses, phone numbers, date of birth | Fields excluded; member-name and contact scrubber on free text |
-| Location of a person | Home or mailing addresses, property addresses of owned real estate | Fields excluded; `manual_asset.description` scrubbed; street-address scrubber on free text |
+| Location of a person | Home or mailing addresses, property addresses of owned real estate | Fields excluded; `manual_asset.description` excluded (column `classification: identity`); street-address scrubber on free text |
 | Documents | Original files, page previews, extracted full text, OCR output | No tool exposes them; the MCP process has no document mount |
 | Credentials and secrets | Everything in the credentials class of SECURITY.md | Not reachable from the API at all |
 | Tax form identity boxes | SSN/EIN fields, employer/payer addresses on W-2/1099 | Tax tools return amounts by box label only |

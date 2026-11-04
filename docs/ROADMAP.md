@@ -212,23 +212,93 @@ Deferred from Phases 3-4 (not needed for the boxes above):
 
 ## Phase 5: Investments, loans, net worth (v0.5)
 
-- [ ] Securities, lots, investment transactions, holdings cache
-- [ ] Brokerage statement parsing (holdings and activity sections)
-- [ ] Price providers (manual first; pluggable external, opt-in), FX rates
-- [ ] Performance: TWR, MWR, allocation views, realised/unrealised gains
-- [ ] Loans: amortisation, payment split from statements, extra-payment
+- [x] Securities, lots, investment transactions, holdings cache
+- [x] Brokerage statement parsing (holdings and activity sections)
+- [x] Price providers (manual first; pluggable external, opt-in), FX rates
+      (`app/integrations/prices/`, `app/integrations/fx/`, `refresh_prices`,
+      `/fx-rates`; docs/security/integrations.md; the external feeds are
+      tested against a mock transport only, and FX rates have an API but no
+      screen yet: see the deferrals below)
+- [x] Performance: TWR, MWR, allocation views, realised/unrealised gains
+      (API: `/investments/holdings`, `/investments/performance`; screens:
+      `frontend/src/features/investments/`)
+- [x] Loans: amortisation, payment split from statements, extra-payment
       simulation, rate changes
-- [ ] Manual assets and valuations
-- [ ] Daily net worth snapshots, history chart, breakdown, projections
-- [ ] Recurring transaction detection and cash-flow calendar
+- [x] Manual assets and valuations
+- [x] Daily net worth snapshots, history chart, breakdown, projections
+      (`/networth`, `/networth/latest`, `/networth/projection`,
+      `snapshot_net_worth`; `frontend/src/features/networth/`)
+- [x] Recurring transaction detection and cash-flow calendar
+      (`app/domain/recurring/`, `/recurring`, `/cashflow/calendar`,
+      `detect_recurring`; `frontend/src/features/calendar/`)
+
+Phases 5+6 integration: revision `0005_phase5_6_wealth_tax` (17 tables,
+11 enum types) and `tests/integration/test_phase5_6_end_to_end.py` (brokerage
+PDF and OFX to holdings and performance, a loan statement's payment split, a
+manual asset valuation, the net worth snapshot job and history, recurring
+detection and the calendar, a W-2 and a 1099-INT ticking off the checklist
+with no identity value stored, the accountant export) through the real
+worker.
+
+Live verification of Phases 5+6 (2026-11-04; fresh database migrated to
+`0005` by `perfin migrate`, `perfin api` and `perfin worker` in dev mode,
+built SPA, synthetic documents from `tests/fixtures/synth_*`): setup and
+TOTP login; a brokerage PDF (January) and OFX (February) processed through
+the sandbox, `GET /investments/holdings` equal to the February positions
+(4 securities, market value 33365.731046 against the statement's
+33365.7310454 unrounded) and `/investments/performance` over the account
+(TWR 0.0554402266, MWR 0.1097820888); two mortgage statements recorded
+with the printed principal/interest/escrow split (`schedule_check` `ok`)
+and the account balance equal to the second statement's; the 360-row
+schedule and a +200/month simulation; a manual asset valuation; recurring
+detection finding the monthly bill and biweekly salary and the 45-day
+calendar; the `snapshot_net_worth` job through the worker storing today's
+snapshot and backfilling the year (`/networth` serving stored snapshots);
+a W-2 and a 1099-INT ticking off the 2025 checklist with exact box amounts
+and no identity value anywhere in a database dump; the accountant export
+(refused to a personal access token with `session-required`, built after
+step-up, the zip holding both originals plus `summary.csv`/`summary.pdf`,
+a second download `410`); then the investments, loans, loan detail, net
+worth, assets, asset detail, calendar, tax and tax-year pages in headless
+Chrome with the live data. The run found two real bugs, fixed with
+regression tests (CHANGELOG "Fixed"): request transactions committed after
+the response was sent (a write could be invisible to the next request:
+1 failed read in 300 create-then-read pairs, 0 in 1000 after the fix; the
+likely cause of a `401` seen once right after a step-up rotated the session), and a reload of `/assets` or
+`/assets/<id>` hitting Vite's `/assets/` bundle mount instead of the SPA
+(bundles now live under `/static/`).
+
+Deferred from Phases 5-6 (not needed for the boxes above):
+
+- The Phase 5/6 tables are not in the portability export (format v1;
+  PORTABILITY.md): investments, loans, manual assets and the tax vault do
+  not leave in `/export` yet, and `lot_links` ids need remapping on import.
+- No screen for `/fx-rates`, the cost-method switch, specific-lot sales,
+  editing loan terms, or resolving held brokerage and loan statements
+  (the backend has no resolve action for those either: dismiss or reprocess).
+- Corporate actions are splits/ratios and cash only (no mergers, spin-offs
+  or return of capital); performance covers the securities portfolio only.
+- The external price and FX feeds have not been run against a real service,
+  and there is no feed-specific test through the egress proxy (H2 partial).
+- Net worth and recurring days are UTC dates; tax years are one per
+  household and calendar year (no separate state jurisdiction year);
+  `tax.reminder` events are not delivered anywhere until notifications
+  (Phase 7).
 
 ## Phase 6: Tax vault (v0.6)
 
-- [ ] Tax years, checklist items learned from prior years, received/missing
-- [ ] Tax form parsing (W-2, 1099 family, 1098, 1095) with key boxes
-- [ ] Deductible tagging and category-to-schedule hints, yearly roll-up
-- [ ] Accountant export: originals zip + summary CSV/PDF
-- [ ] Reminders as the year closes ("3 expected documents still missing")
+- [x] Tax years, checklist items learned from prior years, received/missing
+- [x] Tax form parsing (W-2, 1099 family, 1098, 1095) with key boxes
+- [x] Deductible tagging and category-to-schedule hints, yearly roll-up
+- [x] Accountant export: originals zip + summary CSV/PDF
+- [x] Reminders as the year closes ("3 expected documents still missing")
+      (the `tax.reminder` event and the missing-documents line on `/tax` and
+      the dashboard; delivery by mail or push waits for Phase 7 notifications)
+
+Screens: `frontend/src/features/tax/` (years, checklist, roll-up, schedule
+hints, accountant export with step-up). The tax forms are parsed from
+synthetic reportlab forms only; no real issuer's layout has been tried.
+Live run: see "Live verification of Phases 5+6" under Phase 5.
 
 ## Phase 6b: AI access boundary (v0.7)
 

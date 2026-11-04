@@ -6,6 +6,11 @@ authenticate with the session cookie plus CSRF header; scripts use
 
 ## Conventions
 - UUIDv7 identifiers. Timestamps in RFC 3339 UTC; dates as `YYYY-MM-DD`.
+  Business dates a client supplies (investment trade/settle dates, prices,
+  loan origination, payment, rate-change and simulation dates, asset
+  valuations, FX rates, recurring due dates) are never before `1900-01-01`
+  (`422` request validation; `app/core/dates.py`, SECURITY.md F8); the
+  database refuses older rows too and importers and feeds hold or drop them.
 - Money as `{"amount": "123.45", "currency": "USD"}` strings, never floats.
 - Pagination: cursor-based (`?cursor=&limit=`), max limit 500.
 - Filtering: explicit query parameters, no free-form query language.
@@ -25,6 +30,11 @@ authenticate with the session cookie plus CSRF header; scripts use
   no longer see (the request runs again). The Phase 1 creating `POST`s (`/households`,
   `/households/{id}/members`, `/admin/users`) ignore it; `POST /auth/tokens`
   never will (a replay could not return the secret).
+- Read your writes: a request's database transaction commits before its
+  response is sent (`DbSession` in `app/auth/deps.py` is a
+  `scope="function"` dependency), so a `2xx` means the change is stored and
+  the client's next request sees it; a failed commit is a `500`, never a
+  success (`tests/integration/test_commit_before_response.py`).
 - Versioning: path version; breaking changes bump the path.
 - Every response carries `Cache-Control: no-store` except static assets.
 
@@ -52,9 +62,15 @@ rotation); the drop folder and mailbox intake are worker jobs, not routes. It al
 grant routes. Not built yet among the Phase 2 families: `GET/PATCH
 /settings/household` (so the household settings `reports.include_pending_review`
 and `documents.viewer_download` have their defaults and no API) and `GET
-/audit`. Everything from `/securities` on is later phases. These Phase 2
-routes were run end to end against a live `perfin api` and `perfin worker`
-on a freshly migrated database (CHANGELOG "Resume here").
+/audit`. Phases 5-6 (v0.5, v0.6) add `/securities`, `/investments/*`,
+`/fx-rates`, `/loans`, `/assets`, `/networth`, `/recurring`,
+`/cashflow/calendar`, `/tax-years` and `/tax-category-map` (notes below);
+the Phase 7+ routes in the list are not built yet. The Phase 2 routes, and
+the Phase 5-6 routes for brokerage, loan and tax-form uploads, holdings,
+performance, loan payments, schedules and simulation, manual assets, net
+worth, recurring detection, the calendar, the tax checklist and the
+accountant export, were run end to end against a live `perfin api` and
+`perfin worker` on a freshly migrated database (CHANGELOG "Resume here").
 
 ```
 GET    /setup/status                    first-run setup pending? (no user yet)
@@ -142,16 +158,35 @@ GET             /reports/trends                 month-on-month, year-on-year
 GET             /reports/cashflow               monthly in / out / net
 
 GET/POST/PATCH/DELETE /securities
+GET/POST        /securities/{id}/prices         manual closing prices
+DELETE          /securities/{id}/prices/{price_id}
+GET/POST        /fx-rates                       rate history; manual rate of a pair and day
+DELETE          /fx-rates/{id}
 GET/POST/PATCH/DELETE /investments/transactions
 GET             /investments/holdings?account=
-GET             /investments/performance?range=
+GET             /investments/performance?range=&account=
+GET/PUT         /investments/accounts/{id}/cost-method   fifo | average
 
-GET/POST/PATCH/DELETE /loans
-GET             /loans/{id}/schedule
-POST            /loans/{id}/simulate            extra payments what-if
+GET/POST/PATCH/DELETE /loans                   terms of a loan/mortgage/line-of-credit account
+GET             /loans/{id}/schedule?basis=     original | projected (from today)
+POST            /loans/{id}/simulate            extra payments what-if (stores nothing)
+GET/POST        /loans/{id}/payments            payment splits, checked against the schedule
+DELETE          /loans/{id}/payments/{payment_id}
+GET/POST        /loans/{id}/rate-changes
+DELETE          /loans/{id}/rate-changes/{change_id}
+GET/POST/PATCH/DELETE /assets                  manual assets (property, vehicle, other)
+GET/POST        /assets/{id}/valuations         valuation history; manual valuation
+DELETE          /assets/{id}/valuations/{valuation_id}
 
-GET             /networth?range=
+GET             /networth?range=&granularity=   history (stored snapshots or recomputed)
 GET             /networth/latest
+GET             /networth/projection?months=&basis_months=   linear trend and savings rate
+
+GET/POST        /recurring                      recurring transactions (detected and manual)
+GET             /recurring/candidates           detection dry run (nothing stored)
+POST            /recurring/detect               detect and store (member or above)
+GET/PATCH/DELETE /recurring/{id}
+GET             /cashflow/calendar?days=&account=   expected income and bills, day by day
 
 POST            /documents                     multipart upload (streamed) -> 202
 GET             /documents                     filters: kind, status, account, tax_year, q (full text)
@@ -176,10 +211,18 @@ POST            /review/{id}/correct            document facts and row values
 POST            /review/{id}/remember-layout    household parser fingerprint, reprocess similar
 GET             /review/{id}/rule-draft         pre-filled rule for POST /rules
 
-GET/POST/PATCH/DELETE /tax-years
-GET             /tax-years/{year}/checklist
-PATCH           /tax-years/{year}/checklist/{item}
-GET             /tax-years/{year}/export        zip (job)
+GET/POST        /tax-years
+GET/PATCH/DELETE /tax-years/{year}
+GET/POST        /tax-years/{year}/checklist
+POST            /tax-years/{year}/checklist/learn
+PATCH/DELETE    /tax-years/{year}/checklist/{item_id}
+GET             /tax-years/{year}/forms         amounts by box (no identity data)
+GET             /tax-years/{year}/summary       roll-up by category and schedule hint
+POST            /tax-years/{year}/export        accountant export (job; 202 + job id)
+GET             /tax-years/{year}/export/{job_id}
+GET             /tax-years/{year}/export/{job_id}/download   zip, once
+GET             /tax-category-map
+PUT/DELETE      /tax-category-map/{category_id}
 
 GET             /events                         SSE stream
 GET             /jobs/{id}
@@ -834,6 +877,271 @@ window, not before the first contribution), `monthly_rate = daily * 365.25
 `remaining / daily` days; `on_track` compares it with `target_date`
 (`app/domain/goals/progress.py`). Events `goal.created|updated|deleted`.
 
+Investments notes (`app.domain.investments`, routers `securities` and
+`investments`; scopes `investments:read` / `investments:write`; any role
+reads, member and above writes; DATA_MODEL.md "Investments"). Quantities,
+unit prices and split ratios are decimal **strings** (at most 18 + 10
+digits, never JSON numbers) and come back without trailing zeros; rates are
+fractions rounded half-even to 10 decimals (`"0.2100000000"` = 21 %).
+
+- **Securities** (`{"id", "symbol", "name", "asset_class", "currency",
+  "isin", "cusip", "sector", "exchange", "created_at", "updated_at"}`): the
+  household's catalogue. Owners and admins see all of it; members and
+  viewers see securities with activity on an account they can see, or with
+  none at all (a security used only on hidden accounts is `404
+  security-not-found`, like another household's). `GET
+  /securities?q=&asset_class=&cursor=&limit=` (by symbol); `POST`
+  (`Idempotency-Key` honoured; symbol and exchange unique, `409
+  security-exists`; ISIN/CUSIP format-checked and upper-cased); `PATCH`
+  (currency only while there are no prices or transactions, `409
+  security-currency-locked`); `DELETE` (`409 security-in-use` with
+  transactions or lots; prices go with it). Prices: `GET
+  /securities/{id}/prices?from=&to=` (newest first), `POST` `{"price_date",
+  "close"}` sets that day's close (`source` `manual`, replaces the day's
+  price; not in the future, `422 price-date-in-future`), `DELETE
+  .../prices/{price_id}` (`404 price-not-found`). Events `security.*`
+  (security id only) reach only callers who see every account.
+- **Transactions** (`{"id", "account_id", "security_id", "type",
+  "trade_date", "settle_date", "quantity", "price", "ratio", "amount",
+  "fees", "lots", "lots_specified", "memo", "source_document_id",
+  "created_at", "updated_at"}`): `GET
+  /investments/transactions?account=&security=&type=&from=&to=&cursor=&limit=`
+  (newest trade date first; visible accounts only); `POST` (`Idempotency-Key`
+  honoured) takes `account_id` (a brokerage or retirement account the
+  caller may edit: `404 account-not-found`, `422 not-an-investment-account`),
+  `type`, `trade_date` (not in the future, `422 trade-date-in-future`),
+  `settle_date`, `security_id`, `quantity`, `price` (security currency),
+  `amount` and `fees` (account currency, `422 currency-mismatch`), `ratio`
+  (`{"new", "old"}`, splits and corporate actions), `lots` (specific lots
+  of a sale or transfer out: `[{"lot_id", "quantity"}]`, `fifo` accounts
+  only) and `memo`; the rules per type are in
+  `app/domain/investments/transactions.py` (`422
+  invalid-investment-transaction`). `PATCH` takes the same fields except
+  `account_id` (`"lots": null` returns a sale to the cost method);
+  `DELETE`. Every write replays the lots of the (account, security) pairs
+  it touches; what the lots cannot satisfy is `422` (`409` for a delete)
+  `insufficient-quantity`, `lot-not-available`, `lot-links-mismatch` or
+  `lot-selection-not-allowed`, and `409 lots-not-replayable` when units
+  that came from a statement precede a split recorded as units added.
+  Transactions on hidden accounts are `404
+  investment-transaction-not-found`; on accounts the caller may only view,
+  writes are `404` too. Events `investment.txn_created|txn_updated|txn_deleted`
+  carry the account id.
+- **Cost method**: `GET /investments/accounts/{id}/cost-method` (any role, a
+  visible account), `PUT` `{"method": "fifo"|"average"}` (an account the
+  caller may edit) replays every lot of the account (`422
+  lot-selection-not-allowed` while a sale names its lots). Event
+  `investment.cost_method_changed`.
+- **Holdings** (`GET /investments/holdings?account=`): as of today, per
+  account and security `{"account_id", "security", "quantity",
+  "cost_basis", "price": {"close", "currency", "price_date", "basis":
+  "price"|"trade"}, "market_value", "market_value_base", "unrealized":
+  {"short_term", "long_term", "total"}, "weight", "lots": [...]}`, plus
+  `accounts` (cost method and value per account), totals (`market_value`,
+  `cost_basis`, `unrealized`) and `allocation` (`asset_class`, `sector`,
+  `account`: `[{"key", "value", "weight"}]`) in the household's base
+  currency, `unpriced_security_ids` and `missing_rates`. Only visible
+  accounts count; a hidden `account` filter is `404 account-not-found`.
+- **Performance** (`GET /investments/performance?range=&account=`, range
+  `1m|3m|6m|ytd|1y|3y|5y|max`, default `1y`): `start`, `end`, `days`,
+  `start_value`, `end_value`, `inflows`, `outflows`, `income`, `fees`,
+  `twr` and `mwr` over the period, `twr_annualized` and `mwr_annualized`
+  (periods of a year or more), `realized` and `unrealized` gains (short and
+  long term), a `series` of `{"date", "value", "twr"}` (at most 400 points)
+  and the unpriced securities / missing rates, all in the base currency over
+  the securities of visible accounts. The period is valued day by day and is
+  at most 3660 days: `max` over an older history starts 3660 days before
+  today, from the value held then (`start` says so; SECURITY.md F8). Method: `app/domain/investments/performance.py`
+  and `returns.py` (daily valuation chain; XIRR by Newton with a bisection
+  fallback in `Decimal`).
+
+Loans notes (`app.domain.loans`, router `loans`; scopes `loans:read` /
+`loans:write`; any role reads, member and above writes on an account they
+may edit; DATA_MODEL.md "Loans"). Rates are **fractions** as decimal
+strings (`"0.06125"` = 6.125 %, at most eight decimals, `0 <= rate < 1`;
+a JSON number is `422`). Hidden, foreign and missing loans are `404
+loan-not-found`; on an account the caller may only view, writes are `403`.
+
+- **Loans** (`{"id", "account_id", "principal_original", "rate",
+  "rate_type", "term_months", "origination_date", "payment_amount",
+  "payment_day", "escrow_amount", "lender", "maturity_date", "projection",
+  "created_at", "updated_at"}`): `POST /loans` (`Idempotency-Key` honoured)
+  takes `account_id` (type loan, mortgage or line_of_credit: `422
+  invalid-loan-account`; one loan per account, `409 loan-exists`), the
+  terms (money in the account currency, `422 currency-mismatch`),
+  `payment_amount` (principal and interest; default the level payment),
+  `payment_day` (default the origination day) and `escrow_amount`. Terms
+  whose payment does not cover a period's interest are `422
+  loan-payment-too-low`. `PATCH` changes any term (`escrow_amount` and
+  `lender` may be null; `422 invalid-payment-date` when payments would
+  precede the origination date); `DELETE` removes the terms, payments and
+  rate changes (the account and its statement/manual balances stay).
+  `projection` is `{"as_of", "balance", "balance_source": "recorded" |
+  "scheduled", "rate", "scheduled_payment", "next_due_date",
+  "payoff_date", "remaining_payments", "remaining_interest"}`: from the
+  loan account's balance and the first payment due more than 14 days after
+  the latest recorded payment or statement balance, or, with nothing
+  recorded, the original schedule with every payment due by today assumed
+  made.
+- **Schedule** (`GET /loans/{id}/schedule?basis=original|projected`):
+  `{"loan_id", "basis", "start_balance", "rows": [{"number", "due_date",
+  "rate", "payment", "principal", "interest", "extra", "escrow", "total",
+  "balance"}], "totals": {"payments", "principal", "interest", "extra",
+  "escrow", "paid", "payoff_date"}}`. Payment `k` is due `k` months after
+  origination on `payment_day`; interest is monthly (rate / 12) at the rate
+  in force on the period's first day, rounded to the minor unit each
+  period; the final payment takes what rounding left, so `principal` adds
+  up to the start balance exactly. A variable loan re-amortises over the
+  months left at each rate change; a fixed one keeps its payment.
+- **Simulate** (`POST /loans/{id}/simulate`, any role, nothing stored):
+  `{"one_off": [{"on", "amount"}] (max 240), "recurring": {"amount",
+  "start"?, "end"?}, "include_schedule"}`; extras are principal, `> 0`
+  (`422 invalid-extra-payment`) in the loan currency. A one-off goes with
+  the first payment due on or after its date, a recurring extra with every
+  payment due in its window (default from today). Answer: `{"loan_id",
+  "as_of", "balance", "baseline", "with_extras"` (each `{"payoff_date",
+  "payments", "total_interest", "total_extra"}`), `"interest_saved",
+  "payments_saved", "schedule"}` (the rows with extras, when asked).
+- **Payments** (`{"id", "loan_id", "paid_on", "principal", "interest",
+  "escrow", "fees", "total", "balance_after", "transaction_id",
+  "source_document_id", "schedule_check", "created_at"}`): `GET
+  /loans/{id}/payments?from=&to=&limit=` (oldest first, at most 1200);
+  `POST` (`Idempotency-Key` honoured) `{"paid_on", "principal",
+  "interest", "escrow"?, "fees"?, "transaction_id"?}` (parts `>= 0`, not
+  all zero, `422 invalid-payment`; dated from origination to today, `422
+  invalid-payment-date`; a linked transaction must be visible, `404
+  transaction-not-found`); `DELETE .../payments/{payment_id}` (`404
+  loan-payment-not-found`). `schedule_check` compares the interest with the
+  interest due on the balance owed the day before at the period's rate:
+  `{"status": "ok" (within one minor unit) | "differs" | "unchecked",
+  "expected_interest", "difference"}`. Loan statements add payments too
+  (INGESTION.md "Loan statements"). Every change rebuilds the loan
+  account's `computed` balances, so its balance is the principal owed.
+- **Rate changes** (`{"id", "loan_id", "effective_date", "new_rate",
+  "created_at"}`): `GET /loans/{id}/rate-changes`; `POST` after the
+  origination date (`422 invalid-rate-change`, one per day `409
+  rate-change-exists`); `DELETE .../rate-changes/{change_id}` (`404
+  loan-rate-change-not-found`).
+
+Events `loan.created|updated|deleted` carry the loan and account ids
+(account-scoped). Audit actions `loan.create|update|delete`,
+`loan.payment_add|payment_delete|payment_import`,
+`loan.rate_change_add|rate_change_delete`.
+
+Manual assets notes (`app.domain.assets`, router `assets`; scopes
+`accounts:read` / `accounts:write`, a manual asset is an account; any role
+reads, member and above writes on an account they may edit). `{"id",
+"account_id", "name", "kind": "property"|"vehicle"|"other",
+"description", "valuation_method", "current_value", "created_at",
+"updated_at"}`; `kind` is the account's `asset_kind`, `current_value` the
+latest valuation on or before today (`manual` beats `provider` on a day).
+`POST /assets` (`Idempotency-Key` honoured) `{"account_id" (type
+manual_asset, `422 invalid-asset-account`; one per account, `409
+asset-exists`), "description"?, "valuation_method"?, "value"?,
+"valued_on"?}`; `PATCH` `{"kind"?, "description"? (null clears),
+"valuation_method"?}`; `DELETE` removes the details (the account and its
+valuations stay). Valuations (`{"id", "account_id", "valued_on", "value",
+"source", "created_at"}`): `GET /assets/{id}/valuations?from=&to=&limit=`
+(newest first); `POST` `{"valued_on", "value"}` (`>= 0`, `422
+invalid-valuation`; account currency, `422 currency-mismatch`; not in the
+future, `422 valuation-in-future`) replaces that day's manual valuation and
+is also the account's `manual` balance of that day; `DELETE
+.../valuations/{valuation_id}` (`404 valuation-not-found`). `description`
+may hold an address: callers who see the account get it, the audit trail
+and events never do (`has_description` only), and it is on the `ai:read`
+denylist (`classification: identity`). Hidden, foreign and missing assets
+are `404 asset-not-found`. Events `asset.created|updated|deleted`.
+
+FX rates notes (`app.domain.fx.manage`, router `fx_rates`; scopes
+`accounts:read` / `accounts:write`): `1 base = rate quote` on `rate_date`,
+rates as decimal **strings** (at most 12 digits before and 12 after the
+point, above zero; output without trailing zeros), one per household, pair
+and day (DATA_MODEL.md "Ledger" for the conversion rules). `GET
+/fx-rates?base=&quote=&from=&to=&cursor=&limit=` (any role): newest day
+first, then base and quote; `base`/`quote` filter the stored direction (`422
+invalid-range`, `422 invalid-cursor`). `POST /fx-rates` `{"base", "quote",
+"rate_date", "rate"}` (owner or admin: rates are household-wide and change
+converted totals over accounts members cannot see; `Idempotency-Key`
+honoured) sets the day's **manual** rate, replacing what that pair had that
+day, a fetched rate included (`source` becomes `manual`); not in the future
+(`422 fx-rate-date-in-future`), `base` and `quote` must differ. `DELETE
+/fx-rates/{id}` (owner or admin, `404 fx-rate-not-found`). Writes are
+audited (`fx_rate.set|delete`) and emit `fx.rate_set|rate_deleted` with the
+rate id. Fetched rates (`PERFIN_FX_PROVIDER=ecb`) and fetched prices
+(`PERFIN_PRICE_PROVIDER=http_json`) come from the `refresh_prices` worker
+job, never replace a manual row, and carry the provider name as `source`;
+what they send is in docs/security/integrations.md.
+
+Net worth notes (`app.domain.networth`, router `networth`; any role, scope
+`networth:read`; DATA_MODEL.md "Net worth"):
+
+- **Scope**: owners, admins and members/viewers granted every account get
+  household figures (`"scope": "household"`); anyone else gets figures
+  recomputed over the accounts they may see (`"visible_accounts"`). A stored
+  `net_worth_snapshot` (whose breakdown names every account) is only ever
+  read for household scope.
+- `GET /networth?range=&granularity=`: `range` `1m|3m|6m|ytd|1y|3y|5y|max`
+  (default `1y`; `max` from the first data), `granularity` `day|week|month`
+  (default: `day` up to 400 days, `week` up to 7 years, else `month`; more
+  than 1000 points is `422 too-many-points`; `max` without `granularity`
+  starts at most 1000 months back instead). Answer `{"currency", "range",
+  "granularity", "scope", "date_from", "date_to", "points": [{"as_of",
+  "assets", "liabilities", "net", "source": "snapshot"|"computed"}],
+  "change"}`: one point per bucket end (every day, every 7 days back from
+  today, every month end), the last one today and always computed live.
+- `GET /networth/latest`: `{"as_of", "currency", "scope", "assets",
+  "liabilities", "net", "by_class": {"assets": {class: Money},
+  "liabilities": {...}}, "by_type": {account_type: signed Money},
+  "accounts": [{"account_id", "name", "type", "account_class", "side",
+  "amount" (account currency), "amount_base"}], "unconverted": [account
+  ids], "unpriced_security_ids", "last_snapshot_date"}` (the snapshot date
+  only for household scope). Classes: `cash`, `investments`, `real_estate`,
+  `vehicles`, `other_assets`, `credit_cards`, `mortgages`, `loans`,
+  `other_liabilities`.
+- `GET /networth/projection?months=&basis_months=` (1-360, default 12;
+  1-120, default 12): `{"as_of", "currency", "scope", "months",
+  "basis_months", "current", "trend": {"slope_per_month", "points": [{"on",
+  "net"}]} | null, "savings": {"average_monthly_savings", "savings_rate",
+  "points"}, "unconverted"}`. Trend: least-squares line through the month
+  ends of the basis window and today; savings: the average monthly net cash
+  flow of the basis window's whole months (`/reports/cashflow` rules) added
+  each month. Neither compounds returns (`app/domain/networth/projection.py`).
+
+Recurring notes (`app.domain.recurring`, router `recurring`; scopes
+`transactions:read` / `transactions:write`):
+
+- Schedules (`{"id", "account_id", "name", "cadence":
+  daily|weekly|monthly|quarterly|yearly, "interval_count", "next_due",
+  "amount_min", "amount_max", "payee_id", "category_id", "origin":
+  detected|manual, "active", "last_seen_on"}`) follow their account's
+  visibility: hidden, foreign or missing is `404 schedule-not-found`; writes
+  need member or above and an edit grant (`403` on a view-only account).
+  `GET /recurring?origin=&active=&account=` lists at most 500, soonest first.
+  `POST /recurring` (`Idempotency-Key` honoured) adds a manual schedule;
+  amounts are in the account currency (`422 currency-mismatch`) with
+  `amount_min <= amount_max` (`422 invalid-amount-range`); payee and
+  category must be the household's (`404`). `PATCH` changes any field
+  (`null` clears payee/category), `DELETE` removes it.
+- `GET /recurring/candidates?account=` (any role) runs detection over the
+  visible accounts and stores nothing: `{"as_of", "items": [{"account_id",
+  "payee_id", "name", "pattern": weekly|biweekly|monthly|quarterly|annual,
+  "cadence", "interval_count", "amount_min", "amount_max", "category_id",
+  "occurrences", "first_seen", "last_seen", "next_due", "regularity",
+  "confidence", "schedule_id"}]}`. `POST /recurring/detect` (`{"account_ids"?}`,
+  member or above; every account editable, else `404 account-not-found`)
+  stores them as `detected` schedules and answers `{"as_of", "created",
+  "updated", "unchanged", "skipped_manual", "items"}`. Manual schedules are
+  never changed; a detected schedule keeps the name and `active` flag a
+  person gave it. Detection rules: `app/domain/recurring/detection.py`.
+- `GET /cashflow/calendar?days=&account=` (any role; `days` 1-366, default
+  30): `{"currency", "date_from", "date_to", "opening_balance", "days":
+  [{"on", "events": [{"schedule_id", "name", "account_id", "kind":
+  income|bill, "amount", "amount_min", "amount_max", "amount_base"}],
+  "income", "bills", "net", "balance"}], "income", "bills", "net",
+  "unconverted"}`: occurrences of the active visible schedules from today
+  at the midpoint of their range; `opening_balance` and `balance` cover the
+  visible checking, savings and cash accounts.
+
 Reports notes (`app.domain.reports`, router `reports`; any role, scope
 `transactions:read`): amounts come only from accounts the caller may see,
 read splits instead of split transactions, leave out transfer legs and
@@ -866,6 +1174,93 @@ User settings notes: `GET /settings/user` returns `{"display_name", "locale",
 of them (locale a BCP 47 tag, theme `system|light|dark`, timezone an IANA
 name) and needs a browser session. A token reads them only with the
 `settings:read` scope (`403 insufficient-scope` otherwise).
+
+Tax vault notes (`app.domain.tax`, router `tax`; scopes `tax:read` /
+`tax:write`; DATA_MODEL.md "Tax vault"): a tax year is household-wide. Any
+role reads `GET /tax-years` (newest first) and `GET /tax-years/{year}`
+(`{"id", "year", "jurisdiction", "filing_status", "state", "notes",
+"checklist": {"expected", "received", "not_applicable"}, ...}`); `404
+tax-year-not-found` for a year the household has not opened. Member or
+above: `POST /tax-years` `{"year", "jurisdiction"? ("US"), "filing_status"?,
+"notes"?}` (`201`, `Idempotency-Key` honoured; `409 tax-year-exists`; `422
+tax-jurisdiction-unknown` / `tax-filing-status-unknown`), which learns the
+checklist from the year before: every form received last year (checklist
+items `received` and forms parsed with last year printed on them) becomes an
+`expected` item with origin `prior_year`; `PATCH /tax-years/{year}`
+`{"filing_status"?, "notes"?, "state"?}`: `open -> filed -> closed`, `open ->
+closed`, `filed -> open`; a closed year changes only back to `open`, by an
+owner or admin (`403` for others), and is otherwise frozen (`409
+tax-year-closed`); other moves are `409 tax-year-state-invalid`. `DELETE
+/tax-years/{year}`: owner or admin (its checklist goes with it; form data
+stays with its documents). A year is also opened by the worker when the
+first form printed with that year is parsed.
+
+Checklist: `GET /tax-years/{year}/checklist` (any role) `{"year", "items":
+[{"id", "expected_form", "form_title", "issuer", "status":
+expected|received|not_applicable, "origin": manual|prior_year|detected,
+"document_id", ...}], "counts"}`; `document_id` is set only when the caller
+may see the document (owners/admins always; members and viewers for
+documents of accounts they see and their own unattached uploads). Member or
+above: `POST` `{"expected_form", "issuer"?}` (`201`; the form type must
+belong to the year's jurisdiction, `422 tax-form-unknown`; `409
+tax-checklist-item-exists` for the same form and issuer, compared on letters
+and digits only), `PATCH .../checklist/{item_id}` `{"status"?, "issuer"?,
+"document_id"?}` (naming a document marks the item `received`; the document
+must be one the caller can see, else `404 document-not-found`; any other
+status clears it; a document with a status other than `received` is `422
+tax-checklist-document-needs-received`), `DELETE`, and `POST
+.../checklist/learn` (`{"added"}`: learn again, adding only what is missing).
+A parsed form ticks the checklist off by itself (INGESTION.md "Parse").
+
+`GET /tax-years/{year}/forms` (any role): the forms parsed with that year,
+of documents the caller may see: `{"id", "document_id", "form_type",
+"form_index", "tax_year", "issuer_name", "source", "confidence", "boxes":
+[{"box", "label", "amount"}], "coverage_months"?}` (amounts as decimal
+strings; `12_D` is W-2 box 12 code D, `cov_<MON>` a covered month of a
+1095). Identity boxes are never stored, so they cannot be returned.
+
+`GET /tax-years/{year}/summary` (any role): deductible tagging rolled up
+over the calendar year: every ledger line (splits instead of their
+transaction; pending review rows and transfers left out) in a category with
+a `tax_treatment`, and every split flagged `tax_flag` (`POST
+/transactions/{id}/split`), summed per category in the household's base
+currency (rate of each posting day; amounts without a rate under
+`unconverted`): `{"year", "jurisdiction", "currency", "partial",
+"by_treatment": {"deductible"|"taxable_income"|"tax_exempt_income"|
+"tax_payment"|"flagged": money}, "categories": [{"category_id",
+"category_name", "tax_treatment", "schedule", "line", "total", "flagged"}],
+"by_hint": [{"schedule", "line", "total"}], "forms": [{"form_type",
+"count", "boxes"}], "checklist", "unconverted"}`. A member or viewer gets
+totals over their visible accounts only and `partial: true` unless they see
+every account.
+
+Schedule hints: `GET /tax-category-map?jurisdiction=` (any role) and, member
+or above, `PUT /tax-category-map/{category_id}` `{"jurisdiction"? ("US"),
+"schedule", "line"?}` (upsert; `404 category-not-found`) and `DELETE
+/tax-category-map/{category_id}?jurisdiction=` (`404
+tax-category-map-not-found`). A hint for the accountant, not tax advice.
+
+Accountant export (`app.domain.tax.export`): `POST
+/tax-years/{year}/export` needs an owner or admin **browser session with a
+step-up** (tokens refused, as for `POST /export`) and answers `202
+{"job_id", "year", "state"}` (`Idempotency-Key` honoured; `409
+tax-export-in-progress` while another is pending). The `tax.export` job
+writes a zip of `originals/<document id>/<file>` (every accepted document of
+the year: its `tax_year`, named by the checklist or holding the year's form
+data), `summary.csv` (sections `year`, `checklist`, `form`, `category`,
+`hint`; formula cells neutralised, SECURITY.md C7) and `summary.pdf`, into
+the blob store, encrypted at rest. `GET /tax-years/{year}/export/{job_id}`
+(the requester only, else `404 tax-export-not-found`) gives its state, size,
+SHA-256, expiry and counts; `GET .../download` (step-up) streams it once,
+within `PERFIN_EXPORT_TTL_MINUTES` (`410 tax-export-already-downloaded` /
+`tax-export-expired`, `409 tax-export-not-ready`); the stored copy is
+crypto-shredded before the first byte is sent.
+
+Events: `tax_year.created|updated|deleted`, `tax_category_map.updated`,
+`tax_export.request|complete|fail|download|expire`, and `tax.reminder`
+`{"year", "missing", "message"}` ("3 expected documents still missing") on
+the days of `PERFIN_TAX_REMINDER_DATES` for open years of the previous
+calendar year with expected items left.
 
 Intake settings notes (INGESTION.md "Email intake specifics"): every
 `/settings/intake` route needs a browser session of an owner or admin

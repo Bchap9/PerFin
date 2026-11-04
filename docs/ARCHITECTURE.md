@@ -60,7 +60,10 @@ network.
 
 ### perfin-api
 FastAPI application. Stateless apart from the DB. Serves the compiled SPA from
-`/` and the API from `/api/v1`. Owns:
+`/` (hashed bundles under `/static/`; every other unmatched `GET` outside
+`/api/` gets `index.html`, so client routes such as `/assets/<id>` reload)
+and the API from `/api/v1`. A request's transaction commits before its
+response is sent (API.md "Conventions"). Owns:
 
 - Authentication (local + OIDC), session management, CSRF, MFA.
 - Authorisation (household membership, per-account visibility, roles).
@@ -113,8 +116,28 @@ SECURITY.md "Container hardening"). Pulls jobs from a Postgres table using
   `poll_mailbox` for each household whose mailbox is enabled; a run that
   recorded messages queues a follow-up that moves them out of the inbox
   after the commit. No IDLE yet. INGESTION.md "Email intake specifics".)
-- `snapshot_net_worth`: daily.
+- `snapshot_net_worth`: daily. (Built in Phase 5 as an instance-level
+  recurring job, `app/workers/handlers/networth.py`: it queues one
+  `networth.snapshot` per household and day (dedupe key
+  `networth:<household>:<day>`), which upserts that day's
+  `net_worth_snapshot` in the household's RLS context and backfills the
+  days missing since the last one.)
+- `detect_recurring`: daily (Phase 5, `app/workers/handlers/recurring.py`):
+  one `recurring.detect` per household and day; writes `detected`
+  scheduled transactions, never touches manual ones.
 - `refresh_prices`: scheduled, only if a price provider is enabled.
+  (Built in Phase 5 as an instance-level recurring job every 6 hours,
+  `app/workers/handlers/market_data.py`: with `PERFIN_PRICE_PROVIDER` and
+  `PERFIN_FX_PROVIDER` both `none`, the default, it returns without any
+  connection; otherwise it asks the price provider once per distinct
+  symbol of the instance and the FX provider once, then writes each
+  household's prices and rates in its RLS context, never over manual ones.
+  docs/security/integrations.md.)
+- `tax.export`, `tax.export_expire`: the accountant export of a tax year
+  (Phase 6, `app/workers/handlers/tax.py`; API.md "Tax vault notes").
+- `tax_reminders`: daily, instance-level (Phase 6): one `tax.reminders` per
+  household and day, which emits `tax.reminder` on the days of
+  `PERFIN_TAX_REMINDER_DATES` for open years with expected documents missing.
 - `run_rules`: re-apply rules after a rule change.
 - `send_notification`: fan out to configured channels.
 - `backup_export`: produce encrypted export archives.
@@ -126,9 +149,12 @@ limits so a pathological PDF cannot take down the worker.
 Status after Phases 3-4: `ingest_document`, `imports.apply_mapping`,
 `run_rules`, `transactions.auto_pair`, `portability.*`, the identity
 maintenance jobs, `watch_dropfolder` and `dropfolder.finish`, and
-`poll_mailboxes`/`poll_mailbox` exist. `snapshot_net_worth`,
-`refresh_prices`, `send_notification` and `backup_export` are later
-phases. The extraction subprocess is built
+`poll_mailboxes`/`poll_mailbox` exist. Phases 5-6 add
+`snapshot_net_worth`/`networth.snapshot`, `detect_recurring`/
+`recurring.detect`, `refresh_prices`, `tax.export`/`tax.export_expire` and
+`tax_reminders`/`tax.reminders` (the snapshot, recurring and export jobs ran
+through a live `perfin worker` in the Phases 5+6 live run).
+`send_notification` and `backup_export` are later phases. The extraction subprocess is built
 (`app.ingestion.sandbox`: a fresh interpreter per document, rlimits on
 memory, CPU, open files and file size, a wall-clock timeout, its own process
 group, Landlock limiting the filesystem to reading the interpreter's own

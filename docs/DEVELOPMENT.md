@@ -124,6 +124,25 @@ app/
   `env.py` and the test fixtures call `import_all_models()`.
 - **Job handlers**: decorate with `@job_handler("type_name", payload=Model)` in
   any module under `app/workers/handlers/`; the runner discovers them.
+- **Tax form sets**: a jurisdiction is a module in `app/domain/tax/forms/`
+  building a `FormSet` (code, filing statuses, `FormDef`s with box ids,
+  labels and kinds; identity boxes are kind `identity` and never stored),
+  listed in that package's `_BUILTIN` or added with `register(...)`.
+  `FormDef.issuer_box` names the box printing the issuer's name. The tax
+  form parser (`app/ingestion/parsers/tax_forms.py`) reads every registered
+  set by its labels (`Form <type>` heading, box id plus the first words of
+  the label) and its redaction keeps the words of the registered titles and
+  labels, so a new set needs no parser change unless its layout has tables
+  (see the 1095 handling there).
+- **Price and FX providers**: an external feed is a module in
+  `app/integrations/prices/` (protocol `PriceProvider`: symbols in, quotes
+  out) or `app/integrations/fx/` (`FxProvider`), a new `Literal` value of
+  `Settings.price_provider` / `fx_provider` (default `none`) and a branch in
+  that package's `registry.py`. It must use `app.core.http.SafeHttpClient`
+  with an allowlist of its own host, send ticker symbols or currency codes
+  only, get a `config_check` warning naming its destination and a section
+  in docs/security/integrations.md. The `refresh_prices` job
+  (`app/workers/handlers/market_data.py`) is its only caller.
 - **Settings**: add fields to `Settings`; insecure combinations go in
   `config_check.py` with a test.
 - **Frontend features**: `src/features/<name>/routes.tsx` exports
@@ -160,6 +179,13 @@ app/
   transfers and pending review rows already handled), aggregate with its
   `aggregate` in SQL, and convert with its `Accumulator` (rate per posting
   day, missing rates reported as `unconverted`).
+- Investment lots, `investment_txn.lot_links` and `holding` rows are
+  derived: only `app.domain.investments.service.replay_position(db,
+  account, security_id)` writes them (the lot engine in
+  `app/domain/investments/lots.py`). Code that adds, changes or deletes
+  investment transactions calls it for every (account, security) pair it
+  touched, in the same database transaction; a `ProblemError` from it means
+  the change does not fit the lots and must be rolled back.
 - Per-request context is set with
   `set_config('perfin.household_id', :id, true)` (transaction-local) by
   `app.db.rls.set_context`. Code never builds SQL strings; bound parameters
@@ -190,7 +216,17 @@ app/
   `mail_intake`, `mail_intake_message`; the search vector of documents
   extracted before it backfilled in SQL, with `FORCE` lifted on `document`
   for that statement; the `tsvector` column, its GIN index and
-  `parser_fingerprint` already came with 0003).
+  `parser_fingerprint` already came with 0003),
+  `0005_phase5_6_wealth_tax` (17 household-scoped tables: `security`,
+  `price`, `investment_account`, `investment_txn`, `lot`, `holding`, `loan`,
+  `loan_payment`, `loan_rate_change`, `manual_asset`, `asset_valuation`,
+  `net_worth_snapshot`, `tax_year`, `tax_checklist_item`, `tax_category_map`,
+  `tax_form_data`, `tax_export`; 11 new enum types dropped by its
+  downgrade). `alembic check` does not compare CHECK constraint text, so a
+  `:word` inside a CHECK string is parsed as a bind parameter and silently
+  rendered as `NULL` (both by `create_all` and by autogenerate): write regex
+  character classes so no `:` is followed by a word character (0005 found
+  this in `ck_security_symbol_format`).
 
 ### Tests
 
@@ -254,6 +290,28 @@ app/
   `test_budgets_api.py`; tests freeze "today" by patching the `today`
   function of `app.domain.reports.service`, `app.domain.budgets.service` or
   `app.domain.goals.service`.
+- Investments, loans, manual assets and net worth (Phase 5) come from
+  `tests/fixtures/wealth.py` (flush-only `make_brokerage`, `make_security`,
+  `make_price`, `make_investment_txn`, `make_lot`, `make_holding`,
+  `make_loan` (creates its mortgage account unless one is given),
+  `make_loan_payment`, `make_loan_rate_change`, `make_manual_asset`,
+  `make_asset_valuation`, `make_net_worth_snapshot`); the tax vault
+  (Phase 6) from `tests/fixtures/tax.py` (`make_tax_year`,
+  `make_checklist_item`, `make_tax_category_map`, `make_form_data`, which
+  goes through the real `record_form_data`, and `synthetic_w2_boxes`, a
+  W-2 with invented identity boxes for proving they are discarded;
+  `free_tax_year`, and `make_tax_export`, a ready accountant export with its
+  bytes in a blob store). Commit them with `ledger.run(make_x, ...)`.
+  `tests/fixtures/synth_tax_forms.py` draws every US form as a PDF
+  (reportlab; `synth_form(form_type, seed=, tax_year=)`, `form_pdf`,
+  `forms_pdf` for a consolidated statement, `expected_boxes` is what the
+  parser must return) with obviously fake identity values listed in
+  `IDENTITY_TOKENS` (`000-00-0000`, `00-0000000`, an invented name and
+  address...). Parser tests: `tests/unit/test_tax_form_parser.py`; through
+  the worker, with a scan of every database column and API response for
+  those values, the accountant export and the reminders:
+  `tests/integration/test_tax_form_pipeline.py` (it patches
+  `app.workers.handlers.tax.get_settings`); API: `tests/integration/test_tax_api.py`.
 - Documents and ingestion: `tests/fixtures/statements.py` generates
   synthetic CSV/TSV, OFX (SGML and XML), QFX and QIF files (plus XXE and
   entity-bomb prologs); tests build a `LocalFSBlobStore` under `tmp_path`.
@@ -293,6 +351,26 @@ app/
   worker like the structured imports
   (`tests/integration/test_pdf_statement_pipeline.py`). Adding a layout:
   `docs/CONTRIBUTING-parsers.md`.
+- Brokerage statements: `tests/fixtures/synth_brokerage.py` builds
+  consecutive monthly `SynthBrokerage` statements of the fictional
+  Placeholder Brokerage (`brokerage_series(seed, months=...)`: positions,
+  buys, a sale, dividends, a reinvestment, interest, a fee, cash in and
+  out) and renders them as a PDF (`placeholder_pdf`, also under another
+  broker's name for the generic parser) or OFX `INVSTMTRS` SGML/XML
+  (`ofx_investment`); `tamper="extra_row" | "market_value" | "total"`
+  breaks one reconciliation check; `expected_activity` /
+  `expected_positions` are what a parser must return. Unit tests:
+  `tests/unit/test_brokerage_parser.py`; end to end through the worker
+  (holdings, lots, prices, snapshot, dedupe, holds):
+  `tests/integration/test_brokerage_pipeline.py`.
+- Loan statements: `tests/fixtures/synth_loans.py` builds monthly
+  `SynthLoanStatement`s of the fictional Placeholder Home Lending from a
+  schedule of the real amortisation engine (`loan_series(months, extra=,
+  late_fee_month=)`) and draws them as PDFs (`loan_statement_pdf`, layouts
+  `classic` / `compact`; `tamper="parts" | "balance"` breaks one
+  reconciliation check). Unit tests: `tests/unit/test_loan_statement_parser.py`;
+  end to end through the worker: `tests/integration/test_loan_statement_pipeline.py`.
+  Amortisation properties (hypothesis): `tests/unit/test_amortization.py`.
 - Drop folder: `tests/integration/test_dropfolder.py` builds the inbox and
   `processed/` under `tmp_path` and calls
   `app.ingestion.intake.dropfolder.watch(...)` in a committed transaction

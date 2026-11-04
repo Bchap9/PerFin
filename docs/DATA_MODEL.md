@@ -319,43 +319,236 @@ budget's currency, one per category, and goes with its category.
 ## Investments
 
 ```
-security          (symbol, isin?, cusip?, name, asset_class, exchange, currency)
-holding           (account, security, quantity, cost_basis, as_of)          -- derived cache
-lot               (account, security, open_date, quantity, cost_per_unit, closed_date?)
+security          (household, symbol, isin?, cusip?, name, asset_class, sector?, exchange?,
+                   currency)
+holding           (account, security, quantity, cost_basis, currency, as_of)  -- derived cache
+lot               (account, security, open_date, quantity, remaining_quantity, cost_per_unit,
+                   currency, closed_date?, opening_txn_id?)
 investment_txn    (account, security?, type: buy|sell|dividend|interest|fee|split|
                    transfer_in|transfer_out|reinvest|corporate_action,
-                   date, quantity, price, amount, fees, lot_links JSONB, source_document_id?)
-price             (security, date, close, source)
+                   trade_date, settle_date?, quantity?, price?, amount, fees, currency,
+                   lot_links JSONB, memo?, import_hash?, source_document_id?)
+price             (security, price_date, close, currency, source)
+investment_account (account, cost_method: fifo|average)  -- per-account settings
 ```
+
+Phase 5 notes (`app/domain/investments/models.py`, building blocks in
+`app/domain/investments/service.py`; every table `HouseholdScoped` with
+forced RLS and household-consistent references, ADR-0008):
+
+- **Units**: quantities and per-unit prices/costs are `NUMERIC(28, 10)`
+  (`app.db.types.QUANTITY`, `UNIT_PRICE`), money `NUMERIC(20, 6)`.
+- **security** is the household's own catalogue (no instance-wide table:
+  another household never learns that a ticker is held).
+  `asset_class` is one of equity, etf, mutual_fund, bond, cash_equivalent,
+  option, crypto, real_estate, commodity, other. `(household, symbol,
+  exchange)` is unique (a NULL exchange counts as one value); `isin` (12,
+  check digit last) and `cusip` (9) are format-checked and indexed, not
+  unique. `currency` is the quote currency: `price.currency` must equal it
+  (composite key on `(household_id, id, currency)`). A security with
+  transactions or lots cannot be deleted (`RESTRICT`); its prices and
+  holding cache rows go with it.
+- **price**: at most one per security and date; `close > 0`; `source` is
+  `manual` or a provider name. Lookups take the latest price on or before
+  the day (no look-ahead).
+- **investment_txn**: `amount` is the signed cash effect on the account in
+  the account currency (buy negative, sale/dividend/interest positive, fee
+  negative); `fees` (>= 0) is the part of it that was fees; `quantity`
+  (units, > 0 for buy/sell/reinvest/transfer_in/transfer_out) and `price`
+  (in the security currency) describe the trade. buy, sell, split,
+  transfer_in, transfer_out and reinvest must name a security; dividend,
+  interest, fee and corporate_action may. `currency` equals the account's.
+  `lot_links` is a JSON array of `{"lot_id", "quantity"}` (positive decimal
+  strings, each lot once; `parse_lot_links`): the lots a sell/transfer_out
+  consumed or the lot a buy/reinvest/transfer_in opened. `import_hash`
+  (64 hex) dedupes brokerage statement rows like `transaction.import_hash`:
+  sha256 of `perfin-invest-v1`, account, trade date, type, security,
+  units, amount and the running index among identical rows (no `FITID`,
+  so the same month as OFX and as PDF matches;
+  `app/domain/investments/statement_import.py`). Units held before the
+  first imported statement enter as an opening `transfer_in` (amount 0,
+  memo `Opening position from statement`).
+  The design's `date` is `trade_date` (`settle_date` optional, not before
+  it).
+- **Business dates are bounded below** (SECURITY.md F8, security review
+  P56-SR-R1-01): `price.price_date`, `investment_txn.trade_date`,
+  `lot.open_date`, `loan.origination_date`, `loan_payment.paid_on`,
+  `loan_rate_change.effective_date`, `asset_valuation.valued_on` and
+  `fx_rate.rate_date` carry a CHECK `>= '1900-01-01'` (`*_min`,
+  `app/core/dates.py`; `settle_date` follows from `settle_after_trade`).
+- **lot**: `quantity` opened (> 0), `remaining_quantity` still held (0 ..
+  `quantity`); `closed_date` is set exactly when nothing remains. Cost per
+  unit is in the account currency. `opening_txn_id` is a `SET NULL`
+  reference (plus the deferred household check) to the transaction that
+  opened it.
+- **holding** is a derived cache, one row per account and security,
+  written only by `rebuild_holdings` (sum of remaining lot quantities, cost
+  basis = sum of `remaining_quantity * cost_per_unit` rounded once to 6
+  decimals, in the account currency). Never exported.
+- **Visibility**: holdings, lots and investment transactions are
+  account-derived; reads start from `visible_holdings` / `visible_lots` /
+  `visible_investment_txns` (the principal's visible accounts only).
+- **Lot engine** (`app/domain/investments/lots.py`, pure): lots,
+  `lot_links` and the `holding` row of one (account, security) pair are
+  written only by `service.replay_position`, which replays the pair's
+  transactions in trade order (on one day: splits, openings, cash rows,
+  closings; then entry order) every time one of them changes (incremental
+  per pair; `replay_account` after a cost-method change). A lot keeps its
+  id across replays (keyed by its opening transaction), so specific-lot
+  references stay valid. Opening cost (account currency): buy `-amount`;
+  reinvest `-amount`, or `quantity * price` converted plus fees when no
+  cash moved; transfer in `quantity * price` converted plus fees (`price`
+  is the carried-over cost per unit). Closings: `fifo` (oldest lots first)
+  unless `lots_specified` (the person named the lots in `lot_links`),
+  or `average` (`investment_account.cost_method`: units leave first in
+  first out for the holding period, at the average cost of every open
+  unit, and the remaining lots then carry that average). Sale proceeds are
+  shared between the consumed lots by units (6 decimals, remainder to the
+  last). Holding period: long term when sold after the first anniversary
+  of the open date. Selling more than is held is refused (no shorts).
+- **Splits**: a `split` (or a `corporate_action` with a ratio) stores its
+  ratio exactly as `quantity` new units per `price` old units (3-for-1:
+  3/1; 1-for-10 reverse: 1/10); open lots are rescaled (quantities to 10
+  decimals, cost per unit divided, total cost unchanged up to that
+  rounding). A split stored with `quantity` only (units added, as the
+  brokerage statement import records it) has the ratio `(held + added) /
+  held` at that point of the replay. Other corporate actions (mergers,
+  spin-offs) move cash only.
+- **Statement seed lots**: a lot without `opening_txn_id` (units a
+  brokerage statement reported that no imported activity explains) enters
+  the replay like a transfer in on its open date and keeps its id; the
+  splits after it are taken back out of its stored quantity first. A split
+  recorded as units added after such a lot has no fixed ratio, so replaying
+  that pair is refused (`409 lots-not-replayable`). Deleting a transaction
+  deletes the lots it opened first (the `SET NULL` would otherwise make
+  them look like seeds).
+- **investment_account**: one optional row per account (`fifo` without
+  one); forced RLS, household-consistent key to `account`, deleted with it.
+  Not in export format v1 yet (PORTABILITY.md).
+- `investment_txn.lots_specified` (boolean, default false) marks a sale or
+  transfer out whose `lot_links` were chosen by the person; the engine
+  rewrites the `lot_links` of every other closing on each replay.
 
 ## Loans
 
 ```
-loan              (account, principal_original, rate, rate_type: fixed|variable,
+loan              (account, principal_original, currency, rate, rate_type: fixed|variable,
                    term_months, origination_date, payment_amount, payment_day,
-                   escrow_amount?, lender)
-loan_payment      (loan, date, principal, interest, escrow, fees, transaction_id?)
+                   escrow_amount?, lender?)
+loan_payment      (loan, paid_on, principal, interest, escrow, fees, currency,
+                   transaction_id?, source_document_id?)
 loan_rate_change  (loan, effective_date, new_rate)
 ```
 
-A loan is also an `account` of type `loan` so it appears in net worth with its
-current balance.
+A loan is also an `account` of type `loan`, `mortgage` or `line_of_credit`
+(`app.domain.loans.service.LOAN_ACCOUNT_TYPES`, checked by the service) so
+it appears in net worth with its current balance; one `loan` row per
+account, deleted with it. Phase 5 notes (`app/domain/loans/`):
+
+- `rate` and `new_rate` are the annual nominal rate as a **fraction**
+  (`0.06125` = 6.125 %, `NUMERIC(10, 8)`, `0 <= rate < 1`). The rate in force
+  on a day is the latest `loan_rate_change` on or before it, else `rate`
+  (`rate_on`); at most one change per loan and date.
+- Money columns are in the account currency (composite keys carry
+  `currency` from account to loan to payment). `term_months` is 1..1200,
+  `payment_day` 1..31 (29-31 fall back to the month's last day).
+- `loan_payment` parts are non-negative; `transaction_id` (the ledger row
+  that paid it) and `source_document_id` (the statement) are `SET NULL`
+  references with the deferred household check. The design's `date` is
+  `paid_on`.
+- `lender` is a display name. Loan numbers are identity data
+  (AI_ACCESS.md) and are not stored.
+- A loan is visible to a member or viewer exactly when its account is
+  (`visible_loans`).
+- Schedules are computed, never stored (`app/domain/loans/amortization.py`,
+  exact `Decimal`, interest rounded to the minor unit per period, the final
+  payment absorbing the rounding; API.md "Loans notes").
+- **Balance sync**: the loan account's balance is the principal owed (a
+  negative balance on the liability side). `app.domain.loans.service`
+  owns the account's `computed` `balance_snapshot` rows: the original
+  principal on the origination date and, for each day with payments, the
+  balance at the end of the day before less the principal paid. They are
+  rebuilt after every change to the loan or its payments and deleted with
+  the loan. Loan statements add `statement` snapshots (previous and new
+  principal balance), which beat `computed` ones on the same day, so a
+  balance read from a statement anchors the chain.
 
 ## Manual assets and liabilities
 
 ```
-manual_asset      (account, kind: property|vehicle|other, description, valuation_method)
-asset_valuation   (account, date, value, source: manual|provider)
+manual_asset      (account, description?, valuation_method:
+                   manual|appraisal|purchase_price|index|provider)
+asset_valuation   (account, valued_on, value, currency, source: manual|provider)
 ```
+
+Phase 5 notes (`app/domain/assets/`): `manual_asset` details an account of
+type `manual_asset` (one per account). The design's `kind` is
+`account.asset_kind` (property|vehicle|other), which every manual asset
+account already has, so it is not repeated. `description` is free text
+(`classification: identity`: it may hold an address, so it is kept out of `ai:read` views, audit rows and events). `asset_valuation` values a manual asset or
+manual liability account on a date: a non-negative magnitude in the account
+currency (`account.is_asset` decides the side), at most one per account,
+date and source; on one date `manual` beats `provider` (`latest_valuation`).
+Manual liabilities need no table of their own (`manual_liability` accounts
+valued by `asset_valuation` or `balance_snapshot`). The design's `date` is
+`valued_on`.
 
 ## Net worth
 
 ```
-net_worth_snapshot (household, as_of_date, assets, liabilities, net, breakdown JSONB)
+net_worth_snapshot (household, as_of_date, currency, assets, liabilities, net, breakdown JSONB)
 ```
 
 Computed daily by the worker from `balance_snapshot`, `holding` x `price`,
-`loan` balances and `asset_valuation`.
+`loan` balances and `asset_valuation`, converted to the household base
+currency (`currency`, the base currency on that day). Phase 5 notes
+(`app/domain/networth/`): one per household and date; `assets` and
+`liabilities` are non-negative magnitudes and `net = assets - liabilities`
+(check constraint). `breakdown` is a JSON object owned by the net worth
+service (per account: side, amount, currency, base amount; unconverted
+currencies). Because it names every account, a stored snapshot is shown
+only to a principal who sees every account (`sees_household_totals`:
+owners, admins, or members/viewers granted every account); anyone else gets
+figures recomputed over their visible accounts. Not exported (derived).
+
+How a day is valued (`app/domain/networth/compute.py`, one implementation for
+the daily job, the backfill and recomputed views):
+
+- Accounts with `include_in_net_worth` false, opened after the day or closed
+  before it are left out.
+- Manual balance accounts: the newer of the balance anchor and the latest
+  `asset_valuation` (a magnitude signed by `account.is_asset`; the anchor
+  wins a tie). Investment accounts (brokerage, retirement) with activity:
+  cash plus holdings, where holdings are the lot engine's units at the end
+  of the day times the close (stored price or latest trade price, no
+  look-ahead) and cash moves with ledger transactions and
+  `investment_txn.amount`; a balance anchor (a statement's whole-account
+  value) carries forward as `anchor + holdings(d) - holdings(anchor day) +
+  cash moves since`. Loan accounts use their `computed` snapshots (kept by
+  the loans service), falling back to `principal_original` minus paid
+  principal when there is no anchor yet. Everything else: the ledger
+  balance.
+- Positive values are assets, negative ones liabilities (by sign, not by
+  account type), converted to the base currency on that day; an account
+  whose currency has no rate is listed as unconverted and left out.
+- `breakdown` (version 1): `{"version", "by_class": {"assets": {class:
+  amount}, "liabilities": {...}}, "by_type": {account_type: signed amount},
+  "accounts": [{"account_id", "type", "class", "side", "amount", "currency",
+  "amount_base"}], "unconverted": [{"account_id", "amount", "currency"}],
+  "unpriced_security_ids"}`; amounts are decimal strings. Ids, types and
+  amounts only: no names or free text.
+- The daily `networth.snapshot` job upserts the day's row and backfills the
+  days missing since the last snapshot (from the first data on a first run,
+  at most ten years).
+
+Recurring detection (`app/domain/recurring/`) feeds `scheduled_transaction`
+with `origin = detected`: transactions of the last 1100 days (transfers
+excluded) grouped by account, payee (or normalised payee text) and
+direction, clustered by amount (10 % + 1.00), with the cadence from the
+median gap (weekly, biweekly = weekly x 2, monthly, quarterly, annual =
+yearly) and a confidence from regularity, amount stability and count.
+Manual schedules are never changed; a detected schedule keeps the name and
+`active` flag a person set. Confidence is not stored (computed per run).
 
 ## Documents and ingestion
 
@@ -503,16 +696,85 @@ Notes on structured imports (`app/domain/imports/`, Phase 2):
   `closing`, `total`, `difference` as decimal strings, `running_mismatches`
   count and row indices), `lines_skipped` (`count`) and, for payslips,
   `payslip_does_not_add_up`/`low_confidence` (`fields`, `adds_up`). A
-  statement that does not reconcile writes no balance snapshot.
+  statement that does not reconcile writes no balance snapshot. Brokerage
+  statements are `extraction.investments` (positions, activity, cash and
+  totals, `parser`, `confidence`, `reconciliation`; INGESTION.md
+  "Brokerage statements"); their items are `investment_reconciliation_failed`
+  (`checks`, `failed`, `positions`, cash and totals as decimal strings),
+  `investment_low_confidence` (`fields`, `positions`, `activity`),
+  `position_mismatch` (`securities`: `history`/`reported` units),
+  `investment_lot_conflict` (`code`), `investment_out_of_order`
+  (`rows`) and `investment_date_out_of_range` (`earliest_allowed`), each
+  with `account_id`; nothing of a held statement is written.
 
 ## Tax vault
 
 ```
-tax_year          (household, year, jurisdiction, filing_status?, state: open|filed|closed)
+tax_year          (household, year, jurisdiction, filing_status?, state: open|filed|closed,
+                   notes?)
 tax_checklist_item(tax_year, expected_form: W-2|1099-INT|1099-DIV|1099-B|1098|...,
-                   issuer, status: expected|received|not_applicable, document_id?)
-tax_category_map  (household, category -> schedule/line hint)
+                   issuer?, status: expected|received|not_applicable,
+                   origin: manual|prior_year|detected, document_id?)
+tax_category_map  (household, category, jurisdiction, schedule, line?)
+                                          -- category -> schedule/line hint
+tax_form_data     (document, tax_year (printed), tax_year_id?, jurisdiction, form_type,
+                   form_index, issuer_name?, boxes JSONB, source: parsed|manual,
+                   confidence?)
+tax_export        (tax_year_id?, year, state: pending|ready|downloaded|expired|failed,
+                   job_id, requested_by?, blob_id?, size?, sha256?, expires_at?,
+                   finished_at?, downloaded_at?, error?, summary JSONB)
 ```
+
+Phase 6 notes (`app/domain/tax/models.py`, `app/domain/tax/service.py`,
+`app/domain/tax/forms/`; all `HouseholdScoped`, forced RLS,
+household-consistent references):
+
+- **Form sets** (`app.domain.tax.forms`): a pluggable registry of
+  jurisdictions. A `FormSet` has a `jurisdiction` code (ISO 3166-1 alpha-2,
+  optionally `-` subdivision), a name, its `filing_statuses` and a
+  `FormDef` per form type; each form lists its boxes (`id`, `label`,
+  `kind`: `amount`, `coded_amount`, `text`, `checkbox` or `identity`). `US`
+  ships W-2, 1099-INT, 1099-DIV, 1099-B, 1099-MISC, 1099-NEC, 1099-R,
+  1099-G, 1099-SA, 1098, 1098-E, 1098-T and 1095-A/B/C. A new jurisdiction
+  is a module in that package listed in its `_BUILTIN` (or `register(...)`).
+  The service validates `jurisdiction`, `filing_status`, `expected_form` and
+  `form_type` against the registry; the database checks their format only.
+- **tax_year**: one per household and calendar year (`/tax-years/{year}`),
+  1900..2200. `state` is the workflow state, not a US state.
+- **tax_checklist_item**: unique per year, form and issuer (NULL issuers
+  count as one); `document_id` (`SET NULL` reference) only while `received`.
+  `origin` tells items learned from prior years from manual and detected
+  ones.
+- **tax_category_map**: one hint per category and jurisdiction (e.g.
+  `Schedule A` / `5a`), deleted with the category.
+- **tax_form_data** holds the amounts of one form read from a document (a
+  consolidated 1099 holds several: `form_index` numbers them per type,
+  unique per document, type and index); it goes with its document.
+  `boxes` maps box ids to decimal strings, **amounts only**: identity boxes
+  (SSN/TIN/EIN, names, addresses, ZIP codes, account, control and policy
+  numbers, state employer ids) and text/checkbox boxes are discarded by
+  `sanitize_boxes` before a row is written (`record_form_data` is the only
+  writer); a coded amount (W-2 box 12, 1095-C line 15) is stored as
+  `<box>_<code>` (`12_D`, `15_ALL`). A check constraint refuses any key
+  that is not `[A-Za-z0-9_]{1,32}`, any value that is not a decimal string
+  fitting `NUMERIC(20, 6)` and more than 128 boxes, even if the service is
+  bypassed. `issuer_name` (control characters removed, at most 200
+  characters) is the only text kept from a form. Roll-ups over a tax year
+  include only the accounts a member or viewer may see.
+- Besides the printed boxes the US set stores three derived ones: `14t`
+  (W-2 box 14 "Other": the sum of its amounts; the labels are text and are
+  dropped), `10t` (1098 box 10 "Other": its amount, e.g. property tax) and
+  `cov_<MON>` / `cov_ALL` on 1095-B/C (`1` for each month with coverage).
+  `FormDef.issuer_box` names the identity box printing the issuer (W-2 box
+  `c`, the 1098 lender box...), from which parsers take the display name.
+- A parsed tax form's stored extraction (`document.extraction`) and search
+  vector keep no identity text either: the worker masks everything but form
+  vocabulary, amounts, years, box ids and codes (INGESTION.md "Parse").
+- **tax_export**: one accountant export (API.md "Tax vault notes"), keyed by
+  its job id; the zip is a blob (encrypted at rest) until it is downloaded
+  once or expires, then the blob's key is destroyed and the row's `blob_id`
+  becomes NULL. Like `portability_archive` it is not part of the
+  household export (NOT_EXPORTED).
 
 ## Platform
 
