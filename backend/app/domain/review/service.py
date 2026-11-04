@@ -37,6 +37,15 @@ editable by the caller as well. A closed item is ``409 review-item-closed``.
 * ``unknown_owner``: the held drop-folder document is assigned to the chosen
   member (and account) and goes through the pipeline; ``remember`` routes
   its subfolder (``app.domain.dropfolder.service.resolve_unknown_owner``).
+* ``low_confidence_field``: the named rows of the item's document are
+  corrected (:func:`apply_fixes`, through ``transactions.service``: edit on
+  their account, audited) and, with ``confirm``, the item's pending rows
+  become ``confirmed`` (a ``reconciliation_*`` item: every pending row of
+  the document on the item's account).
+
+``GET /review/{id}`` also carries ``regions`` and ``alternatives``
+(``app.domain.review.assist``); the review tools (correct, remember this
+layout, rule draft) are in ``app.domain.review.actions``.
 
 When the last open item of a ``needs_review`` document that the pipeline
 accepted is closed, the document becomes ``processed``. Every resolution is
@@ -80,19 +89,22 @@ from app.domain.documents.service import visible_document_filter
 from app.domain.dropfolder import service as dropfolder_service
 from app.domain.imports import service as imports_service
 from app.domain.imports.schemas import ApplyMapping, MappingUpdate
-from app.domain.review import repo
+from app.domain.review import assist, repo
 from app.domain.review.schemas import (
     NextStep,
     ResolveDuplicate,
+    ResolveLowConfidence,
     ResolveReceiptMatch,
     ResolveUnknownAccount,
     ResolveUnknownOwner,
     ResolveUnparsed,
     ReviewItemOut,
     ReviewPage,
+    TransactionFix,
 )
 from app.domain.transactions import service as transactions_service
 from app.domain.transactions.models import ReviewState, Transaction
+from app.domain.transactions.schemas import TransactionUpdate
 from app.ingestion.match import receipts as receipts_match
 
 #: ``unparsed`` reasons the column-mapping editor answers.
@@ -105,8 +117,12 @@ RESOLVABLE: Final = frozenset(
         ReviewKind.UNPARSED,
         ReviewKind.UNKNOWN_OWNER,
         ReviewKind.RECEIPT_MATCH,
+        ReviewKind.LOW_CONFIDENCE_FIELD,
     }
 )
+#: ``low_confidence_field`` reasons whose confirmation covers every pending
+#: row of the document on the item's account (the statement as a whole).
+WHOLE_STATEMENT_REASONS: Final = frozenset({"reconciliation_failed", "reconciliation_unavailable"})
 #: Document statuses whose stored extraction the importer can run again.
 REIMPORTABLE: Final = frozenset({DocumentStatus.NEEDS_REVIEW, DocumentStatus.PROCESSED})
 
@@ -206,13 +222,18 @@ def _next_step(item: ReviewItem) -> NextStep | None:
         return "choose_owner"
     if item.kind is ReviewKind.RECEIPT_MATCH:
         return "attach_receipt"
+    if item.kind is ReviewKind.LOW_CONFIDENCE_FIELD:
+        return "correct_fields"
     if item.kind is ReviewKind.UNPARSED:
         reason = item.payload.get("reason")
         return "column_mapping" if reason in MAPPING_REASONS else "reprocess"
     return None
 
 
-def _out(db: Session, principal: Principal, item: ReviewItem) -> ReviewItemOut:
+def _out(
+    db: Session, principal: Principal, item: ReviewItem, *, detail: bool = False
+) -> ReviewItemOut:
+    regions, alternatives = assist.enrich(db, principal, item) if detail else (None, None)
     return ReviewItemOut(
         id=item.id,
         kind=item.kind,
@@ -225,6 +246,8 @@ def _out(db: Session, principal: Principal, item: ReviewItem) -> ReviewItemOut:
         created_at=item.created_at,
         next_step=_next_step(item),
         can_resolve=item.state is ReviewItemState.OPEN and _can_resolve(db, principal, item),
+        regions=regions,
+        alternatives=alternatives,
     )
 
 
@@ -271,7 +294,25 @@ def _get(db: Session, principal: Principal, item_id: uuid.UUID, *, lock: bool) -
 
 
 def get_item(db: Session, principal: Principal, item_id: uuid.UUID) -> ReviewItemOut:
-    return _out(db, principal, _get(db, principal, item_id, lock=False))
+    return _out(db, principal, _get(db, principal, item_id, lock=False), detail=True)
+
+
+def item_out(db: Session, principal: Principal, item: ReviewItem) -> ReviewItemOut:
+    return _out(db, principal, item)
+
+
+def visible_item(db: Session, principal: Principal, item_id: uuid.UUID) -> ReviewItem:
+    """The item (``404`` if hidden), not locked."""
+    return _get(db, principal, item_id, lock=False)
+
+
+def open_item_for_change(db: Session, principal: Principal, item_id: uuid.UUID) -> ReviewItem:
+    """Resolvable by the caller (``404``/``403``), locked, and still open (``409``)."""
+    require_resolvable(db, principal, item_id)
+    item = _get(db, principal, item_id, lock=True)
+    if item.state is not ReviewItemState.OPEN:
+        raise item_closed()
+    return item
 
 
 def require_resolvable(db: Session, principal: Principal, item_id: uuid.UUID) -> ReviewItem:
@@ -285,6 +326,11 @@ def require_resolvable(db: Session, principal: Principal, item_id: uuid.UUID) ->
 # ---------------------------------------------------------------------------
 # Resolutions
 # ---------------------------------------------------------------------------
+
+
+def item_document(db: Session, item: ReviewItem) -> Document:
+    """The item's document, locked (``409 review-item-needs-document`` without one)."""
+    return _document(db, item)
 
 
 def _document(db: Session, item: ReviewItem) -> Document:
@@ -507,6 +553,112 @@ def _resolve_unparsed(
     return {"action": "apply_mapping", **rerun}
 
 
+def apply_fixes(
+    db: Session,
+    principal: Principal,
+    document: Document,
+    fixes: list[TransactionFix],
+    *,
+    request: HTTPConnection | None,
+) -> list[uuid.UUID]:
+    """Correct rows imported from ``document`` (edit on their account); returns their ids."""
+    if len({f.transaction_id for f in fixes}) != len(fixes):
+        raise _invalid("Name each transaction once.")
+    changed: list[uuid.UUID] = []
+    for fix in fixes:
+        row = transactions_service.get_visible_transaction(
+            db, principal, fix.transaction_id, need="edit", lock=True
+        )
+        if row.source_document_id != document.id:
+            raise _invalid("Only rows imported from this document can be corrected here.")
+        update = TransactionUpdate.model_validate(
+            fix.model_dump(mode="json", include=fix.model_fields_set - {"transaction_id"})
+        )
+        if update.model_fields_set:
+            transactions_service.update_transaction(db, principal, row, update, request=request)
+            changed.append(row.id)
+    return changed
+
+
+def _pending_rows(
+    db: Session, principal: Principal, item: ReviewItem, document: Document
+) -> list[Transaction]:
+    payload = item.payload or {}
+    if payload.get("reason") in WHOLE_STATEMENT_REASONS:
+        account_id = _uuid(payload.get("account_id"))
+        if account_id is None:
+            return []
+        ids = list(
+            db.execute(
+                select(Transaction.id).where(
+                    Transaction.household_id == item.household_id,
+                    Transaction.account_id == account_id,
+                    Transaction.source_document_id == document.id,
+                    Transaction.review_state == ReviewState.PENDING,
+                )
+            ).scalars()
+        )
+    else:
+        ids = [
+            found
+            for entry in payload.get("transactions") or []
+            if isinstance(entry, dict) and (found := _uuid(entry.get("transaction_id")))
+        ]
+    rows: list[Transaction] = []
+    for transaction_id in ids:
+        try:
+            row = transactions_service.get_visible_transaction(
+                db, principal, transaction_id, need="edit", lock=True
+            )
+        except ProblemError as exc:
+            if exc.slug != "transaction-not-found":
+                raise
+            continue  # removed meanwhile
+        if row.source_document_id == document.id and row.review_state is ReviewState.PENDING:
+            rows.append(row)
+    return rows
+
+
+def _resolve_low_confidence(
+    db: Session,
+    principal: Principal,
+    item: ReviewItem,
+    body: ResolveLowConfidence,
+    request: HTTPConnection | None,
+) -> dict[str, Any]:
+    document = _document(db, item)
+    corrected = apply_fixes(db, principal, document, body.transactions, request=request)
+    confirmed: list[uuid.UUID] = []
+    if body.confirm:
+        for row in _pending_rows(db, principal, item, document):
+            transactions_service.update_transaction(
+                db,
+                principal,
+                row,
+                TransactionUpdate(review_state=ReviewState.CONFIRMED),
+                request=request,
+            )
+            confirmed.append(row.id)
+    db.flush()
+    return {
+        "corrected": [str(i) for i in corrected],
+        "confirmed": len(confirmed),
+        "confirm": body.confirm,
+    }
+
+
+def close_item(
+    db: Session,
+    principal: Principal,
+    item: ReviewItem,
+    resolution: dict[str, Any],
+    *,
+    request: HTTPConnection | None,
+) -> None:
+    """Resolve an open item with ``resolution`` (audited, event, settles the document)."""
+    _close(db, principal, item, ReviewItemState.RESOLVED, resolution, request=request)
+
+
 def _close(
     db: Session,
     principal: Principal,
@@ -576,7 +728,8 @@ def resolve(
     | ResolveUnknownAccount
     | ResolveUnparsed
     | ResolveUnknownOwner
-    | ResolveReceiptMatch,
+    | ResolveReceiptMatch
+    | ResolveLowConfidence,
     *,
     request: HTTPConnection | None,
 ) -> ReviewItemOut:
@@ -610,6 +763,8 @@ def resolve(
         resolution = receipts_match.resolve_receipt_item(
             db, principal, item, transaction_id=body.transaction_id, request=request
         )
+    elif isinstance(body, ResolveLowConfidence):
+        resolution = _resolve_low_confidence(db, principal, item, body, request)
     else:  # pragma: no cover - the union is exhaustive
         raise unsupported(item.kind)
     _close(db, principal, item, ReviewItemState.RESOLVED, resolution, request=request)

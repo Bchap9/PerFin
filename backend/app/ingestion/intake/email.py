@@ -47,9 +47,10 @@ documents.
 3. with ``require_auth_results`` and an ``Authentication-Results`` header
    present: the topmost such header (or the topmost from ``authserv_id``,
    when configured; headers further down can be added by anyone) must say
-   ``spf=pass`` and ``dkim=pass``, and a ``dkim=pass`` that names its
-   signing domain (``header.d``/``header.i``) must be aligned with the
-   ``From`` domain - else ``auth_failed``. Comments are removed before the
+   ``spf=pass`` and ``dkim=pass``, and the ``dkim=pass`` must name its
+   signing domain (``header.d``/``header.i``; a bare pass counts as not
+   aligned) and that domain must be the ``From`` domain or a parent of it
+   (:func:`_aligned`) - else ``auth_failed``. Comments are removed before the
    results are read. The alias token is the real control: a self-hosted MTA
    may add no such header at all.
 
@@ -66,7 +67,13 @@ already recorded: accepted ones to ``processed_folder``, rejected ones to
 recorded something, so the moves happen right after the commit. A crash
 between the two leaves the message in the inbox, where the next run finds
 its record and only moves it. The same key is the ``Message-ID`` dedupe: a
-second copy of a recorded message is moved, never imported again.
+second copy of an accepted message is moved, never imported again. A
+**rejected** message is recorded under :func:`rejected_key` instead (a hash
+of its whole header block): otherwise an outsider's rejected forgery
+carrying the ``Message-ID`` and ``From`` of a legitimate future message
+would send that message to the rejected folder unprocessed (security review
+P34-SR-R2-02). A copy with the identical header block is still moved to the
+rejected folder without a second evaluation.
 
 **Rejected digest (C10).** Rejections add to **one** open
 ``rejected_email`` review item per household and UTC day (no document;
@@ -604,6 +611,17 @@ def message_key(headers: MailHeaders, header: bytes) -> str:
     return hashlib.sha256(material).hexdigest()
 
 
+def rejected_key(header: bytes) -> str:
+    """The key a rejected message is recorded under: its whole header block.
+
+    Unlike :func:`message_key` an outsider cannot reproduce it for a message
+    they did not send (it covers the receiving MTA's ``Received`` and
+    ``Authentication-Results`` lines), so a rejected forgery never shadows
+    an accepted message with the same ``Message-ID`` and ``From``.
+    """
+    return hashlib.sha256(b"rej\0" + header[:HEADER_MAX]).hexdigest()
+
+
 def has_alias(recipients: Sequence[str], token: str) -> bool:
     """Whether the token is a recipient's local part or one of its ``+`` tags."""
     wanted = token.lower().encode("ascii")
@@ -641,14 +659,22 @@ def _strip_comments(value: str) -> str:
 
 
 def _aligned(signing: str, sender_domain: str) -> bool:
+    """Whether a DKIM signing domain may vouch for the ``From`` domain.
+
+    The signer must be the ``From`` domain itself or a parent of it
+    (``home.example`` signs for ``mail.home.example``) and have at least two
+    labels. A signer *below* the From domain is not enough: on a domain that
+    hands out subdomains, ``attacker.home.example`` could otherwise vouch for
+    ``alex@home.example`` (no public-suffix list needed for this direction:
+    nobody but the parent's operator can sign as the parent).
+    """
     signing = signing.lower().rstrip(".")
     if "@" in signing:
         signing = signing.rsplit("@", 1)[1]
-    return (
-        signing == sender_domain
-        or sender_domain.endswith("." + signing)
-        or signing.endswith("." + sender_domain)
-    )
+    sender_domain = sender_domain.lower().rstrip(".")
+    if not signing or "." not in signing or not sender_domain:
+        return False
+    return signing == sender_domain or sender_domain.endswith("." + signing)
 
 
 def read_auth_results(
@@ -679,8 +705,10 @@ def read_auth_results(
         if method == "spf" and spf != "pass":
             spf = result
         elif method == "dkim":
+            # A pass must name its signer (header.d / header.i): a bare
+            # "dkim=pass" could be a valid signature by any domain.
             prop = _PROPERTY.search(segment.lower())
-            this_aligned = prop is None or _aligned(prop.group(2), sender_domain)
+            this_aligned = prop is not None and _aligned(prop.group(2), sender_domain)
             if result == "pass" and this_aligned:
                 dkim, aligned = "pass", True
             elif dkim != "pass":
@@ -877,28 +905,33 @@ def poll(
             stats.seen += 1
             headers = parse_headers(fetched.header)
             key = message_key(headers, fetched.header)
-            outcome = (
-                known.get(key)
-                or db.execute(
-                    select(MailIntakeMessage.outcome).where(
+            reject_key = rejected_key(fetched.header)
+            keys = (key, reject_key)
+            outcome = next((known[k] for k in keys if k in known), None)
+            if outcome is not None:
+                # A second copy within this run: moved by the follow-up run.
+                stats.skipped += 1
+                continue
+            recorded: dict[str, str] = dict(
+                db.execute(
+                    select(MailIntakeMessage.message_key, MailIntakeMessage.outcome).where(
                         MailIntakeMessage.household_id == household_id,
-                        MailIntakeMessage.message_key == key,
+                        MailIntakeMessage.message_key.in_(keys),
                     )
-                ).scalar_one_or_none()
+                ).all()
             )
-            if outcome is not None and key not in known:
+            if recorded:
                 # Recorded by an earlier, committed run (or a duplicate copy).
+                # This very header block rejected: back to the rejected folder.
                 folder = (
-                    config.processed_folder if outcome == "accepted" else config.rejected_folder
+                    config.processed_folder
+                    if recorded.get(key) == "accepted" and reject_key not in recorded
+                    else config.rejected_folder
                 )
                 if mailbox.move(uid, folder):
                     stats.moved += 1
                 else:
                     stats.move_failed += 1
-                continue
-            if outcome is not None:
-                # A second copy within this run: moved by the follow-up run.
-                stats.skipped += 1
                 continue
             if stats.recorded >= limits.max_messages:
                 break
@@ -928,7 +961,7 @@ def poll(
                 final_reason = reason or "unsupported"
                 stats.rejected += 1
                 stats.reasons[final_reason] += 1
-                known[key] = "rejected"
+                known[reject_key] = "rejected"
                 add_to_digest(
                     db,
                     household_id,
@@ -937,7 +970,7 @@ def poll(
                     subject=headers.subject,
                     reason=final_reason,
                 )
-                _record(db, household_id, key, "rejected", final_reason, None)
+                _record(db, household_id, reject_key, "rejected", final_reason, None)
     except MailboxError as exc:
         stats.error = exc.outcome
     except (imaplib.IMAP4.error, OSError) as exc:
