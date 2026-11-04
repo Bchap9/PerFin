@@ -29,3 +29,10 @@
 #
 # FX reference rates (PERFIN_FX_PROVIDER=ecb)
 # www.ecb.europa.eu:443
+#
+# Notification channels (docs/security/notifications.md): the host of each
+# channel a household adds (webhook URL, ntfy/Gotify server, Matrix homeserver,
+# SMTP relay with its port)
+# ntfy.sh:443
+# matrix.example.org:443
+# smtp.example.com:587

@@ -114,10 +114,21 @@ services:
     logging: *logging
 
   # One-shot: hand Caddy's state volumes to UID 10002. CHOWN is the only
-  # capability and there is no network.
+  # capability and there is no network. A volume Caddy already owns is left
+  # alone: Caddy creates its subdirectories with mode 0700, which root
+  # without CAP_DAC_READ_SEARCH cannot traverse, so a repeated `chown -R`
+  # failed and every later `docker compose up` (an upgrade, a start after
+  # `down`) left the proxy stopped (found by the v1.0.0 verification run,
+  # docs/RELEASE_CHECKLIST.md).
   proxy-init:
     image: ${CADDY_IMAGE:-docker.io/library/caddy:2}
-    entrypoint: ["chown", "-R", "10002:10002", "/data", "/config"]
+    entrypoint:
+      - /bin/sh
+      - -c
+      - >-
+        for d in /data /config; do
+        [ "$$(stat -c %u:%g "$$d")" = 10002:10002 ] || chown -R 10002:10002 "$$d" || exit 1;
+        done
     user: "0:0"
     read_only: true
     cap_drop: [ALL]
@@ -310,7 +321,8 @@ services:
   # (PERFIN_CLAMAV_ADDRESS); nothing publishes the port. Keep clamd's
   # StreamMaxLength at least PERFIN_CLAMAV_MAX_MB. Signature updates (freshclam) reach the internet only through
   # the egress proxy: add database.clamav.net to egress-allowlist.txt and set
-  # HTTPProxyServer egress / HTTPProxyPort 3128 in freshclam.conf.
+  # FRESHCLAM_CONF_HTTPProxyServer=egress and FRESHCLAM_CONF_HTTPProxyPort=3128
+  # in this service's environment (CLAMD_CONF_StreamMaxLength likewise).
   clamav:
     image: ${CLAMAV_IMAGE:-docker.io/clamav/clamav:stable}
     profiles: [av]
@@ -328,8 +340,14 @@ services:
       - /tmp:size=256m,mode=1777,noexec,nosuid,nodev
       - /run/clamav:size=8m,mode=0777
       - /var/log/clamav:size=16m,mode=0777
+    # The image's /init cannot run with a read-only root filesystem (it
+    # re-links /var/lock and edits /etc/clamav in place); clamav/entrypoint.sh
+    # does the same work in /tmp. Proxy settings for freshclam go in as
+    # FRESHCLAM_CONF_HTTPProxyServer / FRESHCLAM_CONF_HTTPProxyPort.
+    entrypoint: ["/sbin/tini", "--", "/bin/sh", "/perfin/clamav-entrypoint.sh"]
     volumes:
       - clamav_db:/var/lib/clamav
+      - ./clamav/entrypoint.sh:/perfin/clamav-entrypoint.sh:ro
     networks: [backend, egress]
     healthcheck:
       # The image's own probe (clamdscan PING); the first signature download
