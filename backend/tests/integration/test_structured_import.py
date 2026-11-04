@@ -46,7 +46,7 @@ from app.domain.transactions.schemas import AUTO_PAIR_JOB_TYPE
 from app.ingestion import pipeline
 from app.ingestion.intake.upload import receive_upload
 from app.workers.handlers import ingest
-from tests.fixtures.factories import Factories, UserRecord
+from tests.fixtures.factories import Factories, UserRecord, without_ids
 from tests.fixtures.households import Actors, problem_type
 from tests.fixtures.imports import make_import_mapping, run_jobs
 from tests.fixtures.ledger import LedgerFactories, make_category, make_rule
@@ -270,8 +270,11 @@ def test_ofx_import_writes_transactions_snapshot_rules_audit_and_events(env: Env
         imported = db.execute(
             select(AuditLog).where(AuditLog.action == "transaction.import")
         ).scalar_one()
-        assert stmt.account_number[-4:] not in str(imported.after)
-        assert "Initech" not in str(imported.after)  # no statement text in the trail
+        # The trail lists the new transactions' ids (masked: UUID hex can hold
+        # any four digits).
+        trail = without_ids(imported.after)
+        assert stmt.account_number[-4:] not in trail
+        assert "Initech" not in trail  # no statement text in the trail
     assert {"transaction.created", "balance.updated", "document.updated"} <= events
     assert {"transaction.import", "document.ingest", "rule.apply"} <= actions
     assert AUTO_PAIR_JOB_TYPE in jobs

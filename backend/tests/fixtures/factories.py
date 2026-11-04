@@ -16,6 +16,7 @@ hashes with ``app.auth.passwords.DEFAULT_PARAMS``.
 
 from __future__ import annotations
 
+import re
 import secrets
 import uuid
 from collections.abc import Iterable, Iterator
@@ -58,6 +59,18 @@ from app.db.rls import get_context, restore_context, set_context
 #: Cheap Argon2id parameters for test users only.
 TEST_PASSWORD_PARAMS = PasswordParams(memory_kib=1024, time_cost=1, parallelism=1)
 TEST_ORIGIN = "http://testserver"
+
+_UUID = re.compile(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}", re.IGNORECASE)
+
+
+def without_ids(value: object) -> str:
+    """``str(value)`` with every UUID masked, for "these digits never appear" checks.
+
+    Audit and review payloads list row ids; random UUID hex holds any four
+    digits now and then, so a check for card or account digits must not
+    look inside them.
+    """
+    return _UUID.sub("<id>", str(value))
 
 
 def unique_name(prefix: str) -> str:

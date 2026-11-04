@@ -40,7 +40,7 @@ from app.domain.transactions.models import Transaction
 from app.ingestion.match import receipts as matcher
 from app.ingestion.sandbox.protocol import ExtractResult, ParseInfo, Receipt, ReceiptPayment
 from tests.fixtures.documents import make_document
-from tests.fixtures.factories import AuthedClient, Factories
+from tests.fixtures.factories import AuthedClient, Factories, without_ids
 from tests.fixtures.households import API, Actors, problem_type
 from tests.fixtures.ledger import LedgerFactories, make_account
 
@@ -201,7 +201,7 @@ def test_confident_unique_match_is_linked(
     assert audit[0].after["auto"] is True
     assert audit[0].user_id is None
     # Card digits never reach the audit log.
-    assert "4321" not in str(audit[0].after)
+    assert "4321" not in without_ids(audit[0].after)
     stored = world.rows(hh, select(Document).where(Document.id == doc.id))[0]
     assert stored.kind is DocumentKind.RECEIPT
     assert (stored.period_start, stored.period_end) == (DAY, DAY)
@@ -245,7 +245,7 @@ def test_two_equally_good_transactions_go_to_review_ranked(
     scores = [s["score"] for s in item.payload["suggestions"]]
     assert scores == sorted(scores, reverse=True)
     # Ids and short facts only: no receipt text, no card digits.
-    assert "4321" not in str(item.payload)
+    assert "4321" not in without_ids(item.payload)
     assert "CORNER" not in str(item.payload)
     # Re-running the matcher does not add a second item.
     world.apply(doc, receipt())

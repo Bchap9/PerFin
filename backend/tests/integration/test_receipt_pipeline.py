@@ -46,7 +46,7 @@ from app.ingestion.sandbox.protocol import ExtractResult
 from app.workers.handlers import ingest
 from tests.fixtures import synth_receipts as sr
 from tests.fixtures import synth_statements as ss
-from tests.fixtures.factories import Factories, UserRecord
+from tests.fixtures.factories import Factories, UserRecord, without_ids
 from tests.fixtures.imports import run_jobs
 from tests.fixtures.ledger import LedgerFactories
 
@@ -203,7 +203,7 @@ def test_thermal_receipt_photo_is_ocrd_parsed_and_linked(
     _no_digits_logged(caplog)
     audit = env.rows(select(AuditLog).where(AuditLog.target_id == str(doc_id)))
     assert audit
-    assert all(LAST4 not in str(row.after) for row in audit)
+    assert all(LAST4 not in without_ids(row.after) for row in audit)
 
 
 def test_pdf_e_receipt_is_linked(env: Env, store: LocalFSBlobStore) -> None:
@@ -310,4 +310,4 @@ def test_two_candidate_transactions_leave_the_choice_to_a_person(
         str(first.id),
         str(second.id),
     }
-    assert LAST4 not in str(item.payload)
+    assert LAST4 not in without_ids(item.payload)
