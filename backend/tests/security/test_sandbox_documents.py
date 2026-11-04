@@ -12,6 +12,7 @@ neither a subprocess nor anything outside the read-only Landlock roots.
 from __future__ import annotations
 
 import time
+from dataclasses import replace
 
 import pytest
 
@@ -32,6 +33,18 @@ def test_text_pdf_with_previews() -> None:
     assert page.text_source == "text_layer"
     assert any(t.source == "rulings" for t in page.tables)
     assert [p.page for p in result.previews] == [1]
+
+
+def test_text_pdf_tables_as_an_unprivileged_uid() -> None:
+    """Table detection (PyMuPDF loads onnxruntime) in a non-root child (CI run 41915782513).
+
+    Run as root, the child drops to 65534, so this binds on every host; the
+    filter must allow what onnxruntime's import and an NSS fall-through need.
+    """
+    config = replace(CONFIG, uid=65534, gid=65534)
+    result = run_extraction("pdf", synth.statement_pdf(ruled=True), config=config)
+    assert result.ok
+    assert any(t.source == "rulings" for t in result.pages[0].tables)
 
 
 def test_ocr_runs_inside_the_hardened_child() -> None:

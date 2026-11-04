@@ -143,17 +143,6 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends tesseract-ocr tesseract-ocr-eng libseccomp2 postgresql-client
-      - name: DIAGNOSTIC sandbox syscall
-        continue-on-error: true
-        run: |
-          which strace || sudo apt-get install -y strace
-          strace -V | head -1
-          strace -f -k -e trace=prctl,arch_prctl -o "$RUNNER_TEMP/st.txt" uv run pytest -p no:randomly -x -q tests/security/test_sandbox_documents.py::test_text_pdf_with_previews || true
-          grep -n -E 'prctl|SIGSYS|killed' "$RUNNER_TEMP/st.txt" | tail -60
-          echo ----
-          grep -n -B2 -A40 'SIGSYS' "$RUNNER_TEMP/st.txt" | head -150 || true
-          echo ---- tail
-          tail -80 "$RUNNER_TEMP/st.txt"
       # helm for tests/unit/test_helm_chart.py (renders deploy/helm/perfin),
       # built from its checksum-pinned module (scripts/install-chart-tools.sh).
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0

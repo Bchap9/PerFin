@@ -39,6 +39,7 @@ from __future__ import annotations
 import contextlib
 import ctypes
 import os
+import re
 import shutil
 import signal
 import subprocess  # nosec B404
@@ -71,7 +72,15 @@ _JOIN_SECONDS: Final = 5.0
 
 # Mirrors app.ingestion.sandbox.child.EXIT_CODES (not imported: the child
 # module is only ever run, never loaded, by the worker).
-_EXIT_CODES: Final = {64: "usage", 65: "harden_failed", 67: "memory_limit", 70: "crashed"}
+_EXIT_CODES: Final = {
+    64: "usage",
+    65: "harden_failed",
+    67: "memory_limit",
+    70: "crashed",
+    159: "syscall_denied",
+}
+#: Written to stderr by the child's SIGSYS reporter (child.SYSCALL_DENIED_PREFIX).
+_DENIED_SYSCALL_LINE: Final = re.compile(r"sandbox: seccomp denied syscall (\d{1,4})\n")
 
 
 class SandboxError(Exception):
@@ -217,6 +226,30 @@ def _classify_exit(returncode: int) -> str:
     return _EXIT_CODES.get(returncode, "crashed")
 
 
+def denied_syscall(stderr: str) -> str:
+    """``"<number> (<name>)"`` of the syscall the child's filter refused, or ``""``.
+
+    Read from the child's SIGSYS reporter line (x86-64; elsewhere the child is
+    killed without one). The child is untrusted, so only a small number is
+    taken from its output and the name is looked up here, from libseccomp's
+    table for this architecture.
+    """
+    match = _DENIED_SYSCALL_LINE.search(stderr)
+    if match is None:
+        return ""
+    number = int(match.group(1))
+    name = "unknown"
+    try:
+        import pyseccomp
+
+        resolved = pyseccomp.resolve_syscall(pyseccomp.Arch.NATIVE, number)
+        if resolved:
+            name = resolved.decode("ascii", "replace")
+    except (ImportError, OSError, ValueError):  # pragma: no cover - the image ships libseccomp2
+        pass
+    return f"{number} ({name})"
+
+
 def _spawn(config: SandboxConfig, job: SandboxJob, workdir: str) -> subprocess.Popen[bytes]:
     command = [config.python, "-I", "-B", "-m", config.module, job.model_dump_json()]
     drop = config.drops_privileges()
@@ -299,7 +332,10 @@ def run_extraction(
         raise SandboxError("input_too_large", stderr=stderr)
     if returncode != 0:
         code = _classify_exit(returncode)
-        raise SandboxError(code, f"exit status {returncode}", stderr=stderr)
+        detail = f"exit status {returncode}"
+        if code == "syscall_denied" and (syscall := denied_syscall(stderr)):
+            detail += f", syscall {syscall}"
+        raise SandboxError(code, detail, stderr=stderr)
     try:
         result = ExtractResult.model_validate_json(bytes(pumps.stdout))
     except ValidationError:

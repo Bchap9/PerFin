@@ -43,12 +43,19 @@ the child **refuses to run** if any step fails:
    require_landlock`), which leaves seccomp and the parent's non-dumpable
    flag as the only layers.
 4. A seccomp filter (libseccomp via ``pyseccomp``). **Default-kill
-   allowlist** (``KILL_PROCESS``, so the child dies with ``SIGSYS`` and the
-   runner reports ``syscall_denied``): only the calls in
+   allowlist**: a call outside it never runs and ends the child, which the
+   runner reports as ``syscall_denied``. On x86-64 the default action is
+   ``TRAP`` to a tiny SIGSYS handler (:func:`install_sigsys_reporter`) that
+   writes the refused syscall's number to stderr and exits with
+   :data:`EXIT_SYSCALL_DENIED`, so the runner can name the call; elsewhere it
+   is ``KILL_PROCESS`` (the child dies with ``SIGSYS``). Only the calls in
    :data:`ALLOWED_SYSCALLS` run, plus a few with argument checks
    (:func:`install_seccomp`): ``clone`` only with ``CLONE_THREAD`` (threads),
    ``kill``/``tgkill``/``rt_sigqueueinfo``/``rt_tgsigqueueinfo`` only at the
-   child's own pid, ``prlimit64`` only on itself, ``fcntl`` and ``ioctl``
+   child's own pid, ``prlimit64`` only on itself, ``prctl`` only with
+   :data:`PRCTL_ALLOWED_OPTIONS` (``PR_CAPBSET_READ``, a read-only query
+   libcap's constructor makes), ``rt_sigaction`` except on ``SIGSYS`` (the
+   reporter cannot be replaced; ``EPERM``), ``fcntl`` and ``ioctl``
    only with the commands in :data:`FCNTL_ALLOWED_COMMANDS` and
    :data:`IOCTL_ALLOWED_COMMANDS`, ``open``/``openat`` only without
    ``O_WRONLY``, ``O_RDWR``, ``O_CREAT`` or ``O_TRUNC``. The allowlist was
@@ -126,16 +133,23 @@ EXIT_USAGE: Final = 64
 EXIT_HARDEN_FAILED: Final = 65
 EXIT_MEMORY: Final = 67
 EXIT_INTERNAL: Final = 70
+#: Exit code of the SIGSYS reporter (:func:`install_sigsys_reporter`): 128 + SIGSYS.
+EXIT_SYSCALL_DENIED: Final = 159
 EXIT_CODES: Final[Mapping[int, str]] = {
     EXIT_USAGE: "usage",
     EXIT_HARDEN_FAILED: "harden_failed",
     EXIT_MEMORY: "memory_limit",
     EXIT_INTERNAL: "crashed",
+    EXIT_SYSCALL_DENIED: "syscall_denied",
 }
+#: The line the SIGSYS reporter writes to stderr, followed by the syscall
+#: number in decimal and a newline (parsed by the runner).
+SYSCALL_DENIED_PREFIX: Final = b"sandbox: seccomp denied syscall "
 
 _PR_SET_DUMPABLE: Final = 4
 _PR_SET_NO_NEW_PRIVS: Final = 38
 _CLONE_THREAD: Final = 0x00010000
+_SIGSYS: Final = 31  # x86-64 and arm64
 #: ``__NR_SCMP_ERROR``: what libseccomp resolves an unknown syscall name to.
 _UNKNOWN_SYSCALL: Final = -1
 _READ_CHUNK: Final = 64 * 1024
@@ -164,6 +178,18 @@ FCNTL_ALLOWED_COMMANDS: Final = (
     1030,  # F_DUPFD_CLOEXEC
     1034,  # F_GET_SEALS
 )
+_PR_CAPBSET_READ: Final = 23
+#: ``prctl`` options allowed; any other is killed. ``PR_CAPBSET_READ`` is a
+#: read-only query of the child's own capability bounding set (the same facts
+#: as ``CapBnd`` in its own ``/proc/<pid>/status``). libcap's constructor
+#: probes it when the library is loaded, e.g. by glibc's ``systemd`` NSS
+#: module (``libnss_systemd`` links libcap) when a library looks up the user
+#: database: onnxruntime, which PyMuPDF's table detection loads, calls
+#: ``getpwuid_r`` at import, the Landlock domain makes ``/etc/passwd``
+#: unreadable, and NSS falls through to the next module of the host's
+#: ``nsswitch.conf`` (``passwd: files systemd`` on Ubuntu hosts; CI run
+#: 41915782513 died there with SIGSYS).
+PRCTL_ALLOWED_OPTIONS: Final = (_PR_CAPBSET_READ,)
 #: ``ioctl`` requests allowed: the terminal queries CPython makes on its
 #: standard streams (``isatty``, window size), close-on-exec and bytes
 #: readable. Any other request is killed.
@@ -257,8 +283,8 @@ ALLOWED_SYSCALLS: Final = (
     "times",
     "arch_prctl",
     "getrandom",
-    # signals to itself (sending: the checked calls below)
-    "rt_sigaction",
+    # signals to itself (sending: the checked calls below; ``rt_sigaction``
+    # is checked too: the SIGSYS disposition is fixed once hardened)
     "rt_sigprocmask",
     "rt_sigreturn",
     "rt_sigpending",
@@ -618,14 +644,125 @@ def allow_readonly_opens(filt: object, pyseccomp: ModuleType) -> None:
         )
 
 
-def install_seccomp() -> None:
+#: x86-64 machine code of the SIGSYS reporter, a ``SA_SIGINFO`` handler
+#: ``(int sig, siginfo_t *info, void *ctx)`` that formats ``info->si_syscall``
+#: (offset 24) in decimal after :data:`SYSCALL_DENIED_PREFIX`, writes the line
+#: to fd 2 and calls ``exit_group(159)``; it touches nothing but its own stack
+#: frame, so it is async-signal-safe and needs only ``write`` and
+#: ``exit_group``, both on the allowlist. Assembled from (GNU as, Intel syntax)::
+#:
+#:     mov  eax, dword ptr [rsi+24]   ; si_syscall
+#:     sub  rsp, 96
+#:     lea  rdi, [rsp+95]
+#:     mov  byte ptr [rdi], 10        ; trailing newline
+#:     mov  ecx, 10
+#: 1:  xor  edx, edx                  ; digits, last first
+#:     div  ecx
+#:     add  dl, 48
+#:     dec  rdi
+#:     mov  byte ptr [rdi], dl
+#:     test eax, eax
+#:     jnz  1b
+#:     lea  rsi, [rip+msg]            ; prefix in front of the digits
+#:     mov  ecx, 32
+#:     sub  rdi, rcx
+#:     mov  r8, rdi
+#:     cld
+#:     rep  movsb
+#:     mov  rsi, r8                   ; write(2, line, length)
+#:     lea  rdx, [rsp+96]
+#:     sub  rdx, rsi
+#:     mov  edi, 2
+#:     mov  eax, 1
+#:     syscall
+#:     mov  edi, 159                  ; exit_group(EXIT_SYSCALL_DENIED)
+#:     mov  eax, 231
+#:     syscall
+#:     hlt
+#: msg: .ascii "sandbox: seccomp denied syscall "
+_SIGSYS_REPORTER_X86_64: Final = (
+    bytes.fromhex(
+        "8b46184883ec60488d7c245fc6070ab90a00000031d2f7f180c23048ffcf8817"
+        "85c075f0488d3532000000b9200000004829cf4989f8fcf3a44c89c6488d5424"
+        "604829f2bf02000000b8010000000f05bf9f000000b8e70000000f05f4"
+    )
+    + SYSCALL_DENIED_PREFIX
+)
+_SA_SIGINFO: Final = 0x00000004
+_PROT_READ: Final = 0x1
+_PROT_WRITE: Final = 0x2
+_PROT_EXEC: Final = 0x4
+_MAP_PRIVATE: Final = 0x02
+_MAP_ANONYMOUS: Final = 0x20
+
+
+class _SigAction(ctypes.Structure):
+    """glibc's ``struct sigaction`` on x86-64 (the C library sets the restorer)."""
+
+    _fields_ = (
+        ("sa_sigaction", ctypes.c_void_p),
+        ("sa_mask", ctypes.c_ulong * 16),
+        ("sa_flags", ctypes.c_int),
+        ("sa_restorer", ctypes.c_void_p),
+    )
+
+
+def install_sigsys_reporter() -> bool:
+    """Report the number of a syscall the filter refuses, then exit (operability).
+
+    With a reporter in place the filter's default action is ``TRAP`` instead
+    of ``KILL_PROCESS``: the refused syscall is still never executed, the
+    kernel delivers ``SIGSYS`` with the syscall number, and the handler
+    (:data:`_SIGSYS_REPORTER_X86_64`) writes ``sandbox: seccomp denied
+    syscall <n>`` to stderr and ends the whole process with
+    :data:`EXIT_SYSCALL_DENIED`; the runner reports ``syscall_denied`` with
+    the number and name. ``rt_sigaction`` on ``SIGSYS`` is refused once the
+    filter is loaded, so nothing in the child can replace the handler, and a
+    thread that blocks ``SIGSYS`` is still killed (the kernel resets a
+    blocked forced signal to its default action). Only x86-64 has a reporter;
+    elsewhere this returns ``False`` and the filter kills as before.
+    """
+    if os.uname().machine != "x86_64":
+        return False
+    libc = ctypes.CDLL(None, use_errno=True)
+    libc.mmap.restype = ctypes.c_void_p
+    libc.mmap.argtypes = (
+        ctypes.c_void_p,
+        ctypes.c_size_t,
+        ctypes.c_int,
+        ctypes.c_int,
+        ctypes.c_int,
+        ctypes.c_long,
+    )
+    libc.mprotect.argtypes = (ctypes.c_void_p, ctypes.c_size_t, ctypes.c_int)
+    size = resource.getpagesize()
+    page = libc.mmap(None, size, _PROT_READ | _PROT_WRITE, _MAP_PRIVATE | _MAP_ANONYMOUS, -1, 0)
+    if page in (None, ctypes.c_void_p(-1).value):
+        raise HardenError(f"mmap failed: errno {ctypes.get_errno()}")
+    ctypes.memmove(page, _SIGSYS_REPORTER_X86_64, len(_SIGSYS_REPORTER_X86_64))
+    if libc.mprotect(page, size, _PROT_READ | _PROT_EXEC) != 0:
+        raise HardenError(f"mprotect failed: errno {ctypes.get_errno()}")
+    action = _SigAction(sa_sigaction=page, sa_flags=_SA_SIGINFO)
+    for index in range(len(action.sa_mask)):
+        action.sa_mask[index] = ~0 & 0xFFFFFFFFFFFFFFFF  # every signal blocked inside
+    if libc.sigaction(_SIGSYS, ctypes.byref(action), None) != 0:
+        raise HardenError(f"sigaction(SIGSYS) failed: errno {ctypes.get_errno()}")
+    return True
+
+
+def install_seccomp(*, report: bool = False) -> None:
+    """Load the filter (module doc, step 4).
+
+    ``report``: a SIGSYS reporter is installed (:func:`install_sigsys_reporter`),
+    so a refused syscall traps to it instead of killing the process outright.
+    """
     pyseccomp = _SECCOMP
     if pyseccomp is None:
         raise HardenError("libseccomp is not available")
     allow = pyseccomp.ALLOW
     eperm = pyseccomp.ERRNO(errno.EPERM)
     pid = os.getpid()
-    filt = pyseccomp.SyscallFilter(defaction=pyseccomp.KILL_PROCESS)
+    filt = pyseccomp.SyscallFilter(defaction=pyseccomp.TRAP if report else pyseccomp.KILL_PROCESS)
     for name in ALLOWED_SYSCALLS:
         _add_optional(filt, pyseccomp, allow, name)
     for name in DENIED_SYSCALLS:
@@ -643,6 +780,13 @@ def install_seccomp() -> None:
     for name in SIGNAL_SELF_ONLY_SYSCALLS:
         filt.add_rule(allow, name, pyseccomp.Arg(0, pyseccomp.EQ, pid))
         filt.add_rule(eperm, name, pyseccomp.Arg(0, pyseccomp.NE, pid))
+    # The SIGSYS disposition is fixed from here on: the reporter (or the
+    # default action) cannot be replaced; every other signal's handler can.
+    filt.add_rule(allow, "rt_sigaction", pyseccomp.Arg(0, pyseccomp.NE, _SIGSYS))
+    filt.add_rule(eperm, "rt_sigaction", pyseccomp.Arg(0, pyseccomp.EQ, _SIGSYS))
+    # ``prctl`` only to read the capability bounding set (module doc, step 4).
+    for option in PRCTL_ALLOWED_OPTIONS:
+        filt.add_rule(allow, "prctl", pyseccomp.Arg(0, pyseccomp.EQ, option))
     # Resource limits of this process only (0 = self): never the worker's.
     for target in (0, pid):
         filt.add_rule(allow, "prlimit64", pyseccomp.Arg(0, pyseccomp.EQ, target))
@@ -668,7 +812,7 @@ def harden(limits: SandboxLimits) -> None:
         _prctl(_PR_SET_DUMPABLE, 0)
         _prctl(_PR_SET_NO_NEW_PRIVS, 1)
         install_landlock(required=limits.require_landlock)
-        install_seccomp()
+        install_seccomp(report=install_sigsys_reporter())
     except HardenError:
         raise
     except Exception as exc:

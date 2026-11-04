@@ -123,3 +123,63 @@ OCRs a scanned PDF through the real runner.
 **Consequences.** libtesseract's parsers run with the same rlimits, Landlock
 and seccomp as PyMuPDF; a tesserocr wheel update is a native-library update
 and goes through the same dependency review (F-controls).
+
+## Addendum (v1.0.0 CI): the user database, libcap and a named SIGSYS
+
+Status: Accepted. Date: 2026-11-04.
+
+**Context.** On the GitHub `ubuntu-24.04` runner (non-root, kernel 7.0
+azure) every text-layer PDF with ruled tables died with `SIGSYS`
+(`syscall_denied`, CI run 41915782513); it passed on the development host.
+The kernel's audit record (`type=1326 ... syscall=157`) and an `strace` of
+the child showed the chain: `page.find_tables()` makes PyMuPDF load its
+layout model, which imports onnxruntime; onnxruntime calls `getpwuid_r` at
+import; the child's Landlock domain makes `/etc/passwd` unreadable, so
+glibc falls through to the next NSS module of the host's `nsswitch.conf`,
+on Ubuntu `passwd: files systemd`; `libnss_systemd.so.2` links libcap, and
+libcap's constructor probes the capability bounding set with
+`prctl(PR_CAPBSET_READ, n)`. `prctl` was not on the allowlist. The
+development host's `nsswitch.conf` lists only `files`, so no module was
+loaded there; the result depends on the host, not on the file.
+
+**Decision.**
+- `prctl` is allowed with one option only, `PR_CAPBSET_READ`
+  (`PRCTL_ALLOWED_OPTIONS`): it reads the child's own capability bounding
+  set, which the child can already read in its own `/proc/<pid>/status`
+  (`CapBnd`). It changes nothing and reaches no other process. Every other
+  `prctl` option (`PR_SET_DUMPABLE`, `PR_SET_NAME`, `PR_SET_SECCOMP`, ...)
+  is still outside the allowlist and ends the child. What the NSS module
+  does next (a varlink `socket`/`connect` to systemd-userdb) is `EPERM`, so
+  the lookup ends "user not found" and onnxruntime carries on.
+- Making the call fail (`EPERM`) instead would also work for libcap (it
+  treats an error as "no such capability") but would hide from libcap
+  facts the child can read anyway; allowing the read-only option is the
+  smaller surprise.
+- **Operability.** On x86-64 the filter's default action is `TRAP` instead
+  of `KILL_PROCESS`, to a 93-byte SIGSYS handler (machine code in an
+  `mmap`ed read-execute page, `install_sigsys_reporter`) that writes
+  `sandbox: seccomp denied syscall <n>` to stderr and calls
+  `exit_group(159)`. The refused call still never runs; the runner reports
+  `syscall_denied` with `exit status 159, syscall <n> (<name>)` (name from
+  libseccomp's table in the worker, only the number is taken from the
+  child). `rt_sigaction` on `SIGSYS` is refused (`EPERM`) once the filter is
+  loaded, so nothing in the child can replace the handler, and a thread
+  that blocks `SIGSYS` is killed by the kernel instead (a blocked forced
+  signal is reset to its default action). Other architectures keep
+  `KILL_PROCESS` (no reporter; writing machine code there would need
+  explicit instruction-cache maintenance) and the number is in the host's
+  audit log (docs/OPERATIONS.md).
+
+**Consequences.** `tests/security/test_sandbox.py::
+test_user_database_lookups_do_not_kill_the_child` (as the current user and
+as UID 65534; looks up the user and group databases and loads libcap in the
+hardened child), `test_prctl_only_reads_the_capability_bounding_set` (and
+that `PR_SET_DUMPABLE` 1 is still killed),
+`test_a_refused_syscall_cannot_be_survived_by_replacing_the_sigsys_handler`,
+`test_denied_syscall_is_read_only_from_the_reporter_line` and
+`tests/security/test_sandbox_documents.py::
+test_text_pdf_tables_as_an_unprivileged_uid` cover it; the first and the
+last fail without the `prctl` rule on a host whose NSS falls through to
+`systemd`. A machine with an exploitable parser and arbitrary code
+execution could remap and patch the handler page, but that only changes
+what happens *after* a refused call, which still does not run.

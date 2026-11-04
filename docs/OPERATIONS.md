@@ -212,9 +212,18 @@ Symptoms: documents end `failed` with extraction code `harden_failed`
   layers; `perfin config check` warns.
 - `syscall_denied`: the child hit the seccomp allowlist. Causes: a custom
   `seccomp` profile on the container (use Docker's default), `seccomp=unconfined`
-  mixed with a missing `libseccomp2`, or a parser library update that needs
-  a new syscall (report it with the file kind; do not widen the filter
-  locally). `docker compose logs worker | jq 'select(.msg|test("sandbox"))'`.
+  mixed with a missing `libseccomp2`, or a parser library (or C library,
+  or kernel) update that needs a new syscall (report it with the file kind
+  and the syscall below; do not widen the filter locally).
+  `docker compose logs worker | jq 'select(.msg|test("sandbox"))'`.
+  On x86-64 the log entry names the refused call: `detail` reads
+  `exit status 159, syscall 157 (prctl)` and `stderr` holds the child's line
+  `sandbox: seccomp denied syscall 157`. (The child's SIGSYS handler writes
+  that line and exits with 159; the call itself never runs. On other
+  architectures the child is killed outright, `detail` is
+  `exit status -31`, and the number is in the host's audit log:
+  `dmesg | grep type=1326` shows `syscall=<n>`.) Look the number up with
+  `ausyscall <n>` or `python -c "import pyseccomp as s; print(s.resolve_syscall(s.Arch.NATIVE, <n>))"`.
 - `memory_limit`, `cpu_limit`, `timeout`: the file is too big or complex for
   `PERFIN_EXTRACT_MEMORY_MB` (1024), `PERFIN_EXTRACT_CPU_SECONDS` (60) or
   `PERFIN_EXTRACT_TIMEOUT_SECONDS` (120, at most 600). Raise them together

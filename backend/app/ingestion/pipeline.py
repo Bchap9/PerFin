@@ -616,6 +616,7 @@ def ingest_document(
             extra={
                 "document_id": str(document.id),
                 "code": exc.code,
+                "detail": exc.detail,
                 "stderr": scrub_text(exc.stderr[:STDERR_LOG_CHARS]),
             },
         )

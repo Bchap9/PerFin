@@ -103,6 +103,30 @@ def test_syscall_outside_the_allowlist_kills_the_child() -> None:
     with pytest.raises(SandboxError) as caught:
         run_extraction("unlisted_syscall", b"x", config=EVIL)
     assert caught.value.code == "syscall_denied"
+    if os.uname().machine == "x86_64":
+        # The SIGSYS reporter names the refused call (docs/OPERATIONS.md).
+        assert caught.value.detail.endswith("syscall 141 (setpriority)")
+        assert "syscall 141 (setpriority)" in str(caught.value)
+
+
+def test_a_refused_syscall_cannot_be_survived_by_replacing_the_sigsys_handler() -> None:
+    """``rt_sigaction`` on SIGSYS is refused once hardened: the reporter stays, the child dies."""
+    with pytest.raises(SandboxError) as caught:
+        run_extraction("sigsys_takeover", b"x", config=EVIL)
+    assert caught.value.code == "syscall_denied"
+    assert "sigsys_handler_replaced" not in caught.value.stderr
+
+
+def test_denied_syscall_is_read_only_from_the_reporter_line() -> None:
+    from app.ingestion.sandbox.runner import _classify_exit, denied_syscall
+
+    assert _classify_exit(child.EXIT_SYSCALL_DENIED) == "syscall_denied"
+    assert _classify_exit(-31) == "syscall_denied"  # killed outright (no reporter)
+    line = child.SYSCALL_DENIED_PREFIX.decode() + "141\n"
+    assert denied_syscall("noise\n" + line).startswith("141 (")
+    assert denied_syscall("") == ""
+    assert denied_syscall("sandbox: seccomp denied syscall 99999999999\n") == ""
+    assert denied_syscall("sandbox: seccomp denied syscall rm -rf\n") == ""
 
 
 def test_allowlist_still_kills_without_the_filesystem_rules() -> None:
@@ -118,7 +142,18 @@ def test_allowlist_and_deny_lists_do_not_overlap() -> None:
     assert not allowed & set(DENIED_SYSCALLS)
     assert not allowed & set(child.FILESYSTEM_DENIED_SYSCALLS)
     assert not set(child.FCNTL_ALLOWED_COMMANDS) & set(child.FCNTL_DENIED_COMMANDS)
-    checked = {"clone", "clone3", "prlimit64", "fcntl", "ioctl", "open", "openat", "openat2"}
+    checked = {
+        "clone",
+        "clone3",
+        "prlimit64",
+        "fcntl",
+        "ioctl",
+        "open",
+        "openat",
+        "openat2",
+        "rt_sigaction",
+        "prctl",
+    }
     assert not allowed & (checked | set(child.SIGNAL_SELF_ONLY_SYSCALLS))
 
 
@@ -366,6 +401,32 @@ def test_unprivileged_child_can_start_threads() -> None:
     found = _warnings("threads", config=config)
     assert found == {"threads": "4"}
     assert _warnings("whoami", config=config)["uid"] != "0"
+
+
+def test_user_database_lookups_do_not_kill_the_child() -> None:
+    """A library looking up the user database must not kill the child (CI run 41915782513).
+
+    onnxruntime (loaded by PyMuPDF's table detection) calls ``getpwuid_r`` at
+    import. Under Landlock ``/etc/passwd`` is unreadable, so glibc tries the
+    next NSS module of the host; Ubuntu's ``systemd`` module loads libcap,
+    whose constructor calls ``prctl(PR_CAPBSET_READ)``, which the filter used
+    to kill. Also run as an unprivileged UID when the tests run as root.
+    """
+    for config in (EVIL, replace(EVIL, uid=65534, gid=65534)):
+        found = _warnings("user_lookup", config=config)
+        assert found["pwd"] in {"found", "missing"}
+        assert found["grp"] in {"found", "missing"}
+        assert found["libcap"] in {"loaded", "absent"}
+
+
+def test_prctl_only_reads_the_capability_bounding_set() -> None:
+    assert child.PRCTL_ALLOWED_OPTIONS == (23,)  # PR_CAPBSET_READ
+    assert _warnings("prctl_probe") == {"capbset_read": "ok"}
+    # Any other option is outside the allowlist, e.g. becoming dumpable again,
+    # which would expose the child's /proc entries to the rest of its UID.
+    with pytest.raises(SandboxError) as caught:
+        run_extraction("prctl_dumpable", b"x", config=EVIL)
+    assert caught.value.code == "syscall_denied"
 
 
 def test_input_over_the_limit_is_refused() -> None:

@@ -257,6 +257,63 @@ def unlisted_syscall(data: bytes, options: ExtractOptions, kind: str) -> Extract
     return _result(kind, "setpriority:ok")
 
 
+def sigsys_takeover(data: bytes, options: ExtractOptions, kind: str) -> ExtractResult:
+    """Replace or ignore the SIGSYS disposition, then make a call outside the allowlist.
+
+    Must still die with ``syscall_denied``: ``rt_sigaction`` on SIGSYS is refused
+    after hardening, so a refused call can never be survived.
+    """
+    for handler in (signal.SIG_IGN, lambda signum, frame: None):
+        try:
+            signal.signal(signal.SIGSYS, handler)
+        except OSError:
+            continue
+        sys.stderr.write("sigsys_handler_replaced\n")
+    os.setpriority(os.PRIO_PROCESS, 0, 19)
+    return _result(kind, "survived:ok")
+
+
+def user_lookup(data: bytes, options: ExtractOptions, kind: str) -> ExtractResult:
+    """Not hostile: look up the user and group databases, as onnxruntime does at import.
+
+    Landlock makes ``/etc/passwd`` unreadable, so glibc falls through to the
+    next NSS module of the host's ``nsswitch.conf``; on Ubuntu hosts that is
+    ``systemd``, whose library loads libcap, whose constructor calls
+    ``prctl(PR_CAPBSET_READ)`` (CI run 41915782513 died there). Then load
+    libcap directly too, so the probe runs on hosts without that NSS module.
+    """
+    import grp
+    import pwd
+
+    found = []
+    for label, lookup in (("pwd", pwd.getpwuid), ("grp", grp.getgrgid)):
+        try:
+            lookup(os.getuid())
+            found.append(f"{label}:found")
+        except KeyError:
+            found.append(f"{label}:missing")
+    try:
+        ctypes.CDLL("libcap.so.2")
+        found.append("libcap:loaded")
+    except OSError:
+        found.append("libcap:absent")
+    return _result(kind, *found)
+
+
+def prctl_probe(data: bytes, options: ExtractOptions, kind: str) -> ExtractResult:
+    """``prctl(PR_CAPBSET_READ)`` (allowed: a read-only query of its own bounding set)."""
+    libc = ctypes.CDLL(None, use_errno=True)
+    cap_sys_admin = 21
+    return _result(kind, f"capbset_read:{'ok' if libc.prctl(23, cap_sys_admin) >= 0 else 'err'}")
+
+
+def prctl_dumpable(data: bytes, options: ExtractOptions, kind: str) -> ExtractResult:
+    """Make itself dumpable again (``PR_SET_DUMPABLE`` 1): any other ``prctl`` is killed."""
+    libc = ctypes.CDLL(None, use_errno=True)
+    outcome = libc.prctl(4, 1, 0, 0, 0)
+    return _result(kind, f"set_dumpable:{'ok' if outcome == 0 else ctypes.get_errno()}")
+
+
 def threads(data: bytes, options: ExtractOptions, kind: str) -> ExtractResult:
     """Not hostile: start and join a few threads, as PyMuPDF and Tesseract do.
 
@@ -335,6 +392,10 @@ EXTRACTORS = {
     "echo": echo,
     "threads": threads,
     "unlisted_syscall": unlisted_syscall,
+    "sigsys_takeover": sigsys_takeover,
+    "user_lookup": user_lookup,
+    "prctl_probe": prctl_probe,
+    "prctl_dumpable": prctl_dumpable,
     "bad_shape": bad_shape,
 }
 
