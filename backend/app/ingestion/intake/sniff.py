@@ -18,8 +18,16 @@ plain text. Rejected, whatever they are called:
   not OFX;
 * **polyglots** (C4): an accepted type whose sniffed window also carries
   active markup (``<script``, ``<html``, ``<svg``, ``<iframe``, ``<object``,
-  ``<embed``, ``javascript:``). EML is exempt: HTML bodies are normal mail and
-  are converted to text by the extractor;
+  ``<embed``, ``javascript:``). For the **text** types (:data:`TEXT_TYPES`:
+  CSV, TSV, OFX, QFX, QIF, plain text) the whole file is scanned, not just
+  the window (:class:`MarkupScanner`, run by the upload intake while it
+  hashes and encrypts; review finding P2-SR-04). Binary types (PDF, images,
+  ZIP) are checked in the window only: their compressed bytes would match
+  these short patterns by chance, and a browser looks for HTML only at the
+  start of a file. What makes a stored file harmless in the browser is the
+  download response (``Content-Disposition: attachment``, ``nosniff``, a
+  sandboxing CSP; C4), not this check. EML is exempt: HTML bodies are
+  normal mail and are converted to text by the extractor;
 * binary content that matches no signature, text with NUL or other control
   bytes, UTF-16/32 text, and empty files.
 """
@@ -69,6 +77,10 @@ _EXTRACT_KINDS: Final[dict[FileType, str]] = {
 
 #: Structured formats the Phase 2 pipeline routes to the sandbox.
 STRUCTURED_TYPES: Final = frozenset(_EXTRACT_KINDS)
+#: Text types scanned for active markup over the whole file (module doc).
+TEXT_TYPES: Final = frozenset(
+    {FileType.CSV, FileType.TSV, FileType.OFX, FileType.QFX, FileType.QIF, FileType.TEXT}
+)
 
 
 class RejectReason(enum.StrEnum):
@@ -101,6 +113,27 @@ _MARKUP_START: Final = re.compile(
 _ACTIVE_MARKUP: Final = re.compile(
     rb"<(?:script|html|svg|iframe|object|embed)(?=[\s>/])|javascript:", re.IGNORECASE
 )
+#: Bytes kept between chunks so a pattern split across two chunks is still found
+#: (longer than the longest pattern, ``javascript:``, and ``<object`` plus terminator).
+_MARKUP_OVERLAP: Final = 16
+
+
+class MarkupScanner:
+    """Finds :data:`_ACTIVE_MARKUP` anywhere in a stream fed chunk by chunk."""
+
+    def __init__(self) -> None:
+        self._tail = b""
+        self.found = False
+
+    def feed(self, chunk: bytes) -> bool:
+        """Scan ``chunk`` (with the end of the previous one); return whether markup was seen."""
+        if not self.found:
+            window = self._tail + chunk
+            self.found = _ACTIVE_MARKUP.search(window) is not None
+            self._tail = window[-_MARKUP_OVERLAP:]
+        return self.found
+
+
 _XML_DECL: Final = re.compile(rb"^<\?xml[\s?]", re.IGNORECASE)
 _OFX_PI: Final = re.compile(rb"<\?OFX[\s?]", re.IGNORECASE)
 _OFX_SGML_HEADER: Final = re.compile(rb"^OFXHEADER\s*:\s*\d+", re.IGNORECASE)

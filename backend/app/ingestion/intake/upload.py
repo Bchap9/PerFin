@@ -10,7 +10,9 @@ the worker). It never parses content (SECURITY.md C1): it
 2. sniffs the magic bytes of the first :data:`~app.ingestion.intake.sniff.SNIFF_BYTES`
    (``app.ingestion.intake.sniff``); a disallowed type, SVG/HTML and
    polyglots are ``415 unsupported-file-type`` before a byte is stored (C4,
-   C5);
+   C5); for text types the rest of the stream is scanned for active markup
+   too, and a match there is the same ``415`` (the partial object is
+   discarded);
 3. computes SHA-256 over the stream;
 4. encrypts each chunk into a new object in the **quarantine** area under a
    random key (``app.domain.documents.blobstore``: per-object DEK, the blob id
@@ -45,7 +47,15 @@ from app.domain.accounts.visibility import get_visible_account
 from app.domain.documents import service
 from app.domain.documents.blobstore import BlobStore, EncryptingWriter, SealedBlob
 from app.domain.documents.models import DocumentSource
-from app.ingestion.intake.sniff import SNIFF_BYTES, FileType, Rejected, RejectReason, sniff
+from app.ingestion.intake.sniff import (
+    SNIFF_BYTES,
+    TEXT_TYPES,
+    FileType,
+    MarkupScanner,
+    Rejected,
+    RejectReason,
+    sniff,
+)
 
 log = get_logger(__name__)
 
@@ -131,12 +141,19 @@ def store_stream(
         raise UploadRejectedError(verdict.reason)
     file_type: FileType = verdict
     digest = hashlib.sha256()
+    # Text types: active markup anywhere in the file makes it a polyglot (C4).
+    scanner = MarkupScanner() if file_type in TEXT_TYPES else None
+    if scanner is not None:
+        scanner.feed(head)
     with EncryptingWriter(store, keyring, uuid7()) as writer:
         digest.update(head)
         writer.write(head)
         for chunk in stream:
             if writer.size + len(chunk) > max_bytes:
                 raise UploadTooLargeError(max_bytes)
+            if scanner is not None and scanner.feed(chunk):
+                log.info("upload rejected", extra={"reason": str(RejectReason.POLYGLOT)})
+                raise UploadRejectedError(RejectReason.POLYGLOT)
             digest.update(chunk)
             writer.write(chunk)
         sealed = writer.finish()

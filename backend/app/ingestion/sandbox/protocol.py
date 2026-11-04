@@ -67,6 +67,8 @@ class SandboxLimits(_Strict):
     max_open_files: int = Field(default=64, ge=16, le=1024)
     max_file_bytes: int = Field(default=0, ge=0)
     max_input_bytes: int = Field(default=1024 * 1024 * 1024, ge=1)
+    #: Refuse to run when the kernel has no Landlock (PERFIN_EXTRACT_REQUIRE_LANDLOCK).
+    require_landlock: bool = True
 
 
 class SandboxJob(_Strict):

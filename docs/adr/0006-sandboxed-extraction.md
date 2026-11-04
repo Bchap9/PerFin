@@ -1,6 +1,8 @@
 # ADR-0006: File content is only ever parsed in a sandboxed worker subprocess
 
-Status: Accepted. Date: 2026-11-03.
+Status: Accepted. Date: 2026-11-03. Amended by ADR-0009 (the child may share
+the worker's UID; a non-dumpable worker, Landlock and seccomp filesystem
+rules isolate it instead).
 
 ## Context
 PDF renderers, image decoders and OCR engines have long CVE histories. PerFin
@@ -15,7 +17,8 @@ reach. The API process holds session data and database credentials.
 - Within the worker, each extraction runs in a **subprocess** with
   `RLIMIT_AS`, `RLIMIT_CPU`, `RLIMIT_NOFILE`, a wall-clock timeout, a seccomp
   profile, a read-only filesystem plus tmpfs scratch, and a dedicated low
-  privilege UID. Output is passed back as JSON over a pipe and validated.
+  privilege UID (see ADR-0009 for the shipped same-UID deployment).
+  Output is passed back as JSON over a pipe and validated.
 - The worker container runs with `read_only`, `cap_drop: ALL`,
   `no-new-privileges`, and a non-root user.
 - Later hardening options: run extraction in gVisor or a Firecracker microVM;

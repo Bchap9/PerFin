@@ -12,7 +12,13 @@ a file. It starts ``python -I -B -m app.ingestion.sandbox.child`` with:
 * its own process group (``process_group=0``), so the whole group can be
   killed; ``close_fds``; ``umask 077``;
 * when the worker runs as root and ``PERFIN_EXTRACT_UID`` is set, the
-  dedicated UID/GID with no supplementary groups;
+  dedicated UID/GID with no supplementary groups. The shipped compose runs
+  the worker as 10001 and the child under the same UID; that is safe only
+  because (a) :func:`protect_parent` makes the worker non-dumpable before any
+  child is spawned, so ``/proc/<worker>/{environ,mem,fd}`` (the master key,
+  the database URL, open blobs) are root-owned and out of a same-UID child's
+  reach, and (b) the child confines its own filesystem view with Landlock and
+  seccomp (see :mod:`app.ingestion.sandbox.child`);
 * the decrypted file on **stdin** (never a path into the blob store).
 
 The parent enforces what the child cannot enforce on itself: a wall-clock
@@ -30,6 +36,7 @@ the child.
 from __future__ import annotations
 
 import contextlib
+import ctypes
 import os
 import shutil
 import signal
@@ -76,6 +83,24 @@ class SandboxError(Exception):
         self.stderr = stderr
 
 
+_PR_SET_DUMPABLE: Final = 4
+_PR_GET_DUMPABLE: Final = 3
+
+
+def protect_parent() -> None:
+    """Mark this (worker) process non-dumpable; raise :class:`SandboxError` if that fails.
+
+    A non-dumpable process's ``/proc/<pid>`` entries belong to root and need
+    ``CAP_SYS_PTRACE`` to open, so an extraction child running under the same
+    UID cannot read the worker's environment or memory, nor its open files
+    (review finding P2-SR-01). The flag is process-wide and idempotent; it is
+    set at worker start-up (``perfin worker``) and again before every spawn.
+    """
+    libc = ctypes.CDLL(None, use_errno=True)
+    if libc.prctl(_PR_SET_DUMPABLE, 0, 0, 0, 0) != 0 or libc.prctl(_PR_GET_DUMPABLE, 0, 0, 0, 0):
+        raise SandboxError("harden_failed", "could not make the worker non-dumpable")
+
+
 @dataclass(frozen=True)
 class SandboxConfig:
     """Limits and process settings for one extraction."""
@@ -89,6 +114,7 @@ class SandboxConfig:
     max_file_bytes: int = 0
     uid: int | None = None
     gid: int | None = None
+    require_landlock: bool = True
     python: str = field(default_factory=lambda: sys.executable)
     module: str = CHILD_MODULE
 
@@ -103,6 +129,7 @@ class SandboxConfig:
             max_input_bytes=settings.upload_max_bytes,
             uid=uid,
             gid=uid,
+            require_landlock=settings.extract_require_landlock,
         )
 
     def limits(self) -> SandboxLimits:
@@ -112,6 +139,7 @@ class SandboxConfig:
             max_open_files=self.max_open_files,
             max_file_bytes=self.max_file_bytes,
             max_input_bytes=self.max_input_bytes,
+            require_landlock=self.require_landlock,
         )
 
     def drops_privileges(self) -> bool:
@@ -226,6 +254,7 @@ def run_extraction(
     pumps = _Pumps()
     timed_out = False
     try:
+        protect_parent()
         if config.drops_privileges() and config.uid is not None:
             os.chown(workdir, config.uid, config.gid if config.gid is not None else config.uid)
         proc = _spawn(config, job, workdir)
