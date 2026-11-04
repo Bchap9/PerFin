@@ -146,13 +146,14 @@ jobs:
       - name: DIAGNOSTIC sandbox syscall
         continue-on-error: true
         run: |
-          uname -a
-          grep -o -w -E 'shstk|ibt|user_shstk' /proc/cpuinfo | sort | uniq -c || true
-          cat /proc/sys/kernel/seccomp/actions_logged || true
-          uv run python -c "import app.ingestion.sandbox.child as c; print(c.landlock_abi())"
-          uv run pytest -p no:randomly -x -q tests/security/test_sandbox_documents.py::test_text_pdf_with_previews || true
-          sudo dmesg | grep -E 'type=1326|seccomp|SECCOMP' | tail -40 || true
-          sudo journalctl -k --no-pager | grep -E 'type=1326|seccomp' | tail -40 || true
+          which strace || sudo apt-get install -y strace
+          strace -V | head -1
+          strace -f -k -e trace=prctl,arch_prctl -o "$RUNNER_TEMP/st.txt" uv run pytest -p no:randomly -x -q tests/security/test_sandbox_documents.py::test_text_pdf_with_previews || true
+          grep -n -E 'prctl|SIGSYS|killed' "$RUNNER_TEMP/st.txt" | tail -60
+          echo ----
+          grep -n -B2 -A40 'SIGSYS' "$RUNNER_TEMP/st.txt" | head -150 || true
+          echo ---- tail
+          tail -80 "$RUNNER_TEMP/st.txt"
       # helm for tests/unit/test_helm_chart.py (renders deploy/helm/perfin),
       # built from its checksum-pinned module (scripts/install-chart-tools.sh).
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
