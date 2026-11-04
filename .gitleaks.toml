@@ -45,6 +45,12 @@ paths = ['''^backend/tests/unit/test_market_data\.py$''']
 regexes = ['''^AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8=$''']
 
 [[allowlists]]
+description = "Synthetic webhook signing secret in the notification channel test fixture; history only, the file now builds an obviously fake value at runtime"
+condition = "AND"
+paths = ['''^backend/tests/fixtures/notifications\.py$''']
+regexes = ['''^synthetic-signing-secret-0123456789$''']
+
+[[allowlists]]
 description = "Cipher name in prose flagged as a key (not a secret)"
 condition = "AND"
 paths = ['''^docs/ARCHITECTURE\.md$''']
