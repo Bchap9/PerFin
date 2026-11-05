@@ -140,6 +140,18 @@ is not suggested well:
   `tests/unit/test_brokerage_table_parser.py` and
   `tests/integration/test_activity_table_import.py`. Bump `PARSER_VERSION`
   when the reading of an existing layout changes.
+- Table cells arrive formula-guarded (a leading `'` on a cell that would be
+  a formula, SECURITY.md C7). Strip the guard only to match headers and
+  action words and to parse dates and numbers; text you keep (a security
+  name, a memo, a payee) keeps it (`_text` in `brokerage_table.py`, or
+  `app.core.csv_safety.neutralise_formula` again), and an identifier such
+  as a symbol that would be a formula is refused.
+- A debit/credit indicator column only signs unsigned amounts: the
+  suggestion drops it when the amounts already carry a minus sign, and
+  doubts it (`indicator_values_unknown`) when a row's indicator is not a
+  direction word. A layout with such a column needs every value in
+  `OUTFLOW_WORDS`/`INFLOW_WORDS` (`structured.py`) to be suggested
+  confidently.
 
 ## Review checklist
 

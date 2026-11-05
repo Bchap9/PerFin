@@ -466,6 +466,7 @@ def _reimport(
     mapping_id: uuid.UUID | None,
     account_id: uuid.UUID | None,
     request: HTTPConnection | None,
+    group: int | None = None,
 ) -> dict[str, Any]:
     """Import the stored extraction again, else run the whole pipeline again."""
     if document.extraction is not None and document.status in REIMPORTABLE:
@@ -473,7 +474,7 @@ def _reimport(
             db,
             principal,
             document.id,
-            ApplyMapping(mapping_id=mapping_id, account_id=account_id),
+            ApplyMapping(mapping_id=mapping_id, account_id=account_id, group=group),
             request=request,
         )
         return {"rerun": "import", "job_id": str(accepted.job_id)}
@@ -494,8 +495,17 @@ def _resolve_account(
     account = get_visible_account(db, principal, body.account_id, need="edit")
     payload = item.payload or {}
     remembered: list[str] = []
+    grouped = isinstance(payload.get("group"), int)
+    if grouped and not imports_service.group_item_current(db, document, payload):
+        # The mapping changed since the item was raised: its group may now
+        # be another account's rows (a re-import raises current items).
+        raise ProblemError(
+            409,
+            "review-item-stale",
+            "Review item is out of date",
+            "The column mapping changed since this item was raised; import the document again.",
+        )
     if body.remember:
-        grouped = isinstance(payload.get("group"), int)
         if grouped:
             last4 = imports_service.stored_group_last4(db, document, payload)
         elif payload.get("investment") is True:
@@ -526,7 +536,14 @@ def _resolve_account(
         document.account_id = account.id
     db.flush()
     rerun = _reimport(
-        db, principal, document, mapping_id=None, account_id=account.id, request=request
+        db,
+        principal,
+        document,
+        mapping_id=None,
+        account_id=account.id,
+        request=request,
+        # A multi-account table: the account is for this item's group only.
+        group=payload["group"] if grouped else None,
     )
     return {"account_id": str(account.id), "remembered": remembered, **rerun}
 

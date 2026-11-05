@@ -118,8 +118,8 @@ What remains (details in docs/ROADMAP.md):
 - A document of several brokerage accounts is linked to no account: the
   account the classifier matched is undone after parsing (an account
   chosen at upload stays), and an account chosen on a re-run takes only
-  the statements with its own last four digits or the single unmatched
-  one, never several accounts' holdings at once.
+  the statements with its own last four digits or, when it records none,
+  the single unmatched one, never several accounts' holdings at once.
 
 ### Fixed
 
@@ -137,6 +137,43 @@ What remains (details in docs/ROADMAP.md):
   PDF, activity export) read the last four digits of the bank statement
   with the same index; it now reads the investment statement's, and the
   item's account suggestions rank by them.
+- Resolving one group's `unknown_account` item of a multi-account CSV gave
+  the chosen account every other group that matched no account too. The
+  review queue now passes the item's `group` to the re-run
+  (`apply-mapping` takes an optional `group` with `account_id`), and
+  without one a chosen account takes only the groups with its own last
+  four digits or, when it records none, the single unmatched group. The
+  same rule now applies to brokerage statements: an account that records
+  its digits no longer also takes the one statement left unmatched.
+- A group `unknown_account` item carries the digest of the mapping spec
+  that numbered its groups (`spec_digest`); once someone edits the mapping
+  the item is `409 review-item-stale`, so "remember" can no longer write
+  another account's digits onto the chosen account.
+- The rule that a sign read on trust never writes into a liability account
+  could be bypassed: a card export uploaded without an account saved its
+  trust-only mapping, and picking the card account then imported every
+  purchase as money in. Such a mapping is now marked `sign_unverified`
+  (`import_mapping.sign_unverified`, migration 0008) and waits as
+  `mapping_required` (`sign_unverified`) whenever it meets a liability
+  account, until a person saves its spec or chooses it explicitly.
+- A household mapping auto-saved from a member's upload could take over
+  the owner's account-bound mapping for the same header (most recently
+  used first), so the owner's files without an account stopped being
+  routed to it; the one account-bound mapping now wins.
+- The suggestion read a `Type` column of `DEBIT`/`CREDIT`/`CHECK` beside a
+  signed amount as a debit/credit indicator, turning every `CHECK` into
+  money in, and still imported it on its own. An indicator is no longer
+  suggested beside amounts that carry a minus sign, and an indicator cell
+  that is no direction word is a doubt (`indicator_values_unknown`).
+- The Fidelity activity CSV dates a trade by its run date and the PDF
+  Investment Report by its settlement date, so importing both recorded the
+  trade twice (lots and holdings doubled). A row the account already
+  records from another document under a trade or settlement date it
+  shares (or within 5 days when one has no settlement date) is no longer
+  written; an `investment_possible_duplicate` item says so.
+- The brokerage activity table reader dropped the extractors' formula
+  guard from the security names and memos it kept (SECURITY.md C7); they
+  keep it now, and a symbol that would be a formula is refused.
 
 ## [1.0.0-rc.1] - 2026-11-05
 

@@ -503,3 +503,61 @@ def test_downloaded_line_is_not_a_date() -> None:
     assert len(parsed.transactions) == len(rows)
     assert parsed.period_end == max(r.run_date for r in rows)
     assert parsed.period_end < date(2026, 11, 1)
+
+
+def _typed(cells: list[tuple[str, str]]) -> Table:
+    rows = [["Date", "Description", "Type", "Amount"]]
+    for index, (kind, amount) in enumerate(cells):
+        rows.append([f"10/{index + 13:02d}/2026", f"SYNTHETIC PAYEE {index}", kind, amount])
+    return _table(rows)
+
+
+def test_a_type_column_beside_signed_amounts_is_not_the_sign() -> None:
+    """``Type`` of DEBIT/CREDIT/CHECK next to signed amounts describes the row."""
+    table = _typed(
+        [
+            ("DEBIT", "-12.50"),
+            ("DEBIT", "-40.00"),
+            ("CREDIT", "1500.00"),
+            ("DEBIT", "-9.99"),
+            ("CHECK", "-250.00"),
+            ("DEBIT", "-3.10"),
+            ("DEBIT", "-60.00"),
+            ("CREDIT", "20.00"),
+        ]
+    )
+    suggestion = suggest_mapping(table)
+    assert suggestion is not None
+    assert suggestion.spec.indicator_column is None
+    assert suggestion.spec.outflow_values == []
+    assert suggestion.sign_evidence is None  # a signed column, read on trust
+    assert "indicator" not in {r.role for r in suggestion.reasons}
+    (statement,) = from_table_grouped(table, suggestion.spec)
+    assert [t.amount for t in statement.transactions][4] == Decimal("-250.00")
+
+
+def test_an_indicator_with_other_words_is_not_trusted() -> None:
+    """Unsigned amounts whose ``Type`` is sometimes no direction word: a person decides."""
+    table = _typed(
+        [
+            ("DEBIT", "12.50"),
+            ("DEBIT", "40.00"),
+            ("CREDIT", "1500.00"),
+            ("DEBIT", "9.99"),
+            ("CHECK", "250.00"),
+            ("DEBIT", "3.10"),
+            ("DEBIT", "60.00"),
+            ("CREDIT", "20.00"),
+        ]
+    )
+    suggestion = suggest_mapping(table)
+    assert suggestion is not None
+    assert suggestion.spec.indicator_column == 2
+    assert suggestion.doubts == ("indicator_values_unknown",)
+    assert suggestion.confident is False
+    # Every cell a direction word: the indicator proves the sign.
+    clean = _typed([("DEBIT", "12.50"), ("CREDIT", "1500.00"), ("DEBIT", "9.99")])
+    trusted = suggest_mapping(clean)
+    assert trusted is not None
+    assert trusted.confident is True
+    assert trusted.sign_evidence == "indicator"

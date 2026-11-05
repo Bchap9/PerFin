@@ -337,19 +337,26 @@ as `suggested_spec` with its confidence: `{"spec", "score" (0-1),
 "confident", "parsed_rows", "failed_rows", "footer_rows", "accounts",
 "sign_evidence" (`debit_credit` | `indicator` | `balance` | null),
 "doubts" (`header_not_exact`, `rows_unreadable`, `date_order_guessed`,
-`no_rows`), "roles": [{"role", "column", "match" (`exact` | `word` |
+`no_rows`, `indicator_values_unknown`), "roles": [{"role", "column", "match" (`exact` | `word` |
 `substring`), "fit"}]}` (roles, columns and counts, never cell text); the
 `unparsed`/`mapping_required` review item carries the same `suggested_spec`
 and facts (`suggestion`) and why it was not imported on its own
 (`auto_import`: `not_confident`, `no_suggestion`, `mapping_ambiguous`,
-`not_delimited`, `no_member`, `sign_unverified`, `not_saved`). `last_import` (and the run
+`not_delimited`, `no_member`, `sign_unverified`, `not_saved`; `sign_unverified`
+also when a mapping saved from a suggestion whose sign was read on trust
+meets a liability account, until someone saves its spec or chooses it
+explicitly). `last_import` (and the run
 summary) has `mapping_suggested`; for a brokerage activity export
 (INGESTION.md "Brokerage activity exports") it also has `brokerage_table`
 (`parser`, `statements`, `rows`, `notes`, `unknown_activity`, `skipped`,
 `warnings`), `mapping_bypassed` (the saved mapping the brokerage reading took
 precedence over, or null) and `investments`. `POST
 /imports/{document_id}/apply-mapping` (member or above, `Idempotency-Key`
-honoured) takes optional `mapping_id` and `account_id`; a `mapping_id`
+honoured) takes optional `mapping_id`, `account_id` and `group` (with
+`account_id` only, else `422`: the statement of a multi-account CSV the
+account is for, an `unknown_account` item's `group`; without it the account
+takes only the statements with its own last four digits or, when it records
+none, the one statement nothing matched); a `mapping_id`
 imports the table with that mapping even when it is brokerage activity; the target account
 (the given one, the document's, else the mapping's) must be editable (`404
 account-not-found`); a document that is not `needs_review`/`processed` or
@@ -480,7 +487,9 @@ reprocesses a document without one; `remember` saves the statement's last
 four digits on the account, `409 account-last4-conflict` if it records
 others, or the account on the item's CSV mapping; for one account of a
 multi-account CSV, an item with `group`, the digits are read again from the
-stored table and the mapping is left as it is); `{"kind": "unparsed",
+stored table and the mapping is left as it is, and the re-run gives the
+account to that group only; `409 review-item-stale` when the item's mapping
+spec changed since it was raised, `spec_digest`); `{"kind": "unparsed",
 "action": "reprocess"}` or `{"kind": "unparsed", "action": "apply_mapping",
 "mapping_id"?, "account_id"?}` (`409 document-not-importable` without a
 stored extraction); `{"kind": "unknown_owner", "user_id", "account_id"?,

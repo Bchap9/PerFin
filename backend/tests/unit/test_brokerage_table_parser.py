@@ -449,3 +449,51 @@ def test_activity_rows_dataclass_is_written_with_its_fees() -> None:
     )
     (statement,) = _read(_extract(activity_csv_bytes([row, row])))
     assert statement.activity[0].fees == Decimal("0.10")
+
+
+def test_names_and_memos_stay_formula_guarded() -> None:
+    """The extractor's ``'`` guard is set aside only for matching and parsing (C7)."""
+    formula = '=HYPERLINK("http://synthetic.invalid/x","c")'
+    rows = activity_rows(91, activity_accounts(91))
+    first = next(i for i, r in enumerate(rows) if r.symbol and r.action.startswith("YOU BOUGHT"))
+    row = rows[first]
+    rows[first] = ActivityRow(
+        row.run_date,
+        row.account,
+        row.action,
+        row.symbol,
+        formula,
+        row.price,
+        row.quantity,
+        row.amount,
+        row.settlement,
+    )
+    table = _extract(activity_csv_bytes(rows))
+    # The extractor guarded the cell; the reader keeps the guard on the name.
+    assert any(cell == "'" + formula for line in table.rows for cell in line)
+    names = {
+        a.security.name
+        for s in _read(table)
+        for a in s.activity
+        if a.security is not None and a.security.symbol == row.symbol
+    }
+    assert "'" + formula in names
+    assert formula not in names
+    # An action that still types but starts like a formula is a guarded memo.
+    guarded = _table(
+        [
+            list(HEADER),
+            ["'" + c if c.startswith("+") else c for c in _row("+DIVIDEND RECEIVED", amount="3")],
+        ]
+    )
+    (statement,) = _read(guarded)
+    (activity,) = statement.activity
+    assert activity.type == "dividend"
+    assert activity.memo == "'+DIVIDEND RECEIVED"
+    # A symbol that would be a formula is no symbol: the buy is skipped.
+    found = read_activity_table(
+        _table([list(HEADER), _row("YOU BOUGHT", symbol="'-SGRX", quantity="1", amount="-5")])
+    )
+    assert found is not None
+    assert found.skipped == 1
+    assert found.statements == []

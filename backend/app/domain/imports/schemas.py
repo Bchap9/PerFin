@@ -62,6 +62,8 @@ PREVIEW_DEFAULT: Final = 50
 MAX_COLUMN: Final = 1000
 MAX_SKIP_ROWS: Final = 50
 OUTFLOW_VALUES_MAX: Final = 10
+#: Highest statement (group) index of a multi-account table an apply may name.
+MAX_GROUP: Final = 10_000
 
 #: Accepted ``date_format`` values and what they read (``D``/``M`` without
 #: leading zeros are accepted too; a trailing time of day is ignored).
@@ -280,11 +282,22 @@ class ApplyMapping(_Input):
     the one whose fingerprint matches); ``account_id`` names the account to
     import into (else the document's, the mapping's or, for OFX/QFX/QIF, the
     account matched by its last four digits). The caller must be able to
-    edit the target account.
+    edit the target account. ``group`` (with ``account_id``) names the
+    statement of a multi-account table the account is for (an
+    ``unknown_account`` item's ``group``); without it a chosen account takes
+    only the statements with its own last four digits, or the one statement
+    no account matched.
     """
 
     mapping_id: uuid.UUID | None = None
     account_id: uuid.UUID | None = None
+    group: int | None = Field(default=None, ge=0, le=MAX_GROUP)
+
+    @model_validator(mode="after")
+    def _group_needs_account(self) -> Self:
+        if self.group is not None and self.account_id is None:
+            raise ValueError("group needs account_id")
+        return self
 
 
 class ApplyMappingJob(BaseModel):
@@ -295,6 +308,7 @@ class ApplyMappingJob(BaseModel):
     document_id: uuid.UUID
     mapping_id: uuid.UUID | None = None
     account_id: uuid.UUID | None = None
+    group: int | None = None
     requested_by: uuid.UUID | None = None
 
 
@@ -383,7 +397,9 @@ class MappingSuggestionOut(_Output):
     ``confident`` (no ``doubts``) is what the importer needs to import a
     never-seen CSV/TSV layout without asking (INGESTION.md "Parse");
     ``doubts`` are codes: ``header_not_exact``, ``rows_unreadable``,
-    ``date_order_guessed``, ``no_rows``. ``sign_evidence`` is
+    ``date_order_guessed``, ``no_rows``, ``indicator_values_unknown`` (an
+    indicator cell that is no direction word, or a signed amount beside
+    it). ``sign_evidence`` is
     ``debit_credit``, ``indicator``, ``balance`` or null (a signed amount
     column read as "positive is money in" on trust).
     """

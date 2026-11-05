@@ -593,8 +593,8 @@ OFX `INVSTMTRS` in the sandbox or from a PDF/scan's pages in the worker.
   statement is matched by its own last four digits; the document is linked
   to no account (the pipeline undoes an account the classifier matched; one
   chosen at upload stays), and an account chosen on a re-run takes only the
-  statements with its own last four digits or the single statement nothing
-  matched, never several accounts at once. No account, or one that does not
+  statements with its own last four digits or, when it records none, the
+  single statement nothing matched, never several accounts at once. No account, or one that does not
   fit, raises `unknown_account` (`account_not_found`, `account_ambiguous`,
   `account_type_mismatch`, `currency_mismatch`). A
   statement that does not reconcile, or has any row or position below the
@@ -609,7 +609,14 @@ OFX `INVSTMTRS` in the sandbox or from a PDF/scan's pages in the worker.
   activity as `investment_txn` with `import_hash` = sha256 of
   `perfin-invest-v1`, account, trade date, type, security, units, amount
   and the running index among identical rows (the same month as OFX and
-  PDF is imported once); cash deposits/withdrawals as ledger transactions
+  PDF is imported once). A row the account already records from another
+  document under another date (same type, security, units and amount; the
+  two share a trade or settlement date, or one has no settlement date and
+  they are at most 5 days apart) is the same trade dated differently by
+  another format and is **not written**: one `low_confidence_field` item
+  per statement (`investment_possible_duplicate`: `account_id`, `rows`,
+  `duplicate_of` ids) says so, and a trade that really happened twice is
+  added by hand. Cash deposits/withdrawals as ledger transactions
   on the account through the structured importer. Units the history does
   not explain become one opening `transfer_in` per security on the
   period's first day (memo `Opening position from statement`, cost per
@@ -660,7 +667,10 @@ table; never a PDF's page table) before it looks for a column mapping:
   effect: negative is cash out); a blank amount is accepted only on a
   transfer of units (no cash moves). Quantities are printed signed and
   carried positive (the type gives the direction); `fees` = commission +
-  fees; the action text is the memo.
+  fees; the action text is the memo. The extractors' formula guard (a
+  leading `'`, SECURITY.md C7) is set aside only to recognise headers and
+  actions and to parse dates and numbers: the security's name and the memo
+  keep it, and a symbol that would be a formula is no symbol.
 - **Accounts**: one `InvestmentStatement` per last four digits of the
   account-number column (one statement without such a column), period =
   first to last trade date, no positions, no cash balances. Only the last
@@ -697,8 +707,10 @@ table; never a PDF's page table) before it looks for a column mapping:
   (`investment_lot_conflict`, nothing of that account written), and the
   out-of-order rule applies (import the oldest statement or export first).
   Its rows are dated by the run (trade) date; a PDF statement of the same
-  month that dates rows by settlement date is not recognised as the same
-  rows by `import_hash`.
+  month that dates rows by settlement date has other `import_hash`es, so
+  its trades are caught by the near-duplicate check instead (not written,
+  `investment_possible_duplicate`). Cash deposits and withdrawals are ledger
+  rows and keep the ledger's same-date near-duplicate check.
 - **Precedence over column mappings**: the brokerage reading wins over a
   saved mapping for the same header and over the suggestion (no mapping is
   suggested or saved for such a file); the run summary names the saved
@@ -788,11 +800,16 @@ same database transaction.
   amounts parse, currencies are three-letter codes, an indicator column
   holds direction words such as `DR`/`CR`/`Debit`, an account column holds
   several account-number-like values); an empty column never takes one,
-  and a "Type" column of `Cash`/`Margin` is no indicator. A running balance
+  and a "Type" column of `Cash`/`Margin` is no indicator, nor is a column of
+  direction words beside amounts that already carry a minus sign (it
+  describes the row; the amount signs it). A running balance
   that agrees with only one sign convention sets `sign`. The suggestion is
   **confident** when the date and amount (or debit/credit) columns are
-  named exactly, every row before the footer reads and the day/month order
-  is not a guess; it reports a score, per-role reasons (role, column, match
+  named exactly, every row before the footer reads, the day/month order
+  is not a guess and, with an indicator, every row's indicator is a
+  direction word beside an unsigned amount (else the doubt
+  `indicator_values_unknown`: a `CHECK` row would otherwise read as money
+  in); it reports a score, per-role reasons (role, column, match
   kind, share of cells that fit) and its doubts.
 - **Never-seen layouts.** When no saved mapping fits and the suggestion is
   confident, a CSV, TSV or XLSX whose person (the uploader, or who asked for
@@ -803,7 +820,15 @@ same database transaction.
   recognised by its fingerprint. A single signed amount column read as
   "positive is money in" on trust (no debit/credit columns, indicator or
   agreeing balance) is never written into a liability account (card exports
-  often list purchases as positive). Page tables of PDFs and images, drop
+  often list purchases as positive): the mapping saved from such a
+  suggestion while the account is still unknown is marked
+  `sign_unverified`, and whenever it later meets a liability account (the
+  re-run after a person picks the card, next month's file) the import
+  waits as `mapping_required` (`auto_import: sign_unverified`) until a
+  person saves the mapping's spec in the editor or chooses the mapping
+  explicitly for the run. With one account-bound mapping among the fitting
+  ones, it wins over household mappings (a member's upload may have saved
+  one meanwhile) for an upload that names no account. Page tables of PDFs and images, drop
   folder and mail intake without a person, and doubtful suggestions are not
   imported on their own.
 - **Mapping editor.** Otherwise the document gets an `unparsed`
@@ -829,10 +854,15 @@ same database transaction.
   last four digits of the cell and each group is matched like an OFX
   statement (`match_account` among the accounts the person may import
   into; the document's or the mapping's account only for a file with one
-  account; an account chosen on re-run takes the groups that match
-  nothing). A group that matches none or several accounts is an
-  `unknown_account` item naming the group, never the digits; "remember"
-  re-reads them from the stored table. The cell text is used in memory for
+  account). An account chosen on re-run takes the group it was chosen for
+  (the review item's `group`, passed on as `apply-mapping`'s `group`), else
+  the groups with its own last four digits when it records them, else the
+  one group that matches nothing when there is only one: one choice never
+  pours several accounts into one. A group that matches none or several
+  accounts is an `unknown_account` item naming the group and the digest of
+  the spec that numbered it (`spec_digest`), never the digits; "remember"
+  re-reads them from the stored table, and once the mapping's spec has
+  changed the item is stale (`409 review-item-stale`; import again). The cell text is used in memory for
   grouping only: statements keep the last four digits, and review items,
   audit rows, events and run logs carry ids and counts. A brokerage
   "Activity" export with an action column never reaches this path unless a

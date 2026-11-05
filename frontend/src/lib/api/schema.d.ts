@@ -4238,11 +4238,17 @@ export interface components {
          *     the one whose fingerprint matches); ``account_id`` names the account to
          *     import into (else the document's, the mapping's or, for OFX/QFX/QIF, the
          *     account matched by its last four digits). The caller must be able to
-         *     edit the target account.
+         *     edit the target account. ``group`` (with ``account_id``) names the
+         *     statement of a multi-account table the account is for (an
+         *     ``unknown_account`` item's ``group``); without it a chosen account takes
+         *     only the statements with its own last four digits, or the one statement
+         *     no account matched.
          */
         ApplyMapping: {
             /** Account Id */
             account_id?: string | null;
+            /** Group */
+            group?: number | null;
             /** Mapping Id */
             mapping_id?: string | null;
         };
@@ -7015,7 +7021,9 @@ export interface components {
          *     ``confident`` (no ``doubts``) is what the importer needs to import a
          *     never-seen CSV/TSV layout without asking (INGESTION.md "Parse");
          *     ``doubts`` are codes: ``header_not_exact``, ``rows_unreadable``,
-         *     ``date_order_guessed``, ``no_rows``. ``sign_evidence`` is
+         *     ``date_order_guessed``, ``no_rows``, ``indicator_values_unknown`` (an
+         *     indicator cell that is no direction word, or a signed amount beside
+         *     it). ``sign_evidence`` is
          *     ``debit_credit``, ``indicator``, ``balance`` or null (a signed amount
          *     column read as "positive is money in" on trust).
          */

@@ -60,6 +60,11 @@ read, counted (``notes``). Every other row must give
   commission + fees. A settle date before the trade date is dropped. The
   action text is the row's memo (a cash deposit's or withdrawal's payee on
   the ledger: ``DIRECT DEPOSIT ...``, ``Electronic Funds Transfer Paid``).
+  The extractors' formula guard (a leading ``'`` on a cell that would be a
+  formula, SECURITY.md C7) is set aside only to recognise headers and
+  actions and to parse dates and numbers; the description (the security's
+  name) and the memo are kept guarded, and a symbol that would be a formula
+  is no symbol.
 
 **Accounts**: rows are grouped by the last four digits of the account-number
 cell (:func:`~app.ingestion.parsers.structured.cell_last4`), one statement per
@@ -105,6 +110,7 @@ from typing import Final, Literal
 
 from pydantic import ValidationError
 
+from app.core.csv_safety import is_dangerous, neutralise_formula
 from app.domain.imports.schemas import DateFormat
 from app.ingestion.parsers import confidence as conf
 from app.ingestion.parsers.brokerage import (
@@ -276,9 +282,17 @@ def _roles(row: Sequence[str]) -> dict[Role, int]:
 
 
 def _cell(row: Sequence[str], column: int | None) -> str:
+    """The cell for matching and parsing: the extractor's formula guard removed."""
     if column is None or column >= len(row):
         return ""
     return " ".join(row[column].removeprefix("'").split())
+
+
+def _text(row: Sequence[str], column: int | None) -> str:
+    """The cell as text to keep (a name, a memo): still formula-guarded (SECURITY.md C7)."""
+    if column is None or column >= len(row):
+        return ""
+    return neutralise_formula(" ".join(row[column].split()))
 
 
 def _account_column(table: Table, header: int, columns: Mapping[Role, int]) -> int | None:
@@ -308,7 +322,7 @@ def _security(symbol: str, name: str) -> SecurityRef | None:
     # A trailing marker (``SPAXX**``: a core money market) is not part of the symbol.
     text = symbol.strip().rstrip("*")
     text = text.upper() if is_cusip(text.upper()) else text
-    if not text or _SYMBOL.fullmatch(text) is None:
+    if not text or _SYMBOL.fullmatch(text) is None or is_dangerous(text):
         return None
     clean_name = name.strip()[:200] or None
     try:
@@ -352,7 +366,7 @@ class _Reader:
             return None
         symbol = _cell(row, self.col("symbol"))
         name = _cell(row, self.col("description"))
-        security = _security(symbol, name)
+        security = _security(symbol, _text(row, self.col("description")))
         signed = self.number(row, "quantity")
         moves = security is not None and signed is not None and signed != 0
         kind: InvestmentActivityType | None = activity_type(
@@ -396,7 +410,7 @@ class _Reader:
                 split_ratio=ratio,
                 amount=amount,
                 fees=fees,
-                memo=_cell(row, self.col("action"))[:TEXT_MAX] or None,
+                memo=_text(row, self.col("action"))[:TEXT_MAX] or None,
                 confidence=conf.GUESSED if self.guessed else None,
                 low_confidence=["trade_date"] if self.guessed else [],
             )

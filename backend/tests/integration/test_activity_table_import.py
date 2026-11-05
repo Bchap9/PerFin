@@ -60,7 +60,8 @@ from app.domain.investments.models import Holding, InvestmentTxn, Security
 from app.domain.transactions.models import Transaction
 from app.ingestion.extract.delimited import extract_delimited
 from app.ingestion.intake.upload import receive_upload
-from app.ingestion.sandbox.protocol import ExtractOptions
+from app.ingestion.parsers.brokerage_table import read_activity_table
+from app.ingestion.sandbox.protocol import ExtractOptions, ExtractResult
 from app.workers.handlers import ingest
 from tests.fixtures.factories import Factories, UserRecord, without_ids
 from tests.fixtures.households import Actors
@@ -582,3 +583,63 @@ def test_a_table_that_is_not_brokerage_activity_goes_through_the_mapping_path(en
         assert [(d, a) for d, a, _ in env.cash(account)] == [(d, a.quantize(Q)) for d, a in cash]
     # The same rows with the brokerage header are investment activity.
     assert HEADER != LEDGER_HEADER
+
+
+def test_the_same_trades_dated_by_settlement_are_not_recorded_twice(env: Env) -> None:
+    """The activity CSV dates a trade by its run date, the PDF by its settlement date."""
+    synthetic = activity_accounts(67)
+    rows = investment_rows(synthetic)
+    accounts = env.accounts(synthetic)
+    data = activity_csv_bytes(rows)
+    document_id = env.ingest(data)
+    assert env.document(document_id).status is DocumentStatus.PROCESSED
+    before = {a.id: env.activity(a) for a in accounts if a is not None}
+    held = {a.id: env.holdings(a) for a in accounts if a is not None}
+
+    # The same activity as a statement whose table has only a settlement
+    # date (the Fidelity PDF): every settled trade is dated a day later.
+    found = read_activity_table(extract_delimited(data, ExtractOptions(), "csv").tables[0])
+    assert found is not None
+    settled = [
+        statement.model_copy(
+            update={
+                "source_format": "ofx",
+                "parser": None,
+                "reconciliation": None,
+                "activity": [
+                    a.model_copy(
+                        update={"trade_date": a.settle_date or a.trade_date, "settle_date": None}
+                    )
+                    for a in statement.activity
+                    if a.type not in ("deposit", "withdrawal")
+                ],
+            }
+        )
+        for statement in found.statements
+    ]
+    moved = sum(1 for s in found.statements for a in s.activity if a.settle_date is not None)
+    assert moved > 0
+    result = ExtractResult(kind="ofx", ok=True, extractor_version="ofx/1", investments=settled)
+    with env.factories.transaction() as db:
+        set_context(db, env.household_id)
+        document = make_extracted_document(
+            db, env.household_id, result=result, uploaded_by=env.owner.user.id
+        )
+        outcome = imports_service.import_extraction(db, document, result)
+        items = list(
+            db.execute(select(ReviewItem).where(ReviewItem.document_id == document.id)).scalars()
+        )
+        db.expunge_all()
+    assert {a.id: env.activity(a) for a in accounts if a is not None} == before
+    assert {a.id: env.holdings(a) for a in accounts if a is not None} == held
+    assert outcome.summary["investments"]["possible_duplicates"] == moved
+    assert outcome.status is DocumentStatus.NEEDS_REVIEW
+    near = [i for i in items if i.payload.get("reason") == "investment_possible_duplicate"]
+    assert sum(i.payload["rows"] for i in near) == moved
+    recorded = {str(t.id) for t in env.query(select(InvestmentTxn))}
+    for item in near:
+        assert item.kind is ReviewKind.LOW_CONFIDENCE_FIELD
+        assert set(item.payload["duplicate_of"]) <= recorded
+        # Ids and counts only: no statement text, no account digits.
+        for account_ in synthetic:
+            assert account_.last4 not in str(without_ids(item.payload))

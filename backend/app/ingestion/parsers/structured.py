@@ -705,7 +705,9 @@ class MappingSuggestion:
 
     ``confident`` is True when ``doubts`` is empty: every required role
     (date, and the amount or debit/credit columns) matched its header
-    exactly and every body row before the footer reads. ``sign_evidence``
+    exactly, every body row before the footer reads and, with an indicator
+    column, every read row's indicator is a direction word beside an
+    unsigned amount (else ``indicator_values_unknown``). ``sign_evidence``
     says what proves the sign convention (``debit_credit``, ``indicator``,
     a reconciling running ``balance``) or is None when a single signed
     amount column is read as "positive is money in" on trust. Reasons carry
@@ -953,6 +955,10 @@ def _candidate(table: Table, skip: int) -> _Candidate | None:
         fields["amount_column"] = picks["amount"].column
         picks.pop("debit", None)
         picks.pop("credit", None)
+        if "indicator" in picks and _signed(column_values(picks["amount"].column), separator):
+            # The amounts carry their own sign: a "Type" column of direction
+            # words beside them is a description, not the sign.
+            picks.pop("indicator")
         if "indicator" in picks:
             values = {v.strip() for v in column_values(picks["indicator"].column) if v.strip()}
             outflow = sorted(v for v in values if v.casefold() in OUTFLOW_WORDS)
@@ -968,6 +974,38 @@ def _candidate(table: Table, skip: int) -> _Candidate | None:
         return None
     rank = sum(p.level + p.fit for p in picks.values())
     return _Candidate(spec, picks, tied, rank)
+
+
+def _signed(values: Iterable[str], separator: str) -> bool:
+    """Whether any of the amount cells ``values`` is negative."""
+    for value in values:
+        amount = parse_cell_amount(value, separator) if value.strip() else None
+        if amount is not None and amount < 0:
+            return True
+    return False
+
+
+def _indicator_doubtful(table: Table, spec: MappingSpec, rows: Iterable[int]) -> bool:
+    """Whether a read row's indicator is no direction word, or its amount is signed.
+
+    Either way the indicator does not decide the row's sign on its own
+    (:func:`_row_amount` takes ``abs`` of the amount and treats every value
+    outside ``outflow_values`` as money in), so the suggestion is not
+    trusted. The whole table is checked, not only the sample the roles
+    were assigned from.
+    """
+    if spec.indicator_column is None or spec.amount_column is None:
+        return False
+    for index in rows:
+        row = table.rows[index]
+        word = (_text(row, spec.indicator_column) or "").casefold()
+        if word not in OUTFLOW_WORDS | INFLOW_WORDS:
+            return True
+        raw = _cell(row, spec.amount_column)
+        amount = parse_cell_amount(raw, spec.decimal_separator) if raw is not None else None
+        if amount is not None and amount < 0:
+            return True
+    return False
 
 
 def _balances_agree(statements: list[ParsedStatement]) -> bool:
@@ -1013,7 +1051,9 @@ def suggest_mapping(table: Table) -> MappingSuggestion | None:
     a role when its body cells fit (dates parse, amounts parse, currencies
     are three-letter codes, an indicator holds direction words such as
     ``DR``/``CR``, an account column several account-number-like values);
-    an empty column never takes one. The best candidate is then read in full
+    an empty column never takes one, and an indicator is dropped when the
+    sampled amounts already carry a minus sign (a "Type" column beside a
+    signed amount describes the row, it does not sign it). The best candidate is then read in full
     with :func:`from_table_grouped` to count the rows that read (and, with a
     running balance, which sign reconciles); the trailing rows after the last
     readable one are footers. No model of any kind (ADR-0007).
@@ -1055,6 +1095,8 @@ def suggest_mapping(table: Table) -> MappingSuggestion | None:
         doubts.append("rows_unreadable")
     if best.date_order_guessed:
         doubts.append("date_order_guessed")
+    if _indicator_doubtful(table, spec, rows):
+        doubts.append("indicator_values_unknown")
     readable = len(rows) / (len(rows) + len(failed)) if rows else 0.0
     quality = sum(p.level / EXACT for p in required) / len(required)
     score = round(quality * readable * (0.9 if best.date_order_guessed else 1.0), 3)
