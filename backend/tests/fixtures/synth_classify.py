@@ -8,7 +8,7 @@ institution, person, account or document appears and nothing is read from
 outside this module (standard library only).
 
 * :func:`institution_document` renders one document in the layout of a
-  shipped fingerprint (``FAKE_INSTITUTIONS``), with the facts the classifier
+  shipped fingerprint (``FAKE_INSTITUTIONS``, ``SHIPPED_LAYOUTS``), with the facts the classifier
   should find (kind, institution, last four, period or printed date, tax year).
 * :func:`generic_document` renders a document of a kind without a known
   layout (other banks, shops, employers, insurers, letters).
@@ -49,6 +49,13 @@ FAKE_INSTITUTIONS: Final = (
     FakeInstitution(
         "mock-savings-and-loan-statement", "Mock Savings and Loan", "statement", date_order="dmy"
     ),
+)
+
+#: Shipped fingerprints of real institutions' layouts. Their documents here are
+#: drawn from invented facts like every other; they are left out of
+#: :func:`corpus` (the shipped classifier artefact is trained without them).
+SHIPPED_LAYOUTS: Final = (
+    FakeInstitution("fidelity-investments-statement", "Fidelity Investments", "statement"),
 )
 
 _GENERIC_BANKS: Final = (
@@ -404,6 +411,37 @@ def _placeholder_brokerage(rng: random.Random) -> SynthDoc:
     )
 
 
+def _fidelity(rng: random.Random) -> SynthDoc:
+    """One account of the Fidelity "Investment Report" layout (invented facts)."""
+    start, end = _month_window(rng)
+    last4 = _digits(rng, 4)
+    number = f"{_digits(rng, 3)}-{_digits(rng, 2)}{last4}"
+    title = rng.choice(("ROTH IRA", "TRADITIONAL IRA", "HEALTH SAVINGS ACCOUNT"))
+    lines = [
+        "Fidelity Investments",
+        f"INVESTMENT REPORT {fmt_date(start, 'long')} - {fmt_date(end, 'long')}",
+        f"Your Portfolio Value {_money(rng, 1000, 90000)}",
+        "Accounts Included in This Report",
+        f"{title} Account Number: {number}",
+        "Account Summary",
+        f"Beginning Account Value {_money(rng, 1000, 90000)}",
+        f"Ending Account Value {_money(rng, 1000, 90000)}",
+        "Holdings",
+        "Mutual Funds",
+        f"SAMPLE TOTAL MARKET INDEX FUND (ZZFTX) {rng.randrange(1, 300)} {_money(rng, 10, 400)}",
+        f"Total Holdings {_money(rng, 1000, 90000)}",
+        "Synthetic test document; not a real statement.",
+    ]
+    return SynthDoc(
+        "statement",
+        tuple(lines),
+        "Fidelity Investments",
+        "fidelity-investments-statement",
+        last4,
+        # The period is unlabelled: the brokerage parser reads it, not the classifier.
+    )
+
+
 def _fictional_mutual(rng: random.Random) -> SynthDoc:
     start = date(rng.choice((2025, 2026)), rng.randrange(1, 13), 1)
     end = date(start.year + 1, start.month, 1) - timedelta(days=1)
@@ -472,6 +510,7 @@ _LAYOUTS: Final[dict[str, Callable[[random.Random], SynthDoc]]] = {
     "placeholder-brokerage-account": _placeholder_brokerage,
     "fictional-mutual-auto-policy": _fictional_mutual,
     "mock-savings-and-loan-statement": _mock_savings,
+    "fidelity-investments-statement": _fidelity,
 }
 
 

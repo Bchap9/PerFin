@@ -10,7 +10,12 @@ statements"). Per statement:
 1. **Account**: the document's account (one statement), the account the
    person chose on a re-run, else the household account with the last four
    digits (institution breaks ties) among those the uploader may edit
-   (``importable_account_ids``, SECURITY.md F3). It must be a brokerage or
+   (``importable_account_ids``, SECURITY.md F3). A document of several
+   accounts (a PDF with one statement per account,
+   ``app.ingestion.parsers.brokerage``) matches each statement by its own
+   last four digits; a chosen account there takes only the statements with
+   its own last four digits, or the single statement nothing matched, so
+   one choice never pours several accounts into one. It must be a brokerage or
    retirement account in the statement's currency; otherwise an
    ``unknown_account`` item and nothing is written.
 2. **Hold** (SECURITY.md C12): a statement whose figures do not reconcile
@@ -850,6 +855,46 @@ def _commit(
     return True
 
 
+def _several_accounts(statements: Sequence[InvestmentStatement]) -> bool:
+    """The statements name two or more accounts (different last four digits)."""
+    return len({s.account.last4 for s in statements if s.account.last4}) > 1
+
+
+def _chosen_takes(
+    ctx: _Context, statements: Sequence[InvestmentStatement], account_id: uuid.UUID
+) -> set[int]:
+    """The statements of a multi-account document that a chosen account may take.
+
+    Those with the chosen account's own last four digits (its choice settles
+    an ambiguous match), and the one statement no account matched when it is
+    the only one; any other unmatched statement stays unmatched rather than
+    land on an account of a different number.
+    """
+    chosen = accounts_repo.get_account(ctx.db, ctx.household_id, account_id)
+    if chosen is None:
+        return set()
+    takes = {
+        index
+        for index, statement in enumerate(statements)
+        if chosen.number_last4 is not None and statement.account.last4 == chosen.number_last4
+    }
+    unmatched = [
+        index
+        for index, statement in enumerate(statements)
+        if match_account(
+            ctx.db,
+            ctx.household_id,
+            last4=statement.account.last4,
+            institution=statement.account.institution,
+            allowed=ctx.allowed,
+        ).account_id
+        is None
+    ]
+    if len(unmatched) == 1:
+        takes.add(unmatched[0])
+    return takes
+
+
 def import_investment_statements(
     db: Session,
     document: Document,
@@ -872,8 +917,17 @@ def import_investment_statements(
         result=InvestmentImport(),
     )
     single = len(statements) == 1
+    takes: Collection[int] = range(len(statements))
+    if account_id is not None and _several_accounts(statements):
+        takes = _chosen_takes(ctx, statements, account_id)
     for index, statement in enumerate(statements):
-        account = _account(ctx, statement, index, single=single, account_id=account_id)
+        account = _account(
+            ctx,
+            statement,
+            index,
+            single=single,
+            account_id=account_id if index in takes else None,
+        )
         if account is None:
             continue
         if account.id not in ctx.result.accounts:
