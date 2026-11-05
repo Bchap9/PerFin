@@ -1290,6 +1290,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/documents/{document_id}/imported": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Rows imported from a document (what a delete with data removes) */
+        get: operations["get_document_imported_api_v1_documents__document_id__imported_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/documents/{document_id}/link": {
         parameters: {
             query?: never;
@@ -5698,6 +5715,26 @@ export interface components {
             period_start?: string | null;
             /** Tax Year */
             tax_year?: number | null;
+        };
+        /**
+         * DocumentImportedOut
+         * @description ``GET /documents/{id}/imported``: what ``DELETE ?with_data=true`` would also remove.
+         *
+         *     Counts only rows in accounts the caller can see. ``child_documents`` are
+         *     attachments or archive members received from this file (an email or ZIP);
+         *     their own imported rows are included in the other counts.
+         */
+        DocumentImportedOut: {
+            /** Balance Snapshots */
+            balance_snapshots: number;
+            /** Child Documents */
+            child_documents: number;
+            /** Investment Transactions */
+            investment_transactions: number;
+            /** Loan Payments */
+            loan_payments: number;
+            /** Transactions */
+            transactions: number;
         };
         /**
          * DocumentKind
@@ -15420,7 +15457,10 @@ export interface operations {
     };
     delete_document_api_v1_documents__document_id__delete: {
         parameters: {
-            query?: never;
+            query?: {
+                /** @description Also delete the transactions, investment transactions, loan payments, balance snapshots and child documents imported from this file. Without it they stay, unlinked from the file. */
+                with_data?: boolean;
+            };
             header?: never;
             path: {
                 document_id: string;
@@ -15653,6 +15693,64 @@ export interface operations {
             };
             /** @description Problem details */
             500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+        };
+    };
+    get_document_imported_api_v1_documents__document_id__imported_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                document_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DocumentImportedOut"];
+                };
+            };
+            /** @description Problem details */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Problem details */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Problem details */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Problem details */
+            422: {
                 headers: {
                     [name: string]: unknown;
                 };

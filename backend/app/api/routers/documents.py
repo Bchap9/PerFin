@@ -20,8 +20,11 @@
   document-quarantined``). Decrypted as it streams, sent as an attachment
   with the sniffed type, ``nosniff`` and a ``sandbox`` CSP (C4).
 * ``POST /documents/{id}/reprocess`` (``202``), ``POST
-  /documents/{id}/link``, ``DELETE /documents/{id}`` (crypto-shredding, G5):
-  member or above who can change the document.
+  /documents/{id}/link``, ``DELETE /documents/{id}`` (crypto-shredding, G5;
+  ``?with_data=true`` also deletes the rows imported from the file): member
+  or above who can change the document.
+* ``GET /documents/{id}/imported``: counts of the rows a delete with data
+  would remove (in accounts the caller can see).
 
 * ``GET /documents/{id}/preview?page=``: the sandbox-rendered PNG of a page
   (stored encrypted; ``app.domain.review.assist``): the download rule (I1),
@@ -62,6 +65,7 @@ from app.domain.documents.schemas import (
     DOCUMENTS_DEFAULT_PAGE,
     DOCUMENTS_MAX_PAGE,
     DocumentDetailOut,
+    DocumentImportedOut,
     DocumentLinkIn,
     DocumentLinkOut,
     DocumentPage,
@@ -338,6 +342,18 @@ def post_link(
     )
 
 
+@router.get(
+    "/documents/{document_id}/imported",
+    response_model=DocumentImportedOut,
+    responses=PROBLEMS,
+    summary="Rows imported from a document (what a delete with data removes)",
+)
+def get_document_imported(
+    document_id: uuid.UUID, db: DbSession, principal: Reader
+) -> DocumentImportedOut:
+    return manage.imported(db, principal, document_id)
+
+
 @router.delete(
     "/documents/{document_id}",
     status_code=status.HTTP_204_NO_CONTENT,
@@ -345,7 +361,20 @@ def post_link(
     summary="Delete a document (its key is destroyed first)",
 )
 def delete_document(
-    document_id: uuid.UUID, request: Request, db: DbSession, principal: Writer
+    document_id: uuid.UUID,
+    request: Request,
+    db: DbSession,
+    principal: Writer,
+    with_data: Annotated[
+        bool,
+        Query(
+            description=(
+                "Also delete the transactions, investment transactions, loan payments, "
+                "balance snapshots and child documents imported from this file. "
+                "Without it they stay, unlinked from the file."
+            )
+        ),
+    ] = False,
 ) -> Response:
     manage.delete(
         db,
@@ -353,5 +382,6 @@ def delete_document(
         document_id,
         store=manage.blob_store(get_app_settings(request)),
         request=request,
+        with_data=with_data,
     )
     return Response(status_code=status.HTTP_204_NO_CONTENT)

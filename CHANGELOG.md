@@ -36,7 +36,20 @@ What remains (details in docs/ROADMAP.md):
 
 ## [Unreleased]
 
-Nothing yet.
+### Added
+
+- Documents can be deleted from the app: a **Delete** button on the document
+  page and in each row of the document library (members and above who can
+  change the document). The confirmation offers two choices:
+  - **The file only**: the imported transactions, balances and other rows
+    stay, unlinked from the file, and the same file can be uploaded again
+    without being held as a duplicate.
+  - **The file and everything imported from it**: also deletes the
+    transactions, investment transactions, loan payments, balance snapshots
+    and attached documents (email attachments, ZIP members) that came from
+    it, showing how many of each first.
+- API: `DELETE /documents/{id}?with_data=true` deletes the imported rows with
+  the document, all or nothing; `GET /documents/{id}/imported` counts them.
 
 ## [1.0.0-rc.3] - 2026-11-05
 

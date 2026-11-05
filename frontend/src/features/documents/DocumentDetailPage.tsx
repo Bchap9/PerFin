@@ -3,7 +3,7 @@ import "../accounts/ledger.css";
 import "./documents.css";
 
 import { useQuery } from "@tanstack/react-query";
-import { Link, useParams } from "@tanstack/react-router";
+import { Link, useNavigate, useParams } from "@tanstack/react-router";
 import { useState } from "react";
 
 import { Badge } from "../../components/Badge";
@@ -22,6 +22,7 @@ import {
   KIND_LABELS,
   SOURCE_LABELS,
 } from "./api";
+import { DeleteDocumentDialog } from "./DeleteDocumentDialog";
 import { PageViewer } from "./PageViewer";
 
 export function DocumentDetailPage() {
@@ -36,6 +37,8 @@ export function DocumentDetailPage() {
   });
   const doc = detail.data;
   const [accountsOpen, setAccountsOpen] = useState(false);
+  const [deleting, setDeleting] = useState(false);
+  const navigate = useNavigate();
   return (
     <section aria-labelledby="page-title" className="ledger-stack">
       <div className="page-header">
@@ -118,7 +121,29 @@ export function DocumentDetailPage() {
                   Accounts in this file
                 </Button>
               ) : null}
+              {doc.can_edit ? (
+                <Button
+                  variant="danger"
+                  onClick={() => {
+                    setDeleting(true);
+                  }}
+                >
+                  Delete
+                </Button>
+              ) : null}
             </div>
+            {deleting ? (
+              <DeleteDocumentDialog
+                documentId={doc.id}
+                filename={doc.original_filename ?? "Unnamed file"}
+                onClose={() => {
+                  setDeleting(false);
+                }}
+                onDeleted={() => {
+                  void navigate({ to: "/documents/library" });
+                }}
+              />
+            ) : null}
             {accountsOpen ? (
               <DocumentAccountsDialog
                 documentId={doc.id}

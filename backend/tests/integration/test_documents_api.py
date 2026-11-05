@@ -20,6 +20,7 @@ from app.auth.models import GrantLevel
 from app.core.settings import Settings
 from app.db.models import Job, Setting, SettingScope
 from app.db.rls import set_context
+from app.domain.accounts.models import Account, AccountType, BalanceSnapshot
 from app.domain.documents.blobstore import LocalFSBlobStore
 from app.domain.documents.manage import VIEWER_DOWNLOAD_SETTING
 from app.domain.documents.models import (
@@ -33,10 +34,14 @@ from app.domain.documents.models import (
     ReviewItemState,
 )
 from app.domain.documents.schemas import INGEST_JOB_TYPE
+from app.domain.investments.models import InvestmentTxn
+from app.domain.loans.models import LoanPayment
+from app.domain.transactions.models import Transaction
 from tests.fixtures.documents import SAMPLE_CSV, make_document, make_review_item
 from tests.fixtures.factories import AuthedClient, Factories
 from tests.fixtures.households import API, Actors, household_audit, household_events, problem_type
-from tests.fixtures.ledger import make_account, make_transaction
+from tests.fixtures.ledger import make_account, make_snapshot, make_transaction
+from tests.fixtures.wealth import make_investment_txn, make_loan, make_loan_payment, make_security
 
 pytestmark = pytest.mark.integration
 
@@ -529,3 +534,136 @@ def test_delete_shreds_and_removes_everything(
     assert [a.target_id for a in household_audit(factories, hh, "document.delete")] == [
         str(document.id)
     ]
+
+
+def imported_rows(factories: Factories, hh: uuid.UUID, document_id: uuid.UUID) -> dict[str, Any]:
+    """A statement with one row of every imported kind, a child document and an unrelated row."""
+    with factories.transaction() as db:
+        set_context(db, hh)
+        checking = make_account(db, hh)
+        brokerage = make_account(db, hh, type=AccountType.BROKERAGE)
+        loan = make_loan(db, hh)
+        child = db.get(Document, document_id)
+        assert child is not None
+        txn = make_transaction(db, checking, source_document_id=document_id)
+        unrelated = make_transaction(db, checking)
+        trade = make_investment_txn(
+            db, brokerage, security=make_security(db, hh), source_document_id=document_id
+        )
+        payment = make_loan_payment(db, loan, source_document_id=document_id)
+        snapshot = make_snapshot(db, checking)
+        snapshot.source_document_id = document_id
+        db.flush()
+        return {
+            "checking": checking.id,
+            "transaction": txn.id,
+            "unrelated": unrelated.id,
+            "trade": trade.id,
+            "payment": payment.id,
+            "snapshot": snapshot.id,
+        }
+
+
+def test_delete_with_data_removes_the_imported_rows(
+    home: dict[str, AuthedClient],
+    factories: Factories,
+    store: LocalFSBlobStore,
+    doc_settings: Settings,
+) -> None:
+    owner = home["owner"]
+    hh = household(owner)
+    document = stored(factories, store, hh)
+    child = stored(factories, store, hh, data=b"child,1\n", filename="attachment.csv")
+    with factories.transaction() as db:
+        set_context(db, hh)
+        row = db.get(Document, child.id)
+        assert row is not None
+        row.source_meta = {"parent_document_id": str(document.id), "depth": 1}
+    rows = imported_rows(factories, hh, document.id)
+    with factories.transaction() as db:
+        set_context(db, hh)
+        checking = db.get(Transaction, rows["unrelated"])
+        assert checking is not None
+        child_txn = Transaction(
+            household_id=hh,
+            account_id=rows["checking"],
+            posted_date=checking.posted_date,
+            amount=checking.amount,
+            currency=checking.currency,
+            status=checking.status,
+            review_state=checking.review_state,
+            source_document_id=child.id,
+        )
+        db.add(child_txn)
+        db.flush()
+        child_txn_id = child_txn.id
+
+    counts = owner.get(f"{DOCS}/{document.id}/imported")
+    assert counts.status_code == 200, counts.text
+    assert counts.json() == {
+        "transactions": 2,
+        "investment_transactions": 1,
+        "loan_payments": 1,
+        "balance_snapshots": 1,
+        "child_documents": 1,
+    }
+
+    response = owner.delete(f"{DOCS}/{document.id}", params={"with_data": "true"})
+    assert response.status_code == 204, response.text
+    assert load(factories, hh, Document, document.id) is None
+    assert load(factories, hh, Document, child.id) is None
+    assert load(factories, hh, Transaction, rows["transaction"]) is None
+    assert load(factories, hh, Transaction, child_txn_id) is None
+    assert load(factories, hh, InvestmentTxn, rows["trade"]) is None
+    assert load(factories, hh, LoanPayment, rows["payment"]) is None
+    assert load(factories, hh, BalanceSnapshot, rows["snapshot"]) is None
+    assert load(factories, hh, Transaction, rows["unrelated"]) is not None
+    assert files_in(doc_settings.documents_dir) == []
+    assert len(household_audit(factories, hh, "document.delete")) == 2
+    assert len(household_audit(factories, hh, "transaction.delete")) == 2
+    assert len(household_audit(factories, hh, "balance_snapshot.delete")) == 1
+
+
+def test_delete_without_data_keeps_the_imported_rows(
+    home: dict[str, AuthedClient], factories: Factories, store: LocalFSBlobStore
+) -> None:
+    owner = home["owner"]
+    hh = household(owner)
+    document = stored(factories, store, hh)
+    rows = imported_rows(factories, hh, document.id)
+    response = owner.delete(f"{DOCS}/{document.id}")
+    assert response.status_code == 204, response.text
+    assert load(factories, hh, Document, document.id) is None
+    kept = load(factories, hh, Transaction, rows["transaction"])
+    assert kept is not None
+    assert kept.source_document_id is None
+    snapshot = load(factories, hh, BalanceSnapshot, rows["snapshot"])
+    assert snapshot is not None
+    assert snapshot.source_document_id is None
+    # The same file can be uploaded again without a duplicate hold.
+    again = upload(owner, SAMPLE_CSV)
+    assert again.status_code == 202, again.text
+    assert again.json()["duplicate_of"] is None
+
+
+def test_delete_with_data_is_all_or_nothing(
+    home: dict[str, AuthedClient], factories: Factories, store: LocalFSBlobStore
+) -> None:
+    owner, member = home["owner"], home["member"]
+    hh = household(owner)
+    editable = account_for(factories, hh, {member.user.id: GrantLevel.EDIT})
+    view_only = account_for(factories, hh, {member.user.id: GrantLevel.VIEW})
+    document = stored(factories, store, hh, account_id=editable)
+    with factories.transaction() as db:
+        set_context(db, hh)
+        mine = make_transaction(db, db.get_one(Account, editable), source_document_id=document.id)
+        theirs = make_transaction(
+            db, db.get_one(Account, view_only), source_document_id=document.id
+        )
+        ids = (mine.id, theirs.id)
+    counts = member.get(f"{DOCS}/{document.id}/imported").json()
+    assert counts["transactions"] == 2  # both accounts are visible to the member
+    refused = member.delete(f"{DOCS}/{document.id}", params={"with_data": "true"})
+    assert refused.status_code == 403, refused.text
+    assert load(factories, hh, Document, document.id) is not None
+    assert all(load(factories, hh, Transaction, i) is not None for i in ids)

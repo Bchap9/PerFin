@@ -195,7 +195,8 @@ GET             /documents/{id}/download        decrypts and streams, attachment
 GET             /documents/{id}/preview?page=   rendered PNG, sandboxed
 GET             /documents/{id}/regions?page=   word boxes for review highlighting
 POST            /documents/{id}/reprocess
-DELETE          /documents/{id}
+GET             /documents/{id}/imported        rows a delete with data would remove
+DELETE          /documents/{id}                 ?with_data=true also deletes the imported rows
 POST            /documents/{id}/link            attach to transaction etc.
 
 GET/POST        /imports/mappings               saved CSV/TSV column mappings
@@ -453,6 +454,21 @@ the download rule refuses `text_included` is `false` and `words` is empty
 (per-word boxes would show the layout, such as how many digits a figure
 has, of a document they may not open);
 `404 page-not-found` without that page, `409 document-quarantined`.
+
+`DELETE /documents/{id}` (`204`) destroys the file's key first (G5), then the
+document, its links, review items and ingest history. By default the rows
+imported from it (transactions, investment transactions, loan payments,
+balance snapshots) stay, with their `source_document_id` set to `null`, and
+the same file can be uploaded again without a `possible_duplicate` hold.
+With `?with_data=true` those rows go first, each through its own delete
+(audited, transfers unlinked, lots replayed, loan balance re-synced), and so
+do the documents received inside it (email attachments, ZIP members) with
+their own rows. The caller must be able to edit every one of them: a row in
+an account they cannot edit is `403 forbidden` and nothing is deleted.
+`GET /documents/{id}/imported` returns `{"transactions",
+"investment_transactions", "loan_payments", "balance_snapshots",
+"child_documents"}`: the counts a delete with data would remove, in accounts
+the caller can see.
 
 Review notes (`app.domain.review.service`, router `review`; INGESTION.md
 "Review queue"): an item is `{"id", "kind", "state", "document_id",
