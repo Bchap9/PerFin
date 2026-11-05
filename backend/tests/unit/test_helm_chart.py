@@ -218,10 +218,17 @@ def test_every_pod_is_hardened(which: str) -> None:
             assert container["securityContext"]["runAsUser"] == expected_uid, name
 
 
+def chart_app_version() -> str:
+    """The chart's appVersion, the image tag the default values must deploy."""
+    match = re.search(r'^appVersion:\s*"?([^"\s#]+)"?', (CHART / "Chart.yaml").read_text(), re.MULTILINE)
+    assert match is not None, "Chart.yaml has no appVersion"
+    return match.group(1)
+
+
 def test_app_pods_run_the_release_image_never_latest() -> None:
     for doc in workloads(default_docs()):
         image = pod_spec(doc)["containers"][0]["image"]
-        assert image == "ghcr.io/bchap9/perfin:1.0.0", image
+        assert image == f"ghcr.io/bchap9/perfin:{chart_app_version()}", image
     for doc in workloads(full_docs()):
         if component(doc) != "db":
             image = pod_spec(doc)["containers"][0]["image"]

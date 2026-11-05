@@ -34,9 +34,10 @@ What remains (details in docs/ROADMAP.md):
 
 Nothing yet.
 
-## [1.0.0] - 2026-11-04
+## [1.0.0-rc.1] - 2026-11-05
 
-First stable release. It covers every roadmap phase:
+First release candidate of 1.0.0 (the final `v1.0.0` follows the external
+security review). It covers every roadmap phase:
 
 - **Phase 0, Foundations:** monorepo (FastAPI, SQLAlchemy, Alembic; Vite,
   React, TypeScript), `perfin config check` with insecure-config refusal,
