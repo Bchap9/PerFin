@@ -369,9 +369,16 @@ def test_output_must_match_the_schema() -> None:
     assert '"x"' not in caught.value.detail
 
 
-def test_stray_stdout_is_reported_by_position_not_content() -> None:
+def test_stray_stdout_cannot_corrupt_the_result() -> None:
+    """print(), C printf and raw writes to descriptor 1 go to stderr, not the result."""
+    result = run_extraction("stray_stdout", b"x", config=EVIL)
+    assert result.ok
+    assert result.warnings == ["survived_stray_output"]
+
+
+def test_broken_result_is_reported_by_position_not_content() -> None:
     with pytest.raises(SandboxError) as caught:
-        run_extraction("stray_stdout", b"x", config=EVIL)
+        run_extraction("garbage_result", b"x", config=EVIL)
     assert caught.value.code == "bad_output"
     detail = caught.value.detail
     assert "json_invalid" in detail

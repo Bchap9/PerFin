@@ -123,6 +123,15 @@ What remains (details in docs/ROADMAP.md):
 
 ### Fixed
 
+- A library printing to stdout inside the extraction sandbox (Python
+  `print`, C `printf`, a native runtime's log) corrupted the JSON result,
+  so the document failed with `extraction failed: bad_output`. The child
+  now keeps a private duplicate of stdout for the result and sends
+  descriptor 1 to stderr; a `bad_output` detail names the failing fields
+  or the JSON position, never the values.
+- PDF table finding no longer loads PyMuPDF's neural layout model
+  (onnxruntime) into the sandbox, where its thread pool made calls the
+  seccomp allowlist refuses (`syscall_denied`, `eventfd2`) at random.
 - The mapping suggestion took the first column whose header merely
   contained a role word: an always-empty "Exchange Currency" became the
   currency column (and then every row was refused), a "Type" column of

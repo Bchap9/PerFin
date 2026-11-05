@@ -24,7 +24,7 @@ import threading
 import time
 from collections.abc import Callable
 
-from app.ingestion.sandbox.child import run
+from app.ingestion.sandbox.child import run, write_result_bytes
 from app.ingestion.sandbox.protocol import ExtractOptions, ExtractResult
 
 
@@ -226,8 +226,7 @@ def read_outside(data: bytes, options: ExtractOptions, kind: str) -> ExtractResu
 def bigoutput(data: bytes, options: ExtractOptions, kind: str) -> ExtractResult:
     block = b"x" * (1024 * 1024)
     for _ in range(64):
-        sys.stdout.buffer.write(block)
-    sys.stdout.buffer.flush()
+        write_result_bytes(block)
     return _result(kind)
 
 
@@ -337,16 +336,27 @@ def echo(data: bytes, options: ExtractOptions, kind: str) -> ExtractResult:
 
 
 def bad_shape(data: bytes, options: ExtractOptions, kind: str) -> ExtractResult:
-    sys.stdout.buffer.write(b'{"format_version":1,"kind":"' + kind.encode() + b'","ok":true,')
-    sys.stdout.buffer.write(b'"injected":"x"}')
-    sys.stdout.buffer.flush()
+    write_result_bytes(b'{"format_version":1,"kind":"' + kind.encode() + b'","ok":true,')
+    write_result_bytes(b'"injected":"x"}')
     os._exit(0)
 
 
 def stray_stdout(data: bytes, options: ExtractOptions, kind: str) -> ExtractResult:
-    """A native library writing to fd 1 ahead of the result corrupts the JSON."""
-    os.write(1, b"warning: secret-ish text\n")
-    return ExtractResult(kind=kind, ok=True)
+    """Libraries printing to stdout (Python, C, raw descriptor) must not corrupt the result."""
+    print("python print: stray text")
+    sys.stdout.flush()
+    libc = ctypes.CDLL(None)
+    libc.printf(b"c printf: stray text\n")
+    libc.fflush(None)
+    os.write(1, b"raw write: stray text\n")
+    return _result(kind, "survived_stray_output")
+
+
+def garbage_result(data: bytes, options: ExtractOptions, kind: str) -> ExtractResult:
+    """Text ahead of the JSON on the result channel itself (a forged, broken answer)."""
+    write_result_bytes(b"warning: secret-ish text\n")
+    write_result_bytes(ExtractResult(kind=kind, ok=True).model_dump_json().encode())
+    os._exit(0)
 
 
 def forged_statement(data: bytes, options: ExtractOptions, kind: str) -> ExtractResult:
@@ -404,6 +414,7 @@ EXTRACTORS = {
     "prctl_dumpable": prctl_dumpable,
     "bad_shape": bad_shape,
     "stray_stdout": stray_stdout,
+    "garbage_result": garbage_result,
 }
 
 
