@@ -456,7 +456,7 @@ def test_unknown_actions_are_skipped_and_reported(env: Env) -> None:
     odd = ActivityRow(
         rows[0].run_date,
         synthetic[0],
-        "JOURNALED SYNTHETIC SPECIAL ITEM (Cash)",
+        "MYSTERY SYNTHETIC SPECIAL ITEM (Cash)",
         "",
         "No Description",
         None,
@@ -473,6 +473,7 @@ def test_unknown_actions_are_skipped_and_reported(env: Env) -> None:
         "reason": "lines_skipped",
         "count": 1,
         "unknown_activity": 1,
+        "unknown_actions": [{"action": "mystery synthetic special", "rows": 1}],
         "parser": "brokerage_activity_table",
     }
     for account, mine in zip(accounts, synthetic, strict=True):
@@ -532,7 +533,8 @@ def test_a_guessed_date_order_holds_the_statement(env: Env) -> None:
     assert env.activity(account) == []
 
 
-def test_a_sale_of_units_never_held_is_a_lot_conflict(env: Env) -> None:
+def test_a_sale_of_units_held_before_the_export_opens_them_at_unknown_cost(env: Env) -> None:
+    """An export starts on a date: units sold before it buys them were held already."""
     synthetic = activity_accounts(66)
     sale = ActivityRow(
         date(2026, 10, 20),
@@ -559,10 +561,22 @@ def test_a_sale_of_units_never_held_is_a_lot_conflict(env: Env) -> None:
     (account, _) = env.accounts(synthetic, only=(0,))
     assert account is not None
     outcome, items = _import(env, activity_csv_bytes([sale, deposit]))
-    assert outcome.summary["investments"]["held"] == 1
-    assert [i.payload["reason"] for i in items] == ["investment_lot_conflict"]
-    assert env.activity(account) == []
-    assert env.cash(account) == []  # nothing of the statement is kept
+    assert outcome.summary["investments"]["held"] == 0
+    (item,) = items
+    assert item.payload["reason"] == "investment_opening_basis_unknown"
+    assert item.payload["account_id"] == str(account.id)
+    (opened,) = item.payload["securities"]
+    assert (opened["quantity"], opened["trade_date"]) == ("5.0000000000", "2026-10-20")
+    assert env.activity(account) == [
+        (date(2026, 10, 20), "sell", "SGRX", Decimal(5), Decimal("50.00")),
+        (date(2026, 10, 20), "transfer_in", "SGRX", Decimal(5), Decimal(0)),
+    ]
+    assert env.holdings(account) == []
+    assert [a for _, a, _ in env.cash(account)] == [Decimal("100.00")]
+    # Importing the same file again adds nothing.
+    again, _ = _import(env, activity_csv_bytes([sale, deposit]))
+    assert again.summary["investments"]["activity"] == 0
+    assert len(env.activity(account)) == 2
 
 
 def test_a_table_that_is_not_brokerage_activity_goes_through_the_mapping_path(env: Env) -> None:
@@ -643,3 +657,115 @@ def test_the_same_trades_dated_by_settlement_are_not_recorded_twice(env: Env) ->
         # Ids and counts only: no statement text, no account digits.
         for account_ in synthetic:
             assert account_.last4 not in str(without_ids(item.payload))
+
+
+# ---------------------------------------------------------------------------
+# Masked account numbers, activity-mode mappings (Fidelity exports)
+# ---------------------------------------------------------------------------
+
+
+def _masked(synthetic: tuple[ActivityAccount, ...]) -> tuple[ActivityAccount, ...]:
+    """The same accounts as an export that masks the numbers (``Z2xxxxxxxx``)."""
+    return tuple(
+        ActivityAccount(a.name, a.number[:1] + str(i + 2) + "x" * (len(a.number) - 2))
+        for i, a in enumerate(synthetic)
+    )
+
+
+def test_masked_accounts_stay_apart_and_are_chosen_one_at_a_time(env: Env) -> None:
+    synthetic = _masked(activity_accounts(81))
+    rows = investment_rows(synthetic)
+    document_id = env.ingest(activity_csv_bytes(rows))
+    items = [i for i in env.open_reviews(document_id) if i.kind is ReviewKind.UNKNOWN_ACCOUNT]
+    assert sorted(i.payload["statement"] for i in items) == [0, 1]
+    assert {i.payload["account_type"] for i in items} == {"brokerage", "retirement"}
+    first = env.ledger.account(
+        env.household_id, type=AccountType.BROKERAGE, currency="USD", name="Mine"
+    )
+    env.rerun(document_id, account_id=first.id, statement=0)
+    assert env.activity(first) == _expected(rows, synthetic[0])
+    left = [i for i in env.open_reviews(document_id) if i.kind is ReviewKind.UNKNOWN_ACCOUNT]
+    assert [i.payload["statement"] for i in left] == [1]
+
+
+def _mostly_unknown(synthetic: tuple[ActivityAccount, ...]) -> list[ActivityRow]:
+    buy = ActivityRow(
+        date(2026, 10, 2),
+        synthetic[0],
+        "YOU BOUGHT SYNTHETIC GROWTH INDEX ETF (SGRX) (Cash)",
+        "SGRX",
+        "SYNTHETIC GROWTH INDEX ETF",
+        Decimal("10.00"),
+        Decimal(2),
+        Decimal("-20.00"),
+        None,
+    )
+    odd = [
+        ActivityRow(
+            date(2026, 10, 3 + i),
+            synthetic[0],
+            f"MYSTERY ITEM {i}",
+            "",
+            "No Description",
+            None,
+            Decimal(0),
+            Decimal("-1.00"),
+            None,
+        )
+        for i in range(3)
+    ]
+    return [buy, *odd]
+
+
+def _activity_spec(rows: list[ActivityRow]) -> dict[str, Any]:
+    from app.ingestion.parsers.brokerage_table import activity_spec
+
+    cells = extract_delimited(activity_csv_bytes(rows), ExtractOptions(), "csv").tables[0]
+    spec = activity_spec(cells)
+    assert spec is not None
+    return spec.model_dump(mode="json")
+
+
+def test_a_saved_activity_mapping_imports_activity_not_cash(env: Env) -> None:
+    synthetic = activity_accounts(82)
+    rows = _mostly_unknown(synthetic)
+    (account, _) = env.accounts(synthetic, only=(0,))
+    assert account is not None
+    data = activity_csv_bytes(rows)
+    cells = extract_delimited(data, ExtractOptions(), "csv").tables[0].rows
+    with env.factories.transaction() as db:
+        make_import_mapping(db, env.household_id, spec=_activity_spec(rows), rows=cells)
+    document_id = env.ingest(data)
+    assert env.activity(account) == [
+        (date(2026, 10, 2), "buy", "SGRX", Decimal(2), Decimal("-20.00"))
+    ]
+    assert env.cash(account) == []  # the unknown rows are skipped, never cash
+    (skipped,) = [
+        i for i in env.open_reviews(document_id) if i.payload.get("reason") == "lines_skipped"
+    ]
+    assert skipped.payload["unknown_activity"] == 3
+    assert skipped.payload["unknown_actions"] == [{"action": "mystery item #", "rows": 3}]
+
+
+def test_an_activity_mapping_chosen_on_a_rerun_reads_activity(env: Env) -> None:
+    synthetic = activity_accounts(83)
+    rows = _mostly_unknown(synthetic)
+    (account, _) = env.accounts(synthetic, only=(0,))
+    assert account is not None
+    data = activity_csv_bytes(rows)
+    document_id = env.ingest(data)
+    # Not recognised on its own and never imported as cash on a guess.
+    assert env.activity(account) == []
+    assert env.cash(account) == []
+    (required,) = [
+        i for i in env.open_reviews(document_id) if i.payload.get("reason") == "mapping_required"
+    ]
+    assert required.payload["suggested_spec"]["mode"] == "activity"
+    assert required.payload["auto_import"] == "not_confident"
+    cells = extract_delimited(data, ExtractOptions(), "csv").tables[0].rows
+    with env.factories.transaction() as db:
+        mapping = make_import_mapping(db, env.household_id, spec=_activity_spec(rows), rows=cells)
+        mapping_id = mapping.id
+    env.rerun(document_id, mapping_id=mapping_id)
+    assert [r[1] for r in env.activity(account)] == ["buy"]
+    assert env.cash(account) == []

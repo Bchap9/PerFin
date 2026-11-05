@@ -125,6 +125,11 @@ def test_activity_export_becomes_one_statement_per_account() -> None:
         "notes": 3,  # two disclaimer paragraphs and the "Date downloaded" line
         "unknown_activity": 0,
         "skipped": 0,
+        "unknown_actions": [],
+        "accounts": [
+            {"account_type": "brokerage", "rows": 9},
+            {"account_type": "retirement", "rows": 5},
+        ],
         "warnings": [],
     }
     first, second = found.statements
@@ -206,7 +211,11 @@ def test_full_account_numbers_never_leave_the_parser() -> None:
     for account in ACCOUNTS:
         assert account.number not in dumped
         assert account.number[:-4] not in dumped
-        assert account.name not in dumped
+    # The nickname names the statement's account (in memory only, for a
+    # proposed account); it is never written to the run summary.
+    summary = str(found.summary())
+    for account in ACCOUNTS:
+        assert account.name not in summary
 
 
 def test_the_reinvestment_row_of_a_real_export_reads() -> None:
@@ -246,7 +255,7 @@ def test_unknown_actions_are_skipped_and_counted_never_guessed() -> None:
     found = read_activity_table(
         _with(
             _row("YOU BOUGHT SYNTHETIC GROWTH INDEX ETF (SGRX) (Cash)", quantity="2", amount="-5"),
-            _row("JOURNALED SYNTHETIC SPECIAL ITEM (Cash)", amount="-3.00", symbol=""),
+            _row("MYSTERY SYNTHETIC SPECIAL ITEM (Cash)", amount="-3.00", symbol=""),
         )
     )
     assert found is not None

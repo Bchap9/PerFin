@@ -364,12 +364,62 @@ ACTIVITY_TYPES: Final[Mapping[str, InvestmentActivityType]] = {
     "corporate action": "corporate_action",
     "merger": "corporate_action",
     "spinoff": "corporate_action",
+    # Fidelity's cash-management and retirement wording (activity exports).
+    "redemption": "sell",
+    "redeemed": "sell",
+    "redemption from core account": "sell",
+    "purchase into core account": "buy",
+    "check paid": "withdrawal",
+    "check received": "deposit",
+    "debit card purchase": "withdrawal",
+    "bill payment": "withdrawal",
+    "bill pay": "withdrawal",
+    "direct debit": "withdrawal",
+    "cash in lieu": "deposit",
+    "return of capital": "deposit",
+    "partic contr": "deposit",
+    "participant contribution": "deposit",
+    "employer contr": "deposit",
+    "employer contribution": "deposit",
+    "credit interest": "interest",
+    "margin interest": "fee",
+    "margin interest paid": "fee",
+    "advisory fee": "fee",
+    "adr fee": "fee",
+    "tax withheld": "fee",
+    "fed tax withheld": "fee",
+    "federal tax withheld": "fee",
+    "state tax withheld": "fee",
+    "nonresident tax": "fee",
+    "non resident tax": "fee",
+    "foreign tax": "fee",
 }
 #: Phrases naming a transfer whose type depends on what moved: ``(type when a
 #: security and a quantity are present, type for cash)``.
 TRANSFER_TYPES: Final[Mapping[str, tuple[InvestmentActivityType, InvestmentActivityType]]] = {
     "transferred from": ("transfer_in", "deposit"),
     "transferred to": ("transfer_out", "withdrawal"),
+}
+#: Phrases whose direction only the row's signs tell: ``(units in, units out)``
+#: when the row moves a security (by the quantity's sign), else cash in or
+#: out by the amount's sign (``deposit``/``withdrawal``). A journal entry,
+#: a rollover or a conversion moves units or cash either way; an exchange,
+#: an option assignment or expiry is a buy or a sale of units.
+SIGNED_TYPES: Final[Mapping[str, tuple[InvestmentActivityType, InvestmentActivityType]]] = {
+    "journaled": ("transfer_in", "transfer_out"),
+    "journal": ("transfer_in", "transfer_out"),
+    "transfer": ("transfer_in", "transfer_out"),
+    "transfer of assets": ("transfer_in", "transfer_out"),
+    "wire transfer": ("transfer_in", "transfer_out"),
+    "electronic funds transfer": ("transfer_in", "transfer_out"),
+    "rollover": ("transfer_in", "transfer_out"),
+    "roth conversion": ("transfer_in", "transfer_out"),
+    "conversion": ("transfer_in", "transfer_out"),
+    "exchanged": ("buy", "sell"),
+    "exchange": ("buy", "sell"),
+    "you exchanged": ("buy", "sell"),
+    "assigned": ("buy", "sell"),
+    "expired": ("buy", "sell"),
 }
 #: Types whose cash effect is an outflow when the amount is printed unsigned.
 OUTFLOW_TYPES: Final = frozenset({"buy", "fee", "withdrawal", "reinvest"})
@@ -393,7 +443,13 @@ def split_ratio(text: str) -> tuple[Decimal, Decimal] | None:
     return new, old
 
 
-def activity_type(text: str, *, moves_security: bool = False) -> InvestmentActivityType | None:
+def activity_type(
+    text: str,
+    *,
+    moves_security: bool = False,
+    units_sign: int = 0,
+    cash_sign: int = 0,
+) -> InvestmentActivityType | None:
     """The type an activity text names (the longest known phrase at its start).
 
     Case and punctuation do not matter and anything after the phrase is
@@ -406,6 +462,13 @@ def activity_type(text: str, *, moves_security: bool = False) -> InvestmentActiv
     ``transfer_in``/``transfer_out`` of units when ``moves_security`` (the
     row names a security and a non-zero quantity), else cash: ``deposit``/
     ``withdrawal``.
+
+    A phrase of :data:`SIGNED_TYPES` (``JOURNALED``, ``ROLLOVER``,
+    ``EXCHANGED``, ...) takes its direction from the row: with
+    ``moves_security`` the sign of the quantity (``units_sign``, negative =
+    units leave), else the sign of the amount (``cash_sign``, negative =
+    cash leaves: ``withdrawal``, else ``deposit``). Without a sign it is
+    None: the direction is never guessed.
     """
     norm = normalise(text)
     best: InvestmentActivityType | None = None
@@ -420,6 +483,16 @@ def activity_type(text: str, *, moves_security: bool = False) -> InvestmentActiv
     for phrase, (units, cash) in TRANSFER_TYPES.items():
         if len(phrase) > best_len and starts(phrase):
             best, best_len = (units if moves_security else cash), len(phrase)
+    for phrase, (inward, outward) in SIGNED_TYPES.items():
+        if len(phrase) > best_len and starts(phrase):
+            sign = units_sign if moves_security else cash_sign
+            if moves_security:
+                best = outward if sign < 0 else inward
+            else:
+                best = "withdrawal" if sign < 0 else "deposit"
+            if sign == 0:
+                best = None
+            best_len = len(phrase)
     return best
 
 

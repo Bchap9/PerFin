@@ -4242,7 +4242,9 @@ export interface components {
          *     statement of a multi-account table the account is for (an
          *     ``unknown_account`` item's ``group``); without it a chosen account takes
          *     only the statements with its own last four digits, or the one statement
-         *     no account matched.
+         *     no account matched. ``statement`` (with ``account_id``) does the same for
+         *     the brokerage statements of a document (an investment ``unknown_account``
+         *     item's ``statement``: an activity export's account, a PDF's).
          */
         ApplyMapping: {
             /** Account Id */
@@ -4251,6 +4253,8 @@ export interface components {
             group?: number | null;
             /** Mapping Id */
             mapping_id?: string | null;
+            /** Statement */
+            statement?: number | null;
         };
         /**
          * ArchiveState
@@ -6962,10 +6966,16 @@ export interface components {
         MappingSpec: {
             /** Account Column */
             account_column?: number | null;
+            /** Account Name Column */
+            account_name_column?: number | null;
+            /** Action Column */
+            action_column?: number | null;
             /** Amount Column */
             amount_column?: number | null;
             /** Balance Column */
             balance_column?: number | null;
+            /** Commission Column */
+            commission_column?: number | null;
             /** Credit Column */
             credit_column?: number | null;
             /** Currency */
@@ -6987,6 +6997,8 @@ export interface components {
              * @enum {string}
              */
             decimal_separator: "." | ",";
+            /** Fees Column */
+            fees_column?: number | null;
             /**
              * Has Header
              * @default true
@@ -6996,10 +7008,24 @@ export interface components {
             indicator_column?: number | null;
             /** Memo Column */
             memo_column?: number | null;
+            /**
+             * Mode
+             * @default cash
+             * @enum {string}
+             */
+            mode: "cash" | "activity";
             /** Outflow Values */
             outflow_values?: string[];
             /** Payee Column */
             payee_column?: number | null;
+            /** Price Column */
+            price_column?: number | null;
+            /** Quantity Column */
+            quantity_column?: number | null;
+            /** Security Column */
+            security_column?: number | null;
+            /** Settle Column */
+            settle_column?: number | null;
             /** @default inflow_positive */
             sign: components["schemas"]["Sign"];
             /**
@@ -7007,6 +7033,8 @@ export interface components {
              * @default 0
              */
             skip_rows: number;
+            /** Symbol Column */
+            symbol_column?: number | null;
             /**
              * Version
              * @default 1
@@ -7023,7 +7051,9 @@ export interface components {
          *     ``doubts`` are codes: ``header_not_exact``, ``rows_unreadable``,
          *     ``date_order_guessed``, ``no_rows``, ``indicator_values_unknown`` (an
          *     indicator cell that is no direction word, or a signed amount beside
-         *     it). ``sign_evidence`` is
+         *     it). ``activity_type_unknown`` is a brokerage activity suggestion with
+         *     actions PerFin does not type. ``sign_evidence`` is ``activity`` for an
+         *     activity-mode suggestion (amounts keep their own signs), else
          *     ``debit_credit``, ``indicator``, ``balance`` or null (a signed amount
          *     column read as "positive is money in" on trust).
          */
@@ -7045,7 +7075,7 @@ export interface components {
             /** Score */
             score: number;
             /** Sign Evidence */
-            sign_evidence: ("debit_credit" | "indicator" | "balance") | null;
+            sign_evidence: ("debit_credit" | "indicator" | "balance" | "activity") | null;
             spec: components["schemas"]["MappingSpec"];
         };
         /**

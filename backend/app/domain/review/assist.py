@@ -304,7 +304,7 @@ def _account_alternatives(
     index = payload.get("statement")
     if document is not None and payload.get("investment") is True:
         # A brokerage statement (OFX, PDF, activity table).
-        last4 = stored_investment_last4(document, payload)
+        last4 = stored_investment_last4(document, payload, db)
     elif result is not None and isinstance(index, int) and 0 <= index < len(result.statements):
         last4 = result.statements[index].account.last4
     elif document is not None and isinstance(payload.get("group"), int):

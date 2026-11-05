@@ -33,7 +33,31 @@ What remains (details in docs/ROADMAP.md):
 
 ## [Unreleased]
 
-Nothing yet.
+### Fixed
+
+- Fidelity "Activity & History" CSV exports import as investment activity in
+  more cases:
+  - The column-mapping editor has an "Investment activity" mode with action,
+    symbol, security, quantity, price, commission, fees, settlement date,
+    account number and account name columns; its suggestion for a brokerage
+    header fills them in. An activity mapping, saved or chosen on a re-run,
+    imports buys, sells and reinvestments instead of plain cash rows.
+  - More of Fidelity's wording is typed: debit card purchases, checks, bill
+    payments, direct debits, margin interest, tax withholdings, participant
+    and employer contributions, return of capital, core-account sweeps;
+    journal entries, rollovers, conversions and exchanges by the row's signs.
+    Unknown actions are listed (first words) in the review item.
+  - Masked account numbers (`Z2xxxxxxxx`) no longer merge accounts; the
+    `Account` nickname tells them apart and marks IRA/Roth/401(k)/HSA
+    accounts as retirement accounts. Choosing an account in the review queue
+    takes that item's account only.
+  - A sale of shares bought before the export's first row opens them with
+    an unknown cost basis and asks for it, instead of rolling back the
+    account's whole import.
+  - Files written as `a, "b, c"` no longer split inside quoted fields, and a
+    short export followed by long disclaimers is still read as CSV.
+  - The upload list no longer offers "Map columns" for a file already read
+    as investment activity.
 
 ## [1.0.0-rc.2] - 2026-11-05
 

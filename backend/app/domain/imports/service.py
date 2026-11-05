@@ -159,6 +159,7 @@ from app.domain.documents.service import get_visible_document
 from app.domain.imports import repo
 from app.domain.imports.models import NAME_MAX, ImportMapping
 from app.domain.imports.schemas import (
+    ACTIVITY_COLUMNS,
     APPLY_MAPPING_JOB_TYPE,
     DEFAULT_PAGE,
     PREVIEW_DEFAULT,
@@ -192,11 +193,13 @@ from app.domain.transactions.models import (
 from app.ingestion.match.accounts import AccountMatch, importable_account_ids, match_account
 from app.ingestion.match.dedupe import dedupe
 from app.ingestion.parsers.brokerage_table import PARSER_NAME as ACTIVITY_PARSER
+from app.ingestion.parsers.brokerage_table import PARSER_VERSION as ACTIVITY_PARSER_VERSION
 from app.ingestion.parsers.brokerage_table import TABLE_KINDS as ACTIVITY_TABLE_KINDS
 from app.ingestion.parsers.brokerage_table import (
     ActivityTable,
     activity_dates,
     read_activity_table,
+    suggest_activity_mapping,
 )
 from app.ingestion.parsers.structured import (
     MappingSuggestion,
@@ -1278,9 +1281,17 @@ def _import_table(
         )
     saved, spec = choice.mapping, choice.spec
     suggestion: MappingSuggestion | None = None
+    if spec is not None and spec.mode == "activity":
+        # An activity mapping that did not read the table (it no longer
+        # fits): asked for again rather than read as a cash ledger.
+        saved, spec = None, None
     if saved is None or spec is None:
-        suggestion = None if choice.ambiguous else suggest_mapping(table)
+        suggestion = None if choice.ambiguous else suggest_table_mapping(table)
         held = "mapping_ambiguous" if choice.ambiguous else _held(run, result, suggestion)
+        if held is None and suggestion is not None and suggestion.spec.mode == "activity":
+            # A brokerage layout whose actions are mostly unknown: a person
+            # confirms the activity mapping; it is never saved on a guess.
+            held = "activity_unconfirmed"
         if held is not None or suggestion is None:
             _mapping_review(run, table, choice, suggestion, held)
             return
@@ -1363,9 +1374,20 @@ def _import_table(
         run.document.institution_id = mapping.institution_id
 
 
+def suggest_table_mapping(table: Table) -> MappingSuggestion | None:
+    """The mapping editor's suggestion: an activity mapping for a brokerage layout, else cash."""
+    return suggest_activity_mapping(table) or suggest_mapping(table)
+
+
 def spec_digest(spec: MappingSpec) -> str:
     """A digest of ``spec`` (hex), recorded on the review items that name a group of it."""
-    canonical = json.dumps(spec.model_dump(mode="json"), sort_keys=True, separators=(",", ":"))
+    data = spec.model_dump(mode="json")
+    # Fields added after the digest was introduced count only when set, so
+    # items raised before they existed keep their digest.
+    for name in ("mode", *ACTIVITY_COLUMNS):
+        if data.get(name) in (None, "cash"):
+            data.pop(name, None)
+    canonical = json.dumps(data, sort_keys=True, separators=(",", ":"))
     return hashlib.sha256(canonical.encode()).hexdigest()
 
 
@@ -1414,11 +1436,13 @@ def stored_group_last4(db: Session, document: Document, payload: dict[str, Any])
     return group_last4(result.tables[0], spec, group)
 
 
-def activity_table(result: ExtractResult) -> ActivityTable | None:
+def activity_table(result: ExtractResult, spec: MappingSpec | None = None) -> ActivityTable | None:
     """Table 0 of a CSV/TSV/XLSX read as brokerage activity (None: it is not one).
 
     Only a delimited or spreadsheet file's own table qualifies (never a
-    PDF's page table, nor a file that also carries statements).
+    PDF's page table, nor a file that also carries statements). ``spec`` is
+    an activity-mode mapping a person saved or chose for the layout; without
+    one the table must be recognised on its own (``brokerage_table``).
     """
     if (
         result.statements
@@ -1427,14 +1451,33 @@ def activity_table(result: ExtractResult) -> ActivityTable | None:
         or result.kind not in ACTIVITY_TABLE_KINDS
     ):
         return None
-    return read_activity_table(result.tables[0])
+    if spec is not None and (spec.mode != "activity" or not _fits(result.tables[0], spec)):
+        return None
+    return read_activity_table(result.tables[0], spec)
 
 
-def stored_investments(document: Document) -> list[InvestmentStatement]:
+def saved_activity_mapping(
+    db: Session,
+    household_id: uuid.UUID,
+    table: Table,
+    *,
+    account_id: uuid.UUID | None,
+    allowed: Collection[uuid.UUID] | None,
+) -> MappingChoice | None:
+    """The saved activity-mode mapping for ``table`` (None: none, or a cash one fits)."""
+    choice = choose_mapping(db, household_id, table, account_id=account_id, allowed=allowed)
+    if choice.mapping is None or choice.spec is None or choice.spec.mode != "activity":
+        return None
+    return choice
+
+
+def stored_investments(document: Document, db: Session | None = None) -> list[InvestmentStatement]:
     """The investment statements an import of ``document`` reads, in the importer's order.
 
     The stored ones (OFX, PDF), else those of a brokerage activity table, read
-    again from the stored table (they are never stored themselves).
+    again from the stored table (they are never stored themselves): as
+    recognised on its own, else through the household's saved activity-mode
+    mapping for the layout (with ``db``).
     """
     result = _stored_result(document)
     if result is None:
@@ -1442,10 +1485,22 @@ def stored_investments(document: Document) -> list[InvestmentStatement]:
     if result.investments:
         return list(result.investments)
     found = activity_table(result)
+    if found is None and db is not None and result.tables:
+        choice = saved_activity_mapping(
+            db,
+            document.household_id,
+            result.tables[0],
+            account_id=document.account_id,
+            allowed=None,
+        )
+        if choice is not None:
+            found = activity_table(result, choice.spec)
     return found.statements if found is not None else []
 
 
-def stored_investment_last4(document: Document, payload: dict[str, Any]) -> str | None:
+def stored_investment_last4(
+    document: Document, payload: dict[str, Any], db: Session | None = None
+) -> str | None:
     """The last four digits of the investment statement an ``unknown_account`` item names.
 
     ``payload`` is an item of ``statement_import`` (``investment``,
@@ -1455,26 +1510,72 @@ def stored_investment_last4(document: Document, payload: dict[str, Any]) -> str 
     index = payload.get("statement")
     if payload.get("investment") is not True or not isinstance(index, int):
         return None
-    statements = stored_investments(document)
+    statements = stored_investments(document, db)
     return statements[index].account.last4 if 0 <= index < len(statements) else None
 
 
-def _import_activity(
-    run: _Run, result: ExtractResult, activity: ActivityTable, *, account_id: uuid.UUID | None
-) -> None:
-    """Record what reading table 0 as brokerage activity did (module doc, precedence)."""
-    run.activity = activity
-    choice = choose_mapping(
+def _activity_reading(
+    run: _Run,
+    result: ExtractResult,
+    mapping_id: uuid.UUID | None,
+    account_id: uuid.UUID | None,
+) -> tuple[ActivityTable | None, ImportMapping | None]:
+    """Table 0 read as brokerage activity, and the activity mapping that read it.
+
+    A mapping chosen for this run reads the table as activity when it is an
+    activity-mode mapping, as a cash ledger otherwise (None). Without one,
+    the table recognised on its own wins, then a saved activity-mode mapping
+    for the layout.
+    """
+    if mapping_id is not None:
+        mapping = repo.get_mapping(run.db, run.household_id, mapping_id)
+        spec = _spec(mapping) if mapping is not None else None
+        if mapping is None or spec is None or spec.mode != "activity":
+            return None, None
+        return activity_table(result, spec), mapping
+    found = activity_table(result)
+    if found is not None:
+        return found, None
+    choice = saved_activity_mapping(
         run.db,
         run.household_id,
         result.tables[0],
         account_id=account_id or run.document.account_id,
         allowed=run.allowed,
     )
-    if choice.mapping is not None:
-        run.mapping_bypassed = choice.mapping.id
-    elif choice.ambiguous:
-        run.mapping_bypassed = choice.ambiguous[0]
+    if choice is None or choice.mapping is None:
+        return None, None
+    return activity_table(result, choice.spec), choice.mapping
+
+
+def _import_activity(
+    run: _Run,
+    result: ExtractResult,
+    activity: ActivityTable,
+    *,
+    account_id: uuid.UUID | None,
+    mapping: ImportMapping | None = None,
+) -> None:
+    """Record what reading table 0 as brokerage activity did (module doc, precedence)."""
+    run.activity = activity
+    # The document says which reader made its records (the upload list then
+    # offers the review queue, not the cash-ledger column mapping).
+    run.document.parser_version = f"{ACTIVITY_PARSER}/{ACTIVITY_PARSER_VERSION}"
+    if mapping is not None:
+        run.mapping_id = mapping.id
+        repo.mark_used(run.db, mapping)
+    else:
+        choice = choose_mapping(
+            run.db,
+            run.household_id,
+            result.tables[0],
+            account_id=account_id or run.document.account_id,
+            allowed=run.allowed,
+        )
+        if choice.mapping is not None and (choice.spec is None or choice.spec.mode != "activity"):
+            run.mapping_bypassed = choice.mapping.id
+        elif choice.ambiguous:
+            run.mapping_bypassed = choice.ambiguous[0]
     missed = activity.unknown_activity + activity.skipped
     if not activity.statements:
         run.review(
@@ -1484,6 +1585,10 @@ def _import_activity(
                 "table": 0,
                 "parser": ACTIVITY_PARSER,
                 "unknown_activity": activity.unknown_activity,
+                "unknown_actions": [
+                    {"action": action, "rows": rows}
+                    for action, rows in activity.unknown_actions.items()
+                ],
                 "skipped_rows": activity.skipped,
             },
         )
@@ -1494,6 +1599,10 @@ def _import_activity(
                 "reason": "lines_skipped",
                 "count": missed,
                 "unknown_activity": activity.unknown_activity,
+                "unknown_actions": [
+                    {"action": action, "rows": rows}
+                    for action, rows in activity.unknown_actions.items()
+                ],
                 "parser": ACTIVITY_PARSER,
             },
         )
@@ -1524,6 +1633,7 @@ def import_extraction(
     mapping_id: uuid.UUID | None = None,
     account_id: uuid.UUID | None = None,
     group: int | None = None,
+    statement: int | None = None,
     user_id: uuid.UUID | None = None,
 ) -> ImportResult:
     """Import the records of ``result`` for ``document`` (module doc, step 2).
@@ -1548,12 +1658,12 @@ def import_extraction(
         _import_statements(run, result, account_id=account_id)
     elif result.tables:
         # A brokerage activity export is investment activity, unless the
-        # person chose a (cash-ledger) mapping for this run (module doc).
-        activity = activity_table(result) if mapping_id is None else None
+        # person chose a cash-ledger mapping for this run (module doc).
+        activity, mapping = _activity_reading(run, result, mapping_id, account_id)
         if activity is None:
             _import_table(run, result, mapping_id=mapping_id, account_id=account_id, group=group)
         else:
-            _import_activity(run, result, activity, account_id=account_id)
+            _import_activity(run, result, activity, account_id=account_id, mapping=mapping)
             statements = activity.statements
     elif not result.investments:
         run.review(ReviewKind.UNPARSED, {"reason": "no_records"})
@@ -1571,6 +1681,7 @@ def import_extraction(
                 run, from_statement(statement), account, statement_index=None
             ),
             account_id=account_id,
+            statement_index=statement,
             user_id=user_id,
         )
         for investment_account in done.accounts:
@@ -1633,6 +1744,7 @@ def request_apply(
         mapping_id=data.mapping_id,
         account_id=data.account_id,
         group=data.group,
+        statement=data.statement,
         requested_by=principal.user_id,
     )
     job_id = enqueue(db, APPLY_MAPPING_JOB_TYPE, payload, household_id=household_id)
@@ -1675,6 +1787,7 @@ def run_apply_job(
         mapping_id=payload.mapping_id,
         account_id=payload.account_id,
         group=payload.group,
+        statement=payload.statement,
         user_id=payload.requested_by,
     )
     now = clock.utcnow()
@@ -1805,7 +1918,7 @@ def preview(
             visible=_visible(principal),
         )
         matched = choice.mapping.id if choice.mapping is not None else None
-        suggested = suggest_mapping(tables[0])
+        suggested = suggest_table_mapping(tables[0])
     return ImportPreview(
         document_id=document.id,
         status=document.status,

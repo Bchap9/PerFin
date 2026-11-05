@@ -206,6 +206,10 @@ def _binary_type(head: bytes) -> FileType | None:
     return None
 
 
+#: Delimiters per row from which a block of two rows is a table (:func:`_rows_then_notes`).
+WIDE_ROW: Final = 5
+
+
 def _rows_then_notes(counts: list[int]) -> bool:
     """Rows of three columns or more followed only by notes (``counts``: delimiters per line).
 
@@ -213,7 +217,9 @@ def _rows_then_notes(counts: list[int]) -> bool:
     "Date downloaded" line whose delimiters (none, or the commas of a quoted
     sentence) are not the table's. The first line sets the row shape; the
     lines of that shape must be a leading block of most lines, two at least,
-    and every other line must come after it.
+    and every other line must come after it. A wide table (five delimiters
+    or more per row, which prose does not keep up line after line) needs
+    only two rows, so a short export is not outweighed by its disclaimers.
     """
     first = counts[0]
     if first < 2:
@@ -221,7 +227,8 @@ def _rows_then_notes(counts: list[int]) -> bool:
     tolerance = max(2, first // 2)
     rows = [abs(c - first) <= tolerance for c in counts]
     block = rows.index(False) if False in rows else len(rows)
-    return block >= max(2, (len(counts) + 1) // 2) and not any(rows[block:])
+    needed = 2 if first >= WIDE_ROW else max(2, (len(counts) + 1) // 2)
+    return block >= needed and not any(rows[block:])
 
 
 def _delimited_type(text: bytes, *, window_full: bool) -> FileType:

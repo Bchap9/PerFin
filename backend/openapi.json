@@ -3608,7 +3608,7 @@
       },
       "ApplyMapping": {
         "additionalProperties": false,
-        "description": "``POST /imports/{document_id}/apply-mapping``.\n\n``mapping_id`` (CSV/TSV) names the mapping to read the table with (else\nthe one whose fingerprint matches); ``account_id`` names the account to\nimport into (else the document's, the mapping's or, for OFX/QFX/QIF, the\naccount matched by its last four digits). The caller must be able to\nedit the target account. ``group`` (with ``account_id``) names the\nstatement of a multi-account table the account is for (an\n``unknown_account`` item's ``group``); without it a chosen account takes\nonly the statements with its own last four digits, or the one statement\nno account matched.",
+        "description": "``POST /imports/{document_id}/apply-mapping``.\n\n``mapping_id`` (CSV/TSV) names the mapping to read the table with (else\nthe one whose fingerprint matches); ``account_id`` names the account to\nimport into (else the document's, the mapping's or, for OFX/QFX/QIF, the\naccount matched by its last four digits). The caller must be able to\nedit the target account. ``group`` (with ``account_id``) names the\nstatement of a multi-account table the account is for (an\n``unknown_account`` item's ``group``); without it a chosen account takes\nonly the statements with its own last four digits, or the one statement\nno account matched. ``statement`` (with ``account_id``) does the same for\nthe brokerage statements of a document (an investment ``unknown_account``\nitem's ``statement``: an activity export's account, a PDF's).",
         "properties": {
           "account_id": {
             "anyOf": [
@@ -3646,6 +3646,19 @@
               }
             ],
             "title": "Mapping Id"
+          },
+          "statement": {
+            "anyOf": [
+              {
+                "maximum": 10000.0,
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Statement"
           }
         },
         "title": "ApplyMapping",
@@ -11805,6 +11818,32 @@
             ],
             "title": "Account Column"
           },
+          "account_name_column": {
+            "anyOf": [
+              {
+                "exclusiveMaximum": 1000.0,
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Account Name Column"
+          },
+          "action_column": {
+            "anyOf": [
+              {
+                "exclusiveMaximum": 1000.0,
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Action Column"
+          },
           "amount_column": {
             "anyOf": [
               {
@@ -11830,6 +11869,19 @@
               }
             ],
             "title": "Balance Column"
+          },
+          "commission_column": {
+            "anyOf": [
+              {
+                "exclusiveMaximum": 1000.0,
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Commission Column"
           },
           "credit_column": {
             "anyOf": [
@@ -11919,6 +11971,19 @@
             "title": "Decimal Separator",
             "type": "string"
           },
+          "fees_column": {
+            "anyOf": [
+              {
+                "exclusiveMaximum": 1000.0,
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Fees Column"
+          },
           "has_header": {
             "default": true,
             "title": "Has Header",
@@ -11950,6 +12015,15 @@
             ],
             "title": "Memo Column"
           },
+          "mode": {
+            "default": "cash",
+            "enum": [
+              "cash",
+              "activity"
+            ],
+            "title": "Mode",
+            "type": "string"
+          },
           "outflow_values": {
             "items": {
               "maxLength": 20,
@@ -11973,6 +12047,58 @@
             ],
             "title": "Payee Column"
           },
+          "price_column": {
+            "anyOf": [
+              {
+                "exclusiveMaximum": 1000.0,
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Price Column"
+          },
+          "quantity_column": {
+            "anyOf": [
+              {
+                "exclusiveMaximum": 1000.0,
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Quantity Column"
+          },
+          "security_column": {
+            "anyOf": [
+              {
+                "exclusiveMaximum": 1000.0,
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Security Column"
+          },
+          "settle_column": {
+            "anyOf": [
+              {
+                "exclusiveMaximum": 1000.0,
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Settle Column"
+          },
           "sign": {
             "$ref": "#/components/schemas/Sign",
             "default": "inflow_positive"
@@ -11983,6 +12109,19 @@
             "minimum": 0.0,
             "title": "Skip Rows",
             "type": "integer"
+          },
+          "symbol_column": {
+            "anyOf": [
+              {
+                "exclusiveMaximum": 1000.0,
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Symbol Column"
           },
           "version": {
             "const": 1,
@@ -11999,7 +12138,7 @@
         "type": "object"
       },
       "MappingSuggestionOut": {
-        "description": "The deterministic mapping guess and how far it can be trusted.\n\n``confident`` (no ``doubts``) is what the importer needs to import a\nnever-seen CSV/TSV layout without asking (INGESTION.md \"Parse\");\n``doubts`` are codes: ``header_not_exact``, ``rows_unreadable``,\n``date_order_guessed``, ``no_rows``, ``indicator_values_unknown`` (an\nindicator cell that is no direction word, or a signed amount beside\nit). ``sign_evidence`` is\n``debit_credit``, ``indicator``, ``balance`` or null (a signed amount\ncolumn read as \"positive is money in\" on trust).",
+        "description": "The deterministic mapping guess and how far it can be trusted.\n\n``confident`` (no ``doubts``) is what the importer needs to import a\nnever-seen CSV/TSV layout without asking (INGESTION.md \"Parse\");\n``doubts`` are codes: ``header_not_exact``, ``rows_unreadable``,\n``date_order_guessed``, ``no_rows``, ``indicator_values_unknown`` (an\nindicator cell that is no direction word, or a signed amount beside\nit). ``activity_type_unknown`` is a brokerage activity suggestion with\nactions PerFin does not type. ``sign_evidence`` is ``activity`` for an\nactivity-mode suggestion (amounts keep their own signs), else\n``debit_credit``, ``indicator``, ``balance`` or null (a signed amount\ncolumn read as \"positive is money in\" on trust).",
         "properties": {
           "accounts": {
             "title": "Accounts",
@@ -12045,7 +12184,8 @@
                 "enum": [
                   "debit_credit",
                   "indicator",
-                  "balance"
+                  "balance",
+                  "activity"
                 ],
                 "type": "string"
               },

@@ -5,6 +5,7 @@ import userEvent from "@testing-library/user-event";
 import { authedSession, json, mockApi, renderApp } from "../auth/testing";
 import { lookupHandlers, NOW } from "../transactions/fixtures";
 import { uploadDocument } from "./api";
+import { readAsActivity } from "./UploadPage";
 
 class FakeXhr {
   static last: FakeXhr | null = null;
@@ -136,5 +137,13 @@ describe("upload page", () => {
     renderApp("/documents");
     expect(await screen.findByText("You have read-only access.")).toBeInTheDocument();
     expect(screen.queryByLabelText("Choose files")).not.toBeInTheDocument();
+  });
+});
+
+describe("readAsActivity", () => {
+  it("is true only for documents the brokerage activity reader imported", () => {
+    expect(readAsActivity({ parser_version: "brokerage_activity_table/1" })).toBe(true);
+    expect(readAsActivity({ parser_version: "delimited/1" })).toBe(false);
+    expect(readAsActivity({ parser_version: null })).toBe(false);
   });
 });

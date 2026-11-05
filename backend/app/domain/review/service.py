@@ -467,6 +467,7 @@ def _reimport(
     account_id: uuid.UUID | None,
     request: HTTPConnection | None,
     group: int | None = None,
+    statement: int | None = None,
 ) -> dict[str, Any]:
     """Import the stored extraction again, else run the whole pipeline again."""
     if document.extraction is not None and document.status in REIMPORTABLE:
@@ -474,7 +475,9 @@ def _reimport(
             db,
             principal,
             document.id,
-            ApplyMapping(mapping_id=mapping_id, account_id=account_id, group=group),
+            ApplyMapping(
+                mapping_id=mapping_id, account_id=account_id, group=group, statement=statement
+            ),
             request=request,
         )
         return {"rerun": "import", "job_id": str(accepted.job_id)}
@@ -511,7 +514,7 @@ def _resolve_account(
         elif payload.get("investment") is True:
             # A brokerage statement (OFX, PDF, activity table): its digits
             # from the stored extraction, never from the item.
-            last4 = imports_service.stored_investment_last4(document, payload)
+            last4 = imports_service.stored_investment_last4(document, payload, db)
         else:
             last4 = _statement_last4(document, payload.get("statement"))
         mapping_id = None if grouped else _uuid(payload.get("mapping_id"))
@@ -544,6 +547,10 @@ def _resolve_account(
         request=request,
         # A multi-account table: the account is for this item's group only.
         group=payload["group"] if grouped else None,
+        # A brokerage document: the account is for this item's statement only.
+        statement=payload["statement"]
+        if payload.get("investment") is True and isinstance(payload.get("statement"), int)
+        else None,
     )
     return {"account_id": str(account.id), "remembered": remembered, **rerun}
 

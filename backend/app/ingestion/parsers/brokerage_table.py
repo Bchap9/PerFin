@@ -70,8 +70,22 @@ read, counted (``notes``). Every other row must give
 cell (:func:`~app.ingestion.parsers.structured.cell_last4`), one statement per
 account in order of first appearance; without an account column the table is
 one statement. Only the last four digits are kept; the cell is never stored or
-logged. A group's currency is its rows' currency column when they agree; a row
-in another currency than the rest of its group is skipped (``currency_mixed``),
+logged. A masked number with fewer than four digits (``Z2xxxxxxxx``) groups
+by its cell text, else by the ``Account`` nickname (:func:`_account_key`), so
+two accounts never fold into one; such a statement has no last four digits.
+The nickname names the statement's account (``StatementAccount.name``, in
+memory only: never in the summary, which may be stored) and makes it a
+``retirement`` account when it reads like one (:func:`account_type_for`). A
+known broker layout (:data:`LAYOUT_INSTITUTIONS`) names the institution.
+
+**Column mappings**: an activity-mode ``MappingSpec`` (``mode =
+"activity"``) gives the columns instead of :func:`find_header`
+(:func:`header_from_spec`); the table is then read whatever share of its
+actions is known. :func:`suggest_activity_mapping` is the mapping editor's
+suggestion for a recognised header.
+
+A group's currency is its rows' currency column when they agree; a row in
+another currency than the rest of its group is skipped (``currency_mixed``),
 an empty cell is the account's currency.
 
 **Scoring and holding (the choice made here).** An activity export prints no
@@ -93,10 +107,10 @@ the child skip the hold rules of document statements by claiming to be a
 table read here.
 
 The out-of-order and lot rules of ``statement_import`` apply as for any
-statement: import exports oldest first; a sale of units bought before the
+statement: import exports oldest first. A sale of units bought before the
 export's first row (with no earlier statement giving the account's
-positions) is refused by the lot engine (``investment_lot_conflict``) and
-nothing of that account's statement is written.
+positions) opens the shortfall at an unknown cost basis
+(``investment_opening_basis_unknown``) rather than being refused.
 """
 
 from __future__ import annotations
@@ -111,7 +125,7 @@ from typing import Final, Literal
 from pydantic import ValidationError
 
 from app.core.csv_safety import is_dangerous, neutralise_formula
-from app.domain.imports.schemas import DateFormat
+from app.domain.imports.schemas import DateFormat, MappingSpec
 from app.ingestion.parsers import confidence as conf
 from app.ingestion.parsers.brokerage import (
     QUANTITY_TYPES,
@@ -124,6 +138,8 @@ from app.ingestion.parsers.brokerage import (
 )
 from app.ingestion.parsers.structured import (
     HEADER_SEARCH_ROWS,
+    MappingSuggestion,
+    RoleReason,
     best_date_format,
     cell_last4,
     guess_decimal_separator,
@@ -151,6 +167,11 @@ TABLE_KINDS: Final = frozenset({"csv", "tsv", "xlsx"})
 TYPED_SHARE_MIN: Final = 0.5
 #: The account type the statements carry (the importer accepts brokerage or retirement).
 ACCOUNT_TYPE: Final = "brokerage"
+#: Unknown actions kept as examples (their first words) for the review queue.
+UNKNOWN_EXAMPLES: Final = 8
+UNKNOWN_WORDS: Final = 3
+#: Longest account nickname kept.
+NAME_MAX: Final = 80
 
 Role = Literal[
     "date",
@@ -217,6 +238,11 @@ HEADERS: Final[Mapping[str, Role]] = {
     "exchange rate": "other",
     "accrued interest": "other",
 }
+#: Header rows (their first normalised cells) that name the broker who wrote them.
+LAYOUT_INSTITUTIONS: Final[Mapping[tuple[str, ...], str]] = {
+    ("run date", "account", "account number", "action", "symbol"): "Fidelity Investments",
+    ("run date", "action", "symbol", "description", "type"): "Fidelity Investments",
+}
 #: Roles a header must name (plus one of :data:`SECURITY_ROLES`).
 REQUIRED_ROLES: Final = ("date", "action", "amount")
 SECURITY_ROLES: Final = ("symbol", "quantity")
@@ -249,6 +275,20 @@ class ActivityTable:
     #: Accounts beyond :data:`~app.ingestion.sandbox.protocol.MAX_STATEMENTS` (dropped).
     dropped_accounts: int = 0
     warnings: list[str] = field(default_factory=list)
+    #: The leading words of actions no phrase types (normalised, a few, for the review queue).
+    unknown_actions: dict[str, int] = field(default_factory=dict)
+
+    def note_unknown(self, action: str) -> None:
+        # Digits (a check number, a card's last digits) are not kept.
+        words = " ".join(
+            "#" if any(c.isdigit() for c in w) else w
+            for w in normalise(action).split()[:UNKNOWN_WORDS]
+        )
+        if not words or (
+            words not in self.unknown_actions and len(self.unknown_actions) >= UNKNOWN_EXAMPLES
+        ):
+            return
+        self.unknown_actions[words] = self.unknown_actions.get(words, 0) + 1
 
     @property
     def parser(self) -> ParserRef:
@@ -263,6 +303,15 @@ class ActivityTable:
             "notes": self.notes,
             "unknown_activity": self.unknown_activity,
             "skipped": self.skipped,
+            "unknown_actions": [
+                {"action": action, "rows": rows} for action, rows in self.unknown_actions.items()
+            ],
+            "accounts": [
+                # Counts and types only: an account's nickname may be a
+                # person's name and is never written to a summary.
+                {"account_type": s.account.account_type, "rows": len(s.activity)}
+                for s in self.statements
+            ],
             "warnings": list(self.warnings),
         }
 
@@ -282,10 +331,18 @@ def _roles(row: Sequence[str]) -> dict[Role, int]:
 
 
 def _cell(row: Sequence[str], column: int | None) -> str:
-    """The cell for matching and parsing: the extractor's formula guard removed."""
+    """The cell for matching and parsing: the extractor's formula guard removed.
+
+    Quotes left around a value (an export that writes ``, "VUG"`` with a
+    space before the quote, which CSV readers do not treat as quoting) are
+    removed too.
+    """
     if column is None or column >= len(row):
         return ""
-    return " ".join(row[column].removeprefix("'").split())
+    text = " ".join(row[column].removeprefix("'").split())
+    if len(text) >= 2 and text[0] == text[-1] == '"':
+        text = text[1:-1].strip()
+    return text
 
 
 def _text(row: Sequence[str], column: int | None) -> str:
@@ -311,11 +368,66 @@ def find_header(table: Table) -> Header | None:
         columns = _roles(row)
         if all(r in columns for r in REQUIRED_ROLES) and any(r in columns for r in SECURITY_ROLES):
             account = _account_column(table, index, columns)
-            columns.pop("account_name", None)
             if account is not None:
                 columns["account"] = account
+            if columns.get("account_name") == account:
+                columns.pop("account_name", None)
             return Header(index, columns)
     return None
+
+
+#: The mapping spec's activity columns -> the role they name.
+SPEC_ROLES: Final[Mapping[str, Role]] = {
+    "date_column": "date",
+    "settle_column": "settle",
+    "action_column": "action",
+    "symbol_column": "symbol",
+    "security_column": "description",
+    "quantity_column": "quantity",
+    "price_column": "price",
+    "commission_column": "commission",
+    "fees_column": "fees",
+    "amount_column": "amount",
+    "currency_column": "currency",
+    "account_column": "account",
+    "account_name_column": "account_name",
+}
+
+
+def layout_institution(table: Table, row: int) -> str | None:
+    """The broker whose export layout the header row ``row`` is (``Run Date, Account, ...``)."""
+    if row >= len(table.rows):
+        return None
+    cells = tuple(normalise(c.removeprefix("'")) for c in table.rows[row])
+    for prefix, institution in LAYOUT_INSTITUTIONS.items():
+        if cells[: len(prefix)] == prefix:
+            return institution
+    return None
+
+
+def header_from_spec(spec: MappingSpec) -> Header:
+    """The header an activity-mode mapping names (its ``skip_rows`` row, its columns)."""
+    columns: dict[Role, int] = {}
+    for name, role in SPEC_ROLES.items():
+        column = getattr(spec, name)
+        if column is not None:
+            columns[role] = column
+    return Header(spec.skip_rows, columns)
+
+
+#: Words in an account's nickname that make it a retirement account.
+_RETIREMENT = re.compile(
+    r"\b(ira|roth|401\s?\(?k\)?|403\s?\(?b\)?|457|sep|simple|hsa|rollover|keogh|pension|retirement)\b",
+    re.IGNORECASE,
+)
+
+
+def account_type_for(name: str | None) -> str:
+    """``retirement`` for an account nicknamed like one (``ROTH IRA``, ``401(k)``).
+
+    Anything else is ``brokerage``.
+    """
+    return "retirement" if name and _RETIREMENT.search(name) else ACCOUNT_TYPE
 
 
 def _security(symbol: str, name: str) -> SecurityRef | None:
@@ -337,9 +449,35 @@ def _security(symbol: str, name: str) -> SecurityRef | None:
 
 @dataclass
 class _Row:
-    account: str | None
+    #: Groups the rows of one account (never stored; see :func:`_account_key`).
+    key: str | None
+    last4: str | None
+    name: str | None
     currency: str | None
     activity: InvestmentActivity
+
+
+def _sign(value: Decimal | None) -> int:
+    if value is None or value == 0:
+        return 0
+    return -1 if value < 0 else 1
+
+
+def _account_key(number: str, name: str | None) -> str | None:
+    """The account a row belongs to: its number's last four digits, else the whole cell.
+
+    A masked number (``Z2xxxxxxxx``) has fewer than four digits; its cell
+    text (else the account's nickname) still tells two accounts apart, so
+    they never fold into one statement. The key lives only while the table
+    is read.
+    """
+    last4 = cell_last4(number) if number else None
+    if last4 is not None:
+        return f"#{last4}"
+    folded = normalise(number) if number else ""
+    if folded:
+        return "=" + folded
+    return f"@{normalise(name)}" if name else None
 
 
 @dataclass
@@ -369,14 +507,19 @@ class _Reader:
         security = _security(symbol, _text(row, self.col("description")))
         signed = self.number(row, "quantity")
         moves = security is not None and signed is not None and signed != 0
+        amount_text = _cell(row, self.col("amount"))
+        amount = parse_cell_amount(amount_text, self.separator) if amount_text else None
+        action = _cell(row, self.col("action"))
         kind: InvestmentActivityType | None = activity_type(
-            _cell(row, self.col("action")), moves_security=moves
+            action,
+            moves_security=moves,
+            units_sign=_sign(signed),
+            cash_sign=_sign(amount),
         )
         if kind is None:
             self.out.unknown_activity += 1
+            self.out.note_unknown(action)
             return None
-        amount_text = _cell(row, self.col("amount"))
-        amount = parse_cell_amount(amount_text, self.separator) if amount_text else None
         if amount is None and not amount_text and kind in ("transfer_in", "transfer_out"):
             amount = Decimal(0)  # a transfer of units moves no cash
         quantity = abs(signed) if signed is not None and signed != 0 else None
@@ -417,8 +560,15 @@ class _Reader:
         except ValidationError:
             self.out.skipped += 1
             return None
-        account = cell_last4(_cell(row, self.col("account"))) if self.col("account") else None
-        return _Row(account, currency, activity)
+        number = _cell(row, self.col("account"))
+        nickname = _text(row, self.col("account_name"))[:NAME_MAX] or None
+        return _Row(
+            _account_key(number, nickname),
+            cell_last4(number) if number else None,
+            nickname,
+            currency,
+            activity,
+        )
 
 
 def _date_format(header: Header, body: Sequence[Sequence[str]]) -> tuple[DateFormat, bool]:
@@ -437,18 +587,41 @@ def _typed_share(header: Header, body: Sequence[Sequence[str]]) -> float:
     return typed / len(body)
 
 
-def read_activity_table(table: Table) -> ActivityTable | None:
-    """The investment statements of a brokerage activity table (None: not one; module doc)."""
-    header = find_header(table)
-    if header is None:
+def read_activity_table(
+    table: Table, spec: MappingSpec | None = None, *, institution: str | None = None
+) -> ActivityTable | None:
+    """The investment statements of a brokerage activity table (None: not one; module doc).
+
+    ``spec`` is an activity-mode column mapping a person saved for this
+    layout: its columns, date format and decimal separator are used as
+    given and the table is read whatever share of its actions is known
+    (each unknown one is still skipped and counted). ``institution`` names
+    the statements' institution; without it a known broker layout
+    (:data:`LAYOUT_INSTITUTIONS`) names it.
+    """
+    if spec is not None:
+        if spec.mode != "activity":
+            return None
+        header: Header | None = header_from_spec(spec)
+    else:
+        header = find_header(table)
+    if header is None or header.row >= len(table.rows):
         return None
+    institution = institution or layout_institution(table, header.row)
     rows = table.rows[header.row + 1 :]
     body = [r for r in rows if _filled(r) >= 2]
-    if not body or _typed_share(header, body) < TYPED_SHARE_MIN:
+    if not body:
         return None
-    date_format, guessed = _date_format(header, body)
-    amounts = [_cell(r, header.columns["amount"]) for r in body]
-    separator = guess_decimal_separator(a for a in amounts if a)
+    if spec is None and _typed_share(header, body) < TYPED_SHARE_MIN:
+        return None
+    if spec is not None:
+        date_format: DateFormat = spec.date_format
+        guessed = False
+        separator: str = spec.decimal_separator
+    else:
+        date_format, guessed = _date_format(header, body)
+        amounts = [_cell(r, header.columns["amount"]) for r in body]
+        separator = guess_decimal_separator(a for a in amounts if a)
     out = ActivityTable(header=header)
     reader = _Reader(table, header, date_format, separator, guessed, out)
     groups: dict[str | None, list[_Row]] = {}
@@ -459,9 +632,9 @@ def read_activity_table(table: Table) -> ActivityTable | None:
         read = reader.read(row)
         if read is None:
             continue
-        groups.setdefault(read.account, []).append(read)
+        groups.setdefault(read.key, []).append(read)
     mixed = False
-    for key, group in groups.items():
+    for group in groups.values():
         if len(out.statements) >= MAX_STATEMENTS:
             out.dropped_accounts += 1
             out.skipped += len(group)
@@ -474,9 +647,16 @@ def read_activity_table(table: Table) -> ActivityTable | None:
             out.skipped += len(group) - len(kept)
         activity = sorted((r.activity for r in kept), key=lambda a: a.trade_date)
         out.rows += len(activity)
+        name = next((r.name for r in group if r.name), None)
         statement = InvestmentStatement(
             source_format="csv",
-            account=StatementAccount(account_type=ACCOUNT_TYPE, last4=key, currency=currency),
+            account=StatementAccount(
+                account_type=account_type_for(name),
+                last4=group[0].last4,
+                currency=currency,
+                name=name,
+                institution=institution,
+            ),
             period_start=activity[0].trade_date if activity else None,
             period_end=activity[-1].trade_date if activity else None,
             activity=activity,
@@ -504,3 +684,83 @@ def activity_dates(statements: Sequence[InvestmentStatement]) -> tuple[date, dat
     """The first and last trade dates of ``statements`` (None: no rows)."""
     days = [a.trade_date for s in statements for a in s.activity]
     return (min(days), max(days)) if days else None
+
+
+#: The role each activity spec field reads (the inverse of :data:`SPEC_ROLES`).
+_ROLE_FIELDS: Final[Mapping[Role, str]] = {role: name for name, role in SPEC_ROLES.items()}
+
+
+def activity_spec(table: Table) -> MappingSpec | None:
+    """The activity-mode mapping a recognised header implies (None: no brokerage header).
+
+    The header (:func:`find_header`) need not pass the typed-actions share:
+    a person shown this suggestion in the mapping editor decides.
+    """
+    header = find_header(table)
+    if header is None:
+        return None
+    body = [r for r in table.rows[header.row + 1 :] if _filled(r) >= 2]
+    date_format, _ = _date_format(header, body)
+    amounts = [_cell(r, header.columns["amount"]) for r in body]
+    separator = guess_decimal_separator(a for a in amounts if a)
+    fields: dict[str, object] = {
+        _ROLE_FIELDS[role]: column
+        for role, column in header.columns.items()
+        if role in _ROLE_FIELDS
+    }
+    try:
+        return MappingSpec.model_validate(
+            {
+                **fields,
+                "mode": "activity",
+                "skip_rows": header.row,
+                "date_format": date_format,
+                "decimal_separator": separator,
+            }
+        )
+    except ValidationError:
+        return None
+
+
+def suggest_activity_mapping(table: Table) -> MappingSuggestion | None:
+    """The mapping editor's suggestion for a brokerage activity table (None: not one).
+
+    Confident when every data row reads and the day/month order is not a
+    guess; ``doubts`` otherwise (``activity_type_unknown``,
+    ``rows_unreadable``, ``date_order_guessed``, ``no_rows``).
+    """
+    spec = activity_spec(table)
+    if spec is None:
+        return None
+    read = read_activity_table(table, spec)
+    header = header_from_spec(spec)
+    body = [r for r in table.rows[header.row + 1 :] if _filled(r) >= 2]
+    _, guessed = _date_format(header, body)
+    rows = read.rows if read is not None else 0
+    unknown = read.unknown_activity if read is not None else 0
+    skipped = read.skipped if read is not None else 0
+    doubts: list[str] = []
+    if not rows:
+        doubts.append("no_rows")
+    if unknown:
+        doubts.append("activity_type_unknown")
+    if skipped:
+        doubts.append("rows_unreadable")
+    if guessed:
+        doubts.append("date_order_guessed")
+    total = rows + unknown + skipped
+    return MappingSuggestion(
+        spec=spec,
+        score=round(rows / total, 3) if total else 0.0,
+        confident=not doubts,
+        reasons=tuple(
+            RoleReason(role, column, "exact", 1.0)
+            for role, column in sorted(header.columns.items(), key=lambda item: item[1])
+        ),
+        parsed_rows=rows,
+        failed_rows=(),
+        footer_rows=read.notes if read is not None else 0,
+        accounts=len(read.statements) if read is not None else 0,
+        sign_evidence="activity",
+        doubts=tuple(doubts),
+    )
