@@ -6,8 +6,9 @@ All notable changes to PerFin are recorded here. The format follows
 
 ## Status
 
-1.0.0 is prepared but not tagged. Every phase (0-7) is implemented. Alembic
-head is `0007_phase7`. `make check` passes from the repository root
+The current release candidate is `v1.0.0-rc.2`; the final `v1.0.0` follows the
+external security review. Every phase (0-7) is implemented. Alembic head is
+`0008`. `make check` passes from the repository root
 (2026-11-04): SPDX; backend ruff, ruff format, mypy --strict (634 source
 files plus 4 scripts), bandit, 7431 pytest tests with `-n auto` and OpenAPI
 drift; frontend eslint, tsc, 399 vitest tests in 55 files and the
@@ -23,14 +24,22 @@ What remains (details in docs/ROADMAP.md):
 
 - An external security review or penetration test before the tag. An
   internal review was done every phase (docs/security/CONTROLS.md).
-- The release workflow runs for the first time when `v1.0.0` is pushed.
-  Signing, SBOM attestation and provenance are unproven until then.
+- The `v1.0.0-rc.1` release run failed in its download step (fixed in rc.2,
+  #8); `v1.0.0-rc.2` is the first run of the release workflow with that fix.
 - Not exercised: the Helm chart on a live cluster, a live Authentik, real
   notification providers, the egress profile with real outbound
   integrations, WebAuthn with a hardware key, Claude Desktop and on-prem MCP
   hosts, and contributed classifier samples.
 
 ## [Unreleased]
+
+Nothing yet.
+
+## [1.0.0-rc.2] - 2026-11-05
+
+Second release candidate of 1.0.0. It adds Fidelity statement and activity
+imports, flexible CSV mapping, a pull request template check, a fix to the
+release workflow and dependency updates; details below.
 
 ### Added
 
