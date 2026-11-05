@@ -96,7 +96,11 @@ export function CategoryMapPage() {
     },
   ];
   return (
-    <PlanningPage title="Schedule hints" actions={<Link to="/tax">Back to tax years</Link>}>
+    <PlanningPage title="Schedule hints" actions={
+        <Link to="/tax" className="btn btn--secondary btn--md">
+          Back to tax years
+        </Link>
+      }>
       <QueryState loading={categories.isPending || map.isPending} error={categories.error ?? map.error} label="schedule hints">
         <Card title="Category to schedule">
           <p>

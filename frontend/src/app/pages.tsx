@@ -59,7 +59,7 @@ export function LoginPage() {
       <h1 id="login-title">Sign in</h1>
       <Card>
         <p>Sign-in is not available yet. Local accounts with multi-factor authentication and single sign-on arrive in Phase 1.</p>
-        <Link to="/">Back to the dashboard</Link>
+        <Link to="/" className="link-action link-action--back">Back to the dashboard</Link>
       </Card>
     </section>
   );

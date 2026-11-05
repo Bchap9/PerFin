@@ -136,7 +136,9 @@ export function LocalLoginForm({ returnTo, showForgot }: { returnTo: string; sho
       </Button>
       {showForgot ? (
         <p className="auth-muted">
-          <Link to={FORGOT_PATH}>Forgot your password?</Link>
+          <Link to={FORGOT_PATH} className="link-action">
+            Forgot your password?
+          </Link>
         </p>
       ) : null}
     </form>
