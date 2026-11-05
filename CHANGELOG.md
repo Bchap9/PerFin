@@ -32,7 +32,47 @@ What remains (details in docs/ROADMAP.md):
 
 ## [Unreleased]
 
-Nothing yet.
+### Added
+
+- CSV/TSV imports of never-seen layouts: when no saved mapping fits and the
+  deterministic suggestion is confident (date and amount columns named
+  exactly, every row before the footer readable, the day/month order not a
+  guess), a CSV, TSV or XLSX uploaded by a member or above is imported with
+  it and the suggestion is saved as a household mapping (audit
+  `import_mapping.create`, `origin: suggested`; run summary
+  `mapping_suggested`). A sign taken on trust is never written into a
+  liability account. Otherwise the `mapping_required` review item carries
+  the suggestion and why it was not used (`auto_import`).
+- `suggest_mapping` (`app/ingestion/parsers/structured.py`): the header row
+  is searched among the first 11 rows, (column, role) pairs are scored
+  exact > whole word > substring and assigned globally best first, a column
+  only takes a role when its cells fit, posting/transaction/run dates beat
+  settlement dates, a running balance can prove the sign; it returns a
+  score, per-role reasons and doubts. `GET /imports/{id}/preview` has
+  `suggestion`; `suggest_spec` keeps its signature.
+- Multi-account CSVs: `MappingSpec.account_column` (optional; mappings
+  saved without it read as before). Rows are grouped by the last four
+  digits of the cell and each group is matched to an account like an OFX
+  statement; an unmatched group is an `unknown_account` item with `group`
+  (no digits), and "remember" re-reads them from the stored table. The
+  mapping editor shows and sets the account-number column and the
+  suggestion's confidence; the review queue says how many transactions of
+  a multi-account file wait for an account.
+- Synthetic multi-account activity export
+  (`backend/tests/fixtures/synth_activity_csv.py`).
+
+### Fixed
+
+- The mapping suggestion took the first column whose header merely
+  contained a role word: an always-empty "Exchange Currency" became the
+  currency column (and then every row was refused), a "Type" column of
+  `Cash`/`Margin` became the debit/credit indicator, and a settlement date
+  could become the date. Exports with a preamble got no suggestion.
+- An empty cell in a mapped currency column refused the row; it now means
+  the account's currency (a cell that is not a three-letter code still
+  refuses it).
+- Rows with a single filled cell (disclaimer paragraphs, "Date downloaded")
+  are no longer reported as skipped rows.
 
 ## [1.0.0-rc.1] - 2026-11-05
 

@@ -228,7 +228,9 @@ Order of attempts, each producing a confidence score:
 3. **Column-mapping review.** No model is consulted. If neither stage reaches
    threshold, the document goes to review with its extracted tables and a
    mapping editor; saving the mapping creates a fingerprint so the next
-   statement from that layout is automatic.
+   statement from that layout is automatic. A CSV/TSV/XLSX whose header
+   names its columns plainly is mapped deterministically and saved without
+   asking ("Never-seen layouts" under "Match and deduplicate").
 
 Output: `kind`, `institution_id?`, `account_id?` (matched by last-4 and
 institution), `period_start`, `period_end`, `tax_year?`, and per-field
@@ -622,18 +624,68 @@ same database transaction.
 - **CSV/TSV.** The header row's fingerprint (case, spacing and a
   formula-guard quote ignored; for headerless files the shape of the first
   row) is looked up in the household's saved `import_mapping`s, trying the
-  first rows so a preamble is found. No mapping is an `unparsed`
-  (`mapping_required`) item: the mapping editor reads the stored table
-  through `GET /imports/{document_id}/preview` (never re-parsed; it also
-  proposes a mapping from header names and cell shapes, deterministic, no
-  model) and saves it with `POST /imports/mappings`; `POST
+  first rows so a preamble is found.
+- **Suggested mapping** (`suggest_mapping` in
+  `app/ingestion/parsers/structured.py`; deterministic, no model). The
+  header row is searched among the first 11 rows (`skip_rows` is what lies
+  above it). Every (column, role) pair is scored: an exact header word
+  ("Amount", "Run Date", "Account Number") beats a whole word inside the
+  header ("Exchange Currency" for currency) beats a substring; posting,
+  booking, transaction, trade and run dates beat settlement and value
+  dates. Pairs are assigned globally, best first, one role per column, so
+  an earlier partial match no longer takes a role from a later exact one.
+  A column only takes a role when its cells fit (dates parse in one format,
+  amounts parse, currencies are three-letter codes, an indicator column
+  holds direction words such as `DR`/`CR`/`Debit`, an account column holds
+  several account-number-like values); an empty column never takes one,
+  and a "Type" column of `Cash`/`Margin` is no indicator. A running balance
+  that agrees with only one sign convention sets `sign`. The suggestion is
+  **confident** when the date and amount (or debit/credit) columns are
+  named exactly, every row before the footer reads and the day/month order
+  is not a guess; it reports a score, per-role reasons (role, column, match
+  kind, share of cells that fit) and its doubts.
+- **Never-seen layouts.** When no saved mapping fits and the suggestion is
+  confident, a CSV, TSV or XLSX whose person (the uploader, or who asked for
+  the re-run) is a member or above is imported with it, and the suggestion
+  is saved as an ordinary household mapping named after the header
+  (`created_by` that person; audit `import_mapping.create` with `origin:
+  suggested`; the run summary has `mapping_suggested`), so the next file is
+  recognised by its fingerprint. A single signed amount column read as
+  "positive is money in" on trust (no debit/credit columns, indicator or
+  agreeing balance) is never written into a liability account (card exports
+  often list purchases as positive). Page tables of PDFs and images, drop
+  folder and mail intake without a person, and doubtful suggestions are not
+  imported on their own.
+- **Mapping editor.** Otherwise the document gets an `unparsed`
+  (`mapping_required`) item carrying the suggestion (`suggested_spec`, its
+  facts, and `auto_import`: why it was not used): the mapping editor reads
+  the stored table through `GET /imports/{document_id}/preview` (never
+  re-parsed; prefilled with the same suggestion and showing its confidence)
+  and saves it with `POST /imports/mappings`; `POST
   /imports/{document_id}/apply-mapping` re-runs the import from the stored
   extraction as the `imports.apply_mapping` job and resolves the items it
   answered. The next file with the same header is imported without asking.
-  Mapped rows that do not parse (footers, totals) are skipped and listed in
-  a `low_confidence_field` item; a running-balance column gives the closing
-  balance and a reconciliation check (each balance = previous + amount;
-  mismatches are a `low_confidence_field` item).
+- **Rows.** Mapped rows that do not parse (totals, rows without an amount)
+  are skipped and listed in a `low_confidence_field` item; rows with at most
+  one filled cell (disclaimer paragraphs, a "Date downloaded" line) are
+  notes, neither imported nor reported. An empty currency cell is the
+  account's currency; another cell that is not a three-letter code makes
+  the row unreadable. A running-balance column gives the closing balance and
+  a reconciliation check (each balance = previous + amount; mismatches are a
+  `low_confidence_field` item).
+- **Multi-account files.** A mapping with `account_column` (a brokerage
+  "Activity" export lists an Individual, a Roth IRA and an HSA account in
+  one file) imports one statement per account: rows are grouped by the
+  last four digits of the cell and each group is matched like an OFX
+  statement (`match_account` among the accounts the person may import
+  into; the document's or the mapping's account only for a file with one
+  account; an account chosen on re-run takes the groups that match
+  nothing). A group that matches none or several accounts is an
+  `unknown_account` item naming the group, never the digits; "remember"
+  re-reads them from the stored table. The cell text is used in memory for
+  grouping only: statements keep the last four digits, and review items,
+  audit rows, events and run logs carry ids and counts. Investment
+  semantics (buys, sells, positions) of such files are not read here.
 - **Dedupe.** `import_hash` exact matches are skipped (re-imports and
   overlapping statements); an incoming row with no hash match but an
   existing, unclaimed transaction on the same date with the same amount
@@ -1030,9 +1082,10 @@ Phase 4 status (`app/ingestion/intake/email.py`, `app/workers/handlers/mailbox.p
 PerFin does not call a language model at any stage of ingestion, local or
 hosted (ADR-0007). Document text, account numbers and personal details have no
 code path off the host. The cost is that a never-seen statement layout needs a
-person once, through the column-mapping editor; the benefit is that the
-pipeline is deterministic, reproducible and auditable, and a crafted document
-cannot talk its way into the ledger.
+person once, through the column-mapping editor (unless it is a delimited file
+whose header the deterministic suggestion reads with confidence); the benefit
+is that the pipeline is deterministic, reproducible and auditable, and a
+crafted document cannot talk its way into the ledger.
 
 The heuristic classifier is a small local model trained offline on synthetic
 and contributed samples; it never makes network calls and ships as a versioned

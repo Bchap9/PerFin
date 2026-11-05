@@ -9647,6 +9647,16 @@
               }
             ]
           },
+          "suggestion": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/MappingSuggestionOut"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "tables": {
             "items": {
               "$ref": "#/components/schemas/PreviewTable"
@@ -9672,6 +9682,7 @@
           "warnings",
           "matched_mapping_id",
           "suggested_spec",
+          "suggestion",
           "last_import"
         ],
         "title": "ImportPreview",
@@ -11768,6 +11779,19 @@
         "additionalProperties": false,
         "description": "How to read one delimited layout (module doc).",
         "properties": {
+          "account_column": {
+            "anyOf": [
+              {
+                "exclusiveMaximum": 1000.0,
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Account Column"
+          },
           "amount_column": {
             "anyOf": [
               {
@@ -11959,6 +11983,82 @@
           "date_format"
         ],
         "title": "MappingSpec",
+        "type": "object"
+      },
+      "MappingSuggestionOut": {
+        "description": "The deterministic mapping guess and how far it can be trusted.\n\n``confident`` (no ``doubts``) is what the importer needs to import a\nnever-seen CSV/TSV layout without asking (INGESTION.md \"Parse\");\n``doubts`` are codes: ``header_not_exact``, ``rows_unreadable``,\n``date_order_guessed``, ``no_rows``. ``sign_evidence`` is\n``debit_credit``, ``indicator``, ``balance`` or null (a signed amount\ncolumn read as \"positive is money in\" on trust).",
+        "properties": {
+          "accounts": {
+            "title": "Accounts",
+            "type": "integer"
+          },
+          "confident": {
+            "title": "Confident",
+            "type": "boolean"
+          },
+          "doubts": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Doubts",
+            "type": "array"
+          },
+          "failed_rows": {
+            "title": "Failed Rows",
+            "type": "integer"
+          },
+          "footer_rows": {
+            "title": "Footer Rows",
+            "type": "integer"
+          },
+          "parsed_rows": {
+            "title": "Parsed Rows",
+            "type": "integer"
+          },
+          "roles": {
+            "items": {
+              "$ref": "#/components/schemas/SuggestionRole"
+            },
+            "title": "Roles",
+            "type": "array"
+          },
+          "score": {
+            "title": "Score",
+            "type": "number"
+          },
+          "sign_evidence": {
+            "anyOf": [
+              {
+                "enum": [
+                  "debit_credit",
+                  "indicator",
+                  "balance"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Sign Evidence"
+          },
+          "spec": {
+            "$ref": "#/components/schemas/MappingSpec"
+          }
+        },
+        "required": [
+          "spec",
+          "score",
+          "confident",
+          "parsed_rows",
+          "failed_rows",
+          "footer_rows",
+          "accounts",
+          "sign_evidence",
+          "doubts",
+          "roles"
+        ],
+        "title": "MappingSuggestionOut",
         "type": "object"
       },
       "MappingUpdate": {
@@ -19045,6 +19145,52 @@
           "splits"
         ],
         "title": "SplitSet",
+        "type": "object"
+      },
+      "SuggestionRole": {
+        "description": "Why the suggestion gave a column a role (no cell text).",
+        "properties": {
+          "column": {
+            "title": "Column",
+            "type": "integer"
+          },
+          "fit": {
+            "title": "Fit",
+            "type": "number"
+          },
+          "match": {
+            "enum": [
+              "exact",
+              "word",
+              "substring"
+            ],
+            "title": "Match",
+            "type": "string"
+          },
+          "role": {
+            "enum": [
+              "date",
+              "amount",
+              "debit",
+              "credit",
+              "indicator",
+              "balance",
+              "currency",
+              "account",
+              "payee",
+              "memo"
+            ],
+            "title": "Role",
+            "type": "string"
+          }
+        },
+        "required": [
+          "role",
+          "column",
+          "match",
+          "fit"
+        ],
+        "title": "SuggestionRole",
         "type": "object"
       },
       "SummaryCategory": {

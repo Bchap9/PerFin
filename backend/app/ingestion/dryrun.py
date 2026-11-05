@@ -198,7 +198,7 @@ class DryRun:
 
     def parse(self, kind: str, result: ExtractResult, found: Classification) -> ExtractResult:
         from app.ingestion.parsers.registry import DOCUMENT_KINDS, parse_extraction
-        from app.ingestion.parsers.structured import from_table, suggest_spec
+        from app.ingestion.parsers.structured import from_table, suggest_mapping
 
         if kind in DOCUMENT_KINDS:
             parsed = parse_extraction(
@@ -217,10 +217,12 @@ class DryRun:
         if result.tables:
             tables = []
             for table in result.tables:
-                spec = suggest_spec(table)
+                suggestion = suggest_mapping(table)
+                spec = suggestion.spec if suggestion is not None else None
                 entry: dict[str, Any] = {
                     "rows": len(table.rows),
                     "suggested_mapping": spec.model_dump(mode="json") if spec else None,
+                    "suggestion": suggestion.summary() if suggestion is not None else None,
                 }
                 if spec is not None:
                     statement = from_table(table, spec)

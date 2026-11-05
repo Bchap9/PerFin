@@ -19,9 +19,20 @@ currency symbols, spaces and apostrophes are ignored, ``(12.34)`` and
 ``12.34-`` are negative. ``date_format`` is one of :data:`DATE_FORMATS`
 (month names are English three-letter abbreviations, whatever the locale).
 ``currency`` fixes the currency of every row (default: the account's);
-``currency_column`` reads it per row; a row in another currency than the
-account's is skipped and reported. ``skip_rows`` rows (a preamble) come
-before the header (``has_header``) or the first data row.
+``currency_column`` reads it per row (an empty cell means the account's
+currency, a cell that is not a three-letter code makes the row unreadable);
+a row in another currency than the account's is skipped and reported.
+``skip_rows`` rows (a preamble) come before the header (``has_header``) or
+the first data row.
+
+``account_column`` (optional) holds an account number per row, for exports
+that list several accounts in one file (a brokerage "Activity" export with
+an Individual, a Roth IRA and an HSA account). The rows are grouped by that
+column and each group is imported as its own statement, matched to an
+account by the **last four digits** of the cell like an OFX statement
+(``app.ingestion.match.accounts``); the cell text itself is never stored or
+logged. Mappings saved before the field existed have no ``account_column``
+and read exactly as before.
 
 Inputs forbid unknown fields (SECURITY.md F4).
 """
@@ -149,6 +160,7 @@ class MappingSpec(BaseModel):
     balance_column: Column | None = None
     currency_column: Column | None = None
     currency: CurrencyCode | None = None
+    account_column: Column | None = None
 
     @model_validator(mode="after")
     def _consistent(self) -> Self:
@@ -181,6 +193,7 @@ class MappingSpec(BaseModel):
             "memo": self.memo_column,
             "balance": self.balance_column,
             "currency": self.currency_column,
+            "account": self.account_column,
         }
 
     def max_column(self) -> int:
@@ -342,6 +355,51 @@ class PreviewStatement(_Output):
     transactions: list[PreviewTransaction]
 
 
+class SuggestionRole(_Output):
+    """Why the suggestion gave a column a role (no cell text)."""
+
+    role: Literal[
+        "date",
+        "amount",
+        "debit",
+        "credit",
+        "indicator",
+        "balance",
+        "currency",
+        "account",
+        "payee",
+        "memo",
+    ]
+    column: int
+    #: How the header named the role.
+    match: Literal["exact", "word", "substring"]
+    #: Share of the column's non-empty sample cells that fit the role (0-1).
+    fit: float
+
+
+class MappingSuggestionOut(_Output):
+    """The deterministic mapping guess and how far it can be trusted.
+
+    ``confident`` (no ``doubts``) is what the importer needs to import a
+    never-seen CSV/TSV layout without asking (INGESTION.md "Parse");
+    ``doubts`` are codes: ``header_not_exact``, ``rows_unreadable``,
+    ``date_order_guessed``, ``no_rows``. ``sign_evidence`` is
+    ``debit_credit``, ``indicator``, ``balance`` or null (a signed amount
+    column read as "positive is money in" on trust).
+    """
+
+    spec: MappingSpec
+    score: float
+    confident: bool
+    parsed_rows: int
+    failed_rows: int
+    footer_rows: int
+    accounts: int
+    sign_evidence: Literal["debit_credit", "indicator", "balance"] | None
+    doubts: list[str]
+    roles: list[SuggestionRole]
+
+
 class ImportPreview(_Output):
     """``GET /imports/{document_id}/preview``: the stored sandbox output, never re-parsed."""
 
@@ -356,4 +414,6 @@ class ImportPreview(_Output):
     matched_mapping_id: uuid.UUID | None
     #: A guess from the header names and cell shapes, for the mapping editor.
     suggested_spec: MappingSpec | None
+    #: The same guess with its confidence and per-role reasons.
+    suggestion: MappingSuggestionOut | None
     last_import: dict[str, Any] | None
