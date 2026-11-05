@@ -456,8 +456,13 @@ has, of a document they may not open);
 
 Review notes (`app.domain.review.service`, router `review`; INGESTION.md
 "Review queue"): an item is `{"id", "kind", "state", "document_id",
-"payload", "resolution", "resolved_by", "resolved_at", "created_at",
-"next_step", "can_resolve"}` (`payload` holds ids and short facts written by
+"document", "reason", "payload", "resolution", "resolved_by", "resolved_at",
+"created_at", "next_step", "can_resolve"}` (`document` names the item's
+document: `{"id", "original_filename", "kind", "status", "mime_detected",
+"source", "created_at", "period_start", "period_end", "previewable"}`, `null`
+for an item without one; `previewable` says whether `GET
+/documents/{id}/preview` would serve the caller; `reason` is
+`payload.reason`; `payload` holds ids and short facts written by
 the pipeline or importer, never file content; `next_step` is
 `confirm_duplicate`, `choose_account`, `column_mapping`, `reprocess`,
 `choose_owner`, `attach_receipt` or `correct_fields`; `GET /review/{id}`

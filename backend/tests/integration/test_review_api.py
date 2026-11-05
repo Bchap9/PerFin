@@ -501,3 +501,52 @@ def test_unparsed_reprocess_and_mapping_hint(
     # The other open item of the document was superseded by the new run.
     assert load(factories, hh, ReviewItem, mapping.id).state is ReviewItemState.DISMISSED
     assert len(jobs_of(factories, hh, INGEST_JOB_TYPE)) == 1
+
+
+# ---------------------------------------------------------------------------
+# Items name their document
+# ---------------------------------------------------------------------------
+
+
+def test_items_name_their_document_and_reason(
+    home: dict[str, AuthedClient], factories: Factories, store: LocalFSBlobStore
+) -> None:
+    owner = home["owner"]
+    hh = hh_of(owner)
+    scan = document(factories, store, hh, mime="application/pdf", filename="october-statement.pdf")
+    held = document(
+        factories, store, hh, mime="application/pdf", filename="held.pdf", area=BlobArea.QUARANTINE
+    )
+    csv_doc = document(factories, store, hh, filename="activity.csv")
+    item(factories, scan, ReviewKind.UNKNOWN_ACCOUNT, {"reason": "account_not_found"})
+    item(factories, held, ReviewKind.UNPARSED, {"reason": "extraction_failed"})
+    item(factories, csv_doc, ReviewKind.LOW_CONFIDENCE_FIELD, {"reason": "lines_skipped"})
+    listed = owner.get(f"{API}/review").json()["items"]
+    by_name = {i["document"]["original_filename"]: i for i in listed}
+    assert by_name["october-statement.pdf"]["reason"] == "account_not_found"
+    assert by_name["october-statement.pdf"]["document"]["previewable"] is True
+    assert by_name["october-statement.pdf"]["document"]["mime_detected"] == "application/pdf"
+    assert by_name["held.pdf"]["document"]["previewable"] is False  # quarantined
+    assert by_name["activity.csv"]["document"]["previewable"] is False  # no pages
+    assert by_name["activity.csv"]["reason"] == "lines_skipped"
+    one = owner.get(f"{API}/review/{by_name['october-statement.pdf']['id']}").json()
+    assert one["document"]["original_filename"] == "october-statement.pdf"
+
+
+def test_an_item_without_a_document_has_none(
+    home: dict[str, AuthedClient], factories: Factories
+) -> None:
+    owner = home["owner"]
+    with factories.transaction() as db:
+        set_context(db, hh_of(owner))
+        review_repo_item = ReviewItem(
+            household_id=hh_of(owner),
+            kind=ReviewKind.REJECTED_EMAIL,
+            payload={"reason": "daily_digest"},
+        )
+        db.add(review_repo_item)
+    (listed,) = [
+        i for i in owner.get(f"{API}/review").json()["items"] if i["kind"] == "rejected_email"
+    ]
+    assert listed["document"] is None
+    assert listed["reason"] == "daily_digest"

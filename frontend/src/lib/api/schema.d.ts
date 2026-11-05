@@ -8215,11 +8215,45 @@ export interface components {
             before: components["schemas"]["ReviewState"];
         };
         /**
+         * ReviewDocument
+         * @description The document an item is about, so the queue can name and show it.
+         *
+         *     ``previewable``: the caller may see its pages (``GET
+         *     /documents/{id}/preview``: a PDF or image out of quarantine, member or
+         *     above, or a viewer where the household allows downloads).
+         */
+        ReviewDocument: {
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            kind: components["schemas"]["DocumentKind"];
+            /** Mime Detected */
+            mime_detected: string;
+            /** Original Filename */
+            original_filename: string | null;
+            /** Period End */
+            period_end: string | null;
+            /** Period Start */
+            period_start: string | null;
+            /** Previewable */
+            previewable: boolean;
+            source: components["schemas"]["DocumentSource"];
+            status: components["schemas"]["DocumentStatus"];
+        };
+        /**
          * ReviewItemOut
          * @description One review item. ``payload`` carries ids and short facts, never file content.
          *
          *     ``next_step`` names what the UI should offer; ``can_resolve`` whether the
-         *     caller may resolve or dismiss it.
+         *     caller may resolve or dismiss it. ``reason`` is ``payload.reason`` (what
+         *     raised it); ``document`` names the item's document.
          */
         ReviewItemOut: {
             /** Alternatives */
@@ -8231,6 +8265,7 @@ export interface components {
              * Format: date-time
              */
             created_at: string;
+            document?: components["schemas"]["ReviewDocument"] | null;
             /** Document Id */
             document_id: string | null;
             /**
@@ -8245,6 +8280,8 @@ export interface components {
             payload: {
                 [key: string]: unknown;
             };
+            /** Reason */
+            reason?: string | null;
             /** Regions */
             regions?: components["schemas"]["Region"][] | null;
             /** Resolution */

@@ -15326,8 +15326,89 @@
         "title": "ReviewChange",
         "type": "object"
       },
+      "ReviewDocument": {
+        "description": "The document an item is about, so the queue can name and show it.\n\n``previewable``: the caller may see its pages (``GET\n/documents/{id}/preview``: a PDF or image out of quarantine, member or\nabove, or a viewer where the household allows downloads).",
+        "properties": {
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "kind": {
+            "$ref": "#/components/schemas/DocumentKind"
+          },
+          "mime_detected": {
+            "title": "Mime Detected",
+            "type": "string"
+          },
+          "original_filename": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Original Filename"
+          },
+          "period_end": {
+            "anyOf": [
+              {
+                "format": "date",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Period End"
+          },
+          "period_start": {
+            "anyOf": [
+              {
+                "format": "date",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Period Start"
+          },
+          "previewable": {
+            "title": "Previewable",
+            "type": "boolean"
+          },
+          "source": {
+            "$ref": "#/components/schemas/DocumentSource"
+          },
+          "status": {
+            "$ref": "#/components/schemas/DocumentStatus"
+          }
+        },
+        "required": [
+          "id",
+          "original_filename",
+          "kind",
+          "status",
+          "mime_detected",
+          "source",
+          "created_at",
+          "period_start",
+          "period_end",
+          "previewable"
+        ],
+        "title": "ReviewDocument",
+        "type": "object"
+      },
       "ReviewItemOut": {
-        "description": "One review item. ``payload`` carries ids and short facts, never file content.\n\n``next_step`` names what the UI should offer; ``can_resolve`` whether the\ncaller may resolve or dismiss it.",
+        "description": "One review item. ``payload`` carries ids and short facts, never file content.\n\n``next_step`` names what the UI should offer; ``can_resolve`` whether the\ncaller may resolve or dismiss it. ``reason`` is ``payload.reason`` (what\nraised it); ``document`` names the item's document.",
         "properties": {
           "alternatives": {
             "anyOf": [
@@ -15351,6 +15432,16 @@
             "format": "date-time",
             "title": "Created At",
             "type": "string"
+          },
+          "document": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ReviewDocument"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "document_id": {
             "anyOf": [
@@ -15396,6 +15487,17 @@
             "additionalProperties": true,
             "title": "Payload",
             "type": "object"
+          },
+          "reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reason"
           },
           "regions": {
             "anyOf": [

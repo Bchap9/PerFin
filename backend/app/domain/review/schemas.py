@@ -69,7 +69,13 @@ from typing import Annotated, Any, Final, Literal, Self
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from app.core.money import MoneyIn
-from app.domain.documents.models import DocumentKind, ReviewItemState, ReviewKind
+from app.domain.documents.models import (
+    DocumentKind,
+    DocumentSource,
+    DocumentStatus,
+    ReviewItemState,
+    ReviewKind,
+)
 from app.domain.rules.schemas import RuleCreate
 from app.domain.transactions.schemas import MemoText, PayeeText
 from app.ingestion.classify.fingerprints import MatchSpec
@@ -248,17 +254,40 @@ class Alternative(BaseModel):
     source: Literal["document", "ledger", "household"]
 
 
+class ReviewDocument(BaseModel):
+    """The document an item is about, so the queue can name and show it.
+
+    ``previewable``: the caller may see its pages (``GET
+    /documents/{id}/preview``: a PDF or image out of quarantine, member or
+    above, or a viewer where the household allows downloads).
+    """
+
+    id: uuid.UUID
+    original_filename: str | None
+    kind: DocumentKind
+    status: DocumentStatus
+    mime_detected: str
+    source: DocumentSource
+    created_at: datetime
+    period_start: date | None
+    period_end: date | None
+    previewable: bool
+
+
 class ReviewItemOut(BaseModel):
     """One review item. ``payload`` carries ids and short facts, never file content.
 
     ``next_step`` names what the UI should offer; ``can_resolve`` whether the
-    caller may resolve or dismiss it.
+    caller may resolve or dismiss it. ``reason`` is ``payload.reason`` (what
+    raised it); ``document`` names the item's document.
     """
 
     id: uuid.UUID
     kind: ReviewKind
     state: ReviewItemState
     document_id: uuid.UUID | None
+    document: ReviewDocument | None = None
+    reason: str | None = None
     payload: dict[str, Any]
     resolution: dict[str, Any] | None
     resolved_by: uuid.UUID | None

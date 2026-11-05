@@ -59,6 +59,15 @@ What remains (details in docs/ROADMAP.md):
   - The upload list no longer offers "Map columns" for a file already read
     as investment activity.
 
+### Changed
+
+- Review queue items name the file they are about (a link, when it arrived,
+  the period it covers) and explain what happened, why PerFin stopped and how
+  to fix it, for every reason the importer raises. A "Fix..." dialog shows the
+  document's pages beside the explanation and the controls. `ReviewItemOut`
+  gains `document` (filename, kind, status, type, source, dates,
+  `previewable`) and `reason`, loaded in one query for the whole list.
+
 ## [1.0.0-rc.2] - 2026-11-05
 
 Second release candidate of 1.0.0. It adds Fidelity statement and activity
