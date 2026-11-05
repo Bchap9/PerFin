@@ -6,13 +6,13 @@ All notable changes to PerFin are recorded here. The format follows
 
 ## Status
 
-The current release candidate is `v1.0.0-rc.2`; the final `v1.0.0` follows the
+The current release candidate is `v1.0.0-rc.3`; the final `v1.0.0` follows the
 external security review. Every phase (0-7) is implemented. Alembic head is
-`0009`. `make check` passes from the repository root
-(2026-11-04): SPDX; backend ruff, ruff format, mypy --strict (634 source
-files plus 4 scripts), bandit, 7431 pytest tests with `-n auto` and OpenAPI
-drift; frontend eslint, tsc, 399 vitest tests in 55 files and the
-production build; `pip-audit` finds no known vulnerabilities and
+`0009`. On 2026-11-05: SPDX; backend ruff, ruff format, mypy --strict (657
+source files), bandit, OpenAPI drift and 7742 pytest tests with `-n auto`,
+of which the OCR and Helm tests (67) need Tesseract and `helm` and were run
+only in CI; frontend eslint, tsc, 439 vitest tests in 57 files and the
+production build. As of rc.2: `pip-audit` finds no known vulnerabilities and
 `npm audit --audit-level=high` passes with 10 moderate advisories in dev
 tooling (eslint, typescript-eslint, minimatch), none high.
 CI is green end to end on GitHub Actions for commit `21d2b38`: `ci` run
@@ -25,13 +25,27 @@ What remains (details in docs/ROADMAP.md):
 - An external security review or penetration test before the tag. An
   internal review was done every phase (docs/security/CONTROLS.md).
 - The `v1.0.0-rc.1` release run failed in its download step (fixed in rc.2,
-  #8); `v1.0.0-rc.2` is the first run of the release workflow with that fix.
+  #8). `v1.0.0-rc.3` also publishes the new `perfin-ml` image.
+- Not exercised: the optional local-model containers (`ml`/`ml-cuda`
+  profiles) against a real Ollama runtime and GPU; the adapter is tested
+  against a fake runtime only.
 - Not exercised: the Helm chart on a live cluster, a live Authentik, real
   notification providers, the egress profile with real outbound
   integrations, WebAuthn with a hardware key, Claude Desktop and on-prem MCP
   hosts, and contributed classifier samples.
 
 ## [Unreleased]
+
+Nothing yet.
+
+## [1.0.0-rc.3] - 2026-11-05
+
+Third release candidate of 1.0.0. Fidelity activity CSVs import as investment
+activity, the review queue names each document and explains how to fix it,
+accounts can be created from a document's own details, account subtypes (IRA
+kinds, 401(k)s, 529s and more) with their tax treatment, and an optional
+local-model container suggests what unfamiliar documents are; details below.
+Migration `0009` adds `account.subtype`.
 
 ### Fixed
 

@@ -27,7 +27,8 @@ MAJOR version you can skip releases: the migrations of every skipped release
 run in order.
 
 Images are published to `ghcr.io/bchap9/perfin` (and the optional egress
-proxy to `ghcr.io/bchap9/perfin-egress`) with the tags `1.2.3`, `1.2` and `1`
+proxy to `ghcr.io/bchap9/perfin-egress`, the optional local-model adapter to
+`ghcr.io/bchap9/perfin-ml`) with the tags `1.2.3`, `1.2` and `1`
 (and `latest` for the newest non-pre-release). The Helm chart is published to
 `oci://ghcr.io/bchap9/charts/perfin`. Pin an exact version, or better a
 digest, in production; never run `latest`. The chart refuses
@@ -273,6 +274,20 @@ Because migrations only move forward, a rollback is a restore:
 
 Data entered after the upgrade is lost by a restore; export it first if you
 need it ([PORTABILITY.md](PORTABILITY.md)).
+
+## Notes for specific releases
+
+### 1.0.0-rc.3
+
+- Migration `0009` adds the nullable `account.subtype` column. It is
+  additive and runs on its own during the upgrade, like every migration.
+- New optional settings `PERFIN_ML_URL`, `PERFIN_ML_TOKEN`,
+  `PERFIN_ML_TIMEOUT_SECONDS` and `PERFIN_ML_MAX_CHARS` default to off;
+  existing `.env` files keep working. `PERFIN_ML_URL`, when set, must be a
+  local address or the application refuses to start.
+- The `perfin-ml` image and the Ollama runtime only start with the `ml` or
+  `ml-cuda` Compose profile ([ML.md](ML.md)). The worker joins a new internal
+  `ml` network either way; `docker compose up -d` creates it.
 
 ## Reporting problems
 
