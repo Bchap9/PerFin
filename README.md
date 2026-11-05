@@ -21,7 +21,7 @@ tax documents from one place, with ingestion that does most of the work for you:
 upload a statement, drop a file into a watched folder, or forward a receipt by
 email, and PerFin works out what it is looking at and files it away.
 
-> Status: **1.0.0 release candidate** (not yet tagged). Every roadmap phase
+> Status: **1.0.0 release candidate**, tagged `v1.0.0-rc.1`. Every roadmap phase
 > (0-7) is implemented: login with MFA, WebAuthn and OIDC, households and
 > account grants; the ledger (accounts, transactions, rules, budgets, goals,
 > reports); smart ingestion of CSV/OFX/QIF/XLSX, text-layer and scanned PDFs,

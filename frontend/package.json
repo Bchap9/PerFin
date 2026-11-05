@@ -1,6 +1,6 @@
 {
   "name": "perfin-frontend",
-  "version": "1.0.0",
+  "version": "1.0.0-rc.1",
   "private": true,
   "license": "AGPL-3.0-or-later",
   "type": "module",
