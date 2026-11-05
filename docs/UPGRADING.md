@@ -277,6 +277,12 @@ need it ([PORTABILITY.md](PORTABILITY.md)).
 
 ## Notes for specific releases
 
+### 1.0.0-rc.4
+
+- No migration and no new settings. `DELETE /documents/{id}` keeps its
+  behaviour by default (imported rows stay, unlinked); `?with_data=true` is
+  new and opt-in.
+
 ### 1.0.0-rc.3
 
 - Migration `0009` adds the nullable `account.subtype` column. It is

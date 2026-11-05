@@ -6,7 +6,7 @@ All notable changes to PerFin are recorded here. The format follows
 
 ## Status
 
-The current release candidate is `v1.0.0-rc.3`; the final `v1.0.0` follows the
+The current release candidate is `v1.0.0-rc.4`; the final `v1.0.0` follows the
 external security review. Every phase (0-7) is implemented. Alembic head is
 `0009`. On 2026-11-05: SPDX; backend ruff, ruff format, mypy --strict (657
 source files), bandit, OpenAPI drift and 7742 pytest tests with `-n auto`,
@@ -35,6 +35,14 @@ What remains (details in docs/ROADMAP.md):
   hosts, and contributed classifier samples.
 
 ## [Unreleased]
+
+Nothing yet.
+
+## [1.0.0-rc.4] - 2026-11-05
+
+Fourth release candidate of 1.0.0. Documents can be deleted from the app,
+either the file alone or the file with everything imported from it. No
+migration; upgrading is a plain image update.
 
 ### Added
 
