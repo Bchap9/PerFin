@@ -97,6 +97,11 @@ What remains (details in docs/ROADMAP.md):
 
 ### Changed
 
+- Dependabot no longer proposes major-version bumps for react, react-dom,
+  their type packages, typescript and @types/node. Those are deliberate
+  upgrades (React 18 per ADR-0001, the TypeScript compiler the lint
+  toolchain depends on, and Node types matching the Node 22 runtime);
+  minor, patch and security updates still arrive.
 - The generic brokerage parser (version 2) reads more layouts: header cells
   over up to three lines or ending in a date, `Symbol/CUSIP` (a valid
   CUSIP is kept as the CUSIP), a security-name column, a settlement date as
