@@ -4,24 +4,38 @@ import "./documents.css";
 
 import { useQuery } from "@tanstack/react-query";
 import { Link, useParams } from "@tanstack/react-router";
+import { useState } from "react";
 
 import { Badge } from "../../components/Badge";
+import { Button } from "../../components/Button";
 import { Card } from "../../components/Card";
 import { Spinner } from "../../components/Spinner";
 import { errorMessage } from "../../lib/api/client";
 import { formatDate, formatDateTime } from "../../lib/dates";
 import { STATUS_LABELS } from "../imports/api";
+import { DocumentAccountsDialog } from "../imports/DocumentAccountsDialog";
 import { statusTone } from "../imports/UploadPage";
-import { docKeys, downloadUrl, getDocumentDetail, KIND_LABELS, SOURCE_LABELS } from "./api";
+import {
+  docKeys,
+  downloadUrl,
+  getDocumentDetail,
+  KIND_LABELS,
+  SOURCE_LABELS,
+} from "./api";
 import { PageViewer } from "./PageViewer";
 
 export function DocumentDetailPage() {
   const documentId = useParams({
     strict: false,
-    select: (params: Record<string, string | undefined>) => params["documentId"] ?? "",
+    select: (params: Record<string, string | undefined>) =>
+      params["documentId"] ?? "",
   });
-  const detail = useQuery({ queryKey: docKeys.one(documentId), queryFn: () => getDocumentDetail(documentId) });
+  const detail = useQuery({
+    queryKey: docKeys.one(documentId),
+    queryFn: () => getDocumentDetail(documentId),
+  });
   const doc = detail.data;
+  const [accountsOpen, setAccountsOpen] = useState(false);
   return (
     <section aria-labelledby="page-title" className="ledger-stack">
       <div className="page-header">
@@ -42,8 +56,12 @@ export function DocumentDetailPage() {
               <dd>{KIND_LABELS[doc.kind]}</dd>
               <dt>Status</dt>
               <dd>
-                <Badge tone={statusTone(doc.status)}>{STATUS_LABELS[doc.status]}</Badge>
-                {doc.quarantined ? <Badge tone="danger">Quarantined</Badge> : null}
+                <Badge tone={statusTone(doc.status)}>
+                  {STATUS_LABELS[doc.status]}
+                </Badge>
+                {doc.quarantined ? (
+                  <Badge tone="danger">Quarantined</Badge>
+                ) : null}
               </dd>
               <dt>Source</dt>
               <dd>{SOURCE_LABELS[doc.source]}</dd>
@@ -54,7 +72,9 @@ export function DocumentDetailPage() {
                   <dt>Period</dt>
                   <dd>
                     {formatDate(doc.period_start) ?? doc.period_start} to{" "}
-                    {doc.period_end === null ? "" : (formatDate(doc.period_end) ?? doc.period_end)}
+                    {doc.period_end === null
+                      ? ""
+                      : (formatDate(doc.period_end) ?? doc.period_end)}
                   </dd>
                 </>
               )}
@@ -67,21 +87,46 @@ export function DocumentDetailPage() {
               <dt>Size</dt>
               <dd>{Math.max(1, Math.round(doc.size / 1024))} KiB</dd>
             </dl>
-            {doc.error === null ? null : <p className="ledger-error">{doc.error}</p>}
+            {doc.error === null ? null : (
+              <p className="ledger-error">{doc.error}</p>
+            )}
             <div className="ledger-actions">
               {doc.downloadable ? (
-                <a className="btn btn--secondary btn--md" href={downloadUrl(doc.id)} download>
+                <a
+                  className="btn btn--secondary btn--md"
+                  href={downloadUrl(doc.id)}
+                  download
+                >
                   Download original
                 </a>
               ) : (
-                <span className="ledger-muted">Your role cannot download the original file.</span>
+                <span className="ledger-muted">
+                  Your role cannot download the original file.
+                </span>
               )}
               {doc.open_review_items > 0 ? (
                 <Link to="/review">
                   {doc.open_review_items} item(s) to review
                 </Link>
               ) : null}
+              {doc.can_edit && doc.kind === "statement" ? (
+                <Button
+                  onClick={() => {
+                    setAccountsOpen(true);
+                  }}
+                >
+                  Accounts in this file
+                </Button>
+              ) : null}
             </div>
+            {accountsOpen ? (
+              <DocumentAccountsDialog
+                documentId={doc.id}
+                onClose={() => {
+                  setAccountsOpen(false);
+                }}
+              />
+            ) : null}
           </Card>
           {doc.quarantined ? null : (
             <Card title="Pages">

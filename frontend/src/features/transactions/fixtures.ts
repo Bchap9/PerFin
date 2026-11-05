@@ -6,7 +6,11 @@ import type { Category, Payee, Tag, Transaction } from "./api";
 
 export const NOW = "2026-11-03T10:00:00Z";
 
-export function account(id: string, name: string, extra: Partial<Account> = {}): Account {
+export function account(
+  id: string,
+  name: string,
+  extra: Partial<Account> = {},
+): Account {
   return {
     id,
     name,
@@ -27,18 +31,49 @@ export function account(id: string, name: string, extra: Partial<Account> = {}):
     number_last4: null,
     opened_on: null,
     asset_kind: null,
+    subtype: null,
+    subtype_label: null,
+    tax_treatment: null,
     ...extra,
   };
 }
 
 export const CATEGORIES: Category[] = [
-  { id: "c-1", name: "Groceries", kind: "expense", parent_id: null, system_key: null, tax_treatment: null, created_at: NOW, updated_at: NOW },
-  { id: "c-2", name: "Dining", kind: "expense", parent_id: null, system_key: null, tax_treatment: null, created_at: NOW, updated_at: NOW },
+  {
+    id: "c-1",
+    name: "Groceries",
+    kind: "expense",
+    parent_id: null,
+    system_key: null,
+    tax_treatment: null,
+    created_at: NOW,
+    updated_at: NOW,
+  },
+  {
+    id: "c-2",
+    name: "Dining",
+    kind: "expense",
+    parent_id: null,
+    system_key: null,
+    tax_treatment: null,
+    created_at: NOW,
+    updated_at: NOW,
+  },
 ];
 export const PAYEES: Payee[] = [
-  { id: "p-1", name: "Corner Market", normalized_name: "corner market", aliases: [], default_category_id: null, created_at: NOW, updated_at: NOW },
+  {
+    id: "p-1",
+    name: "Corner Market",
+    normalized_name: "corner market",
+    aliases: [],
+    default_category_id: null,
+    created_at: NOW,
+    updated_at: NOW,
+  },
 ];
-export const TAGS: Tag[] = [{ id: "t-1", name: "trip", created_at: NOW, updated_at: NOW }];
+export const TAGS: Tag[] = [
+  { id: "t-1", name: "trip", created_at: NOW, updated_at: NOW },
+];
 
 export function tx(id: string, extra: Partial<Transaction> = {}): Transaction {
   return {
@@ -65,10 +100,15 @@ export function tx(id: string, extra: Partial<Transaction> = {}): Transaction {
   };
 }
 
-export const page = (items: unknown[], next: string | null = null): Handler => () => json({ items, next_cursor: next });
+export const page =
+  (items: unknown[], next: string | null = null): Handler =>
+  () =>
+    json({ items, next_cursor: next });
 
 /** Handlers shared by the transaction screens. */
-export function lookupHandlers(accounts: Account[] = [account("a-1", "Everyday")]): Record<string, Handler> {
+export function lookupHandlers(
+  accounts: Account[] = [account("a-1", "Everyday")],
+): Record<string, Handler> {
   return {
     "GET /api/v1/accounts": page(accounts),
     "GET /api/v1/categories": page(CATEGORIES),

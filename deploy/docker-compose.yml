@@ -10,6 +10,7 @@
 #   docker compose --profile egress up -d    # optional outbound allowlist proxy
 #   docker compose --profile av up -d        # optional ClamAV
 #   docker compose --profile mcp up -d       # optional read-only MCP server
+#   docker compose --profile ml-cuda up -d   # optional local model (docs/ML.md)
 #
 # Hardening (checked by backend/tests/unit/test_compose_hardening.py):
 #   H1  app containers run as UID 10001 with a read-only root filesystem,
@@ -35,7 +36,8 @@
 #             (no db, worker or egress; AI_ACCESS.md M7)
 #   mcp_edge  proxy -> mcp, for the optional streamable-HTTP transport
 #   backend   api, worker, migrate, db (and clamav)
-#   egress    api, worker (and clamav) <-> egress proxy
+#   egress    api, worker (and clamav, the ml runtime) <-> egress proxy
+#   ml        worker <-> ml adapter <-> ml runtime (optional local model)
 #   outbound  egress proxy only; the single path to the internet
 
 name: perfin
@@ -232,7 +234,7 @@ services:
       # go to a writable sibling, never back into the inbox.
       - ${DROPFOLDER_HOST_INBOX:-./inbox}:/var/lib/perfin/inbox:ro
       - ${DROPFOLDER_HOST_PROCESSED:-./processed}:/var/lib/perfin/processed
-    networks: [backend, egress]
+    networks: [backend, egress, ml]
     healthcheck:
       # The worker serves no HTTP; its internal metrics endpoint answering
       # means the process is alive. The probe runs under `env -i`: it is a
@@ -399,6 +401,105 @@ services:
         condition: service_healthy
     restart: unless-stopped
 
+  # ------------------------------------------------------------------- ml --
+  # Optional local-model hints for ingestion (ADR-0010, docs/ML.md), like
+  # Immich's machine-learning container: off unless a profile starts it and
+  # PERFIN_ML_URL is set for the worker. `ml` runs the model on the CPU,
+  # `ml-cuda` on an NVIDIA GPU (NVIDIA Container Toolkit on the host):
+  #   docker compose --profile ml-cuda up -d
+  #   docker compose --profile ml-cuda --profile egress exec ml-runtime-cuda \
+  #     ollama pull qwen2.5:7b-instruct        # once; needs the egress entries
+  # The worker talks only to `ml` (the adapter: prompt, JSON schema, bearer
+  # token); `ml` talks only to the runtime. Both sit on the internal `ml`
+  # network: no route out, and the runtime reaches the internet only through
+  # the egress proxy, for model downloads. Answers are untrusted suggestions.
+  ml-init:
+    image: ${OLLAMA_IMAGE:-docker.io/ollama/ollama:0.6.8}
+    profiles: [ml, ml-cuda]
+    entrypoint:
+      - /bin/sh
+      - -c
+      - >-
+        [ "$$(stat -c %u:%g /models)" = 10001:10001 ] || chown 10001:10001 /models
+    user: "0:0"
+    read_only: true
+    cap_drop: [ALL]
+    cap_add: [CHOWN]
+    security_opt:
+      - no-new-privileges:true
+    network_mode: none
+    pids_limit: 16
+    mem_limit: 64m
+    volumes:
+      - ml_models:/models
+    restart: "no"
+    logging: *logging
+
+  ml:
+    <<: *hardened
+    image: ${ML_IMAGE:-ghcr.io/bchap9/perfin-ml}:${PERFIN_VERSION:-latest}
+    build:
+      context: ./ml
+      args:
+        - PYTHON_IMAGE
+    profiles: [ml, ml-cuda]
+    environment:
+      PERFIN_ML_TOKEN: ${PERFIN_ML_TOKEN:-}
+      PERFIN_ML_RUNTIME: http://ollama:11434
+      PERFIN_ML_MODEL: ${ML_MODEL:-qwen2.5:7b-instruct}
+      PERFIN_ML_VISION_MODEL: ${ML_VISION_MODEL:-}
+      PERFIN_ML_TIMEOUT: ${ML_TIMEOUT:-90}
+    mem_limit: 128m
+    memswap_limit: 128m
+    pids_limit: 64
+    networks: [ml]
+    restart: unless-stopped
+
+  ml-runtime: &ml-runtime
+    <<: *hardened
+    image: ${OLLAMA_IMAGE:-docker.io/ollama/ollama:0.6.8}
+    profiles: [ml]
+    environment: &ml-runtime-env
+      HOME: /models
+      OLLAMA_MODELS: /models
+      OLLAMA_HOST: 0.0.0.0:11434
+      OLLAMA_KEEP_ALIVE: ${OLLAMA_KEEP_ALIVE:-30m}
+      OLLAMA_NUM_PARALLEL: "1"
+      OLLAMA_MAX_LOADED_MODELS: "1"
+      # Model downloads only (`ollama pull`), through the allowlist proxy.
+      HTTPS_PROXY: http://egress:3128
+      NO_PROXY: localhost,127.0.0.1,ollama,ml
+    volumes:
+      - ml_models:/models
+    mem_limit: ${ML_MEM_LIMIT:-12g}
+    memswap_limit: ${ML_MEM_LIMIT:-12g}
+    pids_limit: 512
+    tmpfs:
+      - /tmp:size=256m,mode=1777,noexec,nosuid,nodev
+    networks:
+      ml:
+        aliases: [ollama]
+      egress: {}
+    depends_on:
+      ml-init:
+        condition: service_completed_successfully
+    restart: unless-stopped
+
+  ml-runtime-cuda:
+    <<: *ml-runtime
+    profiles: [ml-cuda]
+    environment:
+      <<: *ml-runtime-env
+      NVIDIA_VISIBLE_DEVICES: ${ML_GPU:-all}
+      NVIDIA_DRIVER_CAPABILITIES: compute,utility
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+
   # --------------------------------------------------------------- egress --
   # Optional CONNECT-only allowlist proxy (profile `egress`, deploy/egress).
   # The only container with a route to the internet besides the TLS proxy;
@@ -441,6 +542,9 @@ networks:
     internal: true
   egress:
     internal: true
+  # worker <-> ml adapter <-> model runtime (profiles ml / ml-cuda)
+  ml:
+    internal: true
   outbound: {}
 
 volumes:
@@ -450,3 +554,4 @@ volumes:
   caddy_data: {}
   caddy_config: {}
   clamav_db: {}
+  ml_models: {}

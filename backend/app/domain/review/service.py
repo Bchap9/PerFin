@@ -59,6 +59,7 @@ and emits ``review.resolved`` / ``review.dismissed``.
 from __future__ import annotations
 
 import uuid
+from collections.abc import Sequence
 from typing import Any, Final
 
 from sqlalchemy import Boolean, ColumnElement, String, and_, cast, not_, or_, select
@@ -79,8 +80,9 @@ from app.domain.accounts.visibility import (
     visible_account_filter,
 )
 from app.domain.documents import repo as documents_repo
-from app.domain.documents.manage import can_edit_document, queue_ingestion
+from app.domain.documents.manage import can_edit_document, may_download, queue_ingestion
 from app.domain.documents.models import (
+    Blob,
     BlobArea,
     Document,
     DocumentStatus,
@@ -101,6 +103,7 @@ from app.domain.review.schemas import (
     ResolveUnknownAccount,
     ResolveUnknownOwner,
     ResolveUnparsed,
+    ReviewDocument,
     ReviewItemOut,
     ReviewPage,
     TransactionFix,
@@ -233,15 +236,62 @@ def _next_step(item: ReviewItem) -> NextStep | None:
     return None
 
 
+#: MIME types whose pages the sandbox renders as previews.
+PREVIEW_MIMES: Final = ("application/pdf", "image/")
+
+
+def _documents(
+    db: Session, principal: Principal, items: Sequence[ReviewItem]
+) -> dict[uuid.UUID, ReviewDocument]:
+    """The documents ``items`` are about, in one query (with their blob's area)."""
+    ids = {item.document_id for item in items if item.document_id is not None}
+    if not ids:
+        return {}
+    household_id = _household(principal)
+    rows = db.execute(
+        select(Document, Blob.area)
+        .join(Blob, (Blob.household_id == Document.household_id) & (Blob.id == Document.blob_id))
+        .where(Document.household_id == household_id, Document.id.in_(ids))
+    ).all()
+    pages = may_download(db, principal)
+    return {
+        document.id: ReviewDocument(
+            id=document.id,
+            original_filename=document.original_filename,
+            kind=document.kind,
+            status=document.status,
+            mime_detected=document.mime_detected,
+            source=document.source,
+            created_at=document.created_at,
+            period_start=document.period_start,
+            period_end=document.period_end,
+            previewable=pages
+            and area is not BlobArea.QUARANTINE
+            and document.mime_detected.startswith(PREVIEW_MIMES),
+        )
+        for document, area in rows
+    }
+
+
 def _out(
-    db: Session, principal: Principal, item: ReviewItem, *, detail: bool = False
+    db: Session,
+    principal: Principal,
+    item: ReviewItem,
+    *,
+    detail: bool = False,
+    documents: dict[uuid.UUID, ReviewDocument] | None = None,
 ) -> ReviewItemOut:
     regions, alternatives = assist.enrich(db, principal, item) if detail else (None, None)
+    if documents is None:
+        documents = _documents(db, principal, [item])
+    reason = (item.payload or {}).get("reason")
     return ReviewItemOut(
         id=item.id,
         kind=item.kind,
         state=item.state,
         document_id=item.document_id,
+        document=documents.get(item.document_id) if item.document_id is not None else None,
+        reason=reason if isinstance(reason, str) else None,
         payload=dict(item.payload or {}),
         resolution=dict(item.resolution) if item.resolution is not None else None,
         resolved_by=item.resolved_by,
@@ -282,8 +332,9 @@ def list_items(
     )
     more = len(rows) > limit
     rows = rows[:limit]
+    documents = _documents(db, principal, rows)
     return ReviewPage(
-        items=[_out(db, principal, row) for row in rows],
+        items=[_out(db, principal, row, documents=documents) for row in rows],
         next_cursor=rows[-1].id if more and rows else None,
     )
 
@@ -467,6 +518,7 @@ def _reimport(
     account_id: uuid.UUID | None,
     request: HTTPConnection | None,
     group: int | None = None,
+    statement: int | None = None,
 ) -> dict[str, Any]:
     """Import the stored extraction again, else run the whole pipeline again."""
     if document.extraction is not None and document.status in REIMPORTABLE:
@@ -474,7 +526,9 @@ def _reimport(
             db,
             principal,
             document.id,
-            ApplyMapping(mapping_id=mapping_id, account_id=account_id, group=group),
+            ApplyMapping(
+                mapping_id=mapping_id, account_id=account_id, group=group, statement=statement
+            ),
             request=request,
         )
         return {"rerun": "import", "job_id": str(accepted.job_id)}
@@ -511,7 +565,7 @@ def _resolve_account(
         elif payload.get("investment") is True:
             # A brokerage statement (OFX, PDF, activity table): its digits
             # from the stored extraction, never from the item.
-            last4 = imports_service.stored_investment_last4(document, payload)
+            last4 = imports_service.stored_investment_last4(document, payload, db)
         else:
             last4 = _statement_last4(document, payload.get("statement"))
         mapping_id = None if grouped else _uuid(payload.get("mapping_id"))
@@ -544,6 +598,10 @@ def _resolve_account(
         request=request,
         # A multi-account table: the account is for this item's group only.
         group=payload["group"] if grouped else None,
+        # A brokerage document: the account is for this item's statement only.
+        statement=payload["statement"]
+        if payload.get("investment") is True and isinstance(payload.get("statement"), int)
+        else None,
     )
     return {"account_id": str(account.id), "remembered": remembered, **rerun}
 

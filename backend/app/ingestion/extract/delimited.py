@@ -53,21 +53,33 @@ def _sample(text: str) -> str:
     return text[: cut if cut > 0 else SAMPLE_CHARS]
 
 
-def _reader(text: str, delimiter: str) -> _csv.Reader:
+def _reader(text: str, delimiter: str, *, skip_space: bool = False) -> _csv.Reader:
     return csv.reader(
         io.StringIO(text, newline=""),
         delimiter=delimiter,
         quotechar='"',
         doublequote=True,
-        skipinitialspace=False,
+        skipinitialspace=skip_space,
         strict=True,
     )
+
+
+def spaced_quotes(sample: str, delimiter: str) -> bool:
+    """Whether fields are written ``a, "b, c"``: a space between the delimiter and a quote.
+
+    CSV readers only treat a quote as quoting at the start of a field, so
+    such a file splits inside its quoted values unless the space after each
+    delimiter is skipped. Files without that pattern are read as before
+    (their cells keep any leading spaces).
+    """
+    return sample.count(f'{delimiter} "') > sample.count(f'{delimiter}"')
 
 
 def _score(sample: str, delimiter: str) -> tuple[float, int] | None:
     counts: Counter[int] = Counter()
     try:
-        for index, row in enumerate(_reader(sample, delimiter)):
+        reader = _reader(sample, delimiter, skip_space=spaced_quotes(sample, delimiter))
+        for index, row in enumerate(reader):
             if index >= SAMPLE_ROWS:
                 break
             if any(cell.strip() for cell in row):
@@ -118,7 +130,7 @@ def extract_delimited(data: bytes, options: ExtractOptions, kind: str) -> Extrac
     warnings: list[str] = []
     truncated = False
     cut_cells = 0
-    reader = _reader(text, delimiter)
+    reader = _reader(text, delimiter, skip_space=spaced_quotes(_sample(text), delimiter))
     try:
         for row in reader:
             if not any(cell.strip() for cell in row):

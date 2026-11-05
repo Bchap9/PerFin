@@ -23,13 +23,13 @@ spdx:
 ## (also covers scripts/ and deploy/egress/, as the CI backend job does)
 backend-check:
 	cd $(BACKEND) && uv run ruff check . \
-		&& uv run ruff check --config pyproject.toml ../scripts ../deploy/egress
+		&& uv run ruff check --config pyproject.toml ../scripts ../deploy/egress ../deploy/ml
 	cd $(BACKEND) && uv run ruff format --check . \
-		&& uv run ruff format --check --config pyproject.toml ../scripts ../deploy/egress
+		&& uv run ruff format --check --config pyproject.toml ../scripts ../deploy/egress ../deploy/ml
 	cd $(BACKEND) && uv run mypy \
 		&& uv run mypy --strict ../scripts/check_spdx.py ../scripts/check_pr_body.py ../scripts/release_notes.py ../scripts/seed_dev.py \
-			../deploy/egress/egress_proxy.py
-	cd $(BACKEND) && uv run bandit -q -c pyproject.toml -r app ../scripts ../deploy/egress
+			../deploy/egress/egress_proxy.py ../deploy/ml/perfin_ml.py
+	cd $(BACKEND) && uv run bandit -q -c pyproject.toml -r app ../scripts ../deploy/egress ../deploy/ml
 	cd $(BACKEND) && uv run pytest -n auto
 	cd $(BACKEND) && uv run perfin openapi | diff -u openapi.json - \
 		|| { echo "backend/openapi.json is stale; run 'make openapi'" >&2; exit 1; }

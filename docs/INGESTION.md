@@ -48,7 +48,10 @@ goes to the investments importer, "Brokerage activity exports" below). The
 sniffer reads a text file as CSV/TSV when its first non-empty lines carry
 the same number of delimiters, or when a leading block of most lines, two
 at least, are rows of three columns or more followed only by notes (a short
-brokerage export's disclaimer paragraphs and "Date downloaded" line). A ZIP is expanded once
+brokerage export's disclaimer paragraphs and "Date downloaded" line; rows of
+five delimiters or more need only two, however many notes follow). A file
+that writes `a, "b, c"` (a space between the delimiter and a quote) is read
+with the space after each delimiter skipped, so its quoted fields hold. A ZIP is expanded once
 inside the sandbox and each member becomes a document of its own (below).
 Auto-dedupe is
 not built: a byte-identical upload always becomes a `possible_duplicate`
@@ -659,8 +662,19 @@ table; never a PDF's page table) before it looks for a column mapping:
   EARNED`, `LONG-TERM CAP GAIN`, `DIRECT DEPOSIT`, `Electronic Funds Transfer
   Received/Paid`, `FEE CHARGED`, `FOREIGN TAX PAID`, `CONTRIBUTION`,
   `DISTRIBUTION`, `TRANSFERRED FROM/TO`: units when the row names a security
-  and a non-zero quantity, else cash). An action no phrase types is
-  **skipped and counted, never guessed**; so is a row whose date or amount
+  and a non-zero quantity, else cash; Fidelity's cash-management and
+  retirement wording: `DEBIT CARD PURCHASE`, `CHECK PAID`, `BILL PAYMENT`,
+  `DIRECT DEBIT` as withdrawals, `PARTIC CONTR`, `EMPLOYER CONTRIBUTION`,
+  `RETURN OF CAPITAL`, `CASH IN LIEU` as deposits, `MARGIN INTEREST` and
+  the tax withholdings as fees, `REDEMPTION FROM`/`PURCHASE INTO CORE
+  ACCOUNT` as a sale/buy of the core fund). `JOURNALED`, `TRANSFER`,
+  `ROLLOVER`, `CONVERSION` take their direction from the row: units in or
+  out by the quantity's sign when the row moves a security, else a deposit
+  or withdrawal by the amount's sign; `EXCHANGED`, `ASSIGNED`, `EXPIRED` are
+  a buy or sale by the quantity's sign. Without a sign such a row is not
+  typed. An action no phrase types is
+  **skipped and counted, never guessed** (its first three words, digits
+  removed, are listed in the review item: `unknown_actions`); so is a row whose date or amount
   does not read, a buy/sell/reinvestment/transfer of units without a symbol
   or a quantity, a split without its ratio, or a row in another currency
   than its account's other rows. `Amount` is kept as printed (the cash
@@ -674,7 +688,15 @@ table; never a PDF's page table) before it looks for a column mapping:
 - **Accounts**: one `InvestmentStatement` per last four digits of the
   account-number column (one statement without such a column), period =
   first to last trade date, no positions, no cash balances. Only the last
-  four digits are kept.
+  four digits are kept. A masked number (`Z2xxxxxxxx`, fewer than four
+  digits) groups by the cell's text, else by the `Account` nickname, so
+  accounts never merge; such statements carry no last four digits and each
+  gets its own `unknown_account` item. The nickname (`Individual`, `ROTH
+  IRA`) names the statement's account in memory (never in a summary or an
+  item) and makes it a `retirement` account when it says IRA, Roth, 401(k),
+  403(b), 457, SEP, SIMPLE, HSA, Rollover or Keogh. A Fidelity header
+  (`Run Date, Account, Account Number, Action, Symbol`) names the
+  institution, Fidelity Investments, which breaks last-four ties.
 - **Scoring and holding**: an export prints no positions, cash or totals,
   so reconciliation is `unavailable`. The statements are a structured
   source like OFX (`source_format = "csv"`): every value comes from a named
@@ -701,10 +723,16 @@ table; never a PDF's page table) before it looks for a column mapping:
   warnings); skipped rows raise one `low_confidence_field` item
   (`lines_skipped`: count, `unknown_activity`, parser), a table none of
   whose rows reads an `unparsed` item (`activity_unreadable`).
-- **Limits**: an export has no positions, so it cannot create opening
-  positions: a sale of units bought before its first row (with no earlier
-  statement giving the account's positions) is refused by the lot engine
-  (`investment_lot_conflict`, nothing of that account written), and the
+- **Limits**: an export has no positions. A sale of units bought before
+  its first row (with no earlier statement giving the account's positions)
+  opens those units: one `transfer_in` of the shortfall on the security's
+  first row date, memo `Opening position before this export (cost basis
+  unknown)`, no price (the lot opens at zero cost), and a
+  `low_confidence_field` item (`investment_opening_basis_unknown`: the
+  securities, quantities, dates and transaction ids) asks for the cost
+  basis, or for the older export or statement to be imported first. A
+  security with a split in the export is left to the lot engine
+  (`investment_lot_conflict`, nothing of that account written). The
   out-of-order rule applies (import the oldest statement or export first).
   Its rows are dated by the run (trade) date; a PDF statement of the same
   month that dates rows by settlement date has other `import_hash`es, so
@@ -716,7 +744,21 @@ table; never a PDF's page table) before it looks for a column mapping:
   suggested or saved for such a file); the run summary names the saved
   mapping it took precedence over (`mapping_bypassed`). A mapping chosen
   explicitly for a run (`apply-mapping` with `mapping_id`, "use this
-  mapping" in the review queue) imports the table as a cash ledger instead.
+  mapping" in the review queue) imports the table as a cash ledger instead,
+  unless it is an **activity-mode mapping** (`MappingSpec.mode =
+  "activity"`): its columns (date, action, amount, symbol or quantity, and
+  optionally security name, price, commission, fees, settlement date,
+  currency, account number and account name) read the table as activity
+  whatever share of its actions is known. A saved activity mapping for the
+  header is used for a table not recognised on its own. The mapping
+  editor's suggestion for a brokerage header is an activity mapping
+  (`suggest_activity_mapping`, `sign_evidence: activity`, doubt
+  `activity_type_unknown` when some actions are unknown); it is never saved
+  on its own. An account chosen in the review queue for an investment
+  `unknown_account` item takes that item's statement only
+  (`apply-mapping` `statement`). A document read this way records
+  `parser_version = brokerage_activity_table/1`, and the upload list offers
+  the review queue rather than the cash-ledger column mapping.
 
 #### Loan statements (Phase 5)
 
@@ -1260,15 +1302,24 @@ Phase 4 status (`app/ingestion/intake/email.py`, `app/workers/handlers/mailbox.p
   a new item with the next rejection that day.
 - **Not built:** IMAP IDLE (polling only) and OAuth mailbox login.
 
-## No models in the pipeline
+## Models in the pipeline: optional, local, suggestions only
 
-PerFin does not call a language model at any stage of ingestion, local or
-hosted (ADR-0007). Document text, account numbers and personal details have no
-code path off the host. The cost is that a never-seen statement layout needs a
-person once, through the column-mapping editor (unless it is a delimited file
-whose header the deterministic suggestion reads with confidence); the benefit
-is that the pipeline is deterministic, reproducible and auditable, and a
-crafted document cannot talk its way into the ledger.
+By default PerFin calls no language model at any stage of ingestion. The
+pipeline is deterministic, reproducible and auditable, and a crafted document
+cannot talk its way into the ledger. A never-seen statement layout needs a
+person once, through the column-mapping editor or "Accounts in this file".
+
+The optional `ml` containers (ADR-0010, [ML.md](ML.md)) add a model on the
+same host. When `PERFIN_ML_URL` is set (it must be a local address), the
+worker asks it, after the classify step, about a document whose kind is
+unknown or whose account nothing matched, sending only the extracted text
+(`PERFIN_ML_MAX_CHARS`). The answer is checked (`app.ml.client.validated`:
+known kinds, shape-checked fields, last four digits only when printed in the
+text) and kept on the document as `confidence.ml`. It is used only as a
+suggestion: an unknown kind selects a parser (whose own checks apply), and
+proposed accounts and the review queue's account suggestions are filled in
+from it, marked as the model's. Nothing reaches the ledger on its say-so, and
+a failed or slow call leaves the document as it would have been.
 
 The heuristic classifier is a small local model trained offline on synthetic
 and contributed samples; it never makes network calls and ships as a versioned

@@ -137,7 +137,7 @@ a reason); a new column must be classified there before CI passes.
 ```
 institution           (household, name, country?, fingerprint_rules JSONB,
                        default_parser?, builtin_key?)
-account               (household, institution?, type, asset_kind?, name, nickname?,
+account               (household, institution?, type, asset_kind?, subtype?, name, nickname?,
                        currency, number_last4?, opened_on?, closed_on?, is_asset,
                        manual_balance, include_in_net_worth)
 transaction           (account, posted_date, effective_date?, amount, currency,
@@ -196,7 +196,17 @@ is `HouseholdScoped` with forced RLS):
 - **Account fields**: `type` is one of checking, savings, credit_card, cash,
   brokerage, retirement, loan, mortgage, line_of_credit, manual_asset,
   manual_liability; `asset_kind` (property|vehicle|other) is set exactly for
-  `manual_asset`. `is_asset` defaults from the type (cards, loans, mortgages,
+  `manual_asset`. `subtype` (optional) says which kind of account it is
+  within its type: a Roth, traditional, rollover, SEP, SIMPLE, inherited or
+  spousal IRA, a 401(k), Roth 401(k), solo 401(k), 403(b), 457(b), TSP, HSA,
+  pension or annuity under `retirement`; an individual, joint, trust,
+  custodial (UTMA/UGMA), 529, Coverdell ESA or ABLE account under
+  `brokerage`; a HELOC or margin line under `line_of_credit`; and so on
+  (`app.domain.accounts.subtypes`, `GET /accounts/subtypes`). It is a short
+  code validated against the type by the application (a new subtype needs no
+  migration) and gives the account a tax treatment: taxable, tax-deferred or
+  tax-free (a brokerage account without one is taxable). Account names in
+  imported files (`ROTH IRA`, `529 College Savings`) propose it. `is_asset` defaults from the type (cards, loans, mortgages,
   lines of credit and manual liabilities are liabilities). `manual_balance`
   (default for manual assets and liabilities) means the balance comes from
   `balance_snapshot` only. `number_last4` (four digits) is identity data:

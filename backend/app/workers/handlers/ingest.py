@@ -18,7 +18,7 @@ links receipts waiting in review to the transactions it brought
 
 from __future__ import annotations
 
-from functools import lru_cache
+from functools import lru_cache, partial
 
 from app.core.crypto import Keyring
 from app.core.logging import get_logger
@@ -31,6 +31,7 @@ from app.ingestion import pipeline
 from app.ingestion.match.receipts import rematch_receipts
 from app.ingestion.sandbox.runner import SandboxConfig
 from app.integrations.antivirus import scanner_from_settings
+from app.ml.client import document_hints
 from app.workers.registry import JobContext, PermanentJobError, job_handler
 
 log = get_logger(__name__)
@@ -52,6 +53,7 @@ def default_deps() -> pipeline.PipelineDeps:
         importer=pipeline.structured_import,
         child_max_bytes=settings.upload_max_bytes,
         confidence_threshold=settings.ingest_confidence_threshold,
+        ml=partial(document_hints, settings) if settings.ml_enabled else None,
     )
 
 

@@ -34,6 +34,17 @@ export interface UploadItem {
   message: string | null;
 }
 
+/**
+ * A brokerage activity export the server already read as investment activity:
+ * what is left is in the review queue (unknown accounts, skipped rows), and the
+ * cash-ledger column mapping would only turn its trades into plain cash rows.
+ */
+export function readAsActivity(row: {
+  parser_version: string | null;
+}): boolean {
+  return row.parser_version?.startsWith("brokerage_activity_table/") ?? false;
+}
+
 export function statusTone(status: DocumentStatus): BadgeTone {
   switch (status) {
     case "processed":
@@ -58,17 +69,25 @@ export function UploadPage() {
   const [dragging, setDragging] = useState(false);
   const counter = useRef(0);
   // Statuses change through the event stream (lib/sse.ts invalidates ["documents"]).
-  const documents = useQuery({ queryKey: importKeys.documents, queryFn: () => listRecentDocuments() });
+  const documents = useQuery({
+    queryKey: importKeys.documents,
+    queryFn: () => listRecentDocuments(),
+  });
 
   const patchItem = (id: number, change: Partial<UploadItem>): void => {
-    setItems((current) => current.map((item) => (item.id === id ? { ...item, ...change } : item)));
+    setItems((current) =>
+      current.map((item) => (item.id === id ? { ...item, ...change } : item)),
+    );
   };
 
   const start = (files: readonly File[]): void => {
     for (const file of files) {
       counter.current += 1;
       const id = counter.current;
-      setItems((current) => [...current, { id, name: file.name, progress: 0, state: "uploading", message: null }]);
+      setItems((current) => [
+        ...current,
+        { id, name: file.name, progress: 0, state: "uploading", message: null },
+      ]);
       const handle = uploadDocument(file, {
         accountId: accountId === "" ? null : accountId,
         onProgress: (fraction) => {
@@ -80,13 +99,21 @@ export function UploadPage() {
           patchItem(id, {
             progress: 1,
             state: "done",
-            message: received.duplicate_of === null ? null : "This file was uploaded before. It waits in the review queue.",
+            message:
+              received.duplicate_of === null
+                ? null
+                : "This file was uploaded before. It waits in the review queue.",
           });
-          void queryClient.invalidateQueries({ queryKey: queryRoots.documents });
+          void queryClient.invalidateQueries({
+            queryKey: queryRoots.documents,
+          });
           void queryClient.invalidateQueries({ queryKey: queryRoots.review });
         },
         (error: unknown) => {
-          patchItem(id, { state: "error", message: isAbort(error) ? "Cancelled." : errorMessage(error) });
+          patchItem(id, {
+            state: "error",
+            message: isAbort(error) ? "Cancelled." : errorMessage(error),
+          });
         },
       );
     }
@@ -100,7 +127,9 @@ export function UploadPage() {
     }
   };
 
-  const editable = (accounts.data ?? []).filter((account) => account.can_edit && !account.is_closed);
+  const editable = (accounts.data ?? []).filter(
+    (account) => account.can_edit && !account.is_closed,
+  );
 
   return (
     <section aria-labelledby="page-title" className="ledger-stack">
@@ -111,10 +140,16 @@ export function UploadPage() {
       {canWrite ? (
         <Card title="Upload statements">
           <div className="ledger-stack">
-            <Field label="Account" hint="Optional. Leave empty and PerFin tries to recognise the account.">
+            <Field
+              label="Account"
+              hint="Optional. Leave empty and PerFin tries to recognise the account."
+            >
               <Select
                 placeholder="Detect from the file"
-                options={editable.map((account) => ({ value: account.id, label: accountLabel(account) }))}
+                options={editable.map((account) => ({
+                  value: account.id,
+                  label: accountLabel(account),
+                }))}
                 value={accountId}
                 onChange={(event) => {
                   setAccountId(event.target.value);
@@ -153,7 +188,11 @@ export function UploadPage() {
                   <li key={item.id}>
                     <span>{item.name}</span>
                     {item.state === "uploading" ? (
-                      <progress aria-label={`Uploading ${item.name}`} max={1} value={item.progress} />
+                      <progress
+                        aria-label={`Uploading ${item.name}`}
+                        max={1}
+                        value={item.progress}
+                      />
                     ) : item.state === "done" ? (
                       <span>{item.message ?? "Uploaded"}</span>
                     ) : (
@@ -186,22 +225,44 @@ export function UploadPage() {
             rowKey={(row) => row.id}
             empty="Nothing uploaded yet."
             columns={[
-              { id: "name", header: "File", rowHeader: true, cell: (row) => row.original_filename ?? "Unnamed file" },
+              {
+                id: "name",
+                header: "File",
+                rowHeader: true,
+                cell: (row) => row.original_filename ?? "Unnamed file",
+              },
               {
                 id: "status",
                 header: "Status",
-                cell: (row) => <Badge tone={statusTone(row.status)}>{STATUS_LABELS[row.status]}</Badge>,
+                cell: (row) => (
+                  <Badge tone={statusTone(row.status)}>
+                    {STATUS_LABELS[row.status]}
+                  </Badge>
+                ),
               },
-              { id: "when", header: "Received", cell: (row) => formatDateTime(row.created_at) ?? row.created_at },
+              {
+                id: "when",
+                header: "Received",
+                cell: (row) => formatDateTime(row.created_at) ?? row.created_at,
+              },
               {
                 id: "next",
                 header: "Next step",
                 cell: (row) =>
                   row.status === "needs_review" && canWrite ? (
                     <span className="ledger-actions">
-                      <Link to="/documents/$documentId/mapping" params={{ documentId: row.id }}>
-                        Map columns
-                      </Link>
+                      {readAsActivity(row) ? (
+                        <span className="ledger-muted">
+                          Read as investment activity
+                        </span>
+                      ) : (
+                        <Link
+                          to="/documents/$documentId/mapping"
+                          params={{ documentId: row.id }}
+                        >
+                          Map columns
+                        </Link>
+                      )}
                       <Link to="/review">Review</Link>
                     </span>
                   ) : null,

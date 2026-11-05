@@ -16,8 +16,9 @@
 
 PerFin is a self-hosted, security-first personal finance application: ledger,
 budgets, investments, loans, net worth and a tax vault, fed by uploads, a
-watched drop folder and a receipts mailbox. No telemetry and no model calls
-inside the app. This site is built from the `docs/` directory of the
+watched drop folder and a receipts mailbox. No telemetry and no hosted model
+calls; an optional model on your own machine can suggest what a document is
+([ML.md](ML.md)). This site is built from the `docs/` directory of the
 repository and contains nothing that is not in git.
 
 ## Run it

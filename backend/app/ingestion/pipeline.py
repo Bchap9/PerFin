@@ -78,7 +78,7 @@ import uuid
 from collections.abc import Callable, Iterable, Sequence
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Any, Protocol
+from typing import Any, Final, Protocol
 
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
@@ -137,6 +137,7 @@ from app.ingestion.sandbox.protocol import (
 )
 from app.ingestion.sandbox.runner import SandboxConfig, SandboxError, run_extraction
 from app.integrations.antivirus import Scanner
+from app.ml.client import MLHints
 
 log = get_logger(__name__)
 
@@ -191,6 +192,8 @@ class PipelineDeps:
     child_max_bytes: int = 50 * 1024 * 1024
     #: Parsed fields below this confidence are imported pending (C12).
     confidence_threshold: float = DEFAULT_THRESHOLD
+    #: The optional local-model adapter (ADR-0010): text -> checked hints.
+    ml: Callable[[str], MLHints | None] | None = None
 
 
 class ScanUnavailableError(RuntimeError):
@@ -289,6 +292,53 @@ def _classify(db: Session, document: Document, result: ExtractResult) -> dict[st
             if match.account_id is not None:
                 document.account_id = match.account_id
     return facts
+
+
+#: Rows of a table sent to the local model as text.
+ML_TABLE_ROWS: Final = 80
+#: Below this the model's kind is kept as a hint only, not set on the document.
+ML_KIND_CONFIDENCE: Final = 0.6
+
+
+def _document_text(result: ExtractResult) -> str:
+    if result.text.strip():
+        return result.text
+    if result.tables:
+        return "\n".join(",".join(row) for row in result.tables[0].rows[:ML_TABLE_ROWS])
+    return ""
+
+
+def _ml_hints(
+    db: Session,
+    document: Document,
+    result: ExtractResult,
+    ask: Callable[[str], MLHints | None],
+) -> None:
+    """Ask the local model when PerFin's own readers are unsure (ADR-0010).
+
+    Only for a document whose kind is unknown or whose account nothing
+    matched. The checked hints are kept on the document
+    (``confidence["ml"]``) for account proposals and the review queue; an
+    unknown kind is set from a confident answer (``kind_source: ml``), so the
+    parsers get the hint. Nothing is written to the ledger from them.
+    """
+    if document.kind is not DocumentKind.UNKNOWN and document.account_id is not None:
+        return
+    text = _document_text(result)
+    hints = ask(text) if text.strip() else None
+    if hints is None:
+        return
+    facts = dict(document.confidence or {})
+    facts["ml"] = hints.stored()
+    if (
+        document.kind is DocumentKind.UNKNOWN
+        and hints.kind is not None
+        and hints.confidence >= ML_KIND_CONFIDENCE
+    ):
+        document.kind = DocumentKind(hints.kind)
+        facts["kind_source"] = "ml"
+    document.confidence = facts
+    db.flush()
 
 
 def _parse_hints(document: Document) -> dict[str, str | None]:
@@ -721,6 +771,8 @@ def ingest_document(
     _set_status(document, DocumentStatus.CLASSIFYING)
     stage = _Stage(db, document, IngestStage.CLASSIFY, attempt)
     stage.finish(**_classify(db, document, result))
+    if deps.ml is not None and kind not in CONTAINER_KINDS:
+        _ml_hints(db, document, result, deps.ml)
 
     # ---- parse / match / commit (structured importer) -------------------------
     _set_status(document, DocumentStatus.PARSING)

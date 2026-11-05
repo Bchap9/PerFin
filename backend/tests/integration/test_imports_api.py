@@ -420,6 +420,8 @@ def test_apply_mapping_queues_a_job_once_per_key(
         "mapping_id": str(mapping_id),
         "account_id": None,
         "group": None,
+        "statement": None,
+        "assignments": [],
         "requested_by": str(owner.user.id),
     }
     assert len(audits) == 1

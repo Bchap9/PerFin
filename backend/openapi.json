@@ -112,6 +112,69 @@
         "title": "AccountAi",
         "type": "object"
       },
+      "AccountChoice": {
+        "additionalProperties": false,
+        "description": "Use an existing account (``account_id``) or create one (``create``), not both.",
+        "properties": {
+          "account_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Account Id"
+          },
+          "create": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/AccountCreate"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "index": {
+            "maximum": 10000.0,
+            "minimum": 0.0,
+            "title": "Index",
+            "type": "integer"
+          },
+          "institution_name": {
+            "anyOf": [
+              {
+                "maxLength": 200,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Institution Name"
+          },
+          "target": {
+            "enum": [
+              "statement",
+              "investment",
+              "group",
+              "table"
+            ],
+            "title": "Target",
+            "type": "string"
+          }
+        },
+        "required": [
+          "target",
+          "index"
+        ],
+        "title": "AccountChoice",
+        "type": "object"
+      },
       "AccountClose": {
         "additionalProperties": false,
         "description": "``POST /accounts/{id}/close``: the closing date (default today).",
@@ -290,6 +353,20 @@
             ],
             "title": "Opening Balance Date"
           },
+          "subtype": {
+            "anyOf": [
+              {
+                "maxLength": 40,
+                "minLength": 1,
+                "pattern": "^[a-z0-9_]+$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Subtype"
+          },
           "type": {
             "$ref": "#/components/schemas/AccountType"
           }
@@ -467,6 +544,44 @@
             ],
             "title": "Opened On"
           },
+          "subtype": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Subtype"
+          },
+          "subtype_label": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Subtype Label"
+          },
+          "tax_treatment": {
+            "anyOf": [
+              {
+                "enum": [
+                  "taxable",
+                  "tax_deferred",
+                  "tax_free"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Tax Treatment"
+          },
           "type": {
             "$ref": "#/components/schemas/AccountType"
           },
@@ -480,6 +595,9 @@
           "id",
           "type",
           "asset_kind",
+          "subtype",
+          "subtype_label",
+          "tax_treatment",
           "name",
           "nickname",
           "currency",
@@ -529,6 +647,101 @@
         "title": "AccountPage",
         "type": "object"
       },
+      "AccountProposal": {
+        "description": "A new account ready to create for one of a document's accounts (editable).",
+        "properties": {
+          "currency": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Currency"
+          },
+          "institution_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Institution Name"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "number_last4": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Number Last4"
+          },
+          "opening_balance": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Opening Balance"
+          },
+          "opening_balance_date": {
+            "anyOf": [
+              {
+                "format": "date",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Opening Balance Date"
+          },
+          "subtype": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Subtype"
+          },
+          "suggested_by_model": {
+            "default": false,
+            "title": "Suggested By Model",
+            "type": "boolean"
+          },
+          "type": {
+            "$ref": "#/components/schemas/AccountType"
+          }
+        },
+        "required": [
+          "name",
+          "type",
+          "currency",
+          "institution_name",
+          "number_last4",
+          "opening_balance",
+          "opening_balance_date"
+        ],
+        "title": "AccountProposal",
+        "type": "object"
+      },
       "AccountType": {
         "enum": [
           "checking",
@@ -545,6 +758,27 @@
         ],
         "title": "AccountType",
         "type": "string"
+      },
+      "AccountTypeSubtypes": {
+        "description": "``GET /accounts/subtypes``: the subtypes of one account type, in display order.",
+        "properties": {
+          "subtypes": {
+            "items": {
+              "$ref": "#/components/schemas/SubtypeOut"
+            },
+            "title": "Subtypes",
+            "type": "array"
+          },
+          "type": {
+            "$ref": "#/components/schemas/AccountType"
+          }
+        },
+        "required": [
+          "type",
+          "subtypes"
+        ],
+        "title": "AccountTypeSubtypes",
+        "type": "object"
       },
       "AccountTypeTotal": {
         "additionalProperties": false,
@@ -706,6 +940,20 @@
               }
             ],
             "title": "Opened On"
+          },
+          "subtype": {
+            "anyOf": [
+              {
+                "maxLength": 40,
+                "minLength": 1,
+                "pattern": "^[a-z0-9_]+$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Subtype"
           },
           "type": {
             "anyOf": [
@@ -3608,7 +3856,7 @@
       },
       "ApplyMapping": {
         "additionalProperties": false,
-        "description": "``POST /imports/{document_id}/apply-mapping``.\n\n``mapping_id`` (CSV/TSV) names the mapping to read the table with (else\nthe one whose fingerprint matches); ``account_id`` names the account to\nimport into (else the document's, the mapping's or, for OFX/QFX/QIF, the\naccount matched by its last four digits). The caller must be able to\nedit the target account. ``group`` (with ``account_id``) names the\nstatement of a multi-account table the account is for (an\n``unknown_account`` item's ``group``); without it a chosen account takes\nonly the statements with its own last four digits, or the one statement\nno account matched.",
+        "description": "``POST /imports/{document_id}/apply-mapping``.\n\n``mapping_id`` (CSV/TSV) names the mapping to read the table with (else\nthe one whose fingerprint matches); ``account_id`` names the account to\nimport into (else the document's, the mapping's or, for OFX/QFX/QIF, the\naccount matched by its last four digits). The caller must be able to\nedit the target account. ``group`` (with ``account_id``) names the\nstatement of a multi-account table the account is for (an\n``unknown_account`` item's ``group``); without it a chosen account takes\nonly the statements with its own last four digits, or the one statement\nno account matched. ``statement`` (with ``account_id``) does the same for\nthe brokerage statements of a document (an investment ``unknown_account``\nitem's ``statement``: an activity export's account, a PDF's).",
         "properties": {
           "account_id": {
             "anyOf": [
@@ -3621,6 +3869,14 @@
               }
             ],
             "title": "Account Id"
+          },
+          "assignments": {
+            "items": {
+              "$ref": "#/components/schemas/Assignment"
+            },
+            "maxItems": 100,
+            "title": "Assignments",
+            "type": "array"
           },
           "group": {
             "anyOf": [
@@ -3646,6 +3902,19 @@
               }
             ],
             "title": "Mapping Id"
+          },
+          "statement": {
+            "anyOf": [
+              {
+                "maximum": 10000.0,
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Statement"
           }
         },
         "title": "ApplyMapping",
@@ -3880,6 +4149,40 @@
           }
         },
         "title": "AssetUpdate",
+        "type": "object"
+      },
+      "Assignment": {
+        "additionalProperties": false,
+        "description": "One of a document's accounts and the PerFin account it is imported into.",
+        "properties": {
+          "account_id": {
+            "format": "uuid",
+            "title": "Account Id",
+            "type": "string"
+          },
+          "index": {
+            "maximum": 10000.0,
+            "minimum": 0.0,
+            "title": "Index",
+            "type": "integer"
+          },
+          "target": {
+            "enum": [
+              "statement",
+              "investment",
+              "group",
+              "table"
+            ],
+            "title": "Target",
+            "type": "string"
+          }
+        },
+        "required": [
+          "target",
+          "index",
+          "account_id"
+        ],
+        "title": "Assignment",
         "type": "object"
       },
       "AutoPairRequest": {
@@ -7055,6 +7358,274 @@
           "items"
         ],
         "title": "DetectResult",
+        "type": "object"
+      },
+      "DetectedAccount": {
+        "description": "One account a document names and what PerFin knows of it (``proposals`` module doc).",
+        "properties": {
+          "account_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Account Id"
+          },
+          "account_type": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Account Type"
+          },
+          "candidates": {
+            "items": {
+              "format": "uuid",
+              "type": "string"
+            },
+            "title": "Candidates",
+            "type": "array"
+          },
+          "closing_balance": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Closing Balance"
+          },
+          "currency": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Currency"
+          },
+          "index": {
+            "title": "Index",
+            "type": "integer"
+          },
+          "institution_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Institution Name"
+          },
+          "last4": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last4"
+          },
+          "name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Name"
+          },
+          "opening_balance": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Opening Balance"
+          },
+          "period_end": {
+            "anyOf": [
+              {
+                "format": "date",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Period End"
+          },
+          "period_start": {
+            "anyOf": [
+              {
+                "format": "date",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Period Start"
+          },
+          "proposal": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/AccountProposal"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "review_item_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Review Item Id"
+          },
+          "status": {
+            "enum": [
+              "matched",
+              "new",
+              "ambiguous",
+              "conflict",
+              "done"
+            ],
+            "title": "Status",
+            "type": "string"
+          },
+          "target": {
+            "enum": [
+              "statement",
+              "investment",
+              "group",
+              "table"
+            ],
+            "title": "Target",
+            "type": "string"
+          },
+          "transactions": {
+            "title": "Transactions",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "target",
+          "index",
+          "status",
+          "account_id",
+          "candidates",
+          "review_item_id",
+          "last4",
+          "name",
+          "institution_name",
+          "account_type",
+          "currency",
+          "period_start",
+          "period_end",
+          "opening_balance",
+          "closing_balance",
+          "transactions",
+          "proposal"
+        ],
+        "title": "DetectedAccount",
+        "type": "object"
+      },
+      "DocumentAccounts": {
+        "properties": {
+          "accounts": {
+            "items": {
+              "$ref": "#/components/schemas/DetectedAccount"
+            },
+            "title": "Accounts",
+            "type": "array"
+          },
+          "document_id": {
+            "format": "uuid",
+            "title": "Document Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "document_id",
+          "accounts"
+        ],
+        "title": "DocumentAccounts",
+        "type": "object"
+      },
+      "DocumentAccountsApplied": {
+        "properties": {
+          "created": {
+            "items": {
+              "format": "uuid",
+              "type": "string"
+            },
+            "title": "Created",
+            "type": "array"
+          },
+          "document_id": {
+            "format": "uuid",
+            "title": "Document Id",
+            "type": "string"
+          },
+          "job_id": {
+            "format": "uuid",
+            "title": "Job Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "document_id",
+          "created",
+          "job_id"
+        ],
+        "title": "DocumentAccountsApplied",
+        "type": "object"
+      },
+      "DocumentAccountsApply": {
+        "additionalProperties": false,
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/AccountChoice"
+            },
+            "maxItems": 100,
+            "minItems": 1,
+            "title": "Items",
+            "type": "array"
+          }
+        },
+        "required": [
+          "items"
+        ],
+        "title": "DocumentAccountsApply",
         "type": "object"
       },
       "DocumentDetailOut": {
@@ -11805,6 +12376,32 @@
             ],
             "title": "Account Column"
           },
+          "account_name_column": {
+            "anyOf": [
+              {
+                "exclusiveMaximum": 1000.0,
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Account Name Column"
+          },
+          "action_column": {
+            "anyOf": [
+              {
+                "exclusiveMaximum": 1000.0,
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Action Column"
+          },
           "amount_column": {
             "anyOf": [
               {
@@ -11830,6 +12427,19 @@
               }
             ],
             "title": "Balance Column"
+          },
+          "commission_column": {
+            "anyOf": [
+              {
+                "exclusiveMaximum": 1000.0,
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Commission Column"
           },
           "credit_column": {
             "anyOf": [
@@ -11919,6 +12529,19 @@
             "title": "Decimal Separator",
             "type": "string"
           },
+          "fees_column": {
+            "anyOf": [
+              {
+                "exclusiveMaximum": 1000.0,
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Fees Column"
+          },
           "has_header": {
             "default": true,
             "title": "Has Header",
@@ -11950,6 +12573,15 @@
             ],
             "title": "Memo Column"
           },
+          "mode": {
+            "default": "cash",
+            "enum": [
+              "cash",
+              "activity"
+            ],
+            "title": "Mode",
+            "type": "string"
+          },
           "outflow_values": {
             "items": {
               "maxLength": 20,
@@ -11973,6 +12605,58 @@
             ],
             "title": "Payee Column"
           },
+          "price_column": {
+            "anyOf": [
+              {
+                "exclusiveMaximum": 1000.0,
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Price Column"
+          },
+          "quantity_column": {
+            "anyOf": [
+              {
+                "exclusiveMaximum": 1000.0,
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Quantity Column"
+          },
+          "security_column": {
+            "anyOf": [
+              {
+                "exclusiveMaximum": 1000.0,
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Security Column"
+          },
+          "settle_column": {
+            "anyOf": [
+              {
+                "exclusiveMaximum": 1000.0,
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Settle Column"
+          },
           "sign": {
             "$ref": "#/components/schemas/Sign",
             "default": "inflow_positive"
@@ -11983,6 +12667,19 @@
             "minimum": 0.0,
             "title": "Skip Rows",
             "type": "integer"
+          },
+          "symbol_column": {
+            "anyOf": [
+              {
+                "exclusiveMaximum": 1000.0,
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Symbol Column"
           },
           "version": {
             "const": 1,
@@ -11999,7 +12696,7 @@
         "type": "object"
       },
       "MappingSuggestionOut": {
-        "description": "The deterministic mapping guess and how far it can be trusted.\n\n``confident`` (no ``doubts``) is what the importer needs to import a\nnever-seen CSV/TSV layout without asking (INGESTION.md \"Parse\");\n``doubts`` are codes: ``header_not_exact``, ``rows_unreadable``,\n``date_order_guessed``, ``no_rows``, ``indicator_values_unknown`` (an\nindicator cell that is no direction word, or a signed amount beside\nit). ``sign_evidence`` is\n``debit_credit``, ``indicator``, ``balance`` or null (a signed amount\ncolumn read as \"positive is money in\" on trust).",
+        "description": "The deterministic mapping guess and how far it can be trusted.\n\n``confident`` (no ``doubts``) is what the importer needs to import a\nnever-seen CSV/TSV layout without asking (INGESTION.md \"Parse\");\n``doubts`` are codes: ``header_not_exact``, ``rows_unreadable``,\n``date_order_guessed``, ``no_rows``, ``indicator_values_unknown`` (an\nindicator cell that is no direction word, or a signed amount beside\nit). ``activity_type_unknown`` is a brokerage activity suggestion with\nactions PerFin does not type. ``sign_evidence`` is ``activity`` for an\nactivity-mode suggestion (amounts keep their own signs), else\n``debit_credit``, ``indicator``, ``balance`` or null (a signed amount\ncolumn read as \"positive is money in\" on trust).",
         "properties": {
           "accounts": {
             "title": "Accounts",
@@ -12045,7 +12742,8 @@
                 "enum": [
                   "debit_credit",
                   "indicator",
-                  "balance"
+                  "balance",
+                  "activity"
                 ],
                 "type": "string"
               },
@@ -15186,8 +15884,89 @@
         "title": "ReviewChange",
         "type": "object"
       },
+      "ReviewDocument": {
+        "description": "The document an item is about, so the queue can name and show it.\n\n``previewable``: the caller may see its pages (``GET\n/documents/{id}/preview``: a PDF or image out of quarantine, member or\nabove, or a viewer where the household allows downloads).",
+        "properties": {
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "kind": {
+            "$ref": "#/components/schemas/DocumentKind"
+          },
+          "mime_detected": {
+            "title": "Mime Detected",
+            "type": "string"
+          },
+          "original_filename": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Original Filename"
+          },
+          "period_end": {
+            "anyOf": [
+              {
+                "format": "date",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Period End"
+          },
+          "period_start": {
+            "anyOf": [
+              {
+                "format": "date",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Period Start"
+          },
+          "previewable": {
+            "title": "Previewable",
+            "type": "boolean"
+          },
+          "source": {
+            "$ref": "#/components/schemas/DocumentSource"
+          },
+          "status": {
+            "$ref": "#/components/schemas/DocumentStatus"
+          }
+        },
+        "required": [
+          "id",
+          "original_filename",
+          "kind",
+          "status",
+          "mime_detected",
+          "source",
+          "created_at",
+          "period_start",
+          "period_end",
+          "previewable"
+        ],
+        "title": "ReviewDocument",
+        "type": "object"
+      },
       "ReviewItemOut": {
-        "description": "One review item. ``payload`` carries ids and short facts, never file content.\n\n``next_step`` names what the UI should offer; ``can_resolve`` whether the\ncaller may resolve or dismiss it.",
+        "description": "One review item. ``payload`` carries ids and short facts, never file content.\n\n``next_step`` names what the UI should offer; ``can_resolve`` whether the\ncaller may resolve or dismiss it. ``reason`` is ``payload.reason`` (what\nraised it); ``document`` names the item's document.",
         "properties": {
           "alternatives": {
             "anyOf": [
@@ -15211,6 +15990,16 @@
             "format": "date-time",
             "title": "Created At",
             "type": "string"
+          },
+          "document": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ReviewDocument"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "document_id": {
             "anyOf": [
@@ -15256,6 +16045,17 @@
             "additionalProperties": true,
             "title": "Payload",
             "type": "object"
+          },
+          "reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reason"
           },
           "regions": {
             "anyOf": [
@@ -19160,6 +19960,41 @@
         "title": "SplitSet",
         "type": "object"
       },
+      "SubtypeOut": {
+        "properties": {
+          "code": {
+            "title": "Code",
+            "type": "string"
+          },
+          "label": {
+            "title": "Label",
+            "type": "string"
+          },
+          "tax_treatment": {
+            "anyOf": [
+              {
+                "enum": [
+                  "taxable",
+                  "tax_deferred",
+                  "tax_free"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Tax Treatment"
+          }
+        },
+        "required": [
+          "code",
+          "label",
+          "tax_treatment"
+        ],
+        "title": "SubtypeOut",
+        "type": "object"
+      },
       "SuggestionRole": {
         "description": "Why the suggestion gave a column a role (no cell text).",
         "properties": {
@@ -21976,7 +22811,7 @@
   },
   "info": {
     "title": "PerFin",
-    "version": "1.0.0-rc.2"
+    "version": "1.0.0-rc.3"
   },
   "openapi": "3.1.0",
   "paths": {
@@ -22142,6 +22977,31 @@
           }
         },
         "summary": "Create an account (member or above)",
+        "tags": [
+          "accounts"
+        ]
+      }
+    },
+    "/api/v1/accounts/subtypes": {
+      "get": {
+        "operationId": "get_account_subtypes_api_v1_accounts_subtypes_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/AccountTypeSubtypes"
+                  },
+                  "title": "Response Get Account Subtypes Api V1 Accounts Subtypes Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "The kinds of account within each type (Roth IRA, 529, HELOC...)",
         "tags": [
           "accounts"
         ]
@@ -27842,6 +28702,148 @@
         "summary": "One document (metadata only)",
         "tags": [
           "documents"
+        ]
+      }
+    },
+    "/api/v1/documents/{document_id}/accounts": {
+      "get": {
+        "operationId": "get_document_accounts_api_v1_documents__document_id__accounts_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "document_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Document Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DocumentAccounts"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {}
+            },
+            "description": "Problem details"
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {}
+            },
+            "description": "Problem details"
+          },
+          "409": {
+            "content": {
+              "application/problem+json": {}
+            },
+            "description": "Problem details"
+          },
+          "422": {
+            "content": {
+              "application/problem+json": {}
+            },
+            "description": "Problem details"
+          }
+        },
+        "summary": "The accounts a document names, matched or proposed (member or above)",
+        "tags": [
+          "imports"
+        ]
+      }
+    },
+    "/api/v1/documents/{document_id}/accounts/apply": {
+      "post": {
+        "operationId": "post_document_accounts_api_v1_documents__document_id__accounts_apply_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "document_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Document Id",
+              "type": "string"
+            }
+          },
+          {
+            "description": "Optional. Repeating a request with the same key returns the first answer instead of creating again (24 hours; 1-255 visible ASCII characters).",
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Optional. Repeating a request with the same key returns the first answer instead of creating again (24 hours; 1-255 visible ASCII characters).",
+              "title": "Idempotency-Key"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DocumentAccountsApply"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DocumentAccountsApplied"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {}
+            },
+            "description": "Problem details"
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {}
+            },
+            "description": "Problem details"
+          },
+          "409": {
+            "content": {
+              "application/problem+json": {}
+            },
+            "description": "Problem details"
+          },
+          "422": {
+            "content": {
+              "application/problem+json": {}
+            },
+            "description": "Problem details"
+          }
+        },
+        "summary": "Use or create an account for each of a document's accounts and re-import (job)",
+        "tags": [
+          "imports"
         ]
       }
     },

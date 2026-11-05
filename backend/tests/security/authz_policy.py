@@ -463,6 +463,7 @@ POLICIES: Final[Mapping[str, Policy]] = MappingProxyType(
         # --- accounts and balances (Phase 2; visibility applied by the service:
         # the generator grants the member edit and the viewer view) ---------
         f"GET {API}/accounts": scoped("accounts:read", role=V),
+        f"GET {API}/accounts/subtypes": scoped("accounts:read", role=V),
         f"POST {API}/accounts": scoped("accounts:write", role=M),
         f"GET {API}/accounts/{{account_id}}": scoped("accounts:read", role=V, params=ACCT),
         f"PATCH {API}/accounts/{{account_id}}": scoped("accounts:write", role=M, params=ACCT),
@@ -733,6 +734,12 @@ POLICIES: Final[Mapping[str, Policy]] = MappingProxyType(
         ),
         f"GET {API}/imports/{{document_id}}/preview": scoped("documents:read", role=V, params=DOC),
         f"POST {API}/imports/{{document_id}}/apply-mapping": scoped(
+            "documents:write", role=M, params=DOC
+        ),
+        f"GET {API}/documents/{{document_id}}/accounts": scoped(
+            "documents:write", role=M, params=DOC
+        ),
+        f"POST {API}/documents/{{document_id}}/accounts/apply": scoped(
             "documents:write", role=M, params=DOC
         ),
         # --- user settings --------------------------------------------------

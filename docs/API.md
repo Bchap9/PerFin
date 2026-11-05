@@ -456,8 +456,13 @@ has, of a document they may not open);
 
 Review notes (`app.domain.review.service`, router `review`; INGESTION.md
 "Review queue"): an item is `{"id", "kind", "state", "document_id",
-"payload", "resolution", "resolved_by", "resolved_at", "created_at",
-"next_step", "can_resolve"}` (`payload` holds ids and short facts written by
+"document", "reason", "payload", "resolution", "resolved_by", "resolved_at",
+"created_at", "next_step", "can_resolve"}` (`document` names the item's
+document: `{"id", "original_filename", "kind", "status", "mime_detected",
+"source", "created_at", "period_start", "period_end", "previewable"}`, `null`
+for an item without one; `previewable` says whether `GET
+/documents/{id}/preview` would serve the caller; `reason` is
+`payload.reason`; `payload` holds ids and short facts written by
 the pipeline or importer, never file content; `next_step` is
 `confirm_duplicate`, `choose_account`, `column_mapping`, `reprocess`,
 `choose_owner`, `attach_receipt` or `correct_fields`; `GET /review/{id}`
@@ -466,6 +471,22 @@ also returns `regions` (`[{"page", "bbox", "label": "transaction" |
 `alternatives` (`[{"field", "value", "label", "score", "transaction_id",
 "source": "document" | "ledger" | "household"}]`; values read from the
 document only for callers the download rule allows), both `null` in lists).
+`GET /documents/{id}/accounts` (member or above who may change the
+document): `{"document_id", "accounts": [{"target": "statement" |
+"investment" | "group" | "table", "index", "status": "matched" | "new" |
+"ambiguous" | "conflict" | "done", "account_id", "candidates",
+"review_item_id", "last4", "name", "institution_name", "account_type",
+"currency", "period_start", "period_end", "opening_balance",
+"closing_balance", "transactions", "proposal": {"name", "type", "currency",
+"institution_name", "number_last4", "opening_balance",
+"opening_balance_date"} | null}]}`: every account the stored extraction
+names and what PerFin knows of it. `POST /documents/{id}/accounts/apply`
+(`Idempotency-Key` honoured) takes `{"items": [{"target", "index",
+"account_id"} | {"target", "index", "create": AccountCreate,
+"institution_name"?}]}`, creates the new accounts (institutions found or
+created by name, last four digits recorded), and answers `202` with
+`{"document_id", "created", "job_id"}`: one `imports.apply_mapping` job with
+every choice as an `assignment`.
 `GET /review?state=&kind=&document=&cursor=&limit=` (any role; `state`
 defaults to `open`, `all` for every state; oldest first, `limit` 1-500)
 lists items of documents the caller can see whose payload `account_id`, if
@@ -770,14 +791,17 @@ route, and an account the caller can see but not edit is `403 forbidden`.
 A member who creates an account gets an `edit` grant on it. `GET
 /accounts?cursor=&limit=&closed=&type=` lists `{"items", "next_cursor"}` in
 creation order (`limit` 1-500, default 100). An account is `{"id", "type",
-"asset_kind", "name", "nickname", "currency", "institution_id",
+"asset_kind", "subtype", "subtype_label", "tax_treatment", "name", "nickname", "currency", "institution_id",
 "number_last4", "is_asset", "manual_balance", "include_in_net_worth",
 "opened_on", "closed_on", "is_closed", "balance": {"amount", "currency"},
 "balance_date", "can_edit", "created_at", "updated_at"}` (`balance` at the
 end of today, UTC). `POST /accounts` (`Idempotency-Key` honoured) takes
 `type`, `name` and optionally `nickname`, `currency` (default the
 household's base currency), `institution_id` (`404 institution-not-found`),
-`asset_kind` (required for and only for `manual_asset`), `number_last4`
+`asset_kind` (required for and only for `manual_asset`), `subtype` (one of
+the type's kinds from `GET /accounts/subtypes`, which lists `[{"type",
+"subtypes": [{"code", "label", "tax_treatment"}]}]`; another type's is `422`;
+changing `type` drops a subtype the new type does not have), `number_last4`
 (four digits), `is_asset`/`manual_balance` (default from the type),
 `include_in_net_worth`, `opened_on`, `opening_balance` (`{"amount",
 "currency"}` in the account currency, `422 currency-mismatch`) and

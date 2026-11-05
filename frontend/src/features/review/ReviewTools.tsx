@@ -47,11 +47,19 @@ export function useItemDetail(item: ReviewItem, enabled = true) {
 }
 
 /** The page highlights of an item, or nothing when it has no document. */
-export function ItemViewer({ item, detail }: { item: ReviewItem; detail: ReviewItem | undefined }) {
+export function ItemViewer({
+  item,
+  detail,
+}: {
+  item: ReviewItem;
+  detail: ReviewItem | undefined;
+}) {
   if (item.document_id === null) {
     return null;
   }
-  return <PageViewer documentId={item.document_id} regions={detail?.regions ?? []} />;
+  return (
+    <PageViewer documentId={item.document_id} regions={detail?.regions ?? []} />
+  );
 }
 
 function rowIds(detail: ReviewItem): string[] {
@@ -69,7 +77,11 @@ function rowIds(detail: ReviewItem): string[] {
   return [...ids];
 }
 
-function useResolve(item: ReviewItem, title: string, onError: (message: string) => void) {
+function useResolve(
+  item: ReviewItem,
+  title: string,
+  onError: (message: string) => void,
+) {
   const queryClient = useQueryClient();
   const toast = useToast();
   return useMutation({
@@ -125,7 +137,10 @@ function DoubtfulRow({
   fix: TransactionFix | undefined;
   onFix: (fix: TransactionFix) => void;
 }) {
-  const row = useQuery({ queryKey: txKeys.one(id), queryFn: () => getTransaction(id) });
+  const row = useQuery({
+    queryKey: txKeys.one(id),
+    queryFn: () => getTransaction(id),
+  });
   if (row.isPending) {
     return <Spinner label="Loading row" />;
   }
@@ -134,11 +149,19 @@ function DoubtfulRow({
   }
   const tx = row.data;
   return (
-    <div className="ledger-stack" role="group" aria-label={`Row ${tx.raw_payee ?? tx.id}`}>
+    <div
+      className="ledger-stack"
+      role="group"
+      aria-label={`Row ${tx.raw_payee ?? tx.id}`}
+    >
       <p>
         {fix?.posted_date ?? tx.posted_date} {tx.raw_payee ?? "-"}{" "}
         <MoneyText
-          amount={fix?.amount === undefined || fix.amount === null ? tx.amount.amount : String(fix.amount.amount)}
+          amount={
+            fix?.amount === undefined || fix.amount === null
+              ? tx.amount.amount
+              : String(fix.amount.amount)
+          }
           currency={tx.amount.currency}
         />
         {fix === undefined ? "" : " (corrected)"}
@@ -157,7 +180,13 @@ function DoubtfulRow({
 }
 
 /** Doubtful rows: highlighted on the page, with other readings to pick from. */
-export function LowConfidenceTools({ item, actionable }: { item: ReviewItem; actionable: boolean }) {
+export function LowConfidenceTools({
+  item,
+  actionable,
+}: {
+  item: ReviewItem;
+  actionable: boolean;
+}) {
   const detail = useItemDetail(item);
   const [fixes, setFixes] = useState<TransactionFix[]>([]);
   const [error, setError] = useState<string | null>(null);
@@ -175,13 +204,18 @@ export function LowConfidenceTools({ item, actionable }: { item: ReviewItem; act
   const ids = rowIds(detail.data);
   return (
     <div className="ledger-stack">
-      <p>PerFin was not sure it read these rows correctly. Check them against the page.</p>
+      <p>
+        PerFin was not sure it read these rows correctly. Check them against the
+        page.
+      </p>
       <ItemViewer item={item} detail={detail.data} />
       {ids.map((id) => (
         <DoubtfulRow
           key={id}
           id={id}
-          alternatives={(detail.data.alternatives ?? []).filter((alt) => alt.transaction_id === id)}
+          alternatives={(detail.data.alternatives ?? []).filter(
+            (alt) => alt.transaction_id === id,
+          )}
           fix={fixes.find((f) => f.transaction_id === id)}
           onFix={(fix) => {
             setFixes((previous) => mergeFix(previous, fix));
@@ -202,7 +236,9 @@ export function LowConfidenceTools({ item, actionable }: { item: ReviewItem; act
               resolve.mutate(lowConfidenceResolution(fixes, true));
             }}
           >
-            {fixes.length === 0 ? "Confirm as read" : "Save corrections and confirm"}
+            {fixes.length === 0
+              ? "Confirm as read"
+              : "Save corrections and confirm"}
           </Button>
           <RuleDraftButton item={item} />
         </div>
@@ -216,7 +252,12 @@ export function RuleDraftButton({ item }: { item: ReviewItem }) {
   const queryClient = useQueryClient();
   const [error, setError] = useState<string | null>(null);
   const [savedId, setSavedId] = useState<string | null>(null);
-  const draft = useMutation({ mutationFn: () => getRuleDraft(item.id), onError: (c) => { setError(errorMessage(c)); } });
+  const draft = useMutation({
+    mutationFn: () => getRuleDraft(item.id),
+    onError: (c) => {
+      setError(errorMessage(c));
+    },
+  });
   const save = useMutation({
     mutationFn: () => {
       if (draft.data === undefined) {
@@ -234,7 +275,11 @@ export function RuleDraftButton({ item }: { item: ReviewItem }) {
   });
   if (savedId !== null) {
     return (
-      <Link to="/rules/$ruleId" params={{ ruleId: savedId }} className="link-action">
+      <Link
+        to="/rules/$ruleId"
+        params={{ ruleId: savedId }}
+        className="link-action"
+      >
         Rule saved. Open it
       </Link>
     );
@@ -251,30 +296,51 @@ export function RuleDraftButton({ item }: { item: ReviewItem }) {
         >
           Create a rule from this
         </Button>
-        {error === null ? null : <span role="alert" className="ledger-error">{error}</span>}
+        {error === null ? null : (
+          <span role="alert" className="ledger-error">
+            {error}
+          </span>
+        )}
       </>
     );
   }
   return (
     <span className="ledger-actions" role="group" aria-label="Rule draft">
       <span>Draft rule: {draft.data.rule.name}</span>
-      <Button variant="primary" loading={save.isPending} onClick={() => { save.mutate(); }}>
+      <Button
+        variant="primary"
+        loading={save.isPending}
+        onClick={() => {
+          save.mutate();
+        }}
+      >
         Save this rule
       </Button>
-      {error === null ? null : <span role="alert" className="ledger-error">{error}</span>}
+      {error === null ? null : (
+        <span role="alert" className="ledger-error">
+          {error}
+        </span>
+      )}
     </span>
   );
 }
 
 /** A new institution: remember the layout so the next statement of it is read the same way. */
-export function NewInstitutionTools({ item, actionable }: { item: ReviewItem; actionable: boolean }) {
+export function NewInstitutionTools({
+  item,
+  actionable,
+}: {
+  item: ReviewItem;
+  actionable: boolean;
+}) {
   const queryClient = useQueryClient();
   const detail = useItemDetail(item);
   const [institution, setInstitution] = useState("");
   const [similar, setSimilar] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const remember = useMutation({
-    mutationFn: () => rememberLayout(item.id, layoutRequest(institution, similar)),
+    mutationFn: () =>
+      rememberLayout(item.id, layoutRequest(institution, similar)),
     onSuccess: () => {
       setError(null);
       void queryClient.invalidateQueries({ queryKey: queryRoots.review });
@@ -298,14 +364,20 @@ export function NewInstitutionTools({ item, actionable }: { item: ReviewItem; ac
   const out = remember.data;
   return (
     <div className="ledger-stack">
-      <p>PerFin does not know this layout yet. Tell it which institution the file is from and it reads the next one the same way.</p>
+      <p>
+        PerFin does not know this layout yet. Tell it which institution the file
+        is from and it reads the next one the same way.
+      </p>
       <ItemViewer item={item} detail={detail.data} />
       {actionable ? (
         <>
           <Field label="Institution">
             <Select
               placeholder="Choose an institution"
-              options={choices.map((choice) => ({ value: choice.id, label: choice.label }))}
+              options={choices.map((choice) => ({
+                value: choice.id,
+                label: choice.label,
+              }))}
               value={institution}
               onChange={(event) => {
                 setInstitution(event.target.value);
@@ -335,8 +407,11 @@ export function NewInstitutionTools({ item, actionable }: { item: ReviewItem; ac
       ) : null}
       {out === undefined ? null : (
         <p role="status">
-          Layout remembered. {out.reprocessed.length} file(s) are being read again.
-          {out.ambiguous ? " The layout also matches other institutions, so check the next import." : ""}
+          Layout remembered. {out.reprocessed.length} file(s) are being read
+          again.
+          {out.ambiguous
+            ? " The layout also matches other institutions, so check the next import."
+            : ""}
         </p>
       )}
       {error === null ? null : (
@@ -349,7 +424,13 @@ export function NewInstitutionTools({ item, actionable }: { item: ReviewItem; ac
 }
 
 /** A drop-folder file nobody could be found for: choose the member (and account). */
-export function UnknownOwnerTools({ item, actionable }: { item: ReviewItem; actionable: boolean }) {
+export function UnknownOwnerTools({
+  item,
+  actionable,
+}: {
+  item: ReviewItem;
+  actionable: boolean;
+}) {
   const { session } = useAuthSession();
   const householdId = session?.household?.id ?? "";
   const members = useQuery({
@@ -366,10 +447,15 @@ export function UnknownOwnerTools({ item, actionable }: { item: ReviewItem; acti
   return (
     <div className="ledger-stack">
       <p>
-        A file arrived in the drop folder and PerFin could not tell whose it is. It is held until you choose.
+        A file arrived in the drop folder and PerFin could not tell whose it is.
+        It is held until you choose.
       </p>
       {item.document_id === null ? null : (
-        <Link to="/documents/$documentId" params={{ documentId: item.document_id }} className="link-action">
+        <Link
+          to="/documents/$documentId"
+          params={{ documentId: item.document_id }}
+          className="link-action"
+        >
           Look at the file
         </Link>
       )}
@@ -378,7 +464,9 @@ export function UnknownOwnerTools({ item, actionable }: { item: ReviewItem; acti
           <Field label="Whose file is it?">
             <Select
               placeholder="Choose a member"
-              options={(members.data ?? []).filter((m) => m.is_active).map((m) => ({ value: m.user_id, label: m.display_name }))}
+              options={(members.data ?? [])
+                .filter((m) => m.is_active)
+                .map((m) => ({ value: m.user_id, label: m.display_name }))}
               value={userId}
               onChange={(event) => {
                 setUserId(event.target.value);

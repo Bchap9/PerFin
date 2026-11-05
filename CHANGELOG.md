@@ -6,13 +6,13 @@ All notable changes to PerFin are recorded here. The format follows
 
 ## Status
 
-The current release candidate is `v1.0.0-rc.2`; the final `v1.0.0` follows the
+The current release candidate is `v1.0.0-rc.3`; the final `v1.0.0` follows the
 external security review. Every phase (0-7) is implemented. Alembic head is
-`0008`. `make check` passes from the repository root
-(2026-11-04): SPDX; backend ruff, ruff format, mypy --strict (634 source
-files plus 4 scripts), bandit, 7431 pytest tests with `-n auto` and OpenAPI
-drift; frontend eslint, tsc, 399 vitest tests in 55 files and the
-production build; `pip-audit` finds no known vulnerabilities and
+`0009`. On 2026-11-05: SPDX; backend ruff, ruff format, mypy --strict (657
+source files), bandit, OpenAPI drift and 7742 pytest tests with `-n auto`,
+of which the OCR and Helm tests (67) need Tesseract and `helm` and were run
+only in CI; frontend eslint, tsc, 439 vitest tests in 57 files and the
+production build. As of rc.2: `pip-audit` finds no known vulnerabilities and
 `npm audit --audit-level=high` passes with 10 moderate advisories in dev
 tooling (eslint, typescript-eslint, minimatch), none high.
 CI is green end to end on GitHub Actions for commit `21d2b38`: `ci` run
@@ -25,7 +25,10 @@ What remains (details in docs/ROADMAP.md):
 - An external security review or penetration test before the tag. An
   internal review was done every phase (docs/security/CONTROLS.md).
 - The `v1.0.0-rc.1` release run failed in its download step (fixed in rc.2,
-  #8); `v1.0.0-rc.2` is the first run of the release workflow with that fix.
+  #8). `v1.0.0-rc.3` also publishes the new `perfin-ml` image.
+- Not exercised: the optional local-model containers (`ml`/`ml-cuda`
+  profiles) against a real Ollama runtime and GPU; the adapter is tested
+  against a fake runtime only.
 - Not exercised: the Helm chart on a live cluster, a live Authentik, real
   notification providers, the egress profile with real outbound
   integrations, WebAuthn with a hardware key, Claude Desktop and on-prem MCP
@@ -34,6 +37,96 @@ What remains (details in docs/ROADMAP.md):
 ## [Unreleased]
 
 Nothing yet.
+
+## [1.0.0-rc.3] - 2026-11-05
+
+Third release candidate of 1.0.0. Fidelity activity CSVs import as investment
+activity, the review queue names each document and explains how to fix it,
+accounts can be created from a document's own details, account subtypes (IRA
+kinds, 401(k)s, 529s and more) with their tax treatment, and an optional
+local-model container suggests what unfamiliar documents are; details below.
+Migration `0009` adds `account.subtype`.
+
+### Fixed
+
+- Fidelity "Activity & History" CSV exports import as investment activity in
+  more cases:
+  - The column-mapping editor has an "Investment activity" mode with action,
+    symbol, security, quantity, price, commission, fees, settlement date,
+    account number and account name columns; its suggestion for a brokerage
+    header fills them in. An activity mapping, saved or chosen on a re-run,
+    imports buys, sells and reinvestments instead of plain cash rows.
+  - More of Fidelity's wording is typed: debit card purchases, checks, bill
+    payments, direct debits, margin interest, tax withholdings, participant
+    and employer contributions, return of capital, core-account sweeps;
+    journal entries, rollovers, conversions and exchanges by the row's signs.
+    Unknown actions are listed (first words) in the review item.
+  - Masked account numbers (`Z2xxxxxxxx`) no longer merge accounts; the
+    `Account` nickname tells them apart and marks IRA/Roth/401(k)/HSA
+    accounts as retirement accounts. Choosing an account in the review queue
+    takes that item's account only.
+  - A sale of shares bought before the export's first row opens them with
+    an unknown cost basis and asks for it, instead of rolling back the
+    account's whole import.
+  - Files written as `a, "b, c"` no longer split inside quoted fields, and a
+    short export followed by long disclaimers is still read as CSV.
+  - The upload list no longer offers "Map columns" for a file already read
+    as investment activity.
+
+### Added
+
+- "Accounts in this file": for a statement or export whose accounts PerFin
+  does not know yet, a dialog (from the review queue's "Set up accounts from
+  this file" and the document page) lists every account the file names, which
+  ones are already known, and an editable proposal for each new one (name from
+  the file's nickname or institution, type, institution, currency, last four
+  digits, the statement's opening balance). One click creates the accounts
+  (and institutions by name) and imports the file into all of them.
+  `GET /documents/{id}/accounts`, `POST /documents/{id}/accounts/apply`;
+  `apply-mapping` gains per-statement `assignments`.
+
+- Account subtypes: what kind of account it is within its type, with its tax
+  treatment. Retirement: traditional, Roth, rollover, SEP, SIMPLE, inherited
+  and spousal IRAs, 401(k), Roth 401(k), solo 401(k), 403(b), Roth 403(b),
+  457(b), TSP, HSA, pension, annuity, Keogh, profit sharing. Investment
+  (brokerage): individual, joint, trust, custodial (UTMA/UGMA), 529, Coverdell
+  ESA, ABLE, cash management, crypto, business. Also checking, savings (CD,
+  money market...), card, loan, mortgage and line-of-credit kinds (HELOC,
+  margin). Chosen in the account form, shown in the accounts list, and proposed
+  from account names in imported files (`ROTH IRA`, `Health Savings Account`).
+  Migration `0009` adds `account.subtype`; `GET /accounts/subtypes` lists them.
+- Optional local-model hints (ADR-0010, docs/ML.md), like Immich's machine
+  learning container: the `ml` (CPU) and `ml-cuda` (NVIDIA GPU) Compose
+  profiles start an adapter (`perfin-ml`) and an Ollama runtime on an internal
+  network. With `PERFIN_ML_URL`/`PERFIN_ML_TOKEN` set, the worker asks it about
+  documents whose kind is unknown or whose account nothing matched, sending
+  only extracted text. Answers are checked (last four digits only when printed
+  in the document) and used only as suggestions: proposed accounts, account
+  choices in the review queue, an unknown document kind. `PERFIN_ML_URL` must
+  be a local address; anything else stops the app from starting.
+
+- `perfin review-report --household ID`: a household's review items counted
+  by kind, reason and state, and the open ones by file type (read-only, counts
+  and codes only), to see which misses are most common and whether a change
+  helped.
+
+### Changed
+
+- Institution names are compared by their distinctive words, so `Chase` and
+  `JPMorgan Chase Bank, N.A.`, or `Fidelity` and `Fidelity Investments`, are
+  the same institution when breaking a last-four-digits tie, resolving a
+  classified document's institution, and creating institutions from
+  "Accounts in this file" (no duplicates). Names made only of common words
+  (`First`, `American`, `Capital`...) still need an exact match.
+- More ways of printing an account's last four digits are read: `x1234`,
+  `x-1234`, `...1234`, "ends in 1234", "ending with 1234", "last 4 digits of
+  account number: 1234".
+- Review queue items name the file they are about (a link, when it arrived,
+  the period it covers) and explain what happened, why PerFin stopped and how
+  to fix it, for every reason the importer raises. A "Fix..." dialog shows the
+  document's pages beside the explanation and the controls. `ReviewItemOut`
+  gains `document` (filename, kind, status, type, source, dates,
+  `previewable`) and `reason`, loaded in one query for the whole list.
 
 ## [1.0.0-rc.2] - 2026-11-05
 

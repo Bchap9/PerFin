@@ -1,6 +1,8 @@
 # ADR-0007: No model calls inside PerFin; AI access only through a read-only MCP server that exposes finance, never identity
 
-Status: Accepted. Date: 2026-11-03. Supersedes ADR-0004.
+Status: Accepted. Date: 2026-11-03. Supersedes ADR-0004. Its first decision
+("no LLM client") is partly superseded by ADR-0010: an optional, local-only
+model container may suggest what a document is.
 
 ## Context
 The original design allowed an optional LLM fallback inside ingestion, with

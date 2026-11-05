@@ -1,6 +1,12 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 /** Typed calls for document upload, import preview and column mappings. */
-import { api, ApiError, networkError, problemFromBody, unwrap } from "../../lib/api/client";
+import {
+  api,
+  ApiError,
+  networkError,
+  problemFromBody,
+  unwrap,
+} from "../../lib/api/client";
 import type { components } from "../../lib/api/schema";
 import { CSRF_HEADER, csrfStore } from "../../lib/csrf";
 import { queryRoots } from "../../lib/queryKeys";
@@ -22,27 +28,49 @@ export const importKeys = {
 } as const;
 
 export function listRecentDocuments(limit = 25): Promise<DocumentRow[]> {
-  return unwrap(api.GET("/api/v1/documents", { params: { query: { limit } } })).then((page) => page.items);
+  return unwrap(
+    api.GET("/api/v1/documents", { params: { query: { limit } } }),
+  ).then((page) => page.items);
 }
 
 export function getDocument(id: string): Promise<Schemas["DocumentDetailOut"]> {
-  return unwrap(api.GET("/api/v1/documents/{document_id}", { params: { path: { document_id: id } } }));
+  return unwrap(
+    api.GET("/api/v1/documents/{document_id}", {
+      params: { path: { document_id: id } },
+    }),
+  );
 }
 
 export function getPreview(id: string): Promise<ImportPreview> {
-  return unwrap(api.GET("/api/v1/imports/{document_id}/preview", { params: { path: { document_id: id }, query: { limit: 50 } } }));
+  return unwrap(
+    api.GET("/api/v1/imports/{document_id}/preview", {
+      params: { path: { document_id: id }, query: { limit: 50 } },
+    }),
+  );
 }
 
 export function listMappings(): Promise<Mapping[]> {
-  return unwrap(api.GET("/api/v1/imports/mappings", { params: { query: { limit: 200 } } })).then((page) => page.items);
+  return unwrap(
+    api.GET("/api/v1/imports/mappings", { params: { query: { limit: 200 } } }),
+  ).then((page) => page.items);
 }
 
-export function createMapping(body: Schemas["MappingCreate"]): Promise<Mapping> {
+export function createMapping(
+  body: Schemas["MappingCreate"],
+): Promise<Mapping> {
   return unwrap(api.POST("/api/v1/imports/mappings", { body }));
 }
 
-export function applyMapping(documentId: string, body: Schemas["ApplyMapping"]): Promise<Schemas["ImportAccepted"]> {
-  return unwrap(api.POST("/api/v1/imports/{document_id}/apply-mapping", { params: { path: { document_id: documentId } }, body }));
+export function applyMapping(
+  documentId: string,
+  body: Schemas["ApplyMapping"],
+): Promise<Schemas["ImportAccepted"]> {
+  return unwrap(
+    api.POST("/api/v1/imports/{document_id}/apply-mapping", {
+      params: { path: { document_id: documentId } },
+      body,
+    }),
+  );
 }
 
 function parseJson(text: string): unknown {
@@ -69,12 +97,17 @@ export interface UploadOptions {
  * Upload one file with progress (`fetch` cannot report upload progress, so
  * this uses XHR with the same CSRF header and same-origin cookies).
  */
-export function uploadDocument(file: File, options: UploadOptions = {}): UploadHandle {
+export function uploadDocument(
+  file: File,
+  options: UploadOptions = {},
+): UploadHandle {
   const xhr = (options.createRequest ?? (() => new XMLHttpRequest()))();
   const promise = (async (): Promise<DocumentReceived> => {
     const token = await csrfStore.ensure();
     return new Promise<DocumentReceived>((resolve, reject) => {
-      const query = options.accountId ? `?account_id=${encodeURIComponent(options.accountId)}` : "";
+      const query = options.accountId
+        ? `?account_id=${encodeURIComponent(options.accountId)}`
+        : "";
       xhr.open("POST", `/api/v1/documents${query}`);
       xhr.withCredentials = true;
       xhr.setRequestHeader("Accept", "application/json");
@@ -94,7 +127,12 @@ export function uploadDocument(file: File, options: UploadOptions = {}): UploadH
       };
       xhr.onload = () => {
         const body = parseJson(xhr.responseText);
-        if (xhr.status >= 200 && xhr.status < 300 && typeof body === "object" && body !== null) {
+        if (
+          xhr.status >= 200 &&
+          xhr.status < 300 &&
+          typeof body === "object" &&
+          body !== null
+        ) {
           resolve(body as DocumentReceived);
         } else {
           reject(problemFromBody(xhr.status, body, xhr.statusText));
@@ -105,7 +143,12 @@ export function uploadDocument(file: File, options: UploadOptions = {}): UploadH
       xhr.send(form);
     });
   })();
-  return { promise, abort: () => { xhr.abort(); } };
+  return {
+    promise,
+    abort: () => {
+      xhr.abort();
+    },
+  };
 }
 
 export function isAbort(error: unknown): boolean {
@@ -115,7 +158,11 @@ export function isAbort(error: unknown): boolean {
 export { ApiError };
 
 /** Statuses after which the pipeline needs nothing more from the server. */
-export const FINISHED_STATUSES: readonly DocumentStatus[] = ["processed", "rejected", "failed"];
+export const FINISHED_STATUSES: readonly DocumentStatus[] = [
+  "processed",
+  "rejected",
+  "failed",
+];
 
 export const STATUS_LABELS: Readonly<Record<DocumentStatus, string>> = {
   received: "Received",
@@ -128,3 +175,33 @@ export const STATUS_LABELS: Readonly<Record<DocumentStatus, string>> = {
   rejected: "Rejected",
   failed: "Failed",
 };
+
+export type DetectedAccount = Schemas["DetectedAccount"];
+export type DocumentAccounts = Schemas["DocumentAccounts"];
+export type AccountChoice = Schemas["AccountChoice"];
+
+export const documentAccountKeys = {
+  one: (id: string) => [...queryRoots.documents, "accounts", id],
+} as const;
+
+/** The accounts a document names: matched, or new with a proposal. */
+export function getDocumentAccounts(id: string): Promise<DocumentAccounts> {
+  return unwrap(
+    api.GET("/api/v1/documents/{document_id}/accounts", {
+      params: { path: { document_id: id } },
+    }),
+  );
+}
+
+/** Use or create an account for each, then re-import the document (a job). */
+export function applyDocumentAccounts(
+  id: string,
+  items: AccountChoice[],
+): Promise<Schemas["DocumentAccountsApplied"]> {
+  return unwrap(
+    api.POST("/api/v1/documents/{document_id}/accounts/apply", {
+      params: { path: { document_id: id } },
+      body: { items },
+    }),
+  );
+}

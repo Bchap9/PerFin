@@ -36,3 +36,9 @@
 # ntfy.sh:443
 # matrix.example.org:443
 # smtp.example.com:587
+
+# Local model downloads (optional `ml`/`ml-cuda` profiles, docs/ML.md): the
+# model runtime pulls from the Ollama registry, whose layers are served from a
+# CDN. Uncomment while pulling a model, then comment out again.
+# registry.ollama.ai
+# *.r2.cloudflarestorage.com

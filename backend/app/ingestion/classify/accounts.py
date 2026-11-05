@@ -8,7 +8,8 @@ to its last four digits here, so nothing longer reaches ``document``.
 Sources, strongest first: a structured statement's ``last4``; an account
 mask of the matching fingerprint (``XXXX-XXXX-XXXX-####``: ``X`` a masked or
 any digit, ``#`` a kept digit, other characters literal); generic masks
-(``****1234``, ``xxxx-xxxx-1234``, "ending in 1234"); a labelled number
+(``****1234``, ``xxxx-xxxx-1234``, ``x1234``, ``...1234``, "ending in 1234",
+"ends with 1234", "last 4 digits 1234"); a labelled number
 ("Account number: 0012 3456 7890").
 """
 
@@ -26,7 +27,12 @@ MASK_ALPHABET: Final = frozenset("X#*-. /")
 MAX_MASK_CHARS: Final = 40
 
 _MASK_CHAR: Final = r"[x*\u2022\u00b7#\d]"
-_ENDING: Final = re.compile(r"\bending(?: in)?:? ?(\d{4})\b")
+_ENDING: Final = re.compile(
+    r"\b(?:ending|ends)(?: (?:in|with))?:? ?(\d{4})\b"
+    r"|\blast (?:4|four)(?: digits)?(?: of (?:the )?account(?: number)?)?:? ?(\d{4})\b"
+)
+#: ``x1234``, ``x-1234``, ``...1234``, ``\u20261234`` (a short mask before the digits).
+_SHORT_MASK: Final = re.compile(r"(?<![\w.\u2026])(?:x|\.{2,4}|\u2026)-?(\d{4})(?![\d])")
 #: Possessive quantifiers: a run of mask characters is never split two ways.
 _MASKED: Final = re.compile(
     r"(?<![\w*\u2022])[x*\u2022]{2,8}+(?:[ -]?+[x*\u2022]{2,8}+){0,4}+[ -]?(\d{4})\b"
@@ -85,8 +91,9 @@ def detect_last4(view: DocumentView, masks: Sequence[re.Pattern[str]] = ()) -> L
         value = _unique(found)
         if value:
             return Last4(value, "fingerprint_mask", 0.95)
-    found = [m.group(1) for line in view.normalised for m in _ENDING.finditer(line)]
+    found = [m.group(1) or m.group(2) for line in view.normalised for m in _ENDING.finditer(line)]
     found += [m.group(1) for line in view.normalised for m in _MASKED.finditer(line)]
+    found += [m.group(1) for line in view.normalised for m in _SHORT_MASK.finditer(line)]
     value = _unique(found)
     if value:
         return Last4(value, "mask", 0.85)

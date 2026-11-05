@@ -329,7 +329,7 @@ describe("review queue", () => {
     renderApp("/review");
     const user = userEvent.setup();
     expect(
-      await screen.findByText("This email was not accepted. It can only be dismissed."),
+      await screen.findByText("This email was not accepted."),
     ).toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: "Dismiss" }));
     await waitFor(() => {
@@ -351,7 +351,7 @@ describe("review queue", () => {
     renderApp("/review");
     expect(
       await screen.findByText(
-        "This file lists several accounts. PerFin could not tell which of yours holds 12 of its transactions.",
+        "This file lists several accounts; 12 of its rows belong to an account PerFin does not know.",
       ),
     ).toBeInTheDocument();
   });
@@ -371,5 +371,61 @@ describe("review queue", () => {
     expect(
       screen.queryByRole("button", { name: "Import into this account" }),
     ).not.toBeInTheDocument();
+  });
+
+  it("names the file an item is about and explains how to fix it", async () => {
+    const api = reviewApi([
+      item(
+        "r-8",
+        "unknown_account",
+        { reason: "account_not_found", statement: 0 },
+        {
+          reason: "account_not_found",
+          document: {
+            id: "d-1",
+            original_filename: "october-statement.pdf",
+            kind: "statement",
+            status: "needs_review",
+            mime_detected: "application/pdf",
+            source: "upload",
+            created_at: NOW,
+            period_start: "2026-10-01",
+            period_end: "2026-10-31",
+            previewable: true,
+          },
+        },
+      ),
+    ]);
+    renderApp("/review");
+    const user = userEvent.setup();
+    const link = await screen.findByRole("link", {
+      name: "october-statement.pdf",
+    });
+    expect(link).toHaveAttribute("href", "/documents/d-1");
+    expect(
+      screen.getByText(
+        "None of your accounts matches the account number in this file.",
+      ),
+    ).toBeInTheDocument();
+    // The steps are in the Fix dialog, with the document and the controls.
+    expect(screen.queryByText("How to fix it")).not.toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Fix\u2026" }));
+    const dialog = await screen.findByRole("dialog");
+    expect(within(dialog).getByText("How to fix it")).toBeInTheDocument();
+    expect(
+      within(dialog).getByText(
+        /PerFin matches files to accounts by the last four digits/,
+      ),
+    ).toBeInTheDocument();
+    await user.selectOptions(
+      within(dialog).getByLabelText("Account for this file"),
+      "a-1",
+    );
+    await user.click(
+      within(dialog).getByRole("button", { name: "Import into this account" }),
+    );
+    await waitFor(() => {
+      expect(api.callsTo("POST", "/api/v1/review/:id/resolve")).toHaveLength(1);
+    });
   });
 });

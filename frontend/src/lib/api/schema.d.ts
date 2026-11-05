@@ -22,6 +22,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/accounts/subtypes": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** The kinds of account within each type (Roth IRA, 529, HELOC...) */
+        get: operations["get_account_subtypes_api_v1_accounts_subtypes_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/accounts/{account_id}": {
         parameters: {
             query?: never;
@@ -1217,6 +1234,40 @@ export interface paths {
         post?: never;
         /** Delete a document (its key is destroyed first) */
         delete: operations["delete_document_api_v1_documents__document_id__delete"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/documents/{document_id}/accounts": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** The accounts a document names, matched or proposed (member or above) */
+        get: operations["get_document_accounts_api_v1_documents__document_id__accounts_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/documents/{document_id}/accounts/apply": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Use or create an account for each of a document's accounts and re-import (job) */
+        post: operations["post_document_accounts_api_v1_documents__document_id__accounts_apply_post"];
+        delete?: never;
         options?: never;
         head?: never;
         patch?: never;
@@ -3201,6 +3252,24 @@ export interface components {
             type: string;
         };
         /**
+         * AccountChoice
+         * @description Use an existing account (``account_id``) or create one (``create``), not both.
+         */
+        AccountChoice: {
+            /** Account Id */
+            account_id?: string | null;
+            create?: components["schemas"]["AccountCreate"] | null;
+            /** Index */
+            index: number;
+            /** Institution Name */
+            institution_name?: string | null;
+            /**
+             * Target
+             * @enum {string}
+             */
+            target: "statement" | "investment" | "group" | "table";
+        };
+        /**
          * AccountClose
          * @description ``POST /accounts/{id}/close``: the closing date (default today).
          */
@@ -3254,6 +3323,8 @@ export interface components {
             opening_balance?: components["schemas"]["MoneyIn"] | null;
             /** Opening Balance Date */
             opening_balance_date?: string | null;
+            /** Subtype */
+            subtype?: string | null;
             type: components["schemas"]["AccountType"];
         };
         /**
@@ -3330,6 +3401,12 @@ export interface components {
             number_last4: string | null;
             /** Opened On */
             opened_on: string | null;
+            /** Subtype */
+            subtype: string | null;
+            /** Subtype Label */
+            subtype_label: string | null;
+            /** Tax Treatment */
+            tax_treatment: ("taxable" | "tax_deferred" | "tax_free") | null;
             type: components["schemas"]["AccountType"];
             /**
              * Updated At
@@ -3345,10 +3422,45 @@ export interface components {
             next_cursor: string | null;
         };
         /**
+         * AccountProposal
+         * @description A new account ready to create for one of a document's accounts (editable).
+         */
+        AccountProposal: {
+            /** Currency */
+            currency: string | null;
+            /** Institution Name */
+            institution_name: string | null;
+            /** Name */
+            name: string;
+            /** Number Last4 */
+            number_last4: string | null;
+            /** Opening Balance */
+            opening_balance: string | null;
+            /** Opening Balance Date */
+            opening_balance_date: string | null;
+            /** Subtype */
+            subtype?: string | null;
+            /**
+             * Suggested By Model
+             * @default false
+             */
+            suggested_by_model: boolean;
+            type: components["schemas"]["AccountType"];
+        };
+        /**
          * AccountType
          * @enum {string}
          */
         AccountType: "checking" | "savings" | "credit_card" | "cash" | "brokerage" | "retirement" | "loan" | "mortgage" | "line_of_credit" | "manual_asset" | "manual_liability";
+        /**
+         * AccountTypeSubtypes
+         * @description ``GET /accounts/subtypes``: the subtypes of one account type, in display order.
+         */
+        AccountTypeSubtypes: {
+            /** Subtypes */
+            subtypes: components["schemas"]["SubtypeOut"][];
+            type: components["schemas"]["AccountType"];
+        };
         /** AccountTypeTotal */
         AccountTypeTotal: {
             /** Accounts */
@@ -3388,6 +3500,8 @@ export interface components {
             number_last4?: string | null;
             /** Opened On */
             opened_on?: string | null;
+            /** Subtype */
+            subtype?: string | null;
             type?: components["schemas"]["AccountType"] | null;
         };
         /** AccountValueOut */
@@ -4242,15 +4356,21 @@ export interface components {
          *     statement of a multi-account table the account is for (an
          *     ``unknown_account`` item's ``group``); without it a chosen account takes
          *     only the statements with its own last four digits, or the one statement
-         *     no account matched.
+         *     no account matched. ``statement`` (with ``account_id``) does the same for
+         *     the brokerage statements of a document (an investment ``unknown_account``
+         *     item's ``statement``: an activity export's account, a PDF's).
          */
         ApplyMapping: {
             /** Account Id */
             account_id?: string | null;
+            /** Assignments */
+            assignments?: components["schemas"]["Assignment"][];
             /** Group */
             group?: number | null;
             /** Mapping Id */
             mapping_id?: string | null;
+            /** Statement */
+            statement?: number | null;
         };
         /**
          * ArchiveState
@@ -4336,6 +4456,24 @@ export interface components {
             description?: string | null;
             kind?: components["schemas"]["AssetKind"] | null;
             valuation_method?: components["schemas"]["ValuationMethod"] | null;
+        };
+        /**
+         * Assignment
+         * @description One of a document's accounts and the PerFin account it is imported into.
+         */
+        Assignment: {
+            /**
+             * Account Id
+             * Format: uuid
+             */
+            account_id: string;
+            /** Index */
+            index: number;
+            /**
+             * Target
+             * @enum {string}
+             */
+            target: "statement" | "investment" | "group" | "table";
         };
         /**
          * AutoPairRequest
@@ -5405,6 +5543,81 @@ export interface components {
             unchanged: number;
             /** Updated */
             updated: number;
+        };
+        /**
+         * DetectedAccount
+         * @description One account a document names and what PerFin knows of it (``proposals`` module doc).
+         */
+        DetectedAccount: {
+            /** Account Id */
+            account_id: string | null;
+            /** Account Type */
+            account_type: string | null;
+            /** Candidates */
+            candidates: string[];
+            /** Closing Balance */
+            closing_balance: string | null;
+            /** Currency */
+            currency: string | null;
+            /** Index */
+            index: number;
+            /** Institution Name */
+            institution_name: string | null;
+            /** Last4 */
+            last4: string | null;
+            /** Name */
+            name: string | null;
+            /** Opening Balance */
+            opening_balance: string | null;
+            /** Period End */
+            period_end: string | null;
+            /** Period Start */
+            period_start: string | null;
+            proposal: components["schemas"]["AccountProposal"] | null;
+            /** Review Item Id */
+            review_item_id: string | null;
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "matched" | "new" | "ambiguous" | "conflict" | "done";
+            /**
+             * Target
+             * @enum {string}
+             */
+            target: "statement" | "investment" | "group" | "table";
+            /** Transactions */
+            transactions: number;
+        };
+        /** DocumentAccounts */
+        DocumentAccounts: {
+            /** Accounts */
+            accounts: components["schemas"]["DetectedAccount"][];
+            /**
+             * Document Id
+             * Format: uuid
+             */
+            document_id: string;
+        };
+        /** DocumentAccountsApplied */
+        DocumentAccountsApplied: {
+            /** Created */
+            created: string[];
+            /**
+             * Document Id
+             * Format: uuid
+             */
+            document_id: string;
+            /**
+             * Job Id
+             * Format: uuid
+             */
+            job_id: string;
+        };
+        /** DocumentAccountsApply */
+        DocumentAccountsApply: {
+            /** Items */
+            items: components["schemas"]["AccountChoice"][];
         };
         /**
          * DocumentDetailOut
@@ -6962,10 +7175,16 @@ export interface components {
         MappingSpec: {
             /** Account Column */
             account_column?: number | null;
+            /** Account Name Column */
+            account_name_column?: number | null;
+            /** Action Column */
+            action_column?: number | null;
             /** Amount Column */
             amount_column?: number | null;
             /** Balance Column */
             balance_column?: number | null;
+            /** Commission Column */
+            commission_column?: number | null;
             /** Credit Column */
             credit_column?: number | null;
             /** Currency */
@@ -6987,6 +7206,8 @@ export interface components {
              * @enum {string}
              */
             decimal_separator: "." | ",";
+            /** Fees Column */
+            fees_column?: number | null;
             /**
              * Has Header
              * @default true
@@ -6996,10 +7217,24 @@ export interface components {
             indicator_column?: number | null;
             /** Memo Column */
             memo_column?: number | null;
+            /**
+             * Mode
+             * @default cash
+             * @enum {string}
+             */
+            mode: "cash" | "activity";
             /** Outflow Values */
             outflow_values?: string[];
             /** Payee Column */
             payee_column?: number | null;
+            /** Price Column */
+            price_column?: number | null;
+            /** Quantity Column */
+            quantity_column?: number | null;
+            /** Security Column */
+            security_column?: number | null;
+            /** Settle Column */
+            settle_column?: number | null;
             /** @default inflow_positive */
             sign: components["schemas"]["Sign"];
             /**
@@ -7007,6 +7242,8 @@ export interface components {
              * @default 0
              */
             skip_rows: number;
+            /** Symbol Column */
+            symbol_column?: number | null;
             /**
              * Version
              * @default 1
@@ -7023,7 +7260,9 @@ export interface components {
          *     ``doubts`` are codes: ``header_not_exact``, ``rows_unreadable``,
          *     ``date_order_guessed``, ``no_rows``, ``indicator_values_unknown`` (an
          *     indicator cell that is no direction word, or a signed amount beside
-         *     it). ``sign_evidence`` is
+         *     it). ``activity_type_unknown`` is a brokerage activity suggestion with
+         *     actions PerFin does not type. ``sign_evidence`` is ``activity`` for an
+         *     activity-mode suggestion (amounts keep their own signs), else
          *     ``debit_credit``, ``indicator``, ``balance`` or null (a signed amount
          *     column read as "positive is money in" on trust).
          */
@@ -7045,7 +7284,7 @@ export interface components {
             /** Score */
             score: number;
             /** Sign Evidence */
-            sign_evidence: ("debit_credit" | "indicator" | "balance") | null;
+            sign_evidence: ("debit_credit" | "indicator" | "balance" | "activity") | null;
             spec: components["schemas"]["MappingSpec"];
         };
         /**
@@ -8185,11 +8424,45 @@ export interface components {
             before: components["schemas"]["ReviewState"];
         };
         /**
+         * ReviewDocument
+         * @description The document an item is about, so the queue can name and show it.
+         *
+         *     ``previewable``: the caller may see its pages (``GET
+         *     /documents/{id}/preview``: a PDF or image out of quarantine, member or
+         *     above, or a viewer where the household allows downloads).
+         */
+        ReviewDocument: {
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            kind: components["schemas"]["DocumentKind"];
+            /** Mime Detected */
+            mime_detected: string;
+            /** Original Filename */
+            original_filename: string | null;
+            /** Period End */
+            period_end: string | null;
+            /** Period Start */
+            period_start: string | null;
+            /** Previewable */
+            previewable: boolean;
+            source: components["schemas"]["DocumentSource"];
+            status: components["schemas"]["DocumentStatus"];
+        };
+        /**
          * ReviewItemOut
          * @description One review item. ``payload`` carries ids and short facts, never file content.
          *
          *     ``next_step`` names what the UI should offer; ``can_resolve`` whether the
-         *     caller may resolve or dismiss it.
+         *     caller may resolve or dismiss it. ``reason`` is ``payload.reason`` (what
+         *     raised it); ``document`` names the item's document.
          */
         ReviewItemOut: {
             /** Alternatives */
@@ -8201,6 +8474,7 @@ export interface components {
              * Format: date-time
              */
             created_at: string;
+            document?: components["schemas"]["ReviewDocument"] | null;
             /** Document Id */
             document_id: string | null;
             /**
@@ -8215,6 +8489,8 @@ export interface components {
             payload: {
                 [key: string]: unknown;
             };
+            /** Reason */
+            reason?: string | null;
             /** Regions */
             regions?: components["schemas"]["Region"][] | null;
             /** Resolution */
@@ -9398,6 +9674,15 @@ export interface components {
             /** Splits */
             splits: components["schemas"]["SplitIn"][];
         };
+        /** SubtypeOut */
+        SubtypeOut: {
+            /** Code */
+            code: string;
+            /** Label */
+            label: string;
+            /** Tax Treatment */
+            tax_treatment: ("taxable" | "tax_deferred" | "tax_free") | null;
+        };
         /**
          * SuggestionRole
          * @description Why the suggestion gave a column a role (no cell text).
@@ -10405,6 +10690,26 @@ export interface operations {
                 };
                 content: {
                     "application/problem+json": unknown;
+                };
+            };
+        };
+    };
+    get_account_subtypes_api_v1_accounts_subtypes_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AccountTypeSubtypes"][];
                 };
             };
         };
@@ -15130,6 +15435,129 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content?: never;
+            };
+            /** @description Problem details */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Problem details */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Problem details */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Problem details */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+        };
+    };
+    get_document_accounts_api_v1_documents__document_id__accounts_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                document_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DocumentAccounts"];
+                };
+            };
+            /** @description Problem details */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Problem details */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Problem details */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Problem details */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+        };
+    };
+    post_document_accounts_api_v1_documents__document_id__accounts_apply_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description Optional. Repeating a request with the same key returns the first answer instead of creating again (24 hours; 1-255 visible ASCII characters). */
+                "Idempotency-Key"?: string | null;
+            };
+            path: {
+                document_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["DocumentAccountsApply"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DocumentAccountsApplied"];
+                };
             };
             /** @description Problem details */
             403: {

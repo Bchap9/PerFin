@@ -66,9 +66,13 @@ statements"). Per statement:
    holding more than reported raises a ``position_mismatch`` item. Lots,
    ``lot_links`` and the ``holding`` cache are then written by the
    investments lot engine (``service.replay_position``, FIFO or average
-   cost per account). A history the engine refuses (selling units never
-   held) rolls the statement back (savepoint) with an
-   ``investment_lot_conflict`` item.
+   cost per account). An activity export (``csv``, no positions) that
+   sells units before it adds them opens the shortfall first
+   (:func:`_shortfall_openings`: one ``transfer_in`` per security on its
+   first row date, no price, memo :data:`UNKNOWN_BASIS_MEMO`) with an
+   ``investment_opening_basis_unknown`` item asking for the cost basis. A
+   history the engine still refuses (selling units never held) rolls the
+   statement back (savepoint) with an ``investment_lot_conflict`` item.
 7. **Prices**: each position's unit price on ``as_of`` becomes a ``price``
    row (``source = statement``) unless one exists for that day from another
    source.
@@ -82,7 +86,7 @@ from __future__ import annotations
 import hashlib
 import uuid
 from collections import defaultdict
-from collections.abc import Callable, Collection, Iterable, Sequence
+from collections.abc import Callable, Collection, Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import date
 from decimal import Decimal, localcontext
@@ -134,6 +138,8 @@ IDS_MAX: Final = 50
 #: Days between two formats' dates of one trade (trade vs settlement date).
 SETTLE_WINDOW_DAYS: Final = 5
 OPENING_MEMO: Final = "Opening position from statement"
+#: Memo of the opening a sale of units held before an activity export implies.
+UNKNOWN_BASIS_MEMO: Final = "Opening position before this export (cost basis unknown)"
 OPENING_TYPES: Final = frozenset(
     {InvestmentTxnType.BUY, InvestmentTxnType.REINVEST, InvestmentTxnType.TRANSFER_IN}
 )
@@ -241,10 +247,11 @@ def _account(
     *,
     single: bool,
     account_id: uuid.UUID | None,
+    forced: uuid.UUID | None = None,
 ) -> Account | None:
-    account: Account | None = None
+    account: Account | None = _usable(ctx, forced)
     candidates: tuple[uuid.UUID, ...] = ()
-    if single and ctx.document.account_id is not None and account_id is None:
+    if account is None and single and ctx.document.account_id is not None and account_id is None:
         account = _usable(ctx, ctx.document.account_id)
     if account is None:
         match = match_account(
@@ -758,6 +765,84 @@ def _openings(
     return openings
 
 
+def _shortfall_openings(
+    ctx: _Context,
+    account: Account,
+    created: Sequence[InvestmentTxn],
+    existing: set[str],
+) -> list[InvestmentTxn]:
+    """Openings for units an activity-only statement sells before it ever adds them.
+
+    An activity export starts on a date, not with the account's first trade:
+    a sale of units bought earlier would make the lot engine refuse the whole
+    statement. For each security whose running units (from the lots the
+    account already holds) would go below zero, one ``transfer_in`` of the
+    shortfall enters on the security's first row date, with no price (its
+    cost basis is unknown: the lot opens at zero cost until a person enters
+    it). A security with a split among the new rows is left to the engine
+    (the shortfall before and after the split differ).
+    """
+    held = _held_units(ctx, account)
+    by_security: dict[uuid.UUID, list[InvestmentTxn]] = defaultdict(list)
+    for row in created:
+        if row.security_id is not None:
+            by_security[row.security_id].append(row)
+    openings: list[InvestmentTxn] = []
+    for security_id in sorted(by_security, key=lambda u: u.bytes):
+        rows = sorted(
+            by_security[security_id],
+            key=lambda r: (r.trade_date, _DAY_RANK.get(str(r.type), 2), r.id.bytes),
+        )
+        if any(r.type is InvestmentTxnType.SPLIT for r in rows):
+            continue
+        units = held.get(security_id, Decimal(0))
+        lowest = units
+        with localcontext(calc_context()):
+            for row in rows:
+                if row.type in OPENING_TYPES:
+                    units += row.quantity or Decimal(0)
+                elif row.type in CLOSING_TYPES:
+                    units -= row.quantity or Decimal(0)
+                lowest = min(lowest, units)
+        if lowest >= -UNIT_TOLERANCE:
+            continue
+        opened_on = rows[0].trade_date
+        digest = hashlib.sha256(
+            _SEP.join(
+                (
+                    HASH_VERSION,
+                    str(account.id),
+                    "shortfall",
+                    str(security_id),
+                    opened_on.isoformat(),
+                )
+            ).encode()
+        ).hexdigest()
+        if digest in existing:
+            continue
+        existing.add(digest)
+        openings.append(
+            InvestmentTxn(
+                id=uuid7(),
+                household_id=ctx.household_id,
+                account_id=account.id,
+                security_id=security_id,
+                type=InvestmentTxnType.TRANSFER_IN,
+                trade_date=opened_on,
+                quantity=(-lowest).quantize(QUANTUM),
+                price=None,
+                amount=Decimal(0),
+                fees=Decimal(0),
+                currency=account.currency,
+                lot_links=[],
+                memo=UNKNOWN_BASIS_MEMO,
+                import_hash=digest,
+                source_document_id=ctx.document.id,
+            )
+        )
+    return openings
+
+
 def _cash_statement(
     statement: InvestmentStatement, rows: Iterable[InvestmentActivity]
 ) -> Statement:
@@ -862,6 +947,29 @@ def _write(
     if on is not None and statement.positions:
         openings = _openings(ctx, account, statement, positions, created, on, existing)
         db.flush()
+    elif not statement.positions and statement.source_format == "csv":
+        # An activity export: units sold before it ever bought them were
+        # held before its first row (cost basis unknown, a person is told).
+        openings = _shortfall_openings(ctx, account, created, existing)
+        if openings:
+            db.add_all(openings)
+            db.flush()
+            ctx.review(
+                ReviewKind.LOW_CONFIDENCE_FIELD,
+                {
+                    "reason": "investment_opening_basis_unknown",
+                    "account_id": str(account.id),
+                    "securities": [
+                        {
+                            "security_id": str(row.security_id),
+                            "quantity": _units(row.quantity or Decimal(0)),
+                            "trade_date": row.trade_date.isoformat(),
+                            "transaction_id": str(row.id),
+                        }
+                        for row in openings[:IDS_MAX]
+                    ],
+                },
+            )
     touched = {r.security_id for r in (*created, *openings) if r.security_id is not None}
     touched |= {security.id for _, security in positions}
     for security_id in sorted(touched, key=lambda u: u.bytes):
@@ -970,8 +1078,14 @@ def _commit(
 
 
 def _several_accounts(statements: Sequence[InvestmentStatement]) -> bool:
-    """The statements name two or more accounts (different last four digits)."""
-    return len({s.account.last4 for s in statements if s.account.last4}) > 1
+    """The statements name two or more accounts.
+
+    Different last four digits, or (an activity export whose account
+    numbers are masked) different account names.
+    """
+    if len({s.account.last4 for s in statements if s.account.last4}) > 1:
+        return True
+    return len(statements) > 1 and len({(s.account.last4, s.account.name) for s in statements}) > 1
 
 
 def _chosen_takes(
@@ -1021,9 +1135,16 @@ def import_investment_statements(
     review: Review,
     commit_cash: CommitCash,
     account_id: uuid.UUID | None = None,
+    statement_index: int | None = None,
+    assigned: Mapping[int, uuid.UUID] | None = None,
     user_id: uuid.UUID | None = None,
 ) -> InvestmentImport:
-    """Commit the brokerage statements of ``document`` (module doc)."""
+    """Commit the brokerage statements of ``document`` (module doc).
+
+    ``account_id`` is the account a person chose on a re-run; ``statement_index``
+    names the one statement it is for (the review item's), else
+    :func:`_chosen_takes` decides on a multi-account document.
+    """
     ctx = _Context(
         db=db,
         document=document,
@@ -1035,7 +1156,9 @@ def import_investment_statements(
     )
     single = len(statements) == 1
     takes: Collection[int] = range(len(statements))
-    if account_id is not None and _several_accounts(statements):
+    if account_id is not None and statement_index is not None:
+        takes = {statement_index} if 0 <= statement_index < len(statements) else set()
+    elif account_id is not None and _several_accounts(statements):
         takes = _chosen_takes(ctx, statements, account_id)
     for index, statement in enumerate(statements):
         account = _account(
@@ -1044,6 +1167,7 @@ def import_investment_statements(
             index,
             single=single,
             account_id=account_id if index in takes else None,
+            forced=(assigned or {}).get(index),
         )
         if account is None:
             continue

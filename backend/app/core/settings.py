@@ -21,6 +21,8 @@ from typing import Annotated, Literal
 from pydantic import Field, SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
+from app.core.local_url import is_local_url
+
 MASTER_KEY_BYTES = 32
 
 IPNetwork = IPv4Network | IPv6Network
@@ -311,6 +313,18 @@ class Settings(BaseSettings):
     # "closed" stops it (retried, then failed), "open" goes on unscanned.
     antivirus_fail_mode: Literal["closed", "open"] = "closed"
 
+    # ---- Local model hints (optional; ADR-0010, docs/ML.md) -----------------
+    # The ml adapter (deploy/ml, compose profiles ml / ml-cuda); empty = off.
+    # Must be local: a loopback or private address, or a host name on the
+    # internal network (one label such as `ml`, or .local/.lan/.internal/
+    # .home.arpa). Anything else is refused at start-up, and the worker checks
+    # that the name resolves to local addresses before every call.
+    ml_url: str = ""
+    ml_token: SecretStr | None = None
+    ml_timeout_seconds: Annotated[int, Field(ge=1, le=600)] = 120
+    # Characters of a document's text sent to the model.
+    ml_max_chars: Annotated[int, Field(ge=1000, le=100_000)] = 16_000
+
     # ---- AI access (MCP role) ----------------------------------------------
     mcp_enabled: bool = False
     mcp_transport: Literal["stdio", "http"] = "stdio"
@@ -352,7 +366,12 @@ class Settings(BaseSettings):
         return value.upper() if isinstance(value, str) else value
 
     @field_validator(
-        "master_key", "secret_key", "oidc_client_secret", "smtp_password", mode="before"
+        "master_key",
+        "secret_key",
+        "oidc_client_secret",
+        "smtp_password",
+        "ml_token",
+        mode="before",
     )
     @classmethod
     def _empty_secret_is_none(cls, value: object) -> object:
@@ -370,6 +389,21 @@ class Settings(BaseSettings):
     @classmethod
     def _empty_url_is_none(cls, value: object) -> object:
         return None if value == "" else value
+
+    @field_validator("ml_url")
+    @classmethod
+    def _ml_url_is_local(cls, value: str) -> str:
+        value = value.strip()
+        if value and not is_local_url(value):
+            raise ValueError(
+                "PERFIN_ML_URL must be a local http(s) address (loopback, private, or an "
+                "internal host name such as http://ml:3003); documents never leave the host"
+            )
+        return value.rstrip("/")
+
+    @property
+    def ml_enabled(self) -> bool:
+        return bool(self.ml_url) and self.ml_token is not None
 
     @model_validator(mode="after")
     def _one_master_key_source(self) -> Settings:

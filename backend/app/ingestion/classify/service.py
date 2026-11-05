@@ -6,7 +6,8 @@ themselves; otherwise the household's and the shipped **fingerprints**
 (:mod:`app.ingestion.classify.fingerprints`), then the **heuristic
 classifier** (:mod:`app.ingestion.classify.model`); below
 :data:`KIND_THRESHOLD` the kind stays ``unknown`` and the document goes to
-review. No model is consulted beyond that (ADR-0007).
+review. No language model is consulted here; the optional local model of
+ADR-0010 is asked afterwards by the pipeline (``pipeline._ml_hints``).
 
 :func:`classify_extraction` is pure (no database); :func:`apply_classification`
 writes the result on the ``document`` row, resolving the institution by
@@ -48,6 +49,7 @@ from app.ingestion.classify.period import (
 )
 from app.ingestion.classify.text import DocumentView
 from app.ingestion.match.accounts import importable_account_ids, match_account
+from app.ingestion.match.institutions import pick
 from app.ingestion.sandbox.protocol import ExtractResult
 
 #: Below this the classifier's kind is not believed (document stays ``unknown``).
@@ -220,14 +222,13 @@ def resolve_institution(
     fingerprint = classification.fingerprint
     if fingerprint is not None and fingerprint.institution_id is not None:
         return fingerprint.institution_id
-    wanted = normalize_payee(classification.institution)
-    if not wanted:
+    if not normalize_payee(classification.institution):
         return None
     rows = db.execute(
         select(Institution.id, Institution.name).where(Institution.household_id == household_id)
     ).all()
-    found = [i for i, name in rows if normalize_payee(name) == wanted]
-    return found[0] if len(found) == 1 else None
+    # Exact name first, else the single institution the name means (match.institutions).
+    return pick(classification.institution, [(i, name) for i, name in rows])
 
 
 def apply_classification(

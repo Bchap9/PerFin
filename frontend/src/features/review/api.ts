@@ -214,7 +214,9 @@ export function ownerResolution(
   return {
     kind: "unknown_owner",
     user_id: userId,
-    ...(accountId === null || accountId === "" ? {} : { account_id: accountId }),
+    ...(accountId === null || accountId === ""
+      ? {}
+      : { account_id: accountId }),
     remember,
   };
 }

@@ -332,6 +332,7 @@ def test_single_head_and_linear_history() -> None:
     assert script.get_base() == "0001"
     # One revision per phase, each on top of the previous one.
     assert [rev.revision for rev in script.walk_revisions("base", "heads")] == [
+        "0009",
         "0008",
         "0007",
         "0006",
@@ -348,6 +349,7 @@ def test_single_head_and_linear_history() -> None:
     assert script.get_revision("0006").down_revision == "0005"
     assert script.get_revision("0007").down_revision == "0006"
     assert script.get_revision("0008").down_revision == "0007"
+    assert script.get_revision("0009").down_revision == "0008"
 
 
 def test_upgrade_head_matches_models_without_drift(migrated: Scratch) -> None:

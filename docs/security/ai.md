@@ -6,9 +6,10 @@ ids refer to `docs/AI_ACCESS.md` (M1-M8) and `docs/SECURITY.md`; status is in
 
 ## Short answer
 
-**PerFin sends nothing to any model or AI service.** There is no model client
-in the code base (ADR-0007), no outbound call to an AI provider, and no
-setting for one. A connected assistant host pulls data from PerFin; PerFin
+**PerFin sends nothing to any hosted model or AI service.** There is no
+outbound call to an AI provider and no setting for one. The optional local
+model container (ADR-0010, [`../ML.md`](../ML.md)) is refused unless it runs on
+your own network, and it only suggests. A connected assistant host pulls data from PerFin; PerFin
 never pushes.
 
 ## When an assistant is connected

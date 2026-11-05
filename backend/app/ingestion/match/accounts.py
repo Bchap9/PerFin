@@ -27,7 +27,7 @@ from sqlalchemy.orm import Session
 
 from app.auth.models import AccountGrant, GrantLevel, HouseholdMember, HouseholdRole
 from app.domain.accounts.models import Account, Institution
-from app.domain.transactions.import_hash import normalize_payee
+from app.ingestion.match.institutions import pick
 
 
 @dataclass(frozen=True)
@@ -96,9 +96,10 @@ def match_account(
     if len(rows) == 1:
         return AccountMatch(rows[0][0])
     candidates = tuple(account_id for account_id, _ in rows)
-    wanted = normalize_payee(institution)
-    if wanted and rows:
-        same = [account_id for account_id, name in rows if normalize_payee(name) == wanted]
-        if len(same) == 1:
-            return AccountMatch(same[0], candidates)
+    if institution and rows:
+        # Exact name first, else the one account whose institution means the
+        # same (``Chase`` / ``JPMorgan Chase Bank, N.A.``; match.institutions).
+        chosen = pick(institution, rows)
+        if chosen is not None:
+            return AccountMatch(chosen, candidates)
     return AccountMatch(None, candidates)

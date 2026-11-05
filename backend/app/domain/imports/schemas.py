@@ -34,6 +34,20 @@ account by the **last four digits** of the cell like an OFX statement
 logged. Mappings saved before the field existed have no ``account_column``
 and read exactly as before.
 
+``mode`` is ``cash`` (the default; everything above) or ``activity``: the
+table is a brokerage activity export (Fidelity's "Activity & History" and
+layouts like it) read by ``app.ingestion.parsers.brokerage_table`` into
+investment statements, not ledger rows. An activity mapping names the
+``date_column``, ``action_column``, ``amount_column`` (the signed cash
+effect, kept as printed) and a ``symbol_column`` or ``quantity_column``;
+optionally ``security_column`` (the security's name), ``price_column``,
+``commission_column``, ``fees_column``, ``settle_column``,
+``currency_column``, ``account_column`` (the account number) and
+``account_name_column`` (the account's nickname, ``Individual``/``ROTH
+IRA``: it names a proposed account and tells retirement accounts apart).
+It reads no debit/credit, indicator, payee, memo or balance columns. Specs
+saved before ``mode`` existed are ``cash``.
+
 Inputs forbid unknown fields (SECURITY.md F4).
 """
 
@@ -48,7 +62,8 @@ from typing import Annotated, Any, Final, Literal, Self
 from pydantic import AfterValidator, BaseModel, ConfigDict, Field, model_validator
 
 from app.core.money import CurrencyCode
-from app.domain.accounts.schemas import clean_text
+from app.domain.accounts.models import AccountType
+from app.domain.accounts.schemas import AccountCreate, clean_text
 from app.domain.documents.models import DocumentStatus
 from app.domain.imports.models import NAME_MAX
 
@@ -138,6 +153,20 @@ class _Output(BaseModel):
     model_config = ConfigDict(frozen=True)
 
 
+#: The columns only an activity-mode mapping reads.
+ACTIVITY_COLUMNS: Final = (
+    "action_column",
+    "symbol_column",
+    "security_column",
+    "quantity_column",
+    "price_column",
+    "commission_column",
+    "fees_column",
+    "settle_column",
+    "account_name_column",
+)
+
+
 class MappingSpec(BaseModel):
     """How to read one delimited layout (module doc)."""
 
@@ -163,9 +192,27 @@ class MappingSpec(BaseModel):
     currency_column: Column | None = None
     currency: CurrencyCode | None = None
     account_column: Column | None = None
+    # -- investment activity (``mode = "activity"``) ----------------------------
+    #: ``cash``: rows are ledger transactions; ``activity``: a brokerage
+    #: activity export read by ``app.ingestion.parsers.brokerage_table`` (buys,
+    #: sells, reinvestments, income, cash movements; one statement per account).
+    mode: Literal["cash", "activity"] = "cash"
+    action_column: Column | None = None
+    symbol_column: Column | None = None
+    security_column: Column | None = None
+    quantity_column: Column | None = None
+    price_column: Column | None = None
+    commission_column: Column | None = None
+    fees_column: Column | None = None
+    settle_column: Column | None = None
+    account_name_column: Column | None = None
 
     @model_validator(mode="after")
     def _consistent(self) -> Self:
+        if self.mode == "activity":
+            return self._activity()
+        if any(getattr(self, name) is not None for name in ACTIVITY_COLUMNS):
+            raise ValueError("activity columns need mode 'activity'")
         split = self.debit_column is not None or self.credit_column is not None
         if (self.amount_column is None) == (not split):
             raise ValueError("give either amount_column or debit_column/credit_column")
@@ -176,6 +223,30 @@ class MappingSpec(BaseModel):
                 raise ValueError("indicator_column needs outflow_values")
         elif self.outflow_values:
             raise ValueError("outflow_values need indicator_column")
+        if self.currency is not None and self.currency_column is not None:
+            raise ValueError("give currency or currency_column, not both")
+        used = [c for c in self.columns().values() if c is not None]
+        if len(used) != len(set(used)):
+            raise ValueError("each column can be mapped once")
+        return self
+
+    def _activity(self) -> Self:
+        if self.amount_column is None or self.action_column is None:
+            raise ValueError("an activity mapping needs amount_column and action_column")
+        if self.symbol_column is None and self.quantity_column is None:
+            raise ValueError("an activity mapping needs symbol_column or quantity_column")
+        cash_only = (
+            "debit_column",
+            "credit_column",
+            "indicator_column",
+            "payee_column",
+            "memo_column",
+            "balance_column",
+        )
+        if any(getattr(self, name) is not None for name in cash_only) or self.outflow_values:
+            raise ValueError("an activity mapping reads no cash-ledger columns")
+        if self.sign is not Sign.INFLOW_POSITIVE:
+            raise ValueError("an activity mapping keeps the amounts' own signs")
         if self.currency is not None and self.currency_column is not None:
             raise ValueError("give currency or currency_column, not both")
         used = [c for c in self.columns().values() if c is not None]
@@ -196,6 +267,7 @@ class MappingSpec(BaseModel):
             "balance": self.balance_column,
             "currency": self.currency_column,
             "account": self.account_column,
+            **{name.removesuffix("_column"): getattr(self, name) for name in ACTIVITY_COLUMNS},
         }
 
     def max_column(self) -> int:
@@ -275,6 +347,24 @@ class MappingPage(_Output):
     next_cursor: uuid.UUID | None
 
 
+#: What an assignment targets: a statement of an OFX/QIF/PDF file, a brokerage
+#: statement (an activity export's account), a group of a multi-account table,
+#: or the one statement of a table without an account column.
+AssignmentTarget = Literal["statement", "investment", "group", "table"]
+#: Most assignments one re-run carries.
+ASSIGNMENTS_MAX: Final = 100
+
+
+class Assignment(BaseModel):
+    """One of a document's accounts and the PerFin account it is imported into."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    target: AssignmentTarget
+    index: int = Field(ge=0, le=MAX_GROUP)
+    account_id: uuid.UUID
+
+
 class ApplyMapping(_Input):
     """``POST /imports/{document_id}/apply-mapping``.
 
@@ -286,17 +376,24 @@ class ApplyMapping(_Input):
     statement of a multi-account table the account is for (an
     ``unknown_account`` item's ``group``); without it a chosen account takes
     only the statements with its own last four digits, or the one statement
-    no account matched.
+    no account matched. ``statement`` (with ``account_id``) does the same for
+    the brokerage statements of a document (an investment ``unknown_account``
+    item's ``statement``: an activity export's account, a PDF's).
     """
 
     mapping_id: uuid.UUID | None = None
     account_id: uuid.UUID | None = None
     group: int | None = Field(default=None, ge=0, le=MAX_GROUP)
+    statement: int | None = Field(default=None, ge=0, le=MAX_GROUP)
+    #: An account per statement of the document (each must be editable).
+    assignments: list[Assignment] = Field(default_factory=list, max_length=ASSIGNMENTS_MAX)
 
     @model_validator(mode="after")
     def _group_needs_account(self) -> Self:
         if self.group is not None and self.account_id is None:
             raise ValueError("group needs account_id")
+        if self.statement is not None and self.account_id is None:
+            raise ValueError("statement needs account_id")
         return self
 
 
@@ -309,6 +406,8 @@ class ApplyMappingJob(BaseModel):
     mapping_id: uuid.UUID | None = None
     account_id: uuid.UUID | None = None
     group: int | None = None
+    statement: int | None = None
+    assignments: list[Assignment] = Field(default_factory=list, max_length=ASSIGNMENTS_MAX)
     requested_by: uuid.UUID | None = None
 
 
@@ -399,7 +498,9 @@ class MappingSuggestionOut(_Output):
     ``doubts`` are codes: ``header_not_exact``, ``rows_unreadable``,
     ``date_order_guessed``, ``no_rows``, ``indicator_values_unknown`` (an
     indicator cell that is no direction word, or a signed amount beside
-    it). ``sign_evidence`` is
+    it). ``activity_type_unknown`` is a brokerage activity suggestion with
+    actions PerFin does not type. ``sign_evidence`` is ``activity`` for an
+    activity-mode suggestion (amounts keep their own signs), else
     ``debit_credit``, ``indicator``, ``balance`` or null (a signed amount
     column read as "positive is money in" on trust).
     """
@@ -411,7 +512,7 @@ class MappingSuggestionOut(_Output):
     failed_rows: int
     footer_rows: int
     accounts: int
-    sign_evidence: Literal["debit_credit", "indicator", "balance"] | None
+    sign_evidence: Literal["debit_credit", "indicator", "balance", "activity"] | None
     doubts: list[str]
     roles: list[SuggestionRole]
 
@@ -433,3 +534,88 @@ class ImportPreview(_Output):
     #: The same guess with its confidence and per-role reasons.
     suggestion: MappingSuggestionOut | None
     last_import: dict[str, Any] | None
+
+
+# ---------------------------------------------------------------------------
+# A document's accounts (GET /documents/{id}/accounts, .../accounts/apply)
+# ---------------------------------------------------------------------------
+
+DetectedStatus = Literal["matched", "new", "ambiguous", "conflict", "done"]
+
+
+class AccountProposal(_Output):
+    """A new account ready to create for one of a document's accounts (editable)."""
+
+    name: str
+    type: AccountType
+    #: What kind of account within ``type`` the file's name for it says (``roth_ira``).
+    subtype: str | None = None
+    currency: str | None
+    institution_name: str | None
+    number_last4: str | None
+    #: The statement's printed opening balance (bank accounts), as text.
+    opening_balance: str | None
+    opening_balance_date: date | None
+    #: Some of it came from the local model's hints (ADR-0010), not the file's own fields.
+    suggested_by_model: bool = False
+
+
+class DetectedAccount(_Output):
+    """One account a document names and what PerFin knows of it (``proposals`` module doc)."""
+
+    target: AssignmentTarget
+    index: int
+    status: DetectedStatus
+    #: The matched (or conflicting) account.
+    account_id: uuid.UUID | None
+    candidates: list[uuid.UUID]
+    #: The open ``unknown_account`` item about it.
+    review_item_id: uuid.UUID | None
+    last4: str | None
+    #: The account's own name in the file (an activity export's nickname).
+    name: str | None
+    institution_name: str | None
+    account_type: str | None
+    currency: str | None
+    period_start: date | None
+    period_end: date | None
+    opening_balance: str | None
+    closing_balance: str | None
+    transactions: int
+    proposal: AccountProposal | None
+
+
+class DocumentAccounts(_Output):
+    document_id: uuid.UUID
+    accounts: list[DetectedAccount]
+
+
+class AccountChoice(_Input):
+    """Use an existing account (``account_id``) or create one (``create``), not both."""
+
+    target: AssignmentTarget
+    index: int = Field(ge=0, le=MAX_GROUP)
+    account_id: uuid.UUID | None = None
+    create: AccountCreate | None = None
+    #: The institution of a new account, found or created by name.
+    institution_name: Name | None = None
+
+    @model_validator(mode="after")
+    def _one(self) -> Self:
+        if (self.account_id is None) == (self.create is None):
+            raise ValueError("give exactly one of account_id and create")
+        if self.institution_name is not None and self.create is None:
+            raise ValueError("institution_name is for a new account")
+        return self
+
+
+class DocumentAccountsApply(_Input):
+    items: list[AccountChoice] = Field(min_length=1, max_length=ASSIGNMENTS_MAX)
+
+
+class DocumentAccountsApplied(_Output):
+    document_id: uuid.UUID
+    #: The accounts created by this call.
+    created: list[uuid.UUID]
+    #: The ``imports.apply_mapping`` job that imports the document with the choices.
+    job_id: uuid.UUID
