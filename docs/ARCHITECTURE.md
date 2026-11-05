@@ -230,8 +230,9 @@ styles).
    documents; the optional ClamAV scan; classification by fingerprint or the
    naive Bayes classifier; statement, payslip and receipt parsers with
    per-field confidence and reconciliation; receipts matched to their
-   transaction. A CSV without a matching saved column mapping still waits in
-   review until one is saved; invoices, tax forms and brokerage statements
+   transaction. A CSV without a matching saved column mapping is imported
+   with the deterministic suggestion when it is confident (and saved as a
+   mapping), and otherwise waits in review until one is saved; invoices, tax forms and brokerage statements
    have no parser yet and wait in review.)
 4. Worker emits a `document.updated` event; API relays over SSE; the UI
    refreshes the document card and the review badge.

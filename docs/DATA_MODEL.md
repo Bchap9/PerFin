@@ -597,7 +597,8 @@ parser_fingerprint(institution, kind, match rules JSONB, parser name, version,
                    learned_from_document_id?)
 ingest_job        (document, stage, attempt, started, finished, error, log JSONB)
 import_mapping    (household, name, institution_id?, account_id?, header_fingerprint,
-                   spec JSONB, created_by?, use_count, last_used_at?)
+                   spec JSONB, created_by?, use_count, last_used_at?,
+                   sign_unverified)
 import_hash_alias (household, account, transaction, import_hash)
 dropfolder_route  (household, folder slug, user, account?)
 dropfolder_entry  (household, path_key sha256, rel_path, size, mtime_ns, inode,
@@ -684,7 +685,10 @@ Notes on structured imports (`app/domain/imports/`, Phase 2):
   `account_id`/`institution_id` are optional household-consistent `SET NULL`
   references (ADR-0008); the account is where files of this layout go when
   the upload names none. Name unique per household. A mapping on an account
-  the caller cannot see is invisible to them (`404`).
+  the caller cannot see is invisible to them (`404`). `sign_unverified`
+  (revision 0008, not in the API) marks a mapping the importer saved from a
+  suggestion whose single signed amount column was read on trust: it is not
+  applied to a liability account on its own until a person saves its spec.
 - Imported transactions carry `source_document_id` and `import_hash`; a near
   duplicate (same account, date and amount, no hash match) is written with
   `review_state = pending` next to a `possible_duplicate` review item. A
@@ -695,7 +699,8 @@ Notes on structured imports (`app/domain/imports/`, Phase 2):
   `unparsed` (`mapping_required`, `mapping_ambiguous`, `mapping_failed`,
   `no_records`), `unknown_account` (`account_not_found`,
   `account_ambiguous` with candidate ids, `account_required`,
-  `currency_mismatch`), `possible_duplicate` (`near_match`:
+  `currency_mismatch`; a multi-account CSV's with `group` and
+  `spec_digest`), `possible_duplicate` (`near_match`:
   `transaction_id`, `candidates`), `low_confidence_field` (`rows_skipped`,
   `balance_mismatch`, `date_order_assumed`, `currency_mismatch`,
   `truncated`). The latest import's counts are the `log` of the document's

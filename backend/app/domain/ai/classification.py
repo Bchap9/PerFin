@@ -337,7 +337,7 @@ _deny_table(
 _deny_table(
     "import_mapping",
     R_INGEST,
-    "name institution_id account_id header_fingerprint spec created_by use_count "
+    "name institution_id account_id header_fingerprint spec created_by use_count sign_unverified "
     "last_used_at id created_at updated_at household_id",
 )
 _deny_table(

@@ -2,15 +2,22 @@
 """Committing brokerage statements: securities, activity, openings, prices, snapshots.
 
 Called by the structured importer (``app.domain.imports.service.import_extraction``)
-for the ``investments`` of an extraction: OFX ``INVSTMTRS`` from the sandbox
-and PDF/scan statements read by ``app.ingestion.parsers.brokerage``. It runs
+for the ``investments`` of an extraction: OFX ``INVSTMTRS`` from the sandbox,
+PDF/scan statements read by ``app.ingestion.parsers.brokerage`` and the
+brokerage activity tables of CSV/TSV/XLSX exports read by
+``app.ingestion.parsers.brokerage_table`` (``source_format = "csv"``). It runs
 in the importer's transaction and RLS context (INGESTION.md "Brokerage
 statements"). Per statement:
 
 1. **Account**: the document's account (one statement), the account the
    person chose on a re-run, else the household account with the last four
    digits (institution breaks ties) among those the uploader may edit
-   (``importable_account_ids``, SECURITY.md F3). It must be a brokerage or
+   (``importable_account_ids``, SECURITY.md F3). A document of several
+   accounts (a PDF with one statement per account,
+   ``app.ingestion.parsers.brokerage``) matches each statement by its own
+   last four digits; a chosen account there takes only the statements with
+   its own last four digits or, when it records none, the single statement
+   nothing matched, so one choice never pours several accounts into one. It must be a brokerage or
    retirement account in the statement's currency; otherwise an
    ``unknown_account`` item and nothing is written.
 2. **Hold** (SECURITY.md C12): a statement whose figures do not reconcile
@@ -22,16 +29,29 @@ statements"). Per statement:
    (``investment_reconciliation_failed`` / ``investment_low_confidence``)
    naming the discrepancy. A statement with any date before
    ``app.core.dates.MIN_BUSINESS_DATE`` is held the same way
-   (``investment_date_out_of_range``, SECURITY.md F8). A structured (OFX) statement with nothing to
-   check is imported like an OFX bank statement; a document one cannot be
-   (its rows score below the threshold).
+   (``investment_date_out_of_range``, SECURITY.md F8). A structured
+   statement (OFX, or an activity table: ``csv``, every value from a named
+   column) with nothing to check is imported like an OFX bank statement; a
+   document one cannot be (its rows score below the threshold). An activity
+   table whose day/month order was a guess marks every row
+   ``low_confidence`` (``trade_date``) and is held like any such row.
 3. **Securities**: found in the household's catalogue by CUSIP, ISIN, then
    symbol, else created (quote currency = the account's); identifiers a
    later statement adds are filled in.
 4. **Activity** -> ``investment_txn`` with an ``import_hash`` (account,
    trade date, type, security, quantity, amount, running index among
    identical rows), so the same statement as OFX and as PDF, or overlapping
-   statements, add each row once. Cash ``deposit``/``withdrawal`` rows are
+   statements, add each row once. A row the account already records from
+   another document under another date (same type, security, units and
+   amount; the rows share a trade or settlement date, or one has no
+   settlement date and they are at most :data:`SETTLE_WINDOW_DAYS` apart:
+   Fidelity's activity CSV dates a trade by its run date, its PDF by the
+   settlement date) is **not written**: investment rows have no pending
+   state, so one ``low_confidence_field`` item per statement
+   (``investment_possible_duplicate``: the account, the count and the
+   recorded rows' ids) says so, and a trade that really happened twice is
+   added by hand (``POST /investments/transactions``). Rows on the same
+   date are left to the hash. Cash ``deposit``/``withdrawal`` rows are
    ledger transactions on the account (through the structured importer:
    transaction ``import_hash`` dedupe, rules, provenance).
 5. **Out of order**: new rows of a statement older than activity already
@@ -111,6 +131,8 @@ CASH_TYPES: Final = frozenset({"deposit", "withdrawal"})
 UNIT_TOLERANCE: Final = Decimal("0.000001")
 QUANTUM: Final = Decimal("1e-10")
 IDS_MAX: Final = 50
+#: Days between two formats' dates of one trade (trade vs settlement date).
+SETTLE_WINDOW_DAYS: Final = 5
 OPENING_MEMO: Final = "Opening position from statement"
 OPENING_TYPES: Final = frozenset(
     {InvestmentTxnType.BUY, InvestmentTxnType.REINVEST, InvestmentTxnType.TRANSFER_IN}
@@ -130,6 +152,7 @@ class InvestmentImport:
     held: int = 0
     activity: int = 0
     duplicates: int = 0
+    possible_duplicates: int = 0
     cash_rows: int = 0
     positions: int = 0
     securities_created: int = 0
@@ -144,6 +167,7 @@ class InvestmentImport:
             "held": self.held,
             "activity": self.activity,
             "duplicates": self.duplicates,
+            "possible_duplicates": self.possible_duplicates,
             "cash_rows": self.cash_rows,
             "positions": self.positions,
             "securities_created": self.securities_created,
@@ -493,6 +517,74 @@ def _existing_hashes(ctx: _Context, account: Account) -> set[str]:
     }
 
 
+@dataclass(frozen=True)
+class _Recorded:
+    """An ``investment_txn`` already recorded for the account (near-duplicate check)."""
+
+    id: uuid.UUID
+    trade_date: date
+    settle_date: date | None
+    document_id: uuid.UUID | None
+
+
+def _near_key(
+    kind: str, security_id: uuid.UUID | None, quantity: Decimal | None, amount: Decimal
+) -> tuple[str, uuid.UUID | None, str, str]:
+    return (
+        kind,
+        security_id,
+        _units(quantity) if quantity is not None else "",
+        f"{to_storage(amount):f}",
+    )
+
+
+def _recorded(ctx: _Context, account: Account) -> dict[tuple[Any, ...], list[_Recorded]]:
+    """The account's recorded rows from other documents, by type, security, units and amount."""
+    rows = ctx.db.execute(
+        select(
+            InvestmentTxn.id,
+            InvestmentTxn.type,
+            InvestmentTxn.security_id,
+            InvestmentTxn.quantity,
+            InvestmentTxn.amount,
+            InvestmentTxn.trade_date,
+            InvestmentTxn.settle_date,
+            InvestmentTxn.source_document_id,
+        ).where(
+            InvestmentTxn.household_id == ctx.household_id,
+            InvestmentTxn.account_id == account.id,
+            InvestmentTxn.type != InvestmentTxnType.SPLIT,
+        )
+    ).all()
+    found: dict[tuple[Any, ...], list[_Recorded]] = defaultdict(list)
+    for txn_id, kind, security_id, quantity, amount, trade, settle, document_id in rows:
+        if document_id == ctx.document.id:
+            continue  # a re-run of this document: its rows match by hash
+        key = _near_key(str(kind), security_id, quantity, amount)
+        found[key].append(_Recorded(txn_id, trade, settle, document_id))
+    return found
+
+
+def _same_trade(recorded: _Recorded, activity: InvestmentActivity) -> bool:
+    """Whether two rows of the same security, units and amount date the same trade.
+
+    One format dates a row by its trade date, another by its settlement date
+    (Fidelity's activity CSV by ``Run Date``, its PDF's activity table by
+    ``Settlement Date`` alone): the rows share a date, or one of them has no
+    settlement date and they are at most :data:`SETTLE_WINDOW_DAYS` apart.
+    """
+    ours = {activity.trade_date, activity.settle_date} - {None}
+    theirs = {recorded.trade_date, recorded.settle_date} - {None}
+    if recorded.trade_date == activity.trade_date:
+        return False  # the same date: only the hash decides (identical rows are allowed)
+    if ours & theirs:
+        return True
+    gap = abs((recorded.trade_date - activity.trade_date).days)
+    return (recorded.settle_date is None or activity.settle_date is None) and (
+        gap <= SETTLE_WINDOW_DAYS
+    )
+
+
 def _later_activity(ctx: _Context, account: Account, on: date) -> bool:
     """Whether the account already has investment activity after ``on``."""
     found = ctx.db.execute(
@@ -698,6 +790,9 @@ class _Written:
     duplicates: int
     openings: int
     replayed: int
+    #: Rows not written: the account already records the same trade under
+    #: another date (ids of the recorded rows).
+    possible_duplicates: list[uuid.UUID] = field(default_factory=list)
 
 
 def _write(
@@ -707,6 +802,8 @@ def _write(
     db = ctx.db
     positions = [(p, _security(ctx, p.security, account)) for p in statement.positions]
     existing = _existing_hashes(ctx, account)
+    recorded = _recorded(ctx, account)
+    near: list[uuid.UUID] = []
     seen: dict[tuple[Any, ...], int] = defaultdict(int)
     created: list[InvestmentTxn] = []
     cash_rows: list[InvestmentActivity] = []
@@ -733,6 +830,17 @@ def _write(
         if digest in existing:
             duplicates += 1
             continue
+        if activity.type != "split":
+            candidates = recorded.get(
+                _near_key(activity.type, security_id, activity.quantity, activity.amount), []
+            )
+            match = next((r for r in candidates if _same_trade(r, activity)), None)
+            if match is not None:
+                # The same trade from another format (trade vs settlement
+                # date): not written twice, a person is told.
+                candidates.remove(match)
+                near.append(match.id)
+                continue
         existing.add(digest)
         created.append(_txn(ctx, account, activity, security_id, digest))
     if on is not None and created and _later_activity(ctx, account, on):
@@ -758,7 +866,7 @@ def _write(
     touched |= {security.id for _, security in positions}
     for security_id in sorted(touched, key=lambda u: u.bytes):
         replay_position(db, account, security_id, conflict_status=409)
-    return _Written(created, cash_rows, positions, duplicates, len(openings), len(touched))
+    return _Written(created, cash_rows, positions, duplicates, len(openings), len(touched), near)
 
 
 def _commit(
@@ -791,7 +899,18 @@ def _commit(
     result.positions += len(written.positions)
     result.activity += len(written.created)
     result.duplicates += written.duplicates
+    result.possible_duplicates += len(written.possible_duplicates)
     result.opening_positions += written.openings
+    if written.possible_duplicates:
+        ctx.review(
+            ReviewKind.LOW_CONFIDENCE_FIELD,
+            {
+                "reason": "investment_possible_duplicate",
+                "account_id": str(account.id),
+                "rows": len(written.possible_duplicates),
+                "duplicate_of": [str(i) for i in written.possible_duplicates[:IDS_MAX]],
+            },
+        )
 
     for position, security in written.positions:
         if security.currency == account.currency:
@@ -850,6 +969,49 @@ def _commit(
     return True
 
 
+def _several_accounts(statements: Sequence[InvestmentStatement]) -> bool:
+    """The statements name two or more accounts (different last four digits)."""
+    return len({s.account.last4 for s in statements if s.account.last4}) > 1
+
+
+def _chosen_takes(
+    ctx: _Context, statements: Sequence[InvestmentStatement], account_id: uuid.UUID
+) -> set[int]:
+    """The statements of a multi-account document that a chosen account may take.
+
+    An account that records its last four digits takes the statements with
+    those digits (its choice settles an ambiguous match) and nothing else;
+    one that records none takes the one statement no account matched when
+    it is the only one. Any other unmatched statement stays unmatched rather
+    than land on an account of a different number.
+    """
+    chosen = accounts_repo.get_account(ctx.db, ctx.household_id, account_id)
+    if chosen is None:
+        return set()
+    if chosen.number_last4 is not None:
+        return {
+            index
+            for index, statement in enumerate(statements)
+            if statement.account.last4 == chosen.number_last4
+        }
+    takes: set[int] = set()
+    unmatched = [
+        index
+        for index, statement in enumerate(statements)
+        if match_account(
+            ctx.db,
+            ctx.household_id,
+            last4=statement.account.last4,
+            institution=statement.account.institution,
+            allowed=ctx.allowed,
+        ).account_id
+        is None
+    ]
+    if len(unmatched) == 1:
+        takes.add(unmatched[0])
+    return takes
+
+
 def import_investment_statements(
     db: Session,
     document: Document,
@@ -872,8 +1034,17 @@ def import_investment_statements(
         result=InvestmentImport(),
     )
     single = len(statements) == 1
+    takes: Collection[int] = range(len(statements))
+    if account_id is not None and _several_accounts(statements):
+        takes = _chosen_takes(ctx, statements, account_id)
     for index, statement in enumerate(statements):
-        account = _account(ctx, statement, index, single=single, account_id=account_id)
+        account = _account(
+            ctx,
+            statement,
+            index,
+            single=single,
+            account_id=account_id if index in takes else None,
+        )
         if account is None:
             continue
         if account.id not in ctx.result.accounts:

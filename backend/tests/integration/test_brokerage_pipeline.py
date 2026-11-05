@@ -65,6 +65,7 @@ from app.ingestion.intake.upload import receive_upload
 from app.ingestion.sandbox.protocol import ExtractResult
 from app.workers.handlers import ingest
 from tests.fixtures import synth_brokerage as synth
+from tests.fixtures import synth_fidelity as fid
 from tests.fixtures.factories import Factories, UserRecord
 from tests.fixtures.imports import run_jobs
 from tests.fixtures.ledger import LedgerFactories
@@ -430,3 +431,165 @@ def test_older_statement_after_a_newer_one_is_held(env: Env) -> None:
     assert "investment_out_of_order" in env.reasons(document_id)
     assert [t.id for t in env.txns(account)] == before
     assert env.holdings(account) == holdings
+
+
+# ---------------------------------------------------------------------------
+# Several accounts in one PDF (tests/fixtures/synth_fidelity.py)
+# ---------------------------------------------------------------------------
+
+FID_TYPES = (AccountType.BROKERAGE, AccountType.RETIREMENT, AccountType.RETIREMENT)
+
+
+def _fid_accounts(
+    env: Env, stmt: fid.FidStatement, *, only: tuple[int, ...] = (0, 1, 2)
+) -> list[Account | None]:
+    institution = env.ledger.institution(env.household_id, name=fid.INSTITUTION)
+    out: list[Account | None] = []
+    for index, (account, kind) in enumerate(zip(stmt.accounts, FID_TYPES, strict=True)):
+        if index not in only:
+            out.append(None)
+            continue
+        out.append(
+            env.ledger.account(
+                env.household_id,
+                type=kind,
+                number_last4=account.last4,
+                currency="USD",
+                institution_id=institution.id,
+                name=account.title.title(),
+            )
+        )
+    return out
+
+
+def _fid_expected(account: fid.FidAccount) -> list[Row]:
+    return [
+        (d, t, s, q, a.quantize(Decimal("0.000001")))
+        for d, t, s, q, a in fid.expected_activity(account)
+        if t not in ("deposit", "withdrawal")
+    ]
+
+
+def _fid_cash(account: fid.FidAccount) -> list[tuple[date, Decimal]]:
+    return sorted(
+        (a.day, a.amount.quantize(Decimal("0.000001")))
+        for a in account.activity
+        if a.type in ("deposit", "withdrawal")
+    )
+
+
+def _fid_holdings(env: Env, account: Account) -> list[tuple[str, Decimal]]:
+    return [(symbol, qty) for symbol, qty in env.holdings(account) if qty != 0]
+
+
+def _fid_positions(account: fid.FidAccount) -> list[tuple[str, Decimal]]:
+    return sorted((p.symbol, p.quantity) for p in account.positions)
+
+
+def _choose(env: Env, document_id: uuid.UUID, account: Account) -> None:
+    with env.factories.transaction() as db:
+        apply_rls_context(db, env.principal())
+        request_apply(
+            db, env.principal(), document_id, ApplyMapping(account_id=account.id), request=None
+        )
+    assert run_jobs(env.factories, env.household_id, APPLY_MAPPING_JOB_TYPE, done=env.done)
+
+
+def test_each_account_of_a_multi_account_pdf_lands_on_its_own_account(env: Env) -> None:
+    stmt = fid.fidelity_statement(seed=91)
+    accounts = _fid_accounts(env, stmt)
+    document_id = env.ingest(fid.fidelity_pdf(stmt), "investment-report.pdf")
+
+    document = env.document(document_id)
+    assert document.status is DocumentStatus.PROCESSED, env.open_reviews(document_id)
+    assert document.kind is DocumentKind.STATEMENT
+    assert document.parser_version == "fidelity_investments_statement/1"
+    # The document spans three accounts: it is linked to none of them.
+    assert document.account_id is None
+    assert (document.period_start, document.period_end) == (stmt.start, stmt.end)
+    assert document.confidence is not None
+    assert document.confidence["parse"]["investment_reconciliation"] == ["ok", "ok", "ok"]
+    stored = ExtractResult.model_validate(document.extraction)
+    assert [i.account.last4 for i in stored.investments] == [a.last4 for a in stmt.accounts]
+
+    for account, synthetic in zip(accounts, stmt.accounts, strict=True):
+        assert account is not None
+        assert env.activity(account) == _fid_expected(synthetic), synthetic.title
+        cash = sorted((t.posted_date, t.amount) for t in env.cash_rows(account))
+        assert cash == _fid_cash(synthetic)
+        assert _fid_holdings(env, account) == _fid_positions(synthetic)
+        assert all(t.source_document_id == document_id for t in env.txns(account))
+        snapshots = env.snapshots(account)
+        assert [(s.as_of_date, s.balance, s.source) for s in snapshots] == [
+            (stmt.end, synthetic.total_value, BalanceSource.STATEMENT)
+        ]
+
+    # The same report again adds nothing to any account.
+    before = {a.id: len(env.txns(a)) for a in accounts if a is not None}
+    again = env.ingest(fid.fidelity_pdf(stmt), "investment-report-again.pdf")
+    assert env.document(again).status is DocumentStatus.PROCESSED, env.open_reviews(again)
+    assert {a.id: len(env.txns(a)) for a in accounts if a is not None} == before
+
+
+def test_a_tampered_account_is_held_and_the_others_are_written(env: Env) -> None:
+    stmt = fid.fidelity_statement(seed=92)
+    accounts = _fid_accounts(env, stmt)
+    data = fid.fidelity_pdf(stmt, tamper="total", tamper_account=1)
+    document_id = env.ingest(data, "investment-report.pdf")
+
+    assert env.document(document_id).status is DocumentStatus.NEEDS_REVIEW
+    (item,) = [
+        r
+        for r in env.open_reviews(document_id)
+        if r.payload.get("reason") == "investment_reconciliation_failed"
+    ]
+    roth = accounts[1]
+    assert roth is not None
+    assert item.payload["account_id"] == str(roth.id)
+    assert item.payload["failed"] == ["total_value"]
+    assert env.txns(roth) == []
+    assert env.snapshots(roth) == []
+    assert env.cash_rows(roth) == []
+    for index in (0, 2):
+        account = accounts[index]
+        assert account is not None
+        assert env.activity(account) == _fid_expected(stmt.accounts[index])
+        assert _fid_holdings(env, account) == _fid_positions(stmt.accounts[index])
+
+
+def test_a_chosen_account_takes_only_the_unmatched_statement(env: Env) -> None:
+    stmt = fid.fidelity_statement(seed=93)
+    accounts = _fid_accounts(env, stmt, only=(0, 1))
+    document_id = env.ingest(fid.fidelity_pdf(stmt), "investment-report.pdf")
+    assert env.document(document_id).status is DocumentStatus.NEEDS_REVIEW
+    assert "account_not_found" in env.reasons(document_id)
+    written = {a.id: len(env.txns(a)) for a in accounts if a is not None}
+    assert all(written.values())
+
+    hsa = env.ledger.account(
+        env.household_id, type=AccountType.RETIREMENT, currency="USD", name="Health Savings"
+    )
+    _choose(env, document_id, hsa)
+    assert env.document(document_id).status is DocumentStatus.PROCESSED, env.open_reviews(
+        document_id
+    )
+    assert env.activity(hsa) == _fid_expected(stmt.accounts[2])
+    assert _fid_holdings(env, hsa) == _fid_positions(stmt.accounts[2])
+    # The matched statements stayed on their own accounts (nothing new, nothing moved).
+    assert {a.id: len(env.txns(a)) for a in accounts if a is not None} == written
+
+
+def test_a_chosen_account_never_takes_several_accounts(env: Env) -> None:
+    stmt = fid.fidelity_statement(seed=94)
+    _fid_accounts(env, stmt, only=(0,))
+    document_id = env.ingest(fid.fidelity_pdf(stmt), "investment-report.pdf")
+    assert "account_not_found" in env.reasons(document_id)
+
+    chosen = env.ledger.account(
+        env.household_id, type=AccountType.RETIREMENT, currency="USD", name="Retirement"
+    )
+    _choose(env, document_id, chosen)
+    # Two statements matched no account: the choice cannot say which one it is for.
+    assert env.txns(chosen) == []
+    assert env.document(document_id).status is DocumentStatus.NEEDS_REVIEW
+    assert "account_not_found" in env.reasons(document_id)

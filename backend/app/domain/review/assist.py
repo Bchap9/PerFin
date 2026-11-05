@@ -54,6 +54,7 @@ from app.domain.documents.manage import (
 )
 from app.domain.documents.models import BlobArea, Document, ReviewItem, ReviewKind
 from app.domain.documents.service import get_visible_document
+from app.domain.imports.service import stored_group_last4, stored_investment_last4
 from app.domain.review.layout import page_of, row_region, stored_result, words_matching
 from app.domain.review.schemas import (
     ALTERNATIVES_MAX,
@@ -301,8 +302,14 @@ def _account_alternatives(
     result = stored_result(document.extraction) if document is not None else None
     last4: str | None = None
     index = payload.get("statement")
-    if result is not None and isinstance(index, int) and 0 <= index < len(result.statements):
+    if document is not None and payload.get("investment") is True:
+        # A brokerage statement (OFX, PDF, activity table).
+        last4 = stored_investment_last4(document, payload)
+    elif result is not None and isinstance(index, int) and 0 <= index < len(result.statements):
         last4 = result.statements[index].account.last4
+    elif document is not None and isinstance(payload.get("group"), int):
+        # One account of a multi-account CSV: its digits from the stored table.
+        last4 = stored_group_last4(db, document, payload)
     currency = payload.get("currency") if isinstance(payload.get("currency"), str) else None
     institution_id = document.institution_id if document is not None else None
     accounts = db.execute(

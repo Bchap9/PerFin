@@ -3,10 +3,14 @@
  * Column-mapping state of the CSV mapping editor and the `MappingSpec` it
  * produces (docs/INGESTION.md, "Delimited files"). Pure functions so the
  * output is testable without the UI.
+ *
+ * The "account" role marks a column of account numbers in an export that
+ * lists several accounts (a brokerage activity file): the server splits the
+ * rows by it and matches each account by its last four digits.
  */
 import type { MappingSpec } from "./api";
 
-export type ColumnRole = "ignore" | "date" | "payee" | "memo" | "amount" | "debit" | "credit" | "balance" | "currency" | "indicator";
+export type ColumnRole = "ignore" | "date" | "payee" | "memo" | "amount" | "debit" | "credit" | "balance" | "currency" | "indicator" | "account";
 
 export const COLUMN_ROLES: readonly { value: ColumnRole; label: string }[] = [
   { value: "ignore", label: "Ignore" },
@@ -19,6 +23,7 @@ export const COLUMN_ROLES: readonly { value: ColumnRole; label: string }[] = [
   { value: "balance", label: "Balance" },
   { value: "currency", label: "Currency" },
   { value: "indicator", label: "Debit/credit indicator" },
+  { value: "account", label: "Account number (several accounts)" },
 ];
 
 export function isColumnRole(value: string): value is ColumnRole {
@@ -88,6 +93,7 @@ export function rolesFromSpec(spec: MappingSpec, columnCount: number): ColumnRol
   assign(spec.balance_column, "balance");
   assign(spec.currency_column, "currency");
   assign(spec.indicator_column, "indicator");
+  assign(spec.account_column, "account");
   return roles;
 }
 
@@ -114,6 +120,11 @@ export function stateFromSpec(spec: MappingSpec | null, columnCount: number, has
     outflowValues: (spec.outflow_values ?? []).join(", "),
     currency: spec.currency ?? "",
   };
+}
+
+/** Whether the rows name their own accounts (one statement per account number). */
+export function hasAccountColumn(state: MappingState): boolean {
+  return state.roles.includes("account");
 }
 
 /** Change one column's role; a role other than "ignore" belongs to one column, so it leaves any other. */
@@ -184,6 +195,7 @@ export function buildSpec(state: MappingState): BuildResult {
     memo_column: indexOfRole(state.roles, "memo"),
     currency_column: currencyColumn,
     indicator_column: indicator,
+    account_column: indexOfRole(state.roles, "account"),
     currency: currencyColumn === null && currency !== "" ? currency : null,
   };
   return { spec, errors: [] };
