@@ -69,6 +69,7 @@ from app.domain.transactions.models import Transaction
 from app.ingestion.classify.dates import find_dates
 from app.ingestion.parsers.text import find_amounts
 from app.ingestion.sandbox.protocol import ExtractResult, Preview
+from app.ml.client import MLHints
 
 #: Headers of a served preview (C4/C5): inline image, never sniffed or cached.
 PREVIEW_HEADERS: Final = {
@@ -310,6 +311,12 @@ def _account_alternatives(
     elif document is not None and isinstance(payload.get("group"), int):
         # One account of a multi-account CSV: its digits from the stored table.
         last4 = stored_group_last4(db, document, payload)
+    if last4 is None and document is not None:
+        # The local model's hint (ADR-0010): digits it saw printed in the
+        # document, used only when it saw exactly one account.
+        hints = MLHints.from_stored((document.confidence or {}).get("ml"))
+        printed = [a.last4 for a in hints.accounts if a.last4] if hints is not None else []
+        last4 = printed[0] if len(printed) == 1 else None
     currency = payload.get("currency") if isinstance(payload.get("currency"), str) else None
     institution_id = document.institution_id if document is not None else None
     accounts = db.execute(

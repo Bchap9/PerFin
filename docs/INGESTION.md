@@ -1302,15 +1302,24 @@ Phase 4 status (`app/ingestion/intake/email.py`, `app/workers/handlers/mailbox.p
   a new item with the next rejection that day.
 - **Not built:** IMAP IDLE (polling only) and OAuth mailbox login.
 
-## No models in the pipeline
+## Models in the pipeline: optional, local, suggestions only
 
-PerFin does not call a language model at any stage of ingestion, local or
-hosted (ADR-0007). Document text, account numbers and personal details have no
-code path off the host. The cost is that a never-seen statement layout needs a
-person once, through the column-mapping editor (unless it is a delimited file
-whose header the deterministic suggestion reads with confidence); the benefit
-is that the pipeline is deterministic, reproducible and auditable, and a
-crafted document cannot talk its way into the ledger.
+By default PerFin calls no language model at any stage of ingestion. The
+pipeline is deterministic, reproducible and auditable, and a crafted document
+cannot talk its way into the ledger. A never-seen statement layout needs a
+person once, through the column-mapping editor or "Accounts in this file".
+
+The optional `ml` containers (ADR-0010, [ML.md](ML.md)) add a model on the
+same host. When `PERFIN_ML_URL` is set (it must be a local address), the
+worker asks it, after the classify step, about a document whose kind is
+unknown or whose account nothing matched, sending only the extracted text
+(`PERFIN_ML_MAX_CHARS`). The answer is checked (`app.ml.client.validated`:
+known kinds, shape-checked fields, last four digits only when printed in the
+text) and kept on the document as `confidence.ml`. It is used only as a
+suggestion: an unknown kind selects a parser (whose own checks apply), and
+proposed accounts and the review queue's account suggestions are filled in
+from it, marked as the model's. Nothing reaches the ledger on its say-so, and
+a failed or slow call leaves the document as it would have been.
 
 The heuristic classifier is a small local model trained offline on synthetic
 and contributed samples; it never makes network calls and ships as a versioned

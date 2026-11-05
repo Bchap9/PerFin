@@ -33,6 +33,7 @@ function detected(extra: Partial<DetectedAccount>): DetectedAccount {
       number_last4: null,
       opening_balance: null,
       opening_balance_date: null,
+      suggested_by_model: false,
     },
     ...extra,
   };
@@ -84,6 +85,7 @@ describe("document account choices", () => {
           number_last4: "4321",
           opening_balance: "120.50",
           opening_balance_date: "2026-10-01",
+          suggested_by_model: false,
         },
       }),
     ];

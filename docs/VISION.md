@@ -119,7 +119,9 @@ minutes a month rather than hours.
    hostile until validated. Parsing happens in a sandbox.
 2. **Confidence or review.** Automation never silently writes low-confidence
    data. It writes to the review queue.
-3. **Identity never leaves the premises.** PerFin contains no model client.
+3. **Identity never leaves the premises.** PerFin calls no hosted model; an
+   optional model on the owner's own network may suggest what a document is,
+   and a person confirms it (ADR-0010).
    AI assistants reach financial facts (spending, merchants, balances,
    holdings) through the MCP server, never identity (addresses, DOB, SSN,
    account numbers, names, contacts, documents). The owner previews exactly

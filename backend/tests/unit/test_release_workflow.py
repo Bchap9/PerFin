@@ -125,7 +125,7 @@ def test_image_is_multi_arch_and_pushed_by_digest_only() -> None:
     qemu = step_index("image", "docker/setup-qemu-action@")
     assert qemu < step_index("image", "docker/build-push-action@")
     images = {entry["name"] for entry in jobs()["image"]["strategy"]["matrix"]["image"]}
-    assert images == {"perfin", "perfin-egress"}
+    assert images == {"perfin", "perfin-egress", "perfin-ml"}
     assert release()["env"]["IMAGE_NAMESPACE"] == "ghcr.io/bchap9"
     assert jobs()["image"]["env"]["IMAGE"] == "ghcr.io/bchap9/${{ matrix.image.name }}"
 

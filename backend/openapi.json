@@ -655,6 +655,11 @@
             ],
             "title": "Opening Balance Date"
           },
+          "suggested_by_model": {
+            "default": false,
+            "title": "Suggested By Model",
+            "type": "boolean"
+          },
           "type": {
             "$ref": "#/components/schemas/AccountType"
           }

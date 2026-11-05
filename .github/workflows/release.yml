@@ -6,7 +6,7 @@
 #
 #   1. check     tag is semver and matches every version string in the repo;
 #                the CHANGELOG has a section for it (the release notes).
-#   2. image     per image (perfin, perfin-egress): multi-arch build
+#   2. image     per image (perfin, perfin-egress, perfin-ml): multi-arch build
 #                (linux/amd64 + linux/arm64, buildx + QEMU) pushed by digest
 #                only, so nothing carries a tag before it passed the scan;
 #                Trivy scan of both platforms (fails on fixable
@@ -97,6 +97,9 @@ jobs:
           - name: perfin-egress
             context: deploy/egress
             dockerfile: deploy/egress/Dockerfile
+          - name: perfin-ml
+            context: deploy/ml
+            dockerfile: deploy/ml/Dockerfile
     env:
       IMAGE: ghcr.io/bchap9/${{ matrix.image.name }}
       VERSION: ${{ needs.check.outputs.version }}

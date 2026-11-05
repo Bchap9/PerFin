@@ -78,6 +78,7 @@ nav:
       - Data model: DATA_MODEL.md
       - Authentication: AUTH.md
       - Ingestion: INGESTION.md
+      - Local model hints: ML.md
       - AI access: AI_ACCESS.md
       - API: API.md
       - Repository structure: REPO_STRUCTURE.md
@@ -93,6 +94,7 @@ nav:
           - "0007 AI access via MCP": adr/0007-ai-access-via-mcp.md
           - "0008 Household-consistent foreign keys": adr/0008-household-consistent-foreign-keys.md
           - "0009 Extraction isolation under a shared UID": adr/0009-extraction-isolation-under-a-shared-uid.md
+          - "0010 Optional local-model container": adr/0010-optional-local-model-container.md
   - Contributing:
       - Development: DEVELOPMENT.md
       - Writing parsers: CONTRIBUTING-parsers.md

@@ -40,8 +40,12 @@ email, and PerFin works out what it is looking at and files it away.
 ## Goals
 
 - **Own your data.** Everything runs on hardware you control. No telemetry, no
-  third-party sync, and no model calls inside the app: files, account numbers
-  and personal details have no code path off the premises.
+  third-party sync, and no hosted model calls: files, account numbers and
+  personal details have no code path off the premises. An optional local model
+  container (`ml`/`ml-cuda` profiles, like Immich's machine learning) can
+  suggest what an unfamiliar document is; it must run on your own network,
+  and a person confirms everything it suggests ([docs/ML.md](docs/ML.md),
+  ADR-0010).
 - **AI help without identity exposure.** An optional read-only MCP server
   lets an assistant analyse spending, merchants, savings, holdings and loans
   in full detail, while addresses, dates of birth, SSNs, account numbers,

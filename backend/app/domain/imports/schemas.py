@@ -554,6 +554,8 @@ class AccountProposal(_Output):
     #: The statement's printed opening balance (bank accounts), as text.
     opening_balance: str | None
     opening_balance_date: date | None
+    #: Some of it came from the local model's hints (ADR-0010), not the file's own fields.
+    suggested_by_model: bool = False
 
 
 class DetectedAccount(_Output):

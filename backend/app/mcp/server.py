@@ -1,7 +1,8 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """``perfin mcp``: the read-only MCP protocol server (AI_ACCESS.md, ADR-0007).
 
-PerFin contains no model client. This module serves the Model Context
+PerFin calls no hosted model (an optional local one may suggest what a
+document is: ADR-0010, ``app.ml``). This module serves the Model Context
 Protocol (the ``mcp`` SDK) to whatever assistant host the household chose;
 the host and its model are outside PerFin. The process:
 

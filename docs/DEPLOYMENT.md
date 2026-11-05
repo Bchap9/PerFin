@@ -621,7 +621,8 @@ Details and limits: [INGESTION.md](INGESTION.md) "Email intake specifics" and
 
 ## 11. The MCP role (optional AI access)
 
-PerFin never calls a model. The optional `mcp` container lets an assistant
+PerFin never calls a hosted model (the optional local model of
+[ML.md](ML.md) runs on your own network and only suggests). The optional `mcp` container lets an assistant
 you run pull read-only, scrubbed data. It is off by default.
 
 1. As household owner create an AI client in **Settings > AI access**

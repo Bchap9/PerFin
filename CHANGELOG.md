@@ -71,6 +71,16 @@ What remains (details in docs/ROADMAP.md):
   `GET /documents/{id}/accounts`, `POST /documents/{id}/accounts/apply`;
   `apply-mapping` gains per-statement `assignments`.
 
+- Optional local-model hints (ADR-0010, docs/ML.md), like Immich's machine
+  learning container: the `ml` (CPU) and `ml-cuda` (NVIDIA GPU) Compose
+  profiles start an adapter (`perfin-ml`) and an Ollama runtime on an internal
+  network. With `PERFIN_ML_URL`/`PERFIN_ML_TOKEN` set, the worker asks it about
+  documents whose kind is unknown or whose account nothing matched, sending
+  only extracted text. Answers are checked (last four digits only when printed
+  in the document) and used only as suggestions: proposed accounts, account
+  choices in the review queue, an unknown document kind. `PERFIN_ML_URL` must
+  be a local address; anything else stops the app from starting.
+
 ### Changed
 
 - Review queue items name the file they are about (a link, when it arrived,

@@ -37,11 +37,14 @@ APP_UID = "10001:10001"
 ALLOWED_CAP_ADD: dict[str, set[str]] = {
     "proxy": {"NET_BIND_SERVICE"},  # caddy binary carries a file capability
     "proxy-init": {"CHOWN"},  # one-shot chown of Caddy's state volumes
+    "ml-init": {"CHOWN"},  # one-shot chown of the model volume (optional ml profile)
     "clamav": {"CHOWN", "SETUID", "SETGID", "DAC_OVERRIDE"},  # image drops to clamav
 }
 #: Services allowed to start as root: one-shot, no network, CHOWN only; and
 #: ClamAV, whose image switches to its own user itself.
-ROOT_ALLOWED = {"proxy-init", "clamav"}
+ROOT_ALLOWED = {"proxy-init", "ml-init", "clamav"}
+#: One-shot root containers: no network, CHOWN only, never restarted.
+ONE_SHOTS = ("proxy-init", "ml-init")
 
 #: Every secret in .env.example and the services that may receive it through
 #: ``env_file``. Everything else must be blanked in that service's
@@ -172,7 +175,7 @@ def test_every_service_is_hardened(name: str) -> None:
     assert svc.get("mem_limit")
 
 
-@pytest.mark.parametrize("name", [n for n in services() if n != "proxy-init"])
+@pytest.mark.parametrize("name", [n for n in services() if n not in ONE_SHOTS])
 def test_scratch_space_is_tmpfs_noexec(name: str) -> None:
     tmpfs = service(name).get("tmpfs", [])
     tmp = [t for t in tmpfs if t.split(":", 1)[0] == SCRATCH_DIR]
@@ -182,11 +185,31 @@ def test_scratch_space_is_tmpfs_noexec(name: str) -> None:
     assert any(o.startswith("size=") for o in options)
 
 
-def test_root_one_shot_has_no_network() -> None:
-    init = service("proxy-init")
+@pytest.mark.parametrize("name", ONE_SHOTS)
+def test_root_one_shot_has_no_network(name: str) -> None:
+    init = service(name)
     assert init.get("network_mode") == "none"
     assert init.get("restart") == "no"
     assert init.get("cap_add") == ["CHOWN"]
+
+
+def test_ml_services_are_optional_and_isolated() -> None:
+    """ADR-0010: the local model never reaches the database, documents or the proxy."""
+    for name in ("ml", "ml-init"):
+        assert service(name).get("profiles") == ["ml", "ml-cuda"]
+    assert service("ml-runtime").get("profiles") == ["ml"]
+    assert service("ml-runtime-cuda").get("profiles") == ["ml-cuda"]
+    assert networks_of("ml") == {"ml"}
+    for name in ("ml-runtime", "ml-runtime-cuda"):
+        assert networks_of(name) == {"ml", "egress"}
+        assert service(name).get("user") == APP_UID
+    for name in ("ml", "ml-runtime", "ml-runtime-cuda"):
+        assert not networks_of(name) & networks_of("db")
+        assert not networks_of(name) & networks_of("proxy")
+        assert "env_file" not in service(name)
+        assert not any("documents" in m or "quarantine" in m for m in mounts(name))
+    assert "ml" in networks_of("worker")
+    assert "ml" not in networks_of("api")
 
 
 def _run_proxy_init(tmp_path: Path, owner: str) -> list[str]:
@@ -276,7 +299,7 @@ def test_egress_dockerfile_runs_as_unprivileged_user() -> None:
     assert "pip install" not in text
 
 
-@pytest.mark.parametrize("path", ["Dockerfile", "egress/Dockerfile"])
+@pytest.mark.parametrize("path", ["Dockerfile", "egress/Dockerfile", "ml/Dockerfile"])
 def test_base_images_are_pinned(path: str) -> None:
     text = (DEPLOY / path).read_text(encoding="utf-8")
     images = re.findall(r"^ARG \w+_IMAGE=(\S+)", text, flags=re.M)

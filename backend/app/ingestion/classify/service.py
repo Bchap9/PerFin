@@ -6,7 +6,8 @@ themselves; otherwise the household's and the shipped **fingerprints**
 (:mod:`app.ingestion.classify.fingerprints`), then the **heuristic
 classifier** (:mod:`app.ingestion.classify.model`); below
 :data:`KIND_THRESHOLD` the kind stays ``unknown`` and the document goes to
-review. No model is consulted beyond that (ADR-0007).
+review. No language model is consulted here; the optional local model of
+ADR-0010 is asked afterwards by the pipeline (``pipeline._ml_hints``).
 
 :func:`classify_extraction` is pure (no database); :func:`apply_classification`
 writes the result on the ``document`` row, resolving the institution by

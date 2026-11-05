@@ -78,6 +78,7 @@ from app.domain.imports.service import (
 from app.ingestion.match.accounts import importable_account_ids, match_account
 from app.ingestion.parsers.structured import from_table_grouped
 from app.ingestion.sandbox.protocol import ExtractResult, InvestmentStatement, Statement
+from app.ml.client import MLAccount, MLHints
 
 #: A statement's own account-type word -> the PerFin account type it proposes.
 TYPE_WORDS: Final[dict[str, AccountType]] = {
@@ -126,6 +127,8 @@ class _Found:
     opening_balance: Decimal | None
     closing_balance: Decimal | None
     transactions: int
+    #: Filled in from the local model's hints (ADR-0010).
+    from_model: bool = False
 
 
 def _statements(result: ExtractResult) -> list[_Found]:
@@ -236,13 +239,45 @@ def _found(
     db: Session, document: Document, result: ExtractResult, items: Sequence[ReviewItem]
 ) -> list[_Found]:
     if result.statements:
-        return _statements(result)
-    investments = stored_investments(document, db)
-    if investments:
-        return [_investment(i, s) for i, s in enumerate(investments)]
-    if result.tables:
-        return _tables(db, document, result, items)
-    return []
+        found = _statements(result)
+    elif investments := stored_investments(document, db):
+        found = [_investment(i, s) for i, s in enumerate(investments)]
+    elif result.tables:
+        found = _tables(db, document, result, items)
+    else:
+        found = []
+    hints = MLHints.from_stored((document.confidence or {}).get("ml"))
+    if hints is not None:
+        _with_hints(found, hints)
+    return found
+
+
+def _with_hints(found: list[_Found], hints: MLHints) -> None:
+    """Fill what the file's own fields left empty from the model's checked hints.
+
+    The institution for every account; an account's last four digits, name
+    and type when the file names one account and the model saw one, else by
+    matching last four digits. The hints' digits were printed in the
+    document (``app.ml.client.validated``).
+    """
+    for entry in found:
+        if entry.institution is None and hints.institution is not None:
+            entry.institution, entry.from_model = hints.institution, True
+    pairs: list[tuple[_Found, MLAccount]] = []
+    if len(found) == 1 and len(hints.accounts) == 1:
+        pairs = [(found[0], hints.accounts[0])]
+    else:
+        by_last4 = {a.last4: a for a in hints.accounts if a.last4 is not None}
+        pairs = [(e, by_last4[e.last4]) for e in found if e.last4 in by_last4]
+    for entry, hint in pairs:
+        if entry.last4 is None and hint.last4 is not None:
+            entry.last4, entry.from_model = hint.last4, True
+        if entry.name is None and hint.name is not None:
+            entry.name, entry.from_model = hint.name, True
+        if entry.account_type is None and hint.type is not None:
+            entry.account_type, entry.from_model = hint.type, True
+        if entry.currency is None and hint.currency is not None:
+            entry.currency, entry.from_model = hint.currency, True
 
 
 def _item_for(found: _Found, items: Sequence[ReviewItem]) -> ReviewItem | None:
@@ -297,6 +332,7 @@ def _proposal(found: _Found, institution: str | None, base_currency: str | None)
             else None
         ),
         opening_balance_date=opening_date if kind not in INVESTMENT_TYPES else None,
+        suggested_by_model=found.from_model,
     )
 
 

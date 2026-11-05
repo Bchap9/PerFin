@@ -193,6 +193,12 @@ function AccountRow({
       {found.status === "matched" && known !== undefined ? (
         <p className="ledger-muted">Imports into {accountLabel(known)}.</p>
       ) : null}
+      {found.proposal?.suggested_by_model === true ? (
+        <p className="ledger-muted">
+          <Badge tone="neutral">Local model</Badge> Some details below were
+          suggested by the local model; check them.
+        </p>
+      ) : null}
       {editable ? (
         <>
           <Select

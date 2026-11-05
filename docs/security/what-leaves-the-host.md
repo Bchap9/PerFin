@@ -1,7 +1,9 @@
 # What leaves the host
 
-PerFin runs on hardware you control, has no telemetry and contains no model
-client (ADR-0007). **With the default configuration, no connection leaves the
+PerFin runs on hardware you control, has no telemetry and calls no hosted
+model. The optional local model (ADR-0010) must run on your own network:
+`PERFIN_ML_URL` is refused unless it is a local address, and its runtime
+reaches the internet only through the egress proxy, to download a model. **With the default configuration, no connection leaves the
 host at all**: the `api` and `worker` containers have no route to the internet
 (SECURITY.md H2). Every outbound path below is opt-in, goes through the
 allowlisting `egress` proxy in the Compose deployment, and is documented in

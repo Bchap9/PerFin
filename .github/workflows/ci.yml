@@ -157,17 +157,17 @@ jobs:
       - name: Ruff lint
         run: |
           uv run ruff check .
-          uv run ruff check --config pyproject.toml ../scripts ../deploy/egress
+          uv run ruff check --config pyproject.toml ../scripts ../deploy/egress ../deploy/ml
       - name: Ruff format
         run: |
           uv run ruff format --check .
-          uv run ruff format --check --config pyproject.toml ../scripts ../deploy/egress
+          uv run ruff format --check --config pyproject.toml ../scripts ../deploy/egress ../deploy/ml
       - name: mypy --strict
         run: |
           uv run mypy
-          uv run mypy --strict ../scripts/check_spdx.py ../scripts/check_pr_body.py ../scripts/release_notes.py ../scripts/seed_dev.py ../deploy/egress/egress_proxy.py
+          uv run mypy --strict ../scripts/check_spdx.py ../scripts/check_pr_body.py ../scripts/release_notes.py ../scripts/seed_dev.py ../deploy/egress/egress_proxy.py ../deploy/ml/perfin_ml.py
       - name: Bandit
-        run: uv run bandit -q -c pyproject.toml -r app ../scripts ../deploy/egress
+        run: uv run bandit -q -c pyproject.toml -r app ../scripts ../deploy/egress ../deploy/ml
       # `-n auto` counts physical cores and started a single worker on the
       # hosted runner; `-n logical` uses all of its vCPUs.
       - name: pytest (unit, integration, security)
@@ -223,7 +223,7 @@ jobs:
         working-directory: deploy
         run: |
           cp .env.example .env
-          docker compose --profile av --profile mcp --profile egress config --quiet
+          docker compose --profile av --profile mcp --profile egress --profile ml-cuda config --quiet
           rm .env
       - name: Caddyfile validates and is formatted
         working-directory: deploy

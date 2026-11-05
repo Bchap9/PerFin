@@ -96,8 +96,11 @@ master key present in memory.
 
 ### E. AI access through the MCP server (optional role)
 
-PerFin never calls a model itself (ADR-0007). The MCP server is the only
-AI-facing surface; its threat table lives in [AI_ACCESS.md](AI_ACCESS.md)
+PerFin never calls a hosted model. The optional local model (ADR-0010,
+[ML.md](ML.md)) runs on the host's own network only (`PERFIN_ML_URL` must be
+local, checked at start-up and before every call), receives only a document's
+extracted text, and its answers are untrusted suggestions a person confirms.
+The MCP server is the only AI-facing surface for assistants; its threat table lives in [AI_ACCESS.md](AI_ACCESS.md)
 (rows M1 to M8). Summary of the controls:
 
 | # | Vulnerability | Control |

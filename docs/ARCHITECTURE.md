@@ -207,8 +207,12 @@ styles).
 ### Optional integrations (all off by default)
 - **MCP server** (`perfin mcp` role): a read-only window for AI assistants
   that exposes financial facts at full detail and never identity (addresses,
-  DOB, SSN, account numbers, names, documents). PerFin never calls a model
-  itself. See AI_ACCESS.md and ADR-0007.
+  DOB, SSN, account numbers, names, documents). PerFin never calls a hosted
+  model. See AI_ACCESS.md and ADR-0007.
+- **Local model hints** (optional `ml`/`ml-cuda` profiles): an adapter and a
+  model runtime on an internal network; the worker asks it about documents
+  its parsers are unsure of and treats the answer as a suggestion. See ML.md
+  and ADR-0010.
 - **Price feeds** for securities and FX.
 - **Notification channels**: SMTP, webhooks, ntfy, Gotify, Matrix
   (generic messages only; see docs/security/notifications.md).

@@ -15,3 +15,4 @@ superseded ADRs are kept and marked.
 | [0007](0007-ai-access-via-mcp.md) | No model calls inside PerFin; AI access only through a read-only MCP server that exposes finance, never identity | Accepted |
 | [0008](0008-household-consistent-foreign-keys.md) | Household-consistent foreign keys between household-scoped tables | Accepted |
 | [0009](0009-extraction-isolation-under-a-shared-uid.md) | Isolating the extraction child from a worker that shares its UID (non-dumpable worker, Landlock, seccomp filesystem rules) | Accepted |
+| [0010](0010-optional-local-model-container.md) | An optional local-model container suggests what documents are; it never decides | Accepted (partly supersedes 0007) |

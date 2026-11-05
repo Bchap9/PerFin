@@ -3413,6 +3413,11 @@ export interface components {
             opening_balance: string | null;
             /** Opening Balance Date */
             opening_balance_date: string | null;
+            /**
+             * Suggested By Model
+             * @default false
+             */
+            suggested_by_model: boolean;
             type: components["schemas"]["AccountType"];
         };
         /**
