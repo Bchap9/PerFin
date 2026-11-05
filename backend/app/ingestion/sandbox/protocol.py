@@ -53,6 +53,11 @@ REVIEW_ERROR_CODES: Final = frozenset({"encrypted", "depth_limit"})
 
 #: ``Statement.source_format`` values only the worker's document parsers write.
 DOCUMENT_STATEMENT_FORMATS: Final = frozenset({"pdf", "image"})
+#: Every ``source_format`` only the worker writes: the document parsers' and
+#: ``csv`` (brokerage activity tables read by
+#: ``app.ingestion.parsers.brokerage_table`` from a stored table). A child
+#: answering with any of them is refused (``bad_output``).
+WORKER_STATEMENT_FORMATS: Final = DOCUMENT_STATEMENT_FORMATS | frozenset({"csv"})
 
 #: Hard ceilings the models enforce whatever the job's options say.
 MAX_ROWS_CEILING: Final = 1_000_000
@@ -266,8 +271,9 @@ class StatementAccount(_Strict):
 class Statement(_Strict):
     #: ``ofx``/``qfx``/``qif`` come from the sandbox child; ``pdf``/``image``
     #: statements are written by the worker's document parsers from the
-    #: extracted pages (a child answering with one is ``bad_output``).
-    source_format: Literal["ofx", "qfx", "qif", "pdf", "image"]
+    #: extracted pages (a child answering with one is ``bad_output``); ``csv``
+    #: is the cash rows of a brokerage activity table, written by the worker.
+    source_format: Literal["ofx", "qfx", "qif", "pdf", "image", "csv"]
     account: StatementAccount = StatementAccount()
     period_start: date | None = None
     period_end: date | None = None
@@ -423,9 +429,14 @@ class InvestmentReconciliation(_Strict):
 
 
 class InvestmentStatement(_Strict):
-    """A brokerage statement: positions on ``as_of`` and the period's activity."""
+    """A brokerage statement: positions on ``as_of`` and the period's activity.
 
-    source_format: Literal["ofx", "qfx", "pdf", "image"]
+    ``ofx``/``qfx`` come from the sandbox child; ``pdf``/``image`` from the
+    worker's document parsers and ``csv`` from its brokerage activity table
+    parser (:data:`WORKER_STATEMENT_FORMATS`, refused in a child's answer).
+    """
+
+    source_format: Literal["ofx", "qfx", "pdf", "image", "csv"]
     account: StatementAccount = StatementAccount()
     period_start: date | None = None
     period_end: date | None = None
@@ -848,13 +859,13 @@ class ExtractResult(_Strict):
             or self.stored_children
             or self.parse is not None
             or any(
-                s.source_format in DOCUMENT_STATEMENT_FORMATS
+                s.source_format in WORKER_STATEMENT_FORMATS
                 or s.parser is not None
                 or s.reconciliation is not None
                 for s in self.statements
             )
             or any(
-                i.source_format in DOCUMENT_STATEMENT_FORMATS
+                i.source_format in WORKER_STATEMENT_FORMATS
                 or i.parser is not None
                 or i.reconciliation is not None
                 or bool(i.confidence)

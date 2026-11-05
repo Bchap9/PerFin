@@ -11,7 +11,12 @@ adding a layout. The design is in [INGESTION.md](INGESTION.md) ("Parse",
   statement, or text copied from one. Layouts are re-drawn by code from
   invented rows (`backend/tests/fixtures/synth_pdf_statements.py`, reportlab).
   Institution names in tests are fictional (the shipped fingerprints use
-  "Sample National Bank", "Demo Card Services" and similar names).
+  "Sample National Bank", "Demo Card Services" and similar names). A
+  parser for a real institution's layout (like the Fidelity Investments
+  one) prints the institution's name, its headings and column names only
+  because the layout is recognised by them; everything else in its fixture
+  (accounts, numbers, instruments, amounts) is invented and every page
+  says it is a synthetic test document.
 - **Parsers read pages, not files.** A parser receives the validated sandbox
   output (`Page.words`/`lines` with boxes, from the PDF text layer or OCR) as
   a `DocumentView`. It must not import `app.ingestion.extract`, open files,
@@ -68,23 +73,90 @@ adding a layout. The design is in [INGESTION.md](INGESTION.md) ("Parse",
 
 A brokerage statement (holdings and activity) is a subclass of
 `BrokerageStatementParser` in `backend/app/ingestion/parsers/brokerage.py`,
-listed in `BROKERAGE_PARSERS` (like `PlaceholderBrokerageParser`): `name`,
+listed in `BROKERAGE_PARSERS` ahead of the generic parser (like
+`PlaceholderBrokerageParser` and `FidelityStatementParser`): `name`,
 `version`, `institution`, `display_name`, `fingerprints` (the institution's
-name first: detection requires it), `date_styles`, `period_styles`,
-`default_currency`, `base`, and when the layout uses other words
-`summary_labels`, `period_labels` or the module's `HOLDING_HEADERS`,
-`ACTIVITY_HEADERS` and `ACTIVITY_TYPES`. The fingerprint names
-`parser: brokerage_statement_generic`. Draw the layout from a
-`SynthBrokerage` in `backend/tests/fixtures/synth_brokerage.py` (several
-pages of activity, a reinvestment, cash in and out, the three `tamper`
-variants) and extend `tests/unit/test_brokerage_parser.py` and
+name first: detection requires it; `all_fingerprints = True` requires every
+phrase, for a name other documents print too), `date_styles`,
+`period_styles`, `default_currency`, `base`, and when the layout needs it:
+
+| Attribute | Meaning |
+| --- | --- |
+| `summary_labels`, `period_labels`, `skip_prefixes` | other words for the summary values, the period, lines to skip |
+| `description_types` | an activity table without an action column: its description is the action |
+| `cash_groups` | holdings groups whose rows are the account's cash (a core or sweep money market): opening/closing cash, no position, included in the printed holdings total |
+| `ignored_tables`, `section_headings` | headings of tables not to read (they would count money twice), and the headings that end them |
+
+New column names go into the module's `HOLDING_HEADERS` (role `other` for a
+column to recognise but not read) and `ACTIVITY_HEADERS`, asset-class group
+headings into `ASSET_GROUPS`, action words into `ACTIVITY_TYPES` (or
+`TRANSFER_TYPES` for a word whose type depends on whether units moved).
+Several accounts in one PDF need no code: account headings at the top or
+bottom of each account's pages split the document (INGESTION.md "Several
+accounts in one PDF"). The fingerprint names
+`parser: brokerage_statement_generic`. Draw the layout from invented data
+(`SynthBrokerage` in `backend/tests/fixtures/synth_brokerage.py`, or a
+module of its own like `synth_fidelity.py`: several pages of activity with
+the header repeated, a reinvestment, cash in and out, the `tamper`
+variants, several accounts if the layout has them) and extend
+`tests/unit/test_brokerage_parser.py` (or a test module of its own) and
 `tests/integration/test_brokerage_pipeline.py`: exact activity and
-positions, a reconciled statement at full confidence, tampered variants
-held.
+positions, a reconciled statement at full confidence per account, tampered
+variants held (only the tampered account in a multi-account document), the
+PDF through the sandboxed extractor (`run_extraction`).
+
+## CSV and TSV exports
+
+Delimited exports need no parser. The generic path reads them with a column
+mapping (`MappingSpec`), and `suggest_mapping` in
+`backend/app/ingestion/parsers/structured.py` finds one from the header
+names and the cells (INGESTION.md "Match and deduplicate"). When an export
+is not suggested well:
+
+- Add its header words to `ROLE_WORDS` (exact words score best; a word
+  that also names other things, like "value", stays exact only for that
+  role) rather than special-casing an institution. Cells must still fit
+  the role, so a header word alone never maps an empty or unrelated column.
+- Add a synthetic layout: a `Layout` in `LAYOUTS`
+  (`backend/tests/fixtures/synth_statements.py`) for a one-account export,
+  or a writer like `backend/tests/fixtures/synth_activity_csv.py` for a
+  multi-account one (blank lines, footers and disclaimers included, every
+  value invented). `test_every_synthetic_layout_is_suggested_exactly_but_the_sign`
+  (`tests/unit/test_csv_suggestions.py`) then requires the exact spec and
+  a confident suggestion, and `test_confident_layouts_import_on_their_own_and_save_the_mapping`
+  (`tests/integration/test_structured_import.py`) the end-to-end import.
+- A file listing several accounts maps its account-number column
+  (`account_column`); only the last four digits of the cell are kept.
+- A brokerage "Activity" export (an action column typed by
+  `activity_type`, an amount, a symbol or quantity column) is not read by
+  this path: `backend/app/ingestion/parsers/brokerage_table.py` turns it
+  into investment statements per account (INGESTION.md "Brokerage activity
+  exports"). For a new broker's export add its header words to that
+  module's `HEADERS` (role `other` for a column to recognise and not read)
+  and its action words to `ACTIVITY_TYPES` in `brokerage.py`; write the
+  file from invented rows (`investment_rows` in
+  `backend/tests/fixtures/synth_activity_csv.py`: sales never exceed the
+  units bought before them) and extend
+  `tests/unit/test_brokerage_table_parser.py` and
+  `tests/integration/test_activity_table_import.py`. Bump `PARSER_VERSION`
+  when the reading of an existing layout changes.
+- Table cells arrive formula-guarded (a leading `'` on a cell that would be
+  a formula, SECURITY.md C7). Strip the guard only to match headers and
+  action words and to parse dates and numbers; text you keep (a security
+  name, a memo, a payee) keeps it (`_text` in `brokerage_table.py`, or
+  `app.core.csv_safety.neutralise_formula` again), and an identifier such
+  as a symbol that would be a formula is refused.
+- A debit/credit indicator column only signs unsigned amounts: the
+  suggestion drops it when the amounts already carry a minus sign, and
+  doubts it (`indicator_values_unknown`) when a row's indicator is not a
+  direction word. A layout with such a column needs every value in
+  `OUTFLOW_WORDS`/`INFLOW_WORDS` (`structured.py`) to be suggested
+  confidently.
 
 ## Review checklist
 
-- [ ] Fixture is generated by code; no real names, numbers or text.
+- [ ] Fixture is generated by code; no real names, numbers or text (a real
+      institution's own name and headings only for its layout's parser).
 - [ ] `name` unique; `version` bumped if an existing parser changed.
 - [ ] No new import of `app.ingestion.extract`; no I/O; patterns bounded.
 - [ ] Only the last four digits of an account number are kept.

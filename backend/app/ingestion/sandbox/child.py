@@ -92,7 +92,12 @@ The worker container adds the outer layers (read-only root filesystem,
 
 Exit protocol: one :class:`ExtractResult` JSON document on stdout and exit
 code 0 (also when the input cannot be extracted: ``ok=false``); any other
-exit code is a sandbox failure (:data:`EXIT_CODES`).
+exit code is a sandbox failure (:data:`EXIT_CODES`). Only the result reaches
+stdout: before anything else runs, :func:`run` keeps a private duplicate of
+descriptor 1 for the result and points descriptor 1 at stderr, so a library
+that prints (Python ``print``, C ``printf``, a native runtime's log) lands
+in the runner's stderr log instead of corrupting the JSON (which the runner
+would refuse as ``bad_output``).
 """
 
 from __future__ import annotations
@@ -819,9 +824,36 @@ def harden(limits: SandboxLimits) -> None:
         raise HardenError(f"{type(exc).__name__}") from exc
 
 
+#: The private duplicate of the original stdout that carries the result
+#: (set by :func:`run` for the length of one run).
+_result_fd: int | None = None
+
+
+def _claim_stdout() -> int:
+    """Keep the real stdout for the result; send descriptor 1 (stray prints) to stderr."""
+    sys.stdout.flush()
+    result_fd = os.dup(1)  # not inheritable (PEP 446)
+    os.dup2(2, 1)
+    return result_fd
+
+
+def _release_stdout(result_fd: int) -> None:
+    """Undo :func:`_claim_stdout` (matters only when ``run`` is called in-process)."""
+    sys.stdout.flush()
+    os.dup2(result_fd, 1)
+    os.close(result_fd)
+
+
+def write_result_bytes(data: bytes) -> None:
+    """Write ``data`` to the result channel: the original stdout, never descriptor 1."""
+    fd = _result_fd if _result_fd is not None else 1
+    view = memoryview(data)
+    while view:
+        view = view[os.write(fd, view) :]
+
+
 def _write_result(result: ExtractResult) -> None:
-    sys.stdout.buffer.write(result.model_dump_json().encode("utf-8"))
-    sys.stdout.buffer.flush()
+    write_result_bytes(result.model_dump_json().encode("utf-8"))
 
 
 def _fail(kind: str, code: str, message: str = "") -> ExtractResult:
@@ -841,6 +873,16 @@ def _read_input(limit: int) -> bytes | None:
 
 def run(argv: Sequence[str], extractors: Mapping[str, Extractor] | None = None) -> int:
     """Validate the job, harden, read stdin, extract, print the result; return the exit code."""
+    global _result_fd
+    _result_fd = _claim_stdout()
+    try:
+        return _run(argv, extractors)
+    finally:
+        _release_stdout(_result_fd)
+        _result_fd = None
+
+
+def _run(argv: Sequence[str], extractors: Mapping[str, Extractor] | None) -> int:
     if len(argv) != 1:
         return EXIT_USAGE
     try:

@@ -112,6 +112,11 @@ export function payloadString(item: ReviewItem, key: string): string | null {
   return typeof value === "string" ? value : null;
 }
 
+export function payloadNumber(item: ReviewItem, key: string): number | null {
+  const value: unknown = new Map(Object.entries(item.payload)).get(key);
+  return typeof value === "number" ? value : null;
+}
+
 export function payloadIds(item: ReviewItem, key: string): string[] {
   const value: unknown = new Map(Object.entries(item.payload)).get(key);
   return Array.isArray(value)

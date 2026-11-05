@@ -4,7 +4,7 @@ import userEvent from "@testing-library/user-event";
 
 import { authedSession, json, mockApi, renderApp } from "../auth/testing";
 import { account, lookupHandlers } from "../transactions/fixtures";
-import { buildSpec, rolesFromSpec, stateFromSpec, withRole, type ColumnRole } from "./mapping";
+import { buildSpec, hasAccountColumn, rolesFromSpec, stateFromSpec, withRole, type ColumnRole } from "./mapping";
 
 const roles = (...items: ColumnRole[]): ColumnRole[] => items;
 
@@ -32,9 +32,25 @@ describe("mapping spec", () => {
         memo_column: null,
         currency_column: null,
         indicator_column: null,
+        account_column: null,
         currency: "USD",
       },
     });
+  });
+
+  it("maps an account-number column for files with several accounts", () => {
+    const state = { ...base, roles: roles("date", "account", "payee", "amount") };
+    expect(hasAccountColumn(state)).toBe(true);
+    expect(hasAccountColumn(base)).toBe(false);
+    const built = buildSpec(state);
+    expect(built.errors).toEqual([]);
+    expect(built.spec).toMatchObject({ date_column: 0, account_column: 1, payee_column: 2, amount_column: 3 });
+    if (built.spec !== null) {
+      expect(rolesFromSpec(built.spec, 4)).toEqual(["date", "account", "payee", "amount"]);
+    }
+    // A spec saved before the field existed has no account column.
+    const old = { version: 1 as const, date_column: 0, date_format: "YYYY-MM-DD" as const, amount_column: 1, has_header: true, skip_rows: 0, decimal_separator: "." as const, sign: "inflow_positive" as const };
+    expect(rolesFromSpec(old, 2)).toEqual(["date", "amount"]);
   });
 
   it("supports debit and credit columns and an indicator column", () => {
@@ -71,6 +87,7 @@ const PREVIEW = {
   account_id: null,
   matched_mapping_id: null,
   suggested_spec: null,
+  suggestion: null,
   last_import: null,
   statements: [],
   warnings: [],
@@ -192,5 +209,75 @@ describe("mapping editor", () => {
     expect(screen.getByLabelText("Column 3 holds")).toHaveValue("amount");
     expect(screen.getByLabelText("Date format")).toHaveValue("DD/MM/YYYY");
     expect(screen.getByLabelText("Decimal separator")).toHaveValue(",");
+  });
+
+  it("shows the suggestion's confidence and imports a multi-account file without one account", async () => {
+    const spec = {
+      version: 1 as const,
+      date_column: 0,
+      date_format: "MM/DD/YYYY" as const,
+      has_header: true,
+      skip_rows: 0,
+      decimal_separator: "." as const,
+      sign: "inflow_positive" as const,
+      outflow_values: [],
+      amount_column: 3,
+      payee_column: 2,
+      account_column: 1,
+    };
+    const api = mockApi({
+      "GET /api/v1/auth/session": authedSession({ role: "member" }),
+      ...lookupHandlers([account("a-1", "Everyday")]),
+      "GET /api/v1/imports/:id/preview": () =>
+        json({
+          ...PREVIEW,
+          suggested_spec: spec,
+          suggestion: {
+            spec,
+            score: 0.667,
+            confident: false,
+            parsed_rows: 2,
+            failed_rows: 1,
+            footer_rows: 0,
+            accounts: 2,
+            sign_evidence: null,
+            doubts: ["rows_unreadable"],
+            roles: [
+              { role: "date", column: 0, match: "exact", fit: 1 },
+              { role: "account", column: 1, match: "exact", fit: 1 },
+            ],
+          },
+          tables: [
+            {
+              ...PREVIEW.tables[0],
+              column_count: 4,
+              rows: [
+                ["Run Date", "Account Number", "Description", "Amount"],
+                ["10/14/2026", "Z20000044", "SYNTHETIC GROWTH INDEX ETF", "-1.28"],
+                ["10/15/2026", "Y30000077", "SYNTHETIC BOND FUND", "1.28"],
+              ],
+            },
+          ],
+        }),
+      "POST /api/v1/imports/mappings": () => json({ id: "m-3" }, 201),
+      "POST /api/v1/imports/:id/apply-mapping": () => json({ document_id: "d-1", job_id: "j-3", state: "queued" }, 202),
+    });
+    renderApp("/documents/d-1/mapping");
+    expect(await screen.findByLabelText("Column 2 holds")).toHaveValue("account");
+    const note = screen.getByRole("status", { name: "Suggested mapping" });
+    expect(note).toHaveTextContent("check them");
+    expect(note).toHaveTextContent("2 rows read, 1 could not be read across 2 accounts");
+    expect(note).toHaveTextContent("Some rows could not be read with it.");
+    expect(note).toHaveTextContent("Check the sign");
+    expect(screen.getByText(/matched to your account with the same last four digits/)).toBeInTheDocument();
+    const user = userEvent.setup();
+    await user.click(screen.getByRole("button", { name: "Save mapping and import" }));
+    await waitFor(() => {
+      expect(api.callsTo("POST", "/api/v1/imports/:id/apply-mapping")).toHaveLength(1);
+    });
+    const saved = api.callsTo("POST", "/api/v1/imports/mappings")[0]?.body as Record<string, unknown>;
+    expect(saved).toMatchObject({ document_id: "d-1", spec: { account_column: 1, amount_column: 3 } });
+    expect(saved).not.toHaveProperty("account_id");
+    expect(api.callsTo("POST", "/api/v1/imports/:id/apply-mapping")[0]?.body).toEqual({ mapping_id: "m-3" });
   });
 });

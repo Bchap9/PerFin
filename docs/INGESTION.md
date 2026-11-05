@@ -43,7 +43,12 @@ Status after Phases 3-4 (`app/ingestion/intake/`): browser and token uploads
 the types above are accepted by the sniffer and stored. CSV/TSV, OFX/QFX,
 QIF (Phase 2) and PDF, PNG, JPEG, TIFF, HEIC, EML, ZIP and XLSX (Phases 3-4,
 see "Extract") are extracted; an XLSX worksheet is a table like a CSV and
-goes through the same column mapping. A ZIP is expanded once
+goes through the same column mapping (a brokerage activity export instead
+goes to the investments importer, "Brokerage activity exports" below). The
+sniffer reads a text file as CSV/TSV when its first non-empty lines carry
+the same number of delimiters, or when a leading block of most lines, two
+at least, are rows of three columns or more followed only by notes (a short
+brokerage export's disclaimer paragraphs and "Date downloaded" line). A ZIP is expanded once
 inside the sandbox and each member becomes a document of its own (below).
 Auto-dedupe is
 not built: a byte-identical upload always becomes a `possible_duplicate`
@@ -228,7 +233,9 @@ Order of attempts, each producing a confidence score:
 3. **Column-mapping review.** No model is consulted. If neither stage reaches
    threshold, the document goes to review with its extracted tables and a
    mapping editor; saving the mapping creates a fingerprint so the next
-   statement from that layout is automatic.
+   statement from that layout is automatic. A CSV/TSV/XLSX whose header
+   names its columns plainly is mapped deterministically and saved without
+   asking ("Never-seen layouts" under "Match and deduplicate").
 
 Output: `kind`, `institution_id?`, `account_id?` (matched by last-4 and
 institution), `period_start`, `period_end`, `tax_year?`, and per-field
@@ -284,7 +291,13 @@ the validated sandbox output, never on file content):
   the classifier and review. Shipped fingerprints are not budgeted. Six fictional institutions ship
   (Example Federal Credit Union, Sample National Bank (checking and
   1099-INT), Demo Card Services, Placeholder Brokerage, Fictional Mutual
-  Insurance, Mock Savings and Loan with day-first dates).
+  Insurance, Mock Savings and Loan with day-first dates), and one real
+  layout, the Fidelity Investments "Investment Report"
+  (`fidelity-investments-statement`: both "Fidelity Investments" and
+  "Investment Report" in the header, so a bank statement naming the broker
+  as a payee does not match; its documents are drawn from invented facts by
+  `tests/fixtures/synth_fidelity.py` and `synth_classify.py` and are not in
+  the classifier's training corpus).
 - **Classifier** (`model.py`, artefact `classify/artefacts/kind_nb_v1.json`):
   binarised multinomial naive Bayes over unigram and bigram tokens (digits
   by shape), class score = log prior + 3 x (sum of known features' log
@@ -496,21 +509,73 @@ OFX `INVSTMTRS` in the sandbox or from a PDF/scan's pages in the worker.
 
 - **Parser** (`app/ingestion/parsers/brokerage.py`): a **holdings** table
   (header naming a quantity, a market value and a symbol or security name;
-  optional price, cost basis; `Total ...` lines give the printed holdings
-  total) and an **activity** table (date, activity/action and amount;
-  optional settle date, description, symbol, quantity, price, fees), each
-  repeated per page; outside them the period, last four digits, currency,
-  opening/closing cash, holdings total, account value and the holdings'
-  "as of" date by label. The activity word types a row (buy, sell,
-  dividend, interest, fee, reinvest, split with its ratio from the
-  description, transfer in/out, deposit, withdrawal, corporate action); an
-  unsigned amount takes the type's direction; a symbol is read from its
-  column, from the description's first word when the row needs a security
-  or the symbol is held, or from `(SYMBOL)`. `brokerage_statement_generic`
+  optional price, cost basis, beginning market value; unrealized gain/loss
+  and estimated income columns are recognised and not read) and an
+  **activity** table (date, activity/action and amount; optional settle
+  date, description, security name, symbol or CUSIP, quantity, price,
+  fees), each repeated per page; outside them the period, last four digits,
+  currency, opening/closing cash, holdings total, account value and the
+  holdings' "as of" date by label (`Beginning Account Value` is not the
+  account value; `Ending Account Value` and `Ending Net Value` are).
+  Header cells may run over up to three lines (`Price Per` / `Unit`,
+  `Symbol/` / `CUSIP`, a date under `Ending Market Value`) or end in a
+  date; a table with only a settlement date is dated by it; without an
+  action column the description is the action when the table also names a
+  security, symbol or quantity (so a bank's *Date / Description / Amount*
+  table stays a bank's); a header line of known column names the parser
+  cannot use ends the table above it. Holdings may be grouped under
+  asset-class headings (Mutual Funds, Exchange Traded Products, Stocks,
+  Bonds, Core Account, ...) that set the positions' asset class; `Total
+  <group>` lines are subtotals, `Total Holdings` (or `Total Market Value`,
+  `Total Securities`, ..., else the first unlabelled `Total`) is the
+  holdings total, read from the market value column; a security name
+  wrapped onto the next line is joined. The activity text types a row
+  (`activity_type`, also meant for CSV action columns: case, punctuation,
+  the security and a trailing `(Cash)`/`(Margin)` after the leading words
+  do not matter): buy (`Buy`, `You Bought`), sell (`You Sold`), dividend
+  (`Dividend Received`, `Long-Term`/`Short-Term Cap Gain`), interest
+  (`Interest Earned`), fee (`Fee Charged`, `Foreign Tax Paid`), reinvest,
+  split with its ratio from the description, transfer in/out, deposit
+  (`Direct Deposit`, `Electronic Funds Transfer Received`), withdrawal
+  (`Electronic Funds Transfer Paid`), corporate action; `Transferred
+  From`/`Transferred To` is a `transfer_in`/`transfer_out` when the row
+  names a security and a non-zero quantity, else a cash `deposit`/
+  `withdrawal`, and a transfer of units printed with no amount (`-`) moves
+  no cash. An unsigned amount takes the type's direction; a symbol is read
+  from its column (a valid CUSIP there is the CUSIP), from the
+  description's first word when the row needs a security or the symbol is
+  held, or from `(SYMBOL)`. `brokerage_statement_generic` (version 2)
   scores 0.5-0.7 when it sees these tables (above the bank parsers'
   0.4-0.45 for the same activity table); `placeholder_brokerage` pins the
   fictional Placeholder Brokerage (`MM/DD/YYYY`, USD) and needs the
-  institution's name on page 1.
+  institution's name on page 1; `fidelity_investments_statement` pins the
+  Fidelity Investments "Investment Report" (USD, `MM/DD` rows dated from
+  the period, `MM/DD/YYYY`, `Month D, YYYY` period after "Investment
+  Report") and needs both "Fidelity Investments" and "Investment Report"
+  on page 1. Its core money market position is the account's cash: the
+  rows under *Core Account* are no position, their beginning and ending
+  market values are the opening and closing cash and are taken out of the
+  printed holdings total, so the cash check covers every trade, income and
+  transfer; the *Core Fund Activity* table (the core's own trades settling
+  them) is not read.
+- **Several accounts in one PDF** (a statement "of all accounts"): account
+  headings (`Account # Z12-345678`, `Account Number: 123-456789`, `Account
+  XXXX-4821` at the start of a line or cell, after at most an all-capitals
+  title, or an all-capitals title ending in a number such as `INDIVIDUAL -
+  TOD Z12-345678`; never a line with an amount) among a page's first six
+  or last three lines mark each account's pages. Two or more accounts: one
+  `InvestmentStatement` per account with its own last four digits,
+  positions, activity, cash, totals and reconciliation. A page whose
+  headings name one account belongs to it; on a page naming several, the
+  lines before the first heading continue the previous page's account;
+  pages before the first heading (an overview) only give the period,
+  currency and "as of" date to fall back on, and a table row there belongs
+  to no account (skipped, warning `rows_outside_account`); an account
+  without tables gives no statement (`account_without_tables`). A document
+  naming one account is one statement, read as before (its last four
+  digits from the first account number, else from the heading). A line
+  given to the wrong account breaks that account's reconciliation, so it is
+  held, never imported silently. Only last four digits are kept.
 - **Reconciliation** (`reconcile_investment`, SECURITY.md C12), for every
   source: each position's quantity x price = market value (within half a
   unit of the price's last printed decimal per unit plus 0.005), the
@@ -524,8 +589,14 @@ OFX `INVSTMTRS` in the sandbox or from a PDF/scan's pages in the worker.
   structured importer): the account as for bank statements (document's,
   chosen on re-run, else last four digits + institution among the
   accounts the uploader may edit) and of type brokerage or retirement in
-  the statement's currency, else `unknown_account` (`account_not_found`,
-  `account_ambiguous`, `account_type_mismatch`, `currency_mismatch`). A
+  the statement's currency. In a document of several accounts each
+  statement is matched by its own last four digits; the document is linked
+  to no account (the pipeline undoes an account the classifier matched; one
+  chosen at upload stays), and an account chosen on a re-run takes only the
+  statements with its own last four digits or, when it records none, the
+  single statement nothing matched, never several accounts at once. No account, or one that does not
+  fit, raises `unknown_account` (`account_not_found`, `account_ambiguous`,
+  `account_type_mismatch`, `currency_mismatch`). A
   statement that does not reconcile, or has any row or position below the
   threshold, writes **nothing** (investment rows have no pending state) and
   raises `low_confidence_field` `investment_reconciliation_failed` (checks,
@@ -538,7 +609,14 @@ OFX `INVSTMTRS` in the sandbox or from a PDF/scan's pages in the worker.
   activity as `investment_txn` with `import_hash` = sha256 of
   `perfin-invest-v1`, account, trade date, type, security, units, amount
   and the running index among identical rows (the same month as OFX and
-  PDF is imported once); cash deposits/withdrawals as ledger transactions
+  PDF is imported once). A row the account already records from another
+  document under another date (same type, security, units and amount; the
+  two share a trade or settlement date, or one has no settlement date and
+  they are at most 5 days apart) is the same trade dated differently by
+  another format and is **not written**: one `low_confidence_field` item
+  per statement (`investment_possible_duplicate`: `account_id`, `rows`,
+  `duplicate_of` ids) says so, and a trade that really happened twice is
+  added by hand. Cash deposits/withdrawals as ledger transactions
   on the account through the structured importer. Units the history does
   not explain become one opening `transfer_in` per security on the
   period's first day (memo `Opening position from statement`, cost per
@@ -553,6 +631,92 @@ OFX `INVSTMTRS` in the sandbox or from a PDF/scan's pages in the worker.
   are not written (`investment_out_of_order`): import statements oldest
   first. Audit `investment.import`; events `investment.imported` and
   `balance.updated` (both with `account_id`).
+
+#### Brokerage activity exports (CSV, TSV, XLSX)
+
+A brokerage's "Activity" export (Fidelity's `Run Date, Account, Account
+Number, Action, Symbol, Description, Type, Exchange Quantity, Exchange
+Currency, Currency, Price, Quantity, Exchange Rate, Commission, Fees,
+Accrued Interest, Amount, Settlement Date`, and layouts like it) is
+investment activity, not a cash ledger. The structured importer
+(`import_extraction`) reads table 0 of a CSV, TSV or XLSX with
+`app/ingestion/parsers/brokerage_table.py` (in the worker, on the stored
+table; never a PDF's page table) before it looks for a column mapping:
+
+- **Recognised** when a header among the first 11 rows names a date (`Run
+  Date`, `Trade Date`, `Date`; a settlement date is read as the settle date
+  and is not enough alone), an action (`Action`, `Activity`, `Transaction
+  Type`; Fidelity's `Type` column of `Cash`/`Margin` is not the action), an
+  amount, and a symbol or a quantity column (so a bank export typed
+  `Deposit`/`Withdrawal` never qualifies), and at least half of its data
+  rows have an action `activity_type` knows. Optional: settlement date,
+  symbol (a valid CUSIP there is the CUSIP), description (the security's
+  name), quantity, price, commission, fees, currency, account number
+  (`Account Number`, else an `Account` column whose cells carry digits).
+- **Rows**: one-cell rows (blank lines, disclaimer paragraphs, the "Date
+  downloaded" line) are notes. A row is typed by its action (`YOU BOUGHT`,
+  `YOU SOLD`, `REINVESTMENT ... (Cash)`, `DIVIDEND RECEIVED`, `INTEREST
+  EARNED`, `LONG-TERM CAP GAIN`, `DIRECT DEPOSIT`, `Electronic Funds Transfer
+  Received/Paid`, `FEE CHARGED`, `FOREIGN TAX PAID`, `CONTRIBUTION`,
+  `DISTRIBUTION`, `TRANSFERRED FROM/TO`: units when the row names a security
+  and a non-zero quantity, else cash). An action no phrase types is
+  **skipped and counted, never guessed**; so is a row whose date or amount
+  does not read, a buy/sell/reinvestment/transfer of units without a symbol
+  or a quantity, a split without its ratio, or a row in another currency
+  than its account's other rows. `Amount` is kept as printed (the cash
+  effect: negative is cash out); a blank amount is accepted only on a
+  transfer of units (no cash moves). Quantities are printed signed and
+  carried positive (the type gives the direction); `fees` = commission +
+  fees; the action text is the memo. The extractors' formula guard (a
+  leading `'`, SECURITY.md C7) is set aside only to recognise headers and
+  actions and to parse dates and numbers: the security's name and the memo
+  keep it, and a symbol that would be a formula is no symbol.
+- **Accounts**: one `InvestmentStatement` per last four digits of the
+  account-number column (one statement without such a column), period =
+  first to last trade date, no positions, no cash balances. Only the last
+  four digits are kept.
+- **Scoring and holding**: an export prints no positions, cash or totals,
+  so reconciliation is `unavailable`. The statements are a structured
+  source like OFX (`source_format = "csv"`): every value comes from a named
+  column of a delimited file, with no OCR or layout guess, so they carry no
+  per-row confidence and `statement_import` imports them the way it imports
+  OFX with nothing to check. The parser's one possible guess, the
+  day/month order of an all-numeric date column whose days are all 12 or
+  less, marks every row `low_confidence` (`trade_date`, confidence 0.6), and
+  the statement is held (`investment_low_confidence`). `csv` is a
+  worker-only `source_format` (`WORKER_STATEMENT_FORMATS`): a sandbox child
+  answering with it is `bad_output`.
+- **Commit**: `import_investment_statements` exactly as for an OFX
+  `INVSTMTRS` (account by last four digits among the accounts the person
+  may import into, each statement of a multi-account file on its own
+  account, the document linked to none; buys, sells, reinvestments, income
+  and fees as `investment_txn` rows with the `import_hash` dedupe; cash
+  deposits and withdrawals as ledger transactions on the brokerage account,
+  their action text the payee). A re-upload or an `apply-mapping` re-run
+  reads the stored table again and adds nothing (every row matches its
+  hash). An account no account matches is an `unknown_account` item
+  (`investment`, `statement`, never the digits); "remember" re-reads its
+  last four digits from the stored table. The run summary has
+  `brokerage_table` (statements, rows, notes, unknown actions, skipped rows,
+  warnings); skipped rows raise one `low_confidence_field` item
+  (`lines_skipped`: count, `unknown_activity`, parser), a table none of
+  whose rows reads an `unparsed` item (`activity_unreadable`).
+- **Limits**: an export has no positions, so it cannot create opening
+  positions: a sale of units bought before its first row (with no earlier
+  statement giving the account's positions) is refused by the lot engine
+  (`investment_lot_conflict`, nothing of that account written), and the
+  out-of-order rule applies (import the oldest statement or export first).
+  Its rows are dated by the run (trade) date; a PDF statement of the same
+  month that dates rows by settlement date has other `import_hash`es, so
+  its trades are caught by the near-duplicate check instead (not written,
+  `investment_possible_duplicate`). Cash deposits and withdrawals are ledger
+  rows and keep the ledger's same-date near-duplicate check.
+- **Precedence over column mappings**: the brokerage reading wins over a
+  saved mapping for the same header and over the suggestion (no mapping is
+  suggested or saved for such a file); the run summary names the saved
+  mapping it took precedence over (`mapping_bypassed`). A mapping chosen
+  explicitly for a run (`apply-mapping` with `mapping_id`, "use this
+  mapping" in the review queue) imports the table as a cash ledger instead.
 
 #### Loan statements (Phase 5)
 
@@ -622,18 +786,89 @@ same database transaction.
 - **CSV/TSV.** The header row's fingerprint (case, spacing and a
   formula-guard quote ignored; for headerless files the shape of the first
   row) is looked up in the household's saved `import_mapping`s, trying the
-  first rows so a preamble is found. No mapping is an `unparsed`
-  (`mapping_required`) item: the mapping editor reads the stored table
-  through `GET /imports/{document_id}/preview` (never re-parsed; it also
-  proposes a mapping from header names and cell shapes, deterministic, no
-  model) and saves it with `POST /imports/mappings`; `POST
+  first rows so a preamble is found.
+- **Suggested mapping** (`suggest_mapping` in
+  `app/ingestion/parsers/structured.py`; deterministic, no model). The
+  header row is searched among the first 11 rows (`skip_rows` is what lies
+  above it). Every (column, role) pair is scored: an exact header word
+  ("Amount", "Run Date", "Account Number") beats a whole word inside the
+  header ("Exchange Currency" for currency) beats a substring; posting,
+  booking, transaction, trade and run dates beat settlement and value
+  dates. Pairs are assigned globally, best first, one role per column, so
+  an earlier partial match no longer takes a role from a later exact one.
+  A column only takes a role when its cells fit (dates parse in one format,
+  amounts parse, currencies are three-letter codes, an indicator column
+  holds direction words such as `DR`/`CR`/`Debit`, an account column holds
+  several account-number-like values); an empty column never takes one,
+  and a "Type" column of `Cash`/`Margin` is no indicator, nor is a column of
+  direction words beside amounts that already carry a minus sign (it
+  describes the row; the amount signs it). A running balance
+  that agrees with only one sign convention sets `sign`. The suggestion is
+  **confident** when the date and amount (or debit/credit) columns are
+  named exactly, every row before the footer reads, the day/month order
+  is not a guess and, with an indicator, every row's indicator is a
+  direction word beside an unsigned amount (else the doubt
+  `indicator_values_unknown`: a `CHECK` row would otherwise read as money
+  in); it reports a score, per-role reasons (role, column, match
+  kind, share of cells that fit) and its doubts.
+- **Never-seen layouts.** When no saved mapping fits and the suggestion is
+  confident, a CSV, TSV or XLSX whose person (the uploader, or who asked for
+  the re-run) is a member or above is imported with it, and the suggestion
+  is saved as an ordinary household mapping named after the header
+  (`created_by` that person; audit `import_mapping.create` with `origin:
+  suggested`; the run summary has `mapping_suggested`), so the next file is
+  recognised by its fingerprint. A single signed amount column read as
+  "positive is money in" on trust (no debit/credit columns, indicator or
+  agreeing balance) is never written into a liability account (card exports
+  often list purchases as positive): the mapping saved from such a
+  suggestion while the account is still unknown is marked
+  `sign_unverified`, and whenever it later meets a liability account (the
+  re-run after a person picks the card, next month's file) the import
+  waits as `mapping_required` (`auto_import: sign_unverified`) until a
+  person saves the mapping's spec in the editor or chooses the mapping
+  explicitly for the run. With one account-bound mapping among the fitting
+  ones, it wins over household mappings (a member's upload may have saved
+  one meanwhile) for an upload that names no account. Page tables of PDFs and images, drop
+  folder and mail intake without a person, and doubtful suggestions are not
+  imported on their own.
+- **Mapping editor.** Otherwise the document gets an `unparsed`
+  (`mapping_required`) item carrying the suggestion (`suggested_spec`, its
+  facts, and `auto_import`: why it was not used): the mapping editor reads
+  the stored table through `GET /imports/{document_id}/preview` (never
+  re-parsed; prefilled with the same suggestion and showing its confidence)
+  and saves it with `POST /imports/mappings`; `POST
   /imports/{document_id}/apply-mapping` re-runs the import from the stored
   extraction as the `imports.apply_mapping` job and resolves the items it
   answered. The next file with the same header is imported without asking.
-  Mapped rows that do not parse (footers, totals) are skipped and listed in
-  a `low_confidence_field` item; a running-balance column gives the closing
-  balance and a reconciliation check (each balance = previous + amount;
-  mismatches are a `low_confidence_field` item).
+- **Rows.** Mapped rows that do not parse (totals, rows without an amount)
+  are skipped and listed in a `low_confidence_field` item; rows with at most
+  one filled cell (disclaimer paragraphs, a "Date downloaded" line) are
+  notes, neither imported nor reported. An empty currency cell is the
+  account's currency; another cell that is not a three-letter code makes
+  the row unreadable. A running-balance column gives the closing balance and
+  a reconciliation check (each balance = previous + amount; mismatches are a
+  `low_confidence_field` item).
+- **Multi-account files.** A mapping with `account_column` (a brokerage
+  "Activity" export lists an Individual, a Roth IRA and an HSA account in
+  one file) imports one statement per account: rows are grouped by the
+  last four digits of the cell and each group is matched like an OFX
+  statement (`match_account` among the accounts the person may import
+  into; the document's or the mapping's account only for a file with one
+  account). An account chosen on re-run takes the group it was chosen for
+  (the review item's `group`, passed on as `apply-mapping`'s `group`), else
+  the groups with its own last four digits when it records them, else the
+  one group that matches nothing when there is only one: one choice never
+  pours several accounts into one. A group that matches none or several
+  accounts is an `unknown_account` item naming the group and the digest of
+  the spec that numbered it (`spec_digest`), never the digits; "remember"
+  re-reads them from the stored table, and once the mapping's spec has
+  changed the item is stale (`409 review-item-stale`; import again). The cell text is used in memory for
+  grouping only: statements keep the last four digits, and review items,
+  audit rows, events and run logs carry ids and counts. A brokerage
+  "Activity" export with an action column never reaches this path unless a
+  person chooses a mapping for it ("Brokerage activity exports"); the
+  synthetic multi-account file the tests import here has its `Action`
+  column named `Details`.
 - **Dedupe.** `import_hash` exact matches are skipped (re-imports and
   overlapping statements); an incoming row with no hash match but an
   existing, unclaimed transaction on the same date with the same amount
@@ -1030,9 +1265,10 @@ Phase 4 status (`app/ingestion/intake/email.py`, `app/workers/handlers/mailbox.p
 PerFin does not call a language model at any stage of ingestion, local or
 hosted (ADR-0007). Document text, account numbers and personal details have no
 code path off the host. The cost is that a never-seen statement layout needs a
-person once, through the column-mapping editor; the benefit is that the
-pipeline is deterministic, reproducible and auditable, and a crafted document
-cannot talk its way into the ledger.
+person once, through the column-mapping editor (unless it is a delimited file
+whose header the deterministic suggestion reads with confidence); the benefit
+is that the pipeline is deterministic, reproducible and auditable, and a
+crafted document cannot talk its way into the ledger.
 
 The heuristic classifier is a small local model trained offline on synthetic
 and contributed samples; it never makes network calls and ships as a versioned

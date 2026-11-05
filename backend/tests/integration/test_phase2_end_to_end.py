@@ -13,7 +13,9 @@ One synthetic household goes through the whole ledger path over HTTP:
    live ``GET /events`` stream delivered the changes while the worker ran;
 4. upload a CSV export of the same month: it waits in ``/review`` for a
    column mapping; saving one and resolving the item imports it, skipping
-   exact duplicates and flagging a near duplicate in ``/review``;
+   exact duplicates and flagging a near duplicate in ``/review`` (importing
+   a confident suggestion on its own is switched off here, the editor path
+   being the subject; ``test_structured_import.py`` covers that path);
 5. confirming the near duplicate deletes it and records its hash, so the
    next export of that month imports only what is new;
 6. a manual transaction goes through the same rules (fields typed by hand
@@ -46,6 +48,7 @@ from sqlalchemy import Engine, select, text
 from app.core.settings import Settings
 from app.db.models import Job, JobState
 from app.db.rls import queue_scope, set_context
+from app.domain.imports import service as imports_service
 from app.workers.handlers import ingest
 from app.workers.registry import REGISTRY, discover_handlers
 from app.workers.runner import Worker, WorkerConfig
@@ -232,7 +235,10 @@ def _expected(txns: tuple[SynthTxn, ...] | list[SynthTxn]) -> list[tuple[str, st
     return sorted((t.posted.isoformat(), f"{t.amount:.2f}") for t in txns)
 
 
-def test_statements_flow_from_upload_to_ledger_review_and_events(household: Household) -> None:
+def test_statements_flow_from_upload_to_ledger_review_and_events(
+    household: Household, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(imports_service, "AUTO_MAPPING_KINDS", frozenset())
     owner = household.owner
     stmt = _statement()
 

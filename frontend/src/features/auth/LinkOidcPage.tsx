@@ -53,7 +53,7 @@ export function LinkOidcPage() {
     return (
       <AuthLayout title="Link your account">
         <p role="alert">{missing ? "There is no pending link, or it has expired. Sign in with single sign-on again." : authErrorMessage(offer.error)}</p>
-        <Link to={LOGIN_PATH}>Back to sign in</Link>
+        <Link to={LOGIN_PATH} className="link-action link-action--back">Back to sign in</Link>
       </AuthLayout>
     );
   }
@@ -97,7 +97,9 @@ export function LinkOidcPage() {
         <>
           <p>To link them, sign in with that account&apos;s PerFin password first.</p>
           {state?.status === "mfa_pending" ? (
-            <Link to={`/login/mfa?return_to=${encodeURIComponent(LINK_OIDC_PATH)}`}>Finish signing in</Link>
+            <Link to={`/login/mfa?return_to=${encodeURIComponent(LINK_OIDC_PATH)}`} className="btn btn--primary btn--md">
+              Finish signing in
+            </Link>
           ) : (
             <LocalLoginForm returnTo={LINK_OIDC_PATH} showForgot={false} />
           )}

@@ -16,10 +16,67 @@ The flow (INGESTION.md "Parse", "Match and deduplicate", "Commit"):
      review item.
    * **CSV/TSV**: the header fingerprint
      (``app.ingestion.parsers.structured.header_fingerprint``) finds a saved
-     ``import_mapping``; none is an ``unparsed`` review item
-     (``mapping_required``) and the table is shown by ``GET
+     ``import_mapping``. Without one, the deterministic suggestion
+     (``suggest_mapping``) is used when it is confident (every required
+     column named exactly by its header, every row before the footer
+     readable, the day/month order not a guess, an indicator column only
+     direction words beside unsigned amounts), the file is a CSV, TSV or
+     XLSX and the person whose document it is may save mappings (member or
+     above): the suggestion is saved as a new mapping (audited
+     ``import_mapping.create`` with ``origin: suggested``) so the next file
+     is recognised, and the run summary says ``mapping_suggested``. A
+     single signed amount column read on trust (no debit/credit columns, no
+     indicator, no running balance that agrees) is never used to write into a
+     liability account (a card export may list purchases as positive). A
+     statement whose account is not known yet still gets its own
+     ``account_required``/``unknown_account`` item, and the mapping saved
+     from such a suggestion is marked ``sign_unverified``: whenever it
+     later meets a liability account (the re-run after a person picks the
+     card, next month's file) the import waits as ``mapping_required``
+     (``auto_import: sign_unverified``) until a person saves the mapping's
+     spec in the editor (which clears the mark) or chooses the mapping
+     explicitly for that re-run. With one account-bound mapping among the
+     fitting ones, it wins over household mappings for an upload that
+     names no account. Anything else is an ``unparsed``
+     review item (``mapping_required``) carrying the suggestion and why it
+     was not used (``auto_import``), and the table is shown by ``GET
      /imports/{document_id}/preview`` for the mapping editor. The account is
      the one given on re-run, the document's or the mapping's.
+   * **Brokerage activity tables** come first: when table 0 of a CSV, TSV
+     or XLSX is a brokerage "Activity" export
+     (``app.ingestion.parsers.brokerage_table``: a date, an action that
+     ``activity_type`` types, an amount, a symbol or quantity column), its
+     rows become one investment statement per account (last four digits of
+     the account-number column) and go to
+     ``app.domain.investments.statement_import`` like an OFX ``INVSTMTRS``:
+     buys, sells, reinvestments and income as ``investment_txn`` rows, cash
+     deposits and withdrawals as ledger rows on the brokerage account. The
+     statements are read again from the stored table on every run (never
+     stored). **Precedence**: a mapping chosen explicitly on a re-run
+     (``apply-mapping`` with ``mapping_id``, the review queue's "use this
+     mapping") imports the table as a cash ledger; otherwise the brokerage
+     reading wins over a saved mapping for the same header and over the
+     suggestion, and the run summary says so (``brokerage_table`` with the
+     counts, ``mapping_bypassed`` with the saved mapping's id), so a person
+     who saved a cash-ledger mapping for that header can see why it was not
+     used and choose it explicitly. Rows skipped (an action no known phrase
+     types, a row that does not read) raise one ``low_confidence_field`` item
+     (``lines_skipped``, counts only).
+   * **Multi-account CSV/TSV** (``MappingSpec.account_column``): one
+     statement per account (``from_table_grouped``), each matched by the
+     last four digits of its account cell exactly like an OFX statement
+     (same ``match_account`` call and allowed accounts; a single-account
+     file may use the document's or the mapping's account). An account
+     given on re-run takes the statement it was chosen for (``group``,
+     passed on by the review queue), else the statements with its own last
+     four digits when it records them, else the one statement that matches
+     nothing when there is only one (:func:`_chosen_groups`): one choice
+     never pours several accounts into one. An account that matches none or
+     several is an ``unknown_account`` item per statement (``group`` and
+     ``spec_digest``, the digest of the spec that numbered the groups; never
+     the digits); ``remember`` on it re-reads the group's last four digits
+     from the stored table (:func:`stored_group_last4`), and an item whose
+     mapping spec has changed since is stale (:func:`group_item_current`).
    * Deduplication (``app.ingestion.match.dedupe``): exact ``import_hash``
      matches are skipped, near matches (same date and amount) are imported as
      ``review_state = pending`` with a ``possible_duplicate`` review item.
@@ -38,7 +95,8 @@ The flow (INGESTION.md "Parse", "Match and deduplicate", "Commit"):
      pending, a ``reconciliation_failed``/``reconciliation_unavailable``
      item with the figures, and writes no balance snapshot (SECURITY.md C12).
    * Brokerage statements (``result.investments``: OFX ``INVSTMTRS``,
-     PDFs read by ``app.ingestion.parsers.brokerage``) go to
+     PDFs read by ``app.ingestion.parsers.brokerage``; brokerage activity
+     tables above) go to
      ``app.domain.investments.statement_import`` (securities, activity,
      lots, holdings, prices, snapshot; held back when they do not
      reconcile); their cash deposits and withdrawals come back here as
@@ -62,6 +120,8 @@ and counts, never statement text or account numbers (H8).
 
 from __future__ import annotations
 
+import hashlib
+import json
 import uuid
 from collections.abc import Collection, Sequence
 from dataclasses import dataclass, field
@@ -70,10 +130,11 @@ from typing import TYPE_CHECKING, Any, Final, cast
 
 from pydantic import ValidationError
 from sqlalchemy import ColumnElement, delete, or_, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.auth.authz import role_at_least
-from app.auth.models import HouseholdRole
+from app.auth.models import HouseholdMember, HouseholdRole
 from app.auth.principal import Principal
 from app.core import clock
 from app.core.audit import audit
@@ -82,7 +143,7 @@ from app.core.events import emit
 from app.core.money import sum_amounts, to_storage
 from app.db.queue import enqueue
 from app.domain.accounts import repo as accounts_repo
-from app.domain.accounts.models import Account, BalanceSource
+from app.domain.accounts.models import LIABILITY_TYPES, Account, BalanceSource
 from app.domain.accounts.visibility import get_visible_account, visible_account_filter
 from app.domain.documents import repo as documents_repo
 from app.domain.documents.models import (
@@ -96,7 +157,7 @@ from app.domain.documents.models import (
 )
 from app.domain.documents.service import get_visible_document
 from app.domain.imports import repo
-from app.domain.imports.models import ImportMapping
+from app.domain.imports.models import NAME_MAX, ImportMapping
 from app.domain.imports.schemas import (
     APPLY_MAPPING_JOB_TYPE,
     DEFAULT_PAGE,
@@ -109,6 +170,7 @@ from app.domain.imports.schemas import (
     MappingOut,
     MappingPage,
     MappingSpec,
+    MappingSuggestionOut,
     MappingUpdate,
     PreviewBalance,
     PreviewStatement,
@@ -127,19 +189,28 @@ from app.domain.transactions.models import (
     Transaction,
     TransactionStatus,
 )
-from app.ingestion.match.accounts import importable_account_ids, match_account
+from app.ingestion.match.accounts import AccountMatch, importable_account_ids, match_account
 from app.ingestion.match.dedupe import dedupe
+from app.ingestion.parsers.brokerage_table import PARSER_NAME as ACTIVITY_PARSER
+from app.ingestion.parsers.brokerage_table import TABLE_KINDS as ACTIVITY_TABLE_KINDS
+from app.ingestion.parsers.brokerage_table import (
+    ActivityTable,
+    activity_dates,
+    read_activity_table,
+)
 from app.ingestion.parsers.structured import (
+    MappingSuggestion,
     ParsedStatement,
     ParsedTransaction,
     candidate_fingerprints,
     from_statement,
-    from_table,
+    from_table_grouped,
+    group_last4,
     header_fingerprint,
     spec_fingerprint,
-    suggest_spec,
+    suggest_mapping,
 )
-from app.ingestion.sandbox.protocol import ExtractResult, Table
+from app.ingestion.sandbox.protocol import ExtractResult, InvestmentStatement, Table
 
 if TYPE_CHECKING:
     from starlette.requests import HTTPConnection
@@ -150,6 +221,11 @@ IDS_MAX: Final = 50
 RERUN_ANSWERS: Final = frozenset({ReviewKind.UNPARSED, ReviewKind.UNKNOWN_ACCOUNT})
 #: Statuses whose stored extraction may be (re-)imported.
 IMPORTABLE_STATUSES: Final = frozenset({DocumentStatus.NEEDS_REVIEW, DocumentStatus.PROCESSED})
+#: Extraction kinds whose table may be imported with a confident suggestion
+#: (a PDF/image page table no parser read always waits for a person).
+AUTO_MAPPING_KINDS: Final = frozenset({"csv", "tsv", "xlsx"})
+#: Longest name given to a mapping saved from a suggestion (the editor's limit).
+SUGGESTED_NAME_MAX: Final = 120
 
 
 # ---------------------------------------------------------------------------
@@ -246,6 +322,7 @@ def _facts(mapping: ImportMapping) -> dict[str, Any]:
         "institution_id": mapping.institution_id,
         "header_fingerprint": mapping.header_fingerprint,
         "spec": mapping.spec,
+        "sign_unverified": mapping.sign_unverified,
     }
 
 
@@ -425,6 +502,7 @@ def update_mapping(
         mapping.name = data.name
     if data.spec is not None:
         mapping.spec = data.spec.model_dump(mode="json")
+        mapping.sign_unverified = False  # a person saved the spec, sign included
     if "account_id" in given:
         mapping.account_id = data.account_id
     if "institution_id" in given:
@@ -530,6 +608,11 @@ def choose_mapping(
     accounts = {m.account_id for m, _ in fitting if m.account_id is not None}
     if len(accounts) > 1:
         return MappingChoice(None, None, tuple(m.id for m, _ in fitting))
+    for mapping, spec in fitting:
+        # One account-bound mapping wins over household ones (a member's
+        # upload may have saved one meanwhile): its account routes the file.
+        if mapping.account_id is not None:
+            return MappingChoice(mapping, spec)
     return MappingChoice(*fitting[0])
 
 
@@ -564,6 +647,12 @@ class _Run:
     low_confidence: int = 0
     accounts: list[uuid.UUID] = field(default_factory=list)
     mapping_id: uuid.UUID | None = None
+    #: The mapping was saved from the suggestion by this run.
+    mapping_suggested: bool = False
+    #: Table 0 read as brokerage activity (``brokerage_table`` in the summary)
+    #: and the saved mapping that reading took precedence over.
+    activity: ActivityTable | None = None
+    mapping_bypassed: uuid.UUID | None = None
     _payees: dict[str, uuid.UUID] | None = None
     _categories: dict[str, uuid.UUID] | None = None
     _open: list[tuple[ReviewKind, dict[str, Any]]] | None = None
@@ -618,6 +707,17 @@ class _Run:
             "low_confidence": self.low_confidence,
             "accounts": [str(a) for a in self.accounts],
             "mapping_id": str(self.mapping_id) if self.mapping_id else None,
+            "mapping_suggested": self.mapping_suggested,
+            **(
+                {
+                    "brokerage_table": self.activity.summary(),
+                    "mapping_bypassed": (
+                        str(self.mapping_bypassed) if self.mapping_bypassed else None
+                    ),
+                }
+                if self.activity is not None
+                else {}
+            ),
         }
 
 
@@ -953,12 +1053,216 @@ def _import_statements(run: _Run, result: ExtractResult, *, account_id: uuid.UUI
         _commit_statement(run, parsed, account, statement_index=index)
 
 
+@dataclass
+class _Target:
+    """One statement of a table and the account it goes to (None: not known)."""
+
+    parsed: ParsedStatement
+    account: Account | None
+    candidates: tuple[uuid.UUID, ...] = ()
+    #: Index in ``from_table_grouped`` (multi-account tables only).
+    group: int | None = None
+
+
+def _table_targets(
+    run: _Run,
+    statements: list[ParsedStatement],
+    spec: MappingSpec,
+    *,
+    mapping_account: uuid.UUID | None,
+    account_id: uuid.UUID | None,
+    group: int | None = None,
+) -> list[_Target]:
+    """The account of each statement of a table (module doc, CSV/TSV)."""
+    if spec.account_column is None:
+        target = account_id or run.document.account_id or mapping_account
+        return [_Target(statements[0], _usable_account(run, target))]
+    readable = [s for s in statements if s.transactions]
+    single = len(readable) == 1
+    matches = [
+        match_account(run.db, run.household_id, last4=parsed.last4, allowed=run.allowed)
+        for parsed in readable
+    ]
+    chosen = _usable_account(run, account_id)
+    takes = (
+        set(range(len(readable))) if single else _chosen_groups(readable, matches, chosen, group)
+    )
+    targets: list[_Target] = []
+    for index, parsed in enumerate(readable):
+        account: Account | None = None
+        candidates: tuple[uuid.UUID, ...] = ()
+        if single and account_id is None:
+            account = _usable_account(run, run.document.account_id or mapping_account)
+        if account is None:
+            match = matches[index]
+            candidates = match.candidates
+            if chosen is not None and index in takes and (match.account_id is None or single):
+                account = chosen
+            else:
+                account = _usable_account(run, match.account_id)
+        targets.append(_Target(parsed, account, candidates, index))
+    return targets
+
+
+def _chosen_groups(
+    readable: Sequence[ParsedStatement],
+    matches: Sequence[AccountMatch],
+    chosen: Account | None,
+    group: int | None,
+) -> set[int]:
+    """The statements of a multi-account table that an account chosen on re-run may take.
+
+    The one the person chose it for (``group``, from the review item), else
+    those with the chosen account's own last four digits when it records
+    them, else the one statement no account matched when it is the only
+    one: any other unmatched statement keeps its ``unknown_account`` item
+    rather than land on an account of a different number (like
+    ``app.domain.investments.statement_import``).
+    """
+    if chosen is None:
+        return set()
+    if group is not None:
+        return {group}
+    if chosen.number_last4 is not None:
+        return {
+            index for index, parsed in enumerate(readable) if parsed.last4 == chosen.number_last4
+        }
+    unmatched = [index for index, match in enumerate(matches) if match.account_id is None]
+    return set(unmatched) if len(unmatched) == 1 else set()
+
+
+def _may_save_mappings(run: _Run) -> bool:
+    """Whether the person behind the run could save a mapping themselves (member+)."""
+    actor = run.user_id or run.document.uploaded_by
+    if actor is None:
+        return False
+    role = run.db.execute(
+        select(HouseholdMember.role).where(
+            HouseholdMember.household_id == run.household_id, HouseholdMember.user_id == actor
+        )
+    ).scalar_one_or_none()
+    return role is not None and role_at_least(role, HouseholdRole.MEMBER)
+
+
+def _held(run: _Run, result: ExtractResult, suggestion: MappingSuggestion | None) -> str | None:
+    """Why a suggestion is not imported on its own (None: it may be)."""
+    if suggestion is None:
+        return "no_suggestion"
+    if not suggestion.confident:
+        return "not_confident"
+    if result.kind not in AUTO_MAPPING_KINDS:
+        return "not_delimited"
+    if not _may_save_mappings(run):
+        return "no_member"
+    return None
+
+
+def _sign_held(on_trust: bool, targets: list[_Target]) -> str | None:
+    """A sign taken on trust is never used to write into a liability account.
+
+    ``on_trust``: a suggestion without ``sign_evidence``, or a mapping saved
+    from one (``sign_unverified``). Statements whose account is not known
+    yet are left to their ``unknown_account`` / ``account_required`` item;
+    the mapping saved meanwhile keeps ``sign_unverified``, so the re-run
+    after a person picks a liability account is held here again.
+    """
+    if not on_trust:
+        return None
+    if any(t.account is not None and t.account.type in LIABILITY_TYPES for t in targets):
+        return "sign_unverified"
+    return None
+
+
+def _suggested_name(header: Sequence[str]) -> str:
+    """A mapping name from the header cells (formula guard and odd characters removed)."""
+    cells = []
+    for cell in header:
+        text = "".join(ch for ch in cell.removeprefix("'") if ch.isprintable())
+        text = " ".join(text.split())
+        if text:
+            cells.append(text)
+    name = ", ".join(cells) or "CSV layout"
+    if len(name) > SUGGESTED_NAME_MAX:
+        name = name[: SUGGESTED_NAME_MAX - 1].rstrip(", ") + "\u2026"
+    return name
+
+
+def _unique_name(run: _Run, base: str) -> str:
+    if not repo.name_taken(run.db, run.household_id, base):
+        return base
+    for number in range(2, 100):
+        candidate = f"{base[: NAME_MAX - 6]} ({number})"
+        if not repo.name_taken(run.db, run.household_id, candidate):
+            return candidate
+    return f"{base[: NAME_MAX - 12]} ({uuid.uuid4().hex[:8]})"
+
+
+def _save_suggested(run: _Run, table: Table, suggestion: MappingSuggestion) -> ImportMapping | None:
+    """Save the suggestion as a household mapping for the table's header (None: not saved)."""
+    spec = suggestion.spec
+    fingerprint = spec_fingerprint(table, spec)
+    if fingerprint is None:  # pragma: no cover - a confident suggestion has a header row
+        return None
+    actor = run.user_id or run.document.uploaded_by
+    mapping = ImportMapping(
+        household_id=run.household_id,
+        name=_unique_name(run, _suggested_name(table.rows[spec.skip_rows])),
+        header_fingerprint=fingerprint,
+        spec=spec.model_dump(mode="json"),
+        created_by=actor,
+        sign_unverified=suggestion.sign_evidence is None,
+    )
+    try:
+        with run.db.begin_nested():
+            run.db.add(mapping)
+            run.db.flush()
+    except IntegrityError:  # another import saved the same name meanwhile
+        return None
+    audit(
+        run.db,
+        action="import_mapping.create",
+        target_type="import_mapping",
+        target_id=mapping.id,
+        after={**_facts(mapping), "from_document": run.document.id, "origin": "suggested"},
+        household_id=run.household_id,
+        user_id=actor,
+    )
+    emit(run.db, run.household_id, "document.mapping_created", {"id": str(mapping.id)})
+    return mapping
+
+
+def _mapping_review(
+    run: _Run,
+    table: Table,
+    choice: MappingChoice,
+    suggestion: MappingSuggestion | None,
+    held: str | None,
+) -> None:
+    run.review(
+        ReviewKind.UNPARSED,
+        {
+            "reason": "mapping_ambiguous" if choice.ambiguous else "mapping_required",
+            "table": 0,
+            "header_fingerprint": header_fingerprint(table.rows[0]) if table.rows else None,
+            "column_count": table.column_count,
+            "row_count": len(table.rows),
+            "candidates": [str(c) for c in choice.ambiguous[:IDS_MAX]],
+            "suggested_spec": (
+                suggestion.spec.model_dump(mode="json") if suggestion is not None else None
+            ),
+            "suggestion": suggestion.summary() if suggestion is not None else None,
+            "auto_import": held,
+        },
+    )
+
+
 def _import_table(
     run: _Run,
     result: ExtractResult,
     *,
     mapping_id: uuid.UUID | None,
     account_id: uuid.UUID | None,
+    group: int | None = None,
 ) -> None:
     table = result.tables[0]
     target = account_id or run.document.account_id
@@ -972,49 +1276,230 @@ def _import_table(
         choice = choose_mapping(
             run.db, run.household_id, table, account_id=target, allowed=run.allowed
         )
-    if choice.mapping is None or choice.spec is None:
-        run.review(
-            ReviewKind.UNPARSED,
-            {
-                "reason": "mapping_ambiguous" if choice.ambiguous else "mapping_required",
-                "table": 0,
-                "header_fingerprint": header_fingerprint(table.rows[0]) if table.rows else None,
-                "column_count": table.column_count,
-                "row_count": len(table.rows),
-                "candidates": [str(c) for c in choice.ambiguous[:IDS_MAX]],
-            },
-        )
-        return
-    mapping, spec = choice.mapping, choice.spec
-    run.mapping_id = mapping.id
-    parsed = from_table(table, spec)
-    if not parsed.transactions:
+    saved, spec = choice.mapping, choice.spec
+    suggestion: MappingSuggestion | None = None
+    if saved is None or spec is None:
+        suggestion = None if choice.ambiguous else suggest_mapping(table)
+        held = "mapping_ambiguous" if choice.ambiguous else _held(run, result, suggestion)
+        if held is not None or suggestion is None:
+            _mapping_review(run, table, choice, suggestion, held)
+            return
+        saved, spec = None, suggestion.spec
+    statements = from_table_grouped(table, spec)
+    if not any(s.transactions for s in statements):
+        if saved is None:  # pragma: no cover - a confident suggestion reads rows
+            _mapping_review(run, table, choice, suggestion, "no_rows")
+            return
+        run.mapping_id = saved.id
         run.review(
             ReviewKind.UNPARSED,
             {
                 "reason": "mapping_failed",
                 "table": 0,
-                "mapping_id": str(mapping.id),
-                "skipped_rows": len(parsed.skipped_rows),
+                "mapping_id": str(saved.id),
+                "skipped_rows": sum(len(s.skipped_rows) for s in statements),
             },
         )
         return
-    account = _usable_account(run, target or mapping.account_id)
-    if account is None:
-        run.review(
-            ReviewKind.UNKNOWN_ACCOUNT,
-            {
-                "reason": "account_required",
-                "mapping_id": str(mapping.id),
-                "currency": parsed.currency,
-                "transactions": len(parsed.transactions),
-            },
-        )
+    targets = _table_targets(
+        run,
+        statements,
+        spec,
+        mapping_account=saved.account_id if saved is not None else None,
+        account_id=account_id,
+        group=group,
+    )
+    if saved is None:
+        if suggestion is None:  # pragma: no cover - set whenever no mapping was saved
+            return
+        held = _sign_held(suggestion.sign_evidence is None, targets)
+        mapping = None if held is not None else _save_suggested(run, table, suggestion)
+        if mapping is None:
+            _mapping_review(run, table, choice, suggestion, held or "not_saved")
+            return
+        run.mapping_suggested = True
+    else:
+        # A mapping saved from a trust-only suggestion is checked again
+        # whenever it meets a liability account, unless the person chose it.
+        if _sign_held(saved.sign_unverified and mapping_id is None, targets) is not None:
+            _mapping_review(run, table, choice, suggest_mapping(table), "sign_unverified")
+            return
+        mapping = saved
+    run.mapping_id = mapping.id
+    committed = False
+    for item in targets:
+        if item.account is None and item.group is None:
+            run.review(
+                ReviewKind.UNKNOWN_ACCOUNT,
+                {
+                    "reason": "account_required",
+                    "mapping_id": str(mapping.id),
+                    "currency": item.parsed.currency,
+                    "transactions": len(item.parsed.transactions),
+                },
+            )
+            continue
+        if item.account is None:
+            run.review(
+                ReviewKind.UNKNOWN_ACCOUNT,
+                {
+                    "reason": "account_ambiguous" if item.candidates else "account_not_found",
+                    "table": 0,
+                    "group": item.group,
+                    "mapping_id": str(mapping.id),
+                    "spec_digest": spec_digest(spec),
+                    "currency": item.parsed.currency,
+                    "transactions": len(item.parsed.transactions),
+                    "candidates": [str(c) for c in item.candidates[:IDS_MAX]],
+                },
+            )
+            continue
+        _commit_statement(run, item.parsed, item.account, statement_index=None)
+        committed = True
+    if not committed:
         return
     repo.mark_used(run.db, mapping)
     if run.document.institution_id is None and mapping.institution_id is not None:
         run.document.institution_id = mapping.institution_id
-    _commit_statement(run, parsed, account, statement_index=None)
+
+
+def spec_digest(spec: MappingSpec) -> str:
+    """A digest of ``spec`` (hex), recorded on the review items that name a group of it."""
+    canonical = json.dumps(spec.model_dump(mode="json"), sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(canonical.encode()).hexdigest()
+
+
+def _item_spec(db: Session, document: Document, payload: dict[str, Any]) -> MappingSpec | None:
+    """The mapping spec a grouped review item was raised with (None: gone or changed since)."""
+    raw = payload.get("mapping_id")
+    if not isinstance(raw, str):
+        return None
+    try:
+        mapping_id = uuid.UUID(raw)
+    except ValueError:
+        return None
+    mapping = repo.get_mapping(db, document.household_id, mapping_id)
+    spec = _spec(mapping) if mapping is not None else None
+    if spec is None or payload.get("spec_digest") != spec_digest(spec):
+        return None
+    return spec
+
+
+def group_item_current(db: Session, document: Document, payload: dict[str, Any]) -> bool:
+    """Whether a grouped ``unknown_account`` item still names the group it was raised for.
+
+    The group index points into the statements its mapping reads; once the
+    mapping's spec has changed (``spec_digest``), it may point at another
+    account's rows.
+    """
+    return isinstance(payload.get("group"), int) and _item_spec(db, document, payload) is not None
+
+
+def stored_group_last4(db: Session, document: Document, payload: dict[str, Any]) -> str | None:
+    """The last four digits of a multi-account table's statement named by a review item.
+
+    ``payload`` is an ``unknown_account`` item of :func:`_import_table`
+    (``mapping_id``, ``group``, ``spec_digest``); the digits are read again
+    from the stored table, so the item itself never carries them. None when
+    the mapping's spec changed since the item was raised
+    (:func:`group_item_current`).
+    """
+    group = payload.get("group")
+    if not isinstance(group, int):
+        return None
+    spec = _item_spec(db, document, payload)
+    result = _stored_result(document)
+    if spec is None or result is None or not result.tables:
+        return None
+    return group_last4(result.tables[0], spec, group)
+
+
+def activity_table(result: ExtractResult) -> ActivityTable | None:
+    """Table 0 of a CSV/TSV/XLSX read as brokerage activity (None: it is not one).
+
+    Only a delimited or spreadsheet file's own table qualifies (never a
+    PDF's page table, nor a file that also carries statements).
+    """
+    if (
+        result.statements
+        or result.investments
+        or not result.tables
+        or result.kind not in ACTIVITY_TABLE_KINDS
+    ):
+        return None
+    return read_activity_table(result.tables[0])
+
+
+def stored_investments(document: Document) -> list[InvestmentStatement]:
+    """The investment statements an import of ``document`` reads, in the importer's order.
+
+    The stored ones (OFX, PDF), else those of a brokerage activity table, read
+    again from the stored table (they are never stored themselves).
+    """
+    result = _stored_result(document)
+    if result is None:
+        return []
+    if result.investments:
+        return list(result.investments)
+    found = activity_table(result)
+    return found.statements if found is not None else []
+
+
+def stored_investment_last4(document: Document, payload: dict[str, Any]) -> str | None:
+    """The last four digits of the investment statement an ``unknown_account`` item names.
+
+    ``payload`` is an item of ``statement_import`` (``investment``,
+    ``statement``); the digits are read again from the stored extraction, so
+    the item itself never carries them.
+    """
+    index = payload.get("statement")
+    if payload.get("investment") is not True or not isinstance(index, int):
+        return None
+    statements = stored_investments(document)
+    return statements[index].account.last4 if 0 <= index < len(statements) else None
+
+
+def _import_activity(
+    run: _Run, result: ExtractResult, activity: ActivityTable, *, account_id: uuid.UUID | None
+) -> None:
+    """Record what reading table 0 as brokerage activity did (module doc, precedence)."""
+    run.activity = activity
+    choice = choose_mapping(
+        run.db,
+        run.household_id,
+        result.tables[0],
+        account_id=account_id or run.document.account_id,
+        allowed=run.allowed,
+    )
+    if choice.mapping is not None:
+        run.mapping_bypassed = choice.mapping.id
+    elif choice.ambiguous:
+        run.mapping_bypassed = choice.ambiguous[0]
+    missed = activity.unknown_activity + activity.skipped
+    if not activity.statements:
+        run.review(
+            ReviewKind.UNPARSED,
+            {
+                "reason": "activity_unreadable",
+                "table": 0,
+                "parser": ACTIVITY_PARSER,
+                "unknown_activity": activity.unknown_activity,
+                "skipped_rows": activity.skipped,
+            },
+        )
+    elif missed:
+        run.review(
+            ReviewKind.LOW_CONFIDENCE_FIELD,
+            {
+                "reason": "lines_skipped",
+                "count": missed,
+                "unknown_activity": activity.unknown_activity,
+                "parser": ACTIVITY_PARSER,
+            },
+        )
+    dates = activity_dates(activity.statements)
+    if dates is not None and run.document.period_start is None:
+        run.document.period_start, run.document.period_end = dates
 
 
 def _open_items(db: Session, document: Document) -> int:
@@ -1038,13 +1523,15 @@ def import_extraction(
     *,
     mapping_id: uuid.UUID | None = None,
     account_id: uuid.UUID | None = None,
+    group: int | None = None,
     user_id: uuid.UUID | None = None,
 ) -> ImportResult:
     """Import the records of ``result`` for ``document`` (module doc, step 2).
 
     ``user_id`` is the person who asked for a re-run (else the uploader
     decides which accounts may be matched); ``mapping_id``/``account_id``
-    are their choices. Runs in the caller's transaction and RLS context.
+    are their choices, ``group`` the statement of a multi-account table
+    ``account_id`` is for. Runs in the caller's transaction and RLS context.
     """
     actor = user_id or document.uploaded_by
     # A PDF/image no parser read: its page table goes through the saved
@@ -1056,20 +1543,28 @@ def import_extraction(
         allowed=importable_account_ids(db, document.household_id, actor),
         user_id=user_id,
     )
+    statements: Sequence[InvestmentStatement] = result.investments
     if result.statements:
         _import_statements(run, result, account_id=account_id)
     elif result.tables:
-        _import_table(run, result, mapping_id=mapping_id, account_id=account_id)
+        # A brokerage activity export is investment activity, unless the
+        # person chose a (cash-ledger) mapping for this run (module doc).
+        activity = activity_table(result) if mapping_id is None else None
+        if activity is None:
+            _import_table(run, result, mapping_id=mapping_id, account_id=account_id, group=group)
+        else:
+            _import_activity(run, result, activity, account_id=account_id)
+            statements = activity.statements
     elif not result.investments:
         run.review(ReviewKind.UNPARSED, {"reason": "no_records"})
     investments: dict[str, Any] | None = None
-    if result.investments:
+    if statements:
         # Brokerage statements (app.domain.investments.statement_import);
         # their cash deposits/withdrawals are ledger rows committed here.
         done = import_investment_statements(
             db,
             document,
-            result.investments,
+            statements,
             allowed=run.allowed,
             review=run.review,
             commit_cash=lambda statement, account: _commit_statement(
@@ -1137,6 +1632,7 @@ def request_apply(
         document_id=document.id,
         mapping_id=data.mapping_id,
         account_id=data.account_id,
+        group=data.group,
         requested_by=principal.user_id,
     )
     job_id = enqueue(db, APPLY_MAPPING_JOB_TYPE, payload, household_id=household_id)
@@ -1178,6 +1674,7 @@ def run_apply_job(
         result,
         mapping_id=payload.mapping_id,
         account_id=payload.account_id,
+        group=payload.group,
         user_id=payload.requested_by,
     )
     now = clock.utcnow()
@@ -1276,6 +1773,12 @@ def _preview_statement(index: int, statement: Any, offset: int, limit: int) -> P
     )
 
 
+def _suggestion_out(suggestion: MappingSuggestion) -> MappingSuggestionOut:
+    facts = suggestion.summary()
+    del facts["skip_rows"]  # in the spec
+    return MappingSuggestionOut.model_validate({**facts, "spec": suggestion.spec})
+
+
 def preview(
     db: Session,
     principal: Principal,
@@ -1291,7 +1794,7 @@ def preview(
     tables = result.tables if result is not None else []
     statements = result.statements if result is not None else []
     matched: uuid.UUID | None = None
-    suggested: MappingSpec | None = None
+    suggested: MappingSuggestion | None = None
     if tables:
         choice = choose_mapping(
             db,
@@ -1302,7 +1805,7 @@ def preview(
             visible=_visible(principal),
         )
         matched = choice.mapping.id if choice.mapping is not None else None
-        suggested = suggest_spec(tables[0])
+        suggested = suggest_mapping(tables[0])
     return ImportPreview(
         document_id=document.id,
         status=document.status,
@@ -1312,6 +1815,7 @@ def preview(
         statements=[_preview_statement(i, s, offset, limit) for i, s in enumerate(statements)],
         warnings=list(result.warnings) if result is not None else [],
         matched_mapping_id=matched,
-        suggested_spec=suggested,
+        suggested_spec=suggested.spec if suggested is not None else None,
+        suggestion=_suggestion_out(suggested) if suggested is not None else None,
         last_import=repo.last_import_log(db, household_id, document.id),
     )

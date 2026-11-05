@@ -4238,11 +4238,17 @@ export interface components {
          *     the one whose fingerprint matches); ``account_id`` names the account to
          *     import into (else the document's, the mapping's or, for OFX/QFX/QIF, the
          *     account matched by its last four digits). The caller must be able to
-         *     edit the target account.
+         *     edit the target account. ``group`` (with ``account_id``) names the
+         *     statement of a multi-account table the account is for (an
+         *     ``unknown_account`` item's ``group``); without it a chosen account takes
+         *     only the statements with its own last four digits, or the one statement
+         *     no account matched.
          */
         ApplyMapping: {
             /** Account Id */
             account_id?: string | null;
+            /** Group */
+            group?: number | null;
             /** Mapping Id */
             mapping_id?: string | null;
         };
@@ -6287,6 +6293,7 @@ export interface components {
             statements: components["schemas"]["PreviewStatement"][];
             status: components["schemas"]["DocumentStatus"];
             suggested_spec: components["schemas"]["MappingSpec"] | null;
+            suggestion: components["schemas"]["MappingSuggestionOut"] | null;
             /** Tables */
             tables: components["schemas"]["PreviewTable"][];
             /** Warnings */
@@ -6953,6 +6960,8 @@ export interface components {
          * @description How to read one delimited layout (module doc).
          */
         MappingSpec: {
+            /** Account Column */
+            account_column?: number | null;
             /** Amount Column */
             amount_column?: number | null;
             /** Balance Column */
@@ -7004,6 +7013,40 @@ export interface components {
              * @constant
              */
             version: 1;
+        };
+        /**
+         * MappingSuggestionOut
+         * @description The deterministic mapping guess and how far it can be trusted.
+         *
+         *     ``confident`` (no ``doubts``) is what the importer needs to import a
+         *     never-seen CSV/TSV layout without asking (INGESTION.md "Parse");
+         *     ``doubts`` are codes: ``header_not_exact``, ``rows_unreadable``,
+         *     ``date_order_guessed``, ``no_rows``, ``indicator_values_unknown`` (an
+         *     indicator cell that is no direction word, or a signed amount beside
+         *     it). ``sign_evidence`` is
+         *     ``debit_credit``, ``indicator``, ``balance`` or null (a signed amount
+         *     column read as "positive is money in" on trust).
+         */
+        MappingSuggestionOut: {
+            /** Accounts */
+            accounts: number;
+            /** Confident */
+            confident: boolean;
+            /** Doubts */
+            doubts: string[];
+            /** Failed Rows */
+            failed_rows: number;
+            /** Footer Rows */
+            footer_rows: number;
+            /** Parsed Rows */
+            parsed_rows: number;
+            /** Roles */
+            roles: components["schemas"]["SuggestionRole"][];
+            /** Score */
+            score: number;
+            /** Sign Evidence */
+            sign_evidence: ("debit_credit" | "indicator" | "balance") | null;
+            spec: components["schemas"]["MappingSpec"];
         };
         /**
          * MappingUpdate
@@ -9354,6 +9397,26 @@ export interface components {
             category_id?: string | null;
             /** Splits */
             splits: components["schemas"]["SplitIn"][];
+        };
+        /**
+         * SuggestionRole
+         * @description Why the suggestion gave a column a role (no cell text).
+         */
+        SuggestionRole: {
+            /** Column */
+            column: number;
+            /** Fit */
+            fit: number;
+            /**
+             * Match
+             * @enum {string}
+             */
+            match: "exact" | "word" | "substring";
+            /**
+             * Role
+             * @enum {string}
+             */
+            role: "date" | "amount" | "debit" | "credit" | "indicator" | "balance" | "currency" | "account" | "payee" | "memo";
         };
         /** SummaryCategory */
         SummaryCategory: {

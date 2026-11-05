@@ -27,6 +27,7 @@ import {
   duplicateResolution,
   listReviewItems,
   payloadIds,
+  payloadNumber,
   payloadString,
   payloadSuggestions,
   receiptResolution,
@@ -314,7 +315,14 @@ export function ReviewItemCard({ item }: { item: ReviewItem }) {
         ) : null}
         {item.kind === "unknown_account" ? (
           <>
-            <p>PerFin could not tell which account this file belongs to.</p>
+            {payloadNumber(item, "group") === null ? (
+              <p>PerFin could not tell which account this file belongs to.</p>
+            ) : (
+              <p>
+                This file lists several accounts. PerFin could not tell which of yours holds{" "}
+                {String(payloadNumber(item, "transactions") ?? 0)} of its transactions.
+              </p>
+            )}
             {actionable ? (
               <>
                 <Field label="Account for this file">

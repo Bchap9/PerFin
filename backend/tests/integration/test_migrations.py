@@ -28,7 +28,9 @@ run as the owner, exactly like ``perfin migrate`` in production, and then:
   removes exactly those tables and the ``ai_mode``/``ai_transport`` types;
 * 0007 (Phase 7) creates ``notification_channel`` under forced RLS, and its
   downgrade removes exactly that table and the ``notification_channel_type``
-  enum type.
+  enum type;
+* 0008 adds ``import_mapping.sign_unverified`` (false for existing rows), and
+  its downgrade removes exactly that column.
 """
 
 from __future__ import annotations
@@ -330,6 +332,7 @@ def test_single_head_and_linear_history() -> None:
     assert script.get_base() == "0001"
     # One revision per phase, each on top of the previous one.
     assert [rev.revision for rev in script.walk_revisions("base", "heads")] == [
+        "0008",
         "0007",
         "0006",
         "0005",
@@ -344,6 +347,7 @@ def test_single_head_and_linear_history() -> None:
     assert script.get_revision("0005").down_revision == "0004"
     assert script.get_revision("0006").down_revision == "0005"
     assert script.get_revision("0007").down_revision == "0006"
+    assert script.get_revision("0008").down_revision == "0007"
 
 
 def test_upgrade_head_matches_models_without_drift(migrated: Scratch) -> None:
@@ -1516,6 +1520,53 @@ def test_downgrade_0007_leaves_phase6b_and_upgrades_again(migrated: Scratch) -> 
         command.check(cfg)
         assert _public_tables(engine) >= PHASE7_TABLES
         assert _db_enum_labels(engine) == _model_enum_labels()
+    finally:
+        engine.dispose()
+
+
+def _mapping_columns(engine: Engine) -> set[str]:
+    with engine.connect() as conn:
+        rows = conn.execute(
+            text(
+                "SELECT column_name FROM information_schema.columns "
+                "WHERE table_schema = 'public' AND table_name = 'import_mapping'"
+            )
+        ).scalars()
+        return {str(r) for r in rows}
+
+
+def test_downgrade_0008_removes_only_the_mapping_sign_column(migrated: Scratch) -> None:
+    """0008 adds ``import_mapping.sign_unverified``, false for rows that predate it."""
+    cfg = migrated.config()
+    engine = migrated.owner_engine()
+    household, mapping = uuid.uuid4(), uuid.uuid4()
+    try:
+        assert "sign_unverified" in _mapping_columns(engine)
+        command.downgrade(cfg, "0007")
+        assert "sign_unverified" not in _mapping_columns(engine)
+        tables = _public_tables(engine)
+        with engine.begin() as conn:
+            set_context(conn, household)
+            conn.execute(
+                text("INSERT INTO household (id, name) VALUES (:id, 'Synthetic')"),
+                {"id": household},
+            )
+            conn.execute(
+                text(
+                    "INSERT INTO import_mapping (id, household_id, name, header_fingerprint, "
+                    "spec) VALUES (:id, :h, 'Synthetic layout', :f, '{}'::jsonb)"
+                ),
+                {"id": mapping, "h": household, "f": "0" * 64},
+            )
+        command.upgrade(cfg, "head")
+        command.check(cfg)
+        assert _public_tables(engine) == tables
+        with engine.begin() as conn:
+            set_context(conn, household)
+            flag = conn.execute(
+                text("SELECT sign_unverified FROM import_mapping WHERE id = :id"), {"id": mapping}
+            ).scalar_one()
+        assert flag is False
     finally:
         engine.dispose()
 

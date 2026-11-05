@@ -206,7 +206,26 @@ def _binary_type(head: bytes) -> FileType | None:
     return None
 
 
+def _rows_then_notes(counts: list[int]) -> bool:
+    """Rows of three columns or more followed only by notes (``counts``: delimiters per line).
+
+    A brokerage export ends a few rows with disclaimer paragraphs and a
+    "Date downloaded" line whose delimiters (none, or the commas of a quoted
+    sentence) are not the table's. The first line sets the row shape; the
+    lines of that shape must be a leading block of most lines, two at least,
+    and every other line must come after it.
+    """
+    first = counts[0]
+    if first < 2:
+        return False
+    tolerance = max(2, first // 2)
+    rows = [abs(c - first) <= tolerance for c in counts]
+    block = rows.index(False) if False in rows else len(rows)
+    return block >= max(2, (len(counts) + 1) // 2) and not any(rows[block:])
+
+
 def _delimited_type(text: bytes, *, window_full: bool) -> FileType:
+    """CSV/TSV when most of the first non-empty lines carry the same delimiter count."""
     lines = text.splitlines()
     if window_full and len(lines) > 1:
         lines = lines[:-1]  # the last line may be cut by the window
@@ -217,6 +236,8 @@ def _delimited_type(text: bytes, *, window_full: bool) -> FileType:
         counts = [line.count(delimiter) for line in lines]
         # Quoted fields may hold the delimiter, so allow a little variation.
         if min(counts) >= 1 and max(counts) - min(counts) <= max(2, min(counts) // 2):
+            return file_type
+        if _rows_then_notes(counts):
             return file_type
     return FileType.TEXT
 

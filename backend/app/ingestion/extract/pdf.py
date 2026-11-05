@@ -251,7 +251,11 @@ def _ruling_tables(page: Any, words: list[RawWord]) -> list[LayoutTable]:
     if not _has_rulings(page):
         return tables
     try:
-        found = page.find_tables(strategy="lines_strict")
+        # use_layout=False: PyMuPDF 2.x otherwise gates the ruled tables with
+        # its neural layout model, loading onnxruntime into the sandbox (a
+        # large native runtime parsing nothing but untrusted pages, whose
+        # thread pool makes calls the seccomp allowlist refuses at random).
+        found = page.find_tables(strategy="lines_strict", use_layout=False)
         candidates = list(found.tables)[:50]
     except (RuntimeError, ValueError, ZeroDivisionError, IndexError):
         return tables

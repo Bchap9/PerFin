@@ -35,21 +35,43 @@ from app.domain.documents.blobstore import LocalFSBlobStore
 from app.domain.documents.models import (
     Document,
     DocumentStatus,
+    IngestJob,
+    IngestStage,
     ReviewItem,
     ReviewItemState,
     ReviewKind,
 )
 from app.domain.documents.schemas import INGEST_JOB_TYPE
-from app.domain.imports.schemas import APPLY_MAPPING_JOB_TYPE
+from app.domain.imports import service as imports_service
+from app.domain.imports.models import ImportMapping
+from app.domain.imports.schemas import APPLY_MAPPING_JOB_TYPE, MappingSpec
 from app.domain.transactions.models import ReviewState, Transaction, TransactionSplit
 from app.domain.transactions.schemas import AUTO_PAIR_JOB_TYPE
 from app.ingestion import pipeline
+from app.ingestion.extract.delimited import extract_delimited
 from app.ingestion.intake.upload import receive_upload
+from app.ingestion.sandbox.protocol import ExtractOptions
 from app.workers.handlers import ingest
 from tests.fixtures.factories import Factories, UserRecord, without_ids
 from tests.fixtures.households import Actors, problem_type
-from tests.fixtures.imports import make_import_mapping, run_jobs
+from tests.fixtures.imports import (
+    make_extracted_document,
+    make_import_mapping,
+    run_jobs,
+    table_result,
+)
 from tests.fixtures.ledger import LedgerFactories, make_category, make_rule
+from tests.fixtures.synth_activity_csv import (
+    LEDGER_HEADER,
+    ActivityAccount,
+    ActivityRow,
+    activity_accounts,
+    activity_csv_bytes,
+    activity_rows,
+)
+from tests.fixtures.synth_activity_csv import (
+    SPEC as ACTIVITY_SPEC,
+)
 from tests.fixtures.synth_statements import (
     INSTITUTIONS,
     LAYOUTS,
@@ -336,7 +358,12 @@ def test_qif_import_uses_the_upload_account_categories_and_splits(env: Env) -> N
 
 
 @pytest.mark.parametrize("layout", sorted(LAYOUTS))
-def test_csv_layouts_import_with_a_saved_mapping(env: Env, layout: str) -> None:
+def test_csv_layouts_import_with_a_saved_mapping(
+    env: Env, layout: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # The mapping-editor path: importing confident suggestions on their own
+    # is switched off here (tested below).
+    monkeypatch.setattr(imports_service, "AUTO_MAPPING_KINDS", frozenset())
     history = synth_ledger(24, days=59)
     stmt = layout_statement(
         statement(history, date(2026, 1, 1), date(2026, 1, 31), seed=24), layout
@@ -602,3 +629,546 @@ def _household(env: Env) -> Household:
     household = env.owner.household
     assert household is not None
     return household
+
+
+# ---------------------------------------------------------------------------
+# Never-seen layouts: confident suggestions, multi-account files
+# ---------------------------------------------------------------------------
+
+
+def _mappings(env: Env) -> list[ImportMapping]:
+    for db in env.db():
+        rows = list(db.execute(select(ImportMapping).order_by(ImportMapping.created_at)).scalars())
+        db.expunge_all()
+        return rows
+    raise AssertionError  # pragma: no cover
+
+
+def _trail(env: Env) -> str:
+    """Every audit row, event and ingest log of the household, as text."""
+    for db in env.db():
+        audits = [without_ids(a.after) for a in db.execute(select(AuditLog)).scalars()]
+        events = [without_ids(e.payload) for e in db.execute(select(Event)).scalars()]
+        logs = [
+            without_ids(j.log) for j in db.execute(select(IngestJob)).scalars() if j.log is not None
+        ]
+        return str([audits, events, logs])
+    raise AssertionError  # pragma: no cover
+
+
+@pytest.mark.parametrize("layout", sorted(LAYOUTS))
+def test_confident_layouts_import_on_their_own_and_save_the_mapping(env: Env, layout: str) -> None:
+    history = synth_ledger(25, days=59)
+    stmt = layout_statement(
+        statement(history, date(2026, 1, 1), date(2026, 1, 31), seed=25), layout
+    )
+    # Purchases-positive card exports have nothing that proves the sign: on a
+    # card account the suggestion waits for a person.
+    card = layout == "card_positive_purchases"
+    account = env.ledger.account(
+        env.household_id,
+        currency=stmt.currency,
+        type=AccountType.CREDIT_CARD if card else AccountType.CHECKING,
+    )
+    first = env.ingest(csv_bytes(stmt, layout), account=account, name=f"{layout}.csv")
+    document = env.document(first)
+    if card:
+        assert document.status is DocumentStatus.NEEDS_REVIEW
+        (item,) = env.open_reviews(first)
+        assert item.payload["reason"] == "mapping_required"
+        assert item.payload["auto_import"] == "sign_unverified"
+        assert item.payload["suggestion"]["confident"] is True
+        assert item.payload["suggestion"]["sign_evidence"] is None
+        assert item.payload["suggested_spec"]["date_column"] == 1  # Post Date
+        assert env.transactions(account) == []
+        assert _mappings(env) == []
+        return
+    assert document.status is DocumentStatus.PROCESSED, env.open_reviews(first)
+    assert _amounts(env.transactions(account)) == _expected(stmt)
+    (mapping,) = _mappings(env)
+    assert mapping.created_by == env.owner.user.id
+    assert mapping.name.startswith(LAYOUTS[layout].header[0])
+    assert mapping.spec == {
+        **json_spec(LAYOUTS[layout].spec),
+        "account_column": None,
+    }
+    with Actors.open(env.settings, env.factories) as actors:
+        owner = actors.login(env.owner)
+        last = owner.get(f"{API}/imports/{first}/preview").json()["last_import"]
+        assert last["mapping_suggested"] is True
+        assert last["mapping_id"] == str(mapping.id)
+    for db in env.db():
+        created = db.execute(
+            select(AuditLog).where(AuditLog.action == "import_mapping.create")
+        ).scalar_one()
+        assert created.after is not None
+        assert created.after["origin"] == "suggested"
+        assert created.user_id == env.owner.user.id
+        assert "name" not in created.after  # names are not in the trail
+    # The next file of the layout is recognised by its saved mapping.
+    later = layout_statement(
+        statement(history, date(2026, 2, 1), date(2026, 2, 28), seed=25), layout
+    )
+    second = env.ingest(csv_bytes(later, layout), account=account)
+    assert env.document(second).status is DocumentStatus.PROCESSED
+    assert len(_mappings(env)) == 1
+    for db in env.db():
+        log = db.execute(
+            select(IngestJob.log).where(
+                IngestJob.document_id == second, IngestJob.stage == IngestStage.PARSE
+            )
+        ).scalar_one()
+        assert log["mapping_suggested"] is False
+        assert log["mapping_id"] == str(mapping.id)
+
+
+def json_spec(fields: dict[str, Any]) -> dict[str, Any]:
+    return MappingSpec.model_validate(fields).model_dump(mode="json")
+
+
+def _activity(
+    env: Env, seed: int, accounts: tuple[ActivityAccount, ...], **kwargs: Any
+) -> tuple[list[ActivityRow], bytes]:
+    rows = activity_rows(seed, accounts, **kwargs)
+    # The cash-ledger layout (no action column): a brokerage activity table
+    # goes to the investments importer instead (test_activity_table_import.py).
+    return rows, activity_csv_bytes(rows, header=LEDGER_HEADER)
+
+
+def _cash(rows: list[ActivityRow], account: ActivityAccount) -> list[tuple[date, Decimal]]:
+    return sorted(
+        (r.run_date, r.amount) for r in rows if r.account == account and r.amount is not None
+    )
+
+
+def test_two_account_activity_csv_lands_on_each_account(env: Env) -> None:
+    individual, roth = activity_accounts(41)
+    rows, data = _activity(env, 41, (individual, roth))
+    brokerage = env.ledger.account(
+        env.household_id, type=AccountType.BROKERAGE, number_last4=individual.last4
+    )
+    retirement = env.ledger.account(
+        env.household_id, type=AccountType.RETIREMENT, number_last4=roth.last4
+    )
+    document_id = env.ingest(data, name="activity.csv")
+    document = env.document(document_id)
+    assert document.status is DocumentStatus.PROCESSED, env.open_reviews(document_id)
+    assert document.account_id is None  # two accounts: the document names neither
+    assert _amounts(env.transactions(brokerage)) == _cash(rows, individual)
+    assert _amounts(env.transactions(retirement)) == _cash(rows, roth)
+    payees = {t.raw_payee for t in env.transactions(brokerage)}
+    assert "SYNTHETIC ADVISORY FEE" in payees or "No Description" in payees
+    (mapping,) = _mappings(env)
+    assert mapping.spec["account_column"] == ACTIVITY_SPEC["account_column"]
+    assert mapping.spec["currency_column"] == ACTIVITY_SPEC["currency_column"]
+    assert mapping.spec["date_column"] == ACTIVITY_SPEC["date_column"]
+    # The disclaimers and "Date downloaded" line are note rows: not imported,
+    # not a review item either.
+    assert env.open_reviews(document_id) == []
+    # Account numbers never reach the trail, not even the last four digits.
+    trail = _trail(env)
+    for account in (individual, roth):
+        assert account.number not in trail
+        assert account.last4 not in trail
+    # A second export with newer rows goes through the saved mapping.
+    newer, data = _activity(env, 42, (individual, roth), start=date(2026, 10, 31), days=12)
+    second = env.ingest(data, name="activity-2.csv")
+    assert env.document(second).status is DocumentStatus.PROCESSED
+    assert len(_mappings(env)) == 1
+    assert _amounts(env.transactions(brokerage)) == sorted(
+        _cash(rows, individual) + _cash(newer, individual)
+    )
+
+
+def test_unknown_account_of_an_activity_csv_waits_per_group(env: Env) -> None:
+    individual, roth = activity_accounts(43)
+    rows, data = _activity(env, 43, (individual, roth))
+    brokerage = env.ledger.account(
+        env.household_id, type=AccountType.BROKERAGE, number_last4=individual.last4
+    )
+    retirement = env.ledger.account(env.household_id, type=AccountType.RETIREMENT)
+    document_id = env.ingest(data, name="activity.csv")
+    assert env.document(document_id).status is DocumentStatus.NEEDS_REVIEW
+    assert _amounts(env.transactions(brokerage)) == _cash(rows, individual)
+    (item,) = env.open_reviews(document_id)
+    assert item.kind is ReviewKind.UNKNOWN_ACCOUNT
+    assert item.payload["reason"] == "account_not_found"
+    first_group = 0 if rows[0].account == roth else 1
+    assert item.payload["group"] == first_group
+    assert item.payload["transactions"] == len(_cash(rows, roth))
+    assert roth.last4 not in str(without_ids(item.payload))
+    with Actors.open(env.settings, env.factories) as actors:
+        owner = actors.login(env.owner)
+        detail = owner.get(f"{API}/review/{item.id}").json()
+        ranked = [a["value"] for a in detail["alternatives"] if a["field"] == "account_id"]
+        assert retirement.id is not None
+        assert str(retirement.id) in ranked
+        resolved = owner.post(
+            f"{API}/review/{item.id}/resolve",
+            json={"kind": "unknown_account", "account_id": str(retirement.id), "remember": True},
+        )
+        assert resolved.status_code == 200, resolved.text
+        assert resolved.json()["resolution"]["remembered"] == ["last4"]
+    for db in env.db():
+        remembered = db.get(Account, retirement.id)
+        assert remembered is not None
+        assert remembered.number_last4 == roth.last4
+        (mapping,) = db.execute(select(ImportMapping)).scalars()
+        assert mapping.account_id is None  # the mapping serves both accounts
+    env.run(APPLY_MAPPING_JOB_TYPE)
+    assert env.document(document_id).status is DocumentStatus.PROCESSED
+    assert _amounts(env.transactions(retirement)) == _cash(rows, roth)
+    assert _amounts(env.transactions(brokerage)) == _cash(rows, individual)  # not twice
+
+
+def test_member_activity_csv_only_reaches_accounts_they_edit(env: Env) -> None:
+    individual, roth = activity_accounts(44)
+    rows, data = _activity(env, 44, (individual, roth))
+    member = env.factories.user(role="member", with_totp=True, household=_household(env))
+    mine = env.ledger.account(
+        env.household_id, type=AccountType.BROKERAGE, number_last4=individual.last4
+    )
+    hidden = env.ledger.account(
+        env.household_id, type=AccountType.RETIREMENT, number_last4=roth.last4
+    )
+    env.ledger.grant(env.household_id, member.user.id, mine, GrantLevel.EDIT)
+    document_id = env.ingest(data, as_user=member, name="activity.csv")
+    assert _amounts(env.transactions(mine)) == _cash(rows, individual)
+    assert env.transactions(hidden) == []
+    (item,) = env.open_reviews(document_id)
+    assert item.payload["reason"] == "account_not_found"
+    assert item.payload["candidates"] == []  # the hidden account is not named
+    (mapping,) = _mappings(env)
+    assert mapping.created_by == member.user.id
+
+
+def test_unsure_suggestion_waits_with_the_suggestion(env: Env) -> None:
+    individual, roth = activity_accounts(45)
+    rows = activity_rows(45, (individual, roth))
+    # A row in the middle without a cash amount (a share transfer): the
+    # suggestion cannot read every row, so a person decides.
+    middle = len(rows) // 2
+    rows[middle] = ActivityRow(
+        rows[middle].run_date,
+        rows[middle].account,
+        "TRANSFERRED FROM SYNTHETIC GROWTH INDEX ETF (SGRX) (Cash)",
+        "SGRX",
+        "SYNTHETIC GROWTH INDEX ETF",
+        None,
+        Decimal(3),
+        None,
+        None,
+    )
+    env.ledger.account(env.household_id, type=AccountType.BROKERAGE, number_last4=individual.last4)
+    document_id = env.ingest(activity_csv_bytes(rows, header=LEDGER_HEADER), name="activity.csv")
+    (item,) = env.open_reviews(document_id)
+    assert item.kind is ReviewKind.UNPARSED
+    assert item.payload["reason"] == "mapping_required"
+    assert item.payload["auto_import"] == "not_confident"
+    assert item.payload["suggestion"]["doubts"] == ["rows_unreadable"]
+    assert item.payload["suggestion"]["failed_rows"] == 1
+    assert _mappings(env) == []
+    with Actors.open(env.settings, env.factories) as actors:
+        owner = actors.login(env.owner)
+        preview = owner.get(f"{API}/imports/{document_id}/preview").json()
+    # The review item and the preview carry the same suggestion.
+    assert preview["suggested_spec"] == item.payload["suggested_spec"]
+    assert preview["suggestion"]["spec"] == item.payload["suggested_spec"]
+    assert preview["suggestion"]["confident"] is False
+    assert preview["suggestion"]["doubts"] == ["rows_unreadable"]
+    assert preview["suggested_spec"]["account_column"] == ACTIVITY_SPEC["account_column"]
+    roles = {r["role"]: r["column"] for r in preview["suggestion"]["roles"]}
+    assert roles["account"] == ACTIVITY_SPEC["account_column"]
+    assert "indicator" not in roles
+
+
+def test_mapping_stored_before_account_column_still_imports(env: Env) -> None:
+    stmt = sample_statement(46)
+    account = env.ledger.account(env.household_id)
+    old_spec = dict(LAYOUTS["us_signed"].spec)  # no "account_column" key at all
+    with env.factories.transaction() as db:
+        set_context(db, env.household_id)
+        mapping = make_import_mapping(
+            db, env.household_id, spec=old_spec, rows=[list(LAYOUTS["us_signed"].header)]
+        )
+        mapping.spec = {**json_spec(old_spec)}
+        del mapping.spec["account_column"]
+        db.flush()
+        mapping_id = mapping.id
+    document_id = env.ingest(csv_bytes(stmt, "us_signed"), account=account)
+    assert env.document(document_id).status is DocumentStatus.PROCESSED
+    assert _amounts(env.transactions(account)) == _expected(stmt)
+    assert [m.id for m in _mappings(env)] == [mapping_id]
+    with Actors.open(env.settings, env.factories) as actors:
+        owner = actors.login(env.owner)
+        shown = owner.get(f"{API}/imports/mappings/{mapping_id}").json()
+        assert shown["spec"]["account_column"] is None
+        assert shown["use_count"] == 1
+
+
+@pytest.mark.parametrize(
+    ("kind", "uploader", "held"),
+    [("csv", False, "no_member"), ("pdf", True, "not_delimited"), ("csv", True, None)],
+)
+def test_who_and_what_may_be_mapped_without_a_person(
+    env: Env, kind: str, uploader: bool, held: str | None
+) -> None:
+    """Intake without a person (drop folder, mail) and PDF page tables always wait."""
+    individual, roth = activity_accounts(47)
+    rows = activity_rows(47, (individual, roth))
+    data = activity_csv_bytes(rows, header=LEDGER_HEADER)
+    cells = extract_delimited(data, ExtractOptions(), "csv").tables[0].rows
+    result = table_result(cells, kind=kind)
+    brokerage = env.ledger.account(
+        env.household_id, type=AccountType.BROKERAGE, number_last4=individual.last4
+    )
+    for db in env.db():
+        document = make_extracted_document(
+            db,
+            env.household_id,
+            result=result,
+            uploaded_by=env.owner.user.id if uploader else None,
+        )
+        outcome = imports_service.import_extraction(db, document, result)
+        assert outcome.summary["mapping_suggested"] is (held is None)
+        items = list(
+            db.execute(select(ReviewItem).where(ReviewItem.document_id == document.id)).scalars()
+        )
+        if held is None:
+            assert outcome.status is DocumentStatus.NEEDS_REVIEW  # the unknown Roth IRA
+            assert [i.payload["reason"] for i in items] == ["account_not_found"]
+        else:
+            (item,) = items
+            assert item.payload["reason"] == "mapping_required"
+            assert item.payload["auto_import"] == held
+            assert item.payload["suggestion"]["confident"] is True
+    expected = _cash(rows, individual) if held is None else []
+    assert _amounts(env.transactions(brokerage)) == expected
+    assert len(_mappings(env)) == (1 if held is None else 0)
+
+
+# ---------------------------------------------------------------------------
+# Review fixes: choices that must not reach further than the item they answer
+# ---------------------------------------------------------------------------
+
+
+def _resolve(env: Env, item: ReviewItem, account: Account, *, remember: bool) -> Any:
+    with Actors.open(env.settings, env.factories) as actors:
+        owner = actors.login(env.owner)
+        return owner.post(
+            f"{API}/review/{item.id}/resolve",
+            json={"kind": "unknown_account", "account_id": str(account.id), "remember": remember},
+        )
+
+
+@pytest.mark.parametrize("remember", [True, False])
+def test_an_account_chosen_for_one_group_takes_only_that_group(env: Env, remember: bool) -> None:
+    known, first, second = activity_accounts(51, 3)
+    rows, data = _activity(env, 51, (known, first, second))
+    brokerage = env.ledger.account(
+        env.household_id, type=AccountType.BROKERAGE, number_last4=known.last4
+    )
+    chosen = env.ledger.account(env.household_id, type=AccountType.RETIREMENT)
+    document_id = env.ingest(data, name="activity.csv")
+    items = env.open_reviews(document_id)
+    assert [i.payload["reason"] for i in items] == ["account_not_found"] * 2
+    assert all(isinstance(i.payload["spec_digest"], str) for i in items)
+    groups = {i.payload["group"]: i for i in items}
+    order = [r.account for r in rows if r.account != known and r.amount is not None]
+    # The item of the group of ``first`` (groups are numbered by first appearance).
+    numbered = list(dict.fromkeys(r.account for r in rows if r.amount is not None))
+    item = groups[numbered.index(first)]
+    assert first in order
+    assert second in order
+    resolved = _resolve(env, item, chosen, remember=remember)
+    assert resolved.status_code == 200, resolved.text
+    env.run(APPLY_MAPPING_JOB_TYPE)
+    assert _amounts(env.transactions(chosen)) == _cash(rows, first)
+    assert _amounts(env.transactions(brokerage)) == _cash(rows, known)
+    # The other unmatched group still waits for its own choice.
+    (left,) = env.open_reviews(document_id)
+    assert left.kind is ReviewKind.UNKNOWN_ACCOUNT
+    assert left.payload["group"] == numbered.index(second)
+    assert env.document(document_id).status is DocumentStatus.NEEDS_REVIEW
+
+
+def test_apply_with_an_account_and_no_group_takes_only_its_own_digits(env: Env) -> None:
+    known, first, second = activity_accounts(52, 3)
+    rows, data = _activity(env, 52, (known, first, second))
+    env.ledger.account(env.household_id, type=AccountType.BROKERAGE, number_last4=known.last4)
+    document_id = env.ingest(data, name="activity.csv")
+    assert len(env.open_reviews(document_id)) == 2
+
+    def apply(account: Account) -> None:
+        with Actors.open(env.settings, env.factories) as actors:
+            owner = actors.login(env.owner)
+            accepted = owner.post(
+                f"{API}/imports/{document_id}/apply-mapping",
+                json={"account_id": str(account.id)},
+            )
+            assert accepted.status_code == 202, accepted.text
+        env.run(APPLY_MAPPING_JOB_TYPE)
+
+    with Actors.open(env.settings, env.factories) as actors:
+        owner = actors.login(env.owner)
+        refused = owner.post(f"{API}/imports/{document_id}/apply-mapping", json={"group": 0})
+        assert refused.status_code == 422
+    # Two groups match nothing: neither lands on an account without their number.
+    unnumbered = env.ledger.account(env.household_id, type=AccountType.RETIREMENT)
+    apply(unnumbered)
+    assert env.transactions(unnumbered) == []
+    assert len(env.open_reviews(document_id)) == 2
+    # An account with one group's digits takes that group only.
+    numbered = env.ledger.account(
+        env.household_id, type=AccountType.RETIREMENT, number_last4=second.last4
+    )
+    apply(numbered)
+    assert _amounts(env.transactions(numbered)) == _cash(rows, second)
+    (left,) = env.open_reviews(document_id)
+    assert left.payload["reason"] == "account_not_found"
+    # Now one group is left unmatched: the chosen account takes it.
+    apply(unnumbered)
+    assert _amounts(env.transactions(unnumbered)) == _cash(rows, first)
+    assert env.open_reviews(document_id) == []
+
+
+def test_a_group_item_raised_under_another_spec_is_stale(env: Env) -> None:
+    known, other = activity_accounts(53)
+    _, data = _activity(env, 53, (known, other))
+    env.ledger.account(env.household_id, type=AccountType.BROKERAGE, number_last4=known.last4)
+    chosen = env.ledger.account(env.household_id, type=AccountType.RETIREMENT)
+    document_id = env.ingest(data, name="activity.csv")
+    (item,) = env.open_reviews(document_id)
+    (mapping,) = _mappings(env)
+    with Actors.open(env.settings, env.factories) as actors:
+        owner = actors.login(env.owner)
+        # Someone edits the mapping before the item is answered.
+        changed = owner.patch(
+            f"{API}/imports/mappings/{mapping.id}",
+            json={"spec": {**mapping.spec, "payee_column": None}},
+        )
+        assert changed.status_code == 200, changed.text
+    for db in env.db():
+        document = db.get(Document, document_id)
+        assert document is not None
+        assert imports_service.stored_group_last4(db, document, item.payload) is None
+        assert imports_service.group_item_current(db, document, item.payload) is False
+    response = _resolve(env, item, chosen, remember=True)
+    assert response.status_code == 409
+    assert problem_type(response) == "review-item-stale"
+    for db in env.db():
+        account = db.get(Account, chosen.id)
+        assert account is not None
+        assert account.number_last4 is None  # nothing remembered
+    assert env.transactions(chosen) == []
+
+
+def _card_upload(env: Env) -> tuple[SynthStatement, Account, uuid.UUID]:
+    history = synth_ledger(25, days=59)
+    stmt = layout_statement(
+        statement(history, date(2026, 1, 1), date(2026, 1, 31), seed=25),
+        "card_positive_purchases",
+    )
+    card = env.ledger.account(
+        env.household_id, currency=stmt.currency, type=AccountType.CREDIT_CARD
+    )
+    # No account named: the suggestion is saved, the account is asked for.
+    document_id = env.ingest(csv_bytes(stmt, "card_positive_purchases"), name="card.csv")
+    (item,) = env.open_reviews(document_id)
+    assert item.payload["reason"] == "account_required"
+    (mapping,) = _mappings(env)
+    assert mapping.sign_unverified is True
+    return stmt, card, document_id
+
+
+@pytest.mark.parametrize("remember", [True, False])
+def test_a_sign_read_on_trust_never_reaches_a_card_through_the_saved_mapping(
+    env: Env, remember: bool
+) -> None:
+    stmt, card, document_id = _card_upload(env)
+    (item,) = env.open_reviews(document_id)
+    resolved = _resolve(env, item, card, remember=remember)
+    assert resolved.status_code == 200, resolved.text
+    env.run(APPLY_MAPPING_JOB_TYPE)
+    assert env.transactions(card) == []
+    (held,) = env.open_reviews(document_id)
+    assert held.kind is ReviewKind.UNPARSED
+    assert held.payload["reason"] == "mapping_required"
+    assert held.payload["auto_import"] == "sign_unverified"
+    (mapping,) = _mappings(env)
+    assert mapping.account_id == (card.id if remember else None)
+    # Next month's file to the card waits the same way.
+    february = layout_statement(
+        statement(synth_ledger(25, days=59), date(2026, 2, 1), date(2026, 2, 28), seed=25),
+        "card_positive_purchases",
+    )
+    later = env.ingest(csv_bytes(february, "card_positive_purchases"), account=card, name="b.csv")
+    (again,) = env.open_reviews(later)
+    assert again.payload["auto_import"] == "sign_unverified"
+    # The person fixes the sign in the editor: the mapping is theirs now.
+    with Actors.open(env.settings, env.factories) as actors:
+        owner = actors.login(env.owner)
+        fixed = owner.patch(
+            f"{API}/imports/mappings/{mapping.id}",
+            json={"spec": {**mapping.spec, "sign": "outflow_positive"}},
+        )
+        assert fixed.status_code == 200, fixed.text
+        applied = owner.post(
+            f"{API}/review/{held.id}/resolve", json={"kind": "unparsed", "action": "apply_mapping"}
+        )
+        assert applied.status_code == 200, applied.text
+    env.run(APPLY_MAPPING_JOB_TYPE)
+    assert _amounts(env.transactions(card)) == _expected(stmt)
+    (mapping,) = _mappings(env)
+    assert mapping.sign_unverified is False
+
+
+def test_choosing_the_trust_only_mapping_explicitly_imports_with_it(env: Env) -> None:
+    stmt, card, document_id = _card_upload(env)
+    (mapping,) = _mappings(env)
+    with Actors.open(env.settings, env.factories) as actors:
+        owner = actors.login(env.owner)
+        accepted = owner.post(
+            f"{API}/imports/{document_id}/apply-mapping",
+            json={"mapping_id": str(mapping.id), "account_id": str(card.id)},
+        )
+        assert accepted.status_code == 202, accepted.text
+    env.run(APPLY_MAPPING_JOB_TYPE)
+    # The person's choice: the file's own sign, positive purchases as money in.
+    assert _amounts(env.transactions(card)) == sorted((d, -a) for d, a in _expected(stmt))
+
+
+def test_an_account_bound_mapping_wins_over_a_members_household_one(env: Env) -> None:
+    stmt = sample_statement(54)
+    owners = env.ledger.account(env.household_id, currency=stmt.currency)
+    member = env.factories.user(role="member", with_totp=True, household=_household(env))
+    mine = env.ledger.account(env.household_id, currency=stmt.currency)
+    env.ledger.grant(env.household_id, member.user.id, mine, GrantLevel.EDIT)
+    with env.factories.transaction() as db:
+        set_context(db, env.household_id)
+        bound = make_import_mapping(
+            db,
+            env.household_id,
+            spec=LAYOUTS["us_signed"].spec,
+            rows=[list(LAYOUTS["us_signed"].header)],
+            account=db.get(Account, owners.id),
+        )
+        bound_id = bound.id
+    # The member cannot see the owner's mapping: the suggestion is saved for them.
+    theirs = env.ingest(csv_bytes(stmt, "us_signed"), account=mine, as_user=member)
+    assert env.document(theirs).status is DocumentStatus.PROCESSED
+    assert len(_mappings(env)) == 2
+    # The owner's next file without an account still goes to the owner's account.
+    later = sample_statement(55)
+    document_id = env.ingest(csv_bytes(later, "us_signed"))
+    document = env.document(document_id)
+    assert document.status is DocumentStatus.PROCESSED, env.open_reviews(document_id)
+    assert document.account_id == owners.id
+    assert _amounts(env.transactions(owners)) == _expected(later)
+    for db in env.db():
+        log = db.execute(
+            select(IngestJob.log).where(
+                IngestJob.document_id == document_id, IngestJob.stage == IngestStage.PARSE
+            )
+        ).scalar_one()
+        assert log["mapping_id"] == str(bound_id)
