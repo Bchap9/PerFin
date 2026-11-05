@@ -34,6 +34,10 @@ What remains (details in docs/ROADMAP.md):
 
 ### Added
 
+- Pull request template (`.github/pull_request_template.md`) and a
+  `pr-template` CI workflow that fails a PR whose description drops a
+  template section, leaves Summary or How it was tested empty, or ticks no
+  Type of change box (`scripts/check_pr_body.py`). Dependabot PRs are exempt.
 - **Fidelity Investments statements** (PDF "Investment Report"): an
   institution parser (`fidelity_investments_statement`) and a shipped
   classifier fingerprint (`fidelity-investments-statement`, both

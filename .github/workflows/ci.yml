@@ -165,7 +165,7 @@ jobs:
       - name: mypy --strict
         run: |
           uv run mypy
-          uv run mypy --strict ../scripts/check_spdx.py ../scripts/release_notes.py ../scripts/seed_dev.py ../deploy/egress/egress_proxy.py
+          uv run mypy --strict ../scripts/check_spdx.py ../scripts/check_pr_body.py ../scripts/release_notes.py ../scripts/seed_dev.py ../deploy/egress/egress_proxy.py
       - name: Bandit
         run: uv run bandit -q -c pyproject.toml -r app ../scripts ../deploy/egress
       # `-n auto` counts physical cores and started a single worker on the
