@@ -154,6 +154,10 @@
   gap: var(--space-3);
 }
 
+.review-item > .ledger-stack > .btn {
+  align-self: flex-start;
+}
+
 .review-document {
   margin: 0;
   overflow-wrap: anywhere;
@@ -190,4 +194,27 @@
   .split-line {
     grid-template-columns: 1fr;
   }
+}
+
+/* A document's accounts (DocumentAccountsDialog). */
+.document-accounts {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.document-account {
+  border-bottom: 1px solid var(--color-border);
+  padding-bottom: var(--space-3);
+}
+
+.document-account__head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+  overflow-wrap: anywhere;
 }

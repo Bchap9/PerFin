@@ -1222,6 +1222,40 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/documents/{document_id}/accounts": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** The accounts a document names, matched or proposed (member or above) */
+        get: operations["get_document_accounts_api_v1_documents__document_id__accounts_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/documents/{document_id}/accounts/apply": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Use or create an account for each of a document's accounts and re-import (job) */
+        post: operations["post_document_accounts_api_v1_documents__document_id__accounts_apply_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/documents/{document_id}/download": {
         parameters: {
             query?: never;
@@ -3201,6 +3235,24 @@ export interface components {
             type: string;
         };
         /**
+         * AccountChoice
+         * @description Use an existing account (``account_id``) or create one (``create``), not both.
+         */
+        AccountChoice: {
+            /** Account Id */
+            account_id?: string | null;
+            create?: components["schemas"]["AccountCreate"] | null;
+            /** Index */
+            index: number;
+            /** Institution Name */
+            institution_name?: string | null;
+            /**
+             * Target
+             * @enum {string}
+             */
+            target: "statement" | "investment" | "group" | "table";
+        };
+        /**
          * AccountClose
          * @description ``POST /accounts/{id}/close``: the closing date (default today).
          */
@@ -3343,6 +3395,25 @@ export interface components {
             items: components["schemas"]["AccountOut"][];
             /** Next Cursor */
             next_cursor: string | null;
+        };
+        /**
+         * AccountProposal
+         * @description A new account ready to create for one of a document's accounts (editable).
+         */
+        AccountProposal: {
+            /** Currency */
+            currency: string | null;
+            /** Institution Name */
+            institution_name: string | null;
+            /** Name */
+            name: string;
+            /** Number Last4 */
+            number_last4: string | null;
+            /** Opening Balance */
+            opening_balance: string | null;
+            /** Opening Balance Date */
+            opening_balance_date: string | null;
+            type: components["schemas"]["AccountType"];
         };
         /**
          * AccountType
@@ -4249,6 +4320,8 @@ export interface components {
         ApplyMapping: {
             /** Account Id */
             account_id?: string | null;
+            /** Assignments */
+            assignments?: components["schemas"]["Assignment"][];
             /** Group */
             group?: number | null;
             /** Mapping Id */
@@ -4340,6 +4413,24 @@ export interface components {
             description?: string | null;
             kind?: components["schemas"]["AssetKind"] | null;
             valuation_method?: components["schemas"]["ValuationMethod"] | null;
+        };
+        /**
+         * Assignment
+         * @description One of a document's accounts and the PerFin account it is imported into.
+         */
+        Assignment: {
+            /**
+             * Account Id
+             * Format: uuid
+             */
+            account_id: string;
+            /** Index */
+            index: number;
+            /**
+             * Target
+             * @enum {string}
+             */
+            target: "statement" | "investment" | "group" | "table";
         };
         /**
          * AutoPairRequest
@@ -5409,6 +5500,81 @@ export interface components {
             unchanged: number;
             /** Updated */
             updated: number;
+        };
+        /**
+         * DetectedAccount
+         * @description One account a document names and what PerFin knows of it (``proposals`` module doc).
+         */
+        DetectedAccount: {
+            /** Account Id */
+            account_id: string | null;
+            /** Account Type */
+            account_type: string | null;
+            /** Candidates */
+            candidates: string[];
+            /** Closing Balance */
+            closing_balance: string | null;
+            /** Currency */
+            currency: string | null;
+            /** Index */
+            index: number;
+            /** Institution Name */
+            institution_name: string | null;
+            /** Last4 */
+            last4: string | null;
+            /** Name */
+            name: string | null;
+            /** Opening Balance */
+            opening_balance: string | null;
+            /** Period End */
+            period_end: string | null;
+            /** Period Start */
+            period_start: string | null;
+            proposal: components["schemas"]["AccountProposal"] | null;
+            /** Review Item Id */
+            review_item_id: string | null;
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "matched" | "new" | "ambiguous" | "conflict" | "done";
+            /**
+             * Target
+             * @enum {string}
+             */
+            target: "statement" | "investment" | "group" | "table";
+            /** Transactions */
+            transactions: number;
+        };
+        /** DocumentAccounts */
+        DocumentAccounts: {
+            /** Accounts */
+            accounts: components["schemas"]["DetectedAccount"][];
+            /**
+             * Document Id
+             * Format: uuid
+             */
+            document_id: string;
+        };
+        /** DocumentAccountsApplied */
+        DocumentAccountsApplied: {
+            /** Created */
+            created: string[];
+            /**
+             * Document Id
+             * Format: uuid
+             */
+            document_id: string;
+            /**
+             * Job Id
+             * Format: uuid
+             */
+            job_id: string;
+        };
+        /** DocumentAccountsApply */
+        DocumentAccountsApply: {
+            /** Items */
+            items: components["schemas"]["AccountChoice"][];
         };
         /**
          * DocumentDetailOut
@@ -15197,6 +15363,129 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content?: never;
+            };
+            /** @description Problem details */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Problem details */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Problem details */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Problem details */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+        };
+    };
+    get_document_accounts_api_v1_documents__document_id__accounts_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                document_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DocumentAccounts"];
+                };
+            };
+            /** @description Problem details */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Problem details */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Problem details */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Problem details */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+        };
+    };
+    post_document_accounts_api_v1_documents__document_id__accounts_apply_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description Optional. Repeating a request with the same key returns the first answer instead of creating again (24 hours; 1-255 visible ASCII characters). */
+                "Idempotency-Key"?: string | null;
+            };
+            path: {
+                document_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["DocumentAccountsApply"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DocumentAccountsApplied"];
+                };
             };
             /** @description Problem details */
             403: {

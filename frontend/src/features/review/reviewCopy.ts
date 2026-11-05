@@ -44,15 +44,22 @@ const ACCOUNT_STEPS = [
 
 const COPY: Readonly<Record<string, Copy>> = {
   // -- unknown_account -------------------------------------------------------
-  "unknown_account:account_not_found": (item) => ({
-    what:
+  "unknown_account:account_not_found": (item) => {
+    const rows =
+      payloadNumber(item, "transactions") ?? payloadNumber(item, "activity");
+    const several =
       payloadNumber(item, "group") !== null ||
-      item.payload["investment"] === true
-        ? `This file lists several accounts; ${count(item, "transactions") !== "0" ? count(item, "transactions") + " rows" : "one of them"} belong to an account PerFin does not know.`
+      item.payload["investment"] === true;
+    return {
+      what: several
+        ? rows !== null && rows > 0
+          ? `This file lists several accounts; ${String(rows)} of its rows belong to an account PerFin does not know.`
+          : "This file lists several accounts; one of them is an account PerFin does not know."
         : "None of your accounts matches the account number in this file.",
-    why: "PerFin matches files to accounts by the last four digits of the account number. No account of yours records these digits yet, or the file prints none.",
-    steps: ACCOUNT_STEPS,
-  }),
+      why: "PerFin matches files to accounts by the last four digits of the account number. No account of yours records these digits yet, or the file prints none.",
+      steps: ACCOUNT_STEPS,
+    };
+  },
   "unknown_account:account_ambiguous": () => ({
     title: "Which of these accounts?",
     what: "Several of your accounts end in the same four digits as this file.",

@@ -112,6 +112,69 @@
         "title": "AccountAi",
         "type": "object"
       },
+      "AccountChoice": {
+        "additionalProperties": false,
+        "description": "Use an existing account (``account_id``) or create one (``create``), not both.",
+        "properties": {
+          "account_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Account Id"
+          },
+          "create": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/AccountCreate"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "index": {
+            "maximum": 10000.0,
+            "minimum": 0.0,
+            "title": "Index",
+            "type": "integer"
+          },
+          "institution_name": {
+            "anyOf": [
+              {
+                "maxLength": 200,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Institution Name"
+          },
+          "target": {
+            "enum": [
+              "statement",
+              "investment",
+              "group",
+              "table"
+            ],
+            "title": "Target",
+            "type": "string"
+          }
+        },
+        "required": [
+          "target",
+          "index"
+        ],
+        "title": "AccountChoice",
+        "type": "object"
+      },
       "AccountClose": {
         "additionalProperties": false,
         "description": "``POST /accounts/{id}/close``: the closing date (default today).",
@@ -527,6 +590,85 @@
           "next_cursor"
         ],
         "title": "AccountPage",
+        "type": "object"
+      },
+      "AccountProposal": {
+        "description": "A new account ready to create for one of a document's accounts (editable).",
+        "properties": {
+          "currency": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Currency"
+          },
+          "institution_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Institution Name"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "number_last4": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Number Last4"
+          },
+          "opening_balance": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Opening Balance"
+          },
+          "opening_balance_date": {
+            "anyOf": [
+              {
+                "format": "date",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Opening Balance Date"
+          },
+          "type": {
+            "$ref": "#/components/schemas/AccountType"
+          }
+        },
+        "required": [
+          "name",
+          "type",
+          "currency",
+          "institution_name",
+          "number_last4",
+          "opening_balance",
+          "opening_balance_date"
+        ],
+        "title": "AccountProposal",
         "type": "object"
       },
       "AccountType": {
@@ -3622,6 +3764,14 @@
             ],
             "title": "Account Id"
           },
+          "assignments": {
+            "items": {
+              "$ref": "#/components/schemas/Assignment"
+            },
+            "maxItems": 100,
+            "title": "Assignments",
+            "type": "array"
+          },
           "group": {
             "anyOf": [
               {
@@ -3893,6 +4043,40 @@
           }
         },
         "title": "AssetUpdate",
+        "type": "object"
+      },
+      "Assignment": {
+        "additionalProperties": false,
+        "description": "One of a document's accounts and the PerFin account it is imported into.",
+        "properties": {
+          "account_id": {
+            "format": "uuid",
+            "title": "Account Id",
+            "type": "string"
+          },
+          "index": {
+            "maximum": 10000.0,
+            "minimum": 0.0,
+            "title": "Index",
+            "type": "integer"
+          },
+          "target": {
+            "enum": [
+              "statement",
+              "investment",
+              "group",
+              "table"
+            ],
+            "title": "Target",
+            "type": "string"
+          }
+        },
+        "required": [
+          "target",
+          "index",
+          "account_id"
+        ],
+        "title": "Assignment",
         "type": "object"
       },
       "AutoPairRequest": {
@@ -7068,6 +7252,274 @@
           "items"
         ],
         "title": "DetectResult",
+        "type": "object"
+      },
+      "DetectedAccount": {
+        "description": "One account a document names and what PerFin knows of it (``proposals`` module doc).",
+        "properties": {
+          "account_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Account Id"
+          },
+          "account_type": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Account Type"
+          },
+          "candidates": {
+            "items": {
+              "format": "uuid",
+              "type": "string"
+            },
+            "title": "Candidates",
+            "type": "array"
+          },
+          "closing_balance": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Closing Balance"
+          },
+          "currency": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Currency"
+          },
+          "index": {
+            "title": "Index",
+            "type": "integer"
+          },
+          "institution_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Institution Name"
+          },
+          "last4": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last4"
+          },
+          "name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Name"
+          },
+          "opening_balance": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Opening Balance"
+          },
+          "period_end": {
+            "anyOf": [
+              {
+                "format": "date",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Period End"
+          },
+          "period_start": {
+            "anyOf": [
+              {
+                "format": "date",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Period Start"
+          },
+          "proposal": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/AccountProposal"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "review_item_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Review Item Id"
+          },
+          "status": {
+            "enum": [
+              "matched",
+              "new",
+              "ambiguous",
+              "conflict",
+              "done"
+            ],
+            "title": "Status",
+            "type": "string"
+          },
+          "target": {
+            "enum": [
+              "statement",
+              "investment",
+              "group",
+              "table"
+            ],
+            "title": "Target",
+            "type": "string"
+          },
+          "transactions": {
+            "title": "Transactions",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "target",
+          "index",
+          "status",
+          "account_id",
+          "candidates",
+          "review_item_id",
+          "last4",
+          "name",
+          "institution_name",
+          "account_type",
+          "currency",
+          "period_start",
+          "period_end",
+          "opening_balance",
+          "closing_balance",
+          "transactions",
+          "proposal"
+        ],
+        "title": "DetectedAccount",
+        "type": "object"
+      },
+      "DocumentAccounts": {
+        "properties": {
+          "accounts": {
+            "items": {
+              "$ref": "#/components/schemas/DetectedAccount"
+            },
+            "title": "Accounts",
+            "type": "array"
+          },
+          "document_id": {
+            "format": "uuid",
+            "title": "Document Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "document_id",
+          "accounts"
+        ],
+        "title": "DocumentAccounts",
+        "type": "object"
+      },
+      "DocumentAccountsApplied": {
+        "properties": {
+          "created": {
+            "items": {
+              "format": "uuid",
+              "type": "string"
+            },
+            "title": "Created",
+            "type": "array"
+          },
+          "document_id": {
+            "format": "uuid",
+            "title": "Document Id",
+            "type": "string"
+          },
+          "job_id": {
+            "format": "uuid",
+            "title": "Job Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "document_id",
+          "created",
+          "job_id"
+        ],
+        "title": "DocumentAccountsApplied",
+        "type": "object"
+      },
+      "DocumentAccountsApply": {
+        "additionalProperties": false,
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/AccountChoice"
+            },
+            "maxItems": 100,
+            "minItems": 1,
+            "title": "Items",
+            "type": "array"
+          }
+        },
+        "required": [
+          "items"
+        ],
+        "title": "DocumentAccountsApply",
         "type": "object"
       },
       "DocumentDetailOut": {
@@ -28084,6 +28536,148 @@
         "summary": "One document (metadata only)",
         "tags": [
           "documents"
+        ]
+      }
+    },
+    "/api/v1/documents/{document_id}/accounts": {
+      "get": {
+        "operationId": "get_document_accounts_api_v1_documents__document_id__accounts_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "document_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Document Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DocumentAccounts"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {}
+            },
+            "description": "Problem details"
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {}
+            },
+            "description": "Problem details"
+          },
+          "409": {
+            "content": {
+              "application/problem+json": {}
+            },
+            "description": "Problem details"
+          },
+          "422": {
+            "content": {
+              "application/problem+json": {}
+            },
+            "description": "Problem details"
+          }
+        },
+        "summary": "The accounts a document names, matched or proposed (member or above)",
+        "tags": [
+          "imports"
+        ]
+      }
+    },
+    "/api/v1/documents/{document_id}/accounts/apply": {
+      "post": {
+        "operationId": "post_document_accounts_api_v1_documents__document_id__accounts_apply_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "document_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Document Id",
+              "type": "string"
+            }
+          },
+          {
+            "description": "Optional. Repeating a request with the same key returns the first answer instead of creating again (24 hours; 1-255 visible ASCII characters).",
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Optional. Repeating a request with the same key returns the first answer instead of creating again (24 hours; 1-255 visible ASCII characters).",
+              "title": "Idempotency-Key"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DocumentAccountsApply"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DocumentAccountsApplied"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {}
+            },
+            "description": "Problem details"
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {}
+            },
+            "description": "Problem details"
+          },
+          "409": {
+            "content": {
+              "application/problem+json": {}
+            },
+            "description": "Problem details"
+          },
+          "422": {
+            "content": {
+              "application/problem+json": {}
+            },
+            "description": "Problem details"
+          }
+        },
+        "summary": "Use or create an account for each of a document's accounts and re-import (job)",
+        "tags": [
+          "imports"
         ]
       }
     },

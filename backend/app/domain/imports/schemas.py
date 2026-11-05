@@ -62,7 +62,8 @@ from typing import Annotated, Any, Final, Literal, Self
 from pydantic import AfterValidator, BaseModel, ConfigDict, Field, model_validator
 
 from app.core.money import CurrencyCode
-from app.domain.accounts.schemas import clean_text
+from app.domain.accounts.models import AccountType
+from app.domain.accounts.schemas import AccountCreate, clean_text
 from app.domain.documents.models import DocumentStatus
 from app.domain.imports.models import NAME_MAX
 
@@ -346,6 +347,24 @@ class MappingPage(_Output):
     next_cursor: uuid.UUID | None
 
 
+#: What an assignment targets: a statement of an OFX/QIF/PDF file, a brokerage
+#: statement (an activity export's account), a group of a multi-account table,
+#: or the one statement of a table without an account column.
+AssignmentTarget = Literal["statement", "investment", "group", "table"]
+#: Most assignments one re-run carries.
+ASSIGNMENTS_MAX: Final = 100
+
+
+class Assignment(BaseModel):
+    """One of a document's accounts and the PerFin account it is imported into."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    target: AssignmentTarget
+    index: int = Field(ge=0, le=MAX_GROUP)
+    account_id: uuid.UUID
+
+
 class ApplyMapping(_Input):
     """``POST /imports/{document_id}/apply-mapping``.
 
@@ -366,6 +385,8 @@ class ApplyMapping(_Input):
     account_id: uuid.UUID | None = None
     group: int | None = Field(default=None, ge=0, le=MAX_GROUP)
     statement: int | None = Field(default=None, ge=0, le=MAX_GROUP)
+    #: An account per statement of the document (each must be editable).
+    assignments: list[Assignment] = Field(default_factory=list, max_length=ASSIGNMENTS_MAX)
 
     @model_validator(mode="after")
     def _group_needs_account(self) -> Self:
@@ -386,6 +407,7 @@ class ApplyMappingJob(BaseModel):
     account_id: uuid.UUID | None = None
     group: int | None = None
     statement: int | None = None
+    assignments: list[Assignment] = Field(default_factory=list, max_length=ASSIGNMENTS_MAX)
     requested_by: uuid.UUID | None = None
 
 
@@ -512,3 +534,84 @@ class ImportPreview(_Output):
     #: The same guess with its confidence and per-role reasons.
     suggestion: MappingSuggestionOut | None
     last_import: dict[str, Any] | None
+
+
+# ---------------------------------------------------------------------------
+# A document's accounts (GET /documents/{id}/accounts, .../accounts/apply)
+# ---------------------------------------------------------------------------
+
+DetectedStatus = Literal["matched", "new", "ambiguous", "conflict", "done"]
+
+
+class AccountProposal(_Output):
+    """A new account ready to create for one of a document's accounts (editable)."""
+
+    name: str
+    type: AccountType
+    currency: str | None
+    institution_name: str | None
+    number_last4: str | None
+    #: The statement's printed opening balance (bank accounts), as text.
+    opening_balance: str | None
+    opening_balance_date: date | None
+
+
+class DetectedAccount(_Output):
+    """One account a document names and what PerFin knows of it (``proposals`` module doc)."""
+
+    target: AssignmentTarget
+    index: int
+    status: DetectedStatus
+    #: The matched (or conflicting) account.
+    account_id: uuid.UUID | None
+    candidates: list[uuid.UUID]
+    #: The open ``unknown_account`` item about it.
+    review_item_id: uuid.UUID | None
+    last4: str | None
+    #: The account's own name in the file (an activity export's nickname).
+    name: str | None
+    institution_name: str | None
+    account_type: str | None
+    currency: str | None
+    period_start: date | None
+    period_end: date | None
+    opening_balance: str | None
+    closing_balance: str | None
+    transactions: int
+    proposal: AccountProposal | None
+
+
+class DocumentAccounts(_Output):
+    document_id: uuid.UUID
+    accounts: list[DetectedAccount]
+
+
+class AccountChoice(_Input):
+    """Use an existing account (``account_id``) or create one (``create``), not both."""
+
+    target: AssignmentTarget
+    index: int = Field(ge=0, le=MAX_GROUP)
+    account_id: uuid.UUID | None = None
+    create: AccountCreate | None = None
+    #: The institution of a new account, found or created by name.
+    institution_name: Name | None = None
+
+    @model_validator(mode="after")
+    def _one(self) -> Self:
+        if (self.account_id is None) == (self.create is None):
+            raise ValueError("give exactly one of account_id and create")
+        if self.institution_name is not None and self.create is None:
+            raise ValueError("institution_name is for a new account")
+        return self
+
+
+class DocumentAccountsApply(_Input):
+    items: list[AccountChoice] = Field(min_length=1, max_length=ASSIGNMENTS_MAX)
+
+
+class DocumentAccountsApplied(_Output):
+    document_id: uuid.UUID
+    #: The accounts created by this call.
+    created: list[uuid.UUID]
+    #: The ``imports.apply_mapping`` job that imports the document with the choices.
+    job_id: uuid.UUID

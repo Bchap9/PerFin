@@ -11,6 +11,11 @@
   re-parsed, with the matching saved mapping and a suggested one.
 * ``POST /imports/{document_id}/apply-mapping``: member or above; queues
   ``imports.apply_mapping`` and answers ``202`` with its id.
+* ``GET /documents/{document_id}/accounts`` and ``POST
+  /documents/{document_id}/accounts/apply``: member or above who may change
+  the document; the accounts the document names, matched or proposed, and
+  the choice of an existing or new account for each
+  (``app.domain.imports.proposals``).
 
 Tokens need ``documents:read`` / ``documents:write``.
 """
@@ -28,13 +33,16 @@ from app.auth.models import HouseholdRole
 from app.auth.principal import Principal
 from app.core.idempotency import IdempotencyKeyHeader, idempotent, payload_of
 from app.domain.documents.service import get_visible_document
-from app.domain.imports import service
+from app.domain.imports import proposals, service
 from app.domain.imports.schemas import (
     DEFAULT_PAGE,
     MAX_PAGE,
     PREVIEW_DEFAULT,
     PREVIEW_MAX,
     ApplyMapping,
+    DocumentAccounts,
+    DocumentAccountsApplied,
+    DocumentAccountsApply,
     ImportAccepted,
     ImportPreview,
     MappingCreate,
@@ -178,5 +186,43 @@ def post_apply_mapping(
         scope="POST /imports/{document_id}/apply-mapping",
         payload=payload_of(body, document_id=document_id),
         run=lambda: service.request_apply(db, principal, document_id, body, request=request),
+        status_code=status.HTTP_202_ACCEPTED,
+    )
+
+
+@router.get(
+    "/documents/{document_id}/accounts",
+    response_model=DocumentAccounts,
+    responses=PROBLEMS,
+    summary="The accounts a document names, matched or proposed (member or above)",
+)
+def get_document_accounts(
+    document_id: uuid.UUID, db: DbSession, principal: DocumentWriter
+) -> DocumentAccounts:
+    return proposals.detect_accounts(db, principal, document_id)
+
+
+@router.post(
+    "/documents/{document_id}/accounts/apply",
+    response_model=DocumentAccountsApplied,
+    status_code=status.HTTP_202_ACCEPTED,
+    responses=PROBLEMS,
+    summary="Use or create an account for each of a document's accounts and re-import (job)",
+)
+def post_document_accounts(
+    document_id: uuid.UUID,
+    body: DocumentAccountsApply,
+    request: Request,
+    db: DbSession,
+    principal: DocumentWriter,
+    idempotency_key: IdempotencyKeyHeader = None,
+) -> Any:
+    return idempotent(
+        db,
+        principal,
+        idempotency_key,
+        scope="POST /documents/{document_id}/accounts/apply",
+        payload=payload_of(body, document_id=document_id),
+        run=lambda: proposals.apply_accounts(db, principal, document_id, body, request=request),
         status_code=status.HTTP_202_ACCEPTED,
     )

@@ -86,7 +86,7 @@ from __future__ import annotations
 import hashlib
 import uuid
 from collections import defaultdict
-from collections.abc import Callable, Collection, Iterable, Sequence
+from collections.abc import Callable, Collection, Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import date
 from decimal import Decimal, localcontext
@@ -247,10 +247,11 @@ def _account(
     *,
     single: bool,
     account_id: uuid.UUID | None,
+    forced: uuid.UUID | None = None,
 ) -> Account | None:
-    account: Account | None = None
+    account: Account | None = _usable(ctx, forced)
     candidates: tuple[uuid.UUID, ...] = ()
-    if single and ctx.document.account_id is not None and account_id is None:
+    if account is None and single and ctx.document.account_id is not None and account_id is None:
         account = _usable(ctx, ctx.document.account_id)
     if account is None:
         match = match_account(
@@ -1135,6 +1136,7 @@ def import_investment_statements(
     commit_cash: CommitCash,
     account_id: uuid.UUID | None = None,
     statement_index: int | None = None,
+    assigned: Mapping[int, uuid.UUID] | None = None,
     user_id: uuid.UUID | None = None,
 ) -> InvestmentImport:
     """Commit the brokerage statements of ``document`` (module doc).
@@ -1165,6 +1167,7 @@ def import_investment_statements(
             index,
             single=single,
             account_id=account_id if index in takes else None,
+            forced=(assigned or {}).get(index),
         )
         if account is None:
             continue

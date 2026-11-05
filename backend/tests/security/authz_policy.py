@@ -735,6 +735,12 @@ POLICIES: Final[Mapping[str, Policy]] = MappingProxyType(
         f"POST {API}/imports/{{document_id}}/apply-mapping": scoped(
             "documents:write", role=M, params=DOC
         ),
+        f"GET {API}/documents/{{document_id}}/accounts": scoped(
+            "documents:write", role=M, params=DOC
+        ),
+        f"POST {API}/documents/{{document_id}}/accounts/apply": scoped(
+            "documents:write", role=M, params=DOC
+        ),
         # --- user settings --------------------------------------------------
         f"GET {API}/settings/user": scoped("settings:read"),
         f"PATCH {API}/settings/user": session(),

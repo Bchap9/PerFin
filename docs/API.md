@@ -471,6 +471,22 @@ also returns `regions` (`[{"page", "bbox", "label": "transaction" |
 `alternatives` (`[{"field", "value", "label", "score", "transaction_id",
 "source": "document" | "ledger" | "household"}]`; values read from the
 document only for callers the download rule allows), both `null` in lists).
+`GET /documents/{id}/accounts` (member or above who may change the
+document): `{"document_id", "accounts": [{"target": "statement" |
+"investment" | "group" | "table", "index", "status": "matched" | "new" |
+"ambiguous" | "conflict" | "done", "account_id", "candidates",
+"review_item_id", "last4", "name", "institution_name", "account_type",
+"currency", "period_start", "period_end", "opening_balance",
+"closing_balance", "transactions", "proposal": {"name", "type", "currency",
+"institution_name", "number_last4", "opening_balance",
+"opening_balance_date"} | null}]}`: every account the stored extraction
+names and what PerFin knows of it. `POST /documents/{id}/accounts/apply`
+(`Idempotency-Key` honoured) takes `{"items": [{"target", "index",
+"account_id"} | {"target", "index", "create": AccountCreate,
+"institution_name"?}]}`, creates the new accounts (institutions found or
+created by name, last four digits recorded), and answers `202` with
+`{"document_id", "created", "job_id"}`: one `imports.apply_mapping` job with
+every choice as an `assignment`.
 `GET /review?state=&kind=&document=&cursor=&limit=` (any role; `state`
 defaults to `open`, `all` for every state; oldest first, `limit` 1-500)
 lists items of documents the caller can see whose payload `account_id`, if

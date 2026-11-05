@@ -22,6 +22,7 @@ import { queryRoots } from "../../lib/queryKeys";
 import { accountLabel, useAccounts } from "../accounts/api";
 import { PageViewer } from "../documents/PageViewer";
 import { getDocument, importKeys } from "../imports/api";
+import { DocumentAccountsDialog } from "../imports/DocumentAccountsDialog";
 import { getTransaction, txKeys, type Transaction } from "../transactions/api";
 import {
   accountResolution,
@@ -336,6 +337,7 @@ export function ReviewItemCard({ item }: { item: ReviewItem }) {
   const [chosen, setChosen] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [fixing, setFixing] = useState(false);
+  const [settingUp, setSettingUp] = useState(false);
   const explanation = explain(item);
   const open = item.state === "open";
   const actionable = open && item.can_resolve;
@@ -476,6 +478,16 @@ export function ReviewItemCard({ item }: { item: ReviewItem }) {
               </Button>
             </>
           ) : null}
+          {item.kind === "unknown_account" && item.document_id !== null ? (
+            <Button
+              onClick={() => {
+                setFixing(false);
+                setSettingUp(true);
+              }}
+            >
+              Set up accounts from this file
+            </Button>
+          ) : null}
           {item.kind === "unknown_account" ? (
             <Button
               variant="primary"
@@ -552,6 +564,14 @@ export function ReviewItemCard({ item }: { item: ReviewItem }) {
           </>
         )}
       </article>
+      {settingUp && item.document_id !== null ? (
+        <DocumentAccountsDialog
+          documentId={item.document_id}
+          onClose={() => {
+            setSettingUp(false);
+          }}
+        />
+      ) : null}
       {fixing ? (
         <Dialog
           open={fixing}

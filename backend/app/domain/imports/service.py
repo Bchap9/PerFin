@@ -165,6 +165,7 @@ from app.domain.imports.schemas import (
     PREVIEW_DEFAULT,
     ApplyMapping,
     ApplyMappingJob,
+    Assignment,
     ImportAccepted,
     ImportPreview,
     MappingCreate,
@@ -656,6 +657,9 @@ class _Run:
     #: and the saved mapping that reading took precedence over.
     activity: ActivityTable | None = None
     mapping_bypassed: uuid.UUID | None = None
+    #: Accounts a person assigned to the document's statements, by
+    #: ``(target, index)`` (``POST /documents/{id}/accounts/apply``).
+    assigned: dict[tuple[str, int], uuid.UUID] = field(default_factory=dict)
     _payees: dict[str, uuid.UUID] | None = None
     _categories: dict[str, uuid.UUID] | None = None
     _open: list[tuple[ReviewKind, dict[str, Any]]] | None = None
@@ -1025,7 +1029,15 @@ def _import_statements(run: _Run, result: ExtractResult, *, account_id: uuid.UUI
         parsed = from_statement(statement)
         account: Account | None = None
         candidates: tuple[uuid.UUID, ...] = ()
-        if single and run.document.account_id is not None and account_id is None:
+        assigned = run.assigned.get(("statement", index))
+        if assigned is not None:
+            account = _usable_account(run, assigned)
+        if (
+            account is None
+            and single
+            and run.document.account_id is not None
+            and account_id is None
+        ):
             account = _usable_account(run, run.document.account_id)
         if account is None:
             match = match_account(
@@ -1078,7 +1090,12 @@ def _table_targets(
 ) -> list[_Target]:
     """The account of each statement of a table (module doc, CSV/TSV)."""
     if spec.account_column is None:
-        target = account_id or run.document.account_id or mapping_account
+        target = (
+            run.assigned.get(("table", 0))
+            or account_id
+            or run.document.account_id
+            or mapping_account
+        )
         return [_Target(statements[0], _usable_account(run, target))]
     readable = [s for s in statements if s.transactions]
     single = len(readable) == 1
@@ -1094,6 +1111,12 @@ def _table_targets(
     for index, parsed in enumerate(readable):
         account: Account | None = None
         candidates: tuple[uuid.UUID, ...] = ()
+        assigned = run.assigned.get(("group", index))
+        if assigned is not None:
+            account = _usable_account(run, assigned)
+            if account is not None:
+                targets.append(_Target(parsed, account, (), index))
+                continue
         if single and account_id is None:
             account = _usable_account(run, run.document.account_id or mapping_account)
         if account is None:
@@ -1634,6 +1657,7 @@ def import_extraction(
     account_id: uuid.UUID | None = None,
     group: int | None = None,
     statement: int | None = None,
+    assignments: Sequence[Assignment] = (),
     user_id: uuid.UUID | None = None,
 ) -> ImportResult:
     """Import the records of ``result`` for ``document`` (module doc, step 2).
@@ -1652,6 +1676,7 @@ def import_extraction(
         document=document,
         allowed=importable_account_ids(db, document.household_id, actor),
         user_id=user_id,
+        assigned={(a.target, a.index): a.account_id for a in assignments},
     )
     statements: Sequence[InvestmentStatement] = result.investments
     if result.statements:
@@ -1682,6 +1707,7 @@ def import_extraction(
             ),
             account_id=account_id,
             statement_index=statement,
+            assigned={i: a for (t, i), a in run.assigned.items() if t == "investment"},
             user_id=user_id,
         )
         for investment_account in done.accounts:
@@ -1739,12 +1765,15 @@ def request_apply(
     target = data.account_id or document.account_id or (mapping.account_id if mapping else None)
     if target is not None:
         get_visible_account(db, principal, target, need="edit")
+    for assignment in data.assignments:
+        get_visible_account(db, principal, assignment.account_id, need="edit")
     payload = ApplyMappingJob(
         document_id=document.id,
         mapping_id=data.mapping_id,
         account_id=data.account_id,
         group=data.group,
         statement=data.statement,
+        assignments=data.assignments,
         requested_by=principal.user_id,
     )
     job_id = enqueue(db, APPLY_MAPPING_JOB_TYPE, payload, household_id=household_id)
@@ -1788,6 +1817,7 @@ def run_apply_job(
         account_id=payload.account_id,
         group=payload.group,
         statement=payload.statement,
+        assignments=payload.assignments,
         user_id=payload.requested_by,
     )
     now = clock.utcnow()

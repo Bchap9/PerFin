@@ -59,6 +59,18 @@ What remains (details in docs/ROADMAP.md):
   - The upload list no longer offers "Map columns" for a file already read
     as investment activity.
 
+### Added
+
+- "Accounts in this file": for a statement or export whose accounts PerFin
+  does not know yet, a dialog (from the review queue's "Set up accounts from
+  this file" and the document page) lists every account the file names, which
+  ones are already known, and an editable proposal for each new one (name from
+  the file's nickname or institution, type, institution, currency, last four
+  digits, the statement's opening balance). One click creates the accounts
+  (and institutions by name) and imports the file into all of them.
+  `GET /documents/{id}/accounts`, `POST /documents/{id}/accounts/apply`;
+  `apply-mapping` gains per-statement `assignments`.
+
 ### Changed
 
 - Review queue items name the file they are about (a link, when it arrived,

@@ -351,7 +351,7 @@ describe("review queue", () => {
     renderApp("/review");
     expect(
       await screen.findByText(
-        "This file lists several accounts; 12 rows belong to an account PerFin does not know.",
+        "This file lists several accounts; 12 of its rows belong to an account PerFin does not know.",
       ),
     ).toBeInTheDocument();
   });

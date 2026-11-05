@@ -34,6 +34,7 @@ from datetime import date, timedelta
 from decimal import Decimal
 from typing import TYPE_CHECKING, Any, Final
 
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.auth.authz import forbidden, role_at_least
@@ -50,6 +51,7 @@ from app.domain.accounts.models import (
     AccountType,
     BalanceSnapshot,
     BalanceSource,
+    Institution,
     default_is_asset,
     default_manual_balance,
 )
@@ -74,6 +76,7 @@ from app.domain.accounts.visibility import (
 )
 from app.domain.households import repo as households_repo
 from app.domain.households import service as households_service
+from app.domain.transactions.import_hash import normalize_payee
 
 if TYPE_CHECKING:
     from starlette.requests import HTTPConnection
@@ -238,6 +241,50 @@ def _view(db: Session, principal: Principal, account: Account, *, can_edit: bool
 def _check_institution(db: Session, household_id: uuid.UUID, institution_id: uuid.UUID) -> None:
     if not repo.institution_exists(db, household_id, institution_id):
         raise institution_not_found()
+
+
+#: Longest institution name kept (the column's limit).
+INSTITUTION_NAME_MAX: Final = 200
+
+
+def find_or_create_institution(
+    db: Session, principal: Principal, name: str, *, request: HTTPConnection | None
+) -> uuid.UUID:
+    """The household's institution called ``name`` (compared normalised), else a new one.
+
+    Member or above (the caller is creating an account at it). A new
+    institution is audited (``institution.create``) and emits
+    ``institution.created``.
+    """
+    household_id = _require_role(principal, HouseholdRole.MEMBER)
+    clean = " ".join(name.split())[:INSTITUTION_NAME_MAX]
+    wanted = normalize_payee(clean)
+    if not wanted:
+        raise ProblemError(
+            422, "invalid-institution", "Invalid institution", "Name the institution."
+        )
+    rows = db.execute(
+        select(Institution.id, Institution.name).where(Institution.household_id == household_id)
+    ).all()
+    for institution_id, existing in rows:
+        if normalize_payee(existing) == wanted:
+            return institution_id
+    institution = Institution(household_id=household_id, name=clean)
+    db.add(institution)
+    db.flush()
+    _record(
+        db,
+        principal,
+        household_id,
+        action="institution.create",
+        target_type="institution",
+        target_id=institution.id,
+        event="institution.created",
+        payload={"institution_id": str(institution.id)},
+        after={"name": clean},
+        request=request,
+    )
+    return institution.id
 
 
 def _editable(db: Session, principal: Principal, account_id: uuid.UUID) -> Account:
