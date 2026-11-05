@@ -69,6 +69,10 @@ CHILD_MODULE: Final = "app.ingestion.sandbox.child"
 _READ_CHUNK: Final = 64 * 1024
 _STDERR_KEEP: Final = 8 * 1024
 _JOIN_SECONDS: Final = 5.0
+#: Most validation errors one ``bad_output`` detail lists.
+_SUMMARY_ERRORS: Final = 10
+_LOC_KEY: Final = re.compile(r"[a-z][a-z0-9_]{0,63}")
+_JSON_POSITION: Final = re.compile(r"line (\d+) column (\d+)")
 
 # Mirrors app.ingestion.sandbox.child.EXIT_CODES (not imported: the child
 # module is only ever run, never loaded, by the worker).
@@ -211,6 +215,40 @@ def _drain_stderr(stream: IO[bytes], pumps: _Pumps) -> None:
             pumps.stderr += chunk[:room]
 
 
+def _loc_part(part: object) -> str:
+    # Indices and schema field names only: a dict key could be child-chosen text.
+    if isinstance(part, int):
+        return str(part)
+    if isinstance(part, str) and _LOC_KEY.fullmatch(part):
+        return part
+    return "*"
+
+
+def validation_summary(exc: ValidationError, stdout: bytes | bytearray) -> str:
+    """Where the child's output failed the schema, without any of its values.
+
+    Each error is ``<path> <type>`` (``pages.3.words.17.bbox.2 less_than_equal``);
+    for output that is not JSON at all, the parser's position, the output's
+    size and whether it starts like a result (stray writes to stdout by a
+    native library show up as ``starts_with_brace=False``). Never the input
+    values, messages or context, which may echo document text.
+    """
+    errors = exc.errors(include_url=False, include_input=False, include_context=False)
+    parts = [
+        ".".join(_loc_part(p) for p in error["loc"]) + " " + error["type"]
+        for error in errors[:_SUMMARY_ERRORS]
+    ]
+    if len(errors) > _SUMMARY_ERRORS:
+        parts.append(f"... {len(errors) - _SUMMARY_ERRORS} more")
+    if any(error["type"] == "json_invalid" for error in errors):
+        match = _JSON_POSITION.search(str(exc))
+        parts.append(
+            f"stdout_bytes={len(stdout)} starts_with_brace={bytes(stdout[:1]) == b'{'}"
+            + (f" json_line={match.group(1)} json_column={match.group(2)}" if match else "")
+        )
+    return "; ".join(parts) or "no detail"
+
+
 def _classify_exit(returncode: int) -> str:
     if returncode < 0:
         sig = -returncode
@@ -338,8 +376,11 @@ def run_extraction(
         raise SandboxError(code, detail, stderr=stderr)
     try:
         result = ExtractResult.model_validate_json(bytes(pumps.stdout))
-    except ValidationError:
-        raise SandboxError("bad_output", "the child's output did not validate") from None
+    except ValidationError as exc:
+        raise SandboxError(
+            "bad_output",
+            "the child's output did not validate: " + validation_summary(exc, pumps.stdout),
+        ) from None
     if result.kind != kind:
         raise SandboxError("bad_output", "the child answered for another kind")
     if result.worker_only_fields():

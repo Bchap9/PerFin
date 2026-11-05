@@ -50,6 +50,15 @@ def _zip() -> bytes:
         (csv_bytes(TXNS, delimiter="\t"), FileType.TSV),
         (csv_bytes(TXNS, encoding="cp1252").replace(b"Memo", b"M\xe9mo"), FileType.CSV),
         (b"Just some synthetic notes.\nSecond line.\n", FileType.TEXT),
+        # A short brokerage export: two rows, then disclaimer notes without commas.
+        (
+            b"\r\nRun Date,Account,Action,Amount\r\n10/14/2026,Synthetic,BUY,-1.00\r\n"
+            b'\r\n"Synthetic disclaimer, with a comma."\r\nDate downloaded 11/02/2026\r\n',
+            FileType.CSV,
+        ),
+        # Prose with a comma in some lines is still text.
+        (b"Synthetic notes, first.\nSecond line, here.\nThird line.\n", FileType.TEXT),
+        (b"No commas here.\nOne, two, three.\nFour, five, six.\n", FileType.TEXT),
         (
             b"Received: from mx.example.invalid\r\nFrom: a@example.invalid\r\n"
             b"Subject: Synthetic\r\nDate: Mon, 5 Jan 2026 10:00:00 +0000\r\n\r\nBody\r\n",

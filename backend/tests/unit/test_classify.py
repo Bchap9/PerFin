@@ -39,15 +39,18 @@ def _view(doc: synth.SynthDoc) -> DocumentView:
 # ---------------------------------------------------------------------------
 
 
+SHIPPED = (*synth.FAKE_INSTITUTIONS, *synth.SHIPPED_LAYOUTS)
+
+
 def test_shipped_catalogue_covers_the_fictional_institutions() -> None:
     fps = builtin_fingerprints()
-    assert sorted(fp.key for fp in fps) == sorted(i.key for i in synth.FAKE_INSTITUTIONS)
+    assert sorted(fp.key for fp in fps) == sorted(i.key for i in SHIPPED)
     institutions = {fp.spec.institution for fp in fps}
-    assert len(institutions) == 6
+    assert len(institutions) == 7
     assert all(fp.origin == "builtin" for fp in fps)
 
 
-@pytest.mark.parametrize("key", [i.key for i in synth.FAKE_INSTITUTIONS])
+@pytest.mark.parametrize("key", [i.key for i in SHIPPED])
 def test_each_shipped_layout_is_recognised_with_its_facts(key: str) -> None:
     for seed in range(15):
         doc = synth.institution_document(key, seed)

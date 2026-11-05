@@ -36,7 +36,9 @@ Phase 2 routes only **structured** formats (CSV, TSV, OFX, QFX, QIF):
   ``PipelineDeps.importer`` or registered with
   :func:`register_structured_importer`. The worker installs
   :func:`structured_import` (``app.domain.imports.service``: column mappings,
-  ``import_hash`` dedupe, rules, balance snapshots, review items). Without
+  brokerage activity tables read as investment statements
+  (``app.ingestion.parsers.brokerage_table``), ``import_hash`` dedupe,
+  rules, balance snapshots, review items). Without
   one, the document waits in ``needs_review`` (``unparsed``/``import_pending``).
 * **parse (PDF, images)**: the document parsers (``app.ingestion.parsers``)
   read the stored pages in the worker, hinted by the classifier's
@@ -48,11 +50,15 @@ Phase 2 routes only **structured** formats (CSV, TSV, OFX, QFX, QIF):
   brokerage statements (``app.ingestion.parsers.brokerage``: holdings and
   activity, reconciled positions x prices and cash) go the same way into
   ``app.domain.investments.statement_import`` (held back when they do not
-  reconcile); a payslip is kept on the document (``kind = payslip``, period) and goes to
-  review when its figures do not add up; a loan statement
-  (``app.ingestion.parsers.loan_statement``) records its payment split and
-  balances on the matching loan (``app.domain.loans.statement_import``; held
-  back when it does not reconcile); tax forms (``app.ingestion.parsers.tax_forms``:
+  reconcile); a PDF of several accounts gives one brokerage statement per
+  account, each matched to its account by its own last four digits, and the
+  document itself is linked to no account (an account the classifier
+  matched is undone; one chosen at upload stays); a payslip is kept on the
+  document (``kind = payslip``, period) and goes to review when its figures
+  do not add up; a loan statement (``app.ingestion.parsers.loan_statement``)
+  records its payment split and balances on the matching loan
+  (``app.domain.loans.statement_import``; held back when it does not
+  reconcile); tax forms (``app.ingestion.parsers.tax_forms``:
   form type, year, issuer name and amount boxes only) go to the tax vault
   (``app.domain.tax.ingest``: form data, tax year, checklist ticked off), and
   the stored pages and search index of a tax form keep no identity text
@@ -303,6 +309,25 @@ def _parse_hints(document: Document) -> dict[str, str | None]:
     return hints
 
 
+def _unlink_classified_account(document: Document) -> None:
+    """Undo the account the classifier matched (``fields.account``); an uploader's choice stays.
+
+    The classifier links a document to an account when it finds one set of
+    last four digits; on a statement of several accounts that is one
+    account's number (the others printed in a form it does not read), so
+    the link would be wrong for the rest.
+    """
+    facts = document.confidence if isinstance(document.confidence, dict) else {}
+    fields = facts.get("fields")
+    if document.account_id is None or not isinstance(fields, dict) or "account" not in fields:
+        return
+    document.account_id = None
+    document.confidence = {
+        **facts,
+        "fields": {key: value for key, value in fields.items() if key != "account"},
+    }
+
+
 def _parse_document(
     db: Session, document: Document, result: ExtractResult, threshold: float
 ) -> tuple[ExtractResult, dict[str, Any]]:
@@ -369,6 +394,11 @@ def _parse_document(
     document.parser_version = f"{info.parser.name}/{info.parser.version}"[:64]
     parsed = [s for s in result.statements if s.parser is not None]
     brokerage = [i for i in result.investments if i.parser is not None]
+    if len({i.account.last4 for i in brokerage}) > 1:
+        # Several accounts in one document: each statement finds its own
+        # account by its last four digits; the document is on none of them.
+        facts["investment_accounts"] = len(brokerage)
+        _unlink_classified_account(document)
     read: list[Statement | InvestmentStatement] = [
         *(s for s in parsed if s.transactions),
         *(i for i in brokerage if i.positions or i.activity),

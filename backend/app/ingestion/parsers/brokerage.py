@@ -22,17 +22,39 @@ Two halves (INGESTION.md "Brokerage statements", SECURITY.md C12):
   scan (the words and boxes the sandbox extracted; never file bytes,
   ADR-0006) in the worker:
 
+  - **accounts**: one statement per account when the pages name several
+    (account headings such as ``Account # Z12-345678`` or ``INDIVIDUAL -
+    TOD Z12-345678`` repeated on each account's pages), each with its own
+    last four digits, tables, totals and reconciliation; a document naming
+    one account is read as one statement (the parser's class doc);
   - a **holdings** table: a header naming a quantity, a market value and a
-    symbol or security name (optional price, cost basis), repeated per page;
-    ``Total ...`` lines in it give the printed holdings total;
+    symbol or security name (optional price, cost basis, beginning market
+    value; columns such as unrealized gain/loss or estimated income are
+    recognised and not read), repeated per page. A header may run over up
+    to three lines (``Price Per`` / ``Unit``, a date under ``Ending Market
+    Value``) and a header cell may end in a date (:func:`header_key`). Rows
+    may be grouped under asset-class headings (:data:`ASSET_GROUPS`:
+    *Mutual Funds*, *Stocks*, ...) that give the positions their class;
+    ``Total <group>`` lines are subtotals, ``Total Holdings`` (or another
+    :data:`GRAND_TOTALS` label, else the first unlabelled ``Total``) is the
+    printed holdings total. A security name wrapped onto the next line is
+    joined (its ``(SYMBOL)`` may be on that line);
   - an **activity** table: a header naming a date, an activity/action and
-    an amount (optional settle date, description, symbol, quantity, price,
-    fees). The activity word types the row (:data:`ACTIVITY_TYPES`); an
-    unsigned amount takes the type's direction (a buy takes cash out); a
-    split's ratio comes from its description (``2-for-1``, ``3:1``);
+    an amount (optional settle date, description, security name,
+    symbol or CUSIP, quantity, price, fees). Only a settlement date: it
+    dates the row; no action column: the description is the action when
+    the table also names a security, a symbol or a quantity (always for a
+    layout with ``description_types``). The action text types the row
+    (:func:`activity_type`, :data:`ACTIVITY_TYPES`); an unsigned amount
+    takes the type's direction (a buy takes cash out); a transfer of units
+    printed without an amount (``-``) moves no cash; a split's ratio comes
+    from its description (``2-for-1``, ``3:1``). A header line of known
+    column names that is no usable table ends the table above it;
   - outside the tables: the period, the account's last four digits, the
     currency, opening/closing cash, the holdings total and the account
-    value by label, and the holdings' "as of" date.
+    value by label (``Beginning Account Value`` is consumed, not read as
+    the account value; ``Ending Account Value``/``Ending Net Value`` are),
+    and the holdings' "as of" date.
 
   Each value is scored like the bank parsers
   (:mod:`app.ingestion.parsers.confidence`): the declared format of an
@@ -42,19 +64,27 @@ Two halves (INGESTION.md "Brokerage statements", SECURITY.md C12):
   that does not reconcile capped at :data:`~confidence.UNRECONCILED`
   (:data:`~confidence.UNCHECKED` when nothing can be checked).
 
-:class:`PlaceholderBrokerageParser` pins the layout of the fictional
-Placeholder Brokerage (fingerprint ``placeholder-brokerage-account``;
-synthetic PDFs from ``tests/fixtures/synth_brokerage.py``).
+Institution parsers pin a layout: :class:`PlaceholderBrokerageParser` the
+fictional Placeholder Brokerage (fingerprint ``placeholder-brokerage-account``;
+synthetic PDFs from ``tests/fixtures/synth_brokerage.py``) and
+:class:`FidelityStatementParser` the Fidelity Investments "Investment
+Report" of one or several accounts (fingerprint
+``fidelity-investments-statement``; synthetic PDFs from
+``tests/fixtures/synth_fidelity.py``), whose core money market position is
+the account's cash (``cash_groups``) and whose *Core Fund Activity* table
+is not read (``ignored_tables``). Every parser here keeps only the last four
+digits of an account number (an account heading is read for them and not
+kept).
 """
 
 from __future__ import annotations
 
 import re
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import date
 from decimal import Decimal, InvalidOperation
-from typing import ClassVar, Final, Literal
+from typing import Any, ClassVar, Final, Literal
 
 from pydantic import ValidationError
 
@@ -78,6 +108,7 @@ from app.ingestion.parsers.text import (
 )
 from app.ingestion.reconcile import TOLERANCE
 from app.ingestion.sandbox.protocol import (
+    MAX_STATEMENTS,
     AssetClassCode,
     Balance,
     InvestmentActivity,
@@ -188,6 +219,7 @@ _NUMBER: Final = re.compile(
 )
 _SYMBOL: Final = re.compile(r"[A-Z][A-Z0-9.]{0,9}")
 _PAREN_SYMBOL: Final = re.compile(r"\(([A-Z][A-Z0-9.]{0,9})\)")
+_CUSIP: Final = re.compile(r"[0-9A-Z]{8}[0-9]")
 _RATIO: Final = re.compile(r"\b(\d{1,6})(?:\s?-?\s?for\s?-?\s?|\s?:\s?)(\d{1,6})\b", re.IGNORECASE)
 _LAST4: Final = re.compile(
     r"(?<![A-Za-z0-9])[*xX\u2022]{2}[*xX\u2022\s-]{0,30}?(\d{4})\b"
@@ -197,6 +229,26 @@ _LAST4: Final = re.compile(
 )
 _CURRENCY: Final = re.compile(r"\bcurrency\s*:?\s*([A-Z]{3})\b", re.IGNORECASE)
 _RANGE: Final = re.compile(r"\s(?:to|through|until|-|\u2013)\s", re.IGNORECASE)
+#: ``Account # Z12-345678``, ``Account Number: 123-456789``, ``Account XXXX-4821``.
+_ACCOUNT_LABELLED: Final = re.compile(
+    r"\baccount\s{0,3}(?:#|number|no\.?)?\s{0,3}:?\s{0,3}"
+    r"(?P<num>(?:[A-Z]{1,3}|[*xX\u2022]{2,12})?[ -]?\d(?:[\d-]| (?=\d)){2,24}\d)(?![\w-])",
+    re.IGNORECASE,
+)
+#: The number ending an all-capitals account title (``INDIVIDUAL - TOD Z12-345678``).
+_TITLE_NUMBER: Final = re.compile(r"[A-Z]{0,3}\d{2,4}-\d{4,8}")
+_TITLE_WORD: Final = re.compile(r"[A-Z][A-Z&'./]{0,30}")
+#: A date at the end of a (normalised) header cell: ``ending market value oct 31 2026``.
+_TRAILING_DATE: Final = re.compile(
+    r"(?:\sas\sof)?\s(?:[a-z]{3,9}\s\d{1,2}\s\d{4}|\d{1,2}\s\d{1,2}\s\d{2,4}|\d{4}\s\d{1,2}\s\d{1,2})$"
+)
+#: Characters of a line an account heading is looked for in.
+_HEADING_CHARS: Final = 200
+_DASHES: Final = frozenset({"-", "\u2013"})
+#: Account headings are looked for in a page's first and last lines (where
+#: layouts print and repeat them), never mid-page.
+HEADING_TOP_LINES: Final = 6
+HEADING_BOTTOM_LINES: Final = 3
 
 
 def read_number(text: str) -> Decimal | None:
@@ -215,22 +267,83 @@ def read_number(text: str) -> Decimal | None:
     return -value if negative else value
 
 
+def is_cusip(text: str) -> bool:
+    """A CUSIP: 8 characters with at least one digit, then a valid check digit."""
+    if _CUSIP.fullmatch(text) is None or not any(c.isdigit() for c in text[:8]):
+        return False
+    total = 0
+    for index, char in enumerate(text[:8]):
+        value = int(char) if char.isdigit() else ord(char) - ord("A") + 10
+        if index % 2:
+            value *= 2
+        total += value // 10 + value % 10
+    return (10 - total % 10) % 10 == int(text[8])
+
+
+def account_heading(text: str) -> str | None:
+    """The last four digits of the account a heading (a line or a cell) names, or None.
+
+    A heading starts with ``Account # Z12-345678`` / ``Account Number:
+    123-456789`` / ``Account XXXX-4821``, after at most an all-capitals
+    account title (``INDIVIDUAL - TOD Account # Z12-345678``), or is an
+    all-capitals title ending in a number (``INDIVIDUAL - TOD Z12-345678``).
+    A text that merely mentions an account (``Linked bank account
+    XXXX-9999``) or prints an amount (a row of an accounts overview) is no
+    heading. Only the last four digits are returned; the number is not kept.
+    """
+    text = text[:_HEADING_CHARS]
+    if find_amounts(text):
+        return None
+    tokens = text.split()
+    title = 0
+    while (
+        title < len(tokens)
+        and normalise(tokens[title]) != "account"
+        and (tokens[title] in _DASHES or _TITLE_WORD.fullmatch(tokens[title]))
+    ):
+        title += 1
+    match = _ACCOUNT_LABELLED.match(" ".join(tokens[title:]))
+    number: str | None = match["num"] if match is not None else None
+    if (
+        number is None
+        and 2 <= len(tokens) <= 12
+        and _TITLE_NUMBER.fullmatch(tokens[-1])
+        and any(_TITLE_WORD.fullmatch(t) for t in tokens[:-1])
+        and all(t in _DASHES or _TITLE_WORD.fullmatch(t) for t in tokens[:-1])
+    ):
+        number = tokens[-1]
+    if number is None:
+        return None
+    digits = "".join(c for c in number if c.isdigit())
+    return digits[-4:] if len(digits) >= 4 else None
+
+
 #: Normalised activity word -> type (the first word(s) of the activity cell).
 ACTIVITY_TYPES: Final[Mapping[str, InvestmentActivityType]] = {
     "buy": "buy",
     "bought": "buy",
+    "you bought": "buy",
     "purchase": "buy",
     "sell": "sell",
     "sold": "sell",
+    "you sold": "sell",
     "sale": "sell",
     "dividend": "dividend",
     "cash dividend": "dividend",
+    "dividend received": "dividend",
     "qualified dividend": "dividend",
     "capital gain": "dividend",
+    "long term cap gain": "dividend",
+    "short term cap gain": "dividend",
+    "long term capital gain": "dividend",
+    "short term capital gain": "dividend",
     "interest": "interest",
+    "interest earned": "interest",
     "fee": "fee",
+    "fee charged": "fee",
     "account fee": "fee",
     "commission": "fee",
+    "foreign tax paid": "fee",
     "reinvest": "reinvest",
     "reinvestment": "reinvest",
     "dividend reinvestment": "reinvest",
@@ -241,12 +354,22 @@ ACTIVITY_TYPES: Final[Mapping[str, InvestmentActivityType]] = {
     "transfer out": "transfer_out",
     "shares out": "transfer_out",
     "deposit": "deposit",
+    "direct deposit": "deposit",
+    "electronic funds transfer received": "deposit",
     "contribution": "deposit",
     "withdrawal": "withdrawal",
+    "electronic funds transfer paid": "withdrawal",
     "distribution": "withdrawal",
+    "normal distribution": "withdrawal",
     "corporate action": "corporate_action",
     "merger": "corporate_action",
     "spinoff": "corporate_action",
+}
+#: Phrases naming a transfer whose type depends on what moved: ``(type when a
+#: security and a quantity are present, type for cash)``.
+TRANSFER_TYPES: Final[Mapping[str, tuple[InvestmentActivityType, InvestmentActivityType]]] = {
+    "transferred from": ("transfer_in", "deposit"),
+    "transferred to": ("transfer_out", "withdrawal"),
 }
 #: Types whose cash effect is an outflow when the amount is printed unsigned.
 OUTFLOW_TYPES: Final = frozenset({"buy", "fee", "withdrawal", "reinvest"})
@@ -255,6 +378,8 @@ SECURITY_TYPES: Final = frozenset(
     {"buy", "sell", "split", "transfer_in", "transfer_out", "reinvest"}
 )
 QUANTITY_TYPES: Final = frozenset({"buy", "sell", "transfer_in", "transfer_out", "reinvest"})
+#: Cash rows whose action text is their memo when nothing else describes them.
+CASH_MEMO_TYPES: Final = frozenset({"deposit", "withdrawal", "fee", "interest"})
 
 
 def split_ratio(text: str) -> tuple[Decimal, Decimal] | None:
@@ -268,14 +393,33 @@ def split_ratio(text: str) -> tuple[Decimal, Decimal] | None:
     return new, old
 
 
-def activity_type(text: str) -> InvestmentActivityType | None:
-    """The type an activity cell names (longest known phrase at its start)."""
+def activity_type(text: str, *, moves_security: bool = False) -> InvestmentActivityType | None:
+    """The type an activity text names (the longest known phrase at its start).
+
+    Case and punctuation do not matter and anything after the phrase is
+    ignored, so a broker's action text with the security and a trailing
+    ``(Cash)``/``(Margin)`` is typed by its leading words
+    (``REINVESTMENT EXAMPLE FUND (EXMPL) (Cash)`` -> ``reinvest``). It reads
+    a PDF's activity cell or a CSV's action column alike.
+
+    ``Transferred from``/``Transferred to`` (:data:`TRANSFER_TYPES`) is a
+    ``transfer_in``/``transfer_out`` of units when ``moves_security`` (the
+    row names a security and a non-zero quantity), else cash: ``deposit``/
+    ``withdrawal``.
+    """
     norm = normalise(text)
     best: InvestmentActivityType | None = None
     best_len = 0
+
+    def starts(phrase: str) -> bool:
+        return norm == phrase or norm.startswith(f"{phrase} ")
+
     for phrase, kind in ACTIVITY_TYPES.items():
-        if (norm == phrase or norm.startswith(f"{phrase} ")) and len(phrase) > best_len:
+        if len(phrase) > best_len and starts(phrase):
             best, best_len = kind, len(phrase)
+    for phrase, (units, cash) in TRANSFER_TYPES.items():
+        if len(phrase) > best_len and starts(phrase):
+            best, best_len = (units if moves_security else cash), len(phrase)
     return best
 
 
@@ -294,17 +438,33 @@ def guess_asset_class(name: str | None) -> AssetClassCode | None:
 
 
 # ---------------------------------------------------------------------------
-# The parser
+# Table vocabulary
 # ---------------------------------------------------------------------------
 
-HoldingRole = Literal["symbol", "name", "quantity", "price", "value", "cost"]
+#: ``begin`` is a beginning-of-period market value (read for cash groups only);
+#: ``other`` a column that is recognised (so its cells are not mistaken for
+#: another column's) but not read.
+HoldingRole = Literal["symbol", "name", "quantity", "price", "value", "cost", "begin", "other"]
+#: ``name`` is a security-name column next to a description column.
 ActivityRole = Literal[
-    "date", "settle", "type", "description", "symbol", "quantity", "price", "amount", "fees"
+    "date",
+    "settle",
+    "type",
+    "description",
+    "name",
+    "symbol",
+    "quantity",
+    "price",
+    "amount",
+    "fees",
+    "other",
 ]
 
 HOLDING_HEADERS: Final[Mapping[str, HoldingRole]] = {
     "symbol": "symbol",
     "ticker": "symbol",
+    "symbol cusip": "symbol",
+    "cusip": "symbol",
     "description": "name",
     "security": "name",
     "security description": "name",
@@ -319,14 +479,27 @@ HOLDING_HEADERS: Final[Mapping[str, HoldingRole]] = {
     "unit price": "price",
     "closing price": "price",
     "price per share": "price",
+    "price per unit": "price",
     "market price": "price",
     "market value": "value",
     "current value": "value",
+    "ending market value": "value",
+    "ending value": "value",
     "value": "value",
     "cost basis": "cost",
+    "total cost basis": "cost",
     "total cost": "cost",
     "cost": "cost",
     "book cost": "cost",
+    "beginning market value": "begin",
+    "beginning value": "begin",
+    "unrealized gain loss": "other",
+    "unrealized gain": "other",
+    "gain loss": "other",
+    "eai ey": "other",
+    "eai": "other",
+    "estimated annual income": "other",
+    "accrued interest": "other",
 }
 ACTIVITY_HEADERS: Final[Mapping[str, ActivityRole]] = {
     "date": "date",
@@ -342,7 +515,10 @@ ACTIVITY_HEADERS: Final[Mapping[str, ActivityRole]] = {
     "description": "description",
     "security": "description",
     "details": "description",
+    "security name": "name",
     "symbol": "symbol",
+    "symbol cusip": "symbol",
+    "cusip": "symbol",
     "quantity": "quantity",
     "shares": "quantity",
     "units": "quantity",
@@ -352,7 +528,31 @@ ACTIVITY_HEADERS: Final[Mapping[str, ActivityRole]] = {
     "net amount": "amount",
     "fees": "fees",
     "commission": "fees",
+    "transaction cost": "fees",
+    "reference": "other",
+    "account type": "other",
+    "balance": "other",
 }
+#: Asset-class group headings of a holdings table (normalised) -> the class
+#: of the rows under them. ``Total <group>`` lines are subtotals.
+ASSET_GROUPS: Final[Mapping[str, AssetClassCode | None]] = {
+    "mutual funds": "mutual_fund",
+    "exchange traded products": "etf",
+    "exchange traded funds": "etf",
+    "etfs": "etf",
+    "stocks": "equity",
+    "equities": "equity",
+    "common stock": "equity",
+    "bonds": "bond",
+    "fixed income": "bond",
+    "options": "option",
+    "money market funds": "cash_equivalent",
+    "core account": "cash_equivalent",
+    "cash and cash equivalents": "cash_equivalent",
+    "other": None,
+}
+#: ``Total <these>`` in a holdings table is the grand total (beats an unlabelled ``Total``).
+GRAND_TOTALS: Final = ("holdings", "market value", "securities", "investments", "portfolio")
 
 
 @dataclass(frozen=True)
@@ -362,16 +562,74 @@ class _Column[R]:
     x1: float
 
 
-def _columns[R](line: ViewLine, headers: Mapping[str, R]) -> list[_Column[R]]:
+@dataclass(frozen=True)
+class _HeaderCell:
+    """A header cell, possibly over several lines (``Price Per`` / ``Unit``)."""
+
+    parts: tuple[str, ...]
+    x0: float
+    x1: float
+
+
+def _header_cells(lines: Sequence[ViewLine]) -> list[_HeaderCell]:
+    """The first line's cells, with the words of the lines below each one appended."""
+    cells = [_HeaderCell((c.text,), c.x0, c.x1) for c in lines[0].cells]
+    for line in lines[1:]:
+        for cell in line.cells:
+            overlaps = [cell.overlap(h.x0, h.x1) for h in cells]
+            best = max(range(len(cells)), key=lambda i: overlaps[i]) if cells else -1
+            if best >= 0 and overlaps[best] > 0:
+                h = cells[best]
+                cells[best] = _HeaderCell(
+                    (*h.parts, cell.text), min(h.x0, cell.x0), max(h.x1, cell.x1)
+                )
+            else:
+                cells.append(_HeaderCell((cell.text,), cell.x0, cell.x1))
+    return sorted(cells, key=lambda h: h.x0)
+
+
+def header_key[R](parts: Sequence[str], headers: Mapping[str, R]) -> R | None:
+    """The role a header cell names: the most of its lines that are a known header.
+
+    ``Ending Market Value`` over ``Oct 31, 2026`` and ``Price Per`` over
+    ``Unit`` are read whole; a trailing date (``... as of 10/31/2026``) is
+    dropped; a line below that is no part of the header (a group heading)
+    is left off.
+    """
+    for count in range(len(parts), 0, -1):
+        text = normalise(" ".join(parts[:count]))
+        for candidate in (text, _TRAILING_DATE.sub("", text)):
+            if candidate in headers:
+                return headers[candidate]
+    return None
+
+
+def _columns[R](cells: Sequence[_HeaderCell], headers: Mapping[str, R]) -> list[_Column[R]]:
     found: list[_Column[R]] = []
     roles: set[R] = set()
-    for cell in line.cells:
-        role = headers.get(normalise(cell.text))
-        if role is None or role in roles:
+    for cell in cells:
+        role = header_key(cell.parts, headers)
+        if role is None or (role in roles and role != "other"):
             continue
         roles.add(role)
         found.append(_Column(role, cell.x0, cell.x1))
     return sorted(found, key=lambda c: c.x0)
+
+
+def _known_header(text: str) -> bool:
+    parts = (text,)
+    return header_key(parts, HOLDING_HEADERS) is not None or (
+        header_key(parts, ACTIVITY_HEADERS) is not None
+    )
+
+
+def _header_like(line: ViewLine) -> bool:
+    """Three or more cells, all header words, no amount: a table header we cannot use."""
+    return (
+        len(line.cells) >= 3
+        and not find_amounts(line.text)
+        and all(_known_header(c.text) for c in line.cells)
+    )
 
 
 def _assign[R](line: ViewLine, columns: Sequence[_Column[R]]) -> dict[R, list[Cell]]:
@@ -401,6 +659,15 @@ def _ocr[R](cells: Mapping[R, list[Cell]]) -> float | None:
     return min(values) if values else None
 
 
+def _starts(norm: str, phrase: str) -> bool:
+    return norm == phrase or norm.startswith(f"{phrase} ")
+
+
+# ---------------------------------------------------------------------------
+# Collected rows
+# ---------------------------------------------------------------------------
+
+
 @dataclass
 class _HoldingRow:
     page: int
@@ -412,6 +679,14 @@ class _HoldingRow:
     value: Amount | None
     cost: Amount | None
     ocr: float | None
+    begin: Amount | None = None
+    cusip: str | None = None
+    #: The asset-class group heading the row is under (normalised).
+    group: str | None = None
+    #: The name cell as printed (continuation lines appended).
+    raw_name: str | None = None
+    #: The symbol came from a symbol column (not from the name).
+    symbol_column: bool = False
 
 
 @dataclass
@@ -428,6 +703,7 @@ class _ActivityRow:
     amount: Amount
     fees: Amount | None
     ocr: float | None
+    cusip: str | None = None
 
 
 @dataclass
@@ -444,24 +720,77 @@ class _Summary:
 
 @dataclass
 class _Collected:
+    """What one account's lines yield (the whole document for one account)."""
+
     holdings: list[_HoldingRow] = field(default_factory=list)
     activity: list[_ActivityRow] = field(default_factory=list)
+    #: Rows under a cash group heading (``cash_groups``): the account's cash.
+    cash: list[_HoldingRow] = field(default_factory=list)
     summary: _Summary = field(default_factory=_Summary)
     skipped: int = 0
     unknown_activity: int = 0
     holdings_header: bool = False
     activity_header: bool = False
+    # -- reading state ------------------------------------------------------------
+    holdings_columns: list[_Column[HoldingRole]] | None = None
+    activity_columns: list[_Column[ActivityRole]] | None = None
+    group: str | None = None
+    last_holding: _HoldingRow | None = None
+    #: Inside a table the layout says not to read (``ignored_tables``).
+    ignoring: bool = False
+    #: Where the holdings total came from: an unlabelled or a ``Total Holdings`` line.
+    table_total: Literal["plain", "grand"] | None = None
+
+    @property
+    def found_table(self) -> bool:
+        return self.holdings_header or self.activity_header
+
+
+# ---------------------------------------------------------------------------
+# The parser
+# ---------------------------------------------------------------------------
 
 
 class BrokerageStatementParser(DocumentParser):
-    """Generic brokerage statement: holdings and activity tables (module doc)."""
+    """Generic brokerage statement: holdings and activity tables, one or more accounts.
+
+    **Accounts.** A heading naming an account (:func:`account_heading`, on
+    the line or in one of its cells) among a page's first
+    :data:`HEADING_TOP_LINES` or last :data:`HEADING_BOTTOM_LINES` lines
+    marks where that account's pages are; a mention mid-page is no heading.
+    When the headings name one account (or
+    none) the document is one statement, read exactly as a single-account
+    statement always was (its last four digits from the first account
+    number found, else from the heading). When they name two or more, each
+    account is its own :class:`InvestmentStatement` (own last four digits,
+    positions, activity, cash, totals and reconciliation):
+
+    * a page whose headings all name one account belongs to it entirely (a
+      heading repeated at the top or the bottom of each page);
+    * on a page naming several, the lines before the first heading continue
+      the account of the page before, and each heading starts its account;
+    * a page with no heading continues the account before it; the pages
+      before the first heading (an overview of all accounts) give only the
+      period, currency and "as of" date every account falls back on, and a
+      holdings or activity row there belongs to no account (skipped,
+      ``rows_outside_account``);
+    * an account without a holdings or activity table gives no statement
+      (``account_without_tables``); at most :data:`MAX_STATEMENTS` accounts.
+
+    Misplaced lines cannot pass silently: they break that account's
+    reconciliation, and the importer holds a statement that does not
+    reconcile.
+    """
 
     name: ClassVar[str] = "brokerage_statement_generic"
-    version: ClassVar[str] = "1"
+    version: ClassVar[str] = "2"
     kind: ClassVar[Literal["statement", "payslip", "receipt"]] = "statement"
     display_name: ClassVar[str | None] = None
     #: Phrases on the first page that identify the institution (its name first).
     fingerprints: ClassVar[tuple[str, ...]] = ()
+    #: Every fingerprint phrase must be on page 1 (not only the name): for an
+    #: institution whose name other documents print (a payee, a transfer).
+    all_fingerprints: ClassVar[bool] = False
     account_type: ClassVar[str] = "brokerage"
     default_currency: ClassVar[str | None] = None
     date_styles: ClassVar[tuple[DateStyle, ...]] = ()
@@ -473,8 +802,13 @@ class BrokerageStatementParser(DocumentParser):
         "statement from",
         "period",
     )
-    #: Summary labels in the order they are tried on a line (longest first).
+    #: Summary labels in the order they are tried on a line (longest first);
+    #: ``ignore`` consumes a label no slot takes (a beginning account value
+    #: is not the account value).
     summary_labels: ClassVar[tuple[tuple[str, str], ...]] = (
+        ("beginning account value", "ignore"),
+        ("beginning net value", "ignore"),
+        ("beginning portfolio value", "ignore"),
         ("beginning cash balance", "cash_opening"),
         ("opening cash balance", "cash_opening"),
         ("starting cash balance", "cash_opening"),
@@ -487,29 +821,102 @@ class BrokerageStatementParser(DocumentParser):
         ("total securities value", "positions_value"),
         ("total holdings", "positions_value"),
         ("holdings value", "positions_value"),
+        ("ending account value", "total_value"),
+        ("ending net value", "total_value"),
         ("total account value", "total_value"),
         ("total portfolio value", "total_value"),
         ("account value", "total_value"),
     )
     skip_prefixes: ClassVar[tuple[str, ...]] = ("page ", "continued", "subtotal")
+    #: Read an activity table's description as the action when it has no
+    #: action column (always; the generic parser only when the table also
+    #: names a security, a symbol or a quantity, so a bank table stays a bank's).
+    description_types: ClassVar[bool] = False
+    #: Holdings groups whose rows are the account's cash (a core/sweep money
+    #: market position): beginning and ending market values are the opening
+    #: and closing cash, they are no position, and the printed holdings totals
+    #: include them (subtracted for the holdings check).
+    cash_groups: ClassVar[tuple[str, ...]] = ()
+    #: Headings (normalised prefixes) of tables not to read (their rows would
+    #: count the same money twice), until one of ``section_headings``.
+    ignored_tables: ClassVar[tuple[str, ...]] = ()
+    section_headings: ClassVar[tuple[str, ...]] = ()
 
     # -- detection ----------------------------------------------------------------
 
     @staticmethod
     def holdings_columns(line: ViewLine) -> list[_Column[HoldingRole]] | None:
-        found = _columns(line, HOLDING_HEADERS)
+        return BrokerageStatementParser._holdings_from(_header_cells([line]))
+
+    @staticmethod
+    def _holdings_from(cells: Sequence[_HeaderCell]) -> list[_Column[HoldingRole]] | None:
+        found = _columns(cells, HOLDING_HEADERS)
         roles = {c.role for c in found}
         if {"quantity", "value"} <= roles and roles & {"symbol", "name"}:
             return found
         return None
 
-    @staticmethod
-    def activity_columns(line: ViewLine) -> list[_Column[ActivityRole]] | None:
-        found = _columns(line, ACTIVITY_HEADERS)
+    @classmethod
+    def activity_columns(cls, line: ViewLine) -> list[_Column[ActivityRole]] | None:
+        return cls._activity_from(_header_cells([line]))
+
+    @classmethod
+    def _activity_from(cls, cells: Sequence[_HeaderCell]) -> list[_Column[ActivityRole]] | None:
+        found = _columns(cells, ACTIVITY_HEADERS)
         roles = {c.role for c in found}
+        if "date" not in roles and "settle" in roles:
+            # Only a settlement date: it dates the row.
+            found = [_Column("date", c.x0, c.x1) if c.role == "settle" else c for c in found]
+            roles = {c.role for c in found}
+        if (
+            "type" not in roles
+            and "description" in roles
+            and (cls.description_types or roles & {"symbol", "name", "quantity"})
+        ):
+            # "You Bought", "Dividend Received": the description is the action.
+            found = [_Column("type", c.x0, c.x1) if c.role == "description" else c for c in found]
+            roles = {c.role for c in found}
         if {"date", "type", "amount"} <= roles:
             return found
         return None
+
+    def _header_at(
+        self, lines: Sequence[ViewLine], index: int
+    ) -> tuple[list[_Column[HoldingRole]] | None, list[_Column[ActivityRole]] | None, int] | None:
+        """A table header starting at ``lines[index]`` over up to three lines.
+
+        Returns ``(holdings, activity, lines used)``. A header over several
+        lines (``Price Per`` / ``Unit``, a date under ``Ending Market
+        Value``) is used when it names more columns than its first line
+        alone; a later line with an amount is a row, never header.
+        """
+        first = lines[index]
+        best: tuple[list[_Column[Any]], bool, int] | None = None
+        for count in (1, 2, 3):
+            group = lines[index : index + count]
+            if len(group) < count or group[-1].page != first.page:
+                break
+            if count > 1:
+                if find_amounts(group[-1].text):
+                    break
+                if count == 2 and (
+                    find_amounts(first.text)
+                    or sum(1 for c in first.cells if _known_header(c.text)) < 2
+                ):
+                    break
+            cells = _header_cells(group)
+            holdings = self._holdings_from(cells)
+            columns: list[_Column[Any]] | None = holdings
+            if columns is None:
+                columns = self._activity_from(cells)
+            if columns is not None and (best is None or len(columns) > len(best[0])):
+                best = (columns, holdings is not None, count)
+        if best is None:
+            return None
+        columns, is_holdings, count = best
+        if is_holdings:
+            return columns, None, count
+        return None, columns, count
 
     def fingerprint_score(self, view: DocumentView) -> float:
         if not self.fingerprints:
@@ -518,10 +925,20 @@ class BrokerageStatementParser(DocumentParser):
         hits = sum(1 for phrase in self.fingerprints if f" {normalise(phrase)} " in head)
         return hits / len(self.fingerprints)
 
+    def _tables(self, view: DocumentView) -> tuple[bool, bool]:
+        holdings = activity = False
+        for index in range(len(view.lines)):
+            found = self._header_at(view.lines, index)
+            if found is not None:
+                holdings = holdings or found[0] is not None
+                activity = activity or found[1] is not None
+                if holdings and activity:
+                    break
+        return holdings, activity
+
     def detect(self, view: DocumentView) -> float:
-        holdings = any(self.holdings_columns(line) is not None for line in view.lines)
-        activity = any(self.activity_columns(line) is not None for line in view.lines)
         if not self.fingerprints:
+            holdings, activity = self._tables(view)
             # Above the bank-statement parsers (0.4/0.45) for the same activity table.
             if holdings:
                 return 0.7 if activity else 0.6
@@ -529,8 +946,67 @@ class BrokerageStatementParser(DocumentParser):
         share = self.fingerprint_score(view)
         if f" {normalise(self.fingerprints[0])} " not in f" {view.head_text()} ":
             return 0.0  # the institution's own name (the first phrase) must be there
+        if self.all_fingerprints and share < 1:
+            return 0.0
+        holdings, activity = self._tables(view)
         score = 0.5 + 0.4 * share
         return round(score + 0.1 if holdings or activity else score * 0.6, 4)
+
+    # -- accounts -----------------------------------------------------------------
+
+    def _sections(self, view: DocumentView) -> tuple[list[_Collected], _Collected | None, int]:
+        """``(accounts, preamble, accounts dropped)`` (class doc); one account: no preamble."""
+        pages: dict[int, list[ViewLine]] = {}
+        for line in view.lines:
+            pages.setdefault(line.page, []).append(line)
+        headings: dict[int, str | None] = {}
+        for page_lines in pages.values():
+            last = len(page_lines) - HEADING_BOTTOM_LINES
+            for position, line in enumerate(page_lines):
+                zone = position < HEADING_TOP_LINES or position >= last
+                headings[line.index] = self._heading(line) if zone else None
+        named = list(dict.fromkeys(v for v in headings.values() if v is not None))
+        if len(named) < 2:
+            single = _Collected()
+            self._read(view.lines, single)
+            if single.summary.last4 is None and named:
+                single.summary.last4 = named[0]
+            return [single], None, 0
+        routed: dict[str | None, list[ViewLine]] = {None: []}
+        current: str | None = None
+        for page_lines in pages.values():
+            marks = [headings[line.index] for line in page_lines if headings[line.index]]
+            if marks and len(set(marks)) == 1:
+                current = marks[0]
+                routed.setdefault(current, []).extend(page_lines)
+                continue
+            for line in page_lines:
+                mark = headings[line.index]
+                if mark is not None:
+                    current = mark
+                routed.setdefault(current, []).append(line)
+        preamble = _Collected()
+        self._read(routed.pop(None), preamble)
+        accounts: list[_Collected] = []
+        for last4, lines in routed.items():
+            collected = _Collected()
+            self._read(lines, collected)
+            collected.summary.last4 = last4
+            accounts.append(collected)
+        kept = accounts[:MAX_STATEMENTS]
+        return kept, preamble, len(accounts) - len(kept)
+
+    @staticmethod
+    def _heading(line: ViewLine) -> str | None:
+        """The account a line names (the line, else one of its cells; no amounts)."""
+        if find_amounts(line.text):
+            return None
+        found = account_heading(line.text)
+        if found is None and len(line.cells) > 1:
+            found = next(
+                (h for c in line.cells if (h := account_heading(c.text)) is not None), None
+            )
+        return found
 
     # -- collecting -----------------------------------------------------------------
 
@@ -540,7 +1016,7 @@ class BrokerageStatementParser(DocumentParser):
             if end is None:
                 continue
             amounts = find_amounts(line.text[end:])
-            if amounts and getattr(summary, slot) is None:
+            if slot != "ignore" and amounts and getattr(summary, slot) is None:
                 setattr(summary, slot, amounts[0])
             break
         if summary.period_text is None:
@@ -562,17 +1038,29 @@ class BrokerageStatementParser(DocumentParser):
             if match is not None:
                 summary.currency = match[1].upper()
 
-    def _holding(self, line: ViewLine, cells: dict[HoldingRole, list[Cell]]) -> _HoldingRow | None:
+    @staticmethod
+    def _name_symbol(raw: str | None) -> tuple[str | None, str | None]:
+        """``(symbol, name)`` from a name cell (``... (EXMPL)`` or a leading ticker)."""
+        if raw is None:
+            return None, None
+        symbol, name = _split_symbol(raw)
+        if symbol is not None and not _SYMBOL.fullmatch(symbol):
+            symbol = None
+        return symbol, name
+
+    def _holding(
+        self, line: ViewLine, cells: dict[HoldingRole, list[Cell]], group: str | None
+    ) -> _HoldingRow | None:
         quantity = read_number(_text(cells.get("quantity")))
         if quantity is None:
             return None
-        name = _text(cells.get("name")) or None
-        symbol = _text(cells.get("symbol")) or None
-        if symbol is None and name is not None:
-            symbol, name = _split_symbol(name)
-        if symbol is not None and not _SYMBOL.fullmatch(symbol):
-            symbol = None
-        if symbol is None and name is None:
+        raw_name = _text(cells.get("name")) or None
+        name = raw_name
+        symbol, cusip = _identifier(_text(cells.get("symbol")))
+        symbol_column = symbol is not None or cusip is not None
+        if not symbol_column:
+            symbol, name = self._name_symbol(raw_name)
+        if symbol is None and cusip is None and name is None:
             return None
         price_text = _text(cells.get("price"))
         return _HoldingRow(
@@ -585,7 +1073,59 @@ class BrokerageStatementParser(DocumentParser):
             value=read_amount(_text(cells.get("value"))),
             cost=read_amount(_text(cells.get("cost"))),
             ocr=_ocr(cells),
+            begin=read_amount(_text(cells.get("begin"))),
+            cusip=cusip,
+            group=group,
+            raw_name=raw_name,
+            symbol_column=symbol_column,
         )
+
+    def _continue_holding(
+        self, line: ViewLine, cells: dict[HoldingRole, list[Cell]], row: _HoldingRow
+    ) -> bool:
+        """A wrapped security name (``EXAMPLE TOTAL MARKET`` / ``INDEX FUND (EXMPL)``)."""
+        if not cells or not set(cells) <= {"name", "symbol"} or find_amounts(line.text):
+            return False
+        extra = _text(cells.get("name"))
+        if not extra:
+            return False
+        row.raw_name = f"{row.raw_name or ''} {extra}".strip()[:200]
+        if row.symbol_column:
+            row.name = row.raw_name
+        else:
+            row.symbol, row.name = self._name_symbol(row.raw_name)
+        return True
+
+    def _group(self, norm: str, *, prefix: bool = False) -> str | None:
+        """The asset-class group a heading names (``prefix``: a ``Total <group> ...`` rest)."""
+        if norm.endswith(" continued"):
+            norm = norm[: -len(" continued")]
+        for group in (*self.cash_groups, *ASSET_GROUPS):
+            if norm == group or (prefix and norm.startswith(f"{group} ")):
+                return group
+        return None
+
+    def _holdings_total(self, line: ViewLine, collected: _Collected) -> None:
+        rest = line.norm[len("total") :].strip()
+        if self._group(rest, prefix=True) is not None:
+            return  # "Total Mutual Funds": a group's subtotal
+        columns = collected.holdings_columns or []
+        value = read_amount(_text(_assign(line, columns).get("value")))
+        if value is None:
+            amounts = find_amounts(line.text)
+            value = amounts[-1] if amounts else None
+        if value is None:
+            return
+        summary = collected.summary
+        if any(_starts(rest, g) for g in GRAND_TOTALS):
+            if collected.table_total != "grand" and (
+                summary.positions_value is None or collected.table_total == "plain"
+            ):
+                summary.positions_value = value
+            collected.table_total = "grand"
+        elif summary.positions_value is None:
+            summary.positions_value = value
+            collected.table_total = "plain"
 
     def _activity(
         self, line: ViewLine, cells: dict[ActivityRole, list[Cell]], collected: _Collected
@@ -593,18 +1133,35 @@ class BrokerageStatementParser(DocumentParser):
         date_text = _text(cells.get("date"))
         if not date_text or not _date_shaped(date_text):
             return
-        kind = activity_type(_text(cells.get("type")))
-        amount = read_amount(_text(cells.get("amount")))
+        type_text = _text(cells.get("type"))
+        name = _text(cells.get("name"))
+        symbol, cusip = _identifier(_text(cells.get("symbol")))
+        quantity_text = _text(cells.get("quantity"))
+        quantity = read_number(quantity_text) if quantity_text else None
+        # A transfer moves units when the row names a security and a quantity.
+        named = symbol or cusip or name or _text(cells.get("description"))
+        moves = bool(named) and bool(quantity)
+        kind = activity_type(type_text, moves_security=moves)
+        amount_text = _text(cells.get("amount"))
+        amount = read_amount(amount_text)
         if kind is None:
             collected.unknown_activity += 1
             collected.skipped += 1
             return
+        if (
+            amount is None
+            and kind in ("transfer_in", "transfer_out")
+            and quantity
+            and amount_text.strip("-\u2013 ") == ""
+        ):
+            amount = Amount(value=Decimal(0))  # units moved, no cash ("-")
         if amount is None:
             collected.skipped += 1
             return
-        description = _text(cells.get("description"))
-        symbol = _text(cells.get("symbol")) or None
-        quantity_text = _text(cells.get("quantity"))
+        description = name or _text(cells.get("description"))
+        if not description and kind in CASH_MEMO_TYPES:
+            # A deposit table's action ("Electronic Funds Transfer Received") is its memo.
+            description = type_text
         price_text = _text(cells.get("price"))
         fees_text = _text(cells.get("fees"))
         collected.activity.append(
@@ -615,52 +1172,92 @@ class BrokerageStatementParser(DocumentParser):
                 settle_text=_text(cells.get("settle")),
                 type=kind,
                 description=description,
-                symbol=symbol if symbol and _SYMBOL.fullmatch(symbol) else None,
-                quantity=read_number(quantity_text) if quantity_text else None,
+                symbol=symbol,
+                quantity=quantity,
                 price=read_number(price_text) if price_text else None,
                 amount=amount,
                 fees=read_amount(fees_text) if fees_text else None,
                 ocr=_ocr(cells),
+                cusip=cusip,
             )
         )
 
-    def _collect(self, view: DocumentView) -> _Collected:
-        collected = _Collected()
-        holdings: list[_Column[HoldingRole]] | None = None
-        activity: list[_Column[ActivityRole]] | None = None
-        for line in view.lines:
-            header_h = self.holdings_columns(line)
-            header_a = self.activity_columns(line) if header_h is None else None
-            if header_h is not None:
-                holdings, activity = header_h, None
-                collected.holdings_header = True
+    def _is_heading(self, line: ViewLine, phrases: tuple[str, ...]) -> bool:
+        if not phrases or len(line.cells) > 2 or find_amounts(line.text):
+            return False
+        return any(_starts(line.norm, p) for p in phrases)
+
+    def _read(self, lines: Sequence[ViewLine], collected: _Collected) -> None:
+        """Read one account's lines (or the whole document) into ``collected``."""
+        index = 0
+        while index < len(lines):
+            line = lines[index]
+            found = self._header_at(lines, index)
+            if found is not None:
+                holdings, activity, used = found
+                index += used
+                if collected.ignoring:
+                    collected.holdings_columns = collected.activity_columns = None
+                elif holdings is not None:
+                    collected.holdings_columns, collected.activity_columns = holdings, None
+                    collected.holdings_header = True
+                    collected.group = None
+                    collected.last_holding = None
+                else:
+                    collected.holdings_columns, collected.activity_columns = None, activity
+                    collected.activity_header = True
                 continue
-            if header_a is not None:
-                holdings, activity = None, header_a
-                collected.activity_header = True
+            index += 1
+            if self._is_heading(line, self.ignored_tables):
+                collected.ignoring = True
+                collected.holdings_columns = collected.activity_columns = None
                 continue
-            norm = line.norm
-            if any(norm.startswith(prefix.strip()) for prefix in self.skip_prefixes):
-                continue
-            if holdings is not None:
-                if norm.startswith("total"):
-                    amounts = find_amounts(line.text)
-                    if amounts and collected.summary.positions_value is None:
-                        collected.summary.positions_value = amounts[-1]
+            if collected.ignoring:
+                if not self._is_heading(line, self.section_headings):
                     continue
-                row = self._holding(line, _assign(line, holdings))
-                if row is not None:
+                collected.ignoring = False
+            self._line(line, collected)
+
+    def _line(self, line: ViewLine, collected: _Collected) -> None:
+        norm = line.norm
+        if any(norm.startswith(prefix.strip()) for prefix in self.skip_prefixes):
+            return
+        holdings, activity = collected.holdings_columns, collected.activity_columns
+        if (holdings is not None or activity is not None) and _header_like(line):
+            # A table header we cannot read: the table above ends here.
+            collected.holdings_columns = collected.activity_columns = None
+            return
+        if holdings is not None:
+            group = self._group(norm)
+            if group is not None and not find_amounts(line.text):
+                collected.group = group
+                collected.last_holding = None
+                return
+            if norm.startswith("total"):
+                self._holdings_total(line, collected)
+                collected.last_holding = None
+                return
+            cells = _assign(line, holdings)
+            row = self._holding(line, cells, collected.group)
+            if row is not None:
+                if collected.group is not None and collected.group in self.cash_groups:
+                    collected.cash.append(row)
+                else:
                     collected.holdings.append(row)
-                    continue
-            elif activity is not None:
-                if norm.startswith("total"):
-                    continue
-                before = len(collected.activity) + collected.skipped
-                self._activity(line, _assign(line, activity), collected)
-                if len(collected.activity) + collected.skipped != before:
-                    continue
-            self._scan_summary(line, collected.summary)
-        return collected
+                collected.last_holding = row
+                return
+            last = collected.last_holding
+            if last is not None and self._continue_holding(line, cells, last):
+                return
+            collected.last_holding = None
+        elif activity is not None:
+            if norm.startswith("total"):
+                return
+            before = len(collected.activity) + collected.skipped
+            self._activity(line, _assign(line, activity), collected)
+            if len(collected.activity) + collected.skipped != before:
+                return
+        self._scan_summary(line, collected.summary)
 
     # -- dates ----------------------------------------------------------------------
 
@@ -710,14 +1307,23 @@ class BrokerageStatementParser(DocumentParser):
     # -- the statement --------------------------------------------------------------
 
     def _security(
-        self, symbol: str | None, name: str | None, known: Mapping[str, str | None]
+        self,
+        symbol: str | None,
+        name: str | None,
+        known: Mapping[str, str | None],
+        *,
+        cusip: str | None = None,
+        asset_class: AssetClassCode | None = None,
     ) -> SecurityRef | None:
-        if symbol is None:
+        if symbol is None and cusip is None:
             return None
-        clean_name = (name or known.get(symbol) or "").strip()[:200] or None
+        clean_name = (name or (known.get(symbol) if symbol else None) or "").strip()[:200] or None
         try:
             return SecurityRef(
-                symbol=symbol, name=clean_name, asset_class=guess_asset_class(clean_name)
+                symbol=symbol,
+                cusip=cusip,
+                name=clean_name,
+                asset_class=asset_class or guess_asset_class(clean_name),
             )
         except ValidationError:
             return None
@@ -728,7 +1334,13 @@ class BrokerageStatementParser(DocumentParser):
         positions: list[InvestmentPosition] = []
         scores: list[dict[str, float]] = []
         for row in collected.holdings:
-            security = self._security(row.symbol, row.name, {})
+            security = self._security(
+                row.symbol,
+                row.name,
+                {},
+                cusip=row.cusip,
+                asset_class=ASSET_GROUPS.get(row.group) if row.group else None,
+            )
             if security is None:
                 collected.skipped += 1
                 continue
@@ -773,11 +1385,11 @@ class BrokerageStatementParser(DocumentParser):
                 continue
             settle = self._read_date(row.settle_text, styles, period) if row.settle_text else None
             symbol, name = row.symbol, row.description or None
-            if symbol is None and name is not None:
+            if symbol is None and row.cusip is None and name is not None:
                 lead, rest = _split_symbol(name)
                 if lead is not None and (lead in known or row.type in SECURITY_TYPES):
                     symbol, name = lead, rest
-            security = self._security(symbol, name, known)
+            security = self._security(symbol, name, known, cusip=row.cusip)
             amount = row.amount.value
             if not row.amount.negative_marked and row.type in OUTFLOW_TYPES:
                 amount = -abs(amount)
@@ -825,15 +1437,35 @@ class BrokerageStatementParser(DocumentParser):
             scores.append(score)
         return rows, scores
 
-    def parse(
-        self, view: DocumentView, *, threshold: float, date_order: str | None = None
-    ) -> ParseOutcome:
-        collected = self._collect(view)
-        outcome = ParseOutcome()
-        if not (collected.holdings_header or collected.activity_header):
-            outcome.warnings.append("no_table_header")
-            return outcome
+    @staticmethod
+    def _cash_from_groups(collected: _Collected) -> tuple[Amount | None, Amount | None, Decimal]:
+        """``(opening, closing, closing total)`` from the cash group rows."""
+        if not collected.cash:
+            return None, None, Decimal(0)
+        ends = [r.value.value for r in collected.cash if r.value is not None]
+        begins = [r.begin.value for r in collected.cash if r.begin is not None]
+        closing = sum_amounts(ends) if len(ends) == len(collected.cash) else None
+        opening = sum_amounts(begins) if len(begins) == len(collected.cash) else None
+        return (
+            Amount(value=opening) if opening is not None else None,
+            Amount(value=closing) if closing is not None else None,
+            closing if closing is not None else Decimal(0),
+        )
+
+    def _statement(
+        self,
+        view: DocumentView,
+        collected: _Collected,
+        fallback: _Summary | None,
+        threshold: float,
+        date_order: str | None,
+    ) -> tuple[InvestmentStatement, bool]:
+        """One account's statement and whether its dates were read with certainty."""
         summary = collected.summary
+        if fallback is not None:
+            for slot in ("period_text", "as_of_text", "currency"):
+                if getattr(summary, slot) is None:
+                    setattr(summary, slot, getattr(fallback, slot))
         styles, certain = self._styles(collected.activity, date_order)
         period = self._period(summary, styles)
         as_of: date | None = None
@@ -854,10 +1486,29 @@ class BrokerageStatementParser(DocumentParser):
                 [conf.INFERRED, *(s["trade_date"] for s in activity_scores)]
             )
         currency = summary.currency or self.default_currency
+        cash_opening, cash_closing = summary.cash_opening, summary.cash_closing
+        positions_value = summary.positions_value
+        group_open, group_close, group_total = self._cash_from_groups(collected)
+        if collected.cash:
+            if cash_opening is None:
+                cash_opening = group_open
+            if cash_closing is None:
+                cash_closing = group_close
+            if positions_value is not None:
+                # The printed holdings total includes the cash group rows.
+                positions_value = replace(
+                    positions_value, value=positions_value.value - group_total
+                )
         statement_conf["account_number"] = self.base if summary.last4 else conf.MISSING
         statement_conf["currency"] = self.base if currency else conf.MISSING
-        for slot in ("cash_opening", "cash_closing", "positions_value", "total_value"):
-            statement_conf[slot] = self.base if getattr(summary, slot) is not None else conf.MISSING
+        values = {
+            "cash_opening": cash_opening,
+            "cash_closing": cash_closing,
+            "positions_value": positions_value,
+            "total_value": summary.total_value,
+        }
+        for slot, value in values.items():
+            statement_conf[slot] = self.base if value is not None else conf.MISSING
 
         def balance(value: Amount | None, on: date | None) -> Balance | None:
             return Balance(amount=value.value, as_of=on) if value is not None else None
@@ -875,9 +1526,9 @@ class BrokerageStatementParser(DocumentParser):
             as_of=as_of,
             positions=positions,
             activity=activity,
-            cash_opening=balance(summary.cash_opening, period[0] if period else None),
-            cash_closing=balance(summary.cash_closing, as_of),
-            positions_value=balance(summary.positions_value, as_of),
+            cash_opening=balance(cash_opening, period[0] if period else None),
+            cash_closing=balance(cash_closing, as_of),
+            positions_value=balance(positions_value, as_of),
             total_value=balance(summary.total_value, as_of),
             truncated=view.truncated,
         )
@@ -919,14 +1570,51 @@ class BrokerageStatementParser(DocumentParser):
                 "reconciliation": check,
             }
         )
-        outcome.investments.append(statement)
-        outcome.skipped_lines = collected.skipped
-        if collected.unknown_activity:
+        return statement, certain
+
+    def parse(
+        self, view: DocumentView, *, threshold: float, date_order: str | None = None
+    ) -> ParseOutcome:
+        accounts, preamble, dropped = self._sections(view)
+        outcome = ParseOutcome()
+        if not any(c.found_table for c in accounts):
+            outcome.warnings.append("no_table_header")
+            return outcome
+        warnings: list[str] = []
+        skipped = 0
+        unknown = 0
+        guessed = False
+        for collected in accounts:
+            if not collected.found_table:
+                warnings.append("account_without_tables")
+                continue
+            statement, certain = self._statement(
+                view,
+                collected,
+                preamble.summary if preamble is not None else None,
+                threshold,
+                date_order,
+            )
+            outcome.investments.append(statement)
+            skipped += collected.skipped
+            unknown += collected.unknown_activity
+            guessed = guessed or not certain
+        if preamble is not None:
+            outside = len(preamble.holdings) + len(preamble.activity) + len(preamble.cash)
+            skipped += outside + preamble.skipped
+            unknown += preamble.unknown_activity
+            if outside:
+                warnings.append("rows_outside_account")
+        if dropped:
+            warnings.append("too_many_accounts")
+        outcome.skipped_lines = skipped
+        if unknown:
             outcome.warnings.append("activity_type_unknown")
         if view.truncated:
             outcome.warnings.append("truncated")
-        if not certain:
+        if guessed:
             outcome.warnings.append("date_order_guessed")
+        outcome.warnings.extend(dict.fromkeys(warnings))
         return outcome
 
 
@@ -934,6 +1622,16 @@ def _date_shaped(text: str) -> bool:
     if numeric_parts(text) is not None:
         return True
     return any(read_date(text, style) is not None for style in ("d_mon_y", "mon_d_y", "ymd"))
+
+
+def _identifier(text: str) -> tuple[str | None, str | None]:
+    """``(symbol, cusip)`` of a symbol cell (``Symbol/CUSIP`` holds either)."""
+    text = text.strip()
+    if not text:
+        return None, None
+    if is_cusip(text):
+        return None, text
+    return (text, None) if _SYMBOL.fullmatch(text) else (None, None)
 
 
 def _split_symbol(text: str) -> tuple[str | None, str | None]:
@@ -965,7 +1663,70 @@ class PlaceholderBrokerageParser(BrokerageStatementParser):
     base: ClassVar[float] = 1.0
 
 
+class FidelityStatementParser(BrokerageStatementParser):
+    """Fidelity Investments "Investment Report": one or several accounts per PDF.
+
+    The layout as this parser expects it (drawn by
+    ``tests/fixtures/synth_fidelity.py`` from invented accounts and
+    instruments; no real statement is in the repository): page 1 names
+    "Fidelity Investments" and "Investment Report" with the period
+    (``October 1, 2026 - October 31, 2026``) and an overview of the accounts;
+    each account's pages carry its title and number (``INDIVIDUAL - TOD``
+    ... ``Account # Z12-345678``), an account summary (``Beginning Account
+    Value`` ... ``Ending Account Value``), *Holdings* grouped by asset class
+    (Core Account, Mutual Funds, Exchange Traded Products, Stocks) with
+    ``Total <group>`` subtotals and ``Total Holdings``, its columns
+    *Description, Beginning Market Value, Quantity, Price Per Unit, Ending
+    Market Value, Total Cost Basis, Unrealized Gain/Loss, EAI ($) / EY (%)*
+    over two lines with dates under them; and *Activity* tables (*Settlement
+    Date, Security Name, Symbol/CUSIP, Description, Quantity, Price,
+    Transaction Cost, Amount*; *Date, Reference, Description, Amount* for
+    deposits and withdrawals) whose description is the action ("You
+    Bought", "Dividend Received", "Reinvestment", "Electronic Funds Transfer
+    Received", ...; :data:`ACTIVITY_TYPES`). Dates are ``MM/DD`` (the year
+    from the period), ``MM/DD/YYYY`` or ``Mon D, YYYY``.
+
+    Cash is the **core account** (a money market position): its rows are
+    the account's opening and closing cash, not a position, so every trade,
+    income and transfer is checked against the change in cash; the *Core
+    Fund Activity* table (the core's own buys and sells settling those
+    trades) is not read, it would count each of them twice.
+    """
+
+    name: ClassVar[str] = "fidelity_investments_statement"
+    version: ClassVar[str] = "1"
+    institution: ClassVar[str | None] = "fidelity-investments-statement"
+    display_name: ClassVar[str | None] = "Fidelity Investments"
+    fingerprints: ClassVar[tuple[str, ...]] = ("fidelity investments", "investment report")
+    all_fingerprints: ClassVar[bool] = True
+    default_currency: ClassVar[str | None] = "USD"
+    date_styles: ClassVar[tuple[DateStyle, ...]] = ("mdy", "md", "mon_d_y")
+    period_styles: ClassVar[tuple[DateStyle, ...]] = ("mon_d_y", "mdy")
+    base: ClassVar[float] = 1.0
+    period_labels: ClassVar[tuple[str, ...]] = (
+        "investment report",
+        *BrokerageStatementParser.period_labels,
+    )
+    description_types: ClassVar[bool] = True
+    cash_groups: ClassVar[tuple[str, ...]] = ("core account",)
+    ignored_tables: ClassVar[tuple[str, ...]] = ("core fund activity",)
+    section_headings: ClassVar[tuple[str, ...]] = (
+        "holdings",
+        "activity",
+        "account summary",
+        "securities bought",
+        "dividends interest",
+        "deposits",
+        "withdrawals",
+        "fees and charges",
+        "other activity",
+        "trades pending",
+        "income summary",
+    )
+
+
 BROKERAGE_PARSERS: Final[tuple[type[BrokerageStatementParser], ...]] = (
+    FidelityStatementParser,
     PlaceholderBrokerageParser,
     BrokerageStatementParser,
 )

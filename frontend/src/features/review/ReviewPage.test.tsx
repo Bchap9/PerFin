@@ -340,6 +340,22 @@ describe("review queue", () => {
     ).toBeInTheDocument();
   });
 
+  it("says which part of a multi-account file needs an account", async () => {
+    reviewApi([
+      item("r-7", "unknown_account", {
+        reason: "account_not_found",
+        group: 1,
+        transactions: 12,
+      }),
+    ]);
+    renderApp("/review");
+    expect(
+      await screen.findByText(
+        "This file lists several accounts. PerFin could not tell which of yours holds 12 of its transactions.",
+      ),
+    ).toBeInTheDocument();
+  });
+
   it("is read-only for a viewer", async () => {
     reviewApi(
       [item("r-6", "unknown_account", {}, { can_resolve: false })],

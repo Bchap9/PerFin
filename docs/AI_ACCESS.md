@@ -342,8 +342,9 @@ never support hosted providers.
 
 Classification and parsing rely on deterministic fingerprints, institution
 parsers, a small local heuristic classifier and the review queue with a
-column-mapping editor. A never-seen layout needs a person once; the saved
-mapping becomes a fingerprint.
+column-mapping editor. A never-seen layout needs a person once (a CSV
+whose header the deterministic suggestion reads with confidence is mapped
+without one); the saved mapping becomes a fingerprint.
 
 ## Threats specific to this boundary
 

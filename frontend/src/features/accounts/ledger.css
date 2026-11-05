@@ -82,6 +82,13 @@
   text-align: start;
   cursor: pointer;
   text-decoration: underline dotted;
+  text-decoration-color: color-mix(in srgb, currentColor 45%, transparent);
+  text-underline-offset: 0.22em;
+}
+
+.cell-text-button:hover {
+  color: var(--color-accent);
+  text-decoration-color: currentColor;
 }
 
 .tag-picker {

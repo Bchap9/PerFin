@@ -27,7 +27,10 @@ editable by the caller as well. A closed item is ``409 review-item-closed``.
   (``app.domain.imports.service.request_apply`` re-runs the stored
   extraction; a document without one goes through the pipeline again).
   ``remember`` saves the statement's last four digits on the account, or the
-  account on the CSV mapping the item names.
+  account on the CSV mapping the item names. For one account of a
+  multi-account CSV (``group``) the digits are read again from the stored
+  table with the item's mapping, and the mapping itself is left alone (it
+  serves every account of the file).
 * ``unparsed``: ``reprocess`` (pipeline again) or ``apply_mapping``
   (re-import with a saved column mapping).
 * ``receipt_match``: the receipt is attached to the chosen transaction
@@ -463,6 +466,7 @@ def _reimport(
     mapping_id: uuid.UUID | None,
     account_id: uuid.UUID | None,
     request: HTTPConnection | None,
+    group: int | None = None,
 ) -> dict[str, Any]:
     """Import the stored extraction again, else run the whole pipeline again."""
     if document.extraction is not None and document.status in REIMPORTABLE:
@@ -470,7 +474,7 @@ def _reimport(
             db,
             principal,
             document.id,
-            ApplyMapping(mapping_id=mapping_id, account_id=account_id),
+            ApplyMapping(mapping_id=mapping_id, account_id=account_id, group=group),
             request=request,
         )
         return {"rerun": "import", "job_id": str(accepted.job_id)}
@@ -491,9 +495,26 @@ def _resolve_account(
     account = get_visible_account(db, principal, body.account_id, need="edit")
     payload = item.payload or {}
     remembered: list[str] = []
+    grouped = isinstance(payload.get("group"), int)
+    if grouped and not imports_service.group_item_current(db, document, payload):
+        # The mapping changed since the item was raised: its group may now
+        # be another account's rows (a re-import raises current items).
+        raise ProblemError(
+            409,
+            "review-item-stale",
+            "Review item is out of date",
+            "The column mapping changed since this item was raised; import the document again.",
+        )
     if body.remember:
-        last4 = _statement_last4(document, payload.get("statement"))
-        mapping_id = _uuid(payload.get("mapping_id"))
+        if grouped:
+            last4 = imports_service.stored_group_last4(db, document, payload)
+        elif payload.get("investment") is True:
+            # A brokerage statement (OFX, PDF, activity table): its digits
+            # from the stored extraction, never from the item.
+            last4 = imports_service.stored_investment_last4(document, payload)
+        else:
+            last4 = _statement_last4(document, payload.get("statement"))
+        mapping_id = None if grouped else _uuid(payload.get("mapping_id"))
         if last4 is not None:
             if account.number_last4 is None:
                 account.number_last4 = last4
@@ -515,7 +536,14 @@ def _resolve_account(
         document.account_id = account.id
     db.flush()
     rerun = _reimport(
-        db, principal, document, mapping_id=None, account_id=account.id, request=request
+        db,
+        principal,
+        document,
+        mapping_id=None,
+        account_id=account.id,
+        request=request,
+        # A multi-account table: the account is for this item's group only.
+        group=payload["group"] if grouped else None,
     )
     return {"account_id": str(account.id), "remembered": remembered, **rerun}
 

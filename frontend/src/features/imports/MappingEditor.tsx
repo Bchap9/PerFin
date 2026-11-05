@@ -22,6 +22,7 @@ import {
   COLUMN_ROLES,
   DATE_FORMATS,
   buildSpec,
+  hasAccountColumn,
   isColumnRole,
   isDateFormat,
   stateFromSpec,
@@ -30,6 +31,38 @@ import {
 } from "./mapping";
 
 type PreviewTable = ImportPreview["tables"][number];
+type Suggestion = NonNullable<ImportPreview["suggestion"]>;
+
+const DOUBTS: ReadonlyMap<string, string> = new Map([
+  ["header_not_exact", "Some column names only partly match what they were mapped to."],
+  ["rows_unreadable", "Some rows could not be read with it."],
+  ["date_order_guessed", "Every day in the file is 12 or less, so the day/month order is a guess."],
+  ["no_rows", "No row could be read with it."],
+]);
+
+/** What the server's guess is based on, so a person knows what to check. */
+export function SuggestionNote({ suggestion }: { suggestion: Suggestion }) {
+  const read = `${String(suggestion.parsed_rows)} rows read`;
+  const failed = suggestion.failed_rows > 0 ? `, ${String(suggestion.failed_rows)} could not be read` : "";
+  const accounts = suggestion.accounts > 1 ? ` across ${String(suggestion.accounts)} accounts` : "";
+  return (
+    <div className="ledger-muted" role="status" aria-label="Suggested mapping">
+      <p>
+        {suggestion.confident ? "PerFin filled in the columns from the header names." : "PerFin guessed the columns from the header names; check them."} ({read}
+        {failed}
+        {accounts}.)
+      </p>
+      {suggestion.doubts.length > 0 ? (
+        <ul>
+          {suggestion.doubts.map((doubt) => (
+            <li key={doubt}>{DOUBTS.get(doubt) ?? doubt}</li>
+          ))}
+        </ul>
+      ) : null}
+      {suggestion.sign_evidence === null ? <p>Check the sign: nothing in the file proves whether positive amounts are money in or money out.</p> : null}
+    </div>
+  );
+}
 
 export function MappingForm({ documentId, preview, table }: { documentId: string; preview: ImportPreview; table: PreviewTable }) {
   const queryClient = useQueryClient();
@@ -74,7 +107,7 @@ export function MappingForm({ documentId, preview, table }: { documentId: string
     if (name.trim() === "") {
       found.push("Name the mapping.");
     }
-    if (accountId === "" && preview.account_id === null) {
+    if (accountId === "" && preview.account_id === null && !hasAccountColumn(state)) {
       found.push("Choose the account these rows belong to.");
     }
     setProblems(found);
@@ -94,6 +127,7 @@ export function MappingForm({ documentId, preview, table }: { documentId: string
     <form className="ledger-stack" noValidate aria-label="Column mapping" onSubmit={submit}>
       <Card title="Columns">
         <p className="ledger-muted">Tell PerFin what each column holds. Showing the first {table.rows.length} rows.</p>
+        {preview.suggestion ? <SuggestionNote suggestion={preview.suggestion} /> : null}
         <div className="mapping-grid" role="region" aria-label="File preview" tabIndex={0}>
           <table className="table table--compact">
             <thead>
@@ -214,9 +248,18 @@ export function MappingForm({ documentId, preview, table }: { documentId: string
               }}
             />
           </Field>
-          <Field label="Account">
+          <Field
+            label="Account"
+            hint={
+              hasAccountColumn(state)
+                ? "Each account number in the file is matched to your account with the same last four digits; an account chosen here takes the rows that match none."
+                : undefined
+            }
+          >
             <Select
-              placeholder={preview.account_id === null ? "Choose an account" : "Keep the document's account"}
+              placeholder={
+                hasAccountColumn(state) ? "Match by account number" : preview.account_id === null ? "Choose an account" : "Keep the document's account"
+              }
               options={editableAccounts.map((account) => ({ value: account.id, label: accountLabel(account) }))}
               value={accountId}
               onChange={(event) => {

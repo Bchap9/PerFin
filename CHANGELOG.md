@@ -32,6 +32,69 @@ What remains (details in docs/ROADMAP.md):
 
 ## [Unreleased]
 
+### Added
+
+- Pull request template (`.github/pull_request_template.md`) and a
+  `pr-template` CI workflow that fails a PR whose description drops a
+  template section, leaves Summary or How it was tested empty, or ticks no
+  Type of change box (`scripts/check_pr_body.py`). Dependabot PRs are exempt.
+- **Fidelity Investments statements** (PDF "Investment Report"): an
+  institution parser (`fidelity_investments_statement`) and a shipped
+  classifier fingerprint (`fidelity-investments-statement`, both
+  "Fidelity Investments" and "Investment Report" required). The core money
+  market position is read as the account's cash, so every trade, income
+  and transfer is checked against the change in cash; the *Core Fund
+  Activity* table is not read (it would count each trade twice). Tests use
+  a synthetic three-account report (`tests/fixtures/synth_fidelity.py`,
+  invented accounts and instruments), also through the sandboxed extractor.
+- **Several accounts in one brokerage PDF**: account headings on each
+  account's pages (`Account # Z12-345678`, `INDIVIDUAL - TOD Z12-345678`)
+  split a statement "of all accounts" into one statement per account, each
+  with its own last four digits, positions, activity, cash, totals and
+  reconciliation; each is matched to its own account and a tampered
+  account is held alone. A single-account PDF is read as before.
+- CSV/TSV imports of never-seen layouts: when no saved mapping fits and the
+  deterministic suggestion is confident (date and amount columns named
+  exactly, every row before the footer readable, the day/month order not a
+  guess), a CSV, TSV or XLSX uploaded by a member or above is imported with
+  it and the suggestion is saved as a household mapping (audit
+  `import_mapping.create`, `origin: suggested`; run summary
+  `mapping_suggested`). A sign taken on trust is never written into a
+  liability account. Otherwise the `mapping_required` review item carries
+  the suggestion and why it was not used (`auto_import`).
+- `suggest_mapping` (`app/ingestion/parsers/structured.py`): the header row
+  is searched among the first 11 rows, (column, role) pairs are scored
+  exact > whole word > substring and assigned globally best first, a column
+  only takes a role when its cells fit, posting/transaction/run dates beat
+  settlement dates, a running balance can prove the sign; it returns a
+  score, per-role reasons and doubts. `GET /imports/{id}/preview` has
+  `suggestion`; `suggest_spec` keeps its signature.
+- Multi-account CSVs: `MappingSpec.account_column` (optional; mappings
+  saved without it read as before). Rows are grouped by the last four
+  digits of the cell and each group is matched to an account like an OFX
+  statement; an unmatched group is an `unknown_account` item with `group`
+  (no digits), and "remember" re-reads them from the stored table. The
+  mapping editor shows and sets the account-number column and the
+  suggestion's confidence; the review queue says how many transactions of
+  a multi-account file wait for an account.
+- Synthetic multi-account activity export
+  (`backend/tests/fixtures/synth_activity_csv.py`).
+- **Brokerage activity exports** (CSV, TSV, XLSX; Fidelity's "Activity"
+  export and layouts like it) import as investment activity: a worker-side
+  table parser (`brokerage_activity_table`,
+  `app/ingestion/parsers/brokerage_table.py`) recognises the header (date,
+  action, amount, symbol or quantity) and builds one investment statement
+  per account (last four digits of the account-number column), which
+  `statement_import` commits like an OFX `INVSTMTRS`: buys, sells,
+  reinvestments, dividends, interest and fees as investment transactions,
+  cash deposits and withdrawals as ledger rows. Unknown actions and
+  unreadable rows are skipped and reported (`lines_skipped`), never
+  guessed; a guessed day/month order holds the statement. Re-uploads and
+  re-runs add nothing. The run summary reports the reading
+  (`brokerage_table`) and any saved column mapping it took precedence over
+  (`mapping_bypassed`); a mapping chosen explicitly still imports the table
+  as a cash ledger. New worker-only `source_format` `csv`.
+
 ### Changed
 
 - Dependabot no longer proposes major-version bumps for react, react-dom,
@@ -39,6 +102,96 @@ What remains (details in docs/ROADMAP.md):
   upgrades (React 18 per ADR-0001, the TypeScript compiler the lint
   toolchain depends on, and Node types matching the Node 22 runtime);
   minor, patch and security updates still arrive.
+- The generic brokerage parser (version 2) reads more layouts: header cells
+  over up to three lines or ending in a date, `Symbol/CUSIP` (a valid
+  CUSIP is kept as the CUSIP), a security-name column, a settlement date as
+  the only date, the description as the action when there is no action
+  column but the table names a security; holdings grouped by asset class
+  (the group sets the position's asset class, `Total <group>` subtotals are
+  no longer taken for the holdings total, `Total Holdings` is), wrapped
+  security names, beginning market values; `Beginning Account Value` is no
+  longer read as the account value, `Ending Account Value`/`Ending Net
+  Value` are. A table header the parser cannot use ends the table above it.
+- `activity_type` knows the action words of Fidelity statements and CSV
+  exports (`You Bought`, `You Sold`, `Dividend Received`, `Reinvestment`,
+  `Interest Earned`, `Long-Term`/`Short-Term Cap Gain`, `Direct Deposit`,
+  `Electronic Funds Transfer Received`/`Paid`, `Foreign Tax Paid`, `Fee
+  Charged`, `Transferred From`/`To`: a transfer of units with a security
+  and a quantity, else cash) whatever their case or trailing `(Cash)`.
+- A text file whose first lines are a few delimited rows followed by note
+  lines (a short brokerage export's disclaimers and "Date downloaded" line)
+  is sniffed as CSV/TSV; before, it was plain text and not imported.
+- The synthetic multi-account cash-ledger tests write the activity export
+  with its `Action` column named `Details` (`LEDGER_HEADER`): with the real
+  header the file is brokerage activity.
+- A document of several brokerage accounts is linked to no account: the
+  account the classifier matched is undone after parsing (an account
+  chosen at upload stays), and an account chosen on a re-run takes only
+  the statements with its own last four digits or, when it records none,
+  the single unmatched one, never several accounts' holdings at once.
+
+### Fixed
+
+- A library printing to stdout inside the extraction sandbox (Python
+  `print`, C `printf`, a native runtime's log) corrupted the JSON result,
+  so the document failed with `extraction failed: bad_output`. The child
+  now keeps a private duplicate of stdout for the result and sends
+  descriptor 1 to stderr; a `bad_output` detail names the failing fields
+  or the JSON position, never the values.
+- PDF table finding no longer loads PyMuPDF's neural layout model
+  (onnxruntime) into the sandbox, where its thread pool made calls the
+  seccomp allowlist refuses (`syscall_denied`, `eventfd2`) at random.
+- The mapping suggestion took the first column whose header merely
+  contained a role word: an always-empty "Exchange Currency" became the
+  currency column (and then every row was refused), a "Type" column of
+  `Cash`/`Margin` became the debit/credit indicator, and a settlement date
+  could become the date. Exports with a preamble got no suggestion.
+- An empty cell in a mapped currency column refused the row; it now means
+  the account's currency (a cell that is not a three-letter code still
+  refuses it).
+- Rows with a single filled cell (disclaimer paragraphs, "Date downloaded")
+  are no longer reported as skipped rows.
+- "Remember" on an `unknown_account` item of a brokerage statement (OFX,
+  PDF, activity export) read the last four digits of the bank statement
+  with the same index; it now reads the investment statement's, and the
+  item's account suggestions rank by them.
+- Resolving one group's `unknown_account` item of a multi-account CSV gave
+  the chosen account every other group that matched no account too. The
+  review queue now passes the item's `group` to the re-run
+  (`apply-mapping` takes an optional `group` with `account_id`), and
+  without one a chosen account takes only the groups with its own last
+  four digits or, when it records none, the single unmatched group. The
+  same rule now applies to brokerage statements: an account that records
+  its digits no longer also takes the one statement left unmatched.
+- A group `unknown_account` item carries the digest of the mapping spec
+  that numbered its groups (`spec_digest`); once someone edits the mapping
+  the item is `409 review-item-stale`, so "remember" can no longer write
+  another account's digits onto the chosen account.
+- The rule that a sign read on trust never writes into a liability account
+  could be bypassed: a card export uploaded without an account saved its
+  trust-only mapping, and picking the card account then imported every
+  purchase as money in. Such a mapping is now marked `sign_unverified`
+  (`import_mapping.sign_unverified`, migration 0008) and waits as
+  `mapping_required` (`sign_unverified`) whenever it meets a liability
+  account, until a person saves its spec or chooses it explicitly.
+- A household mapping auto-saved from a member's upload could take over
+  the owner's account-bound mapping for the same header (most recently
+  used first), so the owner's files without an account stopped being
+  routed to it; the one account-bound mapping now wins.
+- The suggestion read a `Type` column of `DEBIT`/`CREDIT`/`CHECK` beside a
+  signed amount as a debit/credit indicator, turning every `CHECK` into
+  money in, and still imported it on its own. An indicator is no longer
+  suggested beside amounts that carry a minus sign, and an indicator cell
+  that is no direction word is a doubt (`indicator_values_unknown`).
+- The Fidelity activity CSV dates a trade by its run date and the PDF
+  Investment Report by its settlement date, so importing both recorded the
+  trade twice (lots and holdings doubled). A row the account already
+  records from another document under a trade or settlement date it
+  shares (or within 5 days when one has no settlement date) is no longer
+  written; an `investment_possible_duplicate` item says so.
+- The brokerage activity table reader dropped the extractors' formula
+  guard from the security names and memos it kept (SECURITY.md C7); they
+  keep it now, and a symbol that would be a formula is refused.
 
 ## [1.0.0-rc.1] - 2026-11-05
 

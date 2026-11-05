@@ -17,7 +17,10 @@ JSON document:
    per-field confidence (shipped fingerprints; the household's own too with
    ``--household``).
 5. ``parse``: document parsers on PDF/image pages; for tables the suggested
-   column mapping and the rows it reads; structured statements as extracted.
+   column mapping and the rows it reads, and for a brokerage activity export
+   (``app.ingestion.parsers.brokerage_table``) the investment statements the
+   importer would commit instead (per account: last four digits, rows by
+   type); structured statements as extracted.
 6. ``match``: only with ``--household`` and a reachable database: the
    account the last four digits would match, read in a ``READ ONLY``
    transaction that is rolled back.
@@ -33,6 +36,7 @@ from __future__ import annotations
 import hashlib
 import json
 import uuid
+from collections import Counter
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass, field
@@ -197,8 +201,9 @@ class DryRun:
         return found
 
     def parse(self, kind: str, result: ExtractResult, found: Classification) -> ExtractResult:
+        from app.ingestion.parsers.brokerage_table import TABLE_KINDS, read_activity_table
         from app.ingestion.parsers.registry import DOCUMENT_KINDS, parse_extraction
-        from app.ingestion.parsers.structured import from_table, suggest_spec
+        from app.ingestion.parsers.structured import from_table, suggest_mapping
 
         if kind in DOCUMENT_KINDS:
             parsed = parse_extraction(
@@ -217,10 +222,12 @@ class DryRun:
         if result.tables:
             tables = []
             for table in result.tables:
-                spec = suggest_spec(table)
+                suggestion = suggest_mapping(table)
+                spec = suggestion.spec if suggestion is not None else None
                 entry: dict[str, Any] = {
                     "rows": len(table.rows),
                     "suggested_mapping": spec.model_dump(mode="json") if spec else None,
+                    "suggestion": suggestion.summary() if suggestion is not None else None,
                 }
                 if spec is not None:
                     statement = from_table(table, spec)
@@ -231,6 +238,20 @@ class DryRun:
                         for t in statement.transactions[:SHOWN_ROWS]
                     ]
                 tables.append(entry)
+            activity = read_activity_table(result.tables[0]) if kind in TABLE_KINDS else None
+            if activity is not None:
+                tables[0]["brokerage_activity"] = {
+                    **activity.summary(),
+                    "accounts": [
+                        {
+                            "last4": s.account.last4,
+                            "currency": s.account.currency,
+                            "period": [s.period_start, s.period_end],
+                            "types": dict(Counter(a.type for a in s.activity)),
+                        }
+                        for s in activity.statements
+                    ],
+                }
             self.emit("parse", tables=tables)
             return result
         self.emit(
