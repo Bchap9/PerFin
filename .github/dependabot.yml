@@ -35,6 +35,24 @@ updates:
       npm-runtime:
         dependency-type: production
         update-types: [minor, patch]
+    # Major versions of these are deliberate upgrades, not routine bumps:
+    # React 18 is the stack in ADR-0001 (react and react-dom must move
+    # together with their types), TypeScript majors change the compiler the
+    # lint toolchain depends on, and @types/node must match the Node 22
+    # runtime. Security updates still arrive for them; upgrade by hand.
+    ignore:
+      - dependency-name: "react"
+        update-types: ["version-update:semver-major"]
+      - dependency-name: "react-dom"
+        update-types: ["version-update:semver-major"]
+      - dependency-name: "@types/react"
+        update-types: ["version-update:semver-major"]
+      - dependency-name: "@types/react-dom"
+        update-types: ["version-update:semver-major"]
+      - dependency-name: "typescript"
+        update-types: ["version-update:semver-major"]
+      - dependency-name: "@types/node"
+        update-types: ["version-update:semver-major"]
     commit-message:
       prefix: "build(deps)"
 

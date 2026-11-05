@@ -32,7 +32,13 @@ What remains (details in docs/ROADMAP.md):
 
 ## [Unreleased]
 
-Nothing yet.
+### Changed
+
+- Dependabot no longer proposes major-version bumps for react, react-dom,
+  their type packages, typescript and @types/node. Those are deliberate
+  upgrades (React 18 per ADR-0001, the TypeScript compiler the lint
+  toolchain depends on, and Node types matching the Node 22 runtime);
+  minor, patch and security updates still arrive.
 
 ## [1.0.0-rc.1] - 2026-11-05
 
