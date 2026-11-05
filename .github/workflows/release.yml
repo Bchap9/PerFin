@@ -131,6 +131,10 @@ jobs:
       - name: Build and push (linux/amd64, linux/arm64) by digest
         id: build
         uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        env:
+          # No build-record artifact: provenance and SBOMs are attested below,
+          # and the record is an unzipped artifact the release job cannot use.
+          DOCKER_BUILD_RECORD_UPLOAD: "false"
         with:
           context: ${{ matrix.image.context }}
           file: ${{ matrix.image.dockerfile }}
@@ -323,6 +327,10 @@ jobs:
     steps:
       - uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
         with:
+          # This workflow's own artifacts only: build-push-action also uploads
+          # an unzipped build record (*.dockerbuild) per image, which
+          # download-artifact cannot extract (the v1.0.0-rc.1 run failed here).
+          pattern: "{image-*,chart,release-notes}"
           path: dist
           merge-multiple: true
       - name: Checksums
