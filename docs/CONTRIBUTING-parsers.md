@@ -127,8 +127,19 @@ is not suggested well:
   (`tests/integration/test_structured_import.py`) the end-to-end import.
 - A file listing several accounts maps its account-number column
   (`account_column`); only the last four digits of the cell are kept.
-- Investment activity (buys, sells, reinvestments as positions) is not read
-  by this path; it only writes the cash ledger.
+- A brokerage "Activity" export (an action column typed by
+  `activity_type`, an amount, a symbol or quantity column) is not read by
+  this path: `backend/app/ingestion/parsers/brokerage_table.py` turns it
+  into investment statements per account (INGESTION.md "Brokerage activity
+  exports"). For a new broker's export add its header words to that
+  module's `HEADERS` (role `other` for a column to recognise and not read)
+  and its action words to `ACTIVITY_TYPES` in `brokerage.py`; write the
+  file from invented rows (`investment_rows` in
+  `backend/tests/fixtures/synth_activity_csv.py`: sales never exceed the
+  units bought before them) and extend
+  `tests/unit/test_brokerage_table_parser.py` and
+  `tests/integration/test_activity_table_import.py`. Bump `PARSER_VERSION`
+  when the reading of an existing layout changes.
 
 ## Review checklist
 

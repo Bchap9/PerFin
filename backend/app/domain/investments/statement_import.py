@@ -2,8 +2,10 @@
 """Committing brokerage statements: securities, activity, openings, prices, snapshots.
 
 Called by the structured importer (``app.domain.imports.service.import_extraction``)
-for the ``investments`` of an extraction: OFX ``INVSTMTRS`` from the sandbox
-and PDF/scan statements read by ``app.ingestion.parsers.brokerage``. It runs
+for the ``investments`` of an extraction: OFX ``INVSTMTRS`` from the sandbox,
+PDF/scan statements read by ``app.ingestion.parsers.brokerage`` and the
+brokerage activity tables of CSV/TSV/XLSX exports read by
+``app.ingestion.parsers.brokerage_table`` (``source_format = "csv"``). It runs
 in the importer's transaction and RLS context (INGESTION.md "Brokerage
 statements"). Per statement:
 
@@ -27,9 +29,12 @@ statements"). Per statement:
    (``investment_reconciliation_failed`` / ``investment_low_confidence``)
    naming the discrepancy. A statement with any date before
    ``app.core.dates.MIN_BUSINESS_DATE`` is held the same way
-   (``investment_date_out_of_range``, SECURITY.md F8). A structured (OFX) statement with nothing to
-   check is imported like an OFX bank statement; a document one cannot be
-   (its rows score below the threshold).
+   (``investment_date_out_of_range``, SECURITY.md F8). A structured
+   statement (OFX, or an activity table: ``csv``, every value from a named
+   column) with nothing to check is imported like an OFX bank statement; a
+   document one cannot be (its rows score below the threshold). An activity
+   table whose day/month order was a guess marks every row
+   ``low_confidence`` (``trade_date``) and is held like any such row.
 3. **Securities**: found in the household's catalogue by CUSIP, ISIN, then
    symbol, else created (quote currency = the account's); identifiers a
    later statement adds are filled in.

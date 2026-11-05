@@ -343,9 +343,14 @@ as `suggested_spec` with its confidence: `{"spec", "score" (0-1),
 and facts (`suggestion`) and why it was not imported on its own
 (`auto_import`: `not_confident`, `no_suggestion`, `mapping_ambiguous`,
 `not_delimited`, `no_member`, `sign_unverified`, `not_saved`). `last_import` (and the run
-summary) has `mapping_suggested`. `POST
+summary) has `mapping_suggested`; for a brokerage activity export
+(INGESTION.md "Brokerage activity exports") it also has `brokerage_table`
+(`parser`, `statements`, `rows`, `notes`, `unknown_activity`, `skipped`,
+`warnings`), `mapping_bypassed` (the saved mapping the brokerage reading took
+precedence over, or null) and `investments`. `POST
 /imports/{document_id}/apply-mapping` (member or above, `Idempotency-Key`
-honoured) takes optional `mapping_id` and `account_id`; the target account
+honoured) takes optional `mapping_id` and `account_id`; a `mapping_id`
+imports the table with that mapping even when it is brokerage activity; the target account
 (the given one, the document's, else the mapping's) must be editable (`404
 account-not-found`); a document that is not `needs_review`/`processed` or
 has no extraction is `409 import-not-applicable`. It answers `202 {"job_id",

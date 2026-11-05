@@ -33,6 +33,26 @@ The flow (INGESTION.md "Parse", "Match and deduplicate", "Commit"):
      was not used (``auto_import``), and the table is shown by ``GET
      /imports/{document_id}/preview`` for the mapping editor. The account is
      the one given on re-run, the document's or the mapping's.
+   * **Brokerage activity tables** come first: when table 0 of a CSV, TSV
+     or XLSX is a brokerage "Activity" export
+     (``app.ingestion.parsers.brokerage_table``: a date, an action that
+     ``activity_type`` types, an amount, a symbol or quantity column), its
+     rows become one investment statement per account (last four digits of
+     the account-number column) and go to
+     ``app.domain.investments.statement_import`` like an OFX ``INVSTMTRS``:
+     buys, sells, reinvestments and income as ``investment_txn`` rows, cash
+     deposits and withdrawals as ledger rows on the brokerage account. The
+     statements are read again from the stored table on every run (never
+     stored). **Precedence**: a mapping chosen explicitly on a re-run
+     (``apply-mapping`` with ``mapping_id``, the review queue's "use this
+     mapping") imports the table as a cash ledger; otherwise the brokerage
+     reading wins over a saved mapping for the same header and over the
+     suggestion, and the run summary says so (``brokerage_table`` with the
+     counts, ``mapping_bypassed`` with the saved mapping's id), so a person
+     who saved a cash-ledger mapping for that header can see why it was not
+     used and choose it explicitly. Rows skipped (an action no known phrase
+     types, a row that does not read) raise one ``low_confidence_field`` item
+     (``lines_skipped``, counts only).
    * **Multi-account CSV/TSV** (``MappingSpec.account_column``): one
      statement per account (``from_table_grouped``), each matched by the
      last four digits of its account cell exactly like an OFX statement
@@ -60,7 +80,8 @@ The flow (INGESTION.md "Parse", "Match and deduplicate", "Commit"):
      pending, a ``reconciliation_failed``/``reconciliation_unavailable``
      item with the figures, and writes no balance snapshot (SECURITY.md C12).
    * Brokerage statements (``result.investments``: OFX ``INVSTMTRS``,
-     PDFs read by ``app.ingestion.parsers.brokerage``) go to
+     PDFs read by ``app.ingestion.parsers.brokerage``; brokerage activity
+     tables above) go to
      ``app.domain.investments.statement_import`` (securities, activity,
      lots, holdings, prices, snapshot; held back when they do not
      reconcile); their cash deposits and withdrawals come back here as
@@ -153,6 +174,13 @@ from app.domain.transactions.models import (
 )
 from app.ingestion.match.accounts import importable_account_ids, match_account
 from app.ingestion.match.dedupe import dedupe
+from app.ingestion.parsers.brokerage_table import PARSER_NAME as ACTIVITY_PARSER
+from app.ingestion.parsers.brokerage_table import TABLE_KINDS as ACTIVITY_TABLE_KINDS
+from app.ingestion.parsers.brokerage_table import (
+    ActivityTable,
+    activity_dates,
+    read_activity_table,
+)
 from app.ingestion.parsers.structured import (
     MappingSuggestion,
     ParsedStatement,
@@ -165,7 +193,7 @@ from app.ingestion.parsers.structured import (
     spec_fingerprint,
     suggest_mapping,
 )
-from app.ingestion.sandbox.protocol import ExtractResult, Table
+from app.ingestion.sandbox.protocol import ExtractResult, InvestmentStatement, Table
 
 if TYPE_CHECKING:
     from starlette.requests import HTTPConnection
@@ -597,6 +625,10 @@ class _Run:
     mapping_id: uuid.UUID | None = None
     #: The mapping was saved from the suggestion by this run.
     mapping_suggested: bool = False
+    #: Table 0 read as brokerage activity (``brokerage_table`` in the summary)
+    #: and the saved mapping that reading took precedence over.
+    activity: ActivityTable | None = None
+    mapping_bypassed: uuid.UUID | None = None
     _payees: dict[str, uuid.UUID] | None = None
     _categories: dict[str, uuid.UUID] | None = None
     _open: list[tuple[ReviewKind, dict[str, Any]]] | None = None
@@ -652,6 +684,16 @@ class _Run:
             "accounts": [str(a) for a in self.accounts],
             "mapping_id": str(self.mapping_id) if self.mapping_id else None,
             "mapping_suggested": self.mapping_suggested,
+            **(
+                {
+                    "brokerage_table": self.activity.summary(),
+                    "mapping_bypassed": (
+                        str(self.mapping_bypassed) if self.mapping_bypassed else None
+                    ),
+                }
+                if self.activity is not None
+                else {}
+            ),
         }
 
 
@@ -1272,6 +1314,94 @@ def stored_group_last4(db: Session, document: Document, payload: dict[str, Any])
     return group_last4(result.tables[0], spec, group)
 
 
+def activity_table(result: ExtractResult) -> ActivityTable | None:
+    """Table 0 of a CSV/TSV/XLSX read as brokerage activity (None: it is not one).
+
+    Only a delimited or spreadsheet file's own table qualifies (never a
+    PDF's page table, nor a file that also carries statements).
+    """
+    if (
+        result.statements
+        or result.investments
+        or not result.tables
+        or result.kind not in ACTIVITY_TABLE_KINDS
+    ):
+        return None
+    return read_activity_table(result.tables[0])
+
+
+def stored_investments(document: Document) -> list[InvestmentStatement]:
+    """The investment statements an import of ``document`` reads, in the importer's order.
+
+    The stored ones (OFX, PDF), else those of a brokerage activity table, read
+    again from the stored table (they are never stored themselves).
+    """
+    result = _stored_result(document)
+    if result is None:
+        return []
+    if result.investments:
+        return list(result.investments)
+    found = activity_table(result)
+    return found.statements if found is not None else []
+
+
+def stored_investment_last4(document: Document, payload: dict[str, Any]) -> str | None:
+    """The last four digits of the investment statement an ``unknown_account`` item names.
+
+    ``payload`` is an item of ``statement_import`` (``investment``,
+    ``statement``); the digits are read again from the stored extraction, so
+    the item itself never carries them.
+    """
+    index = payload.get("statement")
+    if payload.get("investment") is not True or not isinstance(index, int):
+        return None
+    statements = stored_investments(document)
+    return statements[index].account.last4 if 0 <= index < len(statements) else None
+
+
+def _import_activity(
+    run: _Run, result: ExtractResult, activity: ActivityTable, *, account_id: uuid.UUID | None
+) -> None:
+    """Record what reading table 0 as brokerage activity did (module doc, precedence)."""
+    run.activity = activity
+    choice = choose_mapping(
+        run.db,
+        run.household_id,
+        result.tables[0],
+        account_id=account_id or run.document.account_id,
+        allowed=run.allowed,
+    )
+    if choice.mapping is not None:
+        run.mapping_bypassed = choice.mapping.id
+    elif choice.ambiguous:
+        run.mapping_bypassed = choice.ambiguous[0]
+    missed = activity.unknown_activity + activity.skipped
+    if not activity.statements:
+        run.review(
+            ReviewKind.UNPARSED,
+            {
+                "reason": "activity_unreadable",
+                "table": 0,
+                "parser": ACTIVITY_PARSER,
+                "unknown_activity": activity.unknown_activity,
+                "skipped_rows": activity.skipped,
+            },
+        )
+    elif missed:
+        run.review(
+            ReviewKind.LOW_CONFIDENCE_FIELD,
+            {
+                "reason": "lines_skipped",
+                "count": missed,
+                "unknown_activity": activity.unknown_activity,
+                "parser": ACTIVITY_PARSER,
+            },
+        )
+    dates = activity_dates(activity.statements)
+    if dates is not None and run.document.period_start is None:
+        run.document.period_start, run.document.period_end = dates
+
+
 def _open_items(db: Session, document: Document) -> int:
     return len(
         list(
@@ -1311,20 +1441,28 @@ def import_extraction(
         allowed=importable_account_ids(db, document.household_id, actor),
         user_id=user_id,
     )
+    statements: Sequence[InvestmentStatement] = result.investments
     if result.statements:
         _import_statements(run, result, account_id=account_id)
     elif result.tables:
-        _import_table(run, result, mapping_id=mapping_id, account_id=account_id)
+        # A brokerage activity export is investment activity, unless the
+        # person chose a (cash-ledger) mapping for this run (module doc).
+        activity = activity_table(result) if mapping_id is None else None
+        if activity is None:
+            _import_table(run, result, mapping_id=mapping_id, account_id=account_id)
+        else:
+            _import_activity(run, result, activity, account_id=account_id)
+            statements = activity.statements
     elif not result.investments:
         run.review(ReviewKind.UNPARSED, {"reason": "no_records"})
     investments: dict[str, Any] | None = None
-    if result.investments:
+    if statements:
         # Brokerage statements (app.domain.investments.statement_import);
         # their cash deposits/withdrawals are ledger rows committed here.
         done = import_investment_statements(
             db,
             document,
-            result.investments,
+            statements,
             allowed=run.allowed,
             review=run.review,
             commit_cash=lambda statement, account: _commit_statement(

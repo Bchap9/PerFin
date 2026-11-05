@@ -313,6 +313,8 @@ def test_worker_only_investment_fields_are_refused_from_the_child() -> None:
     statement = plain.investments[0]
     forged = [
         statement.model_copy(update={"source_format": "pdf"}),
+        # An activity table's statements are the worker's own (brokerage_table).
+        statement.model_copy(update={"source_format": "csv"}),
         statement.model_copy(update={"reconciliation": reconcile_investment(statement)}),
         statement.model_copy(update={"confidence": {"period": 1.0}}),
         statement.model_copy(

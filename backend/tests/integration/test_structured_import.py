@@ -62,14 +62,15 @@ from tests.fixtures.imports import (
 )
 from tests.fixtures.ledger import LedgerFactories, make_category, make_rule
 from tests.fixtures.synth_activity_csv import (
-    SPEC as ACTIVITY_SPEC,
-)
-from tests.fixtures.synth_activity_csv import (
+    LEDGER_HEADER,
     ActivityAccount,
     ActivityRow,
     activity_accounts,
     activity_csv_bytes,
     activity_rows,
+)
+from tests.fixtures.synth_activity_csv import (
+    SPEC as ACTIVITY_SPEC,
 )
 from tests.fixtures.synth_statements import (
     INSTITUTIONS,
@@ -729,7 +730,9 @@ def _activity(
     env: Env, seed: int, accounts: tuple[ActivityAccount, ...], **kwargs: Any
 ) -> tuple[list[ActivityRow], bytes]:
     rows = activity_rows(seed, accounts, **kwargs)
-    return rows, activity_csv_bytes(rows)
+    # The cash-ledger layout (no action column): a brokerage activity table
+    # goes to the investments importer instead (test_activity_table_import.py).
+    return rows, activity_csv_bytes(rows, header=LEDGER_HEADER)
 
 
 def _cash(rows: list[ActivityRow], account: ActivityAccount) -> list[tuple[date, Decimal]]:
@@ -857,7 +860,7 @@ def test_unsure_suggestion_waits_with_the_suggestion(env: Env) -> None:
         None,
     )
     env.ledger.account(env.household_id, type=AccountType.BROKERAGE, number_last4=individual.last4)
-    document_id = env.ingest(activity_csv_bytes(rows), name="activity.csv")
+    document_id = env.ingest(activity_csv_bytes(rows, header=LEDGER_HEADER), name="activity.csv")
     (item,) = env.open_reviews(document_id)
     assert item.kind is ReviewKind.UNPARSED
     assert item.payload["reason"] == "mapping_required"
@@ -913,7 +916,8 @@ def test_who_and_what_may_be_mapped_without_a_person(
     """Intake without a person (drop folder, mail) and PDF page tables always wait."""
     individual, roth = activity_accounts(47)
     rows = activity_rows(47, (individual, roth))
-    cells = extract_delimited(activity_csv_bytes(rows), ExtractOptions(), "csv").tables[0].rows
+    data = activity_csv_bytes(rows, header=LEDGER_HEADER)
+    cells = extract_delimited(data, ExtractOptions(), "csv").tables[0].rows
     result = table_result(cells, kind=kind)
     brokerage = env.ledger.account(
         env.household_id, type=AccountType.BROKERAGE, number_last4=individual.last4

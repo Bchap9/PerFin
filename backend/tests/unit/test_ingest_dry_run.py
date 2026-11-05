@@ -16,6 +16,7 @@ from app.integrations.antivirus.clamav import ClamdAddress, ClamdScanner
 from tests.fixtures import synth_documents as synth
 from tests.fixtures.fake_clamd import MARKER, SIGNATURE, fake_clamd
 from tests.fixtures.statements import csv_bytes, ofx_sgml, synth_transactions
+from tests.fixtures.synth_activity_csv import activity_accounts, activity_csv_bytes, investment_rows
 from tests.fixtures.synth_xlsx import workbook
 
 
@@ -74,6 +75,28 @@ def test_csv_shows_the_suggested_mapping_and_rows(tmp_path: Path) -> None:
     assert [t["amount"] for t in table["first_transactions"]] == [str(t.amount) for t in txns]
     classify = next(s for s in stages if s["stage"] == "classify")
     assert classify["pipeline_kind"] == "statement"
+
+
+def test_activity_export_shows_the_investment_statements(tmp_path: Path) -> None:
+    accounts = activity_accounts(9)
+    rows = investment_rows(accounts)
+    code, stages = _run(_write(tmp_path, "activity.csv", activity_csv_bytes(rows)))
+    assert code == 0
+    parse = next(s for s in stages if s["stage"] == "parse")
+    activity = parse["tables"][0]["brokerage_activity"]
+    assert activity["statements"] == 2
+    assert activity["rows"] == len(rows)
+    assert [a["last4"] for a in activity["accounts"]] == [a.last4 for a in accounts]
+    assert activity["accounts"][1]["types"] == {
+        "deposit": 1,
+        "buy": 1,
+        "dividend": 1,
+        "reinvest": 1,
+        "sell": 1,
+    }
+    # The brokerage reading keeps only the last four digits.
+    text = json.dumps(activity)
+    assert all(a.number not in text for a in accounts)
 
 
 def test_xlsx_and_ofx(tmp_path: Path) -> None:

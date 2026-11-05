@@ -36,7 +36,9 @@ Phase 2 routes only **structured** formats (CSV, TSV, OFX, QFX, QIF):
   ``PipelineDeps.importer`` or registered with
   :func:`register_structured_importer`. The worker installs
   :func:`structured_import` (``app.domain.imports.service``: column mappings,
-  ``import_hash`` dedupe, rules, balance snapshots, review items). Without
+  brokerage activity tables read as investment statements
+  (``app.ingestion.parsers.brokerage_table``), ``import_hash`` dedupe,
+  rules, balance snapshots, review items). Without
   one, the document waits in ``needs_review`` (``unparsed``/``import_pending``).
 * **parse (PDF, images)**: the document parsers (``app.ingestion.parsers``)
   read the stored pages in the worker, hinted by the classifier's

@@ -496,11 +496,14 @@ def _resolve_account(
     remembered: list[str] = []
     if body.remember:
         grouped = isinstance(payload.get("group"), int)
-        last4 = (
-            imports_service.stored_group_last4(db, document, payload)
-            if grouped
-            else _statement_last4(document, payload.get("statement"))
-        )
+        if grouped:
+            last4 = imports_service.stored_group_last4(db, document, payload)
+        elif payload.get("investment") is True:
+            # A brokerage statement (OFX, PDF, activity table): its digits
+            # from the stored extraction, never from the item.
+            last4 = imports_service.stored_investment_last4(document, payload)
+        else:
+            last4 = _statement_last4(document, payload.get("statement"))
         mapping_id = None if grouped else _uuid(payload.get("mapping_id"))
         if last4 is not None:
             if account.number_last4 is None:

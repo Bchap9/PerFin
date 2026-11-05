@@ -16,12 +16,24 @@ statement, account, security or person appears, and nothing is read from
 outside this module.
 
 ``Amount`` is the cash effect (negative = cash out) and ``Quantity`` the
-signed number of shares, as in the real exports; this module only cares
-about the cash-ledger columns (the generic CSV path), not investment
-semantics.
+signed number of shares (a sale is negative), as in the real exports.
+
+Two uses:
+
+* the **brokerage activity** path (``app.ingestion.parsers.brokerage_table``):
+  :func:`investment_rows` is a scripted month of two accounts covering every
+  common action (deposit, buy, sell, dividend, reinvestment, interest, fee,
+  EFT paid, direct deposit) whose sales never exceed the units bought before
+  them, so the lot engine accepts it;
+* the **cash-ledger** mapping path (multi-account CSVs read with a column
+  mapping): :func:`activity_rows` (random rows of a seed) written with
+  :data:`LEDGER_HEADER`, the same layout whose ``Action`` column is called
+  ``Details``, so the file is a multi-account cash export that is *not* a
+  brokerage activity table (no action column) and still exercises the
+  mapping path. Written with :data:`HEADER` it is brokerage activity.
 
 * :func:`activity_accounts` - the synthetic accounts of a seed.
-* :func:`activity_rows` - the rows (dataclasses) of a file.
+* :func:`activity_rows` / :func:`investment_rows` - the rows (dataclasses).
 * :func:`activity_csv_bytes` - the file itself (CRLF, UTF-8).
 """
 
@@ -54,6 +66,9 @@ HEADER: Final = (
     "Amount",
     "Settlement Date",
 )
+#: :data:`HEADER` with ``Action`` renamed ``Details``: a multi-account cash
+#: export the brokerage activity parser does not recognise (no action column).
+LEDGER_HEADER: Final = tuple("Details" if cell == "Action" else cell for cell in HEADER)
 #: Zero-based columns of :data:`HEADER` the cash-ledger mapping reads.
 COLUMNS: Final = {
     "date": 0,
@@ -113,6 +128,8 @@ class ActivityRow:
     amount: Decimal | None
     settlement: date | None
     currency: str = "USD"
+    fees: Decimal | None = None
+    commission: Decimal | None = None
 
 
 def activity_accounts(seed: int, count: int = 2) -> tuple[ActivityAccount, ...]:
@@ -257,6 +274,190 @@ def activity_rows(
     return rows
 
 
+def investment_rows(
+    accounts: Sequence[ActivityAccount], *, start: date = date(2026, 10, 14)
+) -> list[ActivityRow]:
+    """A scripted, newest-first month of activity for two accounts (module doc).
+
+    ``accounts[0]`` (a taxable account): an EFT received, buys of two funds
+    (one with a fee), a dividend and its reinvestment, a partial sale with a
+    commission, money-market interest, an advisory fee and an EFT paid.
+    ``accounts[1]`` (a retirement account): a direct deposit, a buy, a
+    dividend and its reinvestment, and a partial sale. Every day of the month
+    is above 12, so the date order is never a guess.
+    """
+    first, second = accounts[0], accounts[1]
+    growth, bond, value = _FUNDS
+
+    def day(offset: int) -> date:
+        return start + timedelta(days=offset)
+
+    def fund(action: str, symbol: str, name: str) -> str:
+        return f"{action} {name} ({symbol}) (Cash)"
+
+    d = Decimal
+    rows = [
+        ActivityRow(
+            day(0),
+            first,
+            "Electronic Funds Transfer Received (Cash)",
+            "",
+            "No Description",
+            None,
+            d(0),
+            d("5000.00"),
+            None,
+        ),
+        ActivityRow(
+            day(1),
+            first,
+            fund("YOU BOUGHT", *growth),
+            growth[0],
+            growth[1],
+            d("250.00"),
+            d(10),
+            d("-2500.00"),
+            day(2),
+        ),
+        ActivityRow(
+            day(2),
+            first,
+            fund("YOU BOUGHT", *bond),
+            bond[0],
+            bond[1],
+            d("25.00"),
+            d(40),
+            d("-1000.05"),
+            day(3),
+            fees=d("0.05"),
+        ),
+        ActivityRow(
+            day(6),
+            first,
+            fund("DIVIDEND RECEIVED", *growth),
+            growth[0],
+            growth[1],
+            None,
+            d(0),
+            d("12.80"),
+            None,
+        ),
+        ActivityRow(
+            day(6),
+            first,
+            fund("REINVESTMENT", *growth),
+            growth[0],
+            growth[1],
+            d("256.00"),
+            d("0.05"),
+            d("-12.80"),
+            None,
+        ),
+        ActivityRow(
+            day(8),
+            first,
+            fund("YOU SOLD", *growth),
+            growth[0],
+            growth[1],
+            d("260.00"),
+            d(-4),
+            d("1039.95"),
+            day(9),
+            commission=d("0.05"),
+        ),
+        ActivityRow(
+            day(10),
+            first,
+            "INTEREST EARNED SYNTHETIC MONEY MARKET (SMMXX) (Cash)",
+            "SMMXX",
+            "SYNTHETIC MONEY MARKET",
+            None,
+            d(0),
+            d("1.23"),
+            None,
+        ),
+        ActivityRow(
+            day(13),
+            first,
+            "FEE CHARGED SYNTHETIC ADVISORY (Cash)",
+            "",
+            "SYNTHETIC ADVISORY FEE",
+            None,
+            d(0),
+            d("-15.00"),
+            None,
+        ),
+        ActivityRow(
+            day(14),
+            first,
+            "Electronic Funds Transfer Paid (Cash)",
+            "",
+            "No Description",
+            None,
+            d(0),
+            d("-300.00"),
+            None,
+        ),
+        ActivityRow(
+            day(0),
+            second,
+            "DIRECT DEPOSIT SYNTHETIC PAYROLL (Cash)",
+            "",
+            "No Description",
+            None,
+            d(0),
+            d("500.00"),
+            None,
+        ),
+        ActivityRow(
+            day(1),
+            second,
+            fund("YOU BOUGHT", *value),
+            value[0],
+            value[1],
+            d("120.00"),
+            d(3),
+            d("-360.00"),
+            day(2),
+        ),
+        ActivityRow(
+            day(7),
+            second,
+            fund("DIVIDEND RECEIVED", *value),
+            value[0],
+            value[1],
+            None,
+            d(0),
+            d("1.82"),
+            None,
+        ),
+        ActivityRow(
+            day(7),
+            second,
+            fund("REINVESTMENT", *value),
+            value[0],
+            value[1],
+            d("121.33"),
+            d("0.015"),
+            d("-1.82"),
+            None,
+        ),
+        ActivityRow(
+            day(9),
+            second,
+            fund("YOU SOLD", *value),
+            value[0],
+            value[1],
+            d("125.00"),
+            d(-1),
+            d("125.00"),
+            day(10),
+        ),
+    ]
+    rows.sort(key=lambda r: r.run_date, reverse=True)
+    return rows
+
+
 def _quote(cell: str) -> str:
     if any(ch in cell for ch in (",", '"', "\n", "\r")):
         return '"' + cell.replace('"', '""') + '"'
@@ -278,8 +479,8 @@ def _cells(row: ActivityRow) -> tuple[str, ...]:
         f"{row.price:.2f}" if row.price is not None else "",
         f"{row.quantity}",
         "0",
-        "",
-        "",
+        f"{row.commission:.2f}" if row.commission is not None else "",
+        f"{row.fees:.2f}" if row.fees is not None else "",
         "",
         f"{row.amount:.2f}" if row.amount is not None else "",
         row.settlement.strftime("%m/%d/%Y") if row.settlement else "",
@@ -287,10 +488,13 @@ def _cells(row: ActivityRow) -> tuple[str, ...]:
 
 
 def activity_csv_bytes(
-    rows: Sequence[ActivityRow], *, downloaded: date = date(2026, 11, 2)
+    rows: Sequence[ActivityRow],
+    *,
+    downloaded: date = date(2026, 11, 2),
+    header: Sequence[str] = HEADER,
 ) -> bytes:
     """The export: blank lines, header, rows, disclaimers, the download line."""
-    lines = ["", "", ",".join(HEADER)]
+    lines = ["", "", ",".join(header)]
     lines += [",".join(_quote(c) for c in _cells(row)) for row in rows]
     lines += ["", *(_quote(text) for text in DISCLAIMERS), ""]
     lines.append(_quote(f"Date downloaded {downloaded.strftime('%m/%d/%Y')} 10:04 am"))

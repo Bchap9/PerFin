@@ -75,6 +75,21 @@ What remains (details in docs/ROADMAP.md):
   a multi-account file wait for an account.
 - Synthetic multi-account activity export
   (`backend/tests/fixtures/synth_activity_csv.py`).
+- **Brokerage activity exports** (CSV, TSV, XLSX; Fidelity's "Activity"
+  export and layouts like it) import as investment activity: a worker-side
+  table parser (`brokerage_activity_table`,
+  `app/ingestion/parsers/brokerage_table.py`) recognises the header (date,
+  action, amount, symbol or quantity) and builds one investment statement
+  per account (last four digits of the account-number column), which
+  `statement_import` commits like an OFX `INVSTMTRS`: buys, sells,
+  reinvestments, dividends, interest and fees as investment transactions,
+  cash deposits and withdrawals as ledger rows. Unknown actions and
+  unreadable rows are skipped and reported (`lines_skipped`), never
+  guessed; a guessed day/month order holds the statement. Re-uploads and
+  re-runs add nothing. The run summary reports the reading
+  (`brokerage_table`) and any saved column mapping it took precedence over
+  (`mapping_bypassed`); a mapping chosen explicitly still imports the table
+  as a cash ledger. New worker-only `source_format` `csv`.
 
 ### Changed
 
@@ -94,6 +109,12 @@ What remains (details in docs/ROADMAP.md):
   `Electronic Funds Transfer Received`/`Paid`, `Foreign Tax Paid`, `Fee
   Charged`, `Transferred From`/`To`: a transfer of units with a security
   and a quantity, else cash) whatever their case or trailing `(Cash)`.
+- A text file whose first lines are a few delimited rows followed by note
+  lines (a short brokerage export's disclaimers and "Date downloaded" line)
+  is sniffed as CSV/TSV; before, it was plain text and not imported.
+- The synthetic multi-account cash-ledger tests write the activity export
+  with its `Action` column named `Details` (`LEDGER_HEADER`): with the real
+  header the file is brokerage activity.
 - A document of several brokerage accounts is linked to no account: the
   account the classifier matched is undone after parsing (an account
   chosen at upload stays), and an account chosen on a re-run takes only
@@ -112,6 +133,10 @@ What remains (details in docs/ROADMAP.md):
   refuses it).
 - Rows with a single filled cell (disclaimer paragraphs, "Date downloaded")
   are no longer reported as skipped rows.
+- "Remember" on an `unknown_account` item of a brokerage statement (OFX,
+  PDF, activity export) read the last four digits of the bank statement
+  with the same index; it now reads the investment statement's, and the
+  item's account suggestions rank by them.
 
 ## [1.0.0-rc.1] - 2026-11-05
 
