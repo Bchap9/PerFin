@@ -220,7 +220,8 @@ def test_every_pod_is_hardened(which: str) -> None:
 
 def chart_app_version() -> str:
     """The chart's appVersion, the image tag the default values must deploy."""
-    match = re.search(r'^appVersion:\s*"?([^"\s#]+)"?', (CHART / "Chart.yaml").read_text(), re.MULTILINE)
+    chart = (CHART / "Chart.yaml").read_text()
+    match = re.search(r'^appVersion:\s*"?([^"\s#]+)"?', chart, re.MULTILINE)
     assert match is not None, "Chart.yaml has no appVersion"
     return match.group(1)
 
