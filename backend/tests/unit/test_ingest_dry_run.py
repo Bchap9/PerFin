@@ -68,6 +68,8 @@ def test_csv_shows_the_suggested_mapping_and_rows(tmp_path: Path) -> None:
     parse = next(s for s in stages if s["stage"] == "parse")
     (table,) = parse["tables"]
     assert table["suggested_mapping"]["date_column"] == 0
+    assert table["suggestion"]["parsed_rows"] == 4
+    assert {r["role"] for r in table["suggestion"]["roles"]} >= {"date", "amount"}
     assert table["transactions"] == 4
     assert [t["amount"] for t in table["first_transactions"]] == [str(t.amount) for t in txns]
     classify = next(s for s in stages if s["stage"] == "classify")

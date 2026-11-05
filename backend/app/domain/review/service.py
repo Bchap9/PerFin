@@ -27,7 +27,10 @@ editable by the caller as well. A closed item is ``409 review-item-closed``.
   (``app.domain.imports.service.request_apply`` re-runs the stored
   extraction; a document without one goes through the pipeline again).
   ``remember`` saves the statement's last four digits on the account, or the
-  account on the CSV mapping the item names.
+  account on the CSV mapping the item names. For one account of a
+  multi-account CSV (``group``) the digits are read again from the stored
+  table with the item's mapping, and the mapping itself is left alone (it
+  serves every account of the file).
 * ``unparsed``: ``reprocess`` (pipeline again) or ``apply_mapping``
   (re-import with a saved column mapping).
 * ``receipt_match``: the receipt is attached to the chosen transaction
@@ -492,8 +495,13 @@ def _resolve_account(
     payload = item.payload or {}
     remembered: list[str] = []
     if body.remember:
-        last4 = _statement_last4(document, payload.get("statement"))
-        mapping_id = _uuid(payload.get("mapping_id"))
+        grouped = isinstance(payload.get("group"), int)
+        last4 = (
+            imports_service.stored_group_last4(db, document, payload)
+            if grouped
+            else _statement_last4(document, payload.get("statement"))
+        )
+        mapping_id = None if grouped else _uuid(payload.get("mapping_id"))
         if last4 is not None:
             if account.number_last4 is None:
                 account.number_last4 = last4

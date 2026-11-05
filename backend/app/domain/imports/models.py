@@ -12,7 +12,10 @@ every write and every read).
 :func:`app.ingestion.parsers.structured.header_fingerprint` of the layout's
 header row (row ``spec.skip_rows`` of the table); a newly extracted table
 whose header has the same fingerprint is imported with the mapping without
-asking anyone (INGESTION.md "Column-mapping review").
+asking anyone (INGESTION.md "Column-mapping review"). A mapping is saved by a
+person through the editor, or by the importer from a confident suggestion
+for a never-seen layout (``created_by`` is then the person whose document it
+was; the audit row says ``origin: suggested``); both are ordinary mappings.
 
 ``account_id`` (optional) is the account files of this layout go to when the
 upload did not name one; ``institution_id`` (optional) is recorded on the
