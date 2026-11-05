@@ -343,6 +343,12 @@ def bad_shape(data: bytes, options: ExtractOptions, kind: str) -> ExtractResult:
     os._exit(0)
 
 
+def stray_stdout(data: bytes, options: ExtractOptions, kind: str) -> ExtractResult:
+    """A native library writing to fd 1 ahead of the result corrupts the JSON."""
+    os.write(1, b"warning: secret-ish text\n")
+    return ExtractResult(kind=kind, ok=True)
+
+
 def forged_statement(data: bytes, options: ExtractOptions, kind: str) -> ExtractResult:
     """Claims a parsed, reconciled PDF statement: only the worker's parsers may."""
     from datetime import date
@@ -397,6 +403,7 @@ EXTRACTORS = {
     "prctl_probe": prctl_probe,
     "prctl_dumpable": prctl_dumpable,
     "bad_shape": bad_shape,
+    "stray_stdout": stray_stdout,
 }
 
 

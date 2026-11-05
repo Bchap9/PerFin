@@ -364,6 +364,21 @@ def test_output_must_match_the_schema() -> None:
     with pytest.raises(SandboxError) as caught:
         run_extraction("bad_shape", b"x", config=EVIL)
     assert caught.value.code == "bad_output"
+    # The worker log says where the output failed, never what it held.
+    assert "injected extra_forbidden" in caught.value.detail
+    assert '"x"' not in caught.value.detail
+
+
+def test_stray_stdout_is_reported_by_position_not_content() -> None:
+    with pytest.raises(SandboxError) as caught:
+        run_extraction("stray_stdout", b"x", config=EVIL)
+    assert caught.value.code == "bad_output"
+    detail = caught.value.detail
+    assert "json_invalid" in detail
+    assert "starts_with_brace=False" in detail
+    assert "json_line=1" in detail
+    assert "secret" not in detail
+    assert "secret" not in str(caught.value)
 
 
 def test_child_environment_is_empty_private_and_filtered() -> None:
