@@ -1,0 +1,32 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# SSN, ITIN and EIN -> [GOVID]. All values are invented or long-known
+# invalid examples.
+placeholder: "[GOVID]"
+kind: digits
+cases:
+  - {text: "SSN 123-45-6789", secrets: ["123456789"]}
+  - {text: "ssn: 123 45 6789", secrets: ["123456789"]}
+  - {text: "SSN#123.45.6789", secrets: ["123456789"]}
+  - {text: "Social Security 078-05-1120", secrets: ["078051120"]}
+  - {text: "soc sec no 078051120", secrets: ["078051120"]}
+  - {text: "IRS TREAS 310 TAX REF 123-45-6789", secrets: ["123456789"]}
+  - {text: "123-45-6789", secrets: ["123456789"]}
+  - {text: "123 45 6789", secrets: ["123456789"]}
+  - {text: "ITIN 912-70-1234", secrets: ["912701234"]}
+  - {text: "itin 912701234", secrets: ["912701234"]}
+  - {text: "EIN 12-3456789", secrets: ["123456789"]}
+  - {text: "FEIN: 98-7654321 payroll", secrets: ["987654321"]}
+  - {text: "TIN 98-7654321", secrets: ["987654321"]}
+  - {text: "Tax ID 12-3456789", secrets: ["123456789"]}
+  - {text: "employer 98-7654321 W2", secrets: ["987654321"]}
+  - {text: "SSN ***-**-6789", secrets: ["6789"]}
+  - {text: "SSN XXX-XX-4321", secrets: ["4321"]}
+  - {text: "ssn last4 6789", secrets: ["6789"]}
+  - {text: "SSN:987654320", secrets: ["987654320"]}
+  - {text: "id 987654320 verified", any_placeholder: true, secrets: ["987654320"]}
+  # Security review P6B-SR-R1-02: an SSN written with thousands separators.
+  - {text: "123,456,789", secrets: ["123456789"]}
+  - {text: "ssn 123,456,789", secrets: ["123456789"]}
+  # v1.0.0 verification run: the id stays whole when an address follows.
+  - {text: "123-45-6789 742 Evergreen Terrace", any_placeholder: true, secrets: ["123456789", "123"]}
+  - {text: "SSN 123-45-6789 742 Evergreen Terrace", any_placeholder: true, secrets: ["123456789"]}

@@ -1,0 +1,37 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Street addresses, PO boxes and units -> [ADDRESS]. Invented addresses.
+# ``secrets`` are word sequences that must not survive (case-insensitive,
+# separators ignored).
+placeholder: "[ADDRESS]"
+kind: text
+cases:
+  - {text: "123 Main St", secrets: ["123 main"]}
+  - {text: "Rent 123 Main Street Apt 4B", secrets: ["123 main", "apt 4b"]}
+  - {text: "123 Main St Apt 4B, Springfield, IL 62704", secrets: ["123 main", "springfield", "62704"]}
+  - {text: "4500 N Elm Ave #12", secrets: ["4500", "elm"]}
+  - {text: "77 West Harbor Blvd Suite 300", secrets: ["harbor", "suite 300"]}
+  - {text: "9 Old Mill Rd.", secrets: ["old mill"]}
+  - {text: "12B Cherry Tree Lane", secrets: ["cherry tree"]}
+  - {text: "1600 Sunny Brook Dr NW", secrets: ["sunny brook"]}
+  - {text: "PO BOX 1234", secrets: ["1234"]}
+  - {text: "P.O. Box 98765 Anytown", secrets: ["98765"]}
+  - {text: "Post Office Box 42", secrets: ["box 42"]}
+  - {text: "mail to POB 777", secrets: ["777"]}
+  - {text: "HOA DUES 55 Lakeview Ct Unit 7", secrets: ["lakeview", "unit 7"]}
+  - {text: "plumber at 8 Birch Way, Oakdale, CA 95361", secrets: ["birch", "oakdale", "95361"]}
+  - {text: "Deliver: 300 E 5th St, Floor 2", secrets: ["300 e 5th", "floor 2"]}
+  - {text: "moving to 21 Jump St Apt 3", secrets: ["21 jump"]}
+  - {text: "1 Infinite Loop", secrets: ["1 infinite"]}
+  - {text: "2200 Mission College Blvd", secrets: ["mission college"]}
+  - {text: "check mailed 742 Evergreen Terrace", secrets: ["742", "evergreen"]}
+  - {text: "450 Ridge Pkwy Bldg C", secrets: ["450 ridge", "bldg c"]}
+  - {text: "REF 3 Maple Ct ref", secrets: ["3 maple"]}
+  - {text: "MEMO:31 Spooner St.", secrets: ["31 spooner"]}
+  # v1.0.0 verification run (docs/RELEASE_CHECKLIST.md): a government id or a
+  # dashed number right before the address must not swallow the house number
+  # and leave the street name in the clear.
+  - {text: "SSN 123-45-6789 742 Evergreen Terrace", any_placeholder: true, secrets: ["742", "evergreen"]}
+  - {text: "EIN 12-3456789 15 Quuxwood Lane", any_placeholder: true, secrets: ["15 quuxwood", "quuxwood"]}
+  - {text: "ssn xxx-xx-6789 9 Elm St", any_placeholder: true, secrets: ["9 elm", "elm st"]}
+  - {text: "ssn last 4 6789 12 Oak Ave", any_placeholder: true, secrets: ["12 oak", "oak ave"]}
+  - {text: "123-45-6789 742 Evergreen Terrace", any_placeholder: true, secrets: ["742", "evergreen"]}

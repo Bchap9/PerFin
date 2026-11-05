@@ -50,6 +50,9 @@ minutes a month rather than hours.
   external feeds are opt-in and clearly marked as off-host calls).
 - Performance: time-weighted and money-weighted returns, allocation by asset
   class, sector and account, realised and unrealised gains.
+- *Status (v0.5):* corporate actions cover splits and ratio actions plus cash;
+  mergers into another security, spin-offs and return of capital are
+  deferred (ROADMAP Phase 5 "Deferred").
 
 ### Loans
 - Mortgage, auto, student, personal; fixed and variable rate.
@@ -93,6 +96,10 @@ minutes a month rather than hours.
 - Dashboard with configurable widgets.
 - Notifications: in-app, email, webhook, ntfy/Gotify/Matrix adapters later.
 - Full export (JSON + CSV + documents) and import. No lock-in.
+  *Status (v0.6):* the export does not yet carry investments, loans, manual
+  assets, net worth history or the tax vault (PORTABILITY.md, format v1);
+  the uploaded brokerage and loan statements and tax forms themselves are
+  in it (as documents).
 - Audit log of every write and every login.
 - Backups: documented procedure, encrypted archives, restore test script.
 - API with personal access tokens (scoped) for scripting.

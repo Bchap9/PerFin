@@ -1,0 +1,66 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# gitleaks configuration (SECURITY.md H5). Run in CI by
+# .github/workflows/security.yml and locally with
+#   gitleaks git --redact .      (history)   gitleaks dir --redact .   (tree)
+#
+# The default rule set applies in full. The only exceptions are files whose
+# purpose is to contain synthetic, secret-shaped strings: the log-scrubbing
+# leak corpus must look like real tokens to prove they are redacted. Add a
+# path here only for such a corpus, never to silence a real finding.
+
+[extend]
+useDefault = true
+
+[[allowlists]]
+description = "Synthetic leak corpora for the PII/secret scrubbers (never real secrets)"
+paths = [
+  '''^backend/tests/unit/test_logging\.py$''',
+  '''^backend/tests/security/corpus/''',
+]
+
+# Each entry below needs BOTH the path and the exact synthetic value to match
+# (condition = "AND"), so a real secret in the same file is still reported.
+[[allowlists]]
+description = "RFC 6238 Appendix B test vector secret (base32 of 12345678901234567890)"
+condition = "AND"
+paths = ['''^backend/tests/unit/test_mfa_units\.py$''']
+regexes = ['''^GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ$''']
+
+[[allowlists]]
+description = "Synthetic API token shown once by the settings page test"
+condition = "AND"
+paths = ['''^frontend/src/features/settings/SecurityPage\.test\.tsx$''']
+regexes = ['''^pfn_0123456789ab_SECRET''']
+
+[[allowlists]]
+description = "Synthetic mail-intake alias token in the sender-policy unit test"
+condition = "AND"
+paths = ['''^backend/tests/unit/test_email_policy\.py$''']
+regexes = ['''^k7q2m4x9t3b5n6pa$''']
+
+[[allowlists]]
+description = "Synthetic master key (base64 of the bytes 0x00..0x1f) in the config-check test; history only, the file now builds it at runtime"
+condition = "AND"
+paths = ['''^backend/tests/unit/test_market_data\.py$''']
+regexes = ['''^AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8=$''']
+
+[[allowlists]]
+description = "Synthetic webhook signing secret in the notification channel test fixture; history only, the file now builds an obviously fake value at runtime"
+condition = "AND"
+paths = ['''^backend/tests/fixtures/notifications\.py$''']
+regexes = ['''^synthetic-signing-secret-0123456789$''']
+
+[[allowlists]]
+description = "Cipher name in prose flagged as a key (not a secret)"
+condition = "AND"
+paths = ['''^docs/ARCHITECTURE\.md$''']
+regexes = ['''^XChaCha20-Poly1305$''']
+
+[[allowlists]]
+description = "Build and cache output (gitignored; never committed)"
+paths = [
+  '''(^|/)__pycache__/''',
+  '''(^|/)node_modules/''',
+  '''(^|/)\.venv/''',
+  '''^frontend/dist/''',
+]

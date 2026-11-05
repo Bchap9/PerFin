@@ -1,0 +1,59 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+#
+# Automated dependency updates (SECURITY.md H4). Security updates are raised
+# as soon as an advisory is published; version updates are batched weekly.
+# Every update PR runs the full ci.yml and security.yml gates, and lockfiles
+# stay hash-pinned (F10).
+version: 2
+
+updates:
+  - package-ecosystem: uv
+    directory: /backend
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 10
+    groups:
+      python-dev-tools:
+        dependency-type: development
+      python-runtime:
+        dependency-type: production
+        update-types: [minor, patch]
+    commit-message:
+      prefix: "build(deps)"
+
+  - package-ecosystem: npm
+    directory: /frontend
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 10
+    groups:
+      npm-dev-tools:
+        dependency-type: development
+        update-types: [minor, patch]
+      npm-runtime:
+        dependency-type: production
+        update-types: [minor, patch]
+    commit-message:
+      prefix: "build(deps)"
+
+  # Container base images are not listed: Dependabot cannot follow the
+  # ARG-overridable FROM lines in deploy/Dockerfile and deploy/egress/Dockerfile
+  # or the ${VAR:-default} images in docker-compose.yml. Their tags track a
+  # pinned major line (python:3.12-slim, node:22-alpine, postgres:16-alpine,
+  # caddy:2); the weekly security.yml run rebuilds with --pull --no-cache and
+  # fails on any fixable HIGH/CRITICAL finding in the result.
+
+  # Actions are pinned by commit SHA; Dependabot updates the SHA and the
+  # version comment together.
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+    groups:
+      actions:
+        patterns: ["*"]
+    commit-message:
+      prefix: "ci(deps)"

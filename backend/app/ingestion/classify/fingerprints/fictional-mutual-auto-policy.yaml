@@ -1,0 +1,19 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Fictional institution (invented for PerFin tests and examples; not a real
+# company). Layout produced by backend/tests/fixtures/synth_classify.py.
+schema: 1
+key: fictional-mutual-auto-policy
+institution: Fictional Mutual Insurance
+country: US
+kind: insurance
+parser: insurance_declarations
+version: 1
+date_order: mdy
+match:
+  all:
+    - header: Fictional Mutual Insurance
+    - header: Declarations Page
+  any:
+    - regex: 'policy number fmi-[x\d]{4}-\d{4}'
+    - text: Total policy premium
+  min_any: 1

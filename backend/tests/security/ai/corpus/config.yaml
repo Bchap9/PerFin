@@ -1,0 +1,25 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Synthetic household for the scrubber corpus: invented members, aliases and
+# a custom denylist. Every corpus file is scrubbed with this configuration.
+members:
+  - display_name: "Jane Q. Doe"
+    username: "jdoe42"
+    email: "jane.doe@example.org"
+  - display_name: "Robert Smithers"
+    username: "rsmithers"
+    email: "bob.s@example.net"
+  - display_name: "José Álvarez-Núñez"
+    username: "jalvarez"
+    email: null
+aliases:
+  - "Bobby"
+  - "Lil Jo"
+denylist:
+  - "Acme Widgets Corp"
+  - "Lincoln Elementary"
+  - "Oakwood Clinic"
+# Stored account-number fragments (account.number_last4): the API stage
+# replaces them wherever they stand alone (P6B-SR-R2-01).
+account_numbers:
+  - "6611"
+  - "5432"

@@ -1,0 +1,20 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Fictional institution (invented for PerFin tests and examples; not a real
+# company). Layout produced by backend/tests/fixtures/synth_classify.py.
+schema: 1
+key: mock-savings-and-loan-statement
+institution: Mock Savings and Loan
+country: GB
+kind: statement
+parser: statement_generic
+version: 1
+date_order: dmy
+match:
+  all:
+    - header: Mock Savings and Loan
+    - header: Current Account Statement
+  any:
+    - account_mask: '****####'
+    - columns: [Date, Details, Paid out, Paid in, Balance]
+    - text: Balance carried forward
+  min_any: 1

@@ -1,0 +1,51 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+#
+# PerFin local development database (scripts/dev.sh, `make dev`).
+#
+# Only PostgreSQL runs in Docker; the API, worker and Vite dev server run on
+# the host so code changes reload. This is NOT the reference deployment
+# (deploy/docker-compose.yml): the database port is published on 127.0.0.1 so
+# host processes can reach it, and the container has none of the production
+# hardening. Never keep real data in it.
+#
+# scripts/dev.sh generates .dev/env (mode 0600: random passwords and keys, no
+# defaults) and runs
+#   docker compose -f deploy/docker-compose.dev.yml --env-file .dev/env up -d --wait db
+#
+# The same db-init scripts as production create the non-superuser owner and
+# application roles, so row-level security is enforced in development too.
+# Behind a registry mirror set POSTGRES_IMAGE, e.g.
+#   POSTGRES_IMAGE=mirror.gcr.io/library/postgres:16-alpine make dev
+
+name: perfin-dev
+
+services:
+  db:
+    image: ${POSTGRES_IMAGE:-docker.io/library/postgres:16-alpine}
+    command: ["postgres", "-c", "password_encryption=scram-sha-256"]
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_DB: perfin
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?run scripts/dev.sh (it generates .dev/env)}
+      POSTGRES_INITDB_ARGS: "--auth-host=scram-sha-256 --auth-local=scram-sha-256"
+      POSTGRES_HOST_AUTH_METHOD: scram-sha-256
+      # Read by db-init/10-perfin-roles.sh on first start only.
+      POSTGRES_OWNER_PASSWORD: ${POSTGRES_OWNER_PASSWORD:?run scripts/dev.sh}
+      POSTGRES_APP_PASSWORD: ${POSTGRES_APP_PASSWORD:?run scripts/dev.sh}
+      PERFIN_DB_OWNER_ROLE: perfin_owner
+      PERFIN_DB_APP_ROLE: perfin_app
+    ports:
+      - "127.0.0.1:${PERFIN_DEV_DB_PORT:-55432}:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./db-init:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "postgres", "-d", "perfin", "-h", "127.0.0.1"]
+      interval: 3s
+      timeout: 5s
+      start_period: 20s
+      retries: 20
+    restart: "no"
+
+volumes:
+  pgdata:

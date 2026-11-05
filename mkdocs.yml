@@ -1,0 +1,98 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+#
+# Documentation site (mkdocs-material over docs/). Build locally:
+#   python -m venv .venv-docs && .venv-docs/bin/pip install --require-hashes -r requirements-docs.txt
+#   .venv-docs/bin/mkdocs build --strict
+# No analytics, no third-party fonts or CDNs: the built site is self-contained.
+site_name: PerFin
+site_description: Self-hosted, security-first personal finance
+repo_url: https://github.com/bchap9/perfin
+repo_name: bchap9/perfin
+edit_uri: ""
+docs_dir: docs
+site_dir: site
+exclude_docs: |
+  BUILD_PROMPT.md
+use_directory_urls: true
+strict: true
+
+theme:
+  name: material
+  language: en
+  # Material would otherwise fetch Google Fonts at page load.
+  font: false
+  features:
+    - navigation.sections
+    - navigation.top
+    - content.code.copy
+    - search.highlight
+  palette:
+    - media: "(prefers-color-scheme: light)"
+      scheme: default
+      toggle:
+        icon: material/weather-night
+        name: Switch to dark mode
+    - media: "(prefers-color-scheme: dark)"
+      scheme: slate
+      toggle:
+        icon: material/weather-sunny
+        name: Switch to light mode
+
+# Only the built-in plugins: nothing that phones home or needs a network.
+plugins:
+  - search
+
+markdown_extensions:
+  - admonition
+  - tables
+  - toc:
+      permalink: true
+  - pymdownx.superfences
+  - pymdownx.details
+
+nav:
+  - Home: index.md
+  - Running PerFin:
+      - Deployment: DEPLOYMENT.md
+      - Operations: OPERATIONS.md
+      - Upgrading: UPGRADING.md
+      - Release checklist: RELEASE_CHECKLIST.md
+      - Backup and restore: BACKUP_RESTORE.md
+      - Export and import: PORTABILITY.md
+      - Authentik setup: AUTHENTIK.md
+      - Connecting an AI assistant: MCP_CLIENTS.md
+  - Security:
+      - Threat model and controls: SECURITY.md
+      - Control status: security/CONTROLS.md
+      - What leaves the host:
+          - Overview: security/what-leaves-the-host.md
+          - Ingestion: security/ingestion.md
+          - Prices and exchange rates: security/integrations.md
+          - Notifications: security/notifications.md
+          - AI access: security/ai.md
+          - OIDC sign-in: security/oidc.md
+          - Email: security/email.md
+  - Design:
+      - Vision: VISION.md
+      - Architecture: ARCHITECTURE.md
+      - Data model: DATA_MODEL.md
+      - Authentication: AUTH.md
+      - Ingestion: INGESTION.md
+      - AI access: AI_ACCESS.md
+      - API: API.md
+      - Repository structure: REPO_STRUCTURE.md
+      - Roadmap: ROADMAP.md
+      - Decisions:
+          - adr/README.md
+          - "0001 Language and framework": adr/0001-language-and-framework.md
+          - "0002 PostgreSQL as the queue": adr/0002-postgres-as-queue.md
+          - "0003 Document encryption": adr/0003-document-encryption.md
+          - "0004 LLM as untrusted oracle (superseded)": adr/0004-llm-as-untrusted-oracle.md
+          - "0005 Server-side sessions": adr/0005-server-side-sessions.md
+          - "0006 Sandboxed extraction": adr/0006-sandboxed-extraction.md
+          - "0007 AI access via MCP": adr/0007-ai-access-via-mcp.md
+          - "0008 Household-consistent foreign keys": adr/0008-household-consistent-foreign-keys.md
+          - "0009 Extraction isolation under a shared UID": adr/0009-extraction-isolation-under-a-shared-uid.md
+  - Contributing:
+      - Development: DEVELOPMENT.md
+      - Writing parsers: CONTRIBUTING-parsers.md

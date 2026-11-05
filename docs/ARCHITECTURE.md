@@ -60,7 +60,10 @@ network.
 
 ### perfin-api
 FastAPI application. Stateless apart from the DB. Serves the compiled SPA from
-`/` and the API from `/api/v1`. Owns:
+`/` (hashed bundles under `/static/`; every other unmatched `GET` outside
+`/api/` gets `index.html`, so client routes such as `/assets/<id>` reload)
+and the API from `/api/v1`. A request's transaction commits before its
+response is sent (API.md "Conventions"). Owns:
 
 - Authentication (local + OIDC), session management, CSRF, MFA.
 - Authorisation (household membership, per-account visibility, roles).
@@ -71,6 +74,18 @@ FastAPI application. Stateless apart from the DB. Serves the compiled SPA from
 - Server-sent events endpoint for live updates (job progress, new review items,
   balance changes). Clients use TanStack Query and invalidate on events.
 - Audit log writes.
+
+Implemented in Phase 2: every change writes an `event` row and a
+`pg_notify('perfin_events', ...)` in the same transaction
+(`app.core.events.emit`), so a notice exists only once the change commits;
+the notice carries `{id, household_id, type}` only. `GET /api/v1/events`
+holds one `LISTEN` connection per stream, filters each event by the
+subscriber's household, role and account grants, sends `id` and `type`
+(never the payload), and replays from `Last-Event-ID` within the event
+retention window. Streams are capped per user and per API process, re-check
+their session periodically and end after `PERFIN_SSE_MAX_STREAM_SECONDS`
+(the browser reconnects). Writes accept an optional `Idempotency-Key`
+(`app.core.idempotency`, keys kept 24 hours per household and user).
 
 ### perfin-mcp (optional)
 Same image, entrypoint `perfin mcp`. Speaks the Model Context Protocol over
@@ -85,17 +100,76 @@ SECURITY.md "Container hardening"). Pulls jobs from a Postgres table using
 `SELECT ... FOR UPDATE SKIP LOCKED`. Job families:
 
 - `ingest_document`: the full pipeline (see INGESTION.md).
+- `imports.apply_mapping`: re-run a structured import with a saved CSV
+  column mapping (Phase 2).
+- `transactions.auto_pair`: after an import, pair transfers between the
+  accounts the document's uploader may import into (Phase 2).
+- `portability.export`, `portability.import`, `portability.expire`: full
+  export and import archives (Phase 2, PORTABILITY.md).
 - `watch_dropfolder`: long-running; inotify where available, polling fallback.
-- `poll_mailbox`: IMAP IDLE/poll on a schedule.
-- `snapshot_net_worth`: daily.
+  (Built in Phase 3 as a recurring instance-level job, one bounded run a
+  minute that watches while files settle and commits what it took;
+  originals are moved or deleted afterwards by `dropfolder.finish`.
+  INGESTION.md "Drop folder specifics".)
+- `poll_mailbox`: IMAP IDLE/poll on a schedule. (Built in Phase 4 as a
+  poll: the instance-level `poll_mailboxes` runs every 5 minutes and queues
+  `poll_mailbox` for each household whose mailbox is enabled; a run that
+  recorded messages queues a follow-up that moves them out of the inbox
+  after the commit. No IDLE yet. INGESTION.md "Email intake specifics".)
+- `snapshot_net_worth`: daily. (Built in Phase 5 as an instance-level
+  recurring job, `app/workers/handlers/networth.py`: it queues one
+  `networth.snapshot` per household and day (dedupe key
+  `networth:<household>:<day>`), which upserts that day's
+  `net_worth_snapshot` in the household's RLS context and backfills the
+  days missing since the last one.)
+- `detect_recurring`: daily (Phase 5, `app/workers/handlers/recurring.py`):
+  one `recurring.detect` per household and day; writes `detected`
+  scheduled transactions, never touches manual ones.
 - `refresh_prices`: scheduled, only if a price provider is enabled.
+  (Built in Phase 5 as an instance-level recurring job every 6 hours,
+  `app/workers/handlers/market_data.py`: with `PERFIN_PRICE_PROVIDER` and
+  `PERFIN_FX_PROVIDER` both `none`, the default, it returns without any
+  connection; otherwise it asks the price provider once per distinct
+  symbol of the instance and the FX provider once, then writes each
+  household's prices and rates in its RLS context, never over manual ones.
+  docs/security/integrations.md.)
+- `tax.export`, `tax.export_expire`: the accountant export of a tax year
+  (Phase 6, `app/workers/handlers/tax.py`; API.md "Tax vault notes").
+- `tax_reminders`: daily, instance-level (Phase 6): one `tax.reminders` per
+  household and day, which emits `tax.reminder` on the days of
+  `PERFIN_TAX_REMINDER_DATES` for open years with expected documents missing.
 - `run_rules`: re-apply rules after a rule change.
-- `send_notification`: fan out to configured channels.
+- `send_notification`: deliver one generic notification through one
+  household channel (Phase 7, `app/workers/handlers/notifications.py`;
+  queued by `app.domain.notifications.routing.notify`, retried with
+  backoff); `notify_review_waiting`: daily, routes "review items waiting".
 - `backup_export`: produce encrypted export archives.
 
 Each job has a timeout, a retry policy, a dead-letter state and a per-user
 concurrency limit. OCR and parsing run in a subprocess with CPU and memory
 limits so a pathological PDF cannot take down the worker.
+
+Status after Phases 3-4: `ingest_document`, `imports.apply_mapping`,
+`run_rules`, `transactions.auto_pair`, `portability.*`, the identity
+maintenance jobs, `watch_dropfolder` and `dropfolder.finish`, and
+`poll_mailboxes`/`poll_mailbox` exist. Phases 5-6 add
+`snapshot_net_worth`/`networth.snapshot`, `detect_recurring`/
+`recurring.detect`, `refresh_prices`, `tax.export`/`tax.export_expire` and
+`tax_reminders`/`tax.reminders` (the snapshot, recurring and export jobs ran
+through a live `perfin worker` in the Phases 5+6 live run).
+Phase 7 adds `send_notification` and `notify_review_waiting`
+(docs/security/notifications.md); `backup_export` is not built. The extraction subprocess is built
+(`app.ingestion.sandbox`: a fresh interpreter per document, rlimits on
+memory, CPU, open files and file size, a wall-clock timeout, its own process
+group, Landlock limiting the filesystem to reading the interpreter's own
+paths, a default-kill seccomp allowlist (any syscall the extractors do not
+need kills the child; network, exec, new processes, ptrace-style calls and
+every filesystem change fail with `EPERM`), a non-dumpable worker so a
+same-UID child cannot read its environment or memory (ADR-0009), privileges
+dropped to `PERFIN_EXTRACT_UID` when the worker runs as root, plaintext only
+on stdin and the validated result on stdout; ADR-0006 and its addendum).
+Every extractor runs in it: CSV/TSV, OFX/QFX, QIF, XLSX, PDF (PyMuPDF),
+images with OCR (Tesseract in process through `tesserocr`), EML and ZIP.
 
 ### PostgreSQL
 Single database, schema-managed with Alembic. Row-level security policies
@@ -113,10 +187,19 @@ names are random UUIDs; original filenames live only in the database. Blobs are
 never served directly; the API decrypts and streams with `Content-Disposition:
 attachment` and a strict content type.
 
+Implemented in Phase 2: `LocalFSBlobStore` only, with two areas
+(`quarantine` for files not yet accepted, the permanent `documents` area).
+Each object is encrypted as a stream (libsodium secretstream,
+XChaCha20-Poly1305 per chunk) under its own data key, with the blob id as
+associated data; the data key is wrapped by the master key (ADR-0003). The
+S3-compatible store is deferred: `S3BlobStore` is an interface that refuses
+to run (ROADMAP "Later / ideas parking lot").
+
 ### Frontend
 React 18 + TypeScript, built with Vite, routed with TanStack Router, data
-fetching via TanStack Query with an SSE-driven invalidation layer. Charts with a
-lightweight library (likely Recharts or visx). Design system: a small component
+fetching via TanStack Query with an SSE-driven invalidation layer
+(`src/lib/sse.ts` maps event types to query roots). Charts use Recharts
+(account balance history); simple bar summaries are plain CSS. Design system: a small component
 set with light/dark themes. No server-side rendering is needed; the SPA is
 static assets served by the API with a strict CSP (no inline scripts, hashed
 styles).
@@ -127,7 +210,8 @@ styles).
   DOB, SSN, account numbers, names, documents). PerFin never calls a model
   itself. See AI_ACCESS.md and ADR-0007.
 - **Price feeds** for securities and FX.
-- **Notification channels**: SMTP, webhooks, ntfy, Gotify, Matrix.
+- **Notification channels**: SMTP, webhooks, ntfy, Gotify, Matrix
+  (generic messages only; see docs/security/notifications.md).
 - **Antivirus**: ClamAV sidecar scanning quarantined files before parsing.
 
 ## Key flows
@@ -141,7 +225,14 @@ styles).
    subprocess, classifies, fingerprints the institution, parses, deduplicates,
    runs rules, computes confidence per field, writes transactions or review
    items, moves blob from quarantine to the permanent store, sets
-   `status=processed` or `needs_review`.
+   `status=processed` or `needs_review`. (Since Phases 3-4: structured
+   files (CSV/TSV, OFX/QFX, QIF, XLSX) and PDF, image (OCR), EML and ZIP
+   documents; the optional ClamAV scan; classification by fingerprint or the
+   naive Bayes classifier; statement, payslip and receipt parsers with
+   per-field confidence and reconciliation; receipts matched to their
+   transaction. A CSV without a matching saved column mapping still waits in
+   review until one is saved; invoices, tax forms and brokerage statements
+   have no parser yet and wait in review.)
 4. Worker emits a `document.updated` event; API relays over SSE; the UI
    refreshes the document card and the review badge.
 

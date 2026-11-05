@@ -1,0 +1,376 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+"""Loans over HTTP: terms, schedules, payments, balance sync, simulation, visibility.
+
+Figures are exact (``Decimal`` strings); the engine is unit-tested in
+``tests/unit/test_amortization.py``. "Today" is frozen at 2026-06-30.
+"""
+
+from __future__ import annotations
+
+import uuid
+from collections.abc import Iterator
+from dataclasses import dataclass
+from datetime import date
+from decimal import Decimal
+from typing import Any
+
+import pytest
+
+from app.auth.models import GrantLevel
+from app.core.settings import Settings
+from app.domain.accounts import service as accounts_service
+from app.domain.accounts.models import Account, AccountType
+from app.domain.loans import service as loans_service
+from app.domain.loans.amortization import Terms, schedule
+from tests.fixtures.factories import AuthedClient, Factories
+from tests.fixtures.households import (
+    API,
+    Actors,
+    household_audit,
+    household_events,
+    problem_type,
+)
+from tests.fixtures.ledger import LedgerFactories
+
+pytestmark = pytest.mark.integration
+
+LOANS = f"{API}/loans"
+TODAY = date(2026, 6, 30)
+D = Decimal
+
+
+@dataclass(frozen=True)
+class World:
+    owner: AuthedClient
+    member: AuthedClient
+    viewer: AuthedClient
+    household_id: uuid.UUID
+    mortgage: Account
+    car: Account
+    hidden: Account
+    checking: Account
+    ledger: LedgerFactories
+
+
+@pytest.fixture
+def actors(settings: Settings, factories: Factories) -> Iterator[Actors]:
+    with Actors.open(settings, factories) as built:
+        yield built
+
+
+@pytest.fixture
+def world(actors: Actors, ledger: LedgerFactories, monkeypatch: pytest.MonkeyPatch) -> World:
+    monkeypatch.setattr(loans_service, "today", lambda: TODAY)
+    monkeypatch.setattr(accounts_service, "today", lambda: TODAY)
+    owner = actors.new(role="owner")
+    household = owner.record.household
+    assert household is not None
+    member = actors.new(role="member", household=household)
+    viewer = actors.new(role="viewer", household=household)
+    hid = household.id
+    mortgage = ledger.account(hid, type=AccountType.MORTGAGE, name="Home loan")
+    car = ledger.account(hid, type=AccountType.LOAN, name="Car loan")
+    hidden = ledger.account(hid, type=AccountType.LOAN, name="Hidden loan")
+    checking = ledger.account(hid, type=AccountType.CHECKING, name="Checking")
+    for account in (mortgage, car, checking):
+        ledger.grant(hid, member.record.id, account, GrantLevel.EDIT)
+        ledger.grant(hid, viewer.record.id, account, GrantLevel.VIEW)
+    return World(owner, member, viewer, hid, mortgage, car, hidden, checking, ledger)
+
+
+def _usd(amount: str) -> dict[str, str]:
+    return {"amount": amount, "currency": "USD"}
+
+
+def _post(client: AuthedClient, url: str, body: dict[str, Any], status: int = 201) -> Any:
+    response = client.post(url, json=body)
+    assert response.status_code == status, response.text
+    return response.json()
+
+
+def _mortgage_body(account: Account, **extra: Any) -> dict[str, Any]:
+    return {
+        "account_id": str(account.id),
+        "principal_original": _usd("250000.00"),
+        "rate": "0.06125",
+        "term_months": 360,
+        "origination_date": "2024-03-01",
+        "payment_day": 1,
+        "escrow_amount": _usd("350.00"),
+        "lender": "Placeholder Home Lending",
+        **extra,
+    }
+
+
+def _terms() -> Terms:
+    return Terms(
+        principal=D("250000.00"),
+        annual_rate=D("0.06125"),
+        term_months=360,
+        origination_date=date(2024, 3, 1),
+        payment_day=1,
+        currency="USD",
+        escrow=D("350.00"),
+    )
+
+
+def _balance(client: AuthedClient, account: Account) -> str:
+    response = client.get(f"{API}/accounts/{account.id}")
+    assert response.status_code == 200, response.text
+    return str(response.json()["balance"]["amount"])
+
+
+def test_create_loan_computes_the_payment_and_syncs_the_balance(
+    world: World, factories: Factories
+) -> None:
+    loan = _post(world.member, LOANS, _mortgage_body(world.mortgage))
+    assert loan["payment_amount"] == _usd("1519.03")
+    assert loan["rate"] == "0.06125"
+    assert loan["maturity_date"] == "2054-03-01"
+    assert loan["escrow_amount"] == _usd("350.00")
+    projection = loan["projection"]
+    # No payments recorded: the original schedule, payments assumed made.
+    original = schedule(_terms())
+    paid = [r for r in original.rows if r.due_date <= TODAY]
+    assert projection["balance_source"] == "scheduled"
+    assert projection["balance"]["amount"] == f"{paid[-1].balance:f}"
+    assert projection["next_due_date"] == "2026-07-01"
+    assert projection["payoff_date"] == "2054-03-01"
+    assert projection["remaining_payments"] == 360 - len(paid)
+    # The account's balance is the principal owed (origination snapshot).
+    assert _balance(world.member, world.mortgage) == "-250000.00"
+    [entry] = household_audit(factories, world.household_id, "loan.create")
+    assert entry.after is not None
+    assert "lender" not in entry.after
+    events = household_events(factories, world.household_id, "loan.created")
+    assert events[-1].payload == {"loan_id": loan["id"], "account_id": str(world.mortgage.id)}
+
+    listed = world.viewer.get(LOANS).json()["items"]
+    assert [item["id"] for item in listed] == [loan["id"]]
+
+
+def test_loan_rules(world: World) -> None:
+    body = _mortgage_body(world.checking)
+    assert problem_type(world.member.post(LOANS, json=body)) == "invalid-loan-account"
+    euro = _mortgage_body(world.car, principal_original={"amount": "1000", "currency": "EUR"})
+    assert problem_type(world.member.post(LOANS, json=euro)) == "currency-mismatch"
+    low = _mortgage_body(world.car, payment_amount=_usd("1000.00"))
+    assert problem_type(world.member.post(LOANS, json=low)) == "loan-payment-too-low"
+    hidden = _mortgage_body(world.hidden)
+    assert problem_type(world.member.post(LOANS, json=hidden)) == "account-not-found"
+    bad_rate = _mortgage_body(world.car, rate="6.125")
+    assert world.member.post(LOANS, json=bad_rate).status_code == 422
+    float_rate = _mortgage_body(world.car, rate=0.05)
+    assert world.member.post(LOANS, json=float_rate).status_code == 422
+    assert world.viewer.post(LOANS, json=_mortgage_body(world.car)).status_code == 403
+    _post(world.member, LOANS, _mortgage_body(world.car))
+    assert problem_type(world.member.post(LOANS, json=_mortgage_body(world.car))) == "loan-exists"
+
+
+def test_view_only_and_hidden_loans(world: World) -> None:
+    hidden = _post(world.owner, LOANS, _mortgage_body(world.hidden))
+    assert problem_type(world.member.get(f"{LOANS}/{hidden['id']}")) == "loan-not-found"
+    assert world.member.get(LOANS).json()["items"] == []
+    viewed = world.ledger.account(world.household_id, type=AccountType.MORTGAGE, name="Shared")
+    world.ledger.grant(world.household_id, world.member.record.id, viewed, GrantLevel.VIEW)
+    shared = _post(world.owner, LOANS, _mortgage_body(viewed))
+    url = f"{LOANS}/{shared['id']}"
+    assert world.member.get(url).status_code == 200
+    assert world.member.patch(url, json={"lender": "x"}).status_code == 403
+    assert world.member.post(f"{url}/simulate", json={}).status_code == 200
+    payment = {"paid_on": "2024-04-01", "principal": _usd("1"), "interest": _usd("1")}
+    assert world.member.post(f"{url}/payments", json=payment).status_code == 403
+    assert problem_type(world.viewer.get(f"{LOANS}/{hidden['id']}/schedule")) == "loan-not-found"
+
+
+def test_schedule_original_and_projected(world: World) -> None:
+    loan = _post(world.member, LOANS, _mortgage_body(world.mortgage))
+    original = world.viewer.get(f"{LOANS}/{loan['id']}/schedule").json()
+    assert original["basis"] == "original"
+    assert len(original["rows"]) == 360
+    assert original["rows"][0] == {
+        "number": 1,
+        "due_date": "2024-04-01",
+        "rate": "0.06125",
+        "payment": _usd("1519.03"),
+        "principal": _usd("242.99"),
+        "interest": _usd("1276.04"),
+        "extra": _usd("0.00"),
+        "escrow": _usd("350.00"),
+        "total": _usd("1869.03"),
+        "balance": _usd("249757.01"),
+    }
+    assert original["totals"]["principal"] == _usd("250000.00")
+    assert original["totals"]["payoff_date"] == "2054-03-01"
+    projected = world.viewer.get(f"{LOANS}/{loan['id']}/schedule?basis=projected").json()
+    assert projected["rows"][0]["due_date"] == "2026-07-01"
+    assert projected["rows"] == original["rows"][27:]
+
+
+def test_payments_split_balance_sync_and_schedule_check(world: World) -> None:
+    loan = _post(world.member, LOANS, _mortgage_body(world.mortgage))
+    url = f"{LOANS}/{loan['id']}/payments"
+    rows = schedule(_terms()).rows
+    first = _post(
+        world.member,
+        url,
+        {
+            "paid_on": "2024-04-01",
+            "principal": _usd(f"{rows[0].principal}"),
+            "interest": _usd(f"{rows[0].interest}"),
+            "escrow": _usd("350.00"),
+        },
+    )
+    assert first["schedule_check"] == {
+        "status": "ok",
+        "expected_interest": _usd("1276.04"),
+        "difference": _usd("0.00"),
+    }
+    assert first["total"] == _usd("1869.03")
+    assert first["balance_after"] == _usd("249757.01")
+    # Paid three days early, with an extra 1000 of principal.
+    second = _post(
+        world.member,
+        url,
+        {
+            "paid_on": "2024-04-28",
+            "principal": _usd(f"{rows[1].principal + 1000}"),
+            "interest": _usd(f"{rows[1].interest}"),
+            "escrow": _usd("350.00"),
+        },
+    )
+    assert second["schedule_check"]["status"] == "ok"
+    owed = D("249757.01") - rows[1].principal - 1000
+    assert second["balance_after"] == _usd(f"{owed}")
+    assert _balance(world.member, world.mortgage) == f"-{owed}"
+    # Interest that does not match the balance owed is flagged.
+    third = _post(
+        world.member,
+        url,
+        {"paid_on": "2024-06-01", "principal": _usd("300.00"), "interest": _usd("1200.00")},
+    )
+    assert third["schedule_check"]["status"] == "differs"
+    listed = world.viewer.get(url).json()["items"]
+    assert [p["paid_on"] for p in listed] == ["2024-04-01", "2024-04-28", "2024-06-01"]
+
+    projection = world.viewer.get(f"{LOANS}/{loan['id']}").json()["projection"]
+    assert projection["balance_source"] == "recorded"
+    assert projection["balance"] == _usd(f"{owed - 300}")
+    assert projection["next_due_date"] == "2024-07-01"
+    assert projection["payoff_date"] < "2054-03-01"
+
+    assert world.member.delete(f"{url}/{third['id']}").status_code == 204
+    assert _balance(world.member, world.mortgage) == f"-{owed}"
+    future = {"paid_on": "2026-07-01", "principal": _usd("1"), "interest": _usd("0")}
+    assert problem_type(world.member.post(url, json=future)) == "invalid-payment-date"
+    zero = {"paid_on": "2025-01-01", "principal": _usd("0"), "interest": _usd("0")}
+    assert problem_type(world.member.post(url, json=zero)) == "invalid-payment"
+    negative = {"paid_on": "2025-01-01", "principal": _usd("-1"), "interest": _usd("0")}
+    assert problem_type(world.member.post(url, json=negative)) == "invalid-payment"
+    hidden_txn = world.ledger.transaction(world.hidden, amount="-10")
+    linked = {
+        "paid_on": "2025-01-01",
+        "principal": _usd("1"),
+        "interest": _usd("0"),
+        "transaction_id": str(hidden_txn.id),
+    }
+    assert problem_type(world.member.post(url, json=linked)) == "transaction-not-found"
+
+
+def test_simulate_extra_payments(world: World) -> None:
+    loan = _post(world.member, LOANS, _mortgage_body(world.mortgage))
+    url = f"{LOANS}/{loan['id']}/simulate"
+    plain = _post(world.viewer, url, {}, 200)
+    assert plain["interest_saved"] == _usd("0.00")
+    assert plain["payments_saved"] == 0
+    assert plain["baseline"] == plain["with_extras"]
+    assert plain["schedule"] is None
+    result = _post(
+        world.viewer,
+        url,
+        {
+            "one_off": [{"on": "2026-08-15", "amount": _usd("10000")}],
+            "recurring": {"amount": _usd("250"), "start": "2026-07-01"},
+            "include_schedule": True,
+        },
+        200,
+    )
+    assert result["as_of"] == "2026-06-30"
+    assert result["baseline"]["payoff_date"] == "2054-03-01"
+    assert result["with_extras"]["payoff_date"] < "2045-01-01"
+    assert D(result["interest_saved"]["amount"]) > D("100000")
+    assert result["payments_saved"] == (
+        result["baseline"]["payments"] - result["with_extras"]["payments"]
+    )
+    rows = result["schedule"]
+    assert rows[0]["extra"] == _usd("250.00")
+    assert rows[2]["due_date"] == "2026-09-01"
+    assert rows[2]["extra"] == _usd("10250.00")
+    total = sum(D(r["principal"]["amount"]) + D(r["extra"]["amount"]) for r in rows)
+    assert total == D(result["balance"]["amount"])
+    euro = {"recurring": {"amount": {"amount": "1", "currency": "EUR"}}}
+    assert problem_type(world.viewer.post(url, json=euro)) == "currency-mismatch"
+    zero = {"one_off": [{"on": "2026-07-01", "amount": _usd("0")}]}
+    assert problem_type(world.viewer.post(url, json=zero)) == "invalid-extra-payment"
+
+
+def test_variable_rate_changes(world: World, factories: Factories) -> None:
+    body = _mortgage_body(
+        world.car,
+        principal_original=_usd("30000.00"),
+        rate="0.05",
+        rate_type="variable",
+        term_months=60,
+        origination_date="2025-01-15",
+        payment_day=15,
+        escrow_amount=None,
+    )
+    loan = _post(world.member, LOANS, body)
+    url = f"{LOANS}/{loan['id']}/rate-changes"
+    change = _post(world.member, url, {"effective_date": "2026-01-15", "new_rate": "0.07"})
+    assert change["new_rate"] == "0.07"
+    assert (
+        problem_type(
+            world.member.post(url, json={"effective_date": "2026-01-15", "new_rate": "0.08"})
+        )
+        == "rate-change-exists"
+    )
+    early = {"effective_date": "2025-01-01", "new_rate": "0.08"}
+    assert problem_type(world.member.post(url, json=early)) == "invalid-rate-change"
+    rows = world.viewer.get(f"{LOANS}/{loan['id']}/schedule").json()["rows"]
+    assert rows[11]["rate"] == "0.05"
+    assert rows[12]["rate"] == "0.07"
+    assert rows[12]["payment"] != rows[11]["payment"]
+    total = sum(D(r["principal"]["amount"]) for r in rows)
+    assert total == D("30000.00")
+    assert world.viewer.get(url).json()["items"] == [change]
+    assert world.member.delete(f"{url}/{change['id']}").status_code == 204
+    rows = world.viewer.get(f"{LOANS}/{loan['id']}/schedule").json()["rows"]
+    assert {r["rate"] for r in rows} == {"0.05"}
+    assert len(household_audit(factories, world.household_id, "loan.rate_change_delete")) == 1
+
+
+def test_update_and_delete_loan(world: World, factories: Factories) -> None:
+    loan = _post(world.member, LOANS, _mortgage_body(world.mortgage))
+    url = f"{LOANS}/{loan['id']}"
+    changed = world.member.patch(url, json={"principal_original": _usd("200000.00")})
+    assert changed.status_code == 200, changed.text
+    assert _balance(world.member, world.mortgage) == "-200000.00"
+    cleared = world.member.patch(url, json={"escrow_amount": None, "lender": None}).json()
+    assert cleared["escrow_amount"] is None
+    assert cleared["lender"] is None
+    assert world.member.patch(url, json={"rate": None}).status_code == 422
+    low = world.member.patch(url, json={"payment_amount": _usd("100.00")})
+    assert problem_type(low) == "loan-payment-too-low"
+    _post(
+        world.member,
+        f"{url}/payments",
+        {"paid_on": "2024-04-01", "principal": _usd("300"), "interest": _usd("1000")},
+    )
+    late = world.member.patch(url, json={"origination_date": "2024-05-01"})
+    assert problem_type(late) == "invalid-payment-date"
+    assert world.member.delete(url).status_code == 204
+    assert problem_type(world.member.get(url)) == "loan-not-found"
+    # The computed balances went with the loan; the account stays.
+    assert _balance(world.member, world.mortgage) == "0.00"
+    assert len(household_audit(factories, world.household_id, "loan.delete")) == 1

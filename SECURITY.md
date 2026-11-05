@@ -1,5 +1,19 @@
 # Security policy
 
+> [!WARNING]
+> **Disclaimer: this project is entirely vibe coded.** PerFin was written by
+> AI coding agents directed through prompts, not written line by line by a
+> human. A person has not reviewed it line by line, and no external security
+> review or penetration test has been done. Its tests and internal reviews
+> are evidence, not proof.
+>
+> It is **not intended for, and not proven safe for, exposure to the open
+> internet.** Run it only on a private network: your LAN, a VPN, or behind
+> an authenticating gateway such as Authentik's forward-auth outpost. Use it
+> at your own risk, keep your own backups, and do not rely on it as your only
+> record of anything that matters. The AGPL-3.0 licence's "no warranty"
+> terms apply in full.
+
 PerFin handles some of the most sensitive data a person has. Security reports are
 taken seriously and handled privately.
 

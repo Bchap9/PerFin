@@ -1,0 +1,20 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Fictional institution (invented for PerFin tests and examples; not a real
+# company). Layout produced by backend/tests/fixtures/synth_classify.py.
+schema: 1
+key: sample-national-bank-1099-int
+institution: Sample National Bank
+country: US
+kind: tax_form
+parser: tax_1099_int
+version: 1
+match:
+  all:
+    - header: Sample National Bank
+    - regex: 'form 1099-int'
+      region: header
+  any:
+    - account_mask: 'XXXXXX####'
+    - text: Interest income
+    - text: Copy B For Recipient
+  min_any: 1

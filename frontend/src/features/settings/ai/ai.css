@@ -1,0 +1,143 @@
+/* SPDX-License-Identifier: AGPL-3.0-or-later */
+.ai-placeholder {
+  padding: 0 var(--space-1);
+  border-radius: var(--radius-sm);
+  background: var(--color-warning-soft);
+  color: var(--color-warning);
+  font-family: var(--font-mono);
+  font-weight: 600;
+}
+
+.ai-json,
+.ai-snippet {
+  margin: var(--space-2) 0;
+  padding: var(--space-3);
+  max-height: 24rem;
+  overflow: auto;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: var(--color-surface-sunken);
+  font-family: var(--font-mono);
+  font-size: 0.85rem;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.ai-tools,
+.ai-calls {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.ai-tool,
+.ai-call {
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+}
+
+.ai-tool summary,
+.ai-call summary {
+  cursor: pointer;
+}
+
+.ai-count {
+  margin-right: var(--space-1);
+}
+
+.ai-steps {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-3);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  color: var(--color-text-muted);
+}
+
+.ai-steps__on {
+  color: var(--color-text);
+  font-weight: 700;
+}
+
+.ai-options {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+
+.ai-options legend {
+  margin-bottom: var(--space-2);
+  font-weight: 600;
+}
+
+.ai-textarea {
+  font-family: var(--font-mono);
+  resize: vertical;
+}
+
+.ai-summary {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(14rem, 1fr));
+  gap: var(--space-3);
+  margin: 0;
+}
+
+.ai-summary dt {
+  color: var(--color-text-muted);
+}
+
+.ai-summary dd {
+  margin: 0;
+  font-weight: 600;
+}
+
+.ai-row-actions {
+  display: inline-flex;
+  gap: var(--space-2);
+}
+
+.ai-search {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: var(--space-3);
+}
+
+.ai-switches {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.ai-switches li {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+}
+
+.ai-original {
+  color: var(--color-text-muted);
+  overflow-wrap: anywhere;
+}
+
+.ai-banner {
+  margin-bottom: var(--space-4);
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid var(--color-warning);
+  border-radius: var(--radius-md);
+  background: var(--color-warning-soft);
+  color: var(--color-text);
+}

@@ -1,0 +1,19 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+apiVersion: v2
+name: perfin
+description: >-
+  PerFin, self-hosted security-first personal finance: api, worker, optional
+  read-only MCP server and a migration Job, hardened the same way as the
+  reference Compose deployment.
+type: application
+# Chart version; bumped with every release together with appVersion.
+version: 1.0.0
+# The PerFin release (image tag) this chart deploys by default.
+appVersion: "1.0.0"
+kubeVersion: ">=1.27.0-0"
+home: https://github.com/Bchap9/PerFin
+sources:
+  - https://github.com/Bchap9/PerFin
+keywords: [finance, self-hosted, budgeting]
+annotations:
+  licenses: AGPL-3.0-or-later

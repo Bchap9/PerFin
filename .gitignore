@@ -31,8 +31,26 @@ inbox/
 processed/
 quarantine/
 backups/
+# Shipped reference data inside the source tree (not user data).
+!backend/app/auth/data/
+# Source packages whose names match the data patterns above.
+!backend/app/domain/documents/
+!frontend/src/features/documents/
 
 # Editors / OS
 .idea/
 .vscode/
 .DS_Store
+
+# Test/coverage output
+.coverage
+.coverage.*
+htmlcov/
+coverage/
+
+# Local dev stack (scripts/dev.sh): generated secrets, documents, logs
+.dev/
+
+# Built documentation site (mkdocs build)
+/site/
+/.venv-docs/

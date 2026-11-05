@@ -7,7 +7,8 @@ PerFin/
 ├── .editorconfig
 ├── .gitignore
 ├── .github/
-│   └── workflows/              ci.yml (lint/type/test), security.yml (trivy, gitleaks, audit)
+│   └── workflows/              ci.yml (lint/type/test, helm chart), security.yml (trivy, gitleaks, audit),
+│                               release.yml (tags only: multi-arch image, scan, SBOM, cosign, provenance)
 ├── docs/
 │   ├── VISION.md
 │   ├── ARCHITECTURE.md
@@ -73,9 +74,9 @@ PerFin/
 │   ├── .env.example
 │   ├── Caddyfile.example
 │   ├── Dockerfile              multi-stage: frontend build -> backend image
-│   └── helm/                   (later)
+│   └── helm/perfin/            Helm chart: api, worker, mcp, migrate hook, NetworkPolicies (docs/UPGRADING.md)
 └── scripts/
-    ├── backup.sh / restore.sh  (later)
+    ├── backup.sh / restore.sh  encrypted backups and verified restore (docs/BACKUP_RESTORE.md)
     └── dev.sh                  local dev bootstrap (later)
 ```
 

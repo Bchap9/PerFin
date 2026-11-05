@@ -1,0 +1,125 @@
+{{- /* SPDX-License-Identifier: AGPL-3.0-or-later */ -}}
+{{- /*
+Parses untrusted files (ADR-0006): no Service, no ingress at all, egress only
+to the database and networkPolicy.egressAllowlist.worker. The extraction child
+shares UID 10001 and confines itself with Landlock and seccomp (ADR-0009);
+allowPrivilegeEscalation=false gives it no_new_privs, and the RuntimeDefault
+seccomp profile matches Docker's default one the Compose stack relies on.
+*/ -}}
+{{- $rwo := has "ReadWriteOnce" .Values.persistence.documents.accessModes -}}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "perfin.fullname" . }}-worker
+  labels:
+    {{- include "perfin.componentLabels" (dict "ctx" . "component" "worker") | nindent 4 }}
+spec:
+  replicas: {{ .Values.worker.replicas }}
+  selector:
+    matchLabels:
+      {{- include "perfin.componentSelector" (dict "ctx" . "component" "worker") | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "perfin.componentSelector" (dict "ctx" . "component" "worker") | nindent 8 }}
+        {{- with .Values.podLabels }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      annotations:
+        checksum/config: {{ include (print $.Template.BasePath "/configmap.yaml") . | sha256sum }}
+        {{- with .Values.podAnnotations }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+    spec:
+      serviceAccountName: {{ include "perfin.serviceAccountName" . }}
+      {{- include "perfin.podSecurity" . | nindent 6 }}
+      terminationGracePeriodSeconds: 40
+      containers:
+        - name: worker
+          image: {{ include "perfin.image" . }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          args: ["worker"]
+          securityContext:
+            {{- toYaml .Values.containerSecurityContext | nindent 12 }}
+          envFrom:
+            - configMapRef:
+                name: {{ include "perfin.fullname" . }}-config
+          env:
+            - name: PERFIN_ROLE
+              value: worker
+            {{- if .Values.dropfolder.enabled }}
+            - name: PERFIN_DROPFOLDER_INBOX
+              value: /var/lib/perfin/inbox
+            - name: PERFIN_DROPFOLDER_PROCESSED
+              value: /var/lib/perfin/processed
+            {{- end }}
+            {{- include "perfin.secretEnv" (dict "ctx" . "key" "PERFIN_DATABASE_URL" "optional" false) | nindent 12 }}
+            {{- include "perfin.secretEnv" (dict "ctx" . "key" "PERFIN_MASTER_KEY" "optional" false) | nindent 12 }}
+            {{- include "perfin.secretEnv" (dict "ctx" . "key" "PERFIN_SECRET_KEY" "optional" false) | nindent 12 }}
+            {{- include "perfin.secretEnv" (dict "ctx" . "key" "PERFIN_OIDC_CLIENT_SECRET" "optional" true) | nindent 12 }}
+            {{- include "perfin.secretEnv" (dict "ctx" . "key" "PERFIN_PRICE_PROVIDER_API_KEY" "optional" true) | nindent 12 }}
+          livenessProbe:
+            # The worker serves no HTTP; its loopback metrics endpoint
+            # answering means it is alive. `env -i`: the probe is a dumpable
+            # process of the worker's UID and must not carry the secrets
+            # (same reasoning as the Compose healthcheck, ADR-0009).
+            exec:
+              command:
+                - env
+                - -i
+                - /app/.venv/bin/python
+                - -I
+                - -c
+                - "import sys, urllib.request; urllib.request.urlopen('http://127.0.0.1:' + sys.argv[1] + '/metrics', timeout=3)"
+                - "9100"
+            initialDelaySeconds: 20
+            periodSeconds: 30
+            timeoutSeconds: 5
+          resources:
+            {{- toYaml .Values.worker.resources | nindent 12 }}
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+            {{- include "perfin.dataMounts" . | nindent 12 }}
+            {{- if .Values.dropfolder.enabled }}
+            - name: inbox
+              mountPath: /var/lib/perfin/inbox
+              readOnly: true
+            - name: processed
+              mountPath: /var/lib/perfin/processed
+            {{- end }}
+      volumes:
+        - name: tmp
+          emptyDir:
+            sizeLimit: {{ .Values.worker.tmpSizeLimit }}
+        {{- include "perfin.dataVolumes" . | nindent 8 }}
+        {{- if .Values.dropfolder.enabled }}
+        - name: inbox
+          persistentVolumeClaim:
+            claimName: {{ .Values.dropfolder.inboxClaim }}
+            readOnly: true
+        - name: processed
+          persistentVolumeClaim:
+            claimName: {{ .Values.dropfolder.processedClaim }}
+        {{- end }}
+      {{- with .Values.worker.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.worker.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- if .Values.worker.affinity }}
+      affinity:
+        {{- toYaml .Values.worker.affinity | nindent 8 }}
+      {{- else if $rwo }}
+      affinity:
+        # ReadWriteOnce document volumes: run on the api's node.
+        podAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            - topologyKey: kubernetes.io/hostname
+              labelSelector:
+                matchLabels:
+                  {{- include "perfin.componentSelector" (dict "ctx" . "component" "api") | nindent 18 }}
+      {{- end }}

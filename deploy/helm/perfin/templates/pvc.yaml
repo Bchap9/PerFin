@@ -1,0 +1,24 @@
+{{- /* SPDX-License-Identifier: AGPL-3.0-or-later */ -}}
+{{- range $name, $vol := dict "documents" .Values.persistence.documents "quarantine" .Values.persistence.quarantine }}
+{{- if not $vol.existingClaim }}
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ include "perfin.fullname" $ }}-{{ $name }}
+  labels:
+    {{- include "perfin.labels" $ | nindent 4 }}
+  annotations:
+    # Encrypted documents must outlive `helm uninstall`.
+    helm.sh/resource-policy: keep
+spec:
+  accessModes:
+    {{- toYaml $vol.accessModes | nindent 4 }}
+  {{- if $vol.storageClass }}
+  storageClassName: {{ $vol.storageClass | quote }}
+  {{- end }}
+  resources:
+    requests:
+      storage: {{ $vol.size }}
+{{- end }}
+{{- end }}

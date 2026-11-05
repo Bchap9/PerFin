@@ -1,0 +1,21 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Fictional institution (invented for PerFin tests and examples; not a real
+# company). Layout produced by backend/tests/fixtures/synth_classify.py.
+schema: 1
+key: sample-national-bank-checking
+institution: Sample National Bank
+country: US
+kind: statement
+parser: statement_generic
+version: 1
+date_order: mdy
+match:
+  all:
+    - header: Sample National Bank
+    - regex: 'checking account statement'
+      region: header
+  any:
+    - account_mask: 'XXXX-XXXX-####'
+    - columns: [Posting Date, Description, Amount, Balance]
+    - text: Ending balance on
+  min_any: 1

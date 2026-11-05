@@ -1,0 +1,40 @@
+{{- /* SPDX-License-Identifier: AGPL-3.0-or-later */ -}}
+{{- if .Values.ingress.enabled }}
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: {{ include "perfin.fullname" . }}
+  labels:
+    {{- include "perfin.labels" . | nindent 4 }}
+  {{- with .Values.ingress.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  {{- if .Values.ingress.className }}
+  ingressClassName: {{ .Values.ingress.className }}
+  {{- end }}
+  tls:
+    - hosts: [{{ required "ingress.host is required with ingress.enabled" .Values.ingress.host | quote }}]
+      secretName: {{ .Values.ingress.tlsSecretName }}
+  rules:
+    - host: {{ .Values.ingress.host | quote }}
+      http:
+        paths:
+          {{- if .Values.ingress.routeMcp }}
+          - path: /mcp
+            pathType: Prefix
+            backend:
+              service:
+                name: {{ include "perfin.fullname" . }}-mcp
+                port:
+                  name: mcp
+          {{- end }}
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: {{ include "perfin.fullname" . }}-api
+                port:
+                  name: http
+{{- end }}

@@ -1,0 +1,16 @@
+{{- /* SPDX-License-Identifier: AGPL-3.0-or-later */ -}}
+{{- include "perfin.validate" . -}}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "perfin.fullname" . }}-config
+  labels:
+    {{- include "perfin.labels" . | nindent 4 }}
+data:
+  {{- range $key, $value := .Values.config }}
+  {{- if ne (toString $value) "" }}
+  {{ $key }}: {{ toString $value | quote }}
+  {{- end }}
+  {{- end }}
+  PERFIN_DOCUMENTS_DIR: /var/lib/perfin/documents
+  PERFIN_QUARANTINE_DIR: /var/lib/perfin/quarantine

@@ -1,0 +1,35 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Every optional component on: bundled PostgreSQL, MCP, ingress, drop folder.
+secrets:
+  existingSecret: perfin-secrets
+config:
+  PERFIN_PUBLIC_URL: https://perfin.example.com
+  PERFIN_TRUSTED_PROXIES: 10.42.0.0/16
+image:
+  digest: sha256:0000000000000000000000000000000000000000000000000000000000000000
+postgresql:
+  enabled: true
+  existingSecret: perfin-db
+mcp:
+  enabled: true
+  existingSecret: perfin-mcp
+  allowedOrigins: https://assistant.example.com
+ingress:
+  enabled: true
+  className: nginx
+  host: perfin.example.com
+  tlsSecretName: perfin-tls
+  routeMcp: true
+dropfolder:
+  enabled: true
+  inboxClaim: perfin-inbox
+  processedClaim: perfin-processed
+networkPolicy:
+  egressAllowlist:
+    api:
+      - to:
+          - ipBlock:
+              cidr: 192.0.2.10/32
+        ports:
+          - protocol: TCP
+            port: 443

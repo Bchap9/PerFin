@@ -1,0 +1,60 @@
+/* SPDX-License-Identifier: AGPL-3.0-or-later */
+/* Page viewer with region overlay, and the document library. */
+.page-viewer {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.page-viewer__stage {
+  position: relative;
+  max-width: 100%;
+  width: fit-content;
+  border: 1px solid var(--color-border, #8884);
+  line-height: 0;
+}
+
+.page-viewer__image {
+  display: block;
+  max-width: 100%;
+  height: auto;
+}
+
+.page-viewer__box {
+  position: absolute;
+  box-sizing: border-box;
+  border: 2px solid var(--color-accent, #1a73e8);
+  background: color-mix(in srgb, var(--color-accent, #1a73e8) 18%, transparent);
+  pointer-events: none;
+}
+
+.page-viewer__box--account_number {
+  border-color: var(--color-warning, #b26a00);
+  background: color-mix(in srgb, var(--color-warning, #b26a00) 20%, transparent);
+}
+
+.page-viewer__box--page {
+  border-style: dashed;
+  background: transparent;
+}
+
+.page-viewer__word {
+  position: absolute;
+  box-sizing: border-box;
+  border: 1px solid color-mix(in srgb, var(--color-text-muted, #666) 60%, transparent);
+  pointer-events: none;
+}
+
+.snippet-hit {
+  background: color-mix(in srgb, var(--color-warning, #b26a00) 30%, transparent);
+  font-weight: 600;
+}
+
+.alternatives {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}

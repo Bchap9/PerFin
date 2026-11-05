@@ -1,0 +1,21 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Fictional institution (invented for PerFin tests and examples; not a real
+# company). Layout produced by backend/tests/fixtures/synth_classify.py.
+schema: 1
+key: example-fcu-share-statement
+institution: Example Federal Credit Union
+country: US
+kind: statement
+parser: statement_generic
+version: 1
+date_order: mdy
+match:
+  all:
+    - header: Example Federal Credit Union
+    - regex: 'member (?:share )?statement'
+      region: header
+  any:
+    - account_mask: 'XXXXXX####'
+    - columns: [Date, Description, Withdrawals, Deposits, Balance]
+    - text: Dividends earned this period
+  min_any: 1

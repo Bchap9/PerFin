@@ -1,4 +1,38 @@
-# One host per line. Only these are reachable from the worker when the
-# `egress` profile is enabled. Examples:
-# imap.fastmail.com
-# query1.finance.yahoo.com
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Egress allowlist for the optional `egress` proxy (SECURITY.md H2,
+# deploy/egress/egress_proxy.py). Only these destinations are reachable from
+# the worker (and the api, for OIDC) when the `egress` profile is enabled;
+# everything else, including every IP literal and every private address, is
+# refused. Restart the egress container after editing.
+#
+# One entry per line:
+#   host                 ports 443 and 993
+#   host:port            that port only
+#   *.example.com        any subdomain of example.com (not example.com itself)
+#
+# Examples (uncomment the host lines you use):
+#
+# Email intake (IMAPS)
+# imap.fastmail.com:993
+#
+# OIDC issuer (the API reaches it only through this proxy in Compose). An
+# issuer on the LAN needs this entry too, plus its address in
+# EGRESS_ALLOW_PRIVATE_CIDRS (docs/AUTHENTIK.md, step 11)
+# auth.example.com:443
+#
+# ClamAV signature updates (profile av)
+# database.clamav.net:443
+#
+# Price feed (PERFIN_PRICE_PROVIDER=http_json): the host of
+# PERFIN_PRICE_PROVIDER_URL (docs/security/integrations.md)
+# quotes.example.com:443
+#
+# FX reference rates (PERFIN_FX_PROVIDER=ecb)
+# www.ecb.europa.eu:443
+#
+# Notification channels (docs/security/notifications.md): the host of each
+# channel a household adds (webhook URL, ntfy/Gotify server, Matrix homeserver,
+# SMTP relay with its port)
+# ntfy.sh:443
+# matrix.example.org:443
+# smtp.example.com:587

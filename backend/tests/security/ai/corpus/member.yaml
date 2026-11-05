@@ -1,0 +1,39 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Household members (config.yaml): display names whole and by part,
+# usernames, e-mail local parts and aliases -> [MEMBER].
+placeholder: "[MEMBER]"
+kind: text
+cases:
+  - {text: "ZELLE TO JANE DOE", secrets: ["jane", "doe"]}
+  - {text: "Zelle to jane q. doe", secrets: ["jane", "doe"]}
+  - {text: "PAYMENT FROM jAnE dOe", secrets: ["jane", "doe"]}
+  - {text: "VENMO *JANE.DOE", secrets: ["jane", "doe"]}
+  - {text: "JANE_DOE allowance", secrets: ["jane", "doe"]}
+  - {text: "JANEDOE", secrets: ["janedoe"]}
+  - {text: "Doe, Jane", secrets: ["jane", "doe"]}
+  - {text: "(Jane)", secrets: ["jane"]}
+  - {text: "gift for jane!", secrets: ["jane"]}
+  - {text: "DOE J TRANSFER", secrets: ["doe"]}
+  - {text: "transfer to ROBERT SMITHERS", secrets: ["robert", "smithers"]}
+  - {text: "Smithers reimbursement", secrets: ["smithers"]}
+  - {text: "BOBBY lunch money", secrets: ["bobby"]}
+  - {text: "lil jo birthday", secrets: ["lil jo"]}
+  - {text: "jdoe42 venmo", secrets: ["jdoe42"]}
+  - {text: "user RSMITHERS paid", secrets: ["rsmithers"]}
+  - {text: "jane.doe sent you", secrets: ["jane.doe"]}
+  - {text: "bob.s@example.net", any_placeholder: true, secrets: ["bob.s"]}
+  - {text: "Pago a JOSE ALVAREZ", secrets: ["jose", "alvarez"]}
+  - {text: "pago a José Álvarez-Núñez", secrets: ["jose", "alvarez", "nunez"]}
+  - {text: "NUNEZ refund", secrets: ["nunez"]}
+  - {text: "jalvarez", secrets: ["jalvarez"]}
+  # Security review P6B-SR-R2-02: confusable letters and digits, spelled-out
+  # names, a plural or possessive without an apostrophe.
+  - {text: "ZELLE TO JΑNE", secrets: ["jane"]}
+  - {text: "transfer to D0E", secrets: ["doe"]}
+  - {text: "pay SM1THERS back", secrets: ["smithers"]}
+  - {text: "ЈАNЕ DОЕ gift", secrets: ["jane", "doe"]}
+  - {text: "j a n e  d o e", secrets: ["jane", "doe"]}
+  - {text: "J.A.N.E allowance", secrets: ["jane"]}
+  - {text: "S-M-I-T-H-E-R-S", secrets: ["smithers"]}
+  - {text: "SMITHERS TRUST", secrets: ["smithers"]}
+  - {text: "the Roberts account", secrets: ["robert"]}
