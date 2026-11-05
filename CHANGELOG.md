@@ -32,7 +32,47 @@ What remains (details in docs/ROADMAP.md):
 
 ## [Unreleased]
 
-Nothing yet.
+### Added
+
+- **Fidelity Investments statements** (PDF "Investment Report"): an
+  institution parser (`fidelity_investments_statement`) and a shipped
+  classifier fingerprint (`fidelity-investments-statement`, both
+  "Fidelity Investments" and "Investment Report" required). The core money
+  market position is read as the account's cash, so every trade, income
+  and transfer is checked against the change in cash; the *Core Fund
+  Activity* table is not read (it would count each trade twice). Tests use
+  a synthetic three-account report (`tests/fixtures/synth_fidelity.py`,
+  invented accounts and instruments), also through the sandboxed extractor.
+- **Several accounts in one brokerage PDF**: account headings on each
+  account's pages (`Account # Z12-345678`, `INDIVIDUAL - TOD Z12-345678`)
+  split a statement "of all accounts" into one statement per account, each
+  with its own last four digits, positions, activity, cash, totals and
+  reconciliation; each is matched to its own account and a tampered
+  account is held alone. A single-account PDF is read as before.
+
+### Changed
+
+- The generic brokerage parser (version 2) reads more layouts: header cells
+  over up to three lines or ending in a date, `Symbol/CUSIP` (a valid
+  CUSIP is kept as the CUSIP), a security-name column, a settlement date as
+  the only date, the description as the action when there is no action
+  column but the table names a security; holdings grouped by asset class
+  (the group sets the position's asset class, `Total <group>` subtotals are
+  no longer taken for the holdings total, `Total Holdings` is), wrapped
+  security names, beginning market values; `Beginning Account Value` is no
+  longer read as the account value, `Ending Account Value`/`Ending Net
+  Value` are. A table header the parser cannot use ends the table above it.
+- `activity_type` knows the action words of Fidelity statements and CSV
+  exports (`You Bought`, `You Sold`, `Dividend Received`, `Reinvestment`,
+  `Interest Earned`, `Long-Term`/`Short-Term Cap Gain`, `Direct Deposit`,
+  `Electronic Funds Transfer Received`/`Paid`, `Foreign Tax Paid`, `Fee
+  Charged`, `Transferred From`/`To`: a transfer of units with a security
+  and a quantity, else cash) whatever their case or trailing `(Cash)`.
+- A document of several brokerage accounts is linked to no account: the
+  account the classifier matched is undone after parsing (an account
+  chosen at upload stays), and an account chosen on a re-run takes only
+  the statements with its own last four digits or the single unmatched
+  one, never several accounts' holdings at once.
 
 ## [1.0.0-rc.1] - 2026-11-05
 

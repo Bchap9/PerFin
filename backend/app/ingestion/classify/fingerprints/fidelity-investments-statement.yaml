@@ -1,0 +1,27 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Fidelity Investments "Investment Report" (one or several brokerage,
+# retirement and HSA accounts per PDF). The layout was redrawn from its
+# headings by backend/tests/fixtures/synth_fidelity.py (invented accounts and
+# instruments; no real statement is in the repository). Both header phrases
+# are required, so a bank statement naming the broker as a payee does not
+# match. The parser hint is the institution parser
+# (app/ingestion/parsers/brokerage.py FidelityStatementParser, same key);
+# brokerage_statement_generic is the fallback.
+schema: 1
+key: fidelity-investments-statement
+institution: Fidelity Investments
+country: US
+kind: statement
+parser: brokerage_statement_generic
+version: 1
+date_order: mdy
+match:
+  all:
+    - header: Fidelity Investments
+    - header: Investment Report
+  any:
+    - text: Accounts Included in This Report
+    - text: Account Summary
+    - text: Ending Account Value
+    - text: Total Holdings
+  min_any: 1

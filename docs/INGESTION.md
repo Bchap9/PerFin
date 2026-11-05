@@ -284,7 +284,13 @@ the validated sandbox output, never on file content):
   the classifier and review. Shipped fingerprints are not budgeted. Six fictional institutions ship
   (Example Federal Credit Union, Sample National Bank (checking and
   1099-INT), Demo Card Services, Placeholder Brokerage, Fictional Mutual
-  Insurance, Mock Savings and Loan with day-first dates).
+  Insurance, Mock Savings and Loan with day-first dates), and one real
+  layout, the Fidelity Investments "Investment Report"
+  (`fidelity-investments-statement`: both "Fidelity Investments" and
+  "Investment Report" in the header, so a bank statement naming the broker
+  as a payee does not match; its documents are drawn from invented facts by
+  `tests/fixtures/synth_fidelity.py` and `synth_classify.py` and are not in
+  the classifier's training corpus).
 - **Classifier** (`model.py`, artefact `classify/artefacts/kind_nb_v1.json`):
   binarised multinomial naive Bayes over unigram and bigram tokens (digits
   by shape), class score = log prior + 3 x (sum of known features' log
@@ -496,21 +502,73 @@ OFX `INVSTMTRS` in the sandbox or from a PDF/scan's pages in the worker.
 
 - **Parser** (`app/ingestion/parsers/brokerage.py`): a **holdings** table
   (header naming a quantity, a market value and a symbol or security name;
-  optional price, cost basis; `Total ...` lines give the printed holdings
-  total) and an **activity** table (date, activity/action and amount;
-  optional settle date, description, symbol, quantity, price, fees), each
-  repeated per page; outside them the period, last four digits, currency,
-  opening/closing cash, holdings total, account value and the holdings'
-  "as of" date by label. The activity word types a row (buy, sell,
-  dividend, interest, fee, reinvest, split with its ratio from the
-  description, transfer in/out, deposit, withdrawal, corporate action); an
-  unsigned amount takes the type's direction; a symbol is read from its
-  column, from the description's first word when the row needs a security
-  or the symbol is held, or from `(SYMBOL)`. `brokerage_statement_generic`
+  optional price, cost basis, beginning market value; unrealized gain/loss
+  and estimated income columns are recognised and not read) and an
+  **activity** table (date, activity/action and amount; optional settle
+  date, description, security name, symbol or CUSIP, quantity, price,
+  fees), each repeated per page; outside them the period, last four digits,
+  currency, opening/closing cash, holdings total, account value and the
+  holdings' "as of" date by label (`Beginning Account Value` is not the
+  account value; `Ending Account Value` and `Ending Net Value` are).
+  Header cells may run over up to three lines (`Price Per` / `Unit`,
+  `Symbol/` / `CUSIP`, a date under `Ending Market Value`) or end in a
+  date; a table with only a settlement date is dated by it; without an
+  action column the description is the action when the table also names a
+  security, symbol or quantity (so a bank's *Date / Description / Amount*
+  table stays a bank's); a header line of known column names the parser
+  cannot use ends the table above it. Holdings may be grouped under
+  asset-class headings (Mutual Funds, Exchange Traded Products, Stocks,
+  Bonds, Core Account, ...) that set the positions' asset class; `Total
+  <group>` lines are subtotals, `Total Holdings` (or `Total Market Value`,
+  `Total Securities`, ..., else the first unlabelled `Total`) is the
+  holdings total, read from the market value column; a security name
+  wrapped onto the next line is joined. The activity text types a row
+  (`activity_type`, also meant for CSV action columns: case, punctuation,
+  the security and a trailing `(Cash)`/`(Margin)` after the leading words
+  do not matter): buy (`Buy`, `You Bought`), sell (`You Sold`), dividend
+  (`Dividend Received`, `Long-Term`/`Short-Term Cap Gain`), interest
+  (`Interest Earned`), fee (`Fee Charged`, `Foreign Tax Paid`), reinvest,
+  split with its ratio from the description, transfer in/out, deposit
+  (`Direct Deposit`, `Electronic Funds Transfer Received`), withdrawal
+  (`Electronic Funds Transfer Paid`), corporate action; `Transferred
+  From`/`Transferred To` is a `transfer_in`/`transfer_out` when the row
+  names a security and a non-zero quantity, else a cash `deposit`/
+  `withdrawal`, and a transfer of units printed with no amount (`-`) moves
+  no cash. An unsigned amount takes the type's direction; a symbol is read
+  from its column (a valid CUSIP there is the CUSIP), from the
+  description's first word when the row needs a security or the symbol is
+  held, or from `(SYMBOL)`. `brokerage_statement_generic` (version 2)
   scores 0.5-0.7 when it sees these tables (above the bank parsers'
   0.4-0.45 for the same activity table); `placeholder_brokerage` pins the
   fictional Placeholder Brokerage (`MM/DD/YYYY`, USD) and needs the
-  institution's name on page 1.
+  institution's name on page 1; `fidelity_investments_statement` pins the
+  Fidelity Investments "Investment Report" (USD, `MM/DD` rows dated from
+  the period, `MM/DD/YYYY`, `Month D, YYYY` period after "Investment
+  Report") and needs both "Fidelity Investments" and "Investment Report"
+  on page 1. Its core money market position is the account's cash: the
+  rows under *Core Account* are no position, their beginning and ending
+  market values are the opening and closing cash and are taken out of the
+  printed holdings total, so the cash check covers every trade, income and
+  transfer; the *Core Fund Activity* table (the core's own trades settling
+  them) is not read.
+- **Several accounts in one PDF** (a statement "of all accounts"): account
+  headings (`Account # Z12-345678`, `Account Number: 123-456789`, `Account
+  XXXX-4821` at the start of a line or cell, after at most an all-capitals
+  title, or an all-capitals title ending in a number such as `INDIVIDUAL -
+  TOD Z12-345678`; never a line with an amount) among a page's first six
+  or last three lines mark each account's pages. Two or more accounts: one
+  `InvestmentStatement` per account with its own last four digits,
+  positions, activity, cash, totals and reconciliation. A page whose
+  headings name one account belongs to it; on a page naming several, the
+  lines before the first heading continue the previous page's account;
+  pages before the first heading (an overview) only give the period,
+  currency and "as of" date to fall back on, and a table row there belongs
+  to no account (skipped, warning `rows_outside_account`); an account
+  without tables gives no statement (`account_without_tables`). A document
+  naming one account is one statement, read as before (its last four
+  digits from the first account number, else from the heading). A line
+  given to the wrong account breaks that account's reconciliation, so it is
+  held, never imported silently. Only last four digits are kept.
 - **Reconciliation** (`reconcile_investment`, SECURITY.md C12), for every
   source: each position's quantity x price = market value (within half a
   unit of the price's last printed decimal per unit plus 0.005), the
@@ -524,8 +582,14 @@ OFX `INVSTMTRS` in the sandbox or from a PDF/scan's pages in the worker.
   structured importer): the account as for bank statements (document's,
   chosen on re-run, else last four digits + institution among the
   accounts the uploader may edit) and of type brokerage or retirement in
-  the statement's currency, else `unknown_account` (`account_not_found`,
-  `account_ambiguous`, `account_type_mismatch`, `currency_mismatch`). A
+  the statement's currency. In a document of several accounts each
+  statement is matched by its own last four digits; the document is linked
+  to no account (the pipeline undoes an account the classifier matched; one
+  chosen at upload stays), and an account chosen on a re-run takes only the
+  statements with its own last four digits or the single statement nothing
+  matched, never several accounts at once. No account, or one that does not
+  fit, raises `unknown_account` (`account_not_found`, `account_ambiguous`,
+  `account_type_mismatch`, `currency_mismatch`). A
   statement that does not reconcile, or has any row or position below the
   threshold, writes **nothing** (investment rows have no pending state) and
   raises `low_confidence_field` `investment_reconciliation_failed` (checks,
