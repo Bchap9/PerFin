@@ -157,6 +157,7 @@ class Account(UUIDPk, Timestamps, HouseholdScoped, Base):
             "closed_on IS NULL OR opened_on IS NULL OR closed_on >= opened_on",
             name="closed_after_opened",
         ),
+        CheckConstraint("subtype IS NULL OR subtype ~ '^[a-z0-9_]{1,40}$'", name="subtype_code"),
     )
 
     institution_id: Mapped[uuid.UUID | None] = mapped_column(
@@ -164,6 +165,9 @@ class Account(UUIDPk, Timestamps, HouseholdScoped, Base):
     )
     type: Mapped[AccountType] = mapped_column(pg_enum(AccountType, "account_type"), nullable=False)
     asset_kind: Mapped[AssetKind | None] = mapped_column(pg_enum(AssetKind, "asset_kind"))
+    #: What kind of account within ``type`` (``roth_ira``, ``education_529``...;
+    #: ``app.domain.accounts.subtypes``). A code, validated by the application.
+    subtype: Mapped[str | None] = mapped_column(String(40))
     name: Mapped[str] = mapped_column(String(NAME_MAX), nullable=False)
     nickname: Mapped[str | None] = mapped_column(String(NAME_MAX))
     currency: Mapped[str] = mapped_column(CURRENCY, nullable=False)

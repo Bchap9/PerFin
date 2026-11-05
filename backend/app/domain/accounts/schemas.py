@@ -24,6 +24,7 @@ from pydantic import AfterValidator, BaseModel, ConfigDict, Field, model_validat
 from app.auth.models import GrantLevel
 from app.core.money import CurrencyCode, Money, MoneyIn
 from app.domain.accounts.models import NAME_MAX, AccountType, AssetKind, BalanceSource
+from app.domain.accounts.subtypes import TaxTreatment, valid_subtype
 
 #: Largest ``limit`` of a list endpoint (API.md: cursor pagination, max 500).
 MAX_PAGE: Final = 500
@@ -65,6 +66,9 @@ class _Output(BaseModel):
 # ---------------------------------------------------------------------------
 
 
+SubtypeCode = Annotated[str, Field(min_length=1, max_length=40, pattern=r"^[a-z0-9_]+$")]
+
+
 class AccountCreate(_Input):
     """``POST /accounts``.
 
@@ -81,6 +85,8 @@ class AccountCreate(_Input):
     currency: CurrencyCode | None = None
     institution_id: uuid.UUID | None = None
     asset_kind: AssetKind | None = None
+    #: What kind of account within ``type`` (``GET /accounts/subtypes``).
+    subtype: SubtypeCode | None = None
     number_last4: Last4 | None = None
     is_asset: bool | None = None
     manual_balance: bool | None = None
@@ -95,13 +101,28 @@ class AccountCreate(_Input):
             raise ValueError("asset_kind is required for manual_asset accounts and only for them")
         if self.opening_balance_date is not None and self.opening_balance is None:
             raise ValueError("opening_balance_date needs opening_balance")
+        if not valid_subtype(self.type, self.subtype):
+            raise ValueError(f"subtype {self.subtype!r} is not a kind of {self.type.value} account")
         return self
 
 
 #: Fields of :class:`AccountUpdate` that may be set to ``null`` (cleared).
 NULLABLE_UPDATE_FIELDS: Final = frozenset(
-    {"nickname", "institution_id", "asset_kind", "number_last4", "opened_on"}
+    {"nickname", "institution_id", "asset_kind", "subtype", "number_last4", "opened_on"}
 )
+
+
+class SubtypeOut(_Output):
+    code: str
+    label: str
+    tax_treatment: TaxTreatment | None
+
+
+class AccountTypeSubtypes(_Output):
+    """``GET /accounts/subtypes``: the subtypes of one account type, in display order."""
+
+    type: AccountType
+    subtypes: list[SubtypeOut]
 
 
 class AccountUpdate(_Input):
@@ -120,6 +141,7 @@ class AccountUpdate(_Input):
     currency: CurrencyCode | None = None
     institution_id: uuid.UUID | None = None
     asset_kind: AssetKind | None = None
+    subtype: SubtypeCode | None = None
     number_last4: Last4 | None = None
     is_asset: bool | None = None
     manual_balance: bool | None = None
@@ -147,6 +169,10 @@ class AccountOut(_Output):
     id: uuid.UUID
     type: AccountType
     asset_kind: AssetKind | None
+    subtype: str | None
+    #: The subtype's label (``Roth IRA``) and tax treatment (brokerage: taxable by default).
+    subtype_label: str | None
+    tax_treatment: TaxTreatment | None
     name: str
     nickname: str | None
     currency: str

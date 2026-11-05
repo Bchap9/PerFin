@@ -38,7 +38,8 @@ function ManualBalanceForm({ account }: { account: Account }) {
   const [amount, setAmount] = useState("");
   const [error, setError] = useState<string | null>(null);
   const mutation = useMutation({
-    mutationFn: () => addManualBalance(account.id, date, amount.trim(), account.currency),
+    mutationFn: () =>
+      addManualBalance(account.id, date, amount.trim(), account.currency),
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: queryRoots.accounts });
       toast.notify({ title: "Balance recorded", tone: "success" });
@@ -63,7 +64,12 @@ function ManualBalanceForm({ account }: { account: Account }) {
     mutation.mutate();
   };
   return (
-    <form className="ledger-toolbar" aria-label="Record a balance" noValidate onSubmit={submit}>
+    <form
+      className="ledger-toolbar"
+      aria-label="Record a balance"
+      noValidate
+      onSubmit={submit}
+    >
       <Field label="As of">
         <Input
           type="date"
@@ -90,13 +96,20 @@ function ManualBalanceForm({ account }: { account: Account }) {
 }
 
 export function AccountDetailPage() {
-  const accountId = useParams({ strict: false, select: (params: Record<string, string | undefined>) => params["accountId"] ?? "" });
+  const accountId = useParams({
+    strict: false,
+    select: (params: Record<string, string | undefined>) =>
+      params["accountId"] ?? "",
+  });
   const canWrite = useCanWrite();
   const queryClient = useQueryClient();
   const toast = useToast();
   const [editing, setEditing] = useState(false);
   const [closing, setClosing] = useState(false);
-  const account = useQuery({ queryKey: accountKeys.one(accountId), queryFn: () => getAccount(accountId) });
+  const account = useQuery({
+    queryKey: accountKeys.one(accountId),
+    queryFn: () => getAccount(accountId),
+  });
   const start = addDays(todayIsoDate(), -365);
   const history = useQuery({
     queryKey: accountKeys.balances(accountId, start, null),
@@ -110,7 +123,11 @@ export function AccountDetailPage() {
       toast.notify({ title: "Account reopened", tone: "success" });
     },
     onError: (caught) => {
-      toast.notify({ title: "Could not reopen the account", description: errorMessage(caught), tone: "error" });
+      toast.notify({
+        title: "Could not reopen the account",
+        description: errorMessage(caught),
+        tone: "error",
+      });
     },
   });
 
@@ -130,7 +147,9 @@ export function AccountDetailPage() {
   }
   const data = account.data;
   const writable = canWrite && data.can_edit;
-  const snapshots = [...(history.data?.snapshots ?? [])].sort((a, b) => b.as_of_date.localeCompare(a.as_of_date));
+  const snapshots = [...(history.data?.snapshots ?? [])].sort((a, b) =>
+    b.as_of_date.localeCompare(a.as_of_date),
+  );
 
   return (
     <section aria-labelledby="page-title" className="ledger-stack">
@@ -141,12 +160,20 @@ export function AccountDetailPage() {
           </p>
           <h1 id="page-title">{accountLabel(data)}</h1>
           <p className="ledger-muted">
-            <MoneyText amount={data.balance.amount} currency={data.balance.currency} /> as of {formatDate(data.balance_date) ?? data.balance_date}
+            <MoneyText
+              amount={data.balance.amount}
+              currency={data.balance.currency}
+            />{" "}
+            as of {formatDate(data.balance_date) ?? data.balance_date}
             {data.is_closed ? <Badge tone="neutral">Closed</Badge> : null}
           </p>
         </div>
         <div className="ledger-actions">
-          <Link to="/transactions" search={{ account: data.id }} className="btn btn--secondary btn--md">
+          <Link
+            to="/transactions"
+            search={{ account: data.id }}
+            className="btn btn--secondary btn--md"
+          >
             View transactions
           </Link>
           {writable ? (
@@ -206,13 +233,23 @@ export function AccountDetailPage() {
           rowKey={(row) => row.id}
           empty="No recorded balances."
           columns={[
-            { id: "date", header: "As of", cell: (row) => formatDate(row.as_of_date) ?? row.as_of_date, rowHeader: true },
+            {
+              id: "date",
+              header: "As of",
+              cell: (row) => formatDate(row.as_of_date) ?? row.as_of_date,
+              rowHeader: true,
+            },
             { id: "source", header: "Source", cell: (row) => row.source },
             {
               id: "balance",
               header: "Balance",
               align: "end",
-              cell: (row) => <MoneyText amount={row.balance.amount} currency={row.balance.currency} />,
+              cell: (row) => (
+                <MoneyText
+                  amount={row.balance.amount}
+                  currency={row.balance.currency}
+                />
+              ),
             },
           ]}
         />

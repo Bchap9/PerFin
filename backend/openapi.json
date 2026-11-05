@@ -353,6 +353,20 @@
             ],
             "title": "Opening Balance Date"
           },
+          "subtype": {
+            "anyOf": [
+              {
+                "maxLength": 40,
+                "minLength": 1,
+                "pattern": "^[a-z0-9_]+$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Subtype"
+          },
           "type": {
             "$ref": "#/components/schemas/AccountType"
           }
@@ -530,6 +544,44 @@
             ],
             "title": "Opened On"
           },
+          "subtype": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Subtype"
+          },
+          "subtype_label": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Subtype Label"
+          },
+          "tax_treatment": {
+            "anyOf": [
+              {
+                "enum": [
+                  "taxable",
+                  "tax_deferred",
+                  "tax_free"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Tax Treatment"
+          },
           "type": {
             "$ref": "#/components/schemas/AccountType"
           },
@@ -543,6 +595,9 @@
           "id",
           "type",
           "asset_kind",
+          "subtype",
+          "subtype_label",
+          "tax_treatment",
           "name",
           "nickname",
           "currency",
@@ -655,6 +710,17 @@
             ],
             "title": "Opening Balance Date"
           },
+          "subtype": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Subtype"
+          },
           "suggested_by_model": {
             "default": false,
             "title": "Suggested By Model",
@@ -692,6 +758,27 @@
         ],
         "title": "AccountType",
         "type": "string"
+      },
+      "AccountTypeSubtypes": {
+        "description": "``GET /accounts/subtypes``: the subtypes of one account type, in display order.",
+        "properties": {
+          "subtypes": {
+            "items": {
+              "$ref": "#/components/schemas/SubtypeOut"
+            },
+            "title": "Subtypes",
+            "type": "array"
+          },
+          "type": {
+            "$ref": "#/components/schemas/AccountType"
+          }
+        },
+        "required": [
+          "type",
+          "subtypes"
+        ],
+        "title": "AccountTypeSubtypes",
+        "type": "object"
       },
       "AccountTypeTotal": {
         "additionalProperties": false,
@@ -853,6 +940,20 @@
               }
             ],
             "title": "Opened On"
+          },
+          "subtype": {
+            "anyOf": [
+              {
+                "maxLength": 40,
+                "minLength": 1,
+                "pattern": "^[a-z0-9_]+$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Subtype"
           },
           "type": {
             "anyOf": [
@@ -19859,6 +19960,41 @@
         "title": "SplitSet",
         "type": "object"
       },
+      "SubtypeOut": {
+        "properties": {
+          "code": {
+            "title": "Code",
+            "type": "string"
+          },
+          "label": {
+            "title": "Label",
+            "type": "string"
+          },
+          "tax_treatment": {
+            "anyOf": [
+              {
+                "enum": [
+                  "taxable",
+                  "tax_deferred",
+                  "tax_free"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Tax Treatment"
+          }
+        },
+        "required": [
+          "code",
+          "label",
+          "tax_treatment"
+        ],
+        "title": "SubtypeOut",
+        "type": "object"
+      },
       "SuggestionRole": {
         "description": "Why the suggestion gave a column a role (no cell text).",
         "properties": {
@@ -22841,6 +22977,31 @@
           }
         },
         "summary": "Create an account (member or above)",
+        "tags": [
+          "accounts"
+        ]
+      }
+    },
+    "/api/v1/accounts/subtypes": {
+      "get": {
+        "operationId": "get_account_subtypes_api_v1_accounts_subtypes_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/AccountTypeSubtypes"
+                  },
+                  "title": "Response Get Account Subtypes Api V1 Accounts Subtypes Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "The kinds of account within each type (Roth IRA, 529, HELOC...)",
         "tags": [
           "accounts"
         ]

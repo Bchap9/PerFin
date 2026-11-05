@@ -548,6 +548,8 @@ class AccountProposal(_Output):
 
     name: str
     type: AccountType
+    #: What kind of account within ``type`` the file's name for it says (``roth_ira``).
+    subtype: str | None = None
     currency: str | None
     institution_name: str | None
     number_last4: str | None

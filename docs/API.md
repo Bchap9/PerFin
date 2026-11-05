@@ -791,14 +791,17 @@ route, and an account the caller can see but not edit is `403 forbidden`.
 A member who creates an account gets an `edit` grant on it. `GET
 /accounts?cursor=&limit=&closed=&type=` lists `{"items", "next_cursor"}` in
 creation order (`limit` 1-500, default 100). An account is `{"id", "type",
-"asset_kind", "name", "nickname", "currency", "institution_id",
+"asset_kind", "subtype", "subtype_label", "tax_treatment", "name", "nickname", "currency", "institution_id",
 "number_last4", "is_asset", "manual_balance", "include_in_net_worth",
 "opened_on", "closed_on", "is_closed", "balance": {"amount", "currency"},
 "balance_date", "can_edit", "created_at", "updated_at"}` (`balance` at the
 end of today, UTC). `POST /accounts` (`Idempotency-Key` honoured) takes
 `type`, `name` and optionally `nickname`, `currency` (default the
 household's base currency), `institution_id` (`404 institution-not-found`),
-`asset_kind` (required for and only for `manual_asset`), `number_last4`
+`asset_kind` (required for and only for `manual_asset`), `subtype` (one of
+the type's kinds from `GET /accounts/subtypes`, which lists `[{"type",
+"subtypes": [{"code", "label", "tax_treatment"}]}]`; another type's is `422`;
+changing `type` drops a subtype the new type does not have), `number_last4`
 (four digits), `is_asset`/`manual_balance` (default from the type),
 `include_in_net_worth`, `opened_on`, `opening_balance` (`{"amount",
 "currency"}` in the account currency, `422 currency-mismatch`) and

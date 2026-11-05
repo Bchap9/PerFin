@@ -60,12 +60,16 @@ from app.domain.accounts.schemas import (
     AccountCreate,
     AccountOut,
     AccountPage,
+    AccountTypeSubtypes,
     AccountUpdate,
     BalanceHistoryOut,
     BalancePoint,
     ManualBalanceIn,
     SnapshotOut,
+    SubtypeOut,
 )
+from app.domain.accounts.subtypes import subtype as subtype_of
+from app.domain.accounts.subtypes import subtypes_of, tax_treatment, valid_subtype
 from app.domain.accounts.visibility import (
     account_not_found,
     can_edit_account,
@@ -119,6 +123,15 @@ def _invalid_dates(detail: str) -> ProblemError:
     return ProblemError(422, "invalid-account-dates", "Invalid account dates", detail)
 
 
+def _subtype_problem(account_type: AccountType) -> ProblemError:
+    return ProblemError(
+        422,
+        "invalid-subtype",
+        "Invalid subtype",
+        f"That subtype is not a kind of {account_type.value} account (GET /accounts/subtypes).",
+    )
+
+
 def _asset_kind_problem() -> ProblemError:
     return ProblemError(
         422,
@@ -156,6 +169,7 @@ def _audit_state(account: Account) -> dict[str, Any]:
     return {
         "type": account.type.value,
         "asset_kind": account.asset_kind.value if account.asset_kind else None,
+        "subtype": account.subtype,
         "name": account.name,
         "nickname": account.nickname,
         "currency": account.currency,
@@ -202,6 +216,9 @@ def account_out(account: Account, *, balance: Decimal, on: date, can_edit: bool)
         id=account.id,
         type=account.type,
         asset_kind=account.asset_kind,
+        subtype=account.subtype,
+        subtype_label=found.label if (found := subtype_of(account.type, account.subtype)) else None,
+        tax_treatment=tax_treatment(account.type, account.subtype),
         name=account.name,
         nickname=account.nickname,
         currency=account.currency,
@@ -246,6 +263,20 @@ def _check_institution(db: Session, household_id: uuid.UUID, institution_id: uui
 
 #: Longest institution name kept (the column's limit).
 INSTITUTION_NAME_MAX: Final = 200
+
+
+def list_subtypes() -> list[AccountTypeSubtypes]:
+    """``GET /accounts/subtypes``: every account type's subtypes (static data)."""
+    return [
+        AccountTypeSubtypes(
+            type=account_type,
+            subtypes=[
+                SubtypeOut(code=s.code, label=s.label, tax_treatment=s.tax)
+                for s in subtypes_of(account_type)
+            ],
+        )
+        for account_type in AccountType
+    ]
 
 
 def find_or_create_institution(
@@ -380,6 +411,7 @@ def create_account(
         household_id=household_id,
         type=data.type,
         asset_kind=data.asset_kind,
+        subtype=data.subtype,
         name=data.name,
         nickname=data.nickname,
         currency=currency,
@@ -445,8 +477,14 @@ def update_account(
             account.manual_balance = default_manual_balance(new_type)
         if new_type is not AccountType.MANUAL_ASSET and "asset_kind" not in given:
             account.asset_kind = None
+        if "subtype" not in given and not valid_subtype(new_type, account.subtype):
+            account.subtype = None  # the old kind does not exist under the new type
     if "asset_kind" in given:
         account.asset_kind = data.asset_kind
+    if "subtype" in given:
+        if not valid_subtype(account.type, data.subtype):
+            raise _subtype_problem(account.type)
+        account.subtype = data.subtype
     if (account.type is AccountType.MANUAL_ASSET) != (account.asset_kind is not None):
         raise _asset_kind_problem()
     if "currency" in given and data.currency is not None and data.currency != account.currency:

@@ -13,12 +13,25 @@ import { Spinner } from "../../components/Spinner";
 import { errorMessage } from "../../lib/api/client";
 import { sumMoney } from "../../lib/money";
 import { AccountFormDialog } from "./AccountForms";
-import { accountLabel, groupAccounts, useAccounts, useCanWrite, type Account } from "./api";
+import {
+  accountLabel,
+  groupAccounts,
+  useAccounts,
+  useCanWrite,
+  type Account,
+} from "./api";
 
 /** The group's total when every account shares one currency; otherwise none. */
-export function groupTotal(accounts: readonly Account[]): { amount: string; currency: string } | null {
+export function groupTotal(
+  accounts: readonly Account[],
+): { amount: string; currency: string } | null {
   const first = accounts[0];
-  if (first === undefined || accounts.some((account) => account.balance.currency !== first.balance.currency)) {
+  if (
+    first === undefined ||
+    accounts.some(
+      (account) => account.balance.currency !== first.balance.currency,
+    )
+  ) {
     return null;
   }
   return sumMoney(
@@ -33,7 +46,9 @@ export function AccountsPage() {
   const [showClosed, setShowClosed] = useState(false);
   const [creating, setCreating] = useState(false);
 
-  const accounts = (query.data ?? []).filter((account) => showClosed || !account.is_closed);
+  const accounts = (query.data ?? []).filter(
+    (account) => showClosed || !account.is_closed,
+  );
   const groups = groupAccounts(accounts);
   const hasClosed = (query.data ?? []).some((account) => account.is_closed);
 
@@ -74,7 +89,11 @@ export function AccountsPage() {
         <Card>
           <EmptyState
             title="No accounts yet"
-            description={canWrite ? "Add an account, then import a statement or enter transactions." : "No account has been shared with you yet."}
+            description={
+              canWrite
+                ? "Add an account, then import a statement or enter transactions."
+                : "No account has been shared with you yet."
+            }
           />
         </Card>
       ) : null}
@@ -84,19 +103,46 @@ export function AccountsPage() {
           <Card
             key={group.type}
             title={group.label}
-            actions={total === null ? undefined : <MoneyText amount={total.amount} currency={total.currency} tone="none" />}
+            actions={
+              total === null ? undefined : (
+                <MoneyText
+                  amount={total.amount}
+                  currency={total.currency}
+                  tone="none"
+                />
+              )
+            }
           >
             <ul className="account-list" aria-label={group.label}>
               {group.accounts.map((account) => (
                 <li key={account.id}>
                   <span>
-                    <Link to="/accounts/$accountId" params={{ accountId: account.id }}>
+                    <Link
+                      to="/accounts/$accountId"
+                      params={{ accountId: account.id }}
+                    >
                       {accountLabel(account)}
                     </Link>
-                    {account.number_last4 === null ? null : <span className="ledger-muted"> ····{account.number_last4}</span>}
-                    {account.is_closed ? <Badge tone="neutral">Closed</Badge> : null}
+                    {account.number_last4 === null ? null : (
+                      <span className="ledger-muted">
+                        {" "}
+                        ····{account.number_last4}
+                      </span>
+                    )}
+                    {account.subtype_label === null ? null : (
+                      <span className="ledger-muted">
+                        {" "}
+                        · {account.subtype_label}
+                      </span>
+                    )}
+                    {account.is_closed ? (
+                      <Badge tone="neutral">Closed</Badge>
+                    ) : null}
                   </span>
-                  <MoneyText amount={account.balance.amount} currency={account.balance.currency} />
+                  <MoneyText
+                    amount={account.balance.amount}
+                    currency={account.balance.currency}
+                  />
                 </li>
               ))}
             </ul>

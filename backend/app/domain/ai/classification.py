@@ -100,7 +100,7 @@ def _deny_table(name: str, reason: str, columns: str) -> None:
 
 _table(
     "account",
-    exposed="institution_id type asset_kind currency is_asset manual_balance "
+    exposed="institution_id type asset_kind subtype currency is_asset manual_balance "
     "include_in_net_worth opened_on closed_on",
     free_text="name nickname",
     denied={"number_last4": R_ACCOUNT_NUMBER},

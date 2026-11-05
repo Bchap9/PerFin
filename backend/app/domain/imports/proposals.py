@@ -49,6 +49,7 @@ from app.core.errors import ProblemError
 from app.domain.accounts import service as accounts_service
 from app.domain.accounts.models import AccountType, Institution
 from app.domain.accounts.schemas import AccountCreate
+from app.domain.accounts.subtypes import guess_subtype
 from app.domain.accounts.visibility import get_visible_account
 from app.domain.documents.manage import get_editable_document
 from app.domain.documents.models import Document, ReviewItem, ReviewItemState, ReviewKind
@@ -310,6 +311,12 @@ def _type(found: _Found) -> AccountType:
 
 def _proposal(found: _Found, institution: str | None, base_currency: str | None) -> AccountProposal:
     kind = _type(found)
+    # The account's own name says what kind it is (``ROTH IRA``, ``529``,
+    # ``Health Savings Account``); an investment account may move between
+    # brokerage and retirement on it.
+    guessed, subtype = guess_subtype(found.name, None if kind in INVESTMENT_TYPES else kind)
+    if kind in INVESTMENT_TYPES and guessed is not None:
+        kind = guessed
     label = TYPE_LABELS.get(kind, "Account")
     if found.name and institution and institution.lower() not in found.name.lower():
         name = f"{institution.split()[0]} {found.name}"
@@ -323,6 +330,7 @@ def _proposal(found: _Found, institution: str | None, base_currency: str | None)
     return AccountProposal(
         name=name[:NAME_MAX],
         type=kind,
+        subtype=subtype,
         currency=found.currency or base_currency,
         institution_name=institution,
         number_last4=found.last4,

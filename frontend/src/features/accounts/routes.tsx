@@ -6,7 +6,15 @@ import { AccountsPage } from "./AccountsPage";
 
 export function routes(parent: AnyRoute): AnyRoute[] {
   return [
-    createRoute({ getParentRoute: () => parent, path: "/accounts", component: AccountsPage }),
-    createRoute({ getParentRoute: () => parent, path: "/accounts/$accountId", component: AccountDetailPage }),
+    createRoute({
+      getParentRoute: () => parent,
+      path: "/accounts",
+      component: AccountsPage,
+    }),
+    createRoute({
+      getParentRoute: () => parent,
+      path: "/accounts/$accountId",
+      component: AccountDetailPage,
+    }),
   ];
 }

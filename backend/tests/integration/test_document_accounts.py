@@ -67,7 +67,10 @@ def _create(found: Any) -> AccountChoice:
         target=found.target,
         index=found.index,
         create=AccountCreate(
-            type=proposal.type, name=proposal.name, currency=proposal.currency or "USD"
+            type=proposal.type,
+            subtype=proposal.subtype,
+            name=proposal.name,
+            currency=proposal.currency or "USD",
         ),
         institution_name=proposal.institution_name,
     )
@@ -91,6 +94,7 @@ def test_masked_accounts_are_proposed_created_and_imported(env: Env) -> None:
         AccountType.RETIREMENT,
     )
     assert first.proposal.institution_name == "Fidelity Investments"
+    assert (first.proposal.subtype, second.proposal.subtype) == ("individual", "roth_ira")
     assert first.review_item_id is not None
     created = _apply(env, document_id, _create(first), _create(second))
     assert len(created) == 2
@@ -100,6 +104,7 @@ def test_masked_accounts_are_proposed_created_and_imported(env: Env) -> None:
     assert env.activity(two) == _expected(rows, synthetic[1])
     (institution,) = env.query(select(Institution))
     assert one.institution_id == two.institution_id == institution.id
+    assert (one.subtype, two.subtype) == ("individual", "roth_ira")
     assert not [i for i in env.open_reviews(document_id) if i.kind is ReviewKind.UNKNOWN_ACCOUNT]
     assert [a.status for a in _detect(env, document_id).accounts] == ["done", "done"]
 

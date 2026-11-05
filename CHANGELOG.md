@@ -8,7 +8,7 @@ All notable changes to PerFin are recorded here. The format follows
 
 The current release candidate is `v1.0.0-rc.2`; the final `v1.0.0` follows the
 external security review. Every phase (0-7) is implemented. Alembic head is
-`0008`. `make check` passes from the repository root
+`0009`. `make check` passes from the repository root
 (2026-11-04): SPDX; backend ruff, ruff format, mypy --strict (634 source
 files plus 4 scripts), bandit, 7431 pytest tests with `-n auto` and OpenAPI
 drift; frontend eslint, tsc, 399 vitest tests in 55 files and the
@@ -71,6 +71,16 @@ What remains (details in docs/ROADMAP.md):
   `GET /documents/{id}/accounts`, `POST /documents/{id}/accounts/apply`;
   `apply-mapping` gains per-statement `assignments`.
 
+- Account subtypes: what kind of account it is within its type, with its tax
+  treatment. Retirement: traditional, Roth, rollover, SEP, SIMPLE, inherited
+  and spousal IRAs, 401(k), Roth 401(k), solo 401(k), 403(b), Roth 403(b),
+  457(b), TSP, HSA, pension, annuity, Keogh, profit sharing. Investment
+  (brokerage): individual, joint, trust, custodial (UTMA/UGMA), 529, Coverdell
+  ESA, ABLE, cash management, crypto, business. Also checking, savings (CD,
+  money market...), card, loan, mortgage and line-of-credit kinds (HELOC,
+  margin). Chosen in the account form, shown in the accounts list, and proposed
+  from account names in imported files (`ROTH IRA`, `Health Savings Account`).
+  Migration `0009` adds `account.subtype`; `GET /accounts/subtypes` lists them.
 - Optional local-model hints (ADR-0010, docs/ML.md), like Immich's machine
   learning container: the `ml` (CPU) and `ml-cuda` (NVIDIA GPU) Compose
   profiles start an adapter (`perfin-ml`) and an Ollama runtime on an internal

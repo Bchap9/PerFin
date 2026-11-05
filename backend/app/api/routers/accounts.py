@@ -46,6 +46,7 @@ from app.domain.accounts.schemas import (
     AccountCreate,
     AccountOut,
     AccountPage,
+    AccountTypeSubtypes,
     AccountUpdate,
     BalanceHistoryOut,
     ManualBalanceIn,
@@ -131,6 +132,15 @@ def post_account(
         payload=payload_of(body),
         run=lambda: service.create_account(db, principal, body, request=request),
     )
+
+
+@router.get(
+    "/accounts/subtypes",
+    response_model=list[AccountTypeSubtypes],
+    summary="The kinds of account within each type (Roth IRA, 529, HELOC...)",
+)
+def get_account_subtypes(principal: Reader) -> list[AccountTypeSubtypes]:
+    return service.list_subtypes()
 
 
 @router.get(

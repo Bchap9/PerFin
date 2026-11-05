@@ -18,12 +18,17 @@ import {
   ACCOUNT_TYPES,
   closeAccount,
   createAccount,
+  subtypeOptions,
   updateAccount,
+  useAccountSubtypes,
   type Account,
   type AccountType,
 } from "./api";
 
-const TYPE_OPTIONS = ACCOUNT_TYPES.map(({ type, label }) => ({ value: type, label }));
+const TYPE_OPTIONS = ACCOUNT_TYPES.map(({ type, label }) => ({
+  value: type,
+  label,
+}));
 
 function isAccountType(value: string): value is AccountType {
   return ACCOUNT_TYPES.some((entry) => entry.type === value);
@@ -37,18 +42,28 @@ export interface AccountFormDialogProps {
   onSaved?: (account: Account) => void;
 }
 
-export function AccountFormDialog({ open, onClose, account, onSaved }: AccountFormDialogProps) {
+export function AccountFormDialog({
+  open,
+  onClose,
+  account,
+  onSaved,
+}: AccountFormDialogProps) {
   const queryClient = useQueryClient();
   const toast = useToast();
   const editing = account !== undefined;
   const [name, setName] = useState(account?.name ?? "");
   const [nickname, setNickname] = useState(account?.nickname ?? "");
   const [type, setType] = useState<AccountType>(account?.type ?? "checking");
+  const [subtype, setSubtype] = useState(account?.subtype ?? "");
+  const subtypes = useAccountSubtypes();
+  const kinds = subtypeOptions(subtypes.data, type);
   const [currency, setCurrency] = useState(account?.currency ?? "USD");
   const [last4, setLast4] = useState(account?.number_last4 ?? "");
   const [opening, setOpening] = useState("");
   const [openingDate, setOpeningDate] = useState(todayIsoDate());
-  const [inNetWorth, setInNetWorth] = useState(account?.include_in_net_worth ?? true);
+  const [inNetWorth, setInNetWorth] = useState(
+    account?.include_in_net_worth ?? true,
+  );
   const [errors, setErrors] = useState<Record<string, string>>({});
 
   const mutation = useMutation({
@@ -58,6 +73,7 @@ export function AccountFormDialog({ open, onClose, account, onSaved }: AccountFo
         nickname: nickname.trim() === "" ? null : nickname.trim(),
         number_last4: last4.trim() === "" ? null : last4.trim(),
         include_in_net_worth: inNetWorth,
+        subtype: subtype === "" ? null : subtype,
       };
       if (account !== undefined) {
         return updateAccount(account.id, { ...common, type });
@@ -68,12 +84,21 @@ export function AccountFormDialog({ open, onClose, account, onSaved }: AccountFo
         currency: currency.trim().toUpperCase(),
         ...(opening.trim() === ""
           ? {}
-          : { opening_balance: { amount: opening.trim(), currency: currency.trim().toUpperCase() }, opening_balance_date: openingDate }),
+          : {
+              opening_balance: {
+                amount: opening.trim(),
+                currency: currency.trim().toUpperCase(),
+              },
+              opening_balance_date: openingDate,
+            }),
       });
     },
     onSuccess: (saved) => {
       void queryClient.invalidateQueries({ queryKey: queryRoots.accounts });
-      toast.notify({ title: editing ? "Account updated" : "Account created", tone: "success" });
+      toast.notify({
+        title: editing ? "Account updated" : "Account created",
+        tone: "success",
+      });
       onSaved?.(saved);
       onClose();
     },
@@ -120,13 +145,23 @@ export function AccountFormDialog({ open, onClose, account, onSaved }: AccountFo
           <Button variant="ghost" onClick={onClose}>
             Cancel
           </Button>
-          <Button variant="primary" type="submit" form="account-form" loading={mutation.isPending}>
+          <Button
+            variant="primary"
+            type="submit"
+            form="account-form"
+            loading={mutation.isPending}
+          >
             {editing ? "Save changes" : "Create account"}
           </Button>
         </>
       }
     >
-      <form id="account-form" className="ledger-stack" noValidate onSubmit={submit}>
+      <form
+        id="account-form"
+        className="ledger-stack"
+        noValidate
+        onSubmit={submit}
+      >
         <Field label="Name" required error={errors["name"]}>
           <Input
             value={name}
@@ -152,11 +187,35 @@ export function AccountFormDialog({ open, onClose, account, onSaved }: AccountFo
             onChange={(event) => {
               if (isAccountType(event.target.value)) {
                 setType(event.target.value);
+                setSubtype(""); // each type has its own kinds
               }
             }}
           />
         </Field>
-        <Field label="Currency" error={errors["currency"]} hint={editing ? "The currency of an account cannot be changed here." : undefined}>
+        {kinds.length > 0 ? (
+          <Field
+            label="Kind"
+            hint="Optional: which kind of account it is (sets its tax treatment)."
+          >
+            <Select
+              placeholder="Not set"
+              options={kinds}
+              value={subtype}
+              onChange={(event) => {
+                setSubtype(event.target.value);
+              }}
+            />
+          </Field>
+        ) : null}
+        <Field
+          label="Currency"
+          error={errors["currency"]}
+          hint={
+            editing
+              ? "The currency of an account cannot be changed here."
+              : undefined
+          }
+        >
           <Input
             value={currency}
             maxLength={3}
@@ -166,7 +225,11 @@ export function AccountFormDialog({ open, onClose, account, onSaved }: AccountFo
             }}
           />
         </Field>
-        <Field label="Last four digits" error={errors["last4"]} hint="Used to recognise statements of this account.">
+        <Field
+          label="Last four digits"
+          error={errors["last4"]}
+          hint="Used to recognise statements of this account."
+        >
           <Input
             value={last4}
             maxLength={4}
@@ -178,7 +241,11 @@ export function AccountFormDialog({ open, onClose, account, onSaved }: AccountFo
         </Field>
         {editing ? null : (
           <>
-            <Field label="Opening balance" error={errors["opening"]} hint="Optional. Negative for money owed.">
+            <Field
+              label="Opening balance"
+              error={errors["opening"]}
+              hint="Optional. Negative for money owed."
+            >
               <Input
                 value={opening}
                 inputMode="decimal"
@@ -215,13 +282,22 @@ export function AccountFormDialog({ open, onClose, account, onSaved }: AccountFo
   );
 }
 
-export function CloseAccountDialog({ open, onClose, account }: { open: boolean; onClose: () => void; account: Account }) {
+export function CloseAccountDialog({
+  open,
+  onClose,
+  account,
+}: {
+  open: boolean;
+  onClose: () => void;
+  account: Account;
+}) {
   const queryClient = useQueryClient();
   const toast = useToast();
   const [closedOn, setClosedOn] = useState(todayIsoDate());
   const [error, setError] = useState<string | null>(null);
   const mutation = useMutation({
-    mutationFn: () => closeAccount(account.id, isIsoDate(closedOn) ? closedOn : null),
+    mutationFn: () =>
+      closeAccount(account.id, isIsoDate(closedOn) ? closedOn : null),
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: queryRoots.accounts });
       toast.notify({ title: `${account.name} closed`, tone: "success" });

@@ -572,3 +572,44 @@ def test_idempotent_manual_balance(actors: Actors, ledger: LedgerFactories) -> N
     # The same key and body on another account is another request.
     other = owner.post(f"{ACCOUNTS}/{second_account.id}/balances", json=body, headers=key)
     assert problem_type(other) == "idempotency-key-reused"
+
+
+def test_account_subtypes(actors: Actors) -> None:
+    owner = actors.new(role="owner")
+    catalogue = {
+        entry["type"]: entry["subtypes"] for entry in owner.get(f"{ACCOUNTS}/subtypes").json()
+    }
+    retirement = {s["code"]: s for s in catalogue["retirement"]}
+    assert retirement["roth_ira"] == {
+        "code": "roth_ira",
+        "label": "Roth IRA",
+        "tax_treatment": "tax_free",
+    }
+    assert {"simple_ira", "sep_ira", "401k", "403b", "457b", "hsa"} <= set(retirement)
+    assert "education_529" in {s["code"] for s in catalogue["brokerage"]}
+    assert catalogue["manual_asset"] == []
+
+    created = owner.post(
+        ACCOUNTS, json={"type": "retirement", "subtype": "roth_ira", "name": "Retirement"}
+    )
+    assert created.status_code == 201, created.text
+    body = created.json()
+    assert (body["subtype"], body["subtype_label"], body["tax_treatment"]) == (
+        "roth_ira",
+        "Roth IRA",
+        "tax_free",
+    )
+    wrong = owner.post(ACCOUNTS, json={"type": "checking", "subtype": "roth_ira", "name": "X"})
+    assert wrong.status_code == 422
+    account = f"{ACCOUNTS}/{body['id']}"
+    changed = owner.patch(account, json={"subtype": "simple_ira"}).json()
+    assert (changed["subtype"], changed["tax_treatment"]) == ("simple_ira", "tax_deferred")
+    refused = owner.patch(account, json={"subtype": "education_529"})
+    assert refused.status_code == 422
+    assert refused.json()["type"].endswith("invalid-subtype")
+    # A new type drops a kind it does not have; brokerage defaults to taxable.
+    moved = owner.patch(account, json={"type": "brokerage"}).json()
+    assert (moved["subtype"], moved["tax_treatment"]) == (None, "taxable")
+    cleared = owner.patch(account, json={"subtype": "education_529"}).json()
+    assert cleared["subtype_label"] == "529 education plan"
+    assert owner.patch(account, json={"subtype": None}).json()["subtype"] is None

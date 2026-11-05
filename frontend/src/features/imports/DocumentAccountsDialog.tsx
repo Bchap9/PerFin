@@ -22,6 +22,8 @@ import { queryRoots } from "../../lib/queryKeys";
 import {
   ACCOUNT_TYPES,
   accountLabel,
+  subtypeOptions,
+  useAccountSubtypes,
   useAccounts,
   type Account,
 } from "../accounts/api";
@@ -42,6 +44,8 @@ export interface RowChoice {
   accountId: string;
   name: string;
   type: AccountType;
+  /** The kind of account within the type ("" for none). */
+  subtype: string;
   institution: string;
   currency: string;
   openingBalance: string;
@@ -60,6 +64,7 @@ export function initialChoice(found: DetectedAccount): RowChoice {
     accountId: found.status === "ambiguous" ? (found.candidates[0] ?? "") : "",
     name: proposal?.name ?? "",
     type: proposal?.type ?? "checking",
+    subtype: proposal?.subtype ?? "",
     institution: proposal?.institution_name ?? "",
     currency: proposal?.currency ?? "",
     openingBalance: proposal?.opening_balance ?? "",
@@ -105,6 +110,7 @@ export function buildChoices(
     const opening = row.openingBalance.trim();
     const create: NonNullable<AccountChoice["create"]> = {
       type: row.type,
+      ...(row.subtype === "" ? {} : { subtype: row.subtype }),
       name,
       include_in_net_worth: true,
       ...(currency === "" ? {} : { currency }),
@@ -178,6 +184,8 @@ function AccountRow({
   onChange: (change: Partial<RowChoice>) => void;
 }) {
   const status = STATUS[found.status];
+  const subtypes = useAccountSubtypes();
+  const kinds = subtypeOptions(subtypes.data, row.type);
   const known = accounts.find((account) => account.id === found.account_id);
   const choices =
     found.status === "ambiguous"
@@ -261,11 +269,23 @@ function AccountRow({
                       (entry) => entry.type === event.target.value,
                     );
                     if (found !== undefined) {
-                      onChange({ type: found.type });
+                      onChange({ type: found.type, subtype: "" });
                     }
                   }}
                 />
               </Field>
+              {kinds.length > 0 ? (
+                <Field label="Kind">
+                  <Select
+                    placeholder="Not set"
+                    options={kinds}
+                    value={row.subtype}
+                    onChange={(event) => {
+                      onChange({ subtype: event.target.value });
+                    }}
+                  />
+                </Field>
+              ) : null}
               <Field label="Institution">
                 <Input
                   value={row.institution}

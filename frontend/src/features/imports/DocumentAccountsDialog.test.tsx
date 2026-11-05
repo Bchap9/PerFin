@@ -28,6 +28,7 @@ function detected(extra: Partial<DetectedAccount>): DetectedAccount {
     proposal: {
       name: "Fidelity Individual",
       type: "brokerage",
+      subtype: "individual",
       currency: "USD",
       institution_name: "Fidelity Investments",
       number_last4: null,
@@ -62,6 +63,7 @@ describe("document account choices", () => {
           index: 0,
           create: {
             type: "brokerage",
+            subtype: "individual",
             name: "Fidelity Individual",
             include_in_net_worth: true,
             currency: "USD",
@@ -182,6 +184,7 @@ describe("document account choices", () => {
           index: 0,
           create: {
             type: "brokerage",
+            subtype: "individual",
             name: "Fidelity Individual",
             include_in_net_worth: true,
             currency: "USD",

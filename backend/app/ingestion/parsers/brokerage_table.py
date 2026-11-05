@@ -125,6 +125,7 @@ from typing import Final, Literal
 from pydantic import ValidationError
 
 from app.core.csv_safety import is_dangerous, neutralise_formula
+from app.domain.accounts.subtypes import guess_subtype
 from app.domain.imports.schemas import DateFormat, MappingSpec
 from app.ingestion.parsers import confidence as conf
 from app.ingestion.parsers.brokerage import (
@@ -415,19 +416,13 @@ def header_from_spec(spec: MappingSpec) -> Header:
     return Header(spec.skip_rows, columns)
 
 
-#: Words in an account's nickname that make it a retirement account.
-_RETIREMENT = re.compile(
-    r"\b(ira|roth|401\s?\(?k\)?|403\s?\(?b\)?|457|sep|simple|hsa|rollover|keogh|pension|retirement)\b",
-    re.IGNORECASE,
-)
-
-
 def account_type_for(name: str | None) -> str:
-    """``retirement`` for an account nicknamed like one (``ROTH IRA``, ``401(k)``).
+    """``retirement`` for an account nicknamed like one (``ROTH IRA``, ``401(k)``, ``HSA``).
 
-    Anything else is ``brokerage``.
+    Anything else is ``brokerage`` (``app.domain.accounts.subtypes.guess_subtype``).
     """
-    return "retirement" if name and _RETIREMENT.search(name) else ACCOUNT_TYPE
+    kind, _ = guess_subtype(name)
+    return kind.value if kind is not None else ACCOUNT_TYPE
 
 
 def _security(symbol: str, name: str) -> SecurityRef | None:

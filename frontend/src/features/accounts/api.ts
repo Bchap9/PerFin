@@ -19,7 +19,13 @@ export type BalanceSnapshot = Schemas["SnapshotOut"];
 export const accountKeys = {
   all: [...queryRoots.accounts, "all"],
   one: (id: string) => [...queryRoots.accounts, "one", id],
-  balances: (id: string, start: string | null, end: string | null) => [...queryRoots.accounts, "balances", id, start, end],
+  balances: (id: string, start: string | null, end: string | null) => [
+    ...queryRoots.accounts,
+    "balances",
+    id,
+    start,
+    end,
+  ],
 } as const;
 
 const PAGE_LIMIT = 200;
@@ -32,7 +38,14 @@ export async function listAllAccounts(): Promise<Account[]> {
   for (let page = 0; page < MAX_PAGES; page += 1) {
     const current: string | null = cursor;
     const data: Schemas["AccountPage"] = await unwrap(
-      api.GET("/api/v1/accounts", { params: { query: { limit: PAGE_LIMIT, ...(current === null ? {} : { cursor: current }) } } }),
+      api.GET("/api/v1/accounts", {
+        params: {
+          query: {
+            limit: PAGE_LIMIT,
+            ...(current === null ? {} : { cursor: current }),
+          },
+        },
+      }),
     );
     result.push(...data.items);
     cursor = data.next_cursor;
@@ -44,18 +57,33 @@ export async function listAllAccounts(): Promise<Account[]> {
 }
 
 export function getAccount(id: string): Promise<Account> {
-  return unwrap(api.GET("/api/v1/accounts/{account_id}", { params: { path: { account_id: id } } }));
+  return unwrap(
+    api.GET("/api/v1/accounts/{account_id}", {
+      params: { path: { account_id: id } },
+    }),
+  );
 }
 
 export function createAccount(body: AccountCreate): Promise<Account> {
   return unwrap(api.POST("/api/v1/accounts", { body }));
 }
 
-export function updateAccount(id: string, body: AccountUpdate): Promise<Account> {
-  return unwrap(api.PATCH("/api/v1/accounts/{account_id}", { params: { path: { account_id: id } }, body }));
+export function updateAccount(
+  id: string,
+  body: AccountUpdate,
+): Promise<Account> {
+  return unwrap(
+    api.PATCH("/api/v1/accounts/{account_id}", {
+      params: { path: { account_id: id } },
+      body,
+    }),
+  );
 }
 
-export function closeAccount(id: string, closedOn: string | null): Promise<Account> {
+export function closeAccount(
+  id: string,
+  closedOn: string | null,
+): Promise<Account> {
   return unwrap(
     api.POST("/api/v1/accounts/{account_id}/close", {
       params: { path: { account_id: id } },
@@ -65,21 +93,37 @@ export function closeAccount(id: string, closedOn: string | null): Promise<Accou
 }
 
 export function reopenAccount(id: string): Promise<Account> {
-  return unwrap(api.POST("/api/v1/accounts/{account_id}/reopen", { params: { path: { account_id: id } } }));
+  return unwrap(
+    api.POST("/api/v1/accounts/{account_id}/reopen", {
+      params: { path: { account_id: id } },
+    }),
+  );
 }
 
-export function getBalanceHistory(id: string, start: string | null, end: string | null): Promise<BalanceHistory> {
+export function getBalanceHistory(
+  id: string,
+  start: string | null,
+  end: string | null,
+): Promise<BalanceHistory> {
   return unwrap(
     api.GET("/api/v1/accounts/{account_id}/balances", {
       params: {
         path: { account_id: id },
-        query: { ...(start === null ? {} : { start }), ...(end === null ? {} : { end }) },
+        query: {
+          ...(start === null ? {} : { start }),
+          ...(end === null ? {} : { end }),
+        },
       },
     }),
   );
 }
 
-export function addManualBalance(id: string, asOfDate: string, amount: string, currency: string): Promise<BalanceSnapshot> {
+export function addManualBalance(
+  id: string,
+  asOfDate: string,
+  amount: string,
+  currency: string,
+): Promise<BalanceSnapshot> {
   return unwrap(
     api.POST("/api/v1/accounts/{account_id}/balances", {
       params: { path: { account_id: id } },
@@ -90,6 +134,33 @@ export function addManualBalance(id: string, asOfDate: string, amount: string, c
 
 export function useAccounts() {
   return useQuery({ queryKey: accountKeys.all, queryFn: listAllAccounts });
+}
+
+export type AccountTypeSubtypes = components["schemas"]["AccountTypeSubtypes"];
+
+function listSubtypes(): Promise<AccountTypeSubtypes[]> {
+  return unwrap(api.GET("/api/v1/accounts/subtypes"));
+}
+
+/** The kinds of account within each type (Roth IRA, 529, HELOC...); static, fetched once. */
+export function useAccountSubtypes() {
+  return useQuery({
+    queryKey: [...queryRoots.accounts, "subtypes"],
+    queryFn: listSubtypes,
+    staleTime: Infinity,
+  });
+}
+
+/** The subtype choices of one type, as select options (empty when the type has none). */
+export function subtypeOptions(
+  catalogue: readonly AccountTypeSubtypes[] | undefined,
+  type: AccountType,
+): { value: string; label: string }[] {
+  const entry = catalogue?.find((item) => item.type === type);
+  return (entry?.subtypes ?? []).map((subtype) => ({
+    value: subtype.code,
+    label: subtype.label,
+  }));
 }
 
 /** Roles that may change ledger data (viewers read only). The server enforces it again. */
@@ -129,10 +200,16 @@ export function groupAccounts(accounts: readonly Account[]): AccountGroup[] {
   return ACCOUNT_TYPES.map(({ type, label }) => ({
     type,
     label,
-    accounts: accounts.filter((account) => account.type === type).sort((a, b) => a.name.localeCompare(b.name)),
+    accounts: accounts
+      .filter((account) => account.type === type)
+      .sort((a, b) => a.name.localeCompare(b.name)),
   })).filter((group) => group.accounts.length > 0);
 }
 
-export function accountLabel(account: Pick<Account, "name" | "nickname">): string {
-  return account.nickname !== null && account.nickname !== "" ? account.nickname : account.name;
+export function accountLabel(
+  account: Pick<Account, "name" | "nickname">,
+): string {
+  return account.nickname !== null && account.nickname !== ""
+    ? account.nickname
+    : account.name;
 }

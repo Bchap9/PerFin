@@ -22,6 +22,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/accounts/subtypes": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** The kinds of account within each type (Roth IRA, 529, HELOC...) */
+        get: operations["get_account_subtypes_api_v1_accounts_subtypes_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/accounts/{account_id}": {
         parameters: {
             query?: never;
@@ -3306,6 +3323,8 @@ export interface components {
             opening_balance?: components["schemas"]["MoneyIn"] | null;
             /** Opening Balance Date */
             opening_balance_date?: string | null;
+            /** Subtype */
+            subtype?: string | null;
             type: components["schemas"]["AccountType"];
         };
         /**
@@ -3382,6 +3401,12 @@ export interface components {
             number_last4: string | null;
             /** Opened On */
             opened_on: string | null;
+            /** Subtype */
+            subtype: string | null;
+            /** Subtype Label */
+            subtype_label: string | null;
+            /** Tax Treatment */
+            tax_treatment: ("taxable" | "tax_deferred" | "tax_free") | null;
             type: components["schemas"]["AccountType"];
             /**
              * Updated At
@@ -3413,6 +3438,8 @@ export interface components {
             opening_balance: string | null;
             /** Opening Balance Date */
             opening_balance_date: string | null;
+            /** Subtype */
+            subtype?: string | null;
             /**
              * Suggested By Model
              * @default false
@@ -3425,6 +3452,15 @@ export interface components {
          * @enum {string}
          */
         AccountType: "checking" | "savings" | "credit_card" | "cash" | "brokerage" | "retirement" | "loan" | "mortgage" | "line_of_credit" | "manual_asset" | "manual_liability";
+        /**
+         * AccountTypeSubtypes
+         * @description ``GET /accounts/subtypes``: the subtypes of one account type, in display order.
+         */
+        AccountTypeSubtypes: {
+            /** Subtypes */
+            subtypes: components["schemas"]["SubtypeOut"][];
+            type: components["schemas"]["AccountType"];
+        };
         /** AccountTypeTotal */
         AccountTypeTotal: {
             /** Accounts */
@@ -3464,6 +3500,8 @@ export interface components {
             number_last4?: string | null;
             /** Opened On */
             opened_on?: string | null;
+            /** Subtype */
+            subtype?: string | null;
             type?: components["schemas"]["AccountType"] | null;
         };
         /** AccountValueOut */
@@ -9636,6 +9674,15 @@ export interface components {
             /** Splits */
             splits: components["schemas"]["SplitIn"][];
         };
+        /** SubtypeOut */
+        SubtypeOut: {
+            /** Code */
+            code: string;
+            /** Label */
+            label: string;
+            /** Tax Treatment */
+            tax_treatment: ("taxable" | "tax_deferred" | "tax_free") | null;
+        };
         /**
          * SuggestionRole
          * @description Why the suggestion gave a column a role (no cell text).
@@ -10643,6 +10690,26 @@ export interface operations {
                 };
                 content: {
                     "application/problem+json": unknown;
+                };
+            };
+        };
+    };
+    get_account_subtypes_api_v1_accounts_subtypes_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AccountTypeSubtypes"][];
                 };
             };
         };
