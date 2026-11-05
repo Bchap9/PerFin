@@ -81,8 +81,22 @@ What remains (details in docs/ROADMAP.md):
   choices in the review queue, an unknown document kind. `PERFIN_ML_URL` must
   be a local address; anything else stops the app from starting.
 
+- `perfin review-report --household ID`: a household's review items counted
+  by kind, reason and state, and the open ones by file type (read-only, counts
+  and codes only), to see which misses are most common and whether a change
+  helped.
+
 ### Changed
 
+- Institution names are compared by their distinctive words, so `Chase` and
+  `JPMorgan Chase Bank, N.A.`, or `Fidelity` and `Fidelity Investments`, are
+  the same institution when breaking a last-four-digits tie, resolving a
+  classified document's institution, and creating institutions from
+  "Accounts in this file" (no duplicates). Names made only of common words
+  (`First`, `American`, `Capital`...) still need an exact match.
+- More ways of printing an account's last four digits are read: `x1234`,
+  `x-1234`, `...1234`, "ends in 1234", "ending with 1234", "last 4 digits of
+  account number: 1234".
 - Review queue items name the file they are about (a link, when it arrived,
   the period it covers) and explain what happened, why PerFin stopped and how
   to fix it, for every reason the importer raises. A "Fix..." dialog shows the

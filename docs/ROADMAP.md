@@ -187,7 +187,10 @@ Goal: scanned documents, receipts, email intake.
 - [ ] Heuristic classifier trained on synthetic + contributed samples
       (the naive Bayes classifier is trained and evaluated on synthetic
       samples only; no contributed samples exist yet, so its accuracy on
-      real documents is unknown)
+      real documents is unknown). Not done yet: retraining it on a
+      household's own resolved documents (`scripts/train_classifier.py
+      --household`); `perfin review-report` measures the misses meanwhile,
+      and the optional local model (ADR-0010) covers unknown kinds.
 
 Live verification of Phases 3+4 (2026-11-04; fresh database migrated to
 `0004`, `perfin api` and `perfin worker` in dev mode, a fake local clamd):

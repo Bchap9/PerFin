@@ -550,3 +550,27 @@ def test_an_item_without_a_document_has_none(
     ]
     assert listed["document"] is None
     assert listed["reason"] == "daily_digest"
+
+
+def test_the_review_report_counts_items_by_kind_and_reason(
+    home: dict[str, AuthedClient], factories: Factories, store: LocalFSBlobStore
+) -> None:
+    from app.domain.review.report import review_report
+
+    owner = home["owner"]
+    hh = hh_of(owner)
+    pdf = document(factories, store, hh, mime="application/pdf", filename="private-name.pdf")
+    item(factories, pdf, ReviewKind.UNKNOWN_ACCOUNT, {"reason": "account_not_found"})
+    item(factories, pdf, ReviewKind.UNKNOWN_ACCOUNT, {"reason": "account_not_found"})
+    item(factories, pdf, ReviewKind.UNPARSED, {"reason": "extraction_failed"})
+    with factories.transaction() as db:
+        report = review_report(db, hh)
+    assert report["open"] == 3
+    assert report["by_reason"][0] == {
+        "kind": "unknown_account",
+        "reason": "account_not_found",
+        "state": "open",
+        "count": 2,
+    }
+    assert report["open_by_file_type"] == {"application/pdf": 3}
+    assert "private-name" not in str(report)

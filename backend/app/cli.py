@@ -645,6 +645,35 @@ def cmd_ingest(args: argparse.Namespace) -> int:
         return EXIT_FAIL
 
 
+def cmd_review_report(args: argparse.Namespace) -> int:
+    """``perfin review-report --household ID``: review items by kind and reason (read-only)."""
+    import json
+    import uuid
+
+    from app.core.settings import get_settings
+    from app.db.session import make_app_engine, make_sessionmaker
+    from app.domain.review.report import review_report
+
+    try:
+        household_id = uuid.UUID(args.household)
+    except ValueError:
+        print("perfin review-report: --household must be a UUID", file=sys.stderr)
+        return EXIT_FAIL
+    try:
+        settings = get_settings()
+    except ValidationError as exc:
+        _print_validation_error(exc)
+        return EXIT_FAIL
+    engine = make_app_engine(settings)
+    try:
+        with make_sessionmaker(engine)() as db, db.begin():
+            report = review_report(db, household_id)
+    finally:
+        engine.dispose()
+    print(json.dumps(report, indent=2))
+    return EXIT_OK
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="perfin", description="PerFin personal finance")
     sub = parser.add_subparsers(dest="command", required=True, metavar="COMMAND")
@@ -697,6 +726,11 @@ def build_parser() -> argparse.ArgumentParser:
     )
     ingest.add_argument("--pretty", action="store_true", help="indent each stage's JSON")
     ingest.set_defaults(func=cmd_ingest)
+    report = sub.add_parser(
+        "review-report", help="count a household's review items by kind and reason (read-only)"
+    )
+    report.add_argument("--household", required=True, help="household id")
+    report.set_defaults(func=cmd_review_report)
     sub.add_parser(
         "bootstrap-url", help="print a new one-time setup URL (only while no user exists)"
     ).set_defaults(func=cmd_bootstrap_url)

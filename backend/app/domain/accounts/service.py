@@ -77,6 +77,7 @@ from app.domain.accounts.visibility import (
 from app.domain.households import repo as households_repo
 from app.domain.households import service as households_service
 from app.domain.transactions.import_hash import normalize_payee
+from app.ingestion.match.institutions import pick
 
 if TYPE_CHECKING:
     from starlette.requests import HTTPConnection
@@ -266,9 +267,9 @@ def find_or_create_institution(
     rows = db.execute(
         select(Institution.id, Institution.name).where(Institution.household_id == household_id)
     ).all()
-    for institution_id, existing in rows:
-        if normalize_payee(existing) == wanted:
-            return institution_id
+    found = pick(clean, [(institution_id, existing) for institution_id, existing in rows])
+    if found is not None:
+        return found  # the same institution under another spelling is not added twice
     institution = Institution(household_id=household_id, name=clean)
     db.add(institution)
     db.flush()
