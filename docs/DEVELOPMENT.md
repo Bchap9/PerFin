@@ -705,3 +705,11 @@ may be planned.
 Conventional commits (`feat(auth): ...`, `fix(queue): ...`, `docs: ...`).
 One roadmap item per commit at minimum. `CHANGELOG.md` follows Keep a
 Changelog.
+
+## Pull requests
+
+PR descriptions follow `.github/pull_request_template.md`. The `pr-template`
+workflow (`scripts/check_pr_body.py`) fails a PR whose description drops a
+template section, leaves Summary or How it was tested empty, or ticks no
+Type of change box; it re-runs when the description is edited. Checklist
+items that do not apply may stay unticked. Dependabot PRs are exempt.

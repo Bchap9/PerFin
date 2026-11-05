@@ -32,7 +32,12 @@ What remains (details in docs/ROADMAP.md):
 
 ## [Unreleased]
 
-Nothing yet.
+### Added
+
+- Pull request template (`.github/pull_request_template.md`) and a
+  `pr-template` CI workflow that fails a PR whose description drops a
+  template section, leaves Summary or How it was tested empty, or ticks no
+  Type of change box (`scripts/check_pr_body.py`). Dependabot PRs are exempt.
 
 ## [1.0.0-rc.1] - 2026-11-05
 
