@@ -98,7 +98,9 @@ function Editor({ ruleId, initial, conditionsEditable }: { ruleId: string | null
         <Button variant="primary" loading={save.busy} onClick={() => void submit()}>
           Save rule
         </Button>
-        <Link to="/rules">Cancel</Link>
+        <Link to="/rules" className="btn btn--ghost btn--md">
+          Cancel
+        </Link>
       </div>
       <RuleTestPanel target={target} disabled={invalid} names={names} />
     </QueryState>
@@ -109,7 +111,9 @@ export function NewRulePage() {
   return (
     <PlanningPage title="New rule">
       <p>
-        <Link to="/rules">All rules</Link>
+        <Link to="/rules" className="link-action link-action--back">
+          All rules
+        </Link>
       </p>
       <Editor ruleId={null} initial={emptyRule()} conditionsEditable />
     </PlanningPage>
@@ -127,7 +131,9 @@ export function EditRulePage() {
   return (
     <PlanningPage title={rule?.name ?? "Rule"}>
       <p>
-        <Link to="/rules">All rules</Link>
+        <Link to="/rules" className="link-action link-action--back">
+          All rules
+        </Link>
       </p>
       <QueryState loading={query.isPending} error={query.error} label="the rule">
         {rule === undefined || parsed === null ? null : rule.redacted ? (

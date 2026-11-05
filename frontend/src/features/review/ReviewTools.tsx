@@ -234,7 +234,7 @@ export function RuleDraftButton({ item }: { item: ReviewItem }) {
   });
   if (savedId !== null) {
     return (
-      <Link to="/rules/$ruleId" params={{ ruleId: savedId }}>
+      <Link to="/rules/$ruleId" params={{ ruleId: savedId }} className="link-action">
         Rule saved. Open it
       </Link>
     );
@@ -369,7 +369,7 @@ export function UnknownOwnerTools({ item, actionable }: { item: ReviewItem; acti
         A file arrived in the drop folder and PerFin could not tell whose it is. It is held until you choose.
       </p>
       {item.document_id === null ? null : (
-        <Link to="/documents/$documentId" params={{ documentId: item.document_id }}>
+        <Link to="/documents/$documentId" params={{ documentId: item.document_id }} className="link-action">
           Look at the file
         </Link>
       )}

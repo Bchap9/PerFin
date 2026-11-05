@@ -367,7 +367,9 @@ export function TaxYearPage() {
       title={`Tax year ${param}`}
       actions={
         <>
-          <Link to="/tax">All tax years</Link>
+          <Link to="/tax" className="btn btn--secondary btn--md">
+            All tax years
+          </Link>
           {data === undefined ? null : <YearActions year={data} canWrite={canWrite} isAdmin={isAdmin} />}
         </>
       }

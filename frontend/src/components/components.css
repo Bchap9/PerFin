@@ -61,6 +61,26 @@
   background: var(--color-danger-hover);
 }
 
+/* A link styled as a button keeps the button's colours, not the link's. */
+a.btn,
+a.btn:hover {
+  text-decoration: none;
+}
+
+a.btn--secondary,
+a.btn--secondary:hover,
+a.btn--ghost,
+a.btn--ghost:hover {
+  color: var(--color-text);
+}
+
+a.btn--primary,
+a.btn--primary:hover,
+a.btn--danger,
+a.btn--danger:hover {
+  color: var(--color-accent-contrast);
+}
+
 .btn:disabled {
   cursor: not-allowed;
   opacity: 0.6;
@@ -204,6 +224,83 @@
   flex-shrink: 0;
 }
 
+/* ---- Link action ----------------------------------------------------------
+   A link that stands on its own ("All rules", "Back to sign in", "Look at the
+   file"): no underline, a tinted pill on hover. --back adds a leading arrow. */
+.link-action {
+  display: inline-flex;
+  align-self: start;
+  justify-self: start;
+  width: fit-content;
+  align-items: center;
+  gap: var(--space-1);
+  margin-inline: calc(var(--space-2) * -1);
+  padding: var(--space-1) var(--space-2);
+  border-radius: var(--radius-md);
+  font-weight: 600;
+  text-decoration: none;
+}
+
+.link-action:hover {
+  background: var(--color-accent-soft);
+  text-decoration: none;
+}
+
+.link-action--back::before {
+  content: "\2190";
+  transition: transform var(--transition-fast);
+}
+
+.link-action--back:hover::before {
+  transform: translateX(-2px);
+}
+
+/* Inside a row of buttons the pill needs no negative margin. */
+.planning-actions .link-action,
+.page-header .link-action,
+.card__actions .link-action {
+  margin-inline: 0;
+}
+
+/* Settings index: the whole card is the link. */
+.settings-links .card {
+  position: relative;
+  transition:
+    border-color var(--transition-fast),
+    box-shadow var(--transition-fast);
+}
+
+.settings-links .card:hover {
+  border-color: var(--color-accent);
+  box-shadow: var(--shadow-md);
+}
+
+.settings-links .card__title a {
+  color: var(--color-text);
+  font-weight: inherit;
+  text-decoration: none;
+}
+
+.settings-links .card__title a::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+}
+
+.settings-links .card:hover .card__title a {
+  color: var(--color-accent);
+}
+
+.settings-links .card:has(a:focus-visible) {
+  outline: var(--focus-ring-width) solid var(--color-focus);
+  outline-offset: 2px;
+}
+
+.settings-links .card__title a:focus-visible {
+  outline: none;
+}
+
 /* ---- Card ------------------------------------------------------------------ */
 .card {
   border: 1px solid var(--color-border);
@@ -278,6 +375,17 @@
   border-bottom: 1px solid var(--color-border);
   text-align: start;
   vertical-align: middle;
+}
+
+/* Row links (an account, a rule, a year): the row structure already says
+   "this opens", so the name reads as a heading and underlines on hover. */
+.table td a:not(.btn) {
+  font-weight: 600;
+  text-decoration-color: transparent;
+}
+
+.table td a:not(.btn):hover {
+  text-decoration-color: currentColor;
 }
 
 .table--compact th,

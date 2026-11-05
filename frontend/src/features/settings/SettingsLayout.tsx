@@ -25,7 +25,9 @@ export function SettingsPage({ title, children }: { title: string; children: Rea
         <h1 id="page-title">{title}</h1>
       </div>
       <p>
-        <Link to="/settings">All settings</Link>
+        <Link to="/settings" className="link-action link-action--back">
+          All settings
+        </Link>
       </p>
       {children}
     </section>

@@ -48,7 +48,7 @@ export function ForgotPasswordPage() {
         <p role="status">
           If an account matches, a reset link is on its way. It works once and expires in 15 minutes.
         </p>
-        <Link to={LOGIN_PATH}>Back to sign in</Link>
+        <Link to={LOGIN_PATH} className="link-action link-action--back">Back to sign in</Link>
       </AuthLayout>
     );
   }
@@ -77,7 +77,7 @@ export function ForgotPasswordPage() {
         <Button type="submit" variant="primary" loading={busy}>
           Send reset link
         </Button>
-        <Link to={LOGIN_PATH}>Back to sign in</Link>
+        <Link to={LOGIN_PATH} className="link-action link-action--back">Back to sign in</Link>
       </form>
     </AuthLayout>
   );
@@ -105,7 +105,9 @@ export function ResetPasswordPage() {
     return (
       <AuthLayout title="Reset your password">
         <p role="alert">This reset link is incomplete. Open the link from the email again, or ask for a new one.</p>
-        <Link to={FORGOT_PATH}>Ask for a new link</Link>
+        <Link to={FORGOT_PATH} className="btn btn--primary btn--md">
+          Ask for a new link
+        </Link>
       </AuthLayout>
     );
   }
