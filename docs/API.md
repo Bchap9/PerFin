@@ -571,7 +571,8 @@ ends before it starts is `422`; audit `document.correct`; `resolve` closes
 the item) answers the item. `POST /review/{id}/remember-layout`
 `{"institution_id", "kind"?, "parser"?, "match"?, "reprocess_similar"}`
 stores a household `parser_fingerprint` (`match` has the shipped
-fingerprints' schema, derived from the document's header lines and table
+fingerprints' schema: `all`, `one_of`, `any`, `min_any`, rules `header`,
+`text`, `regex`, `account_mask`, `columns`, `metadata`; derived from the document's header lines and table
 layout when absent): `409 layout-unavailable` without extracted pages, `422
 kind-required`, `422 parser-unknown`, `422` for rules outside the schema or
 with an unsafe regex, `422 layout-not-distinctive`, `422 layout-does-not-match`

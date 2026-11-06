@@ -9,7 +9,8 @@ never opens file content itself. Everything is capped: at most
 mail subject and the first body lines), the "page heads" are the first
 :data:`PAGE_HEAD_LINES` lines of each of the first :data:`MAX_PAGE_HEADS`
 pages (where a statement prints its period on every page), and table
-headers are the first row of each table. The view holds only what the extraction already holds (last
+headers are the first row of each table, and the metadata is the PDF's own
+title and author. The view holds only what the extraction already holds (last
 four digits of account numbers at most; masked numbers stay masked).
 """
 
@@ -90,6 +91,8 @@ class DocumentView:
     source: str = "text"
     #: The top lines of each page (pages only; the header-band period).
     page_heads: tuple[tuple[str, ...], ...] = ()
+    #: The document's title and author (PDF metadata), normalised.
+    metadata: tuple[str, ...] = ()
     normalised: tuple[str, ...] = field(default=(), compare=False)
 
     def __post_init__(self) -> None:
@@ -164,4 +167,9 @@ class DocumentView:
             statement_periods=tuple(periods),
             source=source,
             page_heads=tuple(heads),
+            metadata=tuple(
+                normalise(value)[:MAX_LINE_CHARS]
+                for value in ((result.meta.title, result.meta.author) if result.meta else ())
+                if value
+            ),
         )

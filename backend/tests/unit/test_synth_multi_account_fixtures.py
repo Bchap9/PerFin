@@ -255,13 +255,20 @@ def test_fidelity_expected_results_reconcile(fid_report: tuple[Report, fidr.Extr
     types = {row[1] for row in results[0].activity}
     assert types >= {"buy", "sell", "dividend", "reinvest", "interest", "deposit", "withdrawal"}
     assert {"transfer_in", "transfer_out", "fee"} <= types
-    # In-kind transfers have no cash effect; a cash transfer between two accounts
-    # of the report shows on both sides; pending trades are not activity.
+    # In-kind transfers move units and no cash; a cash transfer between two
+    # accounts of the report shows on both sides, as a deposit and a
+    # withdrawal of cash; pending trades are not activity.
     transfers = [row for r in results for row in r.activity if row[1].startswith("transfer")]
-    assert all(row[4] == 0 for row in transfers if row[3] is not None)
-    cash = [row[4] for row in transfers if row[3] is None]
-    assert len(cash) == 2
-    assert sum(cash, ZERO) == 0
+    assert transfers
+    assert all(row[4] == 0 and row[3] is not None for row in transfers)
+    cash = [
+        a
+        for account in stmt.accounts
+        for a in account.section("transferred_in", "transferred_out")
+        if a.quantity is None
+    ]
+    assert sorted(a.type for a in cash) == ["deposit", "withdrawal"]
+    assert sum((a.amount for a in cash), ZERO) == 0
     pending = extras.pending[individual.number][0]
     assert pending.day > stmt.end
     assert all(row[0] <= stmt.end for r in results for row in r.activity)

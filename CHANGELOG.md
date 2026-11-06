@@ -119,8 +119,56 @@ What remains (details in docs/ROADMAP.md):
     unchanged.
   - Statements record the pages they were read from (`first_page`,
     `last_page`).
+- Brokerage table reading, for any institution:
+  - More column names: *Transaction Description*, *Transaction Total*,
+    *Transaction Amount*, *Settlement Date*, *Post Date*, *Trans. Date*,
+    *Symbol/CUSIP*, *Cost Basis of Close*, *Transaction Cost*, *Check Num.*,
+    *Payee*, *Maturity*, *Coupon Rate*, *Accrued Interest (AI)* and the
+    estimated income columns. A header cell naming no known column keeps its
+    values out of its neighbours, header words run together (`Transaction
+    Description Quantity`) are split, and a row cell spanning two columns is
+    shared out word by word.
+  - Headers over two or three lines (`Price` / `Per Unit`, `Settlement` /
+    `Date`, `Ending Market Value` / `Accrued Interest (AI)`) and two tables
+    side by side under one header line are read; a heading is never taken
+    as part of a header.
+  - Activity sections: *Securities Bought & Sold*, *Dividends, Interest &
+    Other Income*, *Securities Transferred In/Out* (units moved, or cash),
+    *Deposits*, *Withdrawals*, *Contributions*, *Distributions*, *Checking
+    Activity*, *Debit Card Activity*, *Bill Payments*, *Cash Activity*,
+    *Fees and Charges* and *Taxes Withheld* type the rows their own words
+    do not; *Trades Pending Settlement*, *Core Account Cash Flow*, *Daily
+    Additions and Subtractions* and other summaries are not activity. In a
+    brokerage account, cash tables (date, description, amount) are read by
+    the generic parser too.
+  - Holdings: `CUSIP:` and `ISIN:` lines under a row give its identifiers,
+    the symbol is the ticker in parentheses ending the name (never the
+    name's first word), note lines are no rows, footnote markers in figures
+    are dropped, `unknown`/`N/A` cost basis stays unknown, a group heading
+    above its table's header (`Core Account`) groups its rows, and a cash
+    sweep printed as a holding is the account's cash when the figures say
+    so.
+  - Bond prices quoted per 100 of face value are recognised
+    (`InvestmentPosition.price_per_100`): reconciliation checks quantity x
+    price / 100 and the import stores one unit's price.
+  - Cash: `Beginning/Ending Core Account Balance` and a cash balance under a
+    `This Period | Last Period` header are read; a statement printing no
+    closing cash is checked against its account value less its holdings.
+- Bank statements: a *Checks Paid* table (`Check No. | Date Paid | Amount`)
+  is read, each check as `CHECK <number>`, money out.
+- Institution parsers are detected by the PDF's title and author and by
+  their subsidiary's name anywhere, beside the layout's wording, not only by
+  page-1 words (Fidelity's name can be only its logo). Fingerprints take a
+  `metadata` rule and a `one_of` group; the shipped Fidelity fingerprint
+  (version 2) takes the name from the header or the metadata.
+- When the chosen parser reads nothing, the next-best parser is tried
+  (warning `parser_fallback:<name>`).
 
 ### Changed
+
+- Parser versions: `brokerage_statement_generic` 4,
+  `fidelity_investments_statement` 3, `placeholder_brokerage` 2 and
+  `statement_generic` 3 (their output for the same pages may change).
 
 - A period guessed from the dates in a document (`line_dates`, or the span
   of its transactions) is no longer stored as the document's period; it is
@@ -146,6 +194,8 @@ What remains (details in docs/ROADMAP.md):
   matched by its own last four digits, never put on the document's account.
 - The brokerage parsers no longer read "Change in Account Value" as the
   account value.
+- An opening position for units held before a statement's period and
+  transferred or sold out during it no longer stops the import.
 
 ## [1.0.0-rc.4] - 2026-11-06
 

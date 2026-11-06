@@ -14,6 +14,11 @@ one extraction (:func:`parse_extraction`):
 2. Otherwise every parser scores the pages (``detect``); the best score of
    at least :data:`MIN_SCORE` wins (ties: the order of :data:`PARSERS`, so
    an institution parser beats the generic one).
+3. **Fallback.** When the chosen parser reads nothing usable (no
+   transactions, positions, activity, payslip, receipt, loan or tax form),
+   the next-best parsers scoring at least :data:`MIN_SCORE` are tried in
+   turn and the first that reads something is used (warning
+   ``parser_fallback:<the parser that read nothing>``).
 
 The chosen parser's statements (and brokerage ``investments``) replace any
 an earlier parser run left in the result (``source_format`` ``pdf``/``image``);
@@ -94,6 +99,34 @@ def _hinted(
     return next((p for p in candidates if scores.get(p.name, 0.0) > 0), None)
 
 
+def _fallback(
+    view: DocumentView,
+    scores: dict[str, float],
+    chosen: DocumentParser,
+    outcome: ParseOutcome,
+    threshold: float,
+    date_order: str | None,
+) -> tuple[DocumentParser, ParseOutcome]:
+    """The next-best parser's outcome when ``chosen`` read nothing usable.
+
+    Parsers scoring at least :data:`MIN_SCORE` are tried best first (ties:
+    the order of :data:`PARSERS`); the first that reads a statement, an
+    investment statement, a payslip, a receipt, a loan or tax form is used,
+    with ``parser_fallback:<name>`` naming the one that read nothing. None
+    does: ``chosen`` and its outcome stay.
+    """
+    ranked = sorted(
+        (p for p in PARSERS if p is not chosen and scores[p.name] >= MIN_SCORE),
+        key=lambda p: -scores[p.name],
+    )
+    for parser in ranked:
+        found = parser.parse(view, threshold=threshold, date_order=date_order)
+        if not found.empty:
+            found.warnings = [f"parser_fallback:{chosen.name}"[:64], *found.warnings]
+            return parser, found
+    return chosen, outcome
+
+
 def parse_extraction(
     result: ExtractResult,
     *,
@@ -113,6 +146,8 @@ def parse_extraction(
     outcome = ParseOutcome()
     if chosen is not None:
         outcome = chosen.parse(view, threshold=threshold, date_order=date_order)
+        if outcome.empty:
+            chosen, outcome = _fallback(view, scores, chosen, outcome, threshold, date_order)
     else:
         outcome.warnings.append("no_parser")
     kept = [s for s in result.statements if s.source_format not in DOCUMENT_STATEMENT_FORMATS]

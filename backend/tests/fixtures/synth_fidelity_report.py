@@ -384,9 +384,11 @@ def report(start: date = START) -> tuple[Report, Extras]:
             ),
             # Securities Transferred In: cash (no security) and shares from the
             # IRA of the same report; Out: shares to an account outside it.
+            # Cash moved between accounts is a deposit / withdrawal of cash
+            # (a transfer_in/out moves units of a security).
             Activity(
                 d(28),
-                "transfer_in",
+                "deposit",
                 "transferred_in",
                 "Trans. from account 418-330642",
                 Decimal("2140.00"),
@@ -764,10 +766,11 @@ def report(start: date = START) -> tuple[Report, Extras]:
                 name="FICTIONAL CASH RESERVES",
                 symbol="ZZCRX",
             ),
-            # The other side of the Individual account's transfers in.
+            # The other side of the Individual account's transfers in (the cash
+            # leaves as a withdrawal).
             Activity(
                 d(28),
-                "transfer_out",
+                "withdrawal",
                 "transferred_out",
                 "Trans. to account 418-205817",
                 Decimal("-2140.00"),

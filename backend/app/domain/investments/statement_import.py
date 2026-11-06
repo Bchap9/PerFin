@@ -80,7 +80,10 @@ statements"). Per statement:
    statement back (savepoint) with an ``investment_lot_conflict`` item.
 8. **Prices**: each position's unit price on ``as_of`` becomes a ``price``
    row (``source = statement``) unless one exists for that day from another
-   source.
+   source; a price quoted per 100 of face value (a bond) is stored as one
+   unit's (``InvestmentPosition.price_per_unit``). An opening position for
+   units held before the period and gone by its end (transferred or sold
+   out) is costed at the price its own rows print.
 9. **Balance snapshot**: holdings + closing cash on ``as_of``
    (``source = statement``) when every check that could run held and both
    are known.
@@ -488,7 +491,8 @@ def _record_price(
     ctx: _Context, security: Security, position: InvestmentPosition, on: date | None
 ) -> None:
     day = position.price_as_of or on
-    price = position.unit_price
+    # One unit's price (a bond's price per 100 of face value, divided by 100).
+    price = position.price_per_unit
     if day is None or price is None or price <= 0:
         return
     existing = ctx.db.execute(
@@ -731,12 +735,16 @@ def _openings(
             continue
         if missing <= UNIT_TOLERANCE:
             continue
-        position = sample[security_id]
+        held_at_end = sample.get(security_id)
         with localcontext(calc_context()):
-            if position.cost_basis is not None and position.quantity > 0:
-                cost = abs(position.cost_basis) / position.quantity
+            if held_at_end is None:
+                # Held before the period and gone by its end (transferred or
+                # sold out): the price its own rows print, else unknown.
+                cost = next((r.price for r in rows if r.price), None) or Decimal(0)
+            elif held_at_end.cost_basis is not None and held_at_end.quantity > 0:
+                cost = abs(held_at_end.cost_basis) / held_at_end.quantity
             else:
-                cost = position.unit_price or Decimal(0)
+                cost = held_at_end.price_per_unit or Decimal(0)
         digest = hashlib.sha256(
             _SEP.join(
                 (HASH_VERSION, str(account.id), "opening", str(security_id), opened_on.isoformat())

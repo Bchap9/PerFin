@@ -165,15 +165,14 @@ def test_combined_statement_gives_bank_and_brokerage_statements(
         assert statement.opening_balance.amount == expected[last4].opening
         assert statement.ledger_balance.amount == expected[last4].closing
         assert (statement.period_start, statement.period_end) == (neutral.START, neutral.END)
-        # The rows of its own Transaction Detail table, nothing of another account's.
+        # The rows of its own Transaction Detail and Checks Paid tables (a
+        # check paid as ``CHECK <number>``, money out), nothing of another
+        # account's; each account reconciles.
         rows = [(t.posted, t.amount, t.payee) for t in statement.transactions]
-        assert rows == [
-            (a.day, a.amount, a.description)
-            for a in accounts[last4].activity
-            if a.section != "checks"
-        ]
-    assert bank["5530"].reconciliation is not None
-    assert bank["5530"].reconciliation.status == "ok"
+        assert rows == expected[last4].bank_rows
+        assert statement.reconciliation is not None
+        assert statement.reconciliation.status == "ok"
+    assert [a.section for a in accounts["4821"].activity].count("checks") == 2
     brokerage = neutral_parsed.investments[0]
     assert (brokerage.account.name, brokerage.account.account_type) == (
         "Self-Directed Brokerage",
@@ -187,8 +186,27 @@ def test_combined_statement_gives_bank_and_brokerage_statements(
         for p in brokerage.positions
     )
     assert positions == expected["6619"].positions
+    # Trade Activity and the Cash Activity table under it (a cash table of a
+    # brokerage account: typed by its description), checked against the cash
+    # the Account Value Summary prints for this period and the last.
+    activity = sorted(
+        (
+            a.trade_date,
+            a.type,
+            a.security.symbol if a.security else None,
+            a.quantity,
+            a.amount,
+        )
+        for a in brokerage.activity
+    )
+    assert activity == sorted(expected["6619"].activity)
+    assert brokerage.cash_opening is not None
+    assert brokerage.cash_closing is not None
+    assert brokerage.cash_opening.amount == expected["6619"].opening
+    assert brokerage.cash_closing.amount == expected["6619"].closing
     assert brokerage.reconciliation is not None
     assert brokerage.reconciliation.status == "ok"
+    assert brokerage.reconciliation.checks == ["positions", "holdings_total", "cash", "total_value"]
 
 
 def _bank_page(

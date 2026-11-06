@@ -264,11 +264,13 @@ the validated sandbox output, never on file content):
 - **Fingerprints** (`fingerprints.py`, shipped files in
   `classify/fingerprints/*.yaml`): `schema`, `key`, `institution`,
   `country?`, `kind`, `parser`, `version`, `date_order?` and `match` with
-  `all` rules (every one must hold), `any` rules and `min_any`. A rule is
+  `all` rules (every one must hold), `one_of` rules (at least one must
+  hold, when any are listed), `any` rules and `min_any`. A rule is
   one of `header` (substring of the header), `text` (substring of any
   line), `regex` (`region: header|text`, `ignore_case`), `account_mask`
-  (`XXXX-XXXX-####`: `X`/`*` masked or any digit, `#` kept digit) or
-  `columns` (a table header row starting with these cells). Confidence is
+  (`XXXX-XXXX-####`: `X`/`*` masked or any digit, `#` kept digit),
+  `columns` (a table header row starting with these cells) or `metadata`
+  (substring of the PDF's title or author). Confidence is
   0.85 plus up to 0.14 for the share of `any` rules that hold; two
   institutions matching equally strongly is no match. YAML is read with
   `yaml.safe_load` after refusing anchors and aliases and files over 64 KiB,
@@ -438,7 +440,9 @@ a child answering with parser output is `bad_output`.
   `card_statement_generic`), then the payslip parser for kind `payslip`; the
   fingerprint's `date_order` goes to a generic parser. Without a usable hint
   every parser scores the pages (`detect`) and the best at or above 0.35
-  wins. All scores are recorded.
+  wins. All scores are recorded. When the chosen parser reads nothing
+  usable, the next-best parsers at or above 0.35 are tried in turn
+  (warning `parser_fallback:<name>`).
 - **Generic table statement parser** (`table_statement.py`): a header line
   naming date, description and amount (or debit/credit style) columns, with
   optional balance and posting date, starts or continues the table (repeated
@@ -579,20 +583,90 @@ OFX `INVSTMTRS` in the sandbox or from a PDF/scan's pages in the worker.
   no cash. An unsigned amount takes the type's direction; a symbol is read
   from its column (a valid CUSIP there is the CUSIP), from the
   description's first word when the row needs a security or the symbol is
-  held, or from `(SYMBOL)`. `brokerage_statement_generic` (version 3)
+  held, or from `(SYMBOL)`. `brokerage_statement_generic` (version 4)
   scores 0.5-0.7 when it sees these tables (above the bank parsers'
   0.4-0.45 for the same activity table); `placeholder_brokerage` pins the
   fictional Placeholder Brokerage (`MM/DD/YYYY`, USD) and needs the
   institution's name on page 1; `fidelity_investments_statement` pins the
   Fidelity Investments "Investment Report" (USD, `MM/DD` rows dated from
   the period, `MM/DD/YYYY`, `Month D, YYYY` period after "Investment
-  Report") and needs both "Fidelity Investments" and "Investment Report"
-  on page 1. Its core money market position is the account's cash: the
+  Report") and needs "Investment Report" on page 1 and the institution's
+  name on page 1, in the PDF's title or author (the name on a report's
+  page 1 can be only its logo), or its subsidiary's name ("Fidelity
+  Brokerage Services") anywhere; a name found only in the metadata or by
+  the subsidiary also needs one of the layout's own phrases somewhere
+  (*Accounts Included in This Report*, *Core Account*, *Ending Account
+  Value*, *Securities Bought & Sold*). The shipped fingerprint (version 2)
+  likewise takes the name from the header or the metadata (`one_of` with
+  a `metadata` rule). Its core money market position is the account's cash: the
   rows under *Core Account* are no position, their beginning and ending
   market values are the opening and closing cash and are taken out of the
   printed holdings total, so the cash check covers every trade, income and
   transfer; the *Core Fund Activity* table (the core's own trades settling
   them) is not read.
+- **Table reading** (any institution; the synthetic Fidelity-layout report
+  `tests/fixtures/synth_fidelity_report.py` and the provider-neutral
+  combined statement `synth_neutral_report.py` are read to the last row
+  by the generic parser as well as by the layout's):
+  - **Header vocabulary**: *Transaction Description* (the action),
+    *Transaction Total* / *Transaction Amount* (the amount), *Settlement
+    Date*, *Post Date*, *Trans. Date*, *Symbol/CUSIP*, *Transaction Cost*
+    (fees), *Cost Basis of Close*, *Check Num.*, *Code*, *Payee*,
+    *Maturity*, *Coupon Rate*, *Est. Annual Income (EAI)*, *Accrued
+    Interest (AI)*, ... A header cell naming no known column is still a
+    column (not read), so its values never slide into a neighbour; a
+    header cell whose words are several headers (`Transaction Description
+    Quantity`, `Check Num. Post Date Code Description`) is split into them,
+    and a row cell spanning two columns (`120 $35.61700`, `96205LQK3 Muni
+    exempt interest`) is shared out word by word.
+  - **Headers over lines**: the line with the most cells gives the
+    columns, the words of the other lines join the column they lie over
+    (`Price` / `Per Unit`, `Settlement` / `Date`, `Cost Basis` / `of
+    Close`, `Ending Market Value` / `Accrued Interest (AI)`); a heading is
+    never a header line, and a group heading right above a holdings header
+    (`Core Account`) still groups its rows.
+  - **Side-by-side tables**: a header repeating one group of cells (`Date |
+    Reference | Transaction Description | Transaction Total` twice) is
+    that many tables, each reading its half of every line (a `Total` in
+    one half ends only that half's row).
+  - **Sections**: the heading above an activity table says how its rows
+    are read when their own words do not: *Trades Pending Settlement*,
+    *Core Account Cash Flow*, *Daily Additions and Subtractions*,
+    *Estimated Cash Flow*, *Income Summary*, *Margin Activity* are no
+    activity; *Securities Transferred In/Out* move units (the printed
+    amount is their value, no cash) or, without units, cash (a deposit or
+    withdrawal); *Dividends, Interest & Other Income* rows are dividends,
+    or interest when they say so; *Deposits*/*Contributions* and
+    *Withdrawals*/*Distributions*, *Checking Activity*, *Debit Card
+    Activity*, *Bill Payments* and *Cash Activity* are cash by their sign;
+    *Fees and Charges* and *Taxes Withheld* are fees. In an account with a
+    holdings or security table, such a cash table (date, description,
+    amount) is activity even for the generic parser. A table printing
+    minus signs has its unsigned amounts read as inflows (a refund, a fee
+    rebate).
+  - **Holdings rows**: the symbol is only the ticker in parentheses ending
+    the name (`APPLE INC (AAPL)`), never the name's first word (a bond's
+    issuer); `CUSIP: ...` and `ISIN: ...` lines under a row are its
+    identifiers, a name wraps until its `(SYMBOL)`, note lines (`— 30-day
+    yield`, bond terms) are read for nothing; footnote markers in figures
+    (`147.85A`, `$8,412.36 c`) are dropped and `unknown`/`N/A` cost basis
+    is unknown. A price is per 100 of face value
+    (`InvestmentPosition.price_per_100`) when quantity x price / 100 is the
+    printed value and quantity x price is not; reconciliation checks it so
+    and the import stores one unit's price. A cash sweep printed as a
+    holding whose value is the closing cash is the account's cash when the
+    positions add up to the account value only without it.
+  - **Cash figures**: `Beginning/Ending Core Account Balance` are the
+    opening and closing cash; a cash balance line (`Cash & Sweep Balance`)
+    under a `This Period | Last Period` header gives the closing and the
+    opening cash. A statement printing no closing cash is checked with the
+    account value less the holdings as its closing cash.
+  - **Checks tables** of bank statements (`Check No. | Date Paid | Amount`)
+    are read: each row is `CHECK <number>`, money out; a line of header
+    words only (`Date | Balance | Date | Balance`) ends the table above it.
+  - **Parser fallback** (`app/ingestion/parsers/registry.py`): when the
+    chosen parser reads nothing usable, the next-best parsers scoring at
+    least 0.35 are tried in turn (warning `parser_fallback:<name>`).
 - **Several accounts in one PDF** (a statement "of all accounts", a bank's
   combined statement; `app/ingestion/parsers/accounts.py`, for any
   institution):
@@ -670,9 +744,11 @@ OFX `INVSTMTRS` in the sandbox or from a PDF/scan's pages in the worker.
     so it is held, never imported silently. Only last four digits are kept.
 - **Reconciliation** (`reconcile_investment`, SECURITY.md C12), for every
   source: each position's quantity x price = market value (within half a
-  unit of the price's last printed decimal per unit plus 0.005), the
-  positions add up to the printed holdings total, opening cash + activity =
-  closing cash, holdings + closing cash = the printed account value. Any
+  unit of the price's last printed decimal per unit plus 0.005; a price
+  per 100 of face value divided by 100), the positions add up to the
+  printed holdings total, opening cash + activity = closing cash (no
+  closing cash printed: the account value less the holdings), holdings +
+  closing cash = the printed account value. Any
   failure is `mismatch`; none checkable is `unavailable`. The parser caps
   every row and position of a `mismatch` at 0.5 (`unavailable`: 0.8) and a
   position whose value disagrees at 0.4; values read in an institution's

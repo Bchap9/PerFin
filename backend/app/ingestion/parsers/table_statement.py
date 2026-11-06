@@ -9,6 +9,10 @@ are read the same way:
    (one signed *Amount* column, or *Debit*/*Credit* style columns), with an
    optional running *Balance* and posting date, starts (or, on a later page,
    continues) the table. The header cells' horizontal spans are the columns.
+   A *checks* table (``Check No. | Date Paid | Amount``) is one too: each
+   row is ``CHECK <number>``, money out. A line of header words only that
+   is no table we read (``Date | Balance | Date | Balance``) ends the table
+   above it.
 2. **Rows.** Every later line is split into cells; each cell goes to the
    column it overlaps most. A line with a date in the date column and an
    amount is a transaction; a dated line whose description is an opening or
@@ -104,7 +108,7 @@ from app.ingestion.sandbox.protocol import (
     StatementAccount,
 )
 
-Role = Literal["date", "post_date", "description", "amount", "debit", "credit", "balance"]
+Role = Literal["date", "post_date", "description", "amount", "debit", "credit", "balance", "check"]
 NUMERIC_ROLES: Final = frozenset({"amount", "debit", "credit", "balance"})
 
 #: Normalised header cell text -> column role.
@@ -141,6 +145,12 @@ HEADERS: Final[Mapping[str, Role]] = {
     "paid in": "credit",
     "balance": "balance",
     "running balance": "balance",
+    "date paid": "date",
+    "check no": "check",
+    "check number": "check",
+    "check num": "check",
+    "check": "check",
+    "chk no": "check",
 }
 
 _LAST4: Final = re.compile(
@@ -340,6 +350,8 @@ class _Row:
     bbox: tuple[float, float, float, float]
     section_type: str | None
     memo: list[str] = field(default_factory=list)
+    #: A row of a checks table (``Check No. | Date Paid | Amount``): a check paid.
+    check: bool = False
 
 
 @dataclass
@@ -372,7 +384,7 @@ class TableStatementParser(DocumentParser):
     """Generic: any statement with a recognisable transaction table (module doc)."""
 
     name: ClassVar[str] = "statement_generic"
-    version: ClassVar[str] = "2"
+    version: ClassVar[str] = "3"
     kind: ClassVar[Literal["statement", "payslip"]] = "statement"
     #: The institution's name as accounts know it (account matching).
     display_name: ClassVar[str | None] = None
@@ -444,11 +456,19 @@ class TableStatementParser(DocumentParser):
                 continue
             roles.add(role)
             found.append(Column(role, cell.x0, cell.x1))
-        if not {"date", "description"} <= roles:
+        if "date" not in roles or not roles & {"description", "check"}:
             return None
         if not roles & {"amount", "debit", "credit"}:
             return None
         return sorted(found, key=lambda c: c.x0)
+
+    def _header_like(self, line: ViewLine) -> bool:
+        """Two or more cells, all header words, no amount: a table we do not read."""
+        return (
+            len(line.cells) >= 2
+            and not find_amounts(line.text)
+            and all(normalise(c.text) in self.headers for c in line.cells)
+        )
 
     def has_table(self, view: DocumentView) -> bool:
         return self.lines_have_table(view.lines)
@@ -553,6 +573,9 @@ class TableStatementParser(DocumentParser):
                 found_header = True
                 continue
             norm = line.norm
+            if columns is not None and self._header_like(line):
+                # The header of a table we do not read ("Date | Balance"): ours ends.
+                columns, last = None, None
             if columns is None:
                 self._scan_summary(line, summary)
                 continue
@@ -565,6 +588,10 @@ class TableStatementParser(DocumentParser):
                     pending, section_type = section
                 continue
             description = [c.text for c in cells.get("description", [])]
+            number = " ".join(c.text for c in cells.get("check", [])).strip(" *")
+            is_check = bool(number) and not description
+            if is_check:
+                description = ["CHECK", number]
             desc_norm = normalise(" ".join(description))
             balance = self._amount(cells.get("balance"))
             amount = self._amount(cells.get("amount"))
@@ -600,6 +627,7 @@ class TableStatementParser(DocumentParser):
                 ocr=_min(*(c.conf for c in used)),
                 bbox=line.bbox,
                 section_type=section_type,
+                check=is_check,
             )
             rows.append(last)
         return rows, summary, pending_items, skipped, found_header
@@ -642,6 +670,8 @@ class TableStatementParser(DocumentParser):
         return read_amount(" ".join(c.text for c in cells))
 
     def _signed(self, row: _Row) -> Decimal | None:
+        if row.check and row.amount is not None and row.amount.credit is None:
+            return -abs(row.amount.value)  # a check paid takes money out
         if row.amount is not None:
             value = row.amount
             if value.credit is True:

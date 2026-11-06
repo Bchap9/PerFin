@@ -1,0 +1,429 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+"""Reading brokerage tables: vocabulary, sections, side-by-side tables, holdings rows.
+
+The synthetic Fidelity-layout report (``tests/fixtures/synth_fidelity_report.py``)
+is read to its last row and figure by the institution parser (found by the
+PDF's metadata, or by its footer without it) and by the generic parser
+alike; the readers it needs are tested on hand-built lines. Everything is
+invented.
+"""
+
+from __future__ import annotations
+
+from datetime import date
+from decimal import Decimal
+
+import pytest
+
+from app.ingestion.classify.fingerprints import (
+    compile_fingerprint,
+    match_fingerprint,
+    parse_fingerprint_yaml,
+)
+from app.ingestion.classify.service import classify_extraction
+from app.ingestion.classify.text import DocumentView as ClassifyView
+from app.ingestion.extract.pdf import extract_pdf
+from app.ingestion.parsers.base import Cell, DocumentView, ViewLine
+from app.ingestion.parsers.brokerage import (
+    BrokerageStatementParser,
+    FidelityStatementParser,
+    _Collected,
+    _unmarked,
+    activity_type,
+    reconcile_investment,
+    section_rule,
+    split_header_cell,
+)
+from app.ingestion.parsers.loan_statement import LoanStatementParser
+from app.ingestion.parsers.registry import PARSERS, _fallback, parse_extraction
+from app.ingestion.parsers.text import normalise
+from app.ingestion.sandbox.protocol import (
+    Balance,
+    ExtractOptions,
+    ExtractResult,
+    InvestmentActivity,
+    InvestmentPosition,
+    InvestmentStatement,
+    SecurityRef,
+)
+from tests.fixtures import synth_fidelity_report as fidr
+from tests.fixtures import synth_neutral_report as neutral
+from tests.fixtures.synth_multi_account import cusip
+
+OPTIONS = ExtractOptions(previews=False, ocr=False)
+Row = tuple[date, str, str | None, Decimal | None, Decimal]
+
+
+def _extract(data: bytes) -> ExtractResult:
+    result = extract_pdf(data, OPTIONS, "pdf")
+    assert result.ok, result.error
+    return result
+
+
+def _hinted(result: ExtractResult) -> ExtractResult:
+    """Parsed as the worker does: with the classifier's hint."""
+    found = classify_extraction(result)
+    return parse_extraction(
+        result,
+        threshold=0.85,
+        institution=found.fingerprint.key if found.fingerprint else None,
+        parser_name=found.parser,
+        kind=found.kind,
+        date_order=found.fingerprint.spec.date_order if found.fingerprint else None,
+    )
+
+
+def _activity(statement: InvestmentStatement) -> list[Row]:
+    rows = [
+        (
+            a.trade_date,
+            a.type,
+            (a.security.symbol or a.security.cusip) if a.security else None,
+            a.quantity,
+            a.amount,
+        )
+        for a in statement.activity
+    ]
+    return sorted(rows, key=lambda r: (r[0], r[1], r[2] or "", r[4]))
+
+
+def _positions(statement: InvestmentStatement) -> list[tuple[str, Decimal, Decimal, Decimal]]:
+    out: list[tuple[str, Decimal, Decimal, Decimal]] = []
+    for p in statement.positions:
+        key = p.security.symbol or p.security.cusip
+        assert key is not None
+        assert p.unit_price is not None
+        assert p.market_value is not None
+        out.append((key, p.quantity, p.unit_price, p.market_value))
+    return sorted(out)
+
+
+def _assert_exact(statements: list[InvestmentStatement]) -> None:
+    stmt, _ = fidr.report()
+    assert len(statements) == 3
+    for statement, expected in zip(statements, fidr.expected(stmt), strict=True):
+        assert statement.account.last4 == expected.last4
+        assert (statement.period_start, statement.period_end) == (
+            expected.period_start,
+            expected.period_end,
+        )
+        assert _positions(statement) == expected.positions
+        assert _activity(statement) == expected.activity
+        cash = (
+            statement.cash_opening.amount if statement.cash_opening else None,
+            statement.cash_closing.amount if statement.cash_closing else None,
+        )
+        assert cash == (expected.cash_opening, expected.cash_closing)
+        assert statement.positions_value is not None
+        assert statement.positions_value.amount == expected.positions_value
+        assert statement.total_value is not None
+        assert statement.total_value.amount == expected.total_value
+        check = statement.reconciliation
+        assert check is not None
+        assert check.status == "ok", check
+        if expected.cash_opening is not None:
+            assert check.checks == ["positions", "holdings_total", "cash", "total_value"]
+
+
+# ---------------------------------------------------------------------------
+# The Fidelity-layout report, read to the last figure
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture(scope="module")
+def report() -> ExtractResult:
+    return _extract(fidr.report_pdf())
+
+
+def test_the_report_is_read_exactly_by_the_layouts_parser(report: ExtractResult) -> None:
+    result = _hinted(report)
+    assert result.parse is not None
+    assert result.parse.parser is not None
+    assert result.parse.parser.name == "fidelity_investments_statement"
+    assert result.parse.warnings == []
+    assert result.parse.skipped_lines == 0
+    _assert_exact(result.investments)
+    individual = result.investments[0]
+    # A bond is priced per 100 of face value and keyed by the CUSIP printed under it.
+    bond = next(p for p in individual.positions if p.security.cusip == cusip("94136RAC"))
+    assert bond.price_per_100
+    assert bond.security.symbol is None
+    assert bond.security.asset_class == "bond"
+    assert bond.price_per_unit == Decimal("0.98625")
+    # "unknown" cost basis is unknown, a footnote marker is no part of the figure.
+    by_symbol = {p.security.symbol: p for p in individual.positions}
+    assert by_symbol["ZZMXX"].cost_basis is None
+    assert by_symbol["ZZTRB"].cost_basis == Decimal("8412.36")
+    assert by_symbol["ZZPGL"].unit_price == Decimal("147.85")
+    # A name wrapped onto the next line keeps its (SYMBOL); no sweep among the positions.
+    assert by_symbol["ZZSHR"].security.name == "SAMPLE HEALTH CARE REIT INC COM USD0.01"
+    assert "ZZSWP" not in by_symbol
+    ira = {p.security.symbol: p for p in result.investments[1].positions}
+    assert ira["ZZSMC"].security.isin == "ZZ0000SMC010"
+    assert "ZZCRX" not in ira
+
+
+def test_the_report_is_detected_by_its_metadata_or_its_footer() -> None:
+    stmt, extras = fidr.report()
+    found = classify_extraction(_extract(fidr.report_pdf(stmt, extras)))
+    assert found.fingerprint is not None
+    assert found.fingerprint.key == "fidelity-investments-statement"
+    # Without the metadata no page names "Fidelity Investments" (only a logo
+    # would): the parser still knows its subsidiary in the footer beside the
+    # layout's wording, the classifier no longer matches the layout.
+    bare = _extract(fidr.report_pdf(stmt, extras, institution_metadata=False))
+    assert classify_extraction(bare).fingerprint is None
+    view = DocumentView.from_result(bare)
+    assert FidelityStatementParser().detect(view) == 1.0
+    result = parse_extraction(bare, threshold=0.85)
+    assert result.parse is not None
+    assert result.parse.parser is not None
+    assert result.parse.parser.name == "fidelity_investments_statement"
+    _assert_exact(result.investments)
+
+
+def test_the_generic_parser_reads_the_report_too(report: ExtractResult) -> None:
+    """No knowledge of the layout: the sweep is cash because the figures say so."""
+    outcome = BrokerageStatementParser().parse(DocumentView.from_result(report), threshold=0.85)
+    _assert_exact(outcome.investments)
+
+
+def test_a_name_in_the_metadata_alone_needs_the_layouts_wording() -> None:
+    """A document titled after the institution that is no report of its is not one."""
+    lines = (_line(1, 0, [(40, "INVESTMENT REPORT")]), _line(1, 1, [(40, "Some other text")]))
+    view = DocumentView(
+        lines=lines,
+        source_format="pdf",
+        truncated=False,
+        page_count=1,
+        metadata=("fidelity investments",),
+    )
+    assert FidelityStatementParser().detect(view) == 0.0
+
+
+def test_the_shipped_fingerprint_takes_the_name_from_the_metadata() -> None:
+    spec = parse_fingerprint_yaml(
+        "schema: 1\nkey: example-layout\ninstitution: Example Broker\nkind: statement\n"
+        "parser: brokerage_statement_generic\nversion: 1\n"
+        "match:\n  all:\n    - header: Investment Report\n"
+        "  one_of:\n    - header: Example Broker\n    - metadata: Example Broker\n"
+    )
+    fingerprint = compile_fingerprint(spec)
+    page = ClassifyView(lines=("INVESTMENT REPORT", "Holdings"), header=("INVESTMENT REPORT",))
+    assert match_fingerprint(fingerprint, page) is None
+    titled = ClassifyView(
+        lines=page.lines, header=page.header, metadata=("report | example broker",)
+    )
+    assert match_fingerprint(fingerprint, titled) is not None
+    named = ClassifyView(lines=page.lines, header=("Example Broker", "INVESTMENT REPORT"))
+    assert match_fingerprint(fingerprint, named) is not None
+
+
+# ---------------------------------------------------------------------------
+# Registry fallback
+# ---------------------------------------------------------------------------
+
+
+def test_the_next_best_parser_reads_what_the_chosen_one_could_not() -> None:
+    result = _extract(neutral.report_pdf())
+    view = DocumentView.from_result(result)
+    scores = {p.name: p.detect(view) for p in PARSERS}
+    chosen = LoanStatementParser()
+    empty = chosen.parse(view, threshold=0.85)
+    assert empty.empty
+    used, outcome = _fallback(view, scores, chosen, empty, 0.85, None)
+    assert used.name == "brokerage_statement_generic"
+    assert not outcome.empty
+    assert outcome.warnings[0] == "parser_fallback:loan_statement_generic"
+
+
+# ---------------------------------------------------------------------------
+# Readers
+# ---------------------------------------------------------------------------
+
+
+def _line(page: int, index: int, cells: list[tuple[float, str]]) -> ViewLine:
+    built = tuple(Cell(text, x, 0.0, x + 5.0 * len(text), 9.0) for x, text in cells)
+    return ViewLine(
+        page=page, index=index, cells=built, text=" ".join(c.text for c in built), height=9.0
+    )
+
+
+def test_a_header_cell_of_several_headers_is_split() -> None:
+    cell = Cell("Transaction Description Quantity", 100.0, 0.0, 260.0, 9.0)
+    assert [c.text for c in split_header_cell(cell)] == ["Transaction Description", "Quantity"]
+    merged = Cell("Check Num. Post Date Code Description", 40.0, 0.0, 225.0, 9.0)
+    assert [c.text for c in split_header_cell(merged)] == [
+        "Check Num.",
+        "Post Date",
+        "Code",
+        "Description",
+    ]
+    known = Cell("Cost Basis", 0.0, 0.0, 50.0, 9.0)
+    assert split_header_cell(known) == (known,)
+    unknown = Cell("Weird Words Here", 0.0, 0.0, 80.0, 9.0)
+    assert split_header_cell(unknown) == (unknown,)
+
+
+def test_side_by_side_tables_are_two_tables() -> None:
+    header: list[tuple[float, str]] = [
+        (40, "Date"),
+        (70, "Description"),
+        (250, "Amount"),
+        (312, "Date"),
+        (342, "Description"),
+        (520, "Amount"),
+    ]
+    rows = [
+        _line(1, 0, [(40, "Deposits")]),
+        _line(1, 1, header),
+        _line(1, 2, [(40, "6/1"), (70, "Wire in"), (250, "$100.00")]),
+        _line(1, 2, [(312, "6/9"), (342, "Wire out"), (520, "-40.00")]),
+    ]
+    joined = ViewLine(
+        page=1,
+        index=2,
+        cells=rows[2].cells + rows[3].cells,
+        text=f"{rows[2].text} {rows[3].text}",
+        height=9.0,
+    )
+    total = _line(1, 3, [(40, "6/2"), (70, "Deposit received"), (250, "5.00")])
+    total = ViewLine(
+        page=1,
+        index=3,
+        cells=total.cells + _line(1, 3, [(342, "Total Deposits"), (520, "$105.00")]).cells,
+        text=f"{total.text} Total Deposits $105.00",
+        height=9.0,
+    )
+    parser = FidelityStatementParser()
+    header_found = parser._header_at([rows[1]], 0)
+    assert header_found is not None
+    assert header_found.parts is not None
+    assert len(header_found.parts) == 2
+    collected = _Collected()
+    parser._read([rows[0], rows[1], joined, total], collected)
+    period = (date(2026, 6, 1), date(2026, 6, 30))
+    activity, _ = parser._activities(collected, ("md",), True, period, {})
+    # Each half's own date; the right half's total is no row; a row the
+    # section types takes its direction from its sign.
+    assert [(a.trade_date, a.type, a.amount) for a in activity] == [
+        (date(2026, 6, 1), "deposit", Decimal("100.00")),
+        (date(2026, 6, 9), "withdrawal", Decimal("-40.00")),
+        (date(2026, 6, 2), "deposit", Decimal("5.00")),
+    ]
+
+
+@pytest.mark.parametrize(
+    ("heading", "kind"),
+    [
+        ("Securities Bought & Sold", "plain"),
+        ("Trades Pending Settlement", "skip"),
+        ("Securities Transferred In", "transfer_in"),
+        ("Securities Transferred Out", "transfer_out"),
+        ("Dividends, Interest & Other Income", "income"),
+        ("Core Account Cash Flow", "skip"),
+        ("Daily Additions and Subtractions", "skip"),
+        ("Deposits", "deposit"),
+        ("Withdrawals", "withdrawal"),
+        ("Checking Activity", "card"),
+        ("Debit Card Activity", "card"),
+        ("Bill Payments", "card"),
+        ("Taxes Withheld", "fee"),
+        ("Fees and Charges", "fee"),
+        ("Income Summary", "skip"),
+        ("Cash Activity", "cash"),
+        ("Mutual Funds", None),
+    ],
+)
+def test_activity_sections(heading: str, kind: str | None) -> None:
+    assert section_rule(normalise(heading)) == kind
+
+
+@pytest.mark.parametrize(
+    ("text", "kind"),
+    [
+        ("Muni exempt interest", "interest"),
+        ("Advisor Fee", "fee"),
+        ("Federal tax paid", "fee"),
+        ("State tax paid", "fee"),
+        ("Trans. from account 418-330642", "deposit"),
+        ("Trans. to account X81-004410", "withdrawal"),
+        ("Transfer from Checking XXXX-4821", "deposit"),
+    ],
+)
+def test_more_action_words(text: str, kind: str) -> None:
+    assert activity_type(text) == kind
+
+
+def test_wire_transfers_take_their_direction_from_the_amount() -> None:
+    assert activity_type("Wire transfer from bank", cash_sign=1) == "deposit"
+    assert activity_type("Wire transfer to bank", cash_sign=-1) == "withdrawal"
+
+
+@pytest.mark.parametrize(
+    ("text", "plain"),
+    [
+        ("147.85A", "147.85"),
+        ("$8,412.36 c", "$8,412.36"),
+        ("$6,630.82t", "$6,630.82"),
+        ("$12,210.00 B", "$12,210.00"),
+        ("125.00 CR", "125.00 CR"),
+        ("unknown", "unknown"),
+        ("N/A", "N/A"),
+    ],
+)
+def test_footnote_markers_are_dropped_from_figures(text: str, plain: str) -> None:
+    assert _unmarked(text) == plain
+
+
+@pytest.mark.parametrize(
+    ("raw", "symbol"),
+    [
+        ("APPLE INC (AAPL)", "AAPL"),
+        ("SAMPLE CORP NT CV", None),
+        ("EXAMPLE CITY INDL DEV AGY REV", None),
+        ("IRA NOT COVERED BY SIPC (QPIKQ) q", "QPIKQ"),
+        ("NH Portfolio 2015 (Fidelity Funds)", None),
+    ],
+)
+def test_a_holdings_symbol_is_only_the_ticker_in_parentheses(raw: str, symbol: str | None) -> None:
+    assert BrokerageStatementParser._name_symbol(raw)[0] == symbol
+
+
+def _statement(**fields: object) -> InvestmentStatement:
+    return InvestmentStatement.model_validate({"source_format": "pdf", **fields})
+
+
+def test_a_bond_priced_per_100_reconciles() -> None:
+    bond = InvestmentPosition(
+        security=SecurityRef(cusip=cusip("94136RAC")),
+        quantity=Decimal("8000"),
+        unit_price=Decimal("98.625"),
+        market_value=Decimal("7890.00"),
+    )
+    assert reconcile_investment(_statement(positions=[bond])).status == "mismatch"
+    per_100 = bond.model_copy(update={"price_per_100": True})
+    assert reconcile_investment(_statement(positions=[per_100])).status == "ok"
+
+
+def test_cash_without_a_closing_figure_is_the_account_value_less_the_holdings() -> None:
+    position = InvestmentPosition(
+        security=SecurityRef(symbol="ZZAA"), quantity=Decimal(10), market_value=Decimal("100.00")
+    )
+    deposit = InvestmentActivity(type="deposit", trade_date=date(2026, 1, 5), amount=Decimal(50))
+    fields = {
+        "positions": [position],
+        "activity": [deposit],
+        "cash_opening": Balance(amount=Decimal("25.00")),
+        "total_value": Balance(amount=Decimal("175.00")),
+    }
+    check = reconcile_investment(_statement(**fields))
+    assert check.status == "ok"
+    assert "cash" in check.checks
+    assert "total_value" not in check.checks  # the closing cash came from it
+    assert check.cash_closing == Decimal("75.00")
+    wrong = reconcile_investment(
+        _statement(**{**fields, "total_value": Balance(amount=Decimal(170))})
+    )
+    assert wrong.status == "mismatch"
+    assert wrong.failed == ["cash"]

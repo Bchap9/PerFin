@@ -7362,6 +7362,8 @@ export interface components {
              * @default 0
              */
             min_any: number;
+            /** One Of */
+            one_of?: components["schemas"]["Rule"][];
         };
         /** MatrixConfigIn */
         MatrixConfigIn: {
@@ -8590,6 +8592,8 @@ export interface components {
              * @default true
              */
             ignore_case: boolean;
+            /** Metadata */
+            metadata?: string | null;
             /** Regex */
             regex?: string | null;
             /**

@@ -12921,6 +12921,14 @@
             "minimum": 0.0,
             "title": "Min Any",
             "type": "integer"
+          },
+          "one_of": {
+            "items": {
+              "$ref": "#/components/schemas/Rule"
+            },
+            "maxItems": 32,
+            "title": "One Of",
+            "type": "array"
           }
         },
         "required": [
@@ -16296,6 +16304,19 @@
             "default": true,
             "title": "Ignore Case",
             "type": "boolean"
+          },
+          "metadata": {
+            "anyOf": [
+              {
+                "maxLength": 200,
+                "minLength": 2,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Metadata"
           },
           "regex": {
             "anyOf": [

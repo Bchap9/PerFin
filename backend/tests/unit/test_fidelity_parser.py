@@ -336,12 +336,9 @@ def test_generic_parser_splits_an_unknown_brokers_accounts() -> None:
             account.core_closing,
         )
         assert _positions(statement) == sorted([*fid.expected_positions(account), core])
-        # Rows of the tables it can read (those naming a security).
-        read = [
-            (a.day, a.type, a.symbol, a.quantity, a.amount)
-            for a in account.activity
-            if a.table in ("trades", "income", "other_in")
-        ]
+        # Every activity table: those naming a security and, in a brokerage
+        # account, its cash tables (deposits, withdrawals, fees) too.
+        read = [(a.day, a.type, a.symbol, a.quantity, a.amount) for a in account.activity]
         assert _activity(statement) == sorted(read, key=lambda r: (r[0], r[1], r[2] or "", r[4]))
         check = statement.reconciliation
         assert check is not None

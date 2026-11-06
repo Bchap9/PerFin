@@ -373,6 +373,9 @@ class InvestmentPosition(_Strict):
     #: Units held (negative for a short position).
     quantity: Quantity
     unit_price: Quantity | None = None
+    #: ``unit_price`` is quoted per 100 of face value (a bond: ``98.625`` is
+    #: 98.625% of par), so the market value is quantity x price / 100.
+    price_per_100: bool = False
     market_value: Amount | None = None
     cost_basis: Amount | None = None
     price_as_of: date | None = None
@@ -381,6 +384,13 @@ class InvestmentPosition(_Strict):
     low_confidence: list[Code] = Field(default_factory=list, max_length=20)
     page: int | None = Field(default=None, ge=1, le=MAX_PAGES_CEILING)
     bbox: BBox | None = None
+
+    @property
+    def price_per_unit(self) -> Decimal | None:
+        """The price of one unit (``unit_price``, divided by 100 when quoted per 100)."""
+        if self.unit_price is None:
+            return None
+        return self.unit_price / 100 if self.price_per_100 else self.unit_price
 
 
 class InvestmentActivity(_Strict):
