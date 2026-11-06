@@ -38,7 +38,7 @@ What remains (details in docs/ROADMAP.md):
 
 Nothing yet.
 
-## [1.0.0-rc.4] - 2026-11-05
+## [1.0.0-rc.4] - 2026-11-06
 
 Fourth release candidate of 1.0.0. Documents can be deleted from the app,
 either the file alone or the file with everything imported from it. No
