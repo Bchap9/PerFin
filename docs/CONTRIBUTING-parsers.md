@@ -179,6 +179,9 @@ is not suggested well:
 - [ ] Figures are returned as printed, never adjusted to make a statement
       add up: a statement that does not reconcile waits in review, where
       the person can "Import as read" (rows as printed, no balance
-      snapshot) once they have seen what is off.
+      snapshot) once they have seen what is off. That answer is bound to
+      the statement exactly as your parser returned it (every figure, the
+      parser's name and version): when a new version reads it
+      differently, the person is asked again.
 - [ ] `uv run ruff check`, `ruff format --check`, `mypy`, `bandit` and
       `pytest -n auto` pass.

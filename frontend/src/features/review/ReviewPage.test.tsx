@@ -21,6 +21,9 @@ import {
   type ReviewItem,
 } from "./api";
 
+/** A held statement's key (``statement_key``): its digest, in letters. */
+const STATEMENT_KEY = "k".repeat(64);
+
 function item(
   id: string,
   kind: ReviewItem["kind"],
@@ -201,6 +204,7 @@ describe("review queue", () => {
       reason: "investment_reconciliation_failed",
       account_id: "a-1",
       statement: 1,
+      statement_key: STATEMENT_KEY,
       currency: "USD",
       failed: ["cash"],
       differences: [
@@ -233,6 +237,9 @@ describe("review queue", () => {
       await screen.findByText(/a difference of \$0\.30/),
     ).toBeInTheDocument();
     expect(screen.getByText(/closing cash of \$412\.15/)).toBeInTheDocument();
+    expect(
+      screen.getByText(/because its totals do not add up\./),
+    ).toBeInTheDocument();
     // Nothing of it is in the ledger: no rows to confirm.
     expect(
       screen.queryByRole("button", { name: "Confirm as read" }),
@@ -261,6 +268,7 @@ describe("review queue", () => {
         {
           reason: "investment_low_confidence",
           account_id: "a-1",
+          statement_key: STATEMENT_KEY,
           fields: ["reconciliation", "trade_date"],
         },
         { reason: "investment_low_confidence" },
@@ -281,6 +289,7 @@ describe("review queue", () => {
         {
           reason: "investment_low_confidence",
           account_id: "a-1",
+          statement_key: STATEMENT_KEY,
           fields: ["reconciliation"],
         },
         { reason: "investment_low_confidence" },
@@ -293,6 +302,35 @@ describe("review queue", () => {
     expect(
       screen.getByRole("button", { name: "Import as read" }),
     ).toBeInTheDocument();
+    // Nothing failed to add up: its totals could not be checked.
+    expect(
+      screen.getByText(/because its totals could not be checked\./),
+    ).toBeInTheDocument();
+    expect(screen.queryByText(/do not add up/)).not.toBeInTheDocument();
+  });
+
+  it("offers no 'import as read' on an item that names no statement", async () => {
+    // Raised before items named their statement: reprocessing raises a current one.
+    reviewApi([
+      item(
+        "r-1",
+        "low_confidence_field",
+        {
+          reason: "investment_reconciliation_failed",
+          account_id: "a-1",
+          failed: ["cash"],
+        },
+        { reason: "investment_reconciliation_failed" },
+      ),
+    ]);
+    renderApp("/review");
+    expect(
+      await screen.findByText("Statement does not add up"),
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: "Import as read" }),
+    ).not.toBeInTheDocument();
+    expect(screen.queryByText(/“Import as read”/)).not.toBeInTheDocument();
   });
 
   it("offers 'same statement' and 'import anyway' for an overlapping statement", async () => {

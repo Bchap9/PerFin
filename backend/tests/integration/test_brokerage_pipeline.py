@@ -20,11 +20,13 @@ from ``tests/fixtures/synth_brokerage.py`` (invented broker and instruments).
 * An older statement after a newer one is held (out of order).
 * A held statement answered "Import as read" imports as printed, without a
   balance snapshot, audited; the answer and "import anyway" carry into each
-  other's re-runs.
+  other's re-runs and into every later re-run, follow their statement
+  wherever it moves and cover no other statement.
 """
 
 from __future__ import annotations
 
+import copy
 import uuid
 from collections.abc import Callable, Iterator
 from dataclasses import dataclass, field
@@ -38,6 +40,7 @@ from sqlalchemy import select
 
 from app.auth.models import GrantLevel, HouseholdRole
 from app.auth.principal import Principal, apply_rls_context
+from app.core import clock
 from app.core.crypto import Keyring
 from app.core.errors import ProblemError
 from app.core.settings import Settings
@@ -67,8 +70,13 @@ from app.domain.investments.models import (
     Security,
 )
 from app.domain.investments.statement_import import OPENING_MEMO
+from app.domain.investments.statement_import import RECONCILIATION_FAILED as RECONCILIATION
 from app.domain.review import service as review_service
-from app.domain.review.schemas import ResolveDuplicate, ResolveLowConfidence
+from app.domain.review.schemas import (
+    ResolveDuplicate,
+    ResolveLowConfidence,
+    ResolveUnknownAccount,
+)
 from app.domain.transactions.models import Transaction
 from app.ingestion.intake.upload import receive_upload
 from app.ingestion.sandbox.protocol import ExtractResult
@@ -773,14 +781,14 @@ def test_held_statement_imported_as_read(env: Env, tamper: synth.Tamper, check: 
     assert env.snapshots(account) == []
     (record,) = env.query(select(StatementRecord).where(StatementRecord.account_id == account.id))
     assert (record.document_id, record.outcome) == (document_id, "imported")
-    # The acceptance is in the audit log: the answer, the job's request, the import.
+    # The acceptance is in the audit log: the answer (for this statement), the
+    # re-run it queued (a plain one: the answer travels with the statement), the import.
     (resolved,) = _audits(env, "review.resolve")
     assert resolved["resolution"]["import_as_read"] is True
+    assert resolved["resolution"]["statement_key"] == item.payload["statement_key"]
     (requested,) = _audits(env, "document.import_requested")
-    assert requested["accept_as_read"] == [str(account.id)]
-    assert requested["assignments"] == [
-        {"target": "investment", "index": 0, "account_id": str(account.id)}
-    ]
+    assert requested["assignments"] == []
+    assert "accept_as_read" not in requested
     (imported,) = _audits(env, "investment.import")
     assert imported["accepted_as_read"] is True
     assert imported["failed"] == item.payload["failed"]
@@ -829,20 +837,219 @@ def test_accepted_and_overlapping_answers_carry_into_each_other(env: Env) -> Non
     _resolve_overlap(env, overlap, "reject")
     assert run_jobs(env.factories, env.household_id, APPLY_MAPPING_JOB_TYPE, done=env.done)
     item = _held_item(env, document_id)
+    # Both items are about the one statement.
+    assert item.payload["statement_key"] == overlap.payload["statement_key"]
 
     resolution = _import_as_read(env, item)
-    (requested, *_) = reversed(_audits(env, "document.import_requested"))
-    assert requested["allow_overlap"] == [str(account.id)]
-    assert requested["accept_as_read"] == [str(account.id)]
-    assert requested["assignments"] == [
-        {"target": "investment", "index": 0, "account_id": str(account.id)}
-    ]
     assert (resolution["target"], resolution["statement"]) == ("investment", 0)
+    assert resolution["statement_key"] == item.payload["statement_key"]
     assert env.document(document_id).status is DocumentStatus.PROCESSED
     assert env.open_reviews(document_id) == []
     # The rows were already recorded: nothing doubled; the OFX's snapshot stays alone.
     assert env.activity(account) == before
     assert [(s.as_of_date, s.balance) for s in env.snapshots(account)] == snapshots
+
+
+def _rerun(env: Env, document_id: uuid.UUID, data: ApplyMapping | None = None) -> None:
+    """A plain ``apply-mapping`` re-run, as the API or the Accounts dialog starts one."""
+    with env.factories.transaction() as db:
+        apply_rls_context(db, env.principal())
+        request_apply(db, env.principal(), document_id, data or ApplyMapping(), request=None)
+    assert run_jobs(env.factories, env.household_id, APPLY_MAPPING_JOB_TYPE, done=env.done)
+
+
+def _edit_extraction(env: Env, document_id: uuid.UUID, change: Callable[[Any], None]) -> None:
+    """Change the stored extraction as a reprocess that reads it differently would."""
+    with env.factories.transaction() as db:
+        set_context(db, env.household_id)
+        document = db.get(Document, document_id)
+        assert document is not None
+        assert document.extraction is not None
+        extraction = copy.deepcopy(document.extraction)
+        change(extraction["investments"])
+        document.extraction = extraction
+
+
+def _investment_imports(env: Env) -> list[tuple[str, bool, int]]:
+    return [
+        (i["account_id"], i.get("accepted_as_read") is True, i["positions"])
+        for i in _audits(env, "investment.import")
+    ]
+
+
+def test_an_accepted_statement_stays_imported_on_any_rerun(env: Env) -> None:
+    """Re-runs the answer did not start (another item's answer, a plain re-run) keep it."""
+    stmt = fid.fidelity_statement(seed=94)
+    accounts = _fid_accounts(env, stmt, only=(0, 1))
+    roth = accounts[1]
+    assert roth is not None
+    document_id = env.ingest(
+        fid.fidelity_pdf(stmt, tamper="total", tamper_account=1), "investment-report.pdf"
+    )
+    _import_as_read(env, _held_item(env, document_id))
+    assert env.reasons(document_id) == {"account_not_found"}
+    written = [t.id for t in env.txns(roth)]
+    assert written
+    # The third statement's account is answered the usual way: its re-run
+    # carries the earlier answer, so the Roth statement is not held again.
+    (unknown,) = env.open_reviews(document_id)
+    assert unknown.payload["statement"] == 2
+    third = env.ledger.account(
+        env.household_id, type=AccountType.RETIREMENT, currency="USD", name="Third"
+    )
+    with env.factories.transaction() as db:
+        apply_rls_context(db, env.principal())
+        review_service.resolve(
+            db,
+            env.principal(),
+            unknown.id,
+            ResolveUnknownAccount(kind="unknown_account", account_id=third.id),
+            request=None,
+        )
+    assert run_jobs(env.factories, env.household_id, APPLY_MAPPING_JOB_TYPE, done=env.done)
+    assert env.open_reviews(document_id) == []
+    assert env.document(document_id).status is DocumentStatus.PROCESSED
+    assert env.activity(third) == _fid_expected(stmt.accounts[2])
+    # A plain re-run (the API, the Accounts dialog) changes nothing either.
+    _rerun(env, document_id, ApplyMapping(account_id=third.id, statement=2))
+    assert env.open_reviews(document_id) == []
+    assert [t.id for t in env.txns(roth)] == written
+    assert env.snapshots(roth) == []
+
+
+def test_an_answer_follows_its_statement_not_its_place(env: Env) -> None:
+    """A reprocess that reorders or re-reads the statements never moves an answer."""
+    stmt = fid.fidelity_statement(seed=94)
+    accounts = _fid_accounts(env, stmt, only=(0, 1))
+    roth = accounts[1]
+    assert roth is not None
+    document_id = env.ingest(
+        fid.fidelity_pdf(stmt, tamper="total", tamper_account=1), "investment-report.pdf"
+    )
+    _import_as_read(env, _held_item(env, document_id))
+    written = [t.id for t in env.txns(roth)]
+
+    # The statements read in another order (the Roth's now third), open items
+    # dismissed as a reprocess does: the answer follows the Roth statement and
+    # the statement now at its old place is not put on the Roth account.
+    def swap(investments: Any) -> None:
+        investments[1], investments[2] = investments[2], investments[1]
+
+    _edit_extraction(env, document_id, swap)
+    with env.factories.transaction() as db:
+        set_context(db, env.household_id)
+        for open_item in db.execute(
+            select(ReviewItem).where(
+                ReviewItem.document_id == document_id, ReviewItem.state == ReviewItemState.OPEN
+            )
+        ).scalars():
+            open_item.state = ReviewItemState.DISMISSED
+            open_item.resolved_at = clock.utcnow()
+    _rerun(env, document_id)
+    (unknown,) = env.open_reviews(document_id)
+    assert (unknown.payload["reason"], unknown.payload["statement"]) == ("account_not_found", 1)
+    assert [t.id for t in env.txns(roth)] == written
+    assert {a for a, _, _ in _investment_imports(env)} == {
+        str(a.id) for a in accounts if a is not None
+    }
+
+    # The Roth statement read differently: no answer covers it, so it is held again.
+    def reread(investments: Any) -> None:
+        investments[2]["reconciliation"]["reported_total_value"] = "1.00"
+
+    _edit_extraction(env, document_id, reread)
+    _rerun(env, document_id)
+    item = _held_item(env, document_id)
+    assert item.payload["statement"] == 2
+    assert item.payload["account_id"] == str(roth.id)
+    imports = len(_audits(env, "investment.import"))
+    _import_as_read(env, item)
+    assert env.reasons(document_id) == {"account_not_found"}
+    # Only the re-read Roth statement was imported on that answer, into the Roth.
+    assert _investment_imports(env)[imports:] == [
+        (str(accounts[0].id), False, len(stmt.accounts[0].positions)),  # type: ignore[union-attr]
+        (str(roth.id), True, len(stmt.accounts[1].positions)),
+    ]
+    assert [t.id for t in env.txns(roth)] == written
+
+
+def test_an_answer_covers_only_its_statement(env: Env) -> None:
+    """Another statement of the same account that does not add up stays held."""
+    stmt = fid.fidelity_statement(seed=94)
+    accounts = _fid_accounts(env, stmt, only=(0, 1))
+    roth = accounts[1]
+    assert roth is not None
+    document_id = env.ingest(
+        fid.fidelity_pdf(stmt, tamper="total", tamper_account=1), "investment-report.pdf"
+    )
+
+    # The third statement made a second, failing statement of the Roth account.
+    def second_roth(investments: Any) -> None:
+        investments[2]["account"] = copy.deepcopy(investments[1]["account"])
+        investments[2]["reconciliation"].update(
+            status="mismatch", failed=["total_value"], reported_total_value="1.00"
+        )
+
+    _edit_extraction(env, document_id, second_roth)
+    _rerun(env, document_id)
+    held = sorted(
+        (r for r in env.open_reviews(document_id) if r.payload.get("reason") == RECONCILIATION),
+        key=lambda r: r.payload["statement"],
+    )
+    assert [(r.payload["statement"], r.payload["account_id"]) for r in held] == [
+        (1, str(roth.id)),
+        (2, str(roth.id)),
+    ]
+    assert held[0].payload["statement_key"] != held[1].payload["statement_key"]
+    imports = len(_audits(env, "investment.import"))
+
+    _import_as_read(env, held[0])
+    accepted = [entry for entry in _investment_imports(env)[imports:] if entry[1]]
+    assert accepted == [(str(roth.id), True, len(stmt.accounts[1].positions))]
+    (still,) = [
+        r for r in env.open_reviews(document_id) if r.payload.get("reason") == RECONCILIATION
+    ]
+    assert still.payload["statement"] == 2
+    assert env.document(document_id).status is DocumentStatus.NEEDS_REVIEW
+
+    # Its own answer imports it.
+    imports = len(_audits(env, "investment.import"))
+    _import_as_read(env, still)
+    accepted = [entry for entry in _investment_imports(env)[imports:] if entry[1]]
+    assert sorted(accepted) == sorted(
+        [
+            (str(roth.id), True, len(stmt.accounts[1].positions)),
+            (str(roth.id), True, len(stmt.accounts[2].positions)),
+        ]
+    )
+    # Nothing is held for its figures any more (the two statements' holdings
+    # on one day of one account disagree, which the lot engine reports).
+    assert env.reasons(document_id) == {"position_mismatch"}
+
+
+def test_an_item_without_a_statement_key_is_stale(env: Env) -> None:
+    """An item raised before statements had keys names no statement to import."""
+    january, _ = synth.brokerage_series(seed=75)
+    account = env.brokerage(january)
+    document_id = env.ingest(synth.placeholder_pdf(january, tamper="total"), "statement.pdf")
+    item = _held_item(env, document_id)
+    with env.factories.transaction() as db:
+        set_context(db, env.household_id)
+        row = db.get(ReviewItem, item.id)
+        assert row is not None
+        row.payload = {k: v for k, v in row.payload.items() if k != "statement_key"}
+    with env.factories.transaction() as db:
+        apply_rls_context(db, env.principal())
+        with pytest.raises(ProblemError) as refused:
+            review_service.resolve(
+                db,
+                env.principal(),
+                item.id,
+                ResolveLowConfidence(kind="low_confidence_field", import_as_read=True),
+                request=None,
+            )
+    assert (refused.value.status, refused.value.slug) == (409, "review-item-stale")
+    assert env.txns(account) == []
 
 
 def test_import_as_read_is_only_for_statements_held_by_their_figures(env: Env) -> None:

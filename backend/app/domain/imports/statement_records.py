@@ -29,23 +29,27 @@ committed :func:`check_overlap` compares it with the account's records:
   compared like any other pair. Held: nothing of it is written and a
   ``possible_duplicate`` review item (``statement_overlap``) names the
   account, the statement, its period and the other documents with theirs.
-  Resolving it: *confirm* ("same statement") records the statement as
-  ``skipped`` and writes nothing; *reject* ("import anyway") re-runs the
-  import with the account in ``allow_overlap``.
+  The item names the statement's key
+  (:func:`app.domain.imports.statement_answers.statement_key`). Resolving
+  it: *confirm* ("same statement") records the statement as ``skipped``
+  and writes nothing; *reject* ("import anyway") re-runs the import, and
+  every later import of the document imports that statement (that key) on
+  that account although it overlaps (``statement_answers``).
 * A document that already has a record for the account is never held
   again: a re-run (``apply-mapping``, reprocess) of an imported statement
   goes on (the row hashes keep it idempotent) and a ``skipped`` one stays
-  skipped, silently, unless the re-run names the account in
-  ``allow_overlap`` (``apply-mapping``): that imports it, so a "same
-  statement" answer can be taken back.
+  skipped, silently, unless the statement was answered "import anyway" on
+  the account or a re-run names the account in ``allow_overlap``
+  (``apply-mapping``): that imports it, so a "same statement" answer can be
+  taken back.
 
-Payloads and audit rows carry ids, dates and counts only.
+Payloads and audit rows carry ids, dates, counts and the statement key (a
+digest) only.
 """
 
 from __future__ import annotations
 
-import uuid
-from collections.abc import Callable, Collection, Mapping
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from datetime import date
 from decimal import Decimal
@@ -223,17 +227,20 @@ def check_overlap(
     facts: StatementFacts,
     *,
     index: int | None,
-    allowed: Collection[uuid.UUID],
+    key: str | None,
+    allow: bool,
     review: Review,
 ) -> Literal["import", "held", "skipped"]:
     """Whether to commit the statement (module doc); ``held`` raised a review item.
 
-    ``allowed`` are the accounts a person said to import anyway.
+    ``key`` is the statement's key (``statement_answers``) and ``allow``
+    whether the person said to import this statement into this account
+    anyway (an answer, or ``allow_overlap`` on the re-run).
     """
     period = facts.period
     if period is None or not facts.stated:
         return "import"
-    if account.id in allowed:
+    if allow:
         # "Import anyway", also after an earlier "same statement".
         return "import"
     start, end = period
@@ -260,6 +267,7 @@ def check_overlap(
             "reason": REASON,
             "account_id": str(account.id),
             "statement": index,
+            "statement_key": key,
             "investment": facts.kind == "investment",
             "source_format": facts.source_format,
             "period_start": start.isoformat(),

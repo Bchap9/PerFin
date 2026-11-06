@@ -4393,21 +4393,17 @@ export interface components {
          *     no account matched. ``statement`` (with ``account_id``) does the same for
          *     the brokerage statements of a document (an investment ``unknown_account``
          *     item's ``statement``: an activity export's account, a PDF's).
-         *     ``allow_overlap`` names accounts whose statements are imported although
-         *     their period overlaps a statement already imported from another
-         *     document (a ``statement_overlap`` item answered "import anyway"; each
-         *     must be editable). It also takes back a "same statement" answer: a
-         *     statement recorded as skipped is imported. ``accept_as_read`` names
-         *     accounts whose brokerage statements are imported as read although their
-         *     figures do not add up or could not be checked (an
-         *     ``investment_reconciliation_failed`` / ``investment_low_confidence``
-         *     item answered "Import as read"; each must be editable): no balance
-         *     snapshot is written from them, and rows with any other doubt are still
-         *     held (``app.domain.investments.statement_import``, step 3).
+         *     ``allow_overlap`` names accounts whose statements this run imports
+         *     although their period overlaps a statement already imported from
+         *     another document (each must be editable); it also takes back a "same
+         *     statement" answer: a statement recorded as skipped is imported. Every
+         *     re-run also carries the document's "import anyway" and "import as read"
+         *     answers from the review queue, each for the one statement it was given
+         *     about (``app.domain.imports.statement_answers``). A statement whose
+         *     figures do not add up is imported as read only on such an answer, never
+         *     by naming its account here.
          */
         ApplyMapping: {
-            /** Accept As Read */
-            accept_as_read?: string[];
             /** Account Id */
             account_id?: string | null;
             /** Allow Overlap */

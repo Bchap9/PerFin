@@ -858,26 +858,36 @@ OFX `INVSTMTRS` in the sandbox or from a PDF/scan's pages in the worker.
   threshold, writes **nothing** (investment rows have no pending state) and
   raises `low_confidence_field` `investment_reconciliation_failed` (checks,
   failed checks, mismatched positions, cash and totals, the statement's
-  index, the account's currency and `differences`: per failed check
+  index and key (`statement_key`), the account's currency and
+  `differences`: per failed check
   `printed`, `computed` and `difference` = computed - printed, `count` for
   `positions`) or `investment_low_confidence`. Real statements do not
   always add up on their own (rounding, items the issuer leaves out), so
   the review queue offers **Import as read** for an
   `investment_reconciliation_failed` item, and for an
   `investment_low_confidence` item whose only doubt is `reconciliation` (a
-  document statement with nothing to check against): the stored
-  extraction is imported again (`apply-mapping`) with the item's statement
-  on the item's account and that account in `accept_as_read`. The
-  statement is then imported as printed (activity, opening positions,
+  document statement with nothing to check against). The answer is for
+  that statement only: its key is a digest of the statement exactly as
+  read (`app/domain/imports/statement_answers.py`), the resolution records
+  it with the item's account, and every import of the document from then
+  on (the `apply-mapping` re-run the answer queues, any other re-run
+  whoever starts it, and the pipeline when the document is processed
+  again) puts the statement on that account wherever it now sits in the
+  document and imports it there as read. Another statement, even of the
+  same account, and the same statement read differently (a reprocess, a
+  lesson, a parser change) are checked on their own figures and held with
+  their own items. Items raised before statements had keys offer no
+  "Import as read" (`409 review-item-stale`); reprocessing raises current
+  ones. The statement is then imported as printed (activity, opening positions,
   prices, cash rows, its statement record) but writes **no balance
   snapshot**: the account's value is never taken from totals that did not
   add up. Any other doubt (a guessed date, an unread figure, a date before
   1900) still holds it. The answer is recorded in the item's resolution
-  (`import_as_read`, account, statement, failed checks, `snapshot: false`)
-  and audited (`review.resolve`, `document.import_requested` with
-  `accept_as_read`, `investment.import` with `accepted_as_read`); a later
-  "Import anyway" on the same document keeps it, as "Import as read" keeps
-  an earlier "Import anyway". A statement with any date before
+  (`import_as_read`, account, statement, `statement_key`, failed checks,
+  `snapshot: false`) and audited (`review.resolve`, `investment.import`
+  with `accepted_as_read`); a later "Import anyway" about the same
+  statement keeps it, as "Import as read" keeps an earlier "Import
+  anyway". A statement with any date before
   1900-01-01 is held the same way (`investment_date_out_of_range`,
   SECURITY.md F8); OFX with nothing to check is imported like
   an OFX bank statement. Otherwise: securities by CUSIP, ISIN, then symbol,
@@ -1104,13 +1114,15 @@ reconciliation, per-field confidence).
   shares at least half of the shorter period with an imported, stated
   record of the same account and kind (bank or brokerage) from **another**
   document is held: nothing of it is written and a `possible_duplicate`
-  item (`statement_overlap`: `account_id`, `statement` index, `investment`,
+  item (`statement_overlap`: `account_id`, `statement` index and
+  `statement_key`, `investment`,
   `period_start`/`period_end`, `other_document_id` with its
   `other_period_start`/`other_period_end`, `others`) asks. *Confirm*
   ("Same statement — skip") records it as `skipped`; *reject* ("Import
-  anyway") re-runs the import with the account in `allow_overlap` (the
-  same path as "Import as read", carrying the document's earlier answers
-  of both kinds), and the row hashes still skip rows already recorded. Statements that only share
+  anyway") records the answer for that statement and account and re-runs
+  the import (the same path as "Import as read": the answer lasts for that
+  statement on every later import and covers no other), and the row hashes
+  still skip rows already recorded. Statements that only share
   their edges (one closing on the 31st, the next opening on the 31st) and
   overlapping CSV exports are left to the row hashes. Two OFX/QFX files are
   compared by their declared windows: the same `DTSTART`/`DTEND` is the same
@@ -1119,8 +1131,8 @@ reconciliation, per-field confidence).
   statement is compared like any other pair. A document that already has a
   record for the account is never held again, so `apply-mapping` re-runs
   and reprocessing stay idempotent, and a skipped statement stays skipped
-  unless `apply-mapping` names its account in `allow_overlap`, which
-  imports it (a "same statement" answer taken back).
+  unless `apply-mapping` names its account in `allow_overlap` (that run
+  only), which imports it (a "same statement" answer taken back).
 - Transfer pairing runs across accounts.
 - Receipt -> transaction linking: match on amount, date within +/- 3 days,
   merchant alias. Confident match links the document; otherwise a review item

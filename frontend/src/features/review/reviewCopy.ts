@@ -7,6 +7,7 @@
 import { formatDate } from "../../lib/dates";
 import { formatDecimal, formatMoney } from "../../lib/money";
 import {
+  canImportAsRead,
   payloadDifferences,
   payloadIds,
   payloadNumber,
@@ -108,6 +109,11 @@ export function differenceTexts(item: ReviewItem): string[] {
 
 const AS_READ_STEP =
   "“Import as read” if the statement itself is off (rounding, items it leaves out): its trades, holdings and prices are imported as printed, but no account value is recorded from this statement.";
+
+/** The "import as read" step, when the item offers it (``canImportAsRead``). */
+function asReadSteps(item: ReviewItem, step: string): string[] {
+  return canImportAsRead(item) ? [step] : [];
+}
 
 const ACCOUNT_STEPS = [
   "Choose the account below and import.",
@@ -499,7 +505,10 @@ const COPY: Readonly<Record<string, Copy>> = {
         why: "PerFin checks every statement's rows against its printed totals before importing it.",
         steps: [
           "Compare what was read with the statement (“Show document”).",
-          "“Import as read” imports its trades, holdings and prices as printed; no account value is recorded from this statement.",
+          ...asReadSteps(
+            item,
+            "“Import as read” imports its trades, holdings and prices as printed; no account value is recorded from this statement.",
+          ),
           "“Teach PerFin” to show where its totals are.",
           "“Dismiss” to import nothing from it.",
         ],
@@ -525,7 +534,7 @@ const COPY: Readonly<Record<string, Copy>> = {
       why: "A statement can round or leave items out, but a misread table looks the same, so PerFin asks before importing it.",
       steps: [
         "Compare the figures with the statement (“Show document”).",
-        AS_READ_STEP,
+        ...asReadSteps(item, AS_READ_STEP),
         "“Teach PerFin” if a table or a figure was read wrong.",
         "“Dismiss” to import nothing from it.",
       ],

@@ -15,7 +15,10 @@ statements"). Per statement:
    (``importable_account_ids``, SECURITY.md F3). A document of several
    accounts (a PDF with one statement per account,
    ``app.ingestion.parsers.brokerage``) matches each statement by its own
-   last four digits; a chosen account there takes only the statements with
+   last four digits; a statement answered "import anyway" or "import as
+   read" goes to the account it was answered on, wherever it now sits in
+   the document (``app.domain.imports.statement_answers``), unless the
+   run assigns it elsewhere; a chosen account there takes only the statements with
    its own last four digits or, when it records none, the single statement
    nothing matched, so one choice never pours several accounts into one. It must be a brokerage or
    retirement account in the statement's currency; otherwise an
@@ -23,8 +26,10 @@ statements"). Per statement:
 2. **Same statement** (``app.domain.imports.statement_records``): a
    statement whose printed period overlaps one already imported for the
    account from another document is held with a ``possible_duplicate``
-   item (``statement_overlap``) unless the person said to import it anyway
-   (``allow_overlap``); every committed statement leaves a record.
+   item (``statement_overlap``) unless the person said to import this
+   statement into this account anyway (``statement_answers``) or the run
+   names the account in ``allow_overlap`` (``apply-mapping``); every
+   committed statement leaves a record.
 3. **Hold** (SECURITY.md C12): a statement whose figures do not reconcile
    (:func:`app.ingestion.parsers.brokerage.reconcile_investment`: positions
    x prices vs market values, holdings total, cash, account value), or with
@@ -34,11 +39,15 @@ statements"). Per statement:
    (``investment_reconciliation_failed`` / ``investment_low_confidence``)
    naming the discrepancy: its ``differences`` (per failed check, what the
    statement prints, what its rows add up to and the difference; see
-   :func:`differences`), the statement's index and the account's currency.
-   **Import as read**: a re-run naming the account in ``accept_as_read``
-   (``apply-mapping``; the review queue's answer to such an item, see
-   ``app.domain.review.service``) imports a statement that does not add up,
-   or that a document gives nothing to check against, as printed: the
+   :func:`differences`), the statement's index and key
+   (``statement_answers.statement_key``) and the account's currency.
+   **Import as read** (the review queue's answer to such an item, see
+   ``app.domain.review.service``; recorded per statement key and account
+   by ``app.domain.imports.statement_answers``): every later import of the
+   document imports that statement, on that account only, as printed
+   although it does not add up or a document gives it nothing to check
+   against. Another statement, even of the same account, is not covered by
+   it. For the answered statement the
    ``reconciliation`` doubt every row carries (and the contradicted market
    value of a position that failed the ``positions`` check) no longer holds
    it, while any other doubt still does (a guessed date, an unread figure),
@@ -146,6 +155,7 @@ from app.core.money import calc_context, to_storage
 from app.domain.accounts import repo as accounts_repo
 from app.domain.accounts.models import Account, AccountType, BalanceSource
 from app.domain.documents.models import Document, ReviewKind
+from app.domain.imports.statement_answers import StatementAnswers, statement_key
 from app.domain.imports.statement_records import (
     check_overlap,
     investment_facts,
@@ -216,7 +226,7 @@ class InvestmentImport:
     snapshots: int = 0
     #: Held as overlapping an imported statement, or skipped as the same one.
     overlaps: int = 0
-    #: Imported as read although they did not add up (``accept_as_read``).
+    #: Imported as read although they did not add up (an answer, step 3).
     accepted_as_read: int = 0
     accounts: list[uuid.UUID] = field(default_factory=list)
 
@@ -496,6 +506,7 @@ def _held(
     account: Account,
     *,
     index: int,
+    key: str,
     accepted: bool = False,
 ) -> bool:
     """Hold the statement back with a review item (module doc, step 3); True: held.
@@ -526,6 +537,7 @@ def _held(
                 "field": "reconciliation",
                 "account_id": str(account.id),
                 "statement": index,
+                "statement_key": key,
                 "currency": account.currency,
                 "parser": _parser(statement),
                 "failed": list(check.failed),
@@ -586,6 +598,7 @@ def _held(
             "fields": fields,
             "account_id": str(account.id),
             "statement": index,
+            "statement_key": key,
             "parser": _parser(statement),
             "reconciliation": check.status,
             "positions": [
@@ -1497,7 +1510,7 @@ def import_investment_statements(
     statement_index: int | None = None,
     assigned: Mapping[int, uuid.UUID] | None = None,
     allow_overlap: Collection[uuid.UUID] = (),
-    accept_as_read: Collection[uuid.UUID] = (),
+    answers: StatementAnswers | None = None,
     user_id: uuid.UUID | None = None,
     several: bool = False,
 ) -> InvestmentImport:
@@ -1506,11 +1519,12 @@ def import_investment_statements(
     ``account_id`` is the account a person chose on a re-run; ``statement_index``
     names the one statement it is for (the review item's), else
     :func:`_chosen_takes` decides on a multi-account document.
-    ``allow_overlap`` are accounts to import into despite an overlapping
-    statement (module doc, step 2); ``accept_as_read`` accounts whose
-    statements are imported as read although their figures do not add up
-    (step 3). ``several``: the document also holds
-    bank statements of other accounts (a combined statement), so even a
+    ``assigned`` are the accounts the run puts statements on, by index;
+    ``allow_overlap`` accounts the run imports into despite an overlapping
+    statement (``apply-mapping``); ``answers`` the document's "import
+    anyway" / "import as read" answers, by statement key (module doc, steps
+    1-3). ``several``: the document also holds bank statements of other
+    accounts (a combined statement), so even a
     single brokerage statement finds its account by its own digits.
     """
     ctx = _Context(
@@ -1528,14 +1542,16 @@ def import_investment_statements(
         takes = {statement_index} if 0 <= statement_index < len(statements) else set()
     elif account_id is not None and _several_accounts(statements):
         takes = _chosen_takes(ctx, statements, account_id)
+    answered = answers or StatementAnswers()
     for index, statement in enumerate(statements):
+        key = statement_key(statement)
         account = _account(
             ctx,
             statement,
             index,
             single=single,
             account_id=account_id if index in takes else None,
-            forced=(assigned or {}).get(index),
+            forced=(assigned or {}).get(index) or answered.account("investment", key),
         )
         if account is None:
             continue
@@ -1543,14 +1559,21 @@ def import_investment_statements(
             ctx.result.accounts.append(account.id)
         facts = investment_facts(statement)
         verdict = check_overlap(
-            db, document, account, facts, index=index, allowed=allow_overlap, review=review
+            db,
+            document,
+            account,
+            facts,
+            index=index,
+            key=key,
+            allow=account.id in allow_overlap or answered.overlap("investment", key, account.id),
+            review=review,
         )
         if verdict != "import":
             ctx.result.overlaps += 1
             continue
         check = statement.reconciliation or reconcile_investment(statement)
-        accepted = account.id in accept_as_read
-        if _held(ctx, statement, check, account, index=index, accepted=accepted):
+        accepted = answered.as_read("investment", key, account.id)
+        if _held(ctx, statement, check, account, index=index, key=key, accepted=accepted):
             ctx.result.held += 1
             continue
         if _commit(ctx, statement, account, check, accepted=accepted):

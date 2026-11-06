@@ -3856,17 +3856,8 @@
       },
       "ApplyMapping": {
         "additionalProperties": false,
-        "description": "``POST /imports/{document_id}/apply-mapping``.\n\n``mapping_id`` (CSV/TSV) names the mapping to read the table with (else\nthe one whose fingerprint matches); ``account_id`` names the account to\nimport into (else the document's, the mapping's or, for OFX/QFX/QIF, the\naccount matched by its last four digits). The caller must be able to\nedit the target account. ``group`` (with ``account_id``) names the\nstatement of a multi-account table the account is for (an\n``unknown_account`` item's ``group``); without it a chosen account takes\nonly the statements with its own last four digits, or the one statement\nno account matched. ``statement`` (with ``account_id``) does the same for\nthe brokerage statements of a document (an investment ``unknown_account``\nitem's ``statement``: an activity export's account, a PDF's).\n``allow_overlap`` names accounts whose statements are imported although\ntheir period overlaps a statement already imported from another\ndocument (a ``statement_overlap`` item answered \"import anyway\"; each\nmust be editable). It also takes back a \"same statement\" answer: a\nstatement recorded as skipped is imported. ``accept_as_read`` names\naccounts whose brokerage statements are imported as read although their\nfigures do not add up or could not be checked (an\n``investment_reconciliation_failed`` / ``investment_low_confidence``\nitem answered \"Import as read\"; each must be editable): no balance\nsnapshot is written from them, and rows with any other doubt are still\nheld (``app.domain.investments.statement_import``, step 3).",
+        "description": "``POST /imports/{document_id}/apply-mapping``.\n\n``mapping_id`` (CSV/TSV) names the mapping to read the table with (else\nthe one whose fingerprint matches); ``account_id`` names the account to\nimport into (else the document's, the mapping's or, for OFX/QFX/QIF, the\naccount matched by its last four digits). The caller must be able to\nedit the target account. ``group`` (with ``account_id``) names the\nstatement of a multi-account table the account is for (an\n``unknown_account`` item's ``group``); without it a chosen account takes\nonly the statements with its own last four digits, or the one statement\nno account matched. ``statement`` (with ``account_id``) does the same for\nthe brokerage statements of a document (an investment ``unknown_account``\nitem's ``statement``: an activity export's account, a PDF's).\n``allow_overlap`` names accounts whose statements this run imports\nalthough their period overlaps a statement already imported from\nanother document (each must be editable); it also takes back a \"same\nstatement\" answer: a statement recorded as skipped is imported. Every\nre-run also carries the document's \"import anyway\" and \"import as read\"\nanswers from the review queue, each for the one statement it was given\nabout (``app.domain.imports.statement_answers``). A statement whose\nfigures do not add up is imported as read only on such an answer, never\nby naming its account here.",
         "properties": {
-          "accept_as_read": {
-            "items": {
-              "format": "uuid",
-              "type": "string"
-            },
-            "maxItems": 100,
-            "title": "Accept As Read",
-            "type": "array"
-          },
           "account_id": {
             "anyOf": [
               {

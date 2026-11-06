@@ -486,8 +486,9 @@ export function ReviewItemCard({ item }: { item: ReviewItem }) {
       ) : null}
       {asRead && actionable ? (
         <p className="ledger-muted">
-          “Import as read” imports this statement as printed. PerFin records no
-          account value from it, because its totals do not add up.
+          {reason === "investment_reconciliation_failed"
+            ? "“Import as read” imports this statement as printed. PerFin records no account value from it, because its totals do not add up."
+            : "“Import as read” imports this statement as printed. PerFin records no account value from it, because its totals could not be checked."}
         </p>
       ) : null}
       {item.kind === "new_institution" ? (

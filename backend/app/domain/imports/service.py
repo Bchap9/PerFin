@@ -179,6 +179,11 @@ from app.domain.imports.schemas import (
     PreviewTable,
     PreviewTransaction,
 )
+from app.domain.imports.statement_answers import (
+    StatementAnswers,
+    document_answers,
+    statement_key,
+)
 from app.domain.imports.statement_records import (
     StatementFacts,
     bank_facts,
@@ -667,9 +672,12 @@ class _Run:
     #: Accounts a person assigned to the document's statements, by
     #: ``(target, index)`` (``POST /documents/{id}/accounts/apply``).
     assigned: dict[tuple[str, int], uuid.UUID] = field(default_factory=dict)
-    #: Accounts a person said to import into although the statement overlaps
-    #: one already imported from another document (``statement_overlap``).
+    #: Accounts this run imports into although a statement overlaps one
+    #: already imported from another document (``apply-mapping``).
     allow_overlap: frozenset[uuid.UUID] = frozenset()
+    #: The document's "import anyway" / "import as read" answers, by
+    #: statement key (``statement_answers``).
+    answers: StatementAnswers = field(default_factory=StatementAnswers)
     #: Statements held (``statement_overlap``) or skipped as already imported.
     overlaps: int = 0
     _payees: dict[str, uuid.UUID] | None = None
@@ -1025,7 +1033,9 @@ def _commit_statement(
     return True
 
 
-def _guarded(run: _Run, account: Account, facts: StatementFacts, index: int | None) -> bool:
+def _guarded(
+    run: _Run, account: Account, facts: StatementFacts, index: int | None, key: str
+) -> bool:
     """The statement-level duplicate guard (``statement_records``); True: commit it."""
     verdict = check_overlap(
         run.db,
@@ -1033,7 +1043,8 @@ def _guarded(run: _Run, account: Account, facts: StatementFacts, index: int | No
         account,
         facts,
         index=index,
-        allowed=run.allow_overlap,
+        key=key,
+        allow=account.id in run.allow_overlap or run.answers.overlap("statement", key, account.id),
         review=run.review,
     )
     if verdict != "import":
@@ -1077,9 +1088,11 @@ def _import_statements(run: _Run, result: ExtractResult, *, account_id: uuid.UUI
     single = len(result.statements) == 1 and not _several_kinds(result)
     for index, statement in enumerate(result.statements):
         parsed = from_statement(statement)
+        key = statement_key(statement)
         account: Account | None = None
         candidates: tuple[uuid.UUID, ...] = ()
-        assigned = run.assigned.get(("statement", index))
+        # The run's own assignment, else the account an answer put it on.
+        assigned = run.assigned.get(("statement", index)) or run.answers.account("statement", key)
         if assigned is not None:
             account = _usable_account(run, assigned)
         if (
@@ -1116,7 +1129,7 @@ def _import_statements(run: _Run, result: ExtractResult, *, account_id: uuid.UUI
             )
             continue
         facts = bank_facts(statement)
-        if not _guarded(run, account, facts, index):
+        if not _guarded(run, account, facts, index, key):
             continue
         if _commit_statement(run, parsed, account, statement_index=index):
             record_statement(run.db, run.document, account, facts)
@@ -1725,7 +1738,6 @@ def import_extraction(
     statement: int | None = None,
     assignments: Sequence[Assignment] = (),
     allow_overlap: Collection[uuid.UUID] = (),
-    accept_as_read: Collection[uuid.UUID] = (),
     user_id: uuid.UUID | None = None,
 ) -> ImportResult:
     """Import the records of ``result`` for ``document`` (module doc, step 2).
@@ -1733,10 +1745,11 @@ def import_extraction(
     ``user_id`` is the person who asked for a re-run (else the uploader
     decides which accounts may be matched); ``mapping_id``/``account_id``
     are their choices, ``group`` the statement of a multi-account table
-    ``account_id`` is for; ``allow_overlap`` and ``accept_as_read`` the
-    accounts whose statements are imported although they overlap an
-    imported one or do not add up. Runs in the caller's transaction and RLS
-    context.
+    ``account_id`` is for; ``allow_overlap`` the accounts whose statements
+    this run imports although they overlap an imported one. Every run
+    carries the document's "import anyway" / "import as read" answers
+    (``statement_answers``), whoever started it. Runs in the caller's
+    transaction and RLS context.
     """
     actor = user_id or document.uploaded_by
     # A PDF/image no parser read: its page table goes through the saved
@@ -1749,6 +1762,7 @@ def import_extraction(
         user_id=user_id,
         assigned={(a.target, a.index): a.account_id for a in assignments},
         allow_overlap=frozenset(allow_overlap),
+        answers=document_answers(db, document),
     )
     statements: Sequence[InvestmentStatement] = result.investments
     if result.statements:
@@ -1781,7 +1795,7 @@ def import_extraction(
             statement_index=statement,
             assigned={i: a for (t, i), a in run.assigned.items() if t == "investment"},
             allow_overlap=run.allow_overlap,
-            accept_as_read=frozenset(accept_as_read),
+            answers=run.answers,
             user_id=user_id,
             several=_several_kinds(result),
         )
@@ -1843,8 +1857,8 @@ def request_apply(
         get_visible_account(db, principal, target, need="edit")
     for assignment in data.assignments:
         get_visible_account(db, principal, assignment.account_id, need="edit")
-    for answered_account in (*data.allow_overlap, *data.accept_as_read):
-        get_visible_account(db, principal, answered_account, need="edit")
+    for overlap_account in data.allow_overlap:
+        get_visible_account(db, principal, overlap_account, need="edit")
     payload = ApplyMappingJob(
         document_id=document.id,
         mapping_id=data.mapping_id,
@@ -1853,7 +1867,6 @@ def request_apply(
         statement=data.statement,
         assignments=data.assignments,
         allow_overlap=data.allow_overlap,
-        accept_as_read=data.accept_as_read,
         requested_by=principal.user_id,
     )
     job_id = enqueue(db, APPLY_MAPPING_JOB_TYPE, payload, household_id=household_id)
@@ -1899,7 +1912,6 @@ def run_apply_job(
         statement=payload.statement,
         assignments=payload.assignments,
         allow_overlap=payload.allow_overlap,
-        accept_as_read=payload.accept_as_read,
         user_id=payload.requested_by,
     )
     now = clock.utcnow()

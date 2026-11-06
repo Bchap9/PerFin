@@ -9,10 +9,10 @@ All notable changes to PerFin are recorded here. The format follows
 The current release candidate is `v1.0.0-rc.4`; the final `v1.0.0` follows the
 external security review. Every phase (0-7) is implemented. Alembic head is
 `0012` (unreleased; `0009` in rc.4). Unreleased work, on 2026-11-06: SPDX;
-backend ruff, ruff format, mypy --strict (679 source files), bandit, OpenAPI
-drift and 8111 pytest tests with `-n 8`, of which the OCR and Helm tests (67)
+backend ruff, ruff format, mypy --strict (681 source files), bandit, OpenAPI
+drift and 8127 pytest tests with `-n 8`, of which the OCR and Helm tests (67)
 need Tesseract and `helm` and could not run in that environment; frontend
-eslint, tsc, 485 vitest tests in 58 files and the production build. As of rc.2: `pip-audit` finds no known vulnerabilities and
+eslint, tsc, 487 vitest tests in 58 files and the production build. As of rc.2: `pip-audit` finds no known vulnerabilities and
 `npm audit --audit-level=high` passes with 10 moderate advisories in dev
 tooling (eslint, typescript-eslint, minimatch), none high.
 CI is green end to end on GitHub Actions for commit `21d2b38`: `ci` run
@@ -250,20 +250,30 @@ What remains (details in docs/ROADMAP.md):
   out what did not add up, per check in plain words (positions, holdings
   total, cash, account value) with what the statement prints, what its
   rows come to and the difference (payload `differences`, `currency`,
-  `statement`), and offers **Import as read** beside "Teach PerFin" and
-  "Dismiss". It re-runs the import (`apply-mapping`, new `accept_as_read`
-  account ids) with the item's statement on the item's account: activity,
-  opening positions, prices and cash rows are written as printed, but **no
-  balance snapshot** is taken from totals that did not add up, and any
-  other doubt (a guessed date, an unread figure) still holds the statement.
-  The resolution (`import_as_read`, account, statement, failed checks,
-  `snapshot: false`) and the audit rows (`review.resolve`,
-  `document.import_requested`, `investment.import` with
-  `accepted_as_read`) record the acceptance. "Import anyway" on a
-  `statement_overlap` item goes through the same path and records the same
-  shape (now with `statement`), and each re-run carries the document's
-  earlier answers of both kinds, so a statement that both overlaps and
-  does not add up is not held again for what was already answered. The
+  `statement`, `statement_key`), and offers **Import as read** beside
+  "Teach PerFin" and "Dismiss". The answer is for **that statement only**:
+  items name their statement by a key (a digest of the statement exactly
+  as read, `app/domain/imports/statement_answers.py`), the resolution
+  records it with the account, and every later import of the document
+  (any `apply-mapping` re-run, whoever starts it: another item's answer,
+  the Accounts dialog, Teach PerFin, a plain re-run; and the pipeline when
+  the document is processed again) puts that statement on that account
+  wherever it now sits in the document and imports it as read there:
+  activity, opening positions, prices and cash rows as printed, but **no
+  balance snapshot** from totals that did not add up, and any other doubt
+  (a guessed date, an unread figure) still holds it. Another statement of
+  the same account, or the statement read differently after a reprocess,
+  is checked on its own figures and held with an item of its own. Items
+  raised before statements had keys offer no "Import as read" (`409
+  review-item-stale` through the API): reprocessing raises current ones.
+  The resolution (`import_as_read`, account, statement, `statement_key`,
+  failed checks, `snapshot: false`) and the audit rows (`review.resolve`,
+  `investment.import` with `accepted_as_read`) record the acceptance.
+  "Import anyway" on a `statement_overlap` item works the same way (its
+  item also names `statement_key`), so a statement that both overlaps and
+  does not add up is not held again for what was already answered.
+  `apply-mapping` takes no account list for either answer (`allow_overlap`
+  stays as an explicit, run-only choice). The
   review queue no longer offers "Confirm as read" on these items (nothing
   of the statement is in the ledger to confirm), and "Map columns" only for
   dates that could not be told apart.

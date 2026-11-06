@@ -178,9 +178,15 @@ export function payloadDifferences(item: ReviewItem): Difference[] {
  * A brokerage statement held back by its figures that may be imported as
  * printed: one that did not add up, or one with nothing to check against
  * whose rows carry no other doubt (the server's ``acceptable_as_read``).
+ * The item must name its statement (``statement_key``): the answer is for
+ * that statement only, and an item raised before statements carried a key
+ * is out of date (reprocess the document).
  */
 export function canImportAsRead(item: ReviewItem): boolean {
-  if (item.kind !== "low_confidence_field") {
+  if (
+    item.kind !== "low_confidence_field" ||
+    payloadString(item, "statement_key") === null
+  ) {
     return false;
   }
   const reason = item.reason ?? payloadString(item, "reason");

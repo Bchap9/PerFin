@@ -113,6 +113,7 @@ describe("review explanations", () => {
     const found = explain(
       item("low_confidence_field", {
         reason: "investment_reconciliation_failed",
+        statement_key: "k".repeat(64),
         currency: "USD",
         differences: [
           {
@@ -131,6 +132,28 @@ describe("review explanations", () => {
     expect(found.steps.some((step) => step.startsWith("“Import as read”"))).toBe(
       true,
     );
+  });
+
+  it("offers the 'import as read' step only on an item naming its statement", () => {
+    const steps = (payload: Record<string, unknown>) =>
+      explain(item("low_confidence_field", payload)).steps;
+    const asRead = (step: string) => step.startsWith("“Import as read”");
+    expect(
+      steps({ reason: "investment_reconciliation_failed" }).some(asRead),
+    ).toBe(false);
+    expect(
+      steps({
+        reason: "investment_low_confidence",
+        fields: ["reconciliation"],
+      }).some(asRead),
+    ).toBe(false);
+    expect(
+      steps({
+        reason: "investment_low_confidence",
+        fields: ["reconciliation"],
+        statement_key: "k".repeat(64),
+      }).some(asRead),
+    ).toBe(true);
   });
 
   it.each([

@@ -362,12 +362,12 @@ none, the one statement nothing matched) and `allow_overlap` (account ids,
 each editable: their statements are imported although their period
 overlaps a statement already imported from another document, the "import
 anyway" of a `statement_overlap` item, also after it was answered "same
-statement": the skipped statement is then imported) and `accept_as_read`
-(account ids, each editable: their brokerage statements are imported as
-printed although their figures do not add up or could not be checked, the
-"import as read" of an `investment_reconciliation_failed` or
-`investment_low_confidence` item; no balance snapshot is written from them
-and rows with any other doubt are still held); a `mapping_id`
+statement": the skipped statement is then imported; this run only). Every
+re-run also applies the document's "import anyway" and "import as read"
+review answers, each to the one statement it was given about (by
+`statement_key`, wherever that statement now sits); a statement whose
+figures do not add up is imported only on such an answer, never through
+this endpoint alone; a `mapping_id`
 imports the table with that mapping even when it is brokerage activity; the target account
 (the given one, the document's, else the mapping's) must be editable (`404
 account-not-found`); a document that is not `needs_review`/`processed` or
@@ -531,13 +531,14 @@ takes the hash when it has none and otherwise gets an `import_hash_alias`;
 reject confirms it; `duplicate_of` must be one of the item's `candidates`
 and is required when there are several, `422 invalid-resolution`; a
 statement whose period overlaps one already imported for the account,
-`reason: "statement_overlap"` with `account_id`, `statement`, `investment`,
+`reason: "statement_overlap"` with `account_id`, `statement`,
+`statement_key`, `investment`,
 `period_start`, `period_end`, `other_document_id`, `other_period_start`,
 `other_period_end` and `others`: confirm ("same statement") records it as
-skipped and imports nothing, reject ("import anyway") queues
-`imports.apply_mapping` with the item's statement assigned to its account
-and that account in `allow_overlap`; both need edit on the account, `404
-account-not-found`); `{"kind":
+skipped and imports nothing, reject ("import anyway") records the answer
+for the item's statement and account and queues `imports.apply_mapping`
+(below); both need edit on the account, `404 account-not-found`);
+`{"kind":
 "unknown_account", "account_id", "remember"}` (an account the caller edits;
 re-imports the stored extraction through `imports.apply_mapping`, or
 reprocesses a document without one; `remember` saves the statement's last
@@ -572,17 +573,23 @@ of the document on the item's account; audited as `transaction.update`);
 read", without `transactions`, else `422`) answers a brokerage statement
 held back because its figures do not add up: an
 `investment_reconciliation_failed` item (`differences`: per failed check
-`printed`, `computed`, `difference`; `currency`, `statement`) or an
+`printed`, `computed`, `difference`; `currency`, `statement`,
+`statement_key`) or an
 `investment_low_confidence` item whose `fields` are only
 `["reconciliation"]`; any other item is `422 invalid-resolution`. It needs
 edit on the item's account (`404 account-not-found`) and queues
-`imports.apply_mapping` with the item's statement assigned to that account
-and the account in `accept_as_read`: the statement is imported as printed,
-without a balance snapshot. The resolution records `import_as_read`,
-`account_id`, `target`, `statement`, `reason`, `failed`, `snapshot: false`
-and `job_id`; "import anyway" (`import_anyway`) records the same shape, and
-each re-run carries the document's earlier answers of both kinds (their
-accounts and statement assignments, for accounts the caller edits).
+`imports.apply_mapping`: the statement is imported as printed into that
+account, without a balance snapshot. The resolution records
+`import_as_read`, `account_id`, `target`, `statement`, `statement_key`,
+`reason`, `failed`, `snapshot: false` and `job_id`; "import anyway"
+(`import_anyway`) records the same shape. An answer covers the item's
+statement only (its `statement_key`: a digest of the statement as read)
+and lasts: every later import of the document, whoever starts it, puts
+that statement on that account wherever it now sits and does not hold it
+again for what was answered, for an account the importing user may import
+into; a statement read differently (after a reprocess) is a new statement.
+An item without `statement_key` (raised before keys existed) is `409
+review-item-stale`.
 Other kinds can only be dismissed for now (`409
 review-resolution-unsupported`). Review tools, same callers and open-item
 rule as resolve unless noted: `POST /review/{id}/correct` `{"document"?:
