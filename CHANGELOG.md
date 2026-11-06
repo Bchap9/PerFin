@@ -157,10 +157,12 @@ What remains (details in docs/ROADMAP.md):
     (`Other Transactions (Page 2)`, `Miscellaneous Items, page 2`, also
     beside the account number) and any other line there is a heading no
     section names and ends the section as it does on one page, unless it is
-    the statement's title: it names the statement (`Monthly Activity
-    Statement`, `Statement of Transactions - Account XXXX-1234`) or names
-    the account or the page with only words for all of its entries
-    (`Account Activity for XXXX-1234`). Known limit: a heading without a
+    the statement's title: it names the statement (`statement`, `report`)
+    or the account or the page and otherwise says only words for all of its
+    entries and title filler (`Monthly Activity Statement`, `Statement of
+    Transactions - Account XXXX-1234`, `Account Activity for XXXX-1234`;
+    not `Miscellaneous Items Report - Account XXXX-1234` or `Transactions
+    After Statement Date`). Known limit: a heading without a
     list word in a block where another line names the account or the page
     (`Page 2 of 4` or `Account XXXX-1234` over `Securities Lending`) is
     taken for the running header and its rows for the section's. A

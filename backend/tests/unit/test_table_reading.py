@@ -861,6 +861,12 @@ _LABELLED_HEADINGS = [
     "Miscellaneous Items - Account XXXX-1234",
     "Securities Lending Activity - Account XXXX-1234",
     "Monthly Activity Statement//Other Transactions",
+    # A heading that also mentions the statement or a report is no title.
+    "Miscellaneous Items Report - Account XXXX-1234",
+    "Other Transactions Not on This Statement - Account XXXX-1234",
+    "Account XXXX-1234//Other Transactions Report",
+    "Page 2 of 2//Checks Outstanding Since Last Statement",
+    "Page 2 of 2//Transactions After Statement Date",
 ]
 
 

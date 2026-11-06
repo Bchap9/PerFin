@@ -669,12 +669,15 @@ OFX `INVSTMTRS` in the sandbox or from a PDF/scan's pages in the worker.
     page label or the account number (`Other Transactions (Page 2)`,
     `Miscellaneous Items, page 2`, `Securities Lending Activity - Account
     XXXX-1234`), unless both header bands print it or it is the statement's
-    title: a line naming the statement itself (`statement`, `report`:
-    `Monthly Activity Statement`, `Statement of Transactions - Account
-    XXXX-1234`), or a line naming the account or the page whose other
-    words only name all of its entries (`activity`, `transactions`) or say
-    `account`, `your`, `for`, `monthly` and the like (`Account Activity for
-    XXXX-1234`, `Account Transactions - Page 2 of 2`). Any other line there
+    title: a line naming the statement itself (`statement`, `report`) or
+    the account or the page whose other words only name all of its entries
+    (`activity`, `transactions`) or say `account`, `your`, `for`,
+    `monthly` and the like (`Monthly Activity Statement`, `Statement of
+    Transactions - Account XXXX-1234`, `Account Activity for XXXX-1234`,
+    `Account Transactions - Page 2 of 2`). One other word makes it a
+    heading, whatever it names (`Miscellaneous Items Report - Account
+    XXXX-1234`, `Checks Outstanding Since Last Statement`, `Transactions
+    After Statement Date`). Any other line there
     (`Miscellaneous Items`, `Other Transactions` at the top of the page, or
     under its running header) is a heading and ends the section, exactly as
     on one page; under a skipped section its rows are then held, not

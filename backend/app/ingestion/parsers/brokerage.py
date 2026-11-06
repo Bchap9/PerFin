@@ -98,7 +98,9 @@ Two halves (INGESTION.md "Brokerage statements", SECURITY.md C12):
     word (:data:`_LIST_WORDS`: ``Other Transactions``, ``Miscellaneous
     Items, page 2``) is a heading there unless it is the statement's title
     (:func:`_titled`: ``Monthly Activity Statement``, ``Account Activity
-    for XXXX-1234``), as is any other line, and ends the section as on one
+    for XXXX-1234``; only all-entries words, ``statement`` or ``report``,
+    title filler and the account or the page, so not ``Miscellaneous Items
+    Report``), as is any other line, and ends the section as on one
     page):
     trades pending settlement, cash-flow summaries and daily balances are
     no activity; securities transferred in/out move
@@ -1311,8 +1313,10 @@ _LIST_WORDS: Final = frozenset(
 #: List words naming all of an account's entries, as the statement's title
 #: does (``Account Activity for XXXX-1234``), not one kind of them.
 _ALL_ENTRIES_WORDS: Final = frozenset({"activity", "activities", "transactions"})
-#: Words naming the statement itself: a line holding one is its title
-#: (``Monthly Activity Statement``), never a table's heading.
+#: Words naming the statement itself (``Monthly Activity Statement``): a
+#: title may say them beside all-entries words and title filler
+#: (:func:`_titled`); beside any other word they make no title
+#: (``Miscellaneous Items Report``).
 _TITLE_WORDS: Final = frozenset({"statement", "statements", "report"})
 #: Words a title says beside all-entries words and the account's number or
 #: the page (``Your Account Activity for XXXX-1234``).
@@ -1341,18 +1345,20 @@ _RunningLine = Literal["band", "named", "dated", "continued", "plain"]
 
 def _titled(norm: str, named: bool) -> bool:
     """A (normalised) line holding a list word is the statement's title, no
-    table's heading: it names the statement itself (``Monthly Activity
-    Statement``, ``Statement of Transactions``), or it names the account or
-    the page (``named``) and otherwise says only all-entries words and title
-    filler (``Account Activity for XXXX-1234``, ``Account Transactions, Page
-    2``; not ``Other Transactions (Page 2)``, ``Securities Lending Activity -
-    Account XXXX-1234``).
+    table's heading: it says only all-entries words, words naming the
+    statement itself (:data:`_TITLE_WORDS`), title filler and the account's
+    number or the page, and it names the statement (``Monthly Activity
+    Statement``, ``Statement of Transactions - Account XXXX-1234``) or the
+    account or the page (``named``: ``Account Activity for XXXX-1234``,
+    ``Account Transactions, Page 2``). Any other word makes it a heading
+    (``Other Transactions (Page 2)``, ``Securities Lending Activity - Account
+    XXXX-1234``, ``Miscellaneous Items Report``, ``Transactions After
+    Statement Date``).
     """
     words = _PAGE_LABEL.sub(" ", norm).split()
-    if _TITLE_WORDS.intersection(words):
-        return True
-    return named and all(
+    return (named or bool(_TITLE_WORDS.intersection(words))) and all(
         word in _ALL_ENTRIES_WORDS
+        or word in _TITLE_WORDS
         or word in _TITLE_FILLER
         or any(ch.isdigit() for ch in word)
         or set(word) == {"x"}
