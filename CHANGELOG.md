@@ -95,8 +95,13 @@ What remains (details in docs/ROADMAP.md):
     its description wrapped onto the next line (`TO SAVINGS ACCOUNT
     XXXX-2468`), even in a page's last lines or for an account the index
     lists, so a single-account bank statement is never split by one.
-    Transaction descriptions (`ACH DEBIT 12-3456789`), telephone numbers
-    and dates after "Account" are not account headings.
+    Transaction descriptions (`ACH DEBIT 12-3456789`, `TO SAVINGS ACCOUNT
+    XXXX-2468`), telephone numbers and dates after "Account" are not
+    account headings; product titles that share words with descriptions
+    still are (`CERTIFICATE OF DEPOSIT`, `ONLINE SAVINGS`, `TRANSFER ON
+    DEATH INDIVIDUAL`, `UNIFORM TRANSFERS TO MINORS ACT`). Only a line
+    starting at one of a row's text columns continues the row: a heading
+    centred or right-aligned straight under a row still starts its account.
   - An account index ("Accounts Included in This Report", "Your Accounts at
     a Glance", any table with an Account Number column and a name or type
     column) is read as the document's map of accounts. Each statement gets

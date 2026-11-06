@@ -611,13 +611,19 @@ OFX `INVSTMTRS` in the sandbox or from a PDF/scan's pages in the worker.
     switches the account: `Trans. from account 222-222222` in a transfer
     row, a dated row in the header band, a line with an amount mid-page,
     a description wrapped under its row (an undated line at the row's
-    spacing starting right of the row's date, such as `TO SAVINGS ACCOUNT
-    XXXX-2468` or `Account XXXX-2468`, anywhere on the page, also in its
-    last lines and for an account the index lists), a title holding a
-    transaction word (`TO SAVINGS`, `ONLINE TRANSFER`, `ACH DEBIT`: a
-    description, not an account's title), or a number shaped like a date
-    (`2026-07-31`) or a telephone number (`1-800-555-0100`, a toll-free
-    area code).
+    spacing starting at one of the row's text columns after its date, such
+    as `TO SAVINGS ACCOUNT XXXX-2468` or `Account XXXX-2468`, anywhere on
+    the page, also in its last lines and for an account the index lists;
+    a heading centred or right-aligned straight under a row starts at no
+    such column and still counts), a title that reads as a transaction's
+    description (a word no product name carries, such as `ACH`, `XFER`,
+    `PMT`, `WIRE`, or `TO`/`FROM` leading the title, ending it or followed
+    by an account noun: `TO SAVINGS`, `ONLINE TRANSFER TO ACCOUNT`), or a
+    number shaped like a date (`2026-07-31`) or a telephone number
+    (`1-800-555-0100`, a toll-free area code). Product titles sharing
+    words with descriptions are headings: `CERTIFICATE OF DEPOSIT`,
+    `ONLINE SAVINGS`, `TRANSFER ON DEATH INDIVIDUAL`, `UNIFORM TRANSFERS
+    TO MINORS ACT`.
   - **Account index**: a table whose header names an account number column
     (`Account Number`, `Account #`, `Account No`) and a name or type column
     (`Account Type/Name`, `Account Name`), such as *Accounts Included in

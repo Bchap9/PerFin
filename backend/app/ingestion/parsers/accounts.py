@@ -14,10 +14,14 @@ this module finds where each account's lines are, for any institution:
   all-capitals title ending in a number (``INDIVIDUAL - TOD Z12-345678``).
   A text that merely mentions an account (``Trans. from account
   418-330642``, ``Linked bank account XXXX-9999``) is no heading, nor is
-  one whose title holds a transaction word (``TO SAVINGS ACCOUNT
-  XXXX-2468``, ``ACH DEBIT 12-3456789``: a description naming another
-  account) or whose number is shaped like a date (``2026-07-31``) or a
-  telephone number (``1-800-555-0100``, a toll-free area code).
+  one whose title reads as a transaction's description (``ACH DEBIT
+  12-3456789``, ``TO SAVINGS ACCOUNT XXXX-2468``, ``ONLINE TRANSFER TO
+  ACCOUNT XXXX-2468``: a word no product name carries, or ``to``/``from``
+  leading the title, ending it or naming an account kind) or whose number
+  is shaped like a date (``2026-07-31``) or a telephone number
+  (``1-800-555-0100``, a toll-free area code). Product names stay
+  titles: ``CERTIFICATE OF DEPOSIT``, ``ONLINE SAVINGS``, ``TRANSFER ON
+  DEATH INDIVIDUAL``, ``UNIFORM TRANSFERS TO MINORS ACT``.
   A heading is looked for
 
   - on a whole line without amounts, and in each of its **cells**;
@@ -35,7 +39,9 @@ this module finds where each account's lines are, for any institution:
     the account of a document that has no index;
   - never on a row's **continuation**: an undated line at a line's
     spacing under a table row (or under an earlier continuation of it)
-    starting right of the row's date, i.e. a wrapped description. A
+    starting at one of the row's text columns after its date, i.e. a
+    wrapped description (a heading centred or right-aligned under a row
+    starts at none of them). A
     transfer between the user's own accounts names an account the index
     lists, and layouts wrap such descriptions onto the page's last lines.
 
@@ -95,14 +101,21 @@ _DATE_SHAPED: Final = re.compile(r"\d{4}-\d{1,2}-\d{1,2}|\d{1,2}-\d{1,2}-(?:\d{2
 #: A heading's number shaped like a telephone number: a ``1-`` trunk prefix
 #: or a toll-free area code (``1-800-555-0100``, ``888-555-0100``).
 _PHONE_SHAPED: Final = re.compile(r"(?:1[ -]\d{3}|8(?:00|33|44|55|66|77|88))[ -]\d{3}[ -]\d{4}")
-#: Words that make an all-capitals title a transaction description
-#: (``TO SAVINGS``, ``ONLINE TRANSFER FROM``, ``ACH DEBIT``), never an
-#: account's title.
+#: Words no account's product name carries: an all-capitals title holding
+#: one is a transaction description (``ACH DEBIT``, ``XFER``). Words a
+#: product name may carry (``ONLINE SAVINGS``, ``CERTIFICATE OF DEPOSIT``,
+#: ``TRANSFER ON DEATH``, ``UNIFORM TRANSFERS TO MINORS``) are not here.
 _DESCRIPTION_WORDS: Final = frozenset(
+    {"ach", "xfer", "xfr", "tfr", "trnsfr", "pmt", "pos", "wire", "withdrawal", "purchase"}
+)
+#: Prepositions a transfer's description puts before the other account.
+_DIRECTION_WORDS: Final = frozenset({"to", "from", "into", "via"})
+#: Words naming an account after a direction word (``TO SAVINGS``,
+#: ``FROM CHK``); ``TRANSFERS TO MINORS`` names none.
+_ACCOUNT_NOUNS: Final = frozenset(
     {
-        *("to", "from", "into", "via", "transfer", "transfers", "trans", "xfer", "tfr"),
-        *("payment", "pmt", "deposit", "withdrawal", "debit", "ach", "wire", "online"),
-        *("mobile", "check", "chk", "pos", "purchase"),
+        *("account", "acct", "acc", "checking", "chequing", "chk", "savings", "sav", "card"),
+        *("credit", "loan", "mortgage", "heloc", "brokerage", "ira", "roth", "money", "share"),
     }
 )
 #: Characters of a line an account heading is looked for in.
@@ -160,7 +173,7 @@ def read_heading(text: str) -> Heading | None:
         title_words = tokens[:-1]
     if number is None:
         return None
-    if any(normalise(t) in _DESCRIPTION_WORDS for t in title_words):
+    if _describes_transaction([normalise(t) for t in title_words]):
         return None  # a transfer's description naming the other account
     if _DATE_SHAPED.fullmatch(number) or _PHONE_SHAPED.fullmatch(number.strip()):
         return None
@@ -169,6 +182,24 @@ def read_heading(text: str) -> Heading | None:
         return None
     named = " ".join(t for t in title_words).strip(" -\u2013")
     return Heading(digits[-4:], named or None)
+
+
+def _describes_transaction(words: Sequence[str]) -> bool:
+    """An all-capitals title is a transaction's description, not an account's.
+
+    It holds a word no product name carries (:data:`_DESCRIPTION_WORDS`) or
+    a direction word (``to``, ``from``) leading the title, ending it (right
+    before ``Account``) or followed by an account noun (``TO SAVINGS``).
+    """
+    words = [w for w in words if w]
+    for position, word in enumerate(words):
+        if word in _DESCRIPTION_WORDS:
+            return True
+        if word in _DIRECTION_WORDS:
+            after = words[position + 1] if position + 1 < len(words) else None
+            if position == 0 or after is None or after in _ACCOUNT_NOUNS:
+                return True
+    return False
 
 
 def account_heading(text: str) -> str | None:
@@ -389,16 +420,23 @@ def _continues_row(line: ViewLine, above: ViewLine, row: ViewLine) -> bool:
     """``line`` is an undated continuation of a table row (a wrapped description).
 
     It follows ``above`` (the row or an earlier continuation of it) at a
-    line's spacing and starts right of where the dated ``row`` starts:
-    ``TO SAVINGS ACCOUNT XXXX-2468`` printed under its row's description is
-    part of that row, never an account heading.
+    line's spacing and starts where one of the dated ``row``'s text cells
+    after its date starts (within a line's height; a row is a line whose
+    first cell is a date alone): ``TO SAVINGS ACCOUNT XXXX-2468`` printed
+    under its row's description is part of that row, never an account
+    heading. A heading centred or right-aligned under a row
+    (``Account Number: XXXX-2468`` at no column of the row) is no
+    continuation.
     """
     if line.page != above.page or numeric_parts(line.cells[0].text) is not None:
         return False
     height = max(line.height, above.height, 1.0)
     if line.bbox[1] - above.bbox[3] > height:
         return False
-    return line.cells[0].x0 > row.cells[0].x0 + height
+    start = line.cells[0].x0
+    return any(
+        abs(start - cell.x0) <= height and not find_amounts(cell.text) for cell in row.cells[1:]
+    )
 
 
 def _heading_of(line: ViewLine, *, band: bool) -> tuple[Heading | None, bool]:

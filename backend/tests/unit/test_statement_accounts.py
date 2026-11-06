@@ -353,6 +353,22 @@ def _filler(count: int) -> list[list[tuple[int, str]]]:
         ("TO SAVINGS ACCOUNT XXXX-2468", None, None),
         ("ONLINE TRANSFER TO SAVINGS ACCOUNT XXXXXX2468", None, None),
         ("ACH DEBIT 12-3456789", None, None),
+        ("ONLINE TRANSFER TO ACCOUNT XXXX-2468", None, None),
+        ("TRANSFER FROM CHK 1234-5678", None, None),
+        # Product names holding words a description also uses.
+        ("CERTIFICATE OF DEPOSIT Account Number XXXX-5678", "5678", "CERTIFICATE OF DEPOSIT"),
+        ("TIME DEPOSIT Account 1234-5678", "5678", "TIME DEPOSIT"),
+        ("ONLINE SAVINGS Account XXXX-1234", "1234", "ONLINE SAVINGS"),
+        (
+            "TRANSFER ON DEATH INDIVIDUAL Account # Z12-345678",
+            "5678",
+            "TRANSFER ON DEATH INDIVIDUAL",
+        ),
+        (
+            "UNIFORM TRANSFERS TO MINORS ACT Account 123-456789",
+            "6789",
+            "UNIFORM TRANSFERS TO MINORS ACT",
+        ),
         # Numbers that are no account's: a telephone number, a date.
         ("Account # 1-800-555-0100", None, None),
         ("Questions about your account? 888-555-0100", None, None),
@@ -441,6 +457,94 @@ def test_a_left_aligned_heading_after_a_table_row_still_counts() -> None:
     ]
     found = segment(_lines(index, page))
     assert [(a.last4, len(a.lines)) for a in found.accounts] == [("1357", 3), ("2468", 9)]
+
+
+_CD_INDEX = [
+    [(40, "Account Name"), (220, "Account Number"), (400, "Closing Balance")],
+    [(40, "Basic Checking"), (220, "XXXX-1357"), (400, "$1,520.00")],
+    [(40, "Certificate of Deposit"), (220, "XXXX-5678"), (400, "$5,000.00")],
+]
+_CHECKING_PAGE = [
+    [(40, "BASIC CHECKING Account Number XXXX-1357")],
+    [(40, "Date"), (80, "Description"), (480, "Amount")],
+    [(40, "01/09"), (80, "SAMPLE GROCER"), (480, "-80.00")],
+    *_filler(6),
+]
+_CD_PAGE = [
+    [(40, "CERTIFICATE OF DEPOSIT Account Number XXXX-5678")],
+    [(40, "Date"), (80, "Description"), (480, "Amount")],
+    [(40, "01/31"), (80, "INTEREST"), (480, "4.10")],
+    *_filler(6),
+]
+
+
+@pytest.mark.parametrize("indexed", [True, False])
+def test_a_certificate_of_deposit_heading_starts_its_account(indexed: bool) -> None:
+    """``DEPOSIT`` in a product's title does not make the heading a description."""
+    pages = [_CD_INDEX] if indexed else []
+    found = segment(_lines(*pages, _CHECKING_PAGE, _CD_PAGE))
+    first = 2 if indexed else 1
+    assert [(a.last4, len(a.lines), a.first_page) for a in found.accounts] == [
+        ("1357", 9, first),
+        ("5678", 9, first + 1),
+    ]
+    # Half-way down a page, the index listing it.
+    page = [*_CHECKING_PAGE[:3], *_CD_PAGE]
+    found = segment(_lines(_CD_INDEX, page))
+    assert [(a.last4, len(a.lines)) for a in found.accounts] == [("1357", 3), ("5678", 9)]
+
+
+def test_transfer_on_death_and_custodial_titles_are_headings() -> None:
+    tod = [[(40, "TRANSFER ON DEATH INDIVIDUAL Account # Z12-345678")], *_filler(8)]
+    utma = [[(40, "UNIFORM TRANSFERS TO MINORS ACT Account 123-456789")], *_filler(8)]
+    ira = [[(40, "ROTH IRA Account # Z12-999999")], *_filler(8)]
+    found = segment(_lines(tod, utma, ira))
+    assert [(a.last4, a.info.name, a.first_page) for a in found.accounts] == [
+        ("5678", "TRANSFER ON DEATH INDIVIDUAL", 1),
+        ("6789", "UNIFORM TRANSFERS TO MINORS ACT", 2),
+        ("9999", "ROTH IRA", 3),
+    ]
+    assert found.preamble == []
+
+
+def test_a_heading_centred_under_a_table_row_still_counts() -> None:
+    """Only a line starting at one of the row's text columns continues the row."""
+    index = [
+        [(40, "Account Name"), (220, "Account Number"), (400, "Closing Balance")],
+        [(40, "Basic Checking"), (220, "XXXX-1357"), (400, "$1,520.00")],
+        [(40, "Rainy Day Savings"), (220, "XXXX-2468"), (400, "$150.00")],
+    ]
+    page = [
+        [(40, "Account Number: XXXX-1357")],
+        [(40, "Date"), (80, "Description"), (480, "Amount")],
+        [(40, "01/09"), (80, "SAMPLE GROCER"), (480, "-80.00")],
+        [(200, "Account Number: XXXX-2468")],  # at no column of the row above
+        [(40, "Date"), (80, "Description"), (480, "Amount")],
+        [(40, "01/31"), (80, "INTEREST"), (480, "0.10")],
+        *_filler(6),
+    ]
+    found = segment(_lines(index, page))
+    assert [(a.last4, len(a.lines)) for a in found.accounts] == [("1357", 3), ("2468", 9)]
+
+
+def test_a_footer_heading_right_under_the_last_row_counts() -> None:
+    first = [
+        [(40, "Account 111-111111")],
+        *_filler(3),
+        [(40, "Date"), (80, "Description"), (480, "Amount")],
+        *[[(40, f"01/{day:02d}"), (80, "BUY"), (480, "-1.00")] for day in range(1, 8)],
+    ]
+    second = [
+        [(40, "Page 2")],
+        [(40, "Date"), (80, "Description"), (480, "Amount")],
+        *[[(40, f"02/{day:02d}"), (80, "BUY"), (480, "-1.00")] for day in range(1, 8)],
+        [(400, "Account 222-222222")],  # the page's footer, right-aligned
+    ]
+    found = segment(_lines(first, second))
+    assert [(a.last4, a.first_page, a.last_page) for a in found.accounts] == [
+        ("1111", 1, 1),
+        ("2222", 2, 2),
+    ]
 
 
 def test_a_mid_page_heading_counts_when_the_index_lists_it() -> None:
