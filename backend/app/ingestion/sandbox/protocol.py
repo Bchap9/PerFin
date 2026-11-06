@@ -21,6 +21,8 @@ from typing import Annotated, Final, Literal
 
 from pydantic import AfterValidator, BaseModel, ConfigDict, Field, model_validator
 
+from app.core.csv_safety import neutralise_formula
+
 FORMAT_VERSION: Final = 1
 
 #: Extractor kinds the child knows: structured formats (Phase 2) and the
@@ -350,19 +352,48 @@ AssetClassCode = Literal[
 ]
 
 
+#: Longest security name carried (``security.name`` holds as much).
+SECURITY_NAME_MAX: Final = 200
+
+
+def _security_name(value: str) -> str:
+    """Whitespace collapsed and a formula neutralised (C7), as the extractors do."""
+    return neutralise_formula(" ".join(value.split()))[:SECURITY_NAME_MAX]
+
+
+def has_word(text: str | None) -> bool:
+    """``text`` holds a letter or a digit (a name that can stand for a security)."""
+    return text is not None and any(ch.isalnum() for ch in text)
+
+
 class SecurityRef(_Strict):
-    """How a statement names an instrument (no holder identity, ever)."""
+    """How a statement names an instrument (no holder identity, ever).
+
+    A symbol, CUSIP or ISIN identifies it; without any of them the name
+    alone does (a holding printed only by its name: an unlisted
+    partnership, a 529 portfolio), when it holds a letter or a digit. The
+    importer matches such a security by its name
+    (``app.domain.investments.statement_import``). Names are bounded,
+    whitespace collapsed and formula-neutralised (SECURITY.md C7).
+    """
 
     symbol: Annotated[str, Field(pattern=r"^[A-Za-z0-9.^/:_-]{1,32}$")] | None = None
     cusip: Annotated[str, Field(pattern=r"^[0-9A-Z*@#]{9}$")] | None = None
     isin: Annotated[str, Field(pattern=r"^[A-Z]{2}[A-Z0-9]{9}[0-9]$")] | None = None
-    name: Annotated[str, Field(max_length=200)] | None = None
+    name: (
+        Annotated[str, Field(max_length=SECURITY_NAME_MAX), AfterValidator(_security_name)] | None
+    ) = None
     asset_class: AssetClassCode | None = None
+
+    @property
+    def identified(self) -> bool:
+        """A symbol, CUSIP or ISIN names it (not its name alone)."""
+        return bool(self.symbol or self.cusip or self.isin)
 
     @model_validator(mode="after")
     def _named(self) -> SecurityRef:
-        if not (self.symbol or self.cusip or self.isin):
-            raise ValueError("a security needs a symbol, CUSIP or ISIN")
+        if not (self.identified or has_word(self.name)):
+            raise ValueError("a security needs a symbol, CUSIP, ISIN or name")
         return self
 
 

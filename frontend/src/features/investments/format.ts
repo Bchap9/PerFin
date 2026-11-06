@@ -120,3 +120,22 @@ export function percentToFraction(percent: string): string | null {
 export function labelOf<K extends string>(table: Readonly<Record<K, string>>, key: K): string {
   return new Map<string, string>(Object.entries(table)).get(key) ?? key;
 }
+
+/** The parts of a security its labels are made of. */
+export interface SecurityNames {
+  symbol: string | null;
+  name: string;
+}
+
+/**
+ * A security's short label: its symbol, else its name (a security an imported
+ * statement printed by its name alone has no symbol).
+ */
+export function securityLabel(security: SecurityNames): string {
+  return security.symbol ?? security.name;
+}
+
+/** "SYM - Name" for a picker; the name alone for a security without a symbol. */
+export function securityOptionLabel(security: SecurityNames): string {
+  return security.symbol === null ? security.name : `${security.symbol} - ${security.name}`;
+}

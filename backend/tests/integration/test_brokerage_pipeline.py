@@ -161,14 +161,14 @@ class Env:
         for t in self.txns(account):
             if t.memo == OPENING_MEMO:
                 continue
-            symbol = names[t.security_id].symbol if t.security_id else None
+            symbol = _key(names[t.security_id]) if t.security_id else None
             rows.append((t.trade_date, str(t.type), symbol, t.quantity, t.amount))
         return sorted(rows, key=lambda r: (r[0], r[1], r[2] or "", r[4]))
 
     def holdings(self, account: Account) -> list[tuple[str, Decimal]]:
         names = self.securities()
         rows: list[Holding] = self.query(select(Holding).where(Holding.account_id == account.id))
-        return sorted((names[h.security_id].symbol, h.quantity) for h in rows)
+        return sorted((_key(names[h.security_id]), h.quantity) for h in rows)
 
     def cash_rows(self, account: Account) -> list[Transaction]:
         return self.query(select(Transaction).where(Transaction.account_id == account.id))
@@ -187,6 +187,11 @@ class Env:
             name="Brokerage",
             **kwargs,
         )
+
+
+def _key(security: Security) -> str:
+    """A security as the fixtures name it: its symbol, else (none printed) its name."""
+    return security.symbol or security.name
 
 
 @pytest.fixture
@@ -265,7 +270,7 @@ def test_brokerage_statement_is_parsed_reconciled_and_committed(env: Env, fmt: s
     stored = ExtractResult.model_validate(document.extraction)
     assert len(stored.investments) == 1
     if fmt == "pdf":
-        assert document.parser_version == "placeholder_brokerage/2"
+        assert document.parser_version == "placeholder_brokerage/3"
         assert document.confidence is not None
         assert document.confidence["parse"]["investment_reconciliation"] == ["ok"]
 
@@ -574,7 +579,7 @@ def test_each_account_of_a_multi_account_pdf_lands_on_its_own_account(env: Env) 
     document = env.document(document_id)
     assert document.status is DocumentStatus.PROCESSED, env.open_reviews(document_id)
     assert document.kind is DocumentKind.STATEMENT
-    assert document.parser_version == "fidelity_investments_statement/3"
+    assert document.parser_version == "fidelity_investments_statement/4"
     # The document spans three accounts: it is linked to none of them.
     assert document.account_id is None
     assert (document.period_start, document.period_end) == (stmt.start, stmt.end)

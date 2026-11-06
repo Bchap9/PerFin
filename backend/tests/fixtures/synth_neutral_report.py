@@ -536,7 +536,7 @@ class _Layout:
                 right[446] = number(a.price, 4)
             right[504] = money(a.cost) if a.cost else ""
             cur.line(
-                {40: f"{a.day:%m/%d/%Y}", 96: a.description, 146: a.key or "", 190: a.name},
+                {40: f"{a.day:%m/%d/%Y}", 96: a.description, 146: a.ident or "", 190: a.name},
                 right,
                 size=7,
             )

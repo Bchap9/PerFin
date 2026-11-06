@@ -1030,15 +1030,19 @@ fractions rounded half-even to 10 decimals (`"0.2100000000"` = 21 %).
 
 - **Securities** (`{"id", "symbol", "name", "asset_class", "currency",
   "isin", "cusip", "sector", "exchange", "created_at", "updated_at"}`): the
-  household's catalogue. Owners and admins see all of it; members and
+  household's catalogue. `symbol` is `null` for a security an imported
+  statement printed by its name alone (an unlisted partnership, a 529
+  portfolio), also in a holding's `security`; clients show its name. Owners and admins see all of it; members and
   viewers see securities with activity on an account they can see, or with
   none at all (a security used only on hidden accounts is `404
   security-not-found`, like another household's). `GET
-  /securities?q=&asset_class=&cursor=&limit=` (by symbol); `POST`
-  (`Idempotency-Key` honoured; symbol and exchange unique, `409
-  security-exists`; ISIN/CUSIP format-checked and upper-cased); `PATCH`
-  (currency only while there are no prices or transactions, `409
-  security-currency-locked`); `DELETE` (`409 security-in-use` with
+  /securities?q=&asset_class=&cursor=&limit=` (by symbol, a security
+  without one by its name); `POST` (`Idempotency-Key` honoured; a symbol
+  is required; symbol and exchange unique, `409 security-exists`;
+  ISIN/CUSIP format-checked and upper-cased); `PATCH` (currency only while
+  there are no prices or transactions, `409 security-currency-locked`; a
+  symbol may be given to a security without one, never set back to
+  `null`); `DELETE` (`409 security-in-use` with
   transactions or lots; prices go with it). Prices: `GET
   /securities/{id}/prices?from=&to=` (newest first), `POST` `{"price_date",
   "close"}` sets that day's close (`source` `manual`, replaces the day's

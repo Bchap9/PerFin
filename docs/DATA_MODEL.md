@@ -348,7 +348,7 @@ budget's currency, one per category, and goes with its category.
 ## Investments
 
 ```
-security          (household, symbol, isin?, cusip?, name, asset_class, sector?, exchange?,
+security          (household, symbol?, isin?, cusip?, name, asset_class, sector?, exchange?,
                    currency)
 holding           (account, security, quantity, cost_basis, currency, as_of)  -- derived cache
 lot               (account, security, open_date, quantity, remaining_quantity, cost_per_unit,
@@ -371,7 +371,13 @@ forced RLS and household-consistent references, ADR-0008):
   another household never learns that a ticker is held).
   `asset_class` is one of equity, etf, mutual_fund, bond, cash_equivalent,
   option, crypto, real_estate, commodity, other. `(household, symbol,
-  exchange)` is unique (a NULL exchange counts as one value); `isin` (12,
+  exchange)` is unique among securities with a symbol (a NULL exchange
+  counts as one value; partial unique index, migration `0012`). `symbol`
+  is NULL for a security an imported statement printed by its name alone
+  (an unlisted partnership, a 529 portfolio): the statement importer
+  matches those by their exact normalised name (NFKC, case-folded, spaces
+  collapsed) and fills the symbol in when a later statement prints one;
+  the API creates securities only with a symbol. `isin` (12,
   check digit last) and `cusip` (9) are format-checked and indexed, not
   unique. `currency` is the quote currency: `price.currency` must equal it
   (composite key on `(household_id, id, currency)`). A security with

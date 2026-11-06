@@ -24,7 +24,7 @@ import {
   type InvestmentTxnType,
   type Security,
 } from "./api";
-import { formatQuantity, labelOf } from "./format";
+import { formatQuantity, labelOf, securityLabel, securityOptionLabel } from "./format";
 import { SecurityDialog } from "./SecurityDialog";
 import { buildTxnBody, emptyTxnForm, fieldsFor, TXN_TYPE_LABELS, type TxnForm, type TxnProblems } from "./txnForm";
 
@@ -107,7 +107,7 @@ export function TxnDialog({
                 value={form.securityId}
                 placeholder="Choose a security"
                 onChange={(event) => { set("securityId", event.target.value); }}
-                options={securities.map((security) => ({ value: security.id, label: `${security.symbol} - ${security.name}` }))}
+                options={securities.map((security) => ({ value: security.id, label: securityOptionLabel(security) }))}
               />
             </Field>
             <Button onClick={() => { setAddingSecurity(true); }}>New security</Button>
@@ -185,6 +185,10 @@ export function TransactionsTab({ account }: { account: string }) {
   });
   const accountName = nameLookup(accounts.data);
   const securityById = new Map((securities.data ?? []).map((entry) => [entry.id, entry]));
+  const securityLabelOf = (id: string): string => {
+    const found = securityById.get(id);
+    return found === undefined ? "Unknown" : securityLabel(found);
+  };
   const remove = useAction(deleteInvestmentTxn, { invalidate: [queryRoots.investments, queryRoots.netWorth, queryRoots.dashboard], success: "Transaction deleted" });
   const editable = investmentAccounts(accounts.data).filter((entry) => entry.can_edit);
 
@@ -192,7 +196,7 @@ export function TransactionsTab({ account }: { account: string }) {
     { id: "date", header: "Date", rowHeader: true, cell: (t) => formatDate(t.trade_date) ?? t.trade_date },
     { id: "type", header: "Type", cell: (t) => labelOf(TXN_TYPE_LABELS, t.type) },
     { id: "account", header: "Account", cell: (t) => accountName(t.account_id) },
-    { id: "security", header: "Security", cell: (t) => (t.security_id === null ? "" : (securityById.get(t.security_id)?.symbol ?? "Unknown")) },
+    { id: "security", header: "Security", cell: (t) => (t.security_id === null ? "" : securityLabelOf(t.security_id)) },
     { id: "qty", header: "Quantity", align: "end", cell: (t) => (t.quantity === null ? "" : formatQuantity(t.quantity)) },
     { id: "price", header: "Price", align: "end", cell: (t) => (t.price === null ? "" : formatQuantity(t.price)) },
     { id: "amount", header: "Amount", align: "end", cell: (t) => <MoneyText amount={t.amount.amount} currency={t.amount.currency} /> },
@@ -220,7 +224,7 @@ export function TransactionsTab({ account }: { account: string }) {
             value={security}
             placeholder="All securities"
             onChange={(event) => { setSecurity(event.target.value); }}
-            options={(securities.data ?? []).map((entry) => ({ value: entry.id, label: entry.symbol }))}
+            options={(securities.data ?? []).map((entry) => ({ value: entry.id, label: securityLabel(entry) }))}
           />
         </Field>
         <Button variant="primary" disabled={editable.length === 0} onClick={() => { setAdding(true); }}>

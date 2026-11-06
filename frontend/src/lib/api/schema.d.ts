@@ -9199,7 +9199,7 @@ export interface components {
             /** Sector */
             sector: string | null;
             /** Symbol */
-            symbol: string;
+            symbol: string | null;
         };
         /** SecurityCreate */
         SecurityCreate: {
@@ -9245,7 +9245,7 @@ export interface components {
             /** Sector */
             sector: string | null;
             /** Symbol */
-            symbol: string;
+            symbol: string | null;
             /**
              * Updated At
              * Format: date-time

@@ -48,6 +48,12 @@ detection) is tested against them:
   ``$6,630.82t``, ``$7,184.90 c $3,821.56``); ``Total <group> (n% of account
   holdings)`` subtotals and ``Total Holdings`` (core included). Holdings run
   over several pages with ``Holdings (continued)``.
+* **Name-only holdings.** Holdings that print no symbol, CUSIP or ISIN, only
+  a name: the IRA's unlisted partnership (:data:`UNLISTED`: an estimated
+  price marked ``A``, ``unknown`` cost basis, a note in sentence case under
+  the name in capitals, and a dividend whose row names it by that name
+  alone) and the 529's two portfolios, whose names end in the fund family
+  in parentheses (``(Example Funds)``), which is no ticker.
 * **Activity.** *Securities Bought & Sold* (``Settlement Date | Security
   Name | Symbol/CUSIP | Transaction Description | Quantity | Price | Cost
   Basis of Close | Transaction Cost | Transaction Total``, headers over two
@@ -123,6 +129,7 @@ __all__ = [
     "INDEX_PAGE_SHIFT",
     "INSTITUTION",
     "MINUS",
+    "UNLISTED",
     "Expected",
     "expected",
     "expected_activity",
@@ -132,6 +139,8 @@ __all__ = [
 ]
 
 INSTITUTION: Final = "Fidelity Investments"
+#: The IRA's unlisted partnership, printed by its name alone (no symbol or CUSIP).
+UNLISTED: Final = "SAMPLE NET LEASE LP XX UNIT"
 #: The page-1 footer naming the broker (the only place page text names it).
 FOOTER_BROKER: Final = "Fidelity Brokerage Services LLC"
 TITLE: Final = "INVESTMENT REPORT"
@@ -720,6 +729,17 @@ def report(start: date = START) -> tuple[Report, Extras]:
                 Decimal("2208.00"),
                 symbol="ZZWSA",
             ),
+            # An unlisted partnership: no symbol, CUSIP or ISIN, an estimated
+            # price marked "A" and a note in sentence case under the name.
+            Position(
+                UNLISTED,
+                "Other",
+                Decimal("8.000"),
+                Decimal("187.500"),
+                Decimal("1500.00"),
+                price_mark="A",
+                notes=("Valued from an independent estimate",),
+            ),
         ),
         activity=(
             Activity(
@@ -769,6 +789,16 @@ def report(start: date = START) -> tuple[Report, Extras]:
                 name="FICTIONAL CASH RESERVES",
                 symbol="ZZCRX",
             ),
+            # Income of the partnership, named by its name alone.
+            Activity(
+                d(22),
+                "dividend",
+                "income",
+                "Dividend received",
+                Decimal("37.50"),
+                name=UNLISTED,
+                named=True,
+            ),
             # The other side of the Individual account's transfers in (the cash
             # leaves as a withdrawal).
             Activity(
@@ -811,21 +841,21 @@ def report(start: date = START) -> tuple[Report, Extras]:
         subtype="529",
         group="EDUCATION (529) ACCOUNTS",
         positions=(
+            # The plan's portfolios print no symbol: their names (with the
+            # fund family in parentheses) are all that names them.
             Position(
-                "Sample College Portfolio 2031",
+                "Sample College Portfolio 2031 (Example Funds)",
                 "Holdings",
                 Decimal("1046.873"),
                 Decimal("18.940"),
                 Decimal("19412.00"),
-                symbol="ZZC31",
             ),
             Position(
-                "Sample Moderate Growth Portfolio",
+                "Sample Moderate Growth Port (Example Funds)",
                 "Holdings",
                 Decimal("512.664"),
                 Decimal("14.270"),
                 Decimal("7170.00"),
-                symbol="ZZMGP",
             ),
         ),
     )
@@ -1546,7 +1576,7 @@ class _Layout:
                 {
                     self.T_DATE: md(a.day),
                     self.T_NAME: name[0],
-                    self.T_SYM: a.key or "",
+                    self.T_SYM: a.ident or "",
                     self.T_DESC: a.description,
                 },
                 right,
@@ -1593,7 +1623,7 @@ class _Layout:
                 {
                     self.T_DATE: md(a.day, pad=pad),
                     self.T_NAME: name[0],
-                    self.T_SYM: a.key or "",
+                    self.T_SYM: a.ident or "",
                     self.T_DESC: a.description,
                 },
                 right,
@@ -2022,7 +2052,7 @@ class _Layout:
         )
         for index, p in enumerate(account.positions):
             cur.line(
-                {40: f"{p.name} ({p.symbol})"},
+                {40: p.name if p.symbol is None else f"{p.name} ({p.symbol})"},
                 {
                     330: _pct(p.market_value, s.end),
                     400: number(p.quantity, 3),

@@ -85,11 +85,12 @@ from app.ingestion.sandbox.protocol import (
     SecurityRef,
     Statement,
     StatementAccount,
+    has_word,
 )
 
 SCHEMA_VERSION: Final = 1
 PARSER_NAME: Final = "layout_template"
-PARSER_VERSION: Final = "1"
+PARSER_VERSION: Final = "2"
 TEMPLATE_REF: Final = ParserRef(name=PARSER_NAME, version=PARSER_VERSION, kind="statement")
 
 MAX_LABEL: Final = 120
@@ -1122,8 +1123,8 @@ def _holdings(
             else None
         )
         name = " ".join([_text(row.cells.get("security")), *row.extra]).strip() or None
-        if symbol is None and name is None:
-            continue
+        if symbol is None and not has_word(name):
+            continue  # a holding needs a symbol or a name (it may be named by it alone)
         price = read_number(_text(row.cells.get("price")).replace(" ", "").lstrip("$"))
         score = {"quantity": conf.GENERIC, "security": conf.GENERIC}
         positions.append(

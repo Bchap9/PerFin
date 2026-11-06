@@ -15,6 +15,7 @@ from datetime import date
 from decimal import Decimal
 
 import pytest
+from pydantic import ValidationError
 from reportlab.pdfgen import canvas
 
 from app.ingestion.classify.fingerprints import (
@@ -80,7 +81,7 @@ def _activity(statement: InvestmentStatement) -> list[Row]:
         (
             a.trade_date,
             a.type,
-            (a.security.symbol or a.security.cusip) if a.security else None,
+            (a.security.symbol or a.security.cusip or a.security.name) if a.security else None,
             a.quantity,
             a.amount,
         )
@@ -92,7 +93,7 @@ def _activity(statement: InvestmentStatement) -> list[Row]:
 def _positions(statement: InvestmentStatement) -> list[tuple[str, Decimal, Decimal, Decimal]]:
     out: list[tuple[str, Decimal, Decimal, Decimal]] = []
     for p in statement.positions:
-        key = p.security.symbol or p.security.cusip
+        key = p.security.symbol or p.security.cusip or p.security.name
         assert key is not None
         assert p.unit_price is not None
         assert p.market_value is not None
@@ -163,6 +164,19 @@ def test_the_report_is_read_exactly_by_the_layouts_parser(report: ExtractResult)
     ira = {p.security.symbol: p for p in result.investments[1].positions}
     assert ira["ZZSMC"].security.isin == "ZZ0000SMC010"
     assert "ZZCRX" not in ira
+    # Holdings printed by their name alone are kept and named by it: the
+    # partnership (its "A" mark dropped, its sentence-case note no part of
+    # its name) and the 529's portfolios ("(Example Funds)" is no ticker).
+    partnership = ira[None]
+    assert (partnership.security.identified, partnership.security.name) == (False, fidr.UNLISTED)
+    assert (partnership.unit_price, partnership.cost_basis) == (Decimal("187.500"), None)
+    income = [a for a in result.investments[1].activity if a.amount == Decimal("37.50")]
+    assert [a.security for a in income] == [partnership.security]
+    assert [p.security.name for p in result.investments[2].positions] == [
+        "Sample College Portfolio 2031 (Example Funds)",
+        "Sample Moderate Growth Port (Example Funds)",
+    ]
+    assert not any(p.security.identified for p in result.investments[2].positions)
 
 
 def test_the_report_is_detected_by_its_metadata_or_its_footer() -> None:
@@ -385,7 +399,7 @@ def test_footnote_markers_are_dropped_from_figures(text: str, plain: str) -> Non
         ("SAMPLE CORP NT CV", None),
         ("EXAMPLE CITY INDL DEV AGY REV", None),
         ("IRA NOT COVERED BY SIPC (QPIKQ) q", "QPIKQ"),
-        ("NH Portfolio 2015 (Fidelity Funds)", None),
+        ("ZZ Portfolio 2030 (Example Funds)", None),
     ],
 )
 def test_a_holdings_symbol_is_only_the_ticker_in_parentheses(raw: str, symbol: str | None) -> None:
@@ -1059,6 +1073,100 @@ def test_the_leading_ticker_rule(raw: str, symbol: str | None) -> None:
         raw_name=raw,
     )
     assert _leading_ticker(row)[0] == symbol
+
+
+_BY_NAME = [(40.0, "Description"), (250.0, "Quantity"), (330.0, "Price"), (420.0, "Market Value")]
+
+
+def test_a_holding_printed_by_its_name_alone_is_kept_by_that_name() -> None:
+    """No symbol, CUSIP or ISIN: the name names the holding; it counts in the total."""
+    rows: Drawn = [
+        [(40, "Holdings")],
+        _BY_NAME,
+        [(40, "EXAMPLE GROWTH FUND (ZZGRX)"), (250, "10"), (330, "$100.00"), (420, "$1,000.00")],
+        [(40, "EXAMPLE ROYALTY"), (250, "4.000"), (330, "125.000A"), (420, "500.00")],
+        [(40, "PARTNERS LP IX-Z")],
+        [(40, "Estimated from an appraisal")],
+        [
+            (40, "Example Plan Portfolio 2040 (Example Funds)"),
+            (250, "20"),
+            (330, "25.00"),
+            (420, "500.00"),
+        ],
+        [(40, "Total Holdings"), (420, "$2,000.00")],
+    ]
+    statement = _generic(rows, cash=("$1,000.00", "$1,000.00"), value="$3,000.00")
+    assert [(p.security.symbol, p.security.name) for p in statement.positions] == [
+        ("ZZGRX", "EXAMPLE GROWTH FUND"),
+        # Wrapped in capitals: the name; the sentence-case line under it: a note.
+        (None, "EXAMPLE ROYALTY PARTNERS LP IX-Z"),
+        # Parentheses holding words are part of the name, not a ticker.
+        (None, "Example Plan Portfolio 2040 (Example Funds)"),
+    ]
+    assert statement.positions[1].unit_price == Decimal("125.000")
+    assert statement.reconciliation is not None
+    assert statement.reconciliation.status == "ok"
+    assert "holdings_total" in statement.reconciliation.checks
+
+
+def test_a_trade_is_named_by_its_security_name_column_alone() -> None:
+    """A sold-out security printed without a symbol is named by its Security Name;
+    a description column never names a security that way."""
+    header = [
+        (40.0, "Date"),
+        (90.0, "Activity"),
+        (160.0, "Security Name"),
+        (330.0, "Quantity"),
+        (390.0, "Price"),
+        (460.0, "Amount"),
+    ]
+    rows: Drawn = [
+        [(40, "Holdings")],
+        _BY_NAME,
+        [(40, "EXAMPLE GROWTH FUND (ZZGRX)"), (250, "10"), (330, "$100.00"), (420, "$1,000.00")],
+        [(40, "Total Holdings"), (420, "$1,000.00")],
+        None,
+        [(40, "Activity")],
+        header,
+        [
+            (40, "03/12/2024"),
+            (90, "Sold"),
+            (160, "Example Private Fund LP"),
+            (330, "5"),
+            (390, "100.00"),
+            (460, "500.00"),
+        ],
+        [(40, "03/14/2024"), (90, "Dividend"), (160, "Example Growth Fund"), (460, "12.00")],
+    ]
+    statement = _generic(rows, cash=("$1,000.00", "$1,512.00"), value="$2,512.00")
+    sold, dividend = statement.activity
+    assert sold.type == "sell"
+    assert sold.security is not None
+    assert (sold.security.identified, sold.security.name) == (False, "Example Private Fund LP")
+    # Income names a security only by a held one's name (here the fund's).
+    assert dividend.security is not None
+    assert dividend.security.symbol == "ZZGRX"
+    assert statement.reconciliation is not None
+    assert statement.reconciliation.status == "ok"
+    described = _generic(
+        [
+            *rows[:6],
+            [(c[0], "Description" if c[1] == "Security Name" else c[1]) for c in header],
+            rows[7],
+        ],
+        cash=("$1,000.00", "$1,500.00"),
+        value="$2,500.00",
+    )
+    assert [a.security for a in described.activity] == [None]
+
+
+def test_a_security_named_by_its_name_alone_needs_a_word() -> None:
+    assert SecurityRef(name="  Example   Fund LP ").name == "Example Fund LP"
+    assert SecurityRef(name="=HYPERLINK(1)").name == "'=HYPERLINK(1)"
+    assert not SecurityRef(name="Example Fund LP").identified
+    for name in (None, "", " - ", "***"):
+        with pytest.raises(ValidationError):
+            SecurityRef(name=name)
 
 
 def _trade(

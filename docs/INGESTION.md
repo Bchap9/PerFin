@@ -695,7 +695,11 @@ OFX `INVSTMTRS` in the sandbox or from a PDF/scan's pages in the worker.
     parser; its description naming no action is the row's memo, and in
     *Securities Transferred In/Out* with a quantity it moves those units. A
     row's description that is the name of a security the statement holds
-    names that security (not a deposit or withdrawal). A table printing
+    names that security (not a deposit or withdrawal), a holding printed by
+    its name alone included. A trade or transfer of units (`buy`, `sell`,
+    `reinvest`, `split`, `transfer_in`/`transfer_out`) with no symbol or
+    CUSIP is named by its *Security Name* column alone (a security no
+    longer held); a description column never names a security that way. A table printing
     minus signs has its unsigned amounts read as inflows (a refund, a fee
     rebate).
   - **Holdings rows**: the symbol is the ticker in parentheses ending
@@ -705,8 +709,15 @@ OFX `INVSTMTRS` in the sandbox or from a PDF/scan's pages in the worker.
     front of its name: a first word of two to five capitals (`ZZAB
     Example Index Fund`, `ZZB.A ...`) before a name that is not all
     capitals, never for a bond priced per 100 or a name with parentheses
-    (`NH Portfolio 2015 (Fidelity Funds)`); in an all-capitals name the
-    first word is the issuer's (`ADI NET LEASE INC ...`). A name wraps until
+    (`ZZ Portfolio 2030 (Example Funds)`); in an all-capitals name the
+    first word is the issuer's (`ZZQ NET LEASE INC ...`). A holding nothing
+    identifies at all is kept, **named by its name alone** (an unlisted
+    partnership, a 529 portfolio: `SecurityRef` with only a name, which must
+    hold a letter or digit; names are bounded to 200 characters, whitespace
+    collapsed and formula-neutralised); it counts in the holdings total like
+    any other. A line in sentence case under a name printed in capitals,
+    with no `(SYMBOL)` (`Valued from an independent estimate`), is a note
+    on the holding, not part of its name. A name wraps until
     its `(SYMBOL)`, also when its next line reads like a section heading
     and ends the name with its `(SYMBOL)` (`EXAMPLE STRATEGIC` / `INCOME
     FUND (ZZSIX)`); without one such a line is the heading (`Dividends and
@@ -846,8 +857,14 @@ OFX `INVSTMTRS` in the sandbox or from a PDF/scan's pages in the worker.
   `investment_low_confidence`; a statement with any date before
   1900-01-01 is held the same way (`investment_date_out_of_range`,
   SECURITY.md F8); OFX with nothing to check is imported like
-  an OFX bank statement. Otherwise: securities by CUSIP, ISIN, then symbol
-  (created in the account currency, identifiers filled in later);
+  an OFX bank statement. Otherwise: securities by CUSIP, ISIN, then symbol,
+  then by name (the same words, case and spacing aside, after Unicode
+  NFKC; never a similar name): a security printed by its name alone is the
+  household's security of that name without identifiers, else the only
+  security carrying that name, else a new security **without a symbol**;
+  one printed with identifiers takes by name only a security that has
+  none (created in the account currency; a CUSIP, ISIN, and a symbol on a
+  security without one, are filled in from later statements);
   activity as `investment_txn` with `import_hash` = sha256 of
   `perfin-invest-v1`, account, trade date, type, security, units, amount
   and the running index among identical rows (the same month as OFX and

@@ -18515,8 +18515,15 @@
             "title": "Sector"
           },
           "symbol": {
-            "title": "Symbol",
-            "type": "string"
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Symbol"
           }
         },
         "required": [
@@ -18682,8 +18689,15 @@
             "title": "Sector"
           },
           "symbol": {
-            "title": "Symbol",
-            "type": "string"
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Symbol"
           },
           "updated_at": {
             "format": "date-time",

@@ -51,6 +51,11 @@ from app.domain.investments.valuation import Converter, PriceBook
 UNCLASSIFIED = "unclassified"
 
 
+def _order(security: Security) -> str:
+    """Holdings by symbol; a security without one by its name among them."""
+    return security.symbol or security.name
+
+
 def gains_out(short: Decimal, long: Decimal, currency: str) -> GainsOut:
     return GainsOut(
         short_term=Money.of(to_storage(short), currency),
@@ -134,7 +139,7 @@ def holdings(
     by_account: dict[uuid.UUID, Decimal] = defaultdict(Decimal)
     with localcontext(calc_context()):
         for row in sorted(
-            rows, key=lambda r: (securities[r.security_id].symbol, r.account_id.bytes)
+            rows, key=lambda r: (_order(securities[r.security_id]), r.account_id.bytes)
         ):
             security = securities[row.security_id]
             account = accounts[row.account_id]
@@ -241,7 +246,7 @@ def holdings(
         )
         for h, r in zip(
             out,
-            sorted(rows, key=lambda r: (securities[r.security_id].symbol, r.account_id.bytes)),
+            sorted(rows, key=lambda r: (_order(securities[r.security_id]), r.account_id.bytes)),
             strict=True,
         )
     ]

@@ -286,6 +286,12 @@ need it ([PORTABILITY.md](PORTABILITY.md)).
   backfilled: they are protected by the row-level duplicate checks only, so
   uploading one of them again is deduplicated row by row, not held as
   `statement_overlap`.
+- Migration `0012` lets `security.symbol` be NULL (securities a statement
+  prints by their name alone) and turns the `(household, symbol, exchange)`
+  unique constraint into a unique index over securities that have a symbol.
+  No data changes. Downgrading below `0012` needs every security to have a
+  symbol again. API clients must accept `"symbol": null` in securities and
+  holdings.
 - No new settings. Several parser versions change (see the changelog);
   re-running the import of an existing document may read it differently,
   usually more rows and more accounts.

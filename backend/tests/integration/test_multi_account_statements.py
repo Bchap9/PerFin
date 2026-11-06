@@ -110,6 +110,14 @@ def test_the_fidelity_layout_report_imports_every_account(env: Env) -> None:
         _assert_activity(env, account, expected.activity)
         # The holdings, bonds by CUSIP (priced per 100), the core sweep as cash.
         assert env.holdings(account) == sorted((p[0], p[1]) for p in expected.positions)
+    # Holdings printed by their name alone (the partnership, the 529's
+    # portfolios) are securities without a symbol, priced from the statement.
+    bare = {s.name: s for s in env.securities().values() if s.symbol is None}
+    assert sorted(bare) == sorted([fidr.UNLISTED, *(p.name for p in stmt.accounts[2].positions)])
+    assert all(s.cusip is None and s.isin is None for s in bare.values())
+    unlisted = bare[fidr.UNLISTED]
+    closes = env.query(select(Price.close).where(Price.security_id == unlisted.id))
+    assert closes == [Decimal("187.500")]
     # A bond's statement price is one unit's: 98.625 per 100 of face value.
     bond = next(s for s in env.securities().values() if s.cusip == "94136RAC4")
     prices: list[Price] = env.query(select(Price).where(Price.security_id == bond.id))

@@ -95,7 +95,14 @@ headings into `ASSET_GROUPS`, action words into `ACTIVITY_TYPES` (or
 Several accounts in one PDF need no code: account headings anywhere on a
 page (also beside an amount) and an account index split the document
 (`app/ingestion/parsers/accounts.py`; INGESTION.md "Several accounts in one
-PDF"). A period printed unlabelled in the page headers needs no code either.
+PDF"). A period printed unlabelled in the page headers needs no code either,
+nor does a holding printed by its name alone (no ticker, CUSIP or ISIN: an
+unlisted partnership, a 529 portfolio): it is a `SecurityRef` with only a
+name (which must hold a letter or digit; it is bounded and
+formula-neutralised by the protocol), kept and counted like any other, and
+the importer matches it by its exact normalised name. Never invent a symbol
+for one, and never name a security by an activity's description column (a
+trade's *Security Name* column may).
 When a parser reads nothing usable the registry tries the next-best one. The fingerprint names
 `parser: brokerage_statement_generic`. Draw the layout from invented data
 (`SynthBrokerage` in `backend/tests/fixtures/synth_brokerage.py`, or a

@@ -1,5 +1,15 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-import { fractionToPercentAmount, formatFraction, gainDisplay, multiplyAmounts, percentToFraction, ratioPercent, weightWidth } from "./format";
+import {
+  fractionToPercentAmount,
+  formatFraction,
+  gainDisplay,
+  multiplyAmounts,
+  percentToFraction,
+  ratioPercent,
+  securityLabel,
+  securityOptionLabel,
+  weightWidth,
+} from "./format";
 
 describe("percent helpers", () => {
   it("shifts fractions to percents exactly", () => {
@@ -48,5 +58,14 @@ describe("gain display", () => {
   it("copes with a zero cost and a flat gain", () => {
     expect(gainDisplay("10", "0")).toMatchObject({ percent: null, percentLabel: "n/a", tone: "gain" });
     expect(gainDisplay("0.00", "50").tone).toBe("flat");
+  });
+});
+
+describe("security labels", () => {
+  it("use the symbol, or the name of a security without one", () => {
+    expect(securityLabel({ symbol: "ZZAB", name: "Example Fund" })).toBe("ZZAB");
+    expect(securityLabel({ symbol: null, name: "Example Plan Portfolio" })).toBe("Example Plan Portfolio");
+    expect(securityOptionLabel({ symbol: "ZZAB", name: "Example Fund" })).toBe("ZZAB - Example Fund");
+    expect(securityOptionLabel({ symbol: null, name: "Example Plan Portfolio" })).toBe("Example Plan Portfolio");
   });
 });

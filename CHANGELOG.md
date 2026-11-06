@@ -8,11 +8,11 @@ All notable changes to PerFin are recorded here. The format follows
 
 The current release candidate is `v1.0.0-rc.4`; the final `v1.0.0` follows the
 external security review. Every phase (0-7) is implemented. Alembic head is
-`0011` (unreleased; `0009` in rc.4). Unreleased work, on 2026-11-06: SPDX;
-backend ruff, ruff format, mypy --strict (676 source files), bandit, OpenAPI
-drift and 8069 pytest tests with `-n 8`, of which the OCR and Helm tests (67)
+`0012` (unreleased; `0009` in rc.4). Unreleased work, on 2026-11-06: SPDX;
+backend ruff, ruff format, mypy --strict (678 source files), bandit, OpenAPI
+drift and 8085 pytest tests with `-n 8`, of which the OCR and Helm tests (67)
 need Tesseract and `helm` and could not run in that environment; frontend
-eslint, tsc, 472 vitest tests in 58 files and the production build. As of rc.2: `pip-audit` finds no known vulnerabilities and
+eslint, tsc, 474 vitest tests in 58 files and the production build. As of rc.2: `pip-audit` finds no known vulnerabilities and
 `npm audit --audit-level=high` passes with 10 moderate advisories in dev
 tooling (eslint, typescript-eslint, minimatch), none high.
 CI is green end to end on GitHub Actions for commit `21d2b38`: `ci` run
@@ -252,11 +252,32 @@ What remains (details in docs/ROADMAP.md):
   explanations for every reason the server raises (skipped rows, running
   balance mismatches, assumed date order, truncated files, payslips, tax
   forms, loan statements, duplicates).
+- **Holdings named by their name alone**: a holding or trade a statement
+  prints with no ticker, CUSIP or ISIN (an unlisted partnership priced by
+  estimate, a 529 portfolio such as `Example Plan Portfolio 2040 (Example
+  Funds)`) is no longer dropped. Statement parsers keep it as a
+  `SecurityRef` with only a name (a letter or digit required; bounded,
+  whitespace collapsed and formula-neutralised by the protocol), so it
+  counts in the holdings total; a line in sentence case under a name in
+  capitals is a note, not part of the name, and a trade or transfer of
+  units is named by its *Security Name* column (never by a description
+  column). The importer matches such a security by its exact normalised
+  name (NFKC, case-folded, spaces collapsed; never a similar name): the
+  household's security of that name without identifiers, else the only
+  security carrying that name, else a new one **without a symbol**. A
+  later statement that prints a symbol, CUSIP or ISIN for the same name
+  fills it in (a symbol only when no other security has it). Securities
+  without a symbol (migration `0012`: `security.symbol` nullable, unique
+  only where present) come back from the API with `"symbol": null`, are
+  listed by their name among the symbols, are never sent to a price feed,
+  merge by name on archive import, and the investments pages show their
+  name. The API still creates securities only with a symbol.
 
 ### Changed
 
-- Parser versions: `brokerage_statement_generic` 4,
-  `fidelity_investments_statement` 3, `placeholder_brokerage` 2,
+- Parser versions: `brokerage_statement_generic` 5,
+  `fidelity_investments_statement` 4, `placeholder_brokerage` 3,
+  `layout_template` 2 (holdings named by their name alone),
   `statement_generic` 3, and the bank and card institution parsers built on
   it (`sample_national_checking`, `example_fcu_share`, `demo_card_services`,
   `mock_savings_and_loan`) 2 (their output for the same pages may change:

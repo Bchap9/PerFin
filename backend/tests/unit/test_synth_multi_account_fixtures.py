@@ -222,7 +222,7 @@ def test_fidelity_table_traits(fid_pdf: ExtractResult) -> None:
         "Daily Additions and Subtractions",
         "Estimated Cash Flow",
         "Core Account Cash Flow Income Summary",
-        "Change from Last Period: -$7,173.29",
+        "Change from Last Period: -$7,135.79",
     ):
         assert any(line.startswith(title) for line in lines), title
 

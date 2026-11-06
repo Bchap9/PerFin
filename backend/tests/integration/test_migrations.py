@@ -34,7 +34,9 @@ run as the owner, exactly like ``perfin migrate`` in production, and then:
 * 0010 creates ``statement_record`` under forced RLS with household-consistent
   keys, and its downgrade removes exactly that table;
 * 0011 adds ``parser_fingerprint.template`` (NULL for existing rows), and its
-  downgrade removes exactly that column.
+  downgrade removes exactly that column;
+* 0012 lets ``security.symbol`` be NULL (unique only where there is one), and
+  its downgrade restores ``NOT NULL`` and the unique constraint.
 """
 
 from __future__ import annotations
@@ -338,6 +340,7 @@ def test_single_head_and_linear_history() -> None:
     assert script.get_base() == "0001"
     # One revision per phase, each on top of the previous one.
     assert [rev.revision for rev in script.walk_revisions("base", "heads")] == [
+        "0012",
         "0011",
         "0010",
         "0009",
@@ -360,6 +363,7 @@ def test_single_head_and_linear_history() -> None:
     assert script.get_revision("0009").down_revision == "0008"
     assert script.get_revision("0010").down_revision == "0009"
     assert script.get_revision("0011").down_revision == "0010"
+    assert script.get_revision("0012").down_revision == "0011"
 
 
 def test_upgrade_head_matches_models_without_drift(migrated: Scratch) -> None:
@@ -1752,3 +1756,59 @@ def test_0011_fingerprint_template_column_downgrades(migrated: Scratch) -> None:
         assert "jsonb_typeof(template)" in check
     finally:
         engine.dispose()
+
+
+def _insert_symbol(conn: Connection, household: uuid.UUID, symbol: str | None) -> None:
+    conn.execute(
+        text(
+            "INSERT INTO security (id, household_id, symbol, name, asset_class, currency) "
+            "VALUES (:id, :h, :s, 'Synthetic Portfolio', 'other', 'USD')"
+        ),
+        {"id": uuid.uuid4(), "h": household, "s": symbol},
+    )
+
+
+def test_0012_securities_without_a_symbol(migrated: Scratch) -> None:
+    """0012 lets ``security.symbol`` be NULL (several per household); a symbol stays
+    unique with its exchange. Downgrade restores ``NOT NULL`` once every security
+    has a symbol."""
+    app = migrated.app_engine()
+    household = uuid.uuid4()
+    try:
+        with app.begin() as conn:
+            set_context(conn, household)
+            conn.execute(
+                text("INSERT INTO household (id, name) VALUES (:id, 'Synthetic')"),
+                {"id": household},
+            )
+            _insert_symbol(conn, household, None)
+            _insert_symbol(conn, household, None)
+            _insert_symbol(conn, household, "ZZAB")
+        with app.connect() as conn, conn.begin():
+            set_context(conn, household)
+            with pytest.raises(DBAPIError, match="uq_security_household_symbol_exchange"):
+                _insert_symbol(conn, household, "ZZAB")
+        with app.connect() as conn, conn.begin():
+            set_context(conn, household)
+            with pytest.raises(DBAPIError, match="check constraint"):
+                _insert_symbol(conn, household, "not a symbol")
+        cfg = migrated.config()
+        with pytest.raises(DBAPIError):
+            command.downgrade(cfg, "0011")
+        with app.begin() as conn:
+            set_context(conn, household)
+            conn.execute(
+                text(
+                    "UPDATE security SET symbol = 'ZZ' || left(md5(id::text), 6) "
+                    "WHERE symbol IS NULL"
+                )
+            )
+        command.downgrade(cfg, "0011")
+        with app.connect() as conn, conn.begin():
+            set_context(conn, household)
+            with pytest.raises(DBAPIError):
+                _insert_symbol(conn, household, None)
+        command.upgrade(cfg, "head")
+        command.check(cfg)
+    finally:
+        app.dispose()

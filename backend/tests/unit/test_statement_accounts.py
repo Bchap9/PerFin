@@ -113,11 +113,13 @@ def test_the_529_is_its_own_statement(fid_parsed: ExtractResult) -> None:
     education = fid_parsed.investments[2]
     expected = stmt.accounts[2]
     assert education.account.last4 == expected.last4
-    assert sorted(p.security.symbol or "" for p in education.positions) == sorted(
-        p.symbol or "" for p in expected.positions
+    # The plan's portfolios print no symbol: each is named by its name alone.
+    assert sorted(p.security.name or "" for p in education.positions) == sorted(
+        p.key for p in expected.positions
     )
+    assert all(not p.security.identified for p in education.positions)
     ira = fid_parsed.investments[1]
-    assert not {p.security.symbol for p in ira.positions} & {p.symbol for p in expected.positions}
+    assert not {p.security.name for p in ira.positions} & {p.key for p in expected.positions}
     assert education.reconciliation is not None
     assert education.reconciliation.status == "ok"
 

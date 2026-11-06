@@ -33,7 +33,7 @@ from tests.fixtures.households import (
     problem_type,
 )
 from tests.fixtures.ledger import LedgerFactories
-from tests.fixtures.wealth import make_lot, make_price
+from tests.fixtures.wealth import make_lot, make_price, make_security
 
 pytestmark = pytest.mark.integration
 
@@ -176,6 +176,64 @@ def test_security_catalogue(world: World, factories: Factories) -> None:
     assert world.member.delete(f"{SECURITIES}/{other['id']}").status_code == 204
     assert world.member.get(f"{SECURITIES}/{other['id']}").status_code == 404
     assert household_audit(factories, world.household_id, "security.create")
+
+
+def test_securities_without_a_symbol(world: World, factories: Factories) -> None:
+    """Securities a statement printed by name alone: listed (by name among the
+    symbols, paged), held and given a symbol later; never created without one."""
+    with factories.transaction() as db:
+        set_context(db, world.household_id)
+        plan = make_security(db, world.household_id, name="Beta Synthetic Plan Portfolio")
+        plan.symbol = None
+        other = make_security(db, world.household_id, name="Alpha Synthetic Partners LP")
+        other.symbol = None
+        plan_id, other_id = str(plan.id), str(other.id)
+    listed = _security(world.member, "SYNZ")
+    items = world.owner.get(SECURITIES).json()["items"]
+    assert [(s["symbol"], s["name"]) for s in items] == [
+        (None, "Alpha Synthetic Partners LP"),
+        (None, "Beta Synthetic Plan Portfolio"),
+        ("SYNZ", "Synthetic SYNZ"),
+    ]
+    seen: list[str] = []
+    page: dict[str, Any] = {"next_cursor": None}
+    while True:
+        params: dict[str, Any] = {"limit": 1}
+        if page["next_cursor"]:
+            params["cursor"] = page["next_cursor"]
+        page = world.owner.get(SECURITIES, params=params).json()
+        seen += [s["id"] for s in page["items"]]
+        if not page["next_cursor"]:
+            break
+    assert seen == [other_id, plan_id, listed["id"]]
+    assert world.owner.get(SECURITIES, params={"q": "plan"}).json()["items"][0]["id"] == plan_id
+    # Held: the holding names it, with no symbol.
+    _txn(
+        world.member,
+        world.brokerage,
+        "buy",
+        "2026-01-05",
+        security={"id": plan_id},
+        quantity="4",
+        amount="-100",
+    )
+    holdings = world.viewer.get(HOLDINGS).json()["holdings"]
+    assert [(h["security"]["symbol"], h["security"]["name"]) for h in holdings] == [
+        (None, "Beta Synthetic Plan Portfolio")
+    ]
+    # A symbol can be set (unique as ever), never unset; none is required to edit.
+    renamed = world.member.patch(f"{SECURITIES}/{other_id}", json={"sector": "Synthetic"})
+    assert (renamed.status_code, renamed.json()["symbol"]) == (200, None)
+    taken = world.member.patch(f"{SECURITIES}/{plan_id}", json={"symbol": "SYNZ"})
+    assert (taken.status_code, problem_type(taken)) == (409, "security-exists")
+    given = world.member.patch(f"{SECURITIES}/{plan_id}", json={"symbol": "SYNPLN"})
+    assert (given.status_code, given.json()["symbol"]) == (200, "SYNPLN")
+    unset = world.member.patch(f"{SECURITIES}/{plan_id}", json={"symbol": None})
+    assert unset.status_code == 422
+    nameless = world.member.post(
+        SECURITIES, json={"name": "No symbol", "asset_class": "other", "currency": "USD"}
+    )
+    assert nameless.status_code == 422
 
 
 def test_security_used_only_on_hidden_account_is_not_found(world: World) -> None:

@@ -89,6 +89,24 @@ describe("investments page", () => {
     expect(within(lots).getByText("Long term")).toBeInTheDocument();
   });
 
+  it("names a holding without a symbol by its name", async () => {
+    const [held] = holdings.holdings;
+    const plan = { ...held, security: { ...held?.security, symbol: null, name: "Example Plan Portfolio" } };
+    mockApi({
+      ...ownerSession(),
+      "GET /api/v1/accounts": accounts(),
+      "GET /api/v1/households/:id": referenceHandlers()["GET /api/v1/households/:id"] ?? (() => json({})),
+      "GET /api/v1/investments/holdings": () => json({ ...holdings, holdings: [plan] }),
+    });
+    renderApp("/investments");
+    const table = await screen.findByRole("table", { name: "Holdings" });
+    const row = within(table).getByRole("row", { name: /Example Plan Portfolio/ });
+    expect(within(row).getByText("Example Plan Portfolio")).toBeInTheDocument();
+    expect(within(row).queryByText("null")).not.toBeInTheDocument();
+    await userEvent.setup().click(screen.getByRole("button", { name: /Show lots of Example Plan Portfolio in Brokerage/ }));
+    expect(await screen.findByRole("dialog", { name: "Lots of Example Plan Portfolio" })).toBeInTheDocument();
+  });
+
   it("records a buy with the cash cost computed from quantity and price", async () => {
     const api = mockApi({
       ...ownerSession(),

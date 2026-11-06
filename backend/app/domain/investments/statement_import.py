@@ -41,8 +41,16 @@ statements"). Per statement:
    table whose day/month order was a guess marks every row
    ``low_confidence`` (``trade_date``) and is held like any such row.
 4. **Securities**: found in the household's catalogue by CUSIP, ISIN, then
-   symbol, else created (quote currency = the account's); identifiers a
-   later statement adds are filled in.
+   symbol, else by name (:func:`~app.domain.investments.models.security_name_key`:
+   the same words, case and spacing aside; never a similar name), else
+   created (quote currency = the account's). A security printed by its
+   name alone (``SecurityRef`` with no symbol, CUSIP or ISIN: an unlisted
+   partnership, a 529 portfolio) is the household's security of that name
+   with no identifier, else the one security carrying that name, else a
+   new one **without a symbol**; one printed with identifiers takes, by
+   name, only a security that has none. Identifiers a later statement adds
+   are filled in: a CUSIP or ISIN, and a symbol on a security without one
+   (unless another security already has that symbol).
 5. **Activity** -> ``investment_txn`` with an ``import_hash`` (account,
    trade date, type, security, quantity, amount, running index among
    identical rows), so the same statement as OFX and as PDF, or overlapping
@@ -126,6 +134,7 @@ from app.domain.investments.models import (
     Lot,
     Price,
     Security,
+    security_name_key,
 )
 from app.domain.investments.service import replay_position
 from app.ingestion.match.accounts import match_account
@@ -243,7 +252,9 @@ class _Context:
     commit_cash: CommitCash
     user_id: uuid.UUID | None
     result: InvestmentImport
-    securities: dict[tuple[str, str], Security] = field(default_factory=dict)
+    securities: dict[tuple[str, str, str], Security] = field(default_factory=dict)
+    #: The household's securities by name key (loaded on first use).
+    by_name: dict[str, list[Security]] | None = None
 
     @property
     def household_id(self) -> uuid.UUID:
@@ -384,6 +395,7 @@ def _held(
                     {
                         "index": i,
                         "symbol": statement.positions[i].security.symbol,
+                        "name": statement.positions[i].security.name,
                         "quantity": _text(statement.positions[i].quantity),
                         "unit_price": _text(statement.positions[i].unit_price),
                         "market_value": _text(statement.positions[i].market_value),
@@ -440,6 +452,38 @@ def _held(
 # ---------------------------------------------------------------------------
 
 
+def _named(ctx: _Context) -> dict[str, list[Security]]:
+    """The household's securities by :func:`security_name_key`, oldest first."""
+    if ctx.by_name is None:
+        found = ctx.db.execute(
+            select(Security)
+            .where(Security.household_id == ctx.household_id)
+            .order_by(Security.created_at, Security.id)
+        )
+        ctx.by_name = defaultdict(list)
+        for security in found.scalars():
+            ctx.by_name[security_name_key(security.name)].append(security)
+    return ctx.by_name
+
+
+def _unidentified(security: Security) -> bool:
+    return security.symbol is None and security.cusip is None and security.isin is None
+
+
+def _by_name(ctx: _Context, ref: SecurityRef) -> Security | None:
+    """The security ``ref`` names by its name alone (module doc, step 4)."""
+    key = security_name_key(ref.name or "")
+    if not key:
+        return None
+    same = _named(ctx).get(key, [])
+    bare = [s for s in same if _unidentified(s)]
+    if bare:
+        return bare[0]
+    if not ref.identified and len(same) == 1:
+        return same[0]
+    return None
+
+
 def _find_security(ctx: _Context, ref: SecurityRef) -> Security | None:
     db, household_id = ctx.db, ctx.household_id
     for column, value in (
@@ -456,35 +500,51 @@ def _find_security(ctx: _Context, ref: SecurityRef) -> Security | None:
         security = found.scalar_one_or_none()
         if security is not None:
             return security
-    return None
+    return _by_name(ctx, ref)
+
+
+def _symbol_free(ctx: _Context, symbol: str) -> bool:
+    taken = select(Security.id).where(
+        Security.household_id == ctx.household_id,
+        Security.symbol == symbol,
+        Security.exchange.is_(None),
+    )
+    return ctx.db.execute(taken.limit(1)).first() is None
 
 
 def _security(ctx: _Context, ref: SecurityRef, account: Account) -> Security:
-    key = (ref.cusip or ref.isin or "", ref.symbol or "")
+    key = (
+        ref.cusip or ref.isin or "",
+        ref.symbol or "",
+        "" if ref.identified else security_name_key(ref.name or ""),
+    )
     cached = ctx.securities.get(key)
     if cached is not None:
         return cached
     security = _find_security(ctx, ref)
     if security is None:
-        symbol = ref.symbol or ref.cusip or ref.isin or ""
+        symbol = ref.symbol or ref.cusip or ref.isin
         security = Security(
             id=uuid7(),
             household_id=ctx.household_id,
             symbol=symbol,
             cusip=ref.cusip,
             isin=ref.isin,
-            name=(ref.name or symbol)[:200],
+            name=(ref.name or symbol or "")[:200],
             asset_class=AssetClass(ref.asset_class or AssetClass.OTHER),
             currency=account.currency,
         )
         ctx.db.add(security)
         ctx.db.flush()
         ctx.result.securities_created += 1
+        _named(ctx)[security_name_key(security.name)].append(security)
     else:
         if security.cusip is None and ref.cusip is not None:
             security.cusip = ref.cusip
         if security.isin is None and ref.isin is not None:
             security.isin = ref.isin
+        if security.symbol is None and ref.symbol is not None and _symbol_free(ctx, ref.symbol):
+            security.symbol = ref.symbol
     ctx.securities[key] = security
     return security
 

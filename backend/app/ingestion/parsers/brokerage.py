@@ -61,7 +61,11 @@ Two halves (INGESTION.md "Brokerage statements", SECURITY.md C12):
     (``— 7-day yield: 0.01%``) are read for nothing. Only a holding
     nothing else identifies takes a ticker printed in front of its name
     (:func:`_leading_ticker`: ``ZZAB Example Index Fund``; never in an
-    all-capitals name, whose first word is an issuer's). Footnote markers
+    all-capitals name, whose first word is an issuer's); one with none at
+    all is kept, **named by its name alone** (``SecurityRef`` with only a
+    name: an unlisted partnership, a 529 portfolio), and a line in sentence
+    case under a name in capitals is a note on it, not its name
+    (:func:`_sentence_under_capitals`). Footnote markers
     in figures (``147.85A``, ``$8,412.36 c``) are dropped,
     ``unknown``/``N/A`` cost basis is unknown. A price is read per
     100 of face value (a bond: :attr:`InvestmentPosition.price_per_100`)
@@ -110,7 +114,9 @@ Two halves (INGESTION.md "Brokerage statements", SECURITY.md C12):
     withheld are fees. The action text types a row first
     (:func:`activity_type`, :data:`ACTIVITY_TYPES`), the section the rest
     (text naming no action is then the row's description; a description
-    that is a held security's name names that security);
+    that is a held security's name names that security, one held by its
+    name alone too; a trade or transfer of units with no symbol or CUSIP
+    is named by its *Security Name* column alone, never by a description);
     an unsigned amount takes the type's direction (a buy takes cash out)
     unless its table prints minus signs (then it is an inflow); a transfer
     of units printed without an amount (``-``) moves no cash; a split's
@@ -220,6 +226,7 @@ from app.ingestion.sandbox.protocol import (
     SecurityRef,
     Statement,
     StatementAccount,
+    has_word,
 )
 
 # ---------------------------------------------------------------------------
@@ -1204,6 +1211,8 @@ class _ActivityRow:
     table: int = 0
     #: The type is the section's: the amount's sign decides deposit or withdrawal.
     by_sign: bool = False
+    #: The text of a security-name column (``Security Name``), when the table has one.
+    security_name: str | None = None
 
 
 @dataclass
@@ -1447,7 +1456,7 @@ class BrokerageStatementParser(DocumentParser):
     """
 
     name: ClassVar[str] = "brokerage_statement_generic"
-    version: ClassVar[str] = "4"
+    version: ClassVar[str] = "5"
     kind: ClassVar[Literal["statement", "payslip", "receipt"]] = "statement"
     display_name: ClassVar[str | None] = None
     #: Phrases on the first page that identify the institution (its name first).
@@ -1891,6 +1900,11 @@ class BrokerageStatementParser(DocumentParser):
         extra = _text(cells.get("name"))
         if not extra or row.closed:
             return False
+        if _sentence_under_capitals(row.raw_name, extra):
+            # ``Based on an independent appraisal`` under a name in capitals:
+            # a note on the holding, no part of its name.
+            row.bbox = (*row.bbox[:3], line.bbox[3])
+            return True
         row.raw_name = f"{row.raw_name or ''} {extra}".strip()[:200]
         if row.symbol_column:
             row.name = row.raw_name
@@ -2031,6 +2045,7 @@ class BrokerageStatementParser(DocumentParser):
                 cusip=cusip,
                 table=collected.tables,
                 by_sign=by_sign,
+                security_name=name or None,
             )
         )
 
@@ -2345,9 +2360,10 @@ class BrokerageStatementParser(DocumentParser):
         isin: str | None = None,
         asset_class: AssetClassCode | None = None,
     ) -> SecurityRef | None:
-        if symbol is None and cusip is None and isin is None:
-            return None
+        """The row's security: by its identifiers, else by its name alone."""
         clean_name = (name or (known.get(symbol) if symbol else None) or "").strip()[:200] or None
+        if symbol is None and cusip is None and isin is None and not has_word(clean_name):
+            return None
         try:
             return SecurityRef(
                 symbol=symbol,
@@ -2367,7 +2383,8 @@ class BrokerageStatementParser(DocumentParser):
         for row in collected.holdings:
             symbol, name = row.symbol, row.name
             if symbol is None and row.cusip is None and row.isin is None:
-                # Nothing else identifies it: a ticker in front of its name.
+                # Nothing else identifies it: a ticker in front of its name,
+                # else the name alone.
                 symbol, name = _leading_ticker(row)
             security = self._security(
                 symbol,
@@ -2432,10 +2449,19 @@ class BrokerageStatementParser(DocumentParser):
                 lead, rest = _split_symbol(name)
                 if lead is not None and (lead in known or row.type in SECURITY_TYPES):
                     symbol, name = lead, rest
-            security = self._security(symbol, name, known, cusip=row.cusip)
+            security = (
+                self._security(symbol, name, known, cusip=row.cusip)
+                if symbol is not None or row.cusip is not None
+                else None
+            )
             if security is None and name is not None and row.type not in _CASH_TYPES:
-                # A description that is a held security's name names it.
+                # A description that is a held security's name names it (also a
+                # holding printed by its name alone).
                 security = held.get(_name_key(name))
+            if security is None and row.security_name and row.type in SECURITY_TYPES:
+                # A trade or transfer whose security-name column is all that names
+                # its security (one no longer held): that name.
+                security = self._security(None, row.security_name, known)
             amount = row.amount.value
             kind = row.type
             if row.by_sign and (row.amount.negative_marked or amount < 0):
@@ -2867,6 +2893,18 @@ def _per_100(row: _HoldingRow) -> bool:
 _CASH_TYPES: Final = frozenset({"deposit", "withdrawal"})
 
 
+def _sentence_under_capitals(name: str | None, line: str) -> bool:
+    """``line`` is in sentence case under a name printed in capitals, and ends no
+    name (no ``(SYMBOL)``): a note on the holding, not the rest of its name."""
+    letters = [ch for ch in name or "" if ch.isalpha()]
+    return (
+        bool(letters)
+        and not any(ch.islower() for ch in letters)
+        and any(ch.islower() for ch in line)
+        and _PAREN_SYMBOL.search(line) is None
+    )
+
+
 def _name_key(name: str) -> str:
     """A security name compared without its ``(SYMBOL)``, case or punctuation."""
     return normalise(_PAREN_SYMBOL.sub(" ", name))
@@ -2972,10 +3010,10 @@ def _leading_ticker(row: _HoldingRow) -> tuple[str | None, str | None]:
     first word in capitals before a name that is not
     (``ZZAB Example Index Fund``).
 
-    Never when the whole name is in capitals (``ADI NET LEASE INC ...``: the
+    Never when the whole name is in capitals (``ZZQ NET LEASE INC ...``: the
     first word is the issuer's), for a bond priced per 100, nor for a name
     with parentheses (a layout that prints tickers prints them in them:
-    ``NH Portfolio 2015 (Fidelity Funds)`` has none).
+    ``ZZ Portfolio 2030 (Example Funds)`` has none).
     """
     raw = (row.raw_name or row.name or "").strip()
     head, _, rest = raw.partition(" ")
@@ -3007,7 +3045,7 @@ class PlaceholderBrokerageParser(BrokerageStatementParser):
     """Placeholder Brokerage (fictional): ``MM/DD/YYYY``, USD, signed amounts."""
 
     name: ClassVar[str] = "placeholder_brokerage"
-    version: ClassVar[str] = "2"
+    version: ClassVar[str] = "3"
     institution: ClassVar[str | None] = "placeholder-brokerage-account"
     display_name: ClassVar[str | None] = "Placeholder Brokerage"
     fingerprints: ClassVar[tuple[str, ...]] = (
@@ -3051,7 +3089,7 @@ class FidelityStatementParser(BrokerageStatementParser):
     """
 
     name: ClassVar[str] = "fidelity_investments_statement"
-    version: ClassVar[str] = "3"
+    version: ClassVar[str] = "4"
     institution: ClassVar[str | None] = "fidelity-investments-statement"
     display_name: ClassVar[str | None] = "Fidelity Investments"
     fingerprints: ClassVar[tuple[str, ...]] = ("fidelity investments", "investment report")

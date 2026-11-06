@@ -23,10 +23,11 @@ keys are checked before it decides):
   of the same name or an FX rate for the same pair and day is kept and the
   archive's is skipped; names that would clash are suffixed ``(imported)``;
 * securities are merged by symbol and exchange (a different quote currency
-  is ``archive-inconsistent``); a price, net worth snapshot, tax category
-  map, checklist item or learned layout (parser fingerprint) the household
-  already has for the same key wins over the archive's; tax years are
-  merged by year;
+  is ``archive-inconsistent``), a security without a symbol by its name
+  (``security_name_key``) and exchange among those without one; a price,
+  net worth snapshot, tax category map, checklist item or learned layout
+  (parser fingerprint) the household already has for the same key wins
+  over the archive's; tax years are merged by year;
 * everything else (accounts, transactions, splits, tags on transactions,
   balance snapshots, schedules, rules, budgets, goals, documents and their
   links, investment settings, investment transactions, lots, loans with
@@ -85,7 +86,12 @@ from app.domain.fx.models import FxRate
 from app.domain.imports.models import ImportMapping
 from app.domain.imports.schemas import MappingSpec
 from app.domain.investments import service as investments_service
-from app.domain.investments.models import InvestmentTxnType, Price, Security
+from app.domain.investments.models import (
+    InvestmentTxnType,
+    Price,
+    Security,
+    security_name_key,
+)
 from app.domain.investments.statement_import import HASH_VERSION as INVEST_HASH_VERSION
 from app.domain.investments.statement_import import activity_hash
 from app.domain.networth.models import NetWorthSnapshot
@@ -137,6 +143,11 @@ _RULE_KINDS: Final = {
     "tag": "tags",
     "account": "accounts",
 }
+
+
+def _unsymbolled(name: str, exchange: str | None) -> tuple[str, str, str | None]:
+    """The merge key of a security without a symbol: its name key and exchange."""
+    return ("name", security_name_key(name), exchange)
 
 
 def _fail(slug: str, detail: str) -> ArchiveInvalidError:
@@ -768,18 +779,34 @@ class _Importer:
             row["template"] = None
 
     def securities(self) -> None:
-        """Merged into the catalogue by symbol and exchange (same quote currency)."""
-        existing = {
-            (symbol, exchange): (sid, currency)
-            for sid, symbol, exchange, currency in self.session.execute(
-                select(Security.id, Security.symbol, Security.exchange, Security.currency).where(
-                    Security.household_id == self.household_id
+        """Merged into the catalogue by symbol and exchange (same quote currency); one
+        without a symbol by its name (``security_name_key``) among those without one."""
+        catalogue = list(
+            self.session.execute(
+                select(
+                    Security.id,
+                    Security.symbol,
+                    Security.name,
+                    Security.exchange,
+                    Security.currency,
                 )
+                .where(Security.household_id == self.household_id)
+                .order_by(Security.created_at, Security.id)
             )
-        }
+        )
+        existing: dict[tuple[str, str, str | None], tuple[uuid.UUID, str]] = {}
+        for sid, symbol, name, exchange, currency in catalogue:
+            key = (
+                ("symbol", symbol, exchange) if symbol is not None else _unsymbolled(name, exchange)
+            )
+            existing.setdefault(key, (sid, currency))
         new_rows: list[dict[str, Any]] = []
         for row in self.rows("securities"):
-            match = existing.get((row["symbol"], row["exchange"]))
+            match = existing.get(
+                ("symbol", row["symbol"], row["exchange"])
+                if row["symbol"] is not None
+                else _unsymbolled(row["name"], row["exchange"])
+            )
             if match is None:
                 new_rows.append(row)
                 continue
@@ -793,7 +820,7 @@ class _Importer:
             self.ids["securities"][row["id"]] = security_id
             self.merged["securities"] += 1
         self.insert("securities", new_rows)
-        self.existing_securities = {sid for sid, _ in existing.values()}
+        self.existing_securities = {row[0] for row in catalogue}
 
     def prices(self) -> None:
         """A price the household already has for the security and day wins."""

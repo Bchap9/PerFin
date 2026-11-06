@@ -135,9 +135,8 @@ class Position:
 
     @property
     def key(self) -> str:
-        key = self.symbol or self.cusip
-        assert key is not None
-        return key
+        """The symbol or CUSIP, else (a holding printed by its name alone) the name."""
+        return self.symbol or self.cusip or self.name
 
 
 @dataclass(frozen=True)
@@ -159,10 +158,18 @@ class Activity:
     reference: str = ""
     #: Lines printed under the row (a wash-sale or gain note, an account ref).
     notes: tuple[str, ...] = ()
+    #: ``name`` alone names the row's security (a holding printed without a symbol).
+    named: bool = False
+
+    @property
+    def ident(self) -> str | None:
+        """The symbol or CUSIP the row prints."""
+        return self.symbol or self.cusip
 
     @property
     def key(self) -> str | None:
-        return self.symbol or self.cusip
+        """The row's security: its symbol or CUSIP, else its name when that names it."""
+        return self.ident or (self.name if self.named else None)
 
     @property
     def shown(self) -> Decimal:
@@ -241,13 +248,14 @@ def check_account(account: Account) -> None:
 def expected_activity(
     account: Account,
 ) -> list[tuple[date, str, str | None, Decimal | None, Decimal]]:
-    """``(date, type, symbol or CUSIP, quantity, cash amount)`` per row, sorted."""
+    """``(date, type, symbol or CUSIP (or name), quantity, cash amount)`` per row, sorted."""
     rows = [(a.day, a.type, a.key, a.quantity, a.amount) for a in account.activity]
     return sorted(rows, key=lambda r: (r[0], r[1], r[2] or "", r[4]))
 
 
 def expected_positions(account: Account) -> list[tuple[str, Decimal, Decimal, Decimal]]:
-    """``(symbol or CUSIP, quantity, printed price, market value)`` per position, sorted.
+    """``(symbol or CUSIP, else name, quantity, printed price, market value)`` per position,
+    sorted.
 
     The core / sweep cash is not a position (it is ``cash_closing``). A bond's
     price is the printed price per 100 of face value (:attr:`Position.per_100`).
