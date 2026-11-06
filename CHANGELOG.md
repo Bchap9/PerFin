@@ -6,11 +6,11 @@ All notable changes to PerFin are recorded here. The format follows
 
 ## Status
 
-The current release candidate is `v1.0.0-rc.4`; the final `v1.0.0` follows the
+The current release candidate is `v1.0.0-rc.5`; the final `v1.0.0` follows the
 external security review. Every phase (0-7) is implemented. Alembic head is
-`0012` (unreleased; `0009` in rc.4). Unreleased work, on 2026-11-06: SPDX;
+`0012`. On 2026-11-06: SPDX;
 backend ruff, ruff format, mypy --strict (683 source files), bandit, OpenAPI
-drift and 8158 pytest tests with `-n 8`, of which the OCR and Helm tests (67)
+drift and 8160 pytest tests with `-n 8`, of which the OCR and Helm tests (67)
 need Tesseract and `helm` and could not run in that environment; frontend
 eslint, tsc, 487 vitest tests in 58 files and the production build. As of rc.2: `pip-audit` finds no known vulnerabilities and
 `npm audit --audit-level=high` passes with 10 moderate advisories in dev
@@ -35,6 +35,19 @@ What remains (details in docs/ROADMAP.md):
   hosts, and contributed classifier samples.
 
 ## [Unreleased]
+
+Nothing yet.
+
+## [1.0.0-rc.5] - 2026-11-06
+
+Fifth release candidate of 1.0.0. Statements that hold several accounts in
+one PDF (a Fidelity "Investment Report") are split into one statement per
+account; the statement period is read from the page header; a statement
+already imported for the same account and period is held instead of doubled;
+card statements that print only a statement date read their year-less rows;
+securities printed by name alone are kept; a held brokerage statement can be
+imported as read; and "Teach PerFin" lets a person show PerFin what each
+field of a page is and remember the layout. Migrations `0010`-`0012`.
 
 ### Added
 
@@ -401,6 +414,10 @@ What remains (details in docs/ROADMAP.md):
   are ..." read as `ARE`); the code must be printed in capitals.
 - An opening position for units held before a statement's period and
   transferred or sold out during it no longer stops the import.
+- The time-weighted return is compounded with guard digits and rounded once,
+  so a period whose exact return sits half-way between two rounded rates
+  (a fall from 20.48 to 0.01 is exactly -0.99951171875) rounds half-even
+  instead of a hair off; the no-flows TWR property test failed on it.
 
 ## [1.0.0-rc.4] - 2026-11-06
 

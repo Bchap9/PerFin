@@ -277,7 +277,7 @@ need it ([PORTABILITY.md](PORTABILITY.md)).
 
 ## Notes for specific releases
 
-### Unreleased
+### 1.0.0-rc.5
 
 - Migration `0010` adds the `statement_record` table (the statement-level
   duplicate guard) and `0011` the nullable `parser_fingerprint.template`
