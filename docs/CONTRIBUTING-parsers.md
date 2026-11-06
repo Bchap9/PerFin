@@ -75,7 +75,9 @@ date instead of a period, a table headed only `New Transactions for <NAME>
 | Foreign Spending | Amount $`, month-named dates without a year across a
 year boundary, `CR` under the amount, a two-line description, a boxed
 equation summary and a payment stub are read by `card_statement_generic`
-(INGESTION.md "Card statements of account"). Its synthetic layout is
+(INGESTION.md "Card statements of account"); it is chosen over
+`statement_generic` only on card words printed outside the rows (a card
+payee on a checking statement is no cue). Its synthetic layout is
 `backend/tests/fixtures/synth_card_statement.py`
 (`tests/unit/test_card_statement.py`); extend that rather than special-casing
 an issuer.

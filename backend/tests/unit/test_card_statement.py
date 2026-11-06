@@ -21,7 +21,7 @@ import pytest
 from app.ingestion.classify.service import classify_extraction
 from app.ingestion.extract.pdf import extract_pdf
 from app.ingestion.parsers.base import Cell, DocumentView, ViewLine
-from app.ingestion.parsers.registry import parse_extraction
+from app.ingestion.parsers.registry import PARSERS, parse_extraction
 from app.ingestion.parsers.table_statement import (
     CardStatementParser,
     TableStatementParser,
@@ -339,3 +339,177 @@ def test_an_opening_closing_date_range_is_the_period_not_a_statement_date() -> N
     (statement,) = CardStatementParser().parse(view, threshold=0.85).statements
     assert (statement.period_start, statement.period_end) == (date(2024, 12, 15), date(2025, 1, 14))
     assert [t.posted for t in statement.transactions] == [date(2024, 12, 20)]
+
+
+@pytest.mark.parametrize(
+    ("marker", "skipped"),
+    [
+        ("Detach and mail this portion with your payment", 0),
+        ("Please fold, tear and return the lower portion", 0),
+        ("Please detach here    Amount Due $ 12,448.71", 0),
+        # No words at all: the stub's dated line is read as a row, but one
+        # row after the statement date among two dozen is an outlier, skipped.
+        ("- - - - - - - - - - - - - - - - - - - - - - - -", 1),
+    ],
+    ids=["detach-and-mail", "tear-and-return", "marker-with-amount", "perforation-only"],
+)
+def test_other_stub_wordings_keep_the_statement_date(marker: str, skipped: int) -> None:
+    stmt = synth.card_statement()
+    result = _parse(synth.card_pdf(stmt, stub_marker=marker))
+    assert result.parse is not None
+    assert result.parse.skipped_lines == skipped
+    statement = _only(result)
+    assert sorted((t.posted, t.amount, t.payee) for t in statement.transactions) == (
+        synth.expected(stmt)
+    )
+    assert (statement.period_start, statement.period_end) == (
+        date(2024, 12, 13),
+        date(2025, 1, 14),
+    )
+    assert statement.reconciliation is not None
+    assert statement.reconciliation.status == "ok"
+
+
+@pytest.mark.parametrize(
+    "line",
+    [
+        "Previous Statement Date: 12/13/2024   Statement Date: 01/14/2025",
+        "Statement Date: 01/14/2025   Previous Statement Date: 12/13/2024",
+    ],
+    ids=["previous-first", "statement-first"],
+)
+def test_both_statement_dates_on_one_line(line: str) -> None:
+    view = _view(
+        [
+            [(line, 62.0)],
+            HEADER,
+            [("12/20", 62.0), ("Coffee", 150.0), ("4.50", 500.0)],
+            [("01/10", 62.0), ("Tea", 150.0), ("3.00", 500.0)],
+        ]
+    )
+    outcome = CardStatementParser().parse(view, threshold=0.85)
+    assert outcome.skipped_lines == 0
+    (statement,) = outcome.statements
+    assert (statement.period_start, statement.period_end) == (date(2024, 12, 14), date(2025, 1, 14))
+    assert [t.posted for t in statement.transactions] == [date(2024, 12, 20), date(2025, 1, 10)]
+
+
+@pytest.mark.parametrize(
+    "lines",
+    [
+        ["Next Closing Date 02/13/25", "Closing Date 01/14/25"],
+        ["Closing Date 01/14/25   Next Closing Date 02/13/25"],
+        ["Next Billing Date: 02/13/25   Billing Date: 01/14/25"],
+    ],
+    ids=["next-line-first", "next-after-on-line", "next-before-on-line"],
+)
+def test_the_next_statements_date_is_not_this_ones(lines: list[str]) -> None:
+    view = _view(
+        [
+            *([(text, 62.0)] for text in lines),
+            HEADER,
+            [("12/20", 62.0), ("Coffee", 150.0), ("4.50", 500.0)],
+            [("01/10", 62.0), ("Tea", 150.0), ("3.00", 500.0)],
+        ]
+    )
+    (statement,) = CardStatementParser().parse(view, threshold=0.85).statements
+    assert (statement.period_start, statement.period_end) == (date(2024, 12, 15), date(2025, 1, 14))
+
+
+def test_one_row_after_the_statement_date_is_skipped_not_the_date() -> None:
+    view = _view(
+        [
+            [("Statement Date: 01/14/2025", 62.0)],
+            HEADER,
+            [("12/20", 62.0), ("Coffee", 150.0), ("4.50", 500.0)],
+            [("01/02", 62.0), ("Lunch", 150.0), ("15.00", 500.0)],
+            [("01/10", 62.0), ("Tea", 150.0), ("3.00", 500.0)],
+            [("02/08/2025", 62.0), ("", 150.0), ("12,448.71", 500.0)],
+        ]
+    )
+    outcome = CardStatementParser().parse(view, threshold=0.85)
+    assert outcome.skipped_lines == 1
+    (statement,) = outcome.statements
+    assert (statement.period_start, statement.period_end) == (date(2024, 12, 15), date(2025, 1, 14))
+    assert [t.posted for t in statement.transactions] == [
+        date(2024, 12, 20),
+        date(2025, 1, 2),
+        date(2025, 1, 10),
+    ]
+
+
+CHECKING_TOP = [
+    [("Riverside Savings Checking Statement", 62.0)],
+    [("Statement period 01/01/2025 - 01/31/2025", 62.0)],
+    [("Opening balance 1,000.00", 62.0)],
+    [("Closing balance 2,500.00", 62.0)],
+]
+
+
+@pytest.mark.parametrize(
+    "table",
+    [
+        [
+            [("Date", 62.0), ("Description", 150.0), ("Amount", 450.0)],
+            [("01/05/2025", 62.0), ("PAYROLL ACME", 150.0), ("2,000.00", 450.0)],
+            [("01/09/2025", 62.0), ("CARDMEMBER SERV WEB PYMT", 150.0), ("-500.00", 450.0)],
+        ],
+        [
+            [
+                ("Date", 62.0),
+                ("Description", 150.0),
+                ("Withdrawals", 300.0),
+                ("Deposits", 400.0),
+                ("Balance", 500.0),
+            ],
+            [
+                ("01/05/2025", 62.0),
+                ("PAYROLL ACME", 150.0),
+                ("2,000.00", 400.0),
+                ("3,000.00", 500.0),
+            ],
+            [
+                ("01/09/2025", 62.0),
+                ("ONLINE PAYMENT", 150.0),
+                ("500.00", 300.0),
+                ("2,500.00", 500.0),
+            ],
+            # A wrapped line of the row is no card cue either.
+            [("CREDIT CARD CARDMEMBER SERV", 150.0)],
+        ],
+    ],
+    ids=["amount", "withdrawals-deposits"],
+)
+def test_card_words_in_a_checking_accounts_rows_are_no_card_cue(
+    table: list[list[tuple[str, float]]],
+) -> None:
+    view = _view([*CHECKING_TOP, *table])
+    assert CardStatementParser().detect(view) == 0.0
+    best = max(PARSERS, key=lambda p: p.detect(view))
+    assert best.name == "statement_generic"
+    (statement,) = best.parse(view, threshold=0.85).statements
+    assert statement.account.account_type != "creditcard"
+    assert [t.amount for t in statement.transactions] == [Decimal("2000.00"), Decimal("-500.00")]
+    assert statement.reconciliation is not None
+    assert statement.reconciliation.status == "ok"
+
+
+@pytest.mark.parametrize(
+    ("words", "card"),
+    [
+        (["Cardmember since 2019"], False),
+        (["Card Member Services", "Cardmember since 2019"], False),
+        (["Cardmember since 2019", "New Charges 25.00"], True),
+        (["Corporate Card"], True),
+    ],
+    ids=["one-weak", "one-weak-twice", "two-weak", "strong"],
+)
+def test_weak_card_words_need_a_second_cue(words: list[str], card: bool) -> None:
+    view = _view(
+        [
+            *([(w, 62.0)] for w in words),
+            HEADER,
+            [("01/05/2025", 62.0), ("Coffee", 150.0), ("4.50", 500.0)],
+        ]
+    )
+    assert (CardStatementParser().detect(view) > 0) is card

@@ -66,7 +66,7 @@ IDENTITY_TOKENS: Final = (
     FAKE_SSN,
     FAKE_EIN,
     "testperson",
-    "quill",
+    "quill",  # no other fixture may print it: the scan reads the shared test database
     "quuxwood",  # unique: a token shared with another fixture made the scan order-dependent
     "nowhereville",
     "makebelieve",

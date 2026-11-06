@@ -475,9 +475,13 @@ a child answering with parser output is `bad_output`.
   credits negative or `CR`; balances owed become negative). Numeric dates
   whose day/month order the values do not show are guessed `mdy` at low
   confidence; yearless dates take their year from the period. The card
-  variant (`card_statement_generic`) needs card vocabulary on page 1
-  ("card ending", "credit card", "card statement", "new charges",
-  "corporate card", "charge card", "cardmember", ...).
+  variant (`card_statement_generic`) needs card vocabulary on page 1,
+  outside the transaction rows and their wrapped lines (a checking
+  account's `CARDMEMBER SERV WEB PYMT` or `CREDIT CARD PAYMENT` row is
+  no cue): one of "card ending", "credit card", "card statement",
+  "minimum payment", "credit limit", "corporate card", "charge card", or
+  two of the weaker "new charges" and "cardmember"/"card member".
+  Numeric rows with and without a year in one table are both read.
 - **Card statements of account** (`table_statement.py`, version 4, any
   institution): the layout of a charge or corporate card statement that
   prints a **statement date** and no period.
@@ -498,10 +502,15 @@ a child answering with parser output is `bad_output`.
     heading; its value beside it or in the cell under it) ends the period.
     It starts the day after a printed previous statement date, else the
     day after the same date a month before, or the earliest row when one
-    is older. Yearless rows take the latest year on or before the
-    statement date (December rows of a January statement are the year
-    before; no row lands after it); a row printed with a year after the
-    "statement date" drops it (the rows' span is the period, inferred).
+    is older. A label's value runs to the next label on its line (both
+    dates on one line), and a label after `Next` (`Next Closing Date`)
+    is the next statement's, never this one's. Yearless rows take the
+    latest year on or before the statement date (December rows of a
+    January statement are the year before; no row lands after it). When
+    half the dated rows or more are printed with a year after the
+    "statement date", it is none (the rows' span is the period,
+    inferred); fewer such rows are outliers (a stub's dated line read as
+    a row when the stub has no marker we know) and are skipped.
     Confidence 0.9 (`DERIVED`): a stated period for the duplicate guard
     and `document.period_*`. A range after `Opening/Closing Date` is a
     period label, not a statement date.
@@ -513,7 +522,8 @@ a child answering with parser output is `bad_output`.
     match the rows' money in and out, or the statement does not reconcile
     (warning `summary_totals_mismatch`).
   - *Payment stub*: from a line saying to detach it (`Please detach here`,
-    `Return this portion`, ..., no amount) to the end of its page nothing
+    `Return this portion`, `Detach and mail`, `Tear and return`, ...;
+    with no amount, or starting with the marker) to the end of its page nothing
     is read (unless a table header follows on that page), so its dated
     `Amount Due` line is no row and its full account number is never the
     statement's.

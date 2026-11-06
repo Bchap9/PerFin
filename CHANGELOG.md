@@ -323,7 +323,10 @@ What remains (details in docs/ROADMAP.md):
     after the same date a month before, or on the earliest row when one is
     older; yearless rows take the latest year on or before the statement
     date, so December rows of a January statement are last year's (a
-    range after `Opening/Closing Date` is read as the period);
+    range after `Opening/Closing Date` is read as the period); both dates
+    on one line are read, a `Next Closing Date` is never the statement's,
+    and a few rows dated after the statement date (a stub's line read as
+    a row) are skipped rather than dropping the date;
   - a table headed only by its heading and money columns (`New
     Transactions for <NAME> | Foreign Spending | Amount $`): each row's
     date and description are read from the cells left of the columns;
@@ -339,9 +342,15 @@ What remains (details in docs/ROADMAP.md):
     statement date; when the summary is a whole equation, the rows' money
     in and out must also equal its credits and charges, or the statement
     does not reconcile (warning `summary_totals_mismatch`);
-  - a payment stub (from `Please detach here`, `Return this portion`... to
-    the end of its page) is never read, so its dated `Amount Due` line is
-    no row and its full account number never the statement's.
+  - a payment stub (from `Please detach here`, `Return this portion`,
+    `Detach and mail`... to the end of its page, the marker line may carry
+    the amount due) is never read, so its dated `Amount Due` line is no
+    row and its full account number never the statement's;
+  - the card parser is chosen only on card words outside the transaction
+    rows, and the weaker ones (`New Charges`, `Cardmember`) need a second
+    cue, so a checking statement with a `CARDMEMBER SERV` payment row
+    stays a checking statement with its signs as printed;
+  - numeric rows with and without a year in one table are both read.
 
   A synthetic layout (`tests/fixtures/synth_card_statement.py`: invented
   issuer, cardholder and merchants, four pages, a year boundary, `CR`

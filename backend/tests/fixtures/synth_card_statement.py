@@ -71,6 +71,8 @@ ISSUER: Final = "Borealis Express"
 HOLDER: Final = "JORDAN Q SAMPLE"
 MASKED: Final = "XXXX-XXXXX4-62019"
 STUB_NUMBER: Final = "9999-123454-62019"
+#: The line over the payment stub.
+STUB_MARKER: Final = "Please detach here"
 LAST4: Final = "2019"
 
 
@@ -183,7 +185,7 @@ def default_rows() -> tuple[CardRow, ...]:
         ),
         CardRow(
             _d(y0, 12, 27),
-            ("QUILLSTONE STUDIO, LLC", "PORTLAND", "OR"),
+            ("INKSTONE STUDIO, LLC", "PORTLAND", "OR"),
             "Goods or Services",
             m("498.12"),
             foreign=("362.00", "US Dollar"),
@@ -250,7 +252,7 @@ def default_rows() -> tuple[CardRow, ...]:
         ),
         CardRow(
             _d(y1, 1, 8),
-            ("QUILLSTONE STUDIO, LLC", "PORTLAND", "OR"),
+            ("INKSTONE STUDIO, LLC", "PORTLAND", "OR"),
             "Goods or Services",
             m("71.94"),
             foreign=("50.00", "US Dollar"),
@@ -462,10 +464,10 @@ def _row(c: canvas.Canvas, row: CardRow, y: float) -> float:
     return y - 25
 
 
-def _stub(c: canvas.Canvas, stmt: CardStatement) -> None:
+def _stub(c: canvas.Canvas, stmt: CardStatement, marker: str = STUB_MARKER) -> None:
     """The payment stub at the bottom of page 1 (never transactions)."""
     c.setFont(FONT, 7)
-    c.drawCentredString(306, 262, "Please detach here")
+    c.drawCentredString(306, 262, marker)
     c.setFont(BOLD, 15)
     c.drawString(LEFT, 238, ISSUER.upper())
     c.setFont(FONT, 6.5)
@@ -520,8 +522,12 @@ def card_pdf(
     first_page_rows: int = 8,
     rows_per_page: int = 12,
     stub: bool = True,
+    stub_marker: str = STUB_MARKER,
 ) -> bytes:
-    """``stmt`` drawn over continuation pages, the stub on page 1, notes last."""
+    """``stmt`` drawn over continuation pages, the stub on page 1, notes last.
+
+    ``stub_marker`` is the line over the stub (other wordings, a perforation).
+    """
     rows = list(stmt.rows)
     chunks = [rows[:first_page_rows]]
     rest = rows[first_page_rows:]
@@ -543,7 +549,7 @@ def card_pdf(
             c.drawString(DESC, y, f"Total of New Transactions for {stmt.holder}")
             c.drawRightString(AMOUNT_RIGHT, y, money(stmt.charges - stmt.credits))
         if number == 1 and stub:
-            _stub(c, stmt)
+            _stub(c, stmt, stub_marker)
         c.setFont(FONT, 6)
         c.drawString(LEFT, 40, DISCLAIMER)
         c.showPage()

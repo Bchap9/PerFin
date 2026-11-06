@@ -30,7 +30,8 @@ are read the same way:
    amount column of that line marks the row's amount, as one after the
    amount does. Dates may carry a mark after them (``January 9 *``: a
    processing date) and may be month names without a year
-   (``December 16``, ``16 Dec``).
+   (``December 16``, ``16 Dec``); numeric rows with and without a year
+   in one table are both read.
    Section headings set the row type (fees, interest) or start a *pending*
    section whose rows are counted but not imported (they are not posted and
    not part of the balances). Totals, page footers and "continued" lines are
@@ -38,9 +39,10 @@ are read the same way:
    A **payment stub** is left out before anything is read
    (:meth:`TableStatementParser.without_stubs`): from a line saying to
    detach it (``Please detach here``, ``Return this portion``..., without
-   an amount) to the end of its page, unless a table header follows on
-   that page; so its dated ``Amount Due`` line is no row and its account
-   number with all digits is not the statement's.
+   an amount or starting with the marker: a row starts with its date) to
+   the end of its page, unless a table header follows on that page; so its
+   dated ``Amount Due`` line is no row and its account number with all
+   digits is not the statement's.
 3. **Summary.** Outside the rows: the statement period (``Statement period``,
    ``Billing period``...), the account's last four digits (a masked number
    or "ending in"), the currency, and the opening/closing balances by label.
@@ -69,12 +71,17 @@ are read the same way:
    ``Date`` on a line naming no column heading) ends the period
    (:func:`anchored_period`): it starts the day after a printed previous
    statement date, else the day after the same date a month before, or on
-   the earliest row when one is older. Yearless rows take the latest year
-   that keeps them on or before the statement date (December rows of a
-   January statement are the year before; none lands after it). A row
-   printed with its year after the "statement date" shows it is none (the
-   rows' span is the period, as without one). Its confidence is
-   ``confidence.DERIVED``: a stated period for the duplicate guard.
+   the earliest row when one is older. Each label's value runs to the next
+   label on its line (``Previous Statement Date: 12/13/24  Statement Date:
+   01/14/25``); a label after ``Next`` (``Next Closing Date``) is another
+   statement's and only ends the value before it. Yearless rows take the
+   latest year that keeps them on or before the statement date (December
+   rows of a January statement are the year before; none lands after it).
+   When half the dated rows or more are printed with a year after the
+   "statement date", it is none (the rows' span is the period, as without
+   one); fewer are outliers (a stub's dated line read as a row) and are
+   skipped. Its confidence is ``confidence.DERIVED``: a stated period for
+   the duplicate guard.
 4. **Signs.** ``bank``: a signed amount as printed, *Debit* negative and
    *Credit* positive, ``CR``/``DR`` markers honoured. ``card``: charges are
    printed positive and credits negative or with ``CR``; both the amounts and
@@ -233,7 +240,14 @@ STUB_MARKERS: Final = (
     "return this coupon",
     "payment coupon",
     "remittance slip",
+    "detach and mail",
+    "tear and return",
+    "return the lower portion",
+    "return the bottom portion",
 )
+#: A word before a statement date label that makes it another statement's
+#: date (``Next Closing Date``).
+OTHER_STATEMENT_WORDS: Final = frozenset({"next", "upcoming", "following"})
 #: A marker after a row's date (``January 9 *``: a processing date).
 _DATE_MARKS: Final = " *\u2020"
 #: Yearless styles a month-named row date may be printed in.
@@ -724,11 +738,42 @@ class TableStatementParser(DocumentParser):
             out.append(line)
         return out
 
+    def summary_lines(self, lines: Sequence[ViewLine]) -> list[ViewLine]:
+        """``lines`` without table headers, transaction rows and the rows'
+        wrapped lines: what the statement says about itself, not its payees
+        (a dated line in a table is a row; an undated one with description
+        text only is a wrap)."""
+        out: list[ViewLine] = []
+        columns: list[Column] | None = None
+        for line in lines:
+            header = self.columns(line)
+            if header is not None:
+                columns = header
+                continue
+            if columns is not None and self._header_like(line):
+                columns = None
+            if columns is None:
+                out.append(line)
+                continue
+            cells = self._assign(line, columns)
+            self._split_lead(cells)
+            date_text = " ".join(c.text for c in cells.get("date", [])).strip(_DATE_MARKS)
+            if date_text and self._date_shaped(date_text):
+                continue
+            if cells and set(cells) <= {"description", "foreign"}:
+                continue
+            out.append(line)
+        return out
+
     def _stub_marker(self, line: ViewLine) -> bool:
+        """A line saying to detach the stub: without an amount, or starting
+        with the marker (``Please detach here  Amount Due $ 12.00``; a
+        transaction row starts with its date)."""
         norm = f" {line.norm} "
-        if not any(f" {marker} " in norm for marker in self.stub_markers):
+        found = [m for m in self.stub_markers if f" {m} " in norm]
+        if not found:
             return False
-        return not find_amounts(line.text)
+        return not find_amounts(line.text) or any(norm.startswith(f" {m} ") for m in found)
 
     def _label_amount(self, line: ViewLine, labels: Sequence[str]) -> Amount | None:
         for label in labels:
@@ -764,17 +809,16 @@ class TableStatementParser(DocumentParser):
 
     def _scan_dates(self, line: ViewLine, summary: _Summary) -> None:
         """Statement date and previous statement date candidates on ``line``."""
-        text = line.text
-        for labels, out in (
-            (self.previous_date_labels, summary.previous_dates),
-            (self.statement_date_labels, summary.statement_dates),
-        ):
-            ends = [e for e in (label_end(text, label) for label in labels) if e is not None]
-            if ends:
-                rest = text[min(ends) :]
-                if any(ch.isdigit() for ch in rest) and len(out) < MAX_PERIOD_CANDIDATES:
-                    out.append(rest)
-                break
+        text = line.text[:MAX_LINE]
+        for out, value in self._date_label_values(text):
+            if out == "previous":
+                found = summary.previous_dates
+            elif out == "statement":
+                found = summary.statement_dates
+            else:
+                continue
+            if any(ch.isdigit() for ch in value) and len(found) < MAX_PERIOD_CANDIDATES:
+                found.append(value)
         if not self._bare_date_labels(line):
             return
         for cell, after in zip(line.cells, line.cells[1:], strict=False):
@@ -782,6 +826,35 @@ class TableStatementParser(DocumentParser):
                 MAX_PERIOD_CANDIDATES
             ):
                 summary.statement_dates.append(after.text)
+
+    def _date_label_values(self, text: str) -> list[tuple[str | None, str]]:
+        """Each date label on ``text`` with its value: the text up to the next label.
+
+        ``("previous" | "statement" | None, value)`` in reading order. A label
+        inside a longer one is no label of its own (``Statement Date`` in
+        ``Previous Statement Date``); one after ``Next`` (``Next Closing
+        Date``) names another statement's date: None, it only ends the value
+        before it.
+        """
+        found: list[tuple[int, int, str | None]] = []
+        for kind, labels in (
+            ("previous", self.previous_date_labels),
+            ("statement", self.statement_date_labels),
+        ):
+            for label in labels:
+                for match in _label_pattern(label).finditer(text):
+                    found.append((match.start(), match.end(), kind))
+        kept: list[tuple[int, int, str | None]] = []
+        for start, end, label_kind in sorted(found, key=lambda f: (f[0], -f[1])):
+            if any(s <= start and end <= e for s, e, _ in kept):
+                continue
+            before = text[:start].split()
+            other = bool(before) and normalise(before[-1]) in OTHER_STATEMENT_WORDS
+            kept.append((start, end, None if other else label_kind))
+        return [
+            (label_kind, text[end : kept[i + 1][0] if i + 1 < len(kept) else len(text)])
+            for i, (_, end, label_kind) in enumerate(kept)
+        ]
 
     def _bare_date_labels(self, line: ViewLine) -> bool:
         """A cell reading only ``Date`` labels the statement date on ``line``:
@@ -1034,7 +1107,8 @@ class TableStatementParser(DocumentParser):
             if hint in NUMERIC_DM and (not certain or style == hint):
                 # The classifier's fingerprint knows the institution's order.
                 style, certain = hint, True
-            yearless = all((numeric_parts(t) or (0, 0, 0))[2] is None for t in numeric)
+            # A yearless style reads full dates too: rows mixing both keep both.
+            yearless = any((numeric_parts(t) or (0, 0, 0))[2] is None for t in numeric)
             if style is None:  # pragma: no cover - numeric values always give a style
                 style = "mdy"
             if yearless:
@@ -1233,10 +1307,16 @@ class TableStatementParser(DocumentParser):
             # Only a statement date: a yearless row is the latest date not after it.
             window, strict = (anchor[0] - timedelta(days=364), anchor[0]), True
         dates = [self._row_date(row, styles, window, strict) for row in rows]
-        if anchor is not None and any(d is not None and d > anchor[0] for d in dates):
-            # A row printed with its year after the "statement date": not one.
-            anchor = None
-            dates = [self._row_date(row, styles, None, False) for row in rows]
+        if anchor is not None:
+            later = sum(1 for d in dates if d is not None and d > anchor[0])
+            if later and 2 * later >= sum(1 for d in dates if d is not None):
+                # Half the rows or more printed with a year after the
+                # "statement date": it is none.
+                anchor = None
+                dates = [self._row_date(row, styles, None, False) for row in rows]
+            elif later:
+                # A few outliers (a stub's dated line read as a row): skipped.
+                dates = [None if d is not None and d > anchor[0] else d for d in dates]
         if anchor is not None:
             period = anchored_period(*anchor, [d for d in dates if d is not None])
         transactions: list[ExtractedTransaction] = []
@@ -1417,23 +1497,30 @@ def totals_disagree(
     return abs(money_in - credits) > TOLERANCE or abs(money_out - charges) > TOLERANCE
 
 
-#: Words on a card statement's first page (the generic card parser's cue).
+#: Words on a card statement's first page (the generic card parser's cue),
+#: read outside the transaction rows (:meth:`TableStatementParser.summary_lines`:
+#: a checking account's ``CREDIT CARD PAYMENT`` row is no cue).
 CARD_VOCABULARY: Final = (
     "card ending",
     "credit card",
     "card statement",
     "minimum payment",
     "credit limit",
-    "new charges",
     "corporate card",
     "charge card",
-    "cardmember",
-    "card member",
 )
+#: Card words that other statements print too (``CARDMEMBER SERV`` as a
+#: payee, ``new charges`` on a fee notice): a cue only two together.
+WEAK_CARD_VOCABULARY: Final = ("new charges", "cardmember", "card member")
 
 
 class CardStatementParser(TableStatementParser):
-    """Generic credit card statement: charges positive, credits ``CR`` or negative."""
+    """Generic credit card statement: charges positive, credits ``CR`` or negative.
+
+    Detected (0.45, above ``statement_generic``) when page 1 has a table and,
+    outside its rows, a card word (:data:`CARD_VOCABULARY`) or two of the
+    weak ones (:data:`WEAK_CARD_VOCABULARY`).
+    """
 
     name: ClassVar[str] = "card_statement_generic"
     sign: ClassVar[Literal["bank", "card"]] = "card"
@@ -1442,8 +1529,12 @@ class CardStatementParser(TableStatementParser):
     def detect(self, view: DocumentView) -> float:
         if self.fingerprints:
             return super().detect(view)
-        head = f" {view.head_text()} "
-        if not any(f" {word} " in head for word in CARD_VOCABULARY):
+        page_one = [line for line in view.lines if line.page <= 1]
+        head = f" {' '.join(line.norm for line in self.summary_lines(page_one))} "
+        strong = any(f" {word} " in head for word in CARD_VOCABULARY)
+        # Each weak word once (``Card Member`` and ``Cardmember`` are one).
+        weak = len({w.replace(" ", "") for w in WEAK_CARD_VOCABULARY if f" {w} " in head})
+        if not strong and weak < 2:
             return 0.0
         # Above the bank-statement generic parser for the same table.
         return 0.45 if self.has_table(view) else 0.0

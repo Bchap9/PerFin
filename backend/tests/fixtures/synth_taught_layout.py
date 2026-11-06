@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """A synthetic statement layout no parser knows, for "Teach PerFin" (INGESTION.md).
 
-An invented institution (*Quillfeather Mutual Test Society*) with labels and
+An invented institution (*Larkfeather Mutual Test Society*) with labels and
 column headers chosen to be in none of the parsers' vocabularies, so the
 first statement of it reads nothing (``unparsed``/``no_records``) until a
 person labels it; the second statement of the same layout (other dates,
@@ -31,7 +31,7 @@ from typing import Final
 from reportlab.lib.pagesizes import letter
 from reportlab.pdfgen import canvas
 
-INSTITUTION: Final = "Quillfeather Mutual Test Society"
+INSTITUTION: Final = "Larkfeather Mutual Test Society"
 FONT: Final = "Helvetica"
 BOLD: Final = "Helvetica-Bold"
 DISCLAIMER: Final = "SYNTHETIC TEST DOCUMENT - INVENTED DATA - NOT A REAL STATEMENT"
