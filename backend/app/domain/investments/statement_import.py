@@ -109,7 +109,9 @@ statements"). Per statement:
    the first imported statement) enter as one ``transfer_in`` per security
    on the period's first day (memo ``Opening position from statement``;
    cost per unit from the printed cost basis, else the price); history
-   holding more than reported raises a ``position_mismatch`` item. Lots,
+   holding more than reported raises a ``position_mismatch`` item (a
+   short position, a negative quantity, counts as none: the lot engine
+   holds no short positions). Lots,
    ``lot_links`` and the ``holding`` cache are then written by the
    investments lot engine (``service.replay_position``, FIFO or average
    cost per account). An activity export (``csv``, no positions) that
@@ -129,7 +131,8 @@ statements"). Per statement:
    out) is costed at the price its own rows print (one unit's).
 9. **Balance snapshot**: holdings + closing cash on ``as_of``
    (``source = statement``) when every check that could run held and both
-   are known; never for a statement accepted as read (step 3).
+   are known (a statement printing no cash gives none); never for a
+   statement accepted as read (step 3).
 """
 
 from __future__ import annotations

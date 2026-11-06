@@ -9,8 +9,8 @@ All notable changes to PerFin are recorded here. The format follows
 The current release candidate is `v1.0.0-rc.4`; the final `v1.0.0` follows the
 external security review. Every phase (0-7) is implemented. Alembic head is
 `0012` (unreleased; `0009` in rc.4). Unreleased work, on 2026-11-06: SPDX;
-backend ruff, ruff format, mypy --strict (681 source files), bandit, OpenAPI
-drift and 8127 pytest tests with `-n 8`, of which the OCR and Helm tests (67)
+backend ruff, ruff format, mypy --strict (683 source files), bandit, OpenAPI
+drift and 8158 pytest tests with `-n 8`, of which the OCR and Helm tests (67)
 need Tesseract and `helm` and could not run in that environment; frontend
 eslint, tsc, 487 vitest tests in 58 files and the production build. As of rc.2: `pip-audit` finds no known vulnerabilities and
 `npm audit --audit-level=high` passes with 10 moderate advisories in dev

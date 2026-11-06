@@ -973,13 +973,17 @@ OFX `INVSTMTRS` in the sandbox or from a PDF/scan's pages in the worker.
   not explain become one opening `transfer_in` per security on the
   period's first day (memo `Opening position from statement`, cost per
   unit from the printed cost basis, else the price); history holding more
-  than reported raises `position_mismatch`. Lots, `lot_links` and holdings
+  than reported raises `position_mismatch`. A short position (a negative
+  quantity) counts as none: the lot engine holds no short positions, so
+  units the history holds against one raise `position_mismatch` too. Lots,
+  `lot_links` and holdings
   are then written by the investments lot engine
   (`service.replay_position`); a history it refuses rolls the statement
   back (savepoint) with `investment_lot_conflict`. Position prices become
   `price` rows (`source = statement`) unless another source has that day;
   holdings + closing cash on `as_of` is a `statement` balance snapshot when
-  reconciled. New rows of a statement older than activity already recorded
+  reconciled and both are known (a statement printing no cash, such as a
+  529 plan's, gives none; nor does one imported as read). New rows of a statement older than activity already recorded
   are not written (`investment_out_of_order`): import statements oldest
   first. Audit `investment.import`; events `investment.imported` and
   `balance.updated` (both with `account_id`).
