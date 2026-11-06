@@ -650,11 +650,19 @@ OFX `INVSTMTRS` in the sandbox or from a PDF/scan's pages in the worker.
     skipped section is read; right under the section's heading such a line
     is a sub-heading (`SAMPLE CHECK CARD (ACCOUNT ...0000)`) and the section
     stays. A table running onto the next page continues its section: the
-    section's own header repeated on a later page, under the page's running
-    header (`Account Number: XXXX-1234`, the client's name), keeps it, and
-    a short line over a header that names no column the header does not
-    (it would only add unnamed columns) is a heading, never the header's
-    top line. In an account with a holdings or security table, such a cash
+    section's own header repeated on a later page keeps it at the page's
+    top or under the page's running header, which is a line printed in the
+    header band (the top lines, above the first row or figure) of both that
+    page and the page the section's header was on (the client's name, the
+    institution's), or a line naming the account (`Account Number:
+    XXXX-1234`, its number) or the page (`Page 2 of 4`). Any other line
+    there (`Miscellaneous Items`, `Other Transactions` at the top of the
+    page, or under its running header) is a heading and ends the section,
+    exactly as on one page. A short line over a header that names no column
+    the header's other lines do not (it would only add unnamed columns) is a
+    heading, never the header's top line, also under a running page header
+    (`ATM Withdrawals`, `Wire Transfers`: the rows keep their whole
+    description). In an account with a holdings or security table, such a cash
     table (date, description, amount) is activity even for the generic
     parser; its description naming no action is the row's memo, and in
     *Securities Transferred In/Out* with a quantity it moves those units. A

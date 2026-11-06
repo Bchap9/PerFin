@@ -85,8 +85,11 @@ Two halves (INGESTION.md "Brokerage statements", SECURITY.md C12):
     how its rows are read, until the next heading (after the section's own
     table, a heading no section names right above a table ends it; right
     under the section's heading it is a sub-heading, a card's name; the
-    section's header repeated on a later page under a running page header
-    continues it):
+    section's header repeated on a later page continues it at the page's
+    top or under the page's running header, a line printed in the header
+    band of that page and of the page the section's header was on, or
+    naming the account or the page: :meth:`~BrokerageStatementParser._continued`;
+    any other line there is a heading and ends the section as on one page):
     trades pending settlement, cash-flow summaries and daily balances are
     no activity; securities transferred in/out move
     units (the amount printed is their value) or, without units, cash;
@@ -153,8 +156,11 @@ from pydantic import ValidationError
 from app.core.money import sum_amounts
 from app.ingestion.parsers import confidence as conf
 from app.ingestion.parsers.accounts import (
+    HEADING_TOP_LINES,
     AccountInfo,
     AccountSegment,
+    account_heading,
+    number_last4,
     segment,
 )
 from app.ingestion.parsers.base import (
@@ -1232,8 +1238,11 @@ class _Collected:
     #: Activity tables read since the last section heading.
     section_tables: int = 0
     #: The column roles and page of the section's latest table header: the
-    #: same header repeated on a later page continues the section.
+    #: same header repeated on a later page under the page's running header
+    #: continues the section.
     section_header: tuple[tuple[tuple[str, ...], ...], int] | None = None
+    #: Each page's header band (:func:`_page_bands`) of the whole document.
+    bands: Mapping[int, frozenset[str]] = field(default_factory=dict)
     group: str | None = None
     last_holding: _HoldingRow | None = None
     #: Inside a table the layout says not to read (``ignored_tables``).
@@ -1244,6 +1253,42 @@ class _Collected:
     @property
     def found_table(self) -> bool:
         return self.holdings_header or self.activity_header
+
+
+#: A line naming the page it is on (``Page 2 of 4``, ``Statement page 3``).
+_PAGE_LABEL: Final = re.compile(r"\bpage \d{1,4}(?: of \d{1,4})?\b")
+
+
+def _band_key(line: ViewLine) -> str:
+    """A line as a page's header band is compared: normalised, digits alike."""
+    return re.sub(r"\d", "0", line.norm)
+
+
+def _page_bands(lines: Sequence[ViewLine]) -> dict[int, frozenset[str]]:
+    """Each page's header band: its first :data:`HEADING_TOP_LINES` lines above
+    its first line that prints an amount or is led by a date (a table row, a
+    summary figure), as :func:`_band_key` gives them.
+
+    A line in the bands of two pages is printed at the top of both: a running
+    page header (the client's name, the institution's), not a heading.
+    """
+    bands: dict[int, set[str]] = {}
+    seen: dict[int, int] = {}
+    ended: set[int] = set()
+    for line in lines:
+        band = bands.setdefault(line.page, set())
+        seen[line.page] = position = seen.get(line.page, 0) + 1
+        if line.page in ended:
+            continue
+        if (
+            position > HEADING_TOP_LINES
+            or find_amounts(line.text)
+            or numeric_parts(line.cells[0].text) is not None
+        ):
+            ended.add(line.page)
+            continue
+        band.add(_band_key(line))
+    return {page: frozenset(band) for page, band in bands.items()}
 
 
 # ---------------------------------------------------------------------------
@@ -1458,9 +1503,13 @@ class BrokerageStatementParser(DocumentParser):
         names more known columns than fewer of its lines; a later line with
         an amount is a row, never header, and a heading (a section, an asset
         group) is never a header's top line; nor is a short top line (one or
-        two cells) that names no column the lines under it do not (an unknown
-        heading, a running page header: its words would only add or widen
-        ``other`` columns).
+        two cells) that names no column the header's other lines do not (an
+        unknown heading, a running page header: its words would only add or
+        widen ``other`` columns). The other lines are compared as they are,
+        so a page's running header over an unknown heading over the columns
+        (``Jane Example`` / ``ATM Withdrawals`` / ``Date | Description |
+        Amount``) is no header either and the heading stays one, as it is
+        anywhere else on a page.
         """
         first = lines[index]
         if find_amounts(first.text):
@@ -1475,29 +1524,35 @@ class BrokerageStatementParser(DocumentParser):
                     break
                 if self._title(group[-2]):
                     break  # a heading starts what follows, it heads no column
-            cells = _header_cells(group)
-            holdings = self._holdings_from(cells)
-            header: _Header | None = None
-            if holdings is not None:
-                known = sum(1 for c in cells if header_key(c.parts, HOLDING_HEADERS) is not None)
-                header = _Header(holdings, None, count)
-            else:
-                parts = self._parts(cells, cash_tables=cash_tables)
-                known = sum(1 for c in cells if header_key(c.parts, ACTIVITY_HEADERS) is not None)
-                if parts is not None:
-                    header = _Header(None, parts, count)
-            if header is not None and (best is None or known > best[0]):
-                best = (known, header)
+            found = self._header_of(group, cash_tables=cash_tables)
+            if found is not None and (best is None or found[0] > best[0]):
+                best = found
         if best is None:
             return None
-        if best[1].used > 1 and len(first.cells) <= 2:
-            below = self._header_at(lines, index + 1, cash_tables=cash_tables)
-            if below is not None and below.known_roles == best[1].known_roles:
+        used = best[1].used
+        if used > 1 and len(first.cells) <= 2:
+            below = self._header_of(lines[index + 1 : index + used], cash_tables=cash_tables)
+            if below is not None and below[1].known_roles == best[1].known_roles:
                 # The top line names no column ("Electronic Funds Transfers",
                 # a running page header "Jane Example - Account XXXX-1234"
                 # over "Date | Description | Amount"): a heading, not header.
                 return None
         return best[1]
+
+    def _header_of(
+        self, group: Sequence[ViewLine], *, cash_tables: bool
+    ) -> tuple[int, _Header] | None:
+        """``(known columns named, header)`` that exactly ``group``'s lines make, if any."""
+        cells = _header_cells(group)
+        holdings = self._holdings_from(cells)
+        if holdings is not None:
+            known = sum(1 for c in cells if header_key(c.parts, HOLDING_HEADERS) is not None)
+            return known, _Header(holdings, None, len(group))
+        parts = self._parts(cells, cash_tables=cash_tables)
+        if parts is None:
+            return None
+        known = sum(1 for c in cells if header_key(c.parts, ACTIVITY_HEADERS) is not None)
+        return known, _Header(None, parts, len(group))
 
     def fingerprint_score(self, view: DocumentView) -> float:
         """Share of :attr:`fingerprints` on page 1 (the name also counts from :meth:`named`)."""
@@ -1559,18 +1614,19 @@ class BrokerageStatementParser(DocumentParser):
     def _sections(self, view: DocumentView) -> tuple[list[_Collected], _Collected | None, int]:
         """``(accounts, preamble, accounts dropped)`` (class doc); one account: no preamble."""
         split = segment(view.lines)
+        bands = _page_bands(view.lines)
         if len(split.accounts) < 2:
-            single = _Collected()
+            single = _Collected(bands=bands)
             self._read(view.lines, single)
             if single.summary.last4 is None and split.accounts:
                 single.summary.last4 = split.accounts[0].last4
             single.info = split.info(single.summary.last4)
             return [single], None, 0
-        preamble = _Collected()
+        preamble = _Collected(bands=bands)
         self._read(split.preamble, preamble)
         accounts: list[_Collected] = []
         for account in split.accounts:
-            collected = _Collected(account=account, info=account.info)
+            collected = _Collected(account=account, info=account.info, bands=bands)
             self._read(account.lines, collected)
             collected.summary.last4 = account.last4
             accounts.append(collected)
@@ -1892,6 +1948,42 @@ class BrokerageStatementParser(DocumentParser):
             return False
         return not _date_shaped(above.cells[0].text)
 
+    @staticmethod
+    def _continued(
+        lines: Sequence[ViewLine], start: int, header: _Header, collected: _Collected
+    ) -> bool:
+        """The table header at ``lines[start]`` continues the section's table on a
+        later page under the page's running header (``lines[start - 1]``).
+
+        Its column roles are the section's latest header's, it is on a later
+        page, and the line above it is a running page header: printed in the
+        header band of the page it is on and of the page the section's latest
+        header is on (:func:`_page_bands`), or naming the account (an account
+        heading, its number) or the page (``Page 2 of 4``). Any other line
+        there is a heading (:meth:`_unknown_heading`) and starts a table of
+        its own, as it does anywhere on a page.
+        """
+        previous = collected.section_header
+        if previous is None or start <= 0:
+            return False
+        above, first = lines[start - 1], lines[start]
+        if previous[0] != header.roles or first.page <= previous[1]:
+            return False
+        key = _band_key(above)
+        if key in collected.bands.get(above.page, ()) and key in collected.bands.get(
+            previous[1], ()
+        ):
+            return True
+        if _PAGE_LABEL.search(above.norm) is not None:
+            return True
+        texts = (above.text, *(c.text for c in above.cells))
+        if any(account_heading(t) is not None for t in texts):
+            return True
+        last4 = (
+            collected.account.last4 if collected.account is not None else collected.summary.last4
+        )
+        return last4 is not None and any(number_last4(t) == last4 for t in above.text.split())
+
     def _read(self, lines: Sequence[ViewLine], collected: _Collected) -> None:
         """Read one account's lines (or the whole document) into ``collected``.
 
@@ -1938,15 +2030,11 @@ class BrokerageStatementParser(DocumentParser):
                     )
                     collected.last_holding = None
                 else:
-                    start = lines[index - found.used]
-                    continued = collected.section_header is not None and (
-                        collected.section_header[0] == found.roles
-                        and start.page > collected.section_header[1]
-                    )
+                    start = index - found.used
                     if (
                         collected.section_tables
-                        and not continued
-                        and self._unknown_heading(lines, index - found.used)
+                        and self._unknown_heading(lines, start)
+                        and not self._continued(lines, start, found, collected)
                     ):
                         # After the section's own table, a heading no section
                         # names starts a table of its own: the section above
@@ -1955,7 +2043,7 @@ class BrokerageStatementParser(DocumentParser):
                         # The section's header repeated on a later page under
                         # the page's running header continues its table.)
                         collected.section = None
-                    collected.section_header = (found.roles, start.page)
+                    collected.section_header = (found.roles, lines[start].page)
                     collected.holdings_columns, collected.activity_parts = None, found.parts
                     collected.activity_header = True
                     collected.tables += 1
