@@ -21,6 +21,9 @@ import {
   type ReviewItem,
 } from "./api";
 
+/** A held statement's key (``statement_key``): its digest, in letters. */
+const STATEMENT_KEY = "k".repeat(64);
+
 function item(
   id: string,
   kind: ReviewItem["kind"],
@@ -193,6 +196,182 @@ describe("review queue", () => {
       expect(
         api.callsTo("POST", "/api/v1/review/:id/resolve")[0]?.body,
       ).toEqual({ kind: "possible_duplicate", decision: "reject" });
+    });
+  });
+
+  it("imports a brokerage statement that does not add up as read", async () => {
+    const held = {
+      reason: "investment_reconciliation_failed",
+      account_id: "a-1",
+      statement: 1,
+      statement_key: STATEMENT_KEY,
+      currency: "USD",
+      failed: ["cash"],
+      differences: [
+        {
+          check: "cash",
+          printed: "412.150000",
+          computed: "412.450000",
+          difference: "0.300000",
+        },
+      ],
+    };
+    const api = reviewApi(
+      [
+        item("r-1", "low_confidence_field", held, {
+          reason: "investment_reconciliation_failed",
+          next_step: "correct_fields",
+        }),
+      ],
+      "member",
+      {
+        "POST /api/v1/review/:id/resolve": () =>
+          json(
+            item("r-1", "low_confidence_field", held, { state: "resolved" }),
+          ),
+      },
+    );
+    renderApp("/review");
+    const user = userEvent.setup();
+    expect(
+      await screen.findByText(/a difference of \$0\.30/),
+    ).toBeInTheDocument();
+    expect(screen.getByText(/closing cash of \$412\.15/)).toBeInTheDocument();
+    expect(
+      screen.getByText(/because its totals do not add up\./),
+    ).toBeInTheDocument();
+    // Nothing of it is in the ledger: no rows to confirm.
+    expect(
+      screen.queryByRole("button", { name: "Confirm as read" }),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: "Dismiss" }),
+    ).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Import as read" }));
+    await waitFor(() => {
+      expect(
+        api.callsTo("POST", "/api/v1/review/:id/resolve")[0]?.body,
+      ).toEqual({
+        kind: "low_confidence_field",
+        transactions: [],
+        confirm: false,
+        import_as_read: true,
+      });
+    });
+  });
+
+  it("offers no 'import as read' for a statement whose dates are a guess", async () => {
+    reviewApi([
+      item(
+        "r-1",
+        "low_confidence_field",
+        {
+          reason: "investment_low_confidence",
+          account_id: "a-1",
+          statement_key: STATEMENT_KEY,
+          fields: ["reconciliation", "trade_date"],
+        },
+        { reason: "investment_low_confidence" },
+      ),
+    ]);
+    renderApp("/review");
+    expect(await screen.findByText("Dates may be wrong")).toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: "Import as read" }),
+    ).not.toBeInTheDocument();
+  });
+
+  it("offers 'import as read' for a statement with nothing to check against", async () => {
+    reviewApi([
+      item(
+        "r-1",
+        "low_confidence_field",
+        {
+          reason: "investment_low_confidence",
+          account_id: "a-1",
+          statement_key: STATEMENT_KEY,
+          fields: ["reconciliation"],
+        },
+        { reason: "investment_low_confidence" },
+      ),
+    ]);
+    renderApp("/review");
+    expect(
+      await screen.findByText("Nothing to check against"),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: "Import as read" }),
+    ).toBeInTheDocument();
+    // Nothing failed to add up: its totals could not be checked.
+    expect(
+      screen.getByText(/because its totals could not be checked\./),
+    ).toBeInTheDocument();
+    expect(screen.queryByText(/do not add up/)).not.toBeInTheDocument();
+  });
+
+  it("offers no 'import as read' on an item that names no statement", async () => {
+    // Raised before items named their statement: reprocessing raises a current one.
+    reviewApi([
+      item(
+        "r-1",
+        "low_confidence_field",
+        {
+          reason: "investment_reconciliation_failed",
+          account_id: "a-1",
+          failed: ["cash"],
+        },
+        { reason: "investment_reconciliation_failed" },
+      ),
+    ]);
+    renderApp("/review");
+    expect(
+      await screen.findByText("Statement does not add up"),
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: "Import as read" }),
+    ).not.toBeInTheDocument();
+    expect(screen.queryByText(/“Import as read”/)).not.toBeInTheDocument();
+  });
+
+  it("offers 'same statement' and 'import anyway' for an overlapping statement", async () => {
+    const overlap = {
+      reason: "statement_overlap",
+      account_id: "a-1",
+      statement: 0,
+      period_start: "2026-03-01",
+      period_end: "2026-03-31",
+      other_document_id: "d-1",
+      other_period_start: "2026-03-01",
+      other_period_end: "2026-03-31",
+    };
+    const api = reviewApi(
+      [item("r-1", "possible_duplicate", overlap)],
+      "member",
+      {
+        "POST /api/v1/review/:id/resolve": () =>
+          json(
+            item("r-1", "possible_duplicate", overlap, { state: "resolved" }),
+          ),
+      },
+    );
+    renderApp("/review");
+    const user = userEvent.setup();
+    const group = await screen.findByRole("group", {
+      name: "Compare statements",
+    });
+    expect(
+      await within(group).findByRole("link", { name: "march.ofx" }),
+    ).toHaveAttribute("href", "/documents/d-1");
+    expect(
+      screen.getByRole("button", { name: "Import anyway" }),
+    ).toBeInTheDocument();
+    await user.click(
+      screen.getByRole("button", { name: "Same statement — skip" }),
+    );
+    await waitFor(() => {
+      expect(
+        api.callsTo("POST", "/api/v1/review/:id/resolve")[0]?.body,
+      ).toEqual({ kind: "possible_duplicate", decision: "confirm" });
     });
   });
 

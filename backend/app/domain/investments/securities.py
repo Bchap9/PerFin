@@ -7,7 +7,10 @@
   activity at all). Anything else is ``404 security-not-found``.
 * **Write** (member or above, ``investments:write``): create; change and
   delete visible securities. ``(symbol, exchange)`` is unique in the
-  household (``409 security-exists``). The currency changes only while the
+  household (``409 security-exists``). A security an imported statement
+  printed by its name alone has no symbol (``symbol`` is null) until one
+  is set here or a later statement prints it; one cannot be created
+  without a symbol, nor have its symbol set back to null. The currency changes only while the
   security has no prices and no transactions (``409 security-currency-locked``);
   a security with transactions or lots cannot be deleted (``409
   security-in-use``), its prices and holding rows go with it.
@@ -28,7 +31,7 @@ import uuid
 from datetime import date
 from typing import TYPE_CHECKING, Any
 
-from sqlalchemy import exists, or_, select, tuple_
+from sqlalchemy import exists, func, or_, select, tuple_
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -145,10 +148,12 @@ def _record(
 def _clash(
     db: Session,
     household_id: uuid.UUID,
-    symbol: str,
+    symbol: str | None,
     exchange: str | None,
     exclude: uuid.UUID | None = None,
 ) -> bool:
+    if symbol is None:
+        return False  # securities without a symbol never clash by it
     stmt = select(Security.id).where(
         Security.household_id == household_id,
         Security.symbol == symbol,
@@ -181,7 +186,8 @@ def list_securities(
     cursor: uuid.UUID | None,
     limit: int,
 ) -> SecurityPage:
-    """By symbol, then id; ``q`` matches symbol, name, ISIN or CUSIP (case-insensitive)."""
+    """By symbol (a security without one: its name), then id; ``q`` matches symbol,
+    name, ISIN or CUSIP (case-insensitive)."""
     household_id = _household(principal, HouseholdRole.VIEWER)
     stmt = select(Security).where(
         Security.household_id == household_id, service.visible_security_filter(principal)
@@ -198,16 +204,16 @@ def list_securities(
         )
     if asset_class is not None:
         stmt = stmt.where(Security.asset_class == asset_class)
+    # A security without a symbol is listed by its name among the symbols.
+    order = func.coalesce(Security.symbol, Security.name)
     if cursor is not None:
         after = db.execute(
-            select(Security.symbol).where(
-                Security.household_id == household_id, Security.id == cursor
-            )
+            select(order).where(Security.household_id == household_id, Security.id == cursor)
         ).scalar_one_or_none()
         if after is None:
             raise ProblemError(422, "invalid-cursor", "Invalid cursor")
-        stmt = stmt.where(tuple_(Security.symbol, Security.id) > tuple_(after, cursor))
-    rows = list(db.execute(stmt.order_by(Security.symbol, Security.id).limit(limit + 1)).scalars())
+        stmt = stmt.where(tuple_(order, Security.id) > tuple_(after, cursor))
+    rows = list(db.execute(stmt.order_by(order, Security.id).limit(limit + 1)).scalars())
     page = rows[:limit]
     return SecurityPage(
         items=[security_out(r) for r in page],

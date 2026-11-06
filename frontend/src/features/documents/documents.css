@@ -58,3 +58,47 @@
   padding: 0;
   list-style: none;
 }
+
+.page-viewer__stage--select {
+  cursor: crosshair;
+  touch-action: none;
+  user-select: none;
+}
+
+.page-viewer__box--selection {
+  border-color: var(--color-success, #1e7d32);
+  background: color-mix(in srgb, var(--color-success, #1e7d32) 18%, transparent);
+}
+
+.page-viewer__box--drag {
+  border-style: dashed;
+}
+
+.page-viewer__box--skipped_line {
+  border-color: var(--color-danger, #c62828);
+  background: color-mix(in srgb, var(--color-danger, #c62828) 15%, transparent);
+}
+
+.teach-dialog {
+  display: grid;
+  grid-template-columns: minmax(0, 3fr) minmax(0, 2fr);
+  gap: var(--space-4);
+}
+
+@media (max-width: 900px) {
+  .teach-dialog {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+.teach-selection {
+  border: 1px solid var(--color-border, #8884);
+  border-radius: var(--radius-md, 6px);
+  padding: var(--space-3);
+}
+
+.teach-columns {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(10rem, 1fr));
+  gap: var(--space-2);
+}

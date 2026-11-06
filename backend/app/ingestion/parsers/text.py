@@ -13,7 +13,12 @@ quantifiers, so a crafted page cannot make matching expensive.
   as money.
 * :func:`read_date` for one :data:`DateStyle`; :func:`guess_numeric_style`
   tells ``DD/MM`` from ``MM/DD`` from the values themselves (a day above 12)
-  and says when it cannot.
+  and says when it cannot. Yearless styles (``MM/DD``, ``DD/MM``,
+  ``December 16``, ``16 Dec``) take their year from a window
+  (:func:`infer_year`): the statement period with a little slack around it,
+  or, ``strict``, only inside it (a statement date's year before it, so a
+  December row on a January statement is last year's and no row lands
+  after the statement date).
 """
 
 from __future__ import annotations
@@ -28,9 +33,11 @@ from typing import Final, Literal
 MAX_TOKEN: Final = 200
 MAX_LINE: Final = 2000
 
-DateStyle = Literal["mdy", "dmy", "ymd", "d_mon_y", "mon_d_y", "md", "dm"]
+DateStyle = Literal["mdy", "dmy", "ymd", "d_mon_y", "mon_d_y", "md", "dm", "mon_d", "d_mon"]
 #: Styles with a year printed.
 FULL_STYLES: Final[tuple[DateStyle, ...]] = ("mdy", "dmy", "ymd", "d_mon_y", "mon_d_y")
+#: Styles without a year (read through a window, :func:`infer_year`).
+YEARLESS_STYLES: Final[tuple[DateStyle, ...]] = ("md", "dm", "mon_d", "d_mon")
 #: Numeric styles whose day/month order is not visible in the text.
 NUMERIC_DM: Final[tuple[DateStyle, ...]] = ("mdy", "dmy")
 
@@ -64,6 +71,8 @@ _AMOUNT: Final = re.compile(
 _NUMERIC_DATE: Final = re.compile(r"(\d{1,4})[/.-](\d{1,2})(?:[/.-](\d{2,4}))?")
 _D_MON_Y: Final = re.compile(r"(\d{1,2})[\s-]([A-Za-z]{3,9})\.?[\s-](\d{4})")
 _MON_D_Y: Final = re.compile(r"([A-Za-z]{3,9})\.?\s(\d{1,2}),?\s(\d{4})")
+_MON_D: Final = re.compile(r"([A-Za-z]{3,9})\.?\s(\d{1,2})")
+_D_MON: Final = re.compile(r"(\d{1,2})[\s-]([A-Za-z]{3,9})\.?")
 _CURRENCY_SYMBOLS: Final = {"$": "USD", "£": "GBP", "€": "EUR"}
 
 
@@ -158,24 +167,55 @@ def numeric_parts(text: str) -> tuple[int, int, int | None] | None:
     return int(match[1]), int(match[2]), year
 
 
-def infer_year(month: int, day: int, window: tuple[date, date] | None) -> date | None:
-    """A yearless date placed in (or next to) the statement period."""
+def infer_year(
+    month: int, day: int, window: tuple[date, date] | None, *, strict: bool = False
+) -> date | None:
+    """A yearless date placed in (or next to) the statement period, the latest that fits.
+
+    ``strict``: only inside ``window`` (no slack of 45 days before it and 7
+    after it), e.g. the year before a statement date ending the window.
+    """
     if window is None:
         return None
     start, end = window
+    low, high = (start, end) if strict else (start - timedelta(days=45), end + timedelta(days=7))
     for year in sorted({start.year, end.year, start.year - 1}, reverse=True):
         candidate = _make(year, month, day)
-        if candidate is not None and start - timedelta(days=45) <= candidate <= end + timedelta(
-            days=7
-        ):
+        if candidate is not None and low <= candidate <= high:
             return candidate
     return None
 
 
+def month_day(text: str, style: DateStyle) -> tuple[int, int] | None:
+    """``(month, day)`` of a yearless month-named date: ``mon_d`` (``December 16``)
+    or ``d_mon`` (``16 Dec``); None for any other text or style."""
+    text = text.strip()[:MAX_TOKEN]
+    if style == "mon_d":
+        found = _MON_D.fullmatch(text)
+        name, number = (found[1], found[2]) if found else ("", "0")
+    elif style == "d_mon":
+        found = _D_MON.fullmatch(text)
+        name, number = (found[2], found[1]) if found else ("", "0")
+    else:
+        return None
+    month = _MONTHS.get(name.lower())
+    day = int(number)
+    if month is None or not 1 <= day <= 31:
+        return None
+    return month, day
+
+
 def read_date(
-    text: str, style: DateStyle, *, window: tuple[date, date] | None = None
+    text: str,
+    style: DateStyle,
+    *,
+    window: tuple[date, date] | None = None,
+    strict: bool = False,
 ) -> date | None:
-    """``text`` (a whole cell) as a date in ``style``; yearless styles need ``window``."""
+    """``text`` (a whole cell) as a date in ``style``; yearless styles need ``window``.
+
+    ``strict`` is :func:`infer_year`'s (a yearless date only inside ``window``).
+    """
     text = text.strip()[:MAX_TOKEN]
     if style in ("mdy", "dmy", "md", "dm"):
         parts = numeric_parts(text)
@@ -188,8 +228,13 @@ def read_date(
                 return _make(year, month, day)
             if not (1 <= month <= 12 and 1 <= day <= 31):
                 return None
-            return infer_year(month, day, window)
+            return infer_year(month, day, window, strict=strict)
         return _make(year, month, day)
+    if style in ("mon_d", "d_mon"):
+        named = month_day(text, style)
+        if named is None:
+            return None
+        return infer_year(named[0], named[1], window, strict=strict)
     if style == "ymd":
         match = re.fullmatch(r"(\d{4})[/.-](\d{1,2})[/.-](\d{1,2})", text)
         return _make(int(match[1]), int(match[2]), int(match[3])) if match else None

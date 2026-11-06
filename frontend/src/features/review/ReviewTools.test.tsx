@@ -6,6 +6,7 @@ import {
   authedSession,
   json,
   mockApi,
+  problem,
   renderApp,
   type Handler,
 } from "../auth/testing";
@@ -127,6 +128,12 @@ describe("correction helpers", () => {
     expect(layoutRequest("i-1", false)).toEqual({
       institution_id: "i-1",
       reprocess_similar: false,
+      replace: false,
+    });
+    expect(layoutRequest("i-1", true, true)).toEqual({
+      institution_id: "i-1",
+      reprocess_similar: true,
+      replace: true,
     });
     expect(ownerResolution("u-1", "", true)).toEqual({
       kind: "unknown_owner",
@@ -212,11 +219,60 @@ describe("review tools", () => {
       ).toEqual({
         institution_id: "i-2",
         reprocess_similar: false,
+        replace: false,
       });
     });
     expect(
       await screen.findByText(/2 file\(s\) are being read again/),
     ).toBeInTheDocument();
+  });
+
+  it("asks before replacing another taught layout of the institution", async () => {
+    const detail = item("r-1", "new_institution", {
+      alternatives: [
+        {
+          field: "institution_id",
+          value: "i-1",
+          label: "Bank A",
+          source: "household",
+        },
+      ],
+      regions: [{ page: 1, bbox: [0, 0, 612, 792], label: "page" }],
+    });
+    let calls = 0;
+    const api = toolsApi(detail, {
+      "POST /api/v1/review/:id/remember-layout": () => {
+        calls += 1;
+        return calls === 1
+          ? problem(409, "layout-conflict")
+          : json({
+              ambiguous: false,
+              fingerprint_id: "f-2",
+              institution_id: "i-1",
+              item: { ...detail, state: "resolved" },
+              kind: "statement",
+              match: {},
+              parser: "statement_generic",
+              reprocessed: ["d-1"],
+              version: 2,
+              kept: [],
+            });
+      },
+    });
+    renderApp("/review");
+    const user = userEvent.setup();
+    await user.selectOptions(await screen.findByLabelText("Institution"), "i-1");
+    expect(screen.queryByLabelText(/Replace the layout remembered/)).toBeNull();
+    const button = screen.getByRole("button", { name: "Remember this layout" });
+    await user.click(button);
+    const replace = await screen.findByLabelText(/Replace the layout remembered/);
+    await user.click(replace);
+    await user.click(button);
+    await waitFor(() => {
+      expect(
+        api.callsTo("POST", "/api/v1/review/:id/remember-layout")[1]?.body,
+      ).toEqual({ institution_id: "i-1", reprocess_similar: true, replace: true });
+    });
   });
 
   it("highlights the doubtful row on the page and saves a chosen reading", async () => {
@@ -264,6 +320,7 @@ describe("review tools", () => {
       ).toEqual({
         kind: "low_confidence_field",
         confirm: true,
+        import_as_read: false,
         transactions: [
           {
             transaction_id: "t-1",

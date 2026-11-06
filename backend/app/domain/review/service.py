@@ -19,6 +19,12 @@ editable by the caller as well. A closed item is ``409 review-item-closed``.
 * ``possible_duplicate`` / ``same_content``: *confirm* -> the document is
   ``rejected`` (kept in quarantine, never downloadable); *reject* -> the
   document goes through the pipeline (``ingest_document``).
+* ``possible_duplicate`` / ``statement_overlap`` (a statement whose period
+  overlaps one already imported for the account from another document;
+  ``app.domain.imports.statement_records``): *confirm* ("same statement")
+  records the statement as skipped and writes nothing; *reject* ("import
+  anyway") imports the item's statement into the item's account although
+  it overlaps (below). Both need edit on the account.
 * ``possible_duplicate`` / ``near_match``: *confirm* -> the imported row is
   deleted and its ``import_hash`` recorded for the kept transaction (the
   kept row takes the hash when it has none, else an ``import_hash_alias``);
@@ -44,7 +50,29 @@ editable by the caller as well. A closed item is ``409 review-item-closed``.
   corrected (:func:`apply_fixes`, through ``transactions.service``: edit on
   their account, audited) and, with ``confirm``, the item's pending rows
   become ``confirmed`` (a ``reconciliation_*`` item: every pending row of
-  the document on the item's account).
+  the document on the item's account). ``import_as_read`` answers a
+  brokerage statement held back by its figures
+  (``investment_reconciliation_failed``, or ``investment_low_confidence``
+  whose only doubt is ``reconciliation``:
+  :func:`app.domain.investments.statement_import.acceptable_as_read`; any
+  other item is ``422``): the item's statement is imported into the item's
+  account as printed, without a balance snapshot. Needs edit on the
+  account.
+
+**Importing a held statement again** ("import anyway", "import as read")
+goes through one path (:func:`_import_statement_again`). The answer is
+for the item's statement only: the resolution records ``import_anyway`` /
+``import_as_read``, the account, the statement (``target``, its index
+``statement`` and its key ``statement_key``) and the ``apply-mapping`` job
+that imports it again (audited as ``review.resolve``). That re-run, and
+every later import of the document, whoever starts it, applies the
+document's answers by statement key
+(``app.domain.imports.statement_answers``): the answered statement goes to
+its account wherever it now sits in the document and is not held again for
+what was answered (a statement accepted as read that then overlaps, or the
+other way round, needs only the other answer); no other statement is
+covered. An item without a key (raised before statements carried one) is
+``409 review-item-stale``.
 
 ``GET /review/{id}`` also carries ``regions`` and ``alternatives``
 (``app.domain.review.assist``); the review tools (correct, remember this
@@ -60,6 +88,7 @@ from __future__ import annotations
 
 import uuid
 from collections.abc import Sequence
+from datetime import date
 from typing import Any, Final
 
 from sqlalchemy import Boolean, ColumnElement, String, and_, cast, not_, or_, select
@@ -93,7 +122,9 @@ from app.domain.documents.models import (
 from app.domain.documents.service import visible_document_filter
 from app.domain.dropfolder import service as dropfolder_service
 from app.domain.imports import service as imports_service
-from app.domain.imports.schemas import ApplyMapping, MappingUpdate
+from app.domain.imports import statement_answers, statement_records
+from app.domain.imports.schemas import ApplyMapping, AssignmentTarget, MappingUpdate
+from app.domain.investments import statement_import
 from app.domain.review import assist, repo
 from app.domain.review.schemas import (
     NextStep,
@@ -129,6 +160,9 @@ RESOLVABLE: Final = frozenset(
 #: ``low_confidence_field`` reasons whose confirmation covers every pending
 #: row of the document on the item's account (the statement as a whole).
 WHOLE_STATEMENT_REASONS: Final = frozenset({"reconciliation_failed", "reconciliation_unavailable"})
+#: Resolution keys of the two ways a held statement is imported again.
+IMPORT_ANYWAY: Final = statement_answers.IMPORT_ANYWAY
+IMPORT_AS_READ: Final = statement_answers.IMPORT_AS_READ
 #: Document statuses whose stored extraction the importer can run again.
 REIMPORTABLE: Final = frozenset({DocumentStatus.NEEDS_REVIEW, DocumentStatus.PROCESSED})
 
@@ -411,6 +445,8 @@ def _resolve_duplicate(
     request: HTTPConnection | None,
 ) -> dict[str, Any]:
     payload = item.payload or {}
+    if payload.get("reason") == statement_records.REASON:
+        return _resolve_statement_overlap(db, principal, item, body, request)
     transaction_id = _uuid(payload.get("transaction_id"))
     if transaction_id is None:
         document = _document(db, item)
@@ -434,6 +470,114 @@ def _resolve_duplicate(
         )
         return {"decision": "confirm", "duplicate_of": payload.get("duplicate_of")}
     return _resolve_transaction_duplicate(db, principal, item, transaction_id, body, request)
+
+
+def _payload_date(payload: dict[str, Any], key: str) -> date | None:
+    value = payload.get(key)
+    try:
+        return date.fromisoformat(value) if isinstance(value, str) else None
+    except ValueError:
+        return None
+
+
+def _import_statement_again(
+    db: Session,
+    principal: Principal,
+    item: ReviewItem,
+    document: Document,
+    account: Account,
+    *,
+    investment: bool,
+    answer: str,
+    request: HTTPConnection | None,
+) -> dict[str, Any]:
+    """Import the item's held statement into the item's account (module doc).
+
+    ``answer`` is :data:`IMPORT_ANYWAY` or :data:`IMPORT_AS_READ`; the
+    resolution returned records it for the item's statement key, which the
+    queued re-run (and every later import of the document) applies.
+    """
+    if document.extraction is None or document.status not in REIMPORTABLE:
+        raise ProblemError(
+            409,
+            "document-not-importable",
+            "Nothing to import",
+            "The document has no stored statements to import again; reprocess it instead.",
+        )
+    payload = item.payload or {}
+    key = statement_answers.payload_key(payload)
+    if key is None:
+        raise ProblemError(
+            409,
+            "review-item-stale",
+            "Review item is out of date",
+            "This item does not say which statement it holds; reprocess the document "
+            "to raise a current one.",
+        )
+    index = payload.get("statement")
+    target: AssignmentTarget = "investment" if investment else "statement"
+    queued = imports_service.request_apply(
+        db, principal, document.id, ApplyMapping(), request=request
+    )
+    return {
+        answer: True,
+        "account_id": str(account.id),
+        "target": target,
+        "statement": index if isinstance(index, int) and index >= 0 else None,
+        statement_answers.KEY_FIELD: key,
+        "rerun": "import",
+        "job_id": str(queued.job_id),
+    }
+
+
+def _resolve_statement_overlap(
+    db: Session,
+    principal: Principal,
+    item: ReviewItem,
+    body: ResolveDuplicate,
+    request: HTTPConnection | None,
+) -> dict[str, Any]:
+    """Same statement (skip it) or import anyway (module doc)."""
+    payload = item.payload or {}
+    document = _document(db, item)
+    account_id = _uuid(payload.get("account_id"))
+    if account_id is None:
+        raise _invalid("This item names no account.")
+    account = get_visible_account(db, principal, account_id, need="edit")
+    investment = payload.get("investment") is True
+    other = payload.get("other_document_id")
+    if body.decision == "confirm":
+        start = _payload_date(payload, "period_start")
+        end = _payload_date(payload, "period_end")
+        source = payload.get("source_format")
+        if start is None or end is None or start > end or not isinstance(source, str):
+            raise _invalid("This item names no statement period.")
+        statement_records.record_statement(
+            db,
+            document,
+            account,
+            statement_records.StatementFacts(
+                kind="investment" if investment else "bank",
+                source_format=source,
+                period_start=start,
+                period_end=end,
+                stated=True,
+            ),
+            outcome="skipped",
+        )
+        db.flush()
+        return {"decision": "confirm", "skipped": True, "duplicate_of": other}
+    rerun = _import_statement_again(
+        db,
+        principal,
+        item,
+        document,
+        account,
+        investment=investment,
+        answer=IMPORT_ANYWAY,
+        request=request,
+    )
+    return {"decision": "reject", **rerun}
 
 
 def _resolve_transaction_duplicate(
@@ -705,6 +849,65 @@ def _pending_rows(
     return rows
 
 
+def confirm_pending(
+    db: Session,
+    principal: Principal,
+    item: ReviewItem,
+    document: Document,
+    *,
+    request: HTTPConnection | None,
+) -> int:
+    """Move the item's pending rows (the statement's, for a reconciliation item) to confirmed."""
+    count = 0
+    for row in _pending_rows(db, principal, item, document):
+        transactions_service.update_transaction(
+            db,
+            principal,
+            row,
+            TransactionUpdate(review_state=ReviewState.CONFIRMED),
+            request=request,
+        )
+        count += 1
+    return count
+
+
+def _import_as_read(
+    db: Session,
+    principal: Principal,
+    item: ReviewItem,
+    request: HTTPConnection | None,
+) -> dict[str, Any]:
+    """Import a held brokerage statement as printed (module doc)."""
+    payload = item.payload or {}
+    if not statement_import.acceptable_as_read(payload):
+        raise _invalid(
+            "Only a brokerage statement held back because its figures do not add up "
+            "can be imported as read."
+        )
+    document = _document(db, item)
+    account_id = _uuid(payload.get("account_id"))
+    if account_id is None:
+        raise _invalid("This item names no account.")
+    account = get_visible_account(db, principal, account_id, need="edit")
+    rerun = _import_statement_again(
+        db,
+        principal,
+        item,
+        document,
+        account,
+        investment=True,
+        answer=IMPORT_AS_READ,
+        request=request,
+    )
+    failed = payload.get("failed")
+    return {
+        **rerun,
+        "reason": payload.get("reason"),
+        "failed": [f for f in failed if isinstance(f, str)] if isinstance(failed, list) else [],
+        "snapshot": False,
+    }
+
+
 def _resolve_low_confidence(
     db: Session,
     principal: Principal,
@@ -712,6 +915,8 @@ def _resolve_low_confidence(
     body: ResolveLowConfidence,
     request: HTTPConnection | None,
 ) -> dict[str, Any]:
+    if body.import_as_read:
+        return _import_as_read(db, principal, item, request)
     document = _document(db, item)
     corrected = apply_fixes(db, principal, document, body.transactions, request=request)
     confirmed: list[uuid.UUID] = []

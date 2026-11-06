@@ -3,10 +3,18 @@
 
 * Statements, payslips and insurance documents: an explicit period printed
   next to a label ("Statement period", "Billing period", "For the period",
-  "Pay period", "Policy period", ...) or an "Opening date"/"Closing date"
+  "Pay period", "Policy period", ...); else the **header band**: a range
+  printed without a label in the top lines of at least half the pages
+  (``July 1 \u2013 July 31, 2015`` under the title of every page;
+  :func:`app.ingestion.classify.dates.header_band_range`, the start
+  borrowing the end's year), confidence 0.9 when two or more pages print
+  it and 0.75 on a one-page document; else an "Opening date"/"Closing date"
   pair; otherwise ``[min(transaction date), max(transaction date)]`` with
   ``inferred=True`` (dates the extractor parsed, else dates that start a
-  line, which is how statement tables print them).
+  line, which is how statement tables print them). An inferred period is a
+  hint only: it is kept in ``document.confidence`` and never stored as the
+  document's period (``app.ingestion.classify.service.apply_classification``);
+  the statement parsers' own period replaces it.
 * Receipts and invoices: the printed date (a labelled one first: "Date",
   "Invoice date", "Transaction date", ...; else the first date).
 * Tax forms: the tax year printed on the form ("Tax year 2025", "2025 Form
@@ -24,7 +32,16 @@ from dataclasses import dataclass
 from datetime import date
 from typing import Final
 
-from app.ingestion.classify.dates import DateHit, DateOrder, complete_range, find_dates
+from app.ingestion.classify.dates import (
+    DateHit,
+    DateOrder,
+    band_confidence,
+    complete_range,
+    day_ranges,
+    find_dates,
+    header_band_range,
+    settle_order,
+)
 from app.ingestion.classify.text import DocumentView
 
 #: A statement period longer than this is not believed.
@@ -100,10 +117,19 @@ def _plausible(start: date, end: date) -> bool:
 
 def _range_after(line: str, at: int, order: DateOrder | None) -> tuple[date, date, bool] | None:
     hits = [h for h in find_dates(line, order=order) if h.end > at]
+    # ``03/01/2024 - 03/31/2024``: the end proves the line is month-first,
+    # whatever the hint says (``01/07/2015 - 31/07/2015`` is day-first).
+    hits = [h for h in settle_order(line, hits, order) if h.end > at]
+    days = day_ranges(line, at)
     for first, second in itertools.pairwise(hits):
+        if any(d.at < second.end and first.start < d.stop for d in days):
+            break  # ``July 1-31, 2015``: read below as one range.
         both = complete_range(first, second)
         if both is not None and _plausible(*both):
             return both[0], both[1], first.ambiguous or second.ambiguous
+    for found in days:
+        if _plausible(found.start, found.end):
+            return found.start, found.end, found.ambiguous
     return None
 
 
@@ -146,6 +172,9 @@ def detect_period(
             if found is not None:
                 start, end, ambiguous = found
                 return Period(start, end, False, "label", 0.8 if ambiguous else 0.95)
+    band = header_band_range(view.page_heads, order=order)
+    if band is not None and _plausible(band.start, band.end):
+        return Period(band.start, band.end, False, "header", band_confidence(band))
     opening = _labelled_date(view.lines, view.normalised, _OPENING_LABELS, order)
     closing = _labelled_date(view.lines, view.normalised, _CLOSING_LABELS, order)
     if opening is not None and closing is not None:

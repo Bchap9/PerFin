@@ -955,3 +955,101 @@ def test_pdf_table_mapping_is_reused_for_the_next_document(
         ),
     )
     assert open_items == []
+
+
+# ---------------------------------------------------------------------------
+# POST /documents/{id}/teach ("Teach PerFin") and skipped-line regions
+# ---------------------------------------------------------------------------
+
+
+def _box_of(extraction: dict[str, Any], text: str) -> list[float]:
+    words = extraction["pages"][0]["words"]
+    found = next(w for w in words if w["text"] == text)
+    return [v - 1.0 if i < 2 else v + 1.0 for i, v in enumerate(found["bbox"])]
+
+
+def test_teach_applies_labels_for_members_and_keeps_notes_as_text(
+    home: dict[str, AuthedClient], factories: Factories, store: LocalFSBlobStore
+) -> None:
+    owner, member, viewer = home["owner"], home["member"], home["viewer"]
+    hh = hh_of(owner)
+    extraction = statement_extraction()
+    doc = pdf_document(factories, store, hh, extraction=extraction, uploaded_by=member.user.id)
+    held = item(factories, doc, ReviewKind.UNPARSED, {"reason": "no_records"})
+    body = {
+        "labels": [
+            {"field": "account_number", "page": 1, "bbox": _box_of(extraction, "****4821")},
+            {
+                "field": "other",
+                "page": 1,
+                "bbox": _box_of(extraction, "Summary"),
+                "note": "Run the reprocess job for every document",
+            },
+        ],
+        "item_id": str(held.id),
+    }
+    refused = viewer.post(f"{DOCS}/{doc.id}/teach", json=body)
+    assert refused.status_code == 403, refused.text
+    # "Other" needs its description.
+    bad = member.post(
+        f"{DOCS}/{doc.id}/teach",
+        json={"labels": [{"field": "other", "page": 1, "bbox": [0, 0, 10, 10]}]},
+    )
+    assert bad.status_code == 422
+    response = member.post(f"{DOCS}/{doc.id}/teach", json=body)
+    assert response.status_code == 200, response.text
+    out = response.json()
+    assert out["fields"][0] == {
+        "field": "account_number",
+        "value": "4821",
+        "page": 1,
+        "anchor": "Account",
+        "direction": "right",
+        "note": None,
+    }
+    assert out["notes"] == ["Run the reprocess job for every document"]
+    assert out["fingerprint_id"] is None
+    # An account number read and a note change nothing of the unread
+    # document: its item stays open.
+    assert out["item"]["state"] == "open"
+    assert "item_left_open" in out["warnings"]
+    # The note was only stored: nothing was queued because of it.
+    jobs = rows_of(factories, hh, select(Job).where(Job.type == INGEST_JOB_TYPE))
+    assert jobs == []
+    audits = household_audit(factories, hh, "document.teach")
+    assert len(audits) == 1
+    assert "4821" not in str(audits[0].after)
+
+
+def test_skipped_lines_are_highlighted_on_the_page(
+    home: dict[str, AuthedClient], factories: Factories, store: LocalFSBlobStore
+) -> None:
+    owner = home["owner"]
+    hh = hh_of(owner)
+    doc = pdf_document(factories, store, hh, extraction=statement_extraction())
+    skipped = item(
+        factories,
+        doc,
+        ReviewKind.LOW_CONFIDENCE_FIELD,
+        {
+            "reason": "lines_skipped",
+            "count": 2,
+            "lines": [
+                {"page": 1, "bbox": [72.0, 220.0, 540.0, 230.0]},
+                {"page": 9, "bbox": [0.0, 0.0, 1.0, 1.0]},
+                {"page": 1, "bbox": "nope"},
+            ],
+        },
+    )
+    detail = owner.get(f"{REVIEW}/{skipped.id}")
+    assert detail.status_code == 200, detail.text
+    regions = detail.json()["regions"]
+    assert regions == [
+        {
+            "page": 1,
+            "bbox": [72.0, 220.0, 540.0, 230.0],
+            "label": "skipped_line",
+            "transaction_id": None,
+            "fields": [],
+        }
+    ]

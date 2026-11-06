@@ -26,9 +26,11 @@ from app.integrations.prices.base import SYMBOL_RE, PriceQuote
 def household_symbols(db: Session, household_id: uuid.UUID) -> set[str]:
     """The ticker symbols of the household's securities (valid ones only)."""
     rows = db.execute(
-        select(Security.symbol).where(Security.household_id == household_id).distinct()
+        select(Security.symbol)
+        .where(Security.household_id == household_id, Security.symbol.is_not(None))
+        .distinct()
     ).scalars()
-    return {s for s in rows if SYMBOL_RE.fullmatch(s)}
+    return {s for s in rows if s is not None and SYMBOL_RE.fullmatch(s)}
 
 
 def store_quotes(
@@ -54,6 +56,8 @@ def store_quotes(
     ).scalars()
     written = 0
     for security in securities:
+        if security.symbol is None:  # pragma: no cover - the query names a symbol
+            continue
         quote = by_symbol[security.symbol]
         if quote.currency != security.currency:
             continue

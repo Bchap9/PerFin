@@ -179,6 +179,18 @@ from app.domain.imports.schemas import (
     PreviewTable,
     PreviewTransaction,
 )
+from app.domain.imports.statement_answers import (
+    StatementAnswers,
+    document_answers,
+    statement_key,
+)
+from app.domain.imports.statement_records import (
+    StatementFacts,
+    bank_facts,
+    check_overlap,
+    record_statement,
+    table_facts,
+)
 from app.domain.investments.statement_import import import_investment_statements
 from app.domain.review.layout import with_layout_tables
 from app.domain.rules.service import apply_rules_to
@@ -660,6 +672,14 @@ class _Run:
     #: Accounts a person assigned to the document's statements, by
     #: ``(target, index)`` (``POST /documents/{id}/accounts/apply``).
     assigned: dict[tuple[str, int], uuid.UUID] = field(default_factory=dict)
+    #: Accounts this run imports into although a statement overlaps one
+    #: already imported from another document (``apply-mapping``).
+    allow_overlap: frozenset[uuid.UUID] = frozenset()
+    #: The document's "import anyway" / "import as read" answers, by
+    #: statement key (``statement_answers``).
+    answers: StatementAnswers = field(default_factory=StatementAnswers)
+    #: Statements held (``statement_overlap``) or skipped as already imported.
+    overlaps: int = 0
     _payees: dict[str, uuid.UUID] | None = None
     _categories: dict[str, uuid.UUID] | None = None
     _open: list[tuple[ReviewKind, dict[str, Any]]] | None = None
@@ -712,6 +732,7 @@ class _Run:
             "review_items": self.review_items,
             "statements": self.statements,
             "low_confidence": self.low_confidence,
+            "statement_overlaps": self.overlaps,
             "accounts": [str(a) for a in self.accounts],
             "mapping_id": str(self.mapping_id) if self.mapping_id else None,
             "mapping_suggested": self.mapping_suggested,
@@ -858,8 +879,11 @@ def _low_confidence_review(
 
 def _commit_statement(
     run: _Run, parsed: ParsedStatement, account: Account, *, statement_index: int | None
-) -> None:
-    """Write one statement's new transactions, review items and closing balance."""
+) -> bool:
+    """Write one statement's new transactions, review items and closing balance.
+
+    False when nothing could be written (the statement is in another currency).
+    """
     db = run.db
     if parsed.currency is not None and parsed.currency != account.currency:
         run.review(
@@ -872,7 +896,7 @@ def _commit_statement(
                 "account_currency": account.currency,
             },
         )
-        return
+        return False
     run.statements += 1
     if account.id not in run.accounts:
         run.accounts.append(account.id)
@@ -1006,6 +1030,29 @@ def _commit_statement(
                 "ids": [str(i) for i in ids[:IDS_MAX]],
             },
         )
+    return True
+
+
+def _guarded(
+    run: _Run, account: Account, facts: StatementFacts, index: int | None, key: str
+) -> bool:
+    """The statement-level duplicate guard (``statement_records``); True: commit it."""
+    verdict = check_overlap(
+        run.db,
+        run.document,
+        account,
+        facts,
+        index=index,
+        key=key,
+        allow=account.id in run.allow_overlap or run.answers.overlap("statement", key, account.id),
+        review=run.review,
+    )
+    if verdict != "import":
+        run.overlaps += 1
+        if account.id not in run.accounts:
+            run.accounts.append(account.id)
+        return False
+    return True
 
 
 def _split_lines(run: _Run, amount: Decimal, splits: Sequence[Any]) -> list[dict[str, Any]]:
@@ -1023,13 +1070,29 @@ def _split_lines(run: _Run, amount: Decimal, splits: Sequence[Any]) -> list[dict
     ]
 
 
+def _several_kinds(result: ExtractResult) -> bool:
+    """Bank and brokerage statements of different accounts in one document.
+
+    A combined statement (checking, savings and brokerage in one PDF): one
+    bank statement there is not the document's only account, so it is
+    matched by its own last four digits like the others.
+    """
+    if not (result.statements and result.investments):
+        return False
+    named = {s.account.last4 for s in result.statements}
+    named |= {i.account.last4 for i in result.investments}
+    return len(named) > 1
+
+
 def _import_statements(run: _Run, result: ExtractResult, *, account_id: uuid.UUID | None) -> None:
-    single = len(result.statements) == 1
+    single = len(result.statements) == 1 and not _several_kinds(result)
     for index, statement in enumerate(result.statements):
         parsed = from_statement(statement)
+        key = statement_key(statement)
         account: Account | None = None
         candidates: tuple[uuid.UUID, ...] = ()
-        assigned = run.assigned.get(("statement", index))
+        # The run's own assignment, else the account an answer put it on.
+        assigned = run.assigned.get(("statement", index)) or run.answers.account("statement", key)
         if assigned is not None:
             account = _usable_account(run, assigned)
         if (
@@ -1065,7 +1128,11 @@ def _import_statements(run: _Run, result: ExtractResult, *, account_id: uuid.UUI
                 },
             )
             continue
-        _commit_statement(run, parsed, account, statement_index=index)
+        facts = bank_facts(statement)
+        if not _guarded(run, account, facts, index, key):
+            continue
+        if _commit_statement(run, parsed, account, statement_index=index):
+            record_statement(run.db, run.document, account, facts)
 
 
 @dataclass
@@ -1388,7 +1455,19 @@ def _import_table(
                 },
             )
             continue
-        _commit_statement(run, item.parsed, item.account, statement_index=None)
+        if _commit_statement(run, item.parsed, item.account, statement_index=None):
+            closing = item.parsed.closing_balance
+            record_statement(
+                run.db,
+                run.document,
+                item.account,
+                table_facts(
+                    item.parsed.source_format,
+                    item.parsed.period_start,
+                    item.parsed.period_end,
+                    closing.amount if closing is not None else None,
+                ),
+            )
         committed = True
     if not committed:
         return
@@ -1658,6 +1737,7 @@ def import_extraction(
     group: int | None = None,
     statement: int | None = None,
     assignments: Sequence[Assignment] = (),
+    allow_overlap: Collection[uuid.UUID] = (),
     user_id: uuid.UUID | None = None,
 ) -> ImportResult:
     """Import the records of ``result`` for ``document`` (module doc, step 2).
@@ -1665,7 +1745,11 @@ def import_extraction(
     ``user_id`` is the person who asked for a re-run (else the uploader
     decides which accounts may be matched); ``mapping_id``/``account_id``
     are their choices, ``group`` the statement of a multi-account table
-    ``account_id`` is for. Runs in the caller's transaction and RLS context.
+    ``account_id`` is for; ``allow_overlap`` the accounts whose statements
+    this run imports although they overlap an imported one. Every run
+    carries the document's "import anyway" / "import as read" answers
+    (``statement_answers``), whoever started it. Runs in the caller's
+    transaction and RLS context.
     """
     actor = user_id or document.uploaded_by
     # A PDF/image no parser read: its page table goes through the saved
@@ -1677,6 +1761,8 @@ def import_extraction(
         allowed=importable_account_ids(db, document.household_id, actor),
         user_id=user_id,
         assigned={(a.target, a.index): a.account_id for a in assignments},
+        allow_overlap=frozenset(allow_overlap),
+        answers=document_answers(db, document),
     )
     statements: Sequence[InvestmentStatement] = result.investments
     if result.statements:
@@ -1708,8 +1794,12 @@ def import_extraction(
             account_id=account_id,
             statement_index=statement,
             assigned={i: a for (t, i), a in run.assigned.items() if t == "investment"},
+            allow_overlap=run.allow_overlap,
+            answers=run.answers,
             user_id=user_id,
+            several=_several_kinds(result),
         )
+        run.overlaps += done.overlaps
         for investment_account in done.accounts:
             if investment_account not in run.accounts:
                 run.accounts.append(investment_account)
@@ -1767,6 +1857,8 @@ def request_apply(
         get_visible_account(db, principal, target, need="edit")
     for assignment in data.assignments:
         get_visible_account(db, principal, assignment.account_id, need="edit")
+    for overlap_account in data.allow_overlap:
+        get_visible_account(db, principal, overlap_account, need="edit")
     payload = ApplyMappingJob(
         document_id=document.id,
         mapping_id=data.mapping_id,
@@ -1774,6 +1866,7 @@ def request_apply(
         group=data.group,
         statement=data.statement,
         assignments=data.assignments,
+        allow_overlap=data.allow_overlap,
         requested_by=principal.user_id,
     )
     job_id = enqueue(db, APPLY_MAPPING_JOB_TYPE, payload, household_id=household_id)
@@ -1818,6 +1911,7 @@ def run_apply_job(
         group=payload.group,
         statement=payload.statement,
         assignments=payload.assignments,
+        allow_overlap=payload.allow_overlap,
         user_id=payload.requested_by,
     )
     now = clock.utcnow()

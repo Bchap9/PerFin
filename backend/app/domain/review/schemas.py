@@ -46,7 +46,13 @@ A resolution is a typed body whose ``kind`` must equal the item's kind
   named rows (only rows imported from the item's document, ones the caller
   edits) and, with ``confirm`` (default), moves the item's pending rows to
   ``confirmed`` (for ``reconciliation_*`` items: every pending row of the
-  document on the item's account).
+  document on the item's account). ``{"kind", "import_as_read": true}``
+  answers a brokerage statement held back because its figures do not add
+  up (``investment_reconciliation_failed``, or ``investment_low_confidence``
+  with ``reconciliation`` its only doubt; ``422`` for any other item, or
+  with ``transactions``): the statement is imported again as printed into
+  the item's account (an account the caller edits), without a balance
+  snapshot.
 
 Other kinds can only be dismissed for now (``409
 review-resolution-unsupported``).
@@ -57,7 +63,9 @@ account, period, tax year, kind and row values), ``POST
 /review/{id}/remember-layout`` (:class:`RememberLayout`) and ``GET
 /review/{id}/rule-draft`` (:class:`RuleDraftOut`). ``GET /review/{id}`` adds
 ``regions`` and ``alternatives`` (:class:`Region`, :class:`Alternative`);
-the list leaves them ``null``.
+the list leaves them ``null``. "Teach PerFin" (``POST /documents/{id}/teach``,
+``app.domain.review.teach``) takes a :class:`TeachRequest` and answers a
+:class:`TeachOut`.
 """
 
 from __future__ import annotations
@@ -68,7 +76,7 @@ from typing import Annotated, Any, Final, Literal, Self
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-from app.core.money import MoneyIn
+from app.core.money import AmountIn, MoneyIn
 from app.domain.documents.models import (
     DocumentKind,
     DocumentSource,
@@ -169,6 +177,14 @@ class ResolveLowConfidence(_Input):
     kind: Literal["low_confidence_field"]
     transactions: list[TransactionFix] = Field(default_factory=list, max_length=FIXES_MAX)
     confirm: bool = True
+    #: Import the item's held brokerage statement as printed (module doc).
+    import_as_read: bool = False
+
+    @model_validator(mode="after")
+    def _as_read_alone(self) -> Self:
+        if self.import_as_read and self.transactions:
+            raise ValueError("import_as_read takes no transactions")
+        return self
 
 
 ReviewResolution = Annotated[
@@ -183,7 +199,15 @@ ReviewResolution = Annotated[
 
 
 class DocumentFix(_Input):
-    """Corrected document facts; ``null`` clears institution, period and tax year."""
+    """Corrected document facts; ``null`` clears institution, period and tax year.
+
+    ``opening_balance``/``closing_balance`` correct the balances of one
+    statement of the document's stored extraction (``statement``: its index;
+    default the item's statement, else the document's only one, else the one
+    of the item's account), which is then reconciled again: a statement held
+    because it did not add up (``reconciliation_failed``/``_unavailable``)
+    is accepted once it does.
+    """
 
     institution_id: uuid.UUID | None = None
     account_id: uuid.UUID | None = None
@@ -191,10 +215,13 @@ class DocumentFix(_Input):
     period_end: date | None = None
     tax_year: int | None = Field(default=None, ge=1900, le=2200)
     kind: DocumentKind | None = None
+    opening_balance: AmountIn | None = None
+    closing_balance: AmountIn | None = None
+    statement: int | None = Field(default=None, ge=0, le=10_000)
 
     @model_validator(mode="after")
     def _check(self) -> Self:
-        for name in ("account_id", "kind"):
+        for name in ("account_id", "kind", "opening_balance", "closing_balance"):
             if name in self.model_fields_set and getattr(self, name) is None:
                 raise ValueError(f"{name} cannot be null")
         if (
@@ -231,6 +258,10 @@ class RememberLayout(_Input):
     parser: ParserName | None = None
     match: MatchSpec | None = None
     reprocess_similar: bool = True
+    #: Drop what was taught for the remembered layout of this institution
+    #: (kept when the same layout is remembered again; ``409
+    #: layout-conflict`` when it is another layout).
+    replace: bool = False
 
 
 class Region(BaseModel):
@@ -238,7 +269,7 @@ class Region(BaseModel):
 
     page: int
     bbox: Bbox
-    label: Literal["transaction", "account_number", "page"]
+    label: Literal["transaction", "account_number", "page", "skipped_line"]
     transaction_id: uuid.UUID | None = None
     fields: list[str] = Field(default_factory=list)
 
@@ -321,6 +352,9 @@ class RememberLayoutOut(BaseModel):
     ambiguous: bool
     reprocessed: list[uuid.UUID]
     item: ReviewItemOut
+    #: The earlier version whose taught template was kept, and what of it.
+    merged_from: int | None = None
+    kept: list[str] = Field(default_factory=list)
 
 
 class RuleDraftOut(BaseModel):
@@ -368,3 +402,178 @@ class DocumentRegions(BaseModel):
     words_truncated: bool
     preview: PreviewInfo | None
     words: list[RegionWord]
+
+
+# ---------------------------------------------------------------------------
+# Teach PerFin (``POST /documents/{id}/teach``; ``app.domain.review.teach``)
+# ---------------------------------------------------------------------------
+
+#: What a selection on the page is. ``other`` carries a free-text ``note``
+#: (kept for the household, never interpreted); ``ignore`` marks a line
+#: never to read.
+TeachField = Literal[
+    "account_number",
+    "account_name",
+    "period_start",
+    "period_end",
+    "opening_balance",
+    "closing_balance",
+    "institution",
+    "ignore",
+    "other",
+]
+#: A column's role in a labelled table (``other``: described in ``note``, not read).
+TeachRole = Literal[
+    "ignore",
+    "other",
+    "date",
+    "payee",
+    "memo",
+    "amount",
+    "debit",
+    "credit",
+    "balance",
+    "symbol",
+    "security",
+    "quantity",
+    "price",
+    "market_value",
+    "cost_basis",
+]
+TeachNote = Annotated[str, Field(min_length=1, max_length=500)]
+TEACH_LABELS_MAX: Final = 40
+
+
+class TeachLabel(_Input):
+    """One selection (a word clicked or a box dragged on a page) and what it is."""
+
+    field: TeachField
+    page: int = Field(ge=1, le=10_000)
+    bbox: Bbox
+    #: The value as the person reads it, when the page's text is wrong or
+    #: unreadable (a date ``YYYY-MM-DD``, an amount, the account's digits).
+    value: Annotated[str, Field(min_length=1, max_length=200)] | None = None
+    note: TeachNote | None = None
+
+    @model_validator(mode="after")
+    def _check(self) -> Self:
+        if self.field == "other" and not (self.note or "").strip():
+            raise ValueError("describe what an 'other' selection is in note")
+        return self
+
+
+class TeachColumn(_Input):
+    """A column of a labelled table: its horizontal span (page units) and role."""
+
+    x0: float = Field(ge=-1.0, le=100_000.0)
+    x1: float = Field(ge=-1.0, le=100_000.0)
+    role: TeachRole
+    note: TeachNote | None = None
+
+    @model_validator(mode="after")
+    def _check(self) -> Self:
+        if self.x1 <= self.x0:
+            raise ValueError("a column ends after it starts")
+        if self.role == "other" and not (self.note or "").strip():
+            raise ValueError("describe what an 'other' column is in note")
+        return self
+
+
+class TeachTable(_Input):
+    """A table selected on a page: the box starts at its header line."""
+
+    kind: Literal["transactions", "holdings"]
+    page: int = Field(ge=1, le=10_000)
+    bbox: Bbox
+    columns: list[TeachColumn] = Field(min_length=2, max_length=20)
+
+
+class TeachRequest(_Input):
+    """``POST /documents/{id}/teach``: what the person labelled on the document.
+
+    The labels are applied to this document at once (period, institution,
+    account, balances, the labelled table re-imported); with ``remember``
+    the layout is also kept as a household fingerprint with the labels'
+    anchors (label text and direction, never the values), and this document
+    and similar ones are read again with it. ``item_id`` names the review
+    item the teaching answers (closed with ``resolve``).
+    """
+
+    labels: list[TeachLabel] = Field(default_factory=list, max_length=TEACH_LABELS_MAX)
+    tables: list[TeachTable] = Field(default_factory=list, max_length=2)
+    institution_id: uuid.UUID | None = None
+    institution_name: Annotated[str, Field(min_length=1, max_length=200)] | None = None
+    account_id: uuid.UUID | None = None
+    remember: bool = False
+    reprocess_similar: bool = True
+    #: With ``remember``: start the remembered template afresh instead of
+    #: adding to what was taught for this layout before (``409
+    #: layout-conflict`` asks for it when another layout of the institution
+    #: was taught).
+    replace: bool = False
+    item_id: uuid.UUID | None = None
+    resolve: bool = True
+
+    @model_validator(mode="after")
+    def _check(self) -> Self:
+        if not self.labels and not self.tables and not self.remember:
+            raise ValueError("label something on the page, or remember the layout")
+        if self.institution_id is not None and self.institution_name is not None:
+            raise ValueError("give institution_id or institution_name, not both")
+        return self
+
+
+class TaughtField(BaseModel):
+    """One label as PerFin understood it."""
+
+    field: str
+    #: What the selection reads as (ISO date, amount, last four digits,
+    #: text); ``null`` when it could not be read.
+    value: str | None
+    page: int
+    #: The label text that finds the value again on the next statement
+    #: (``null``: none next to it, so it applies to this document only).
+    anchor: str | None = None
+    direction: Literal["right", "below", "band"] | None = None
+    note: str | None = None
+
+
+class TaughtColumn(BaseModel):
+    header: str
+    role: str
+
+
+class TaughtTable(BaseModel):
+    kind: Literal["transactions", "holdings"]
+    #: Rows read from the whole document with this table's columns.
+    rows: int
+    columns: list[TaughtColumn]
+
+
+class TeachOut(BaseModel):
+    """What was applied to the document and what was remembered."""
+
+    document_id: uuid.UUID
+    fields: list[TaughtField]
+    tables: list[TaughtTable]
+    ignored: int
+    notes: list[str]
+    #: Document facts changed (``period_start``, ``institution_id``...).
+    applied: list[str]
+    #: ``import``: the labelled rows are being imported; ``pipeline``: the
+    #: document is read again with the remembered layout.
+    rerun: Literal["import", "pipeline"] | None = None
+    job_id: uuid.UUID | None = None
+    fingerprint_id: uuid.UUID | None = None
+    reprocessed: list[uuid.UUID] = Field(default_factory=list)
+    #: The earlier version of the remembered layout whose teaching was kept
+    #: (the same layout taught again), and what of it is still remembered
+    #: (field names, ``table:<kind>``).
+    merged_from: int | None = None
+    kept: list[str] = Field(default_factory=list)
+    #: Short codes: ``no_label:<field>`` (no label next to the value, it is
+    #: not remembered), ``unreadable:<field>``, ``rows_already_imported``,
+    #: ``does_not_reconcile``, ``ignore_not_rememberable``,
+    #: ``item_left_open`` (the review item is not settled by what was taught)...
+    warnings: list[str] = Field(default_factory=list)
+    item: ReviewItemOut | None = None

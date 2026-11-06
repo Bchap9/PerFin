@@ -28,7 +28,7 @@ from sqlalchemy import func, select
 from app.core.settings import Settings
 from app.db.rls import set_context
 from app.domain.ai.models import AiClient
-from app.domain.investments.models import Holding, InvestmentTxn, Lot
+from app.domain.investments.models import Holding, InvestmentTxn, Lot, Security
 from app.domain.investments.statement_import import activity_hash
 from app.domain.portability import service
 from app.domain.portability.entities import ENTITIES, entities_for
@@ -48,6 +48,7 @@ from tests.fixtures.portability import (
     rows_of,
     set_rows,
 )
+from tests.fixtures.wealth import make_security
 from tests.integration.test_portability import (
     Jobs,
     export_archive,
@@ -346,6 +347,28 @@ def test_importing_twice_merges_catalogues_and_keeps_existing_rows(
     # Accounts and their activity are new rows (an import never merges ledgers).
     assert after["investment_txns"] == 2 * before["investment_txns"]
     assert after["lots"] == 2 * before["lots"]
+
+
+def test_securities_without_a_symbol_merge_by_name(
+    jobs: Jobs, full: tuple[AuthedClient, RichLedger, Wealth], factories: Factories
+) -> None:
+    """Two securities without a symbol round-trip, and merge by name, never into each other."""
+    owner, _, _ = full
+    hid = household(owner)
+    with factories.transaction() as db:
+        set_context(db, hid)
+        for name in ("Synthetic Plan Portfolio", "Synthetic Partners LP"):
+            make_security(db, hid, name=name).symbol = None
+    _, data = export_archive(owner, jobs)
+    before = table_counts(factories, hid)
+    outcome = import_archive(owner, jobs, data)
+    assert outcome["state"] == "imported", outcome
+    assert outcome["summary"]["merged"]["securities"] == 4
+    assert table_counts(factories, hid)["securities"] == before["securities"]
+    with factories.transaction() as db:
+        set_context(db, hid)
+        bare = db.execute(select(Security.name).where(Security.symbol.is_(None))).scalars()
+        assert sorted(bare) == ["Synthetic Partners LP", "Synthetic Plan Portfolio"]
 
 
 def _as_version_1(data: bytes) -> bytes:

@@ -42,7 +42,11 @@ Phase 2 routes only **structured** formats (CSV, TSV, OFX, QFX, QIF):
   one, the document waits in ``needs_review`` (``unparsed``/``import_pending``).
 * **parse (PDF, images)**: the document parsers (``app.ingestion.parsers``)
   read the stored pages in the worker, hinted by the classifier's
-  fingerprint (institution key, parser name, date order): statements with
+  fingerprint (institution key, parser name, date order; a household
+  fingerprint's learned template, "Teach PerFin",
+  ``app.ingestion.parsers.template``, then reads its labelled tables and
+  fills the period, account digits and balances; a ``lines_skipped`` item
+  carries the boxes of skipped lines): statements with
   per-field confidence and a reconciliation (``app.ingestion.reconcile``)
   go through the structured importer like an OFX statement (rows below
   ``confidence_threshold`` or of a statement that does not reconcile are
@@ -50,10 +54,14 @@ Phase 2 routes only **structured** formats (CSV, TSV, OFX, QFX, QIF):
   brokerage statements (``app.ingestion.parsers.brokerage``: holdings and
   activity, reconciled positions x prices and cash) go the same way into
   ``app.domain.investments.statement_import`` (held back when they do not
-  reconcile); a PDF of several accounts gives one brokerage statement per
-  account, each matched to its account by its own last four digits, and the
-  document itself is linked to no account (an account the classifier
-  matched is undone; one chosen at upload stays); a payslip is kept on the
+  reconcile); a PDF of several accounts gives one statement per account
+  (``app.ingestion.parsers.accounts``: brokerage, and bank accounts of a
+  combined statement), each matched to its account by its own last four
+  digits and imported or held on its own, and the document itself is
+  linked to no account (an account the classifier matched is undone; one
+  chosen at upload stays); the document's period
+  is the span of the periods its statements (bank and brokerage) read
+  with confidence, replacing the classifier's; a payslip is kept on the
   document (``kind = payslip``, period) and goes to review when its figures
   do not add up; a loan statement (``app.ingestion.parsers.loan_statement``)
   records its payment split and balances on the matching loan
@@ -98,6 +106,7 @@ from app.domain.documents.models import (
     DocumentStatus,
     IngestJob,
     IngestStage,
+    ParserFingerprint,
     ReviewItem,
     ReviewItemState,
     ReviewKind,
@@ -120,6 +129,7 @@ from app.ingestion.parsers.receipt import PARSER_VERSION as RECEIPT_PARSER_VERSI
 from app.ingestion.parsers.receipt import parse_email_receipt
 from app.ingestion.parsers.registry import DOCUMENT_KINDS, parse_extraction
 from app.ingestion.parsers.tax_forms import carries_tax_identity, redact_identity
+from app.ingestion.parsers.template import LayoutTemplate, parse_template
 from app.ingestion.sandbox.protocol import (
     CONTAINER_KINDS,
     REVIEW_ERROR_CODES,
@@ -341,6 +351,25 @@ def _ml_hints(
     db.flush()
 
 
+def _learned_template(db: Session, document: Document) -> LayoutTemplate | None:
+    """The learned layout of the household fingerprint the classifier matched, if any."""
+    facts = document.confidence or {}
+    fingerprint = facts.get("fingerprint") if isinstance(facts, dict) else None
+    if not isinstance(fingerprint, dict) or fingerprint.get("origin") != "household":
+        return None
+    try:
+        fingerprint_id = uuid.UUID(str(fingerprint.get("id")))
+    except ValueError:
+        return None
+    stored = db.execute(
+        select(ParserFingerprint.template).where(
+            ParserFingerprint.household_id == document.household_id,
+            ParserFingerprint.id == fingerprint_id,
+        )
+    ).scalar_one_or_none()
+    return parse_template(stored)
+
+
 def _parse_hints(document: Document) -> dict[str, str | None]:
     """The classifier's fingerprint match (``document.confidence``) as parser hints."""
     facts = document.confidence or {}
@@ -395,6 +424,7 @@ def _parse_document(
         institution=hints.get("institution"),
         kind=hints.get("kind"),
         date_order=hints.get("date_order"),
+        template=_learned_template(db, document),
     )
     info = result.parse
     if info is None:  # pragma: no cover - parse_extraction always records it
@@ -444,10 +474,15 @@ def _parse_document(
     document.parser_version = f"{info.parser.name}/{info.parser.version}"[:64]
     parsed = [s for s in result.statements if s.parser is not None]
     brokerage = [i for i in result.investments if i.parser is not None]
-    if len({i.account.last4 for i in brokerage}) > 1:
-        # Several accounts in one document: each statement finds its own
-        # account by its last four digits; the document is on none of them.
-        facts["investment_accounts"] = len(brokerage)
+    named = {s.account.last4 for s in parsed} | {i.account.last4 for i in brokerage}
+    if len(named) > 1:
+        # Several accounts in one document (a brokerage report of several, a
+        # combined bank statement): each statement finds its own account by
+        # its last four digits; the document is on none of them.
+        if brokerage:
+            facts["investment_accounts"] = len(brokerage)
+        if len(parsed) > 1:
+            facts["statement_accounts"] = len(parsed)
         _unlink_classified_account(document)
     read: list[Statement | InvestmentStatement] = [
         *(s for s in parsed if s.transactions),
@@ -455,13 +490,18 @@ def _parse_document(
     ]
     if read:
         document.kind = DocumentKind.STATEMENT
-        first = read[0]
-        if (
-            first.period_start is not None
-            and first.period_end is not None
-            and first.confidence.get("period", 0.0) >= threshold
-        ):
-            document.period_start, document.period_end = first.period_start, first.period_end
+        # The document's period: what its statements (bank and brokerage)
+        # read with confidence, all of them together.
+        periods = [
+            (s.period_start, s.period_end)
+            for s in read
+            if s.period_start is not None
+            and s.period_end is not None
+            and s.confidence.get("period", 0.0) >= threshold
+        ]
+        if periods:
+            document.period_start = min(start for start, _ in periods)
+            document.period_end = max(end for _, end in periods)
     document.confidence = {
         **(document.confidence or {}),
         "parse": {
@@ -486,7 +526,16 @@ def _parse_document(
             db,
             document,
             ReviewKind.LOW_CONFIDENCE_FIELD,
-            {"reason": "lines_skipped", "count": info.skipped_lines, "parser": info.parser.name},
+            {
+                "reason": "lines_skipped",
+                "count": info.skipped_lines,
+                "parser": info.parser.name,
+                # Where they are (page and box), when the parser knows.
+                "lines": [
+                    {"page": r.page, "bbox": [round(v, 2) for v in r.bbox]}
+                    for r in info.skipped_regions
+                ],
+            },
         )
     return result, facts
 

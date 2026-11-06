@@ -1375,6 +1375,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/documents/{document_id}/teach": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Teach PerFin what is where on the document (and remember the layout) */
+        post: operations["post_teach_api_v1_documents__document_id__teach_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/events": {
         parameters: {
             query?: never;
@@ -4376,10 +4393,21 @@ export interface components {
          *     no account matched. ``statement`` (with ``account_id``) does the same for
          *     the brokerage statements of a document (an investment ``unknown_account``
          *     item's ``statement``: an activity export's account, a PDF's).
+         *     ``allow_overlap`` names accounts whose statements this run imports
+         *     although their period overlaps a statement already imported from
+         *     another document (each must be editable); it also takes back a "same
+         *     statement" answer: a statement recorded as skipped is imported. Every
+         *     re-run also carries the document's "import anyway" and "import as read"
+         *     answers from the review queue, each for the one statement it was given
+         *     about (``app.domain.imports.statement_answers``). A statement whose
+         *     figures do not add up is imported as read only on such an answer, never
+         *     by naming its account here.
          */
         ApplyMapping: {
             /** Account Id */
             account_id?: string | null;
+            /** Allow Overlap */
+            allow_overlap?: string[];
             /** Assignments */
             assignments?: components["schemas"]["Assignment"][];
             /** Group */
@@ -5702,17 +5730,30 @@ export interface components {
         /**
          * DocumentFix
          * @description Corrected document facts; ``null`` clears institution, period and tax year.
+         *
+         *     ``opening_balance``/``closing_balance`` correct the balances of one
+         *     statement of the document's stored extraction (``statement``: its index;
+         *     default the item's statement, else the document's only one, else the one
+         *     of the item's account), which is then reconciled again: a statement held
+         *     because it did not add up (``reconciliation_failed``/``_unavailable``)
+         *     is accepted once it does.
          */
         DocumentFix: {
             /** Account Id */
             account_id?: string | null;
+            /** Closing Balance */
+            closing_balance?: number | string | null;
             /** Institution Id */
             institution_id?: string | null;
             kind?: components["schemas"]["DocumentKind"] | null;
+            /** Opening Balance */
+            opening_balance?: number | string | null;
             /** Period End */
             period_end?: string | null;
             /** Period Start */
             period_start?: string | null;
+            /** Statement */
+            statement?: number | null;
             /** Tax Year */
             tax_year?: number | null;
         };
@@ -7355,6 +7396,8 @@ export interface components {
              * @default 0
              */
             min_any: number;
+            /** One Of */
+            one_of?: components["schemas"]["Rule"][];
         };
         /** MatrixConfigIn */
         MatrixConfigIn: {
@@ -8252,7 +8295,7 @@ export interface components {
              * Label
              * @enum {string}
              */
-            label: "transaction" | "account_number" | "page";
+            label: "transaction" | "account_number" | "page" | "skipped_line";
             /** Page */
             page: number;
             /** Transaction Id */
@@ -8289,6 +8332,11 @@ export interface components {
             /** Parser */
             parser?: string | null;
             /**
+             * Replace
+             * @default false
+             */
+            replace: boolean;
+            /**
              * Reprocess Similar
              * @default true
              */
@@ -8312,11 +8360,15 @@ export interface components {
              */
             institution_id: string;
             item: components["schemas"]["ReviewItemOut"];
+            /** Kept */
+            kept?: string[];
             kind: components["schemas"]["DocumentKind"];
             /** Match */
             match: {
                 [key: string]: unknown;
             };
+            /** Merged From */
+            merged_from?: number | null;
             /** Parser */
             parser: string;
             /** Reprocessed */
@@ -8376,6 +8428,11 @@ export interface components {
              * @default true
              */
             confirm: boolean;
+            /**
+             * Import As Read
+             * @default false
+             */
+            import_as_read: boolean;
             /**
              * @description discriminator enum property added by openapi-typescript
              * @enum {string}
@@ -8583,6 +8640,8 @@ export interface components {
              * @default true
              */
             ignore_case: boolean;
+            /** Metadata */
+            metadata?: string | null;
             /** Regex */
             regex?: string | null;
             /**
@@ -9149,7 +9208,7 @@ export interface components {
             /** Sector */
             sector: string | null;
             /** Symbol */
-            symbol: string;
+            symbol: string | null;
         };
         /** SecurityCreate */
         SecurityCreate: {
@@ -9195,7 +9254,7 @@ export interface components {
             /** Sector */
             sector: string | null;
             /** Symbol */
-            symbol: string;
+            symbol: string | null;
             /**
              * Updated At
              * Format: date-time
@@ -9821,6 +9880,43 @@ export interface components {
             /** Name */
             name: string;
         };
+        /** TaughtColumn */
+        TaughtColumn: {
+            /** Header */
+            header: string;
+            /** Role */
+            role: string;
+        };
+        /**
+         * TaughtField
+         * @description One label as PerFin understood it.
+         */
+        TaughtField: {
+            /** Anchor */
+            anchor?: string | null;
+            /** Direction */
+            direction?: ("right" | "below" | "band") | null;
+            /** Field */
+            field: string;
+            /** Note */
+            note?: string | null;
+            /** Page */
+            page: number;
+            /** Value */
+            value: string | null;
+        };
+        /** TaughtTable */
+        TaughtTable: {
+            /** Columns */
+            columns: components["schemas"]["TaughtColumn"][];
+            /**
+             * Kind
+             * @enum {string}
+             */
+            kind: "transactions" | "holdings";
+            /** Rows */
+            rows: number;
+        };
         /** TaxBoxAi */
         TaxBoxAi: {
             amount: components["schemas"]["AiMoney"];
@@ -9999,6 +10095,140 @@ export interface components {
             /** Notes */
             notes?: string | null;
             state?: components["schemas"]["TaxYearState"] | null;
+        };
+        /**
+         * TeachColumn
+         * @description A column of a labelled table: its horizontal span (page units) and role.
+         */
+        TeachColumn: {
+            /** Note */
+            note?: string | null;
+            /**
+             * Role
+             * @enum {string}
+             */
+            role: "ignore" | "other" | "date" | "payee" | "memo" | "amount" | "debit" | "credit" | "balance" | "symbol" | "security" | "quantity" | "price" | "market_value" | "cost_basis";
+            /** X0 */
+            x0: number;
+            /** X1 */
+            x1: number;
+        };
+        /**
+         * TeachLabel
+         * @description One selection (a word clicked or a box dragged on a page) and what it is.
+         */
+        TeachLabel: {
+            /** Bbox */
+            bbox: number[];
+            /**
+             * Field
+             * @enum {string}
+             */
+            field: "account_number" | "account_name" | "period_start" | "period_end" | "opening_balance" | "closing_balance" | "institution" | "ignore" | "other";
+            /** Note */
+            note?: string | null;
+            /** Page */
+            page: number;
+            /** Value */
+            value?: string | null;
+        };
+        /**
+         * TeachOut
+         * @description What was applied to the document and what was remembered.
+         */
+        TeachOut: {
+            /** Applied */
+            applied: string[];
+            /**
+             * Document Id
+             * Format: uuid
+             */
+            document_id: string;
+            /** Fields */
+            fields: components["schemas"]["TaughtField"][];
+            /** Fingerprint Id */
+            fingerprint_id?: string | null;
+            /** Ignored */
+            ignored: number;
+            item?: components["schemas"]["ReviewItemOut"] | null;
+            /** Job Id */
+            job_id?: string | null;
+            /** Kept */
+            kept?: string[];
+            /** Merged From */
+            merged_from?: number | null;
+            /** Notes */
+            notes: string[];
+            /** Reprocessed */
+            reprocessed?: string[];
+            /** Rerun */
+            rerun?: ("import" | "pipeline") | null;
+            /** Tables */
+            tables: components["schemas"]["TaughtTable"][];
+            /** Warnings */
+            warnings?: string[];
+        };
+        /**
+         * TeachRequest
+         * @description ``POST /documents/{id}/teach``: what the person labelled on the document.
+         *
+         *     The labels are applied to this document at once (period, institution,
+         *     account, balances, the labelled table re-imported); with ``remember``
+         *     the layout is also kept as a household fingerprint with the labels'
+         *     anchors (label text and direction, never the values), and this document
+         *     and similar ones are read again with it. ``item_id`` names the review
+         *     item the teaching answers (closed with ``resolve``).
+         */
+        TeachRequest: {
+            /** Account Id */
+            account_id?: string | null;
+            /** Institution Id */
+            institution_id?: string | null;
+            /** Institution Name */
+            institution_name?: string | null;
+            /** Item Id */
+            item_id?: string | null;
+            /** Labels */
+            labels?: components["schemas"]["TeachLabel"][];
+            /**
+             * Remember
+             * @default false
+             */
+            remember: boolean;
+            /**
+             * Replace
+             * @default false
+             */
+            replace: boolean;
+            /**
+             * Reprocess Similar
+             * @default true
+             */
+            reprocess_similar: boolean;
+            /**
+             * Resolve
+             * @default true
+             */
+            resolve: boolean;
+            /** Tables */
+            tables?: components["schemas"]["TeachTable"][];
+        };
+        /**
+         * TeachTable
+         * @description A table selected on a page: the box starts at its header line.
+         */
+        TeachTable: {
+            /** Bbox */
+            bbox: number[];
+            /** Columns */
+            columns: components["schemas"]["TeachColumn"][];
+            /**
+             * Kind
+             * @enum {string}
+             */
+            kind: "transactions" | "holdings";
+            /** Page */
+            page: number;
         };
         /** TextChange */
         TextChange: {
@@ -15972,6 +16202,68 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["DocumentReprocessOut"];
+                };
+            };
+            /** @description Problem details */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Problem details */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Problem details */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Problem details */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+        };
+    };
+    post_teach_api_v1_documents__document_id__teach_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                document_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["TeachRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TeachOut"];
                 };
             };
             /** @description Problem details */

@@ -346,9 +346,16 @@ _deny_table(
     "account_id transaction_id import_hash id created_at updated_at household_id",
 )
 _deny_table(
+    "statement_record",
+    R_INGEST,
+    "account_id document_id kind outcome period_start period_end period_stated source_format "
+    "currency closing_balance closing_cash holdings_value total_value id created_at updated_at "
+    "household_id",
+)
+_deny_table(
     "parser_fingerprint",
     R_INGEST,
-    "institution_id kind match_rules parser_name version learned_from_document_id id "
+    "institution_id kind match_rules template parser_name version learned_from_document_id id "
     "created_at updated_at household_id",
 )
 _deny_table(

@@ -6,13 +6,13 @@ All notable changes to PerFin are recorded here. The format follows
 
 ## Status
 
-The current release candidate is `v1.0.0-rc.4`; the final `v1.0.0` follows the
+The current release candidate is `v1.0.0-rc.5`; the final `v1.0.0` follows the
 external security review. Every phase (0-7) is implemented. Alembic head is
-`0009`. On 2026-11-05: SPDX; backend ruff, ruff format, mypy --strict (657
-source files), bandit, OpenAPI drift and 7742 pytest tests with `-n auto`,
-of which the OCR and Helm tests (67) need Tesseract and `helm` and were run
-only in CI; frontend eslint, tsc, 439 vitest tests in 57 files and the
-production build. As of rc.2: `pip-audit` finds no known vulnerabilities and
+`0012`. On 2026-11-06: SPDX;
+backend ruff, ruff format, mypy --strict (683 source files), bandit, OpenAPI
+drift and 8160 pytest tests with `-n 8`, of which the OCR and Helm tests (67)
+need Tesseract and `helm` and could not run in that environment; frontend
+eslint, tsc, 487 vitest tests in 58 files and the production build. As of rc.2: `pip-audit` finds no known vulnerabilities and
 `npm audit --audit-level=high` passes with 10 moderate advisories in dev
 tooling (eslint, typescript-eslint, minimatch), none high.
 CI is green end to end on GitHub Actions for commit `21d2b38`: `ci` run
@@ -37,6 +37,387 @@ What remains (details in docs/ROADMAP.md):
 ## [Unreleased]
 
 Nothing yet.
+
+## [1.0.0-rc.5] - 2026-11-06
+
+Fifth release candidate of 1.0.0. Statements that hold several accounts in
+one PDF (a Fidelity "Investment Report") are split into one statement per
+account; the statement period is read from the page header; a statement
+already imported for the same account and period is held instead of doubled;
+card statements that print only a statement date read their year-less rows;
+securities printed by name alone are kept; a held brokerage statement can be
+imported as read; and "Teach PerFin" lets a person show PerFin what each
+field of a page is and remember the layout. Migrations `0010`-`0012`.
+
+### Added
+
+- Test fixtures for statements that hold several accounts in one PDF:
+  - `tests/fixtures/synth_fidelity_report.py`: a synthetic three-account
+    "INVESTMENT REPORT" (Individual - TOD, Traditional IRA, Education 529) in
+    the layout of a Fidelity statement. The institution is named only in the
+    PDF metadata, the period is printed unlabelled in every page header, an
+    account index sits on page 2 with page numbers that are wrong (as the
+    layout's can be), each account's first page prints its number next to a
+    dollar amount, and the tables are side by side or have two-line headers,
+    bonds priced per 100, footnote markers inside amount cells, U+2212 minus
+    signs in some tables, a cash transfer between two accounts of the report
+    and year-less dates.
+  - `tests/fixtures/synth_neutral_report.py`: a provider-neutral combined
+    statement (checking, savings, brokerage) with a labelled period, account
+    headings on their own lines and pages that continue an account without
+    repeating its heading.
+  - Both share `tests/fixtures/synth_multi_account.py` and give the results a
+    correct parser must return per account, with figures that reconcile
+    (Year-to-Date columns included). Everything in them is invented: no
+    figure, reference or check number is taken from a real statement.
+- Statement period from the **header band**: a date range printed without a
+  label in the top lines of at least half the pages ("July 1 – July 31,
+  2015", "07/01/2015 - 07/31/2015") is the statement period, in the
+  classifier and in every statement parser (bank, card, brokerage). The
+  start of a range borrows the year of its end, a range whose end is only a
+  day ("July 1-31, 2015", "1 - 31 July 2015") is read, and an ambiguous
+  numeric end takes the day/month order the other end proves, over any
+  default ("01/07/2015 - 31/07/2015" is July, day-first). When a
+  statement's rows fit both orders, the order its period proves dates them.
+  Parsers believe a header band as far as the classifier does: 0.9 on two
+  or more pages, 0.75 on a one-page document (not a stated period).
+- **Same statement twice**: every committed statement is recorded
+  (migration `0010`, table `statement_record`: account, document, period,
+  source format, closing figures). A statement whose printed period
+  overlaps, by at least half, one already imported for the same account
+  from another file (a PDF and an OFX of the same month, the same report
+  uploaded twice) is held with a `possible_duplicate` review item
+  (`statement_overlap`). The review queue offers **Same statement — skip**
+  and **Import anyway**; row-level duplicate checks still apply. Re-running
+  the import of the same file never trips it, statements that only share a
+  boundary day are not held, and CSV exports are recorded but never held.
+  Two OFX/QFX downloads are held only when they declare the same window:
+  rolling "last 90 days" downloads that overlap keep importing, deduplicated
+  by their rows as before. `POST /imports/{id}/apply-mapping` takes
+  `allow_overlap` (account ids), which also takes back a "same statement"
+  answer.
+- `perfin ingest --dry-run` shows the brokerage statements of a PDF in its
+  `parse` stage: per account the last four digits, period, positions and
+  activity counts by type, figures and reconciliation.
+- **Several accounts in one PDF**, for any institution
+  (`app/ingestion/parsers/accounts.py`):
+  - Account headings are found per cell, so `Account 111-111111` printed
+    next to `$103,351.18` or `Account Value: $142,413.12` at the top of a
+    page starts that account. A transfer row naming another account
+    (`Trans. from account 222-222222`) never switches the page, nor does
+    its description wrapped onto the next line (`TO SAVINGS ACCOUNT
+    XXXX-2468`), even in a page's last lines or for an account the index
+    lists, so a single-account bank statement is never split by one.
+    Transaction descriptions (`ACH DEBIT 12-3456789`, `TO SAVINGS ACCOUNT
+    XXXX-2468`), telephone numbers and dates after "Account" are not
+    account headings; product titles that share words with descriptions
+    still are (`CERTIFICATE OF DEPOSIT`, `ONLINE SAVINGS`, `TRANSFER ON
+    DEATH INDIVIDUAL`, `UNIFORM TRANSFERS TO MINORS ACT`). Only a line
+    starting at one of a row's text columns continues the row: a heading
+    centred or right-aligned straight under a row still starts its account.
+  - An account index ("Accounts Included in This Report", "Your Accounts at
+    a Glance", any table with an Account Number column and a name or type
+    column) is read as the document's map of accounts. Each statement gets
+    the account's printed name (without the owner's name), its type and its
+    subtype (`education_529` from an `EDUCATION (529) ACCOUNTS` group,
+    `traditional_ira`, `checking`), and account proposals use them. The
+    index's page numbers are not trusted.
+  - A combined statement (checking, savings and brokerage in one PDF) gives
+    a bank statement for each bank account and a brokerage statement for
+    the brokerage account. A bank statement of two or more accounts gives
+    one statement per account.
+  - A brokerage statement of a single account takes the name, type and
+    subtype its heading or index prints (`HEALTH SAVINGS ACCOUNT`:
+    retirement, `hsa`), which its account proposal shows; matching is
+    unchanged.
+  - Statements record the pages they were read from (`first_page`,
+    `last_page`).
+- Brokerage table reading, for any institution:
+  - More column names: *Transaction Description*, *Transaction Total*,
+    *Transaction Amount*, *Settlement Date*, *Post Date*, *Trans. Date*,
+    *Symbol/CUSIP*, *Cost Basis of Close*, *Transaction Cost*, *Check Num.*,
+    *Payee*, *Maturity*, *Coupon Rate*, *Accrued Interest (AI)* and the
+    estimated income columns. A header cell naming no known column keeps its
+    values out of its neighbours, header words run together (`Transaction
+    Description Quantity`) are split, and a row cell spanning two columns is
+    shared out word by word.
+  - Headers over two or three lines (`Price` / `Per Unit`, `Settlement` /
+    `Date`, `Ending Market Value` / `Accrued Interest (AI)`) and two tables
+    side by side under one header line are read; a heading is never taken
+    as part of a header.
+  - Activity sections: *Securities Bought & Sold*, *Dividends, Interest &
+    Other Income*, *Securities Transferred In/Out* (units moved, or cash),
+    *Deposits*, *Withdrawals*, *Contributions*, *Distributions*, *Checking
+    Activity*, *Debit Card Activity*, *Bill Payments*, *Cash Activity*,
+    *Electronic Funds Transfers*, *Fees and Charges* and *Taxes Withheld*
+    type the rows their own words do not; *Trades Pending Settlement*, *Core
+    Account Cash Flow*, *Daily Additions and Subtractions* and other
+    summaries are not activity. A section ends at the next heading: a table
+    under a heading no section names, after the section's own table, is
+    typed by its rows' own words only (an untyped row is held, never booked
+    as the section above's type), and the table after a skipped section is
+    read; a line right under a section's heading (a card's name) keeps the
+    section, and so does the section's header repeated on a later page at
+    its top or under its running header (a table continued on the next
+    page): every line above it on the page (at most eight), each printed in
+    the header band of that page and of the page the section's header was
+    on (one cell of a band line will do; not a line that headed a table of
+    its own there), naming the account or the page, a date or period line
+    or saying the table runs on (`Account Activity (continued)`), or any
+    other line without a list word, a figure too (`Total Account Value
+    $6,025.00`), in a block where another line names the account or the
+    page (`Page 2 of 4` over the client's name). A line holding a list word
+    (`Other Transactions (Page 2)`, `Miscellaneous Items, page 2`, also
+    beside the account number) and any other line there is a heading no
+    section names and ends the section as it does on one page, unless it is
+    the statement's title: it names the statement (`statement`, `report`)
+    or the account or the page and otherwise says only words for all of its
+    entries and title filler (`Monthly Activity Statement`, `Statement of
+    Transactions - Account XXXX-1234`, `Account Activity for XXXX-1234`;
+    not `Miscellaneous Items Report - Account XXXX-1234` or `Transactions
+    After Statement Date`). Known limit: a heading without a
+    list word in a block where another line names the account or the page
+    (`Page 2 of 4` or `Account XXXX-1234` over `Securities Lending`) is
+    taken for the running header and its rows for the section's. A
+    heading holding a header word (`ATM
+    Withdrawals`, `Checks`) under a running page header is never the
+    header's top line (the rows keep their whole description). In a brokerage account, cash tables (date, description,
+    amount) are read by the generic parser too; a description naming no
+    action is the row's memo, one that is the name of a held security names
+    that security, and a *Securities Transferred In/Out* row with a quantity
+    moves those units even without a symbol column.
+  - Holdings: `CUSIP:` and `ISIN:` lines under a row give its identifiers,
+    the symbol is the ticker in parentheses ending the name, a name wrapped
+    onto a line worded like a section heading that ends it with its
+    `(SYMBOL)` (`INCOME FUND (ZZSIX)`) is still the name (without one the
+    line is the heading), and a ticker in front of the name (`ZZAB Example Index
+    Fund`) is read only for a holding nothing else identifies, never in an
+    all-capitals name (its first word is an issuer's), a bond's or a name
+    with parentheses; note lines are no rows, footnote markers in figures
+    are dropped, `unknown`/`N/A` cost basis stays unknown, a group heading
+    above its table's header (`Core Account`) groups its rows, and a cash
+    sweep printed as a holding is the account's cash when the figures say
+    so.
+  - Bond prices quoted per 100 of face value are recognised
+    (`InvestmentPosition.price_per_100`): reconciliation checks quantity x
+    price / 100 and the import stores one unit's price. A bond trade's price
+    per 100 (`InvestmentActivity.price_per_100`, by the row's figures or as
+    its position is priced) is stored as one unit's in `investment_txn`, so
+    the bond is never valued at 100 times its price after a trade.
+  - Cash: `Beginning/Ending Core Account Balance` and a cash balance under a
+    `This Period | Last Period` header are read; dated cash balance lines
+    (`Cash balance on 03/01/2024`) give the opening (earliest) and closing
+    (latest) cash; a statement printing no closing cash is checked against
+    its account value less its holdings.
+- Bank statements: a *Checks Paid* table (`Check No. | Date Paid | Amount`)
+  is read, each check as `CHECK <number>`, money out.
+- Institution parsers are detected by the PDF's title and author and by
+  their subsidiary's name anywhere, beside the layout's wording, not only by
+  page-1 words (Fidelity's name can be only its logo). Fingerprints take a
+  `metadata` rule and a `one_of` group; the shipped Fidelity fingerprint
+  (version 2) takes the name from the header or the metadata.
+- When the chosen parser reads nothing, the next-best parser is tried
+  (warning `parser_fallback:<name>`).
+- **Teach PerFin**: a dialog, opened from any review item about a page and
+  from the document page, shows the page; a click picks a word and a drag
+  picks a box (a list of the page's lines does the same by keyboard). Each
+  selection is named: account number, account name/type, statement start
+  or end, opening or closing balance, institution, transaction or holdings
+  table (with a role per column), and always **Other — describe it** and
+  **Ignore this**. What PerFin read so far is shown next to the fields.
+  `POST /documents/{id}/teach` applies the labels to the document (period,
+  institution, account, balances; a labelled table is imported through the
+  normal importer) and, with **Remember this layout**, stores them as a
+  learned template on a household fingerprint (migration `0011`,
+  `parser_fingerprint.template`). The template keeps label text, a
+  direction and column headers and roles, never a value: labels with any
+  digit are refused. The next statement of the layout is read with it
+  (parser `layout_template/1`: period, account digits, balances, the
+  labelled table, reconciled as usual) and imports with no review item.
+  Free-text notes are kept for the household, without words that hold a
+  digit, and never acted on. A label is remembered only when it reads the
+  selected value back (a label printed twice over different figures, such
+  as "Balance", would read the wrong figure next time; a label in every
+  page header may be selected on any page). Teaching the same layout again adds to what
+  was remembered (`merged_from`, `kept`), "Remember this layout" keeps it
+  too, and another layout of the same institution is refused with `409
+  layout-conflict` until the person chooses to replace it (`replace`; the
+  dialog offers it whenever it remembers, so wrongly taught lines can be
+  dropped). The review item the dialog was opened from is closed only when
+  the teaching answers it (a held statement once it reconciles; an unread
+  document or an unknown account once the taught rows are imported or the
+  document is read again; a new institution once it is set; a
+  low-confidence item once a fact it names changed); a fact that does not
+  answer it leaves it open (`item_left_open`). A line picked from the keyboard list is added with
+  "Add this line", not on every change of the list. Audited as
+  `document.teach`.
+- `POST /review/{id}/correct` takes `opening_balance`, `closing_balance`
+  and `statement`: the stored statement is reconciled again, and a
+  `reconciliation_failed`/`reconciliation_unavailable` item is accepted
+  once it adds up (its pending rows confirmed, its closing balance
+  recorded).
+- **Import as read**: a brokerage statement held back because its figures
+  do not add up (`investment_reconciliation_failed`; or
+  `investment_low_confidence` with nothing to check against and no other
+  doubt) can now be imported on the person's word. The review item spells
+  out what did not add up, per check in plain words (positions, holdings
+  total, cash, account value) with what the statement prints, what its
+  rows come to and the difference (payload `differences`, `currency`,
+  `statement`, `statement_key`), and offers **Import as read** beside
+  "Teach PerFin" and "Dismiss". The answer is for **that statement only**:
+  items name their statement by a key (a digest of the statement exactly
+  as read, `app/domain/imports/statement_answers.py`), the resolution
+  records it with the account, and every later import of the document
+  (any `apply-mapping` re-run, whoever starts it: another item's answer,
+  the Accounts dialog, Teach PerFin, a plain re-run; and the pipeline when
+  the document is processed again) puts that statement on that account
+  wherever it now sits in the document and imports it as read there:
+  activity, opening positions, prices and cash rows as printed, but **no
+  balance snapshot** from totals that did not add up, and any other doubt
+  (a guessed date, an unread figure) still holds it. Another statement of
+  the same account, or the statement read differently after a reprocess,
+  is checked on its own figures and held with an item of its own. Items
+  raised before statements had keys offer no "Import as read" (`409
+  review-item-stale` through the API): reprocessing raises current ones.
+  The resolution (`import_as_read`, account, statement, `statement_key`,
+  failed checks, `snapshot: false`) and the audit rows (`review.resolve`,
+  `investment.import` with `accepted_as_read`) record the acceptance.
+  "Import anyway" on a `statement_overlap` item works the same way (its
+  item also names `statement_key`), so a statement that both overlaps and
+  does not add up is not held again for what was already answered.
+  `apply-mapping` takes no account list for either answer (`allow_overlap`
+  stays as an explicit, run-only choice). The
+  review queue no longer offers "Confirm as read" on these items (nothing
+  of the statement is in the ledger to confirm), and "Map columns" only for
+  dates that could not be told apart.
+- Review fixes for items that could only be dismissed: cost per unit for
+  opening positions with an unknown basis (`PATCH
+  /investments/transactions/{id}`), the statement's balances for
+  reconciliation items, skipped lines highlighted on the page (parsers
+  record their boxes; region label `skipped_line`), "Map columns" and
+  "Teach PerFin" for brokerage dates that could not be told apart, and
+  explanations for every reason the server raises (skipped rows, running
+  balance mismatches, assumed date order, truncated files, payslips, tax
+  forms, loan statements, duplicates).
+- **Holdings named by their name alone**: a holding or trade a statement
+  prints with no ticker, CUSIP or ISIN (an unlisted partnership priced by
+  estimate, a 529 portfolio such as `Example Plan Portfolio 2040 (Example
+  Funds)`) is no longer dropped. Statement parsers keep it as a
+  `SecurityRef` with only a name (a letter or digit required; bounded,
+  whitespace collapsed and formula-neutralised by the protocol), so it
+  counts in the holdings total; a sentence under a name in capitals that
+  nothing else identifies is a note, not part of the name (a line in title
+  case, such as `Class R6` or `2031 (Example Funds)`, is the rest of the
+  name, and a holding with a symbol or CUSIP keeps every wrapped line), and
+  a trade or transfer of units is named by its *Security Name* column
+  (never by a description column). The importer matches such a security
+  by its exact normalised name (NFKC, case-folded, spaces collapsed; never
+  a similar name), only in the account's currency and among the
+  securities the account holds or traded, then those of another account
+  at its institution, then those no account holds (so one generic name in
+  two plans is two securities, and an account keeps the security it
+  holds): the one of that name without identifiers, else the only one,
+  else a new one **without a symbol**. Two positions of one statement
+  taking one security by its name at different prices hold the statement
+  (`investment_same_name_securities`). A
+  later statement that prints a symbol, CUSIP or ISIN for the same name
+  fills it in (a symbol only when no other security has it). Securities
+  without a symbol (migration `0012`: `security.symbol` nullable, unique
+  only where present) come back from the API with `"symbol": null`, are
+  listed by their name among the symbols, are never sent to a price feed,
+  merge by name on archive import, and the investments pages show their
+  name. The API still creates securities only with a symbol.
+- **Card statements of account** (a charge or corporate card statement
+  that prints a statement date and no period) are read by the generic
+  card parser, for any issuer:
+  - a statement date (`Statement Date`, `Closing Date`, or a cell reading
+    only `Date`, its value beside it or under it) ends the period, which
+    starts the day after a printed previous statement date, else the day
+    after the same date a month before, or on the earliest row when one is
+    older; yearless rows take the latest year on or before the statement
+    date, so December rows of a January statement are last year's (a
+    range after `Opening/Closing Date` is read as the period); both dates
+    on one line are read, a `Next Closing Date` is never the statement's,
+    and a few rows dated after the statement date (a stub's line read as
+    a row) are skipped rather than dropping the date;
+  - a table headed only by its heading and money columns (`New
+    Transactions for <NAME> | Foreign Spending | Amount $`): each row's
+    date and description are read from the cells left of the columns;
+  - month-named dates without a year (`December 16`, `16 Dec`) and a mark
+    after a date (`January 9 *`);
+  - a category line under the merchant line is the memo, and `CR` (or
+    `DR`) alone under the amount marks it as `CR` after it does;
+  - an informational foreign-currency column (`360.00` over `US Dollar`)
+    is kept in the memo, never booked;
+  - labels printed over their values (a boxed summary `Previous Balance -
+    Payments and Credits + New Charges = New Balance`, `Prepared For |
+    Account Number | Date` over the values) give the balances and the
+    statement date; when the summary is a whole equation, the rows' money
+    in and out must also equal its credits and charges, or the statement
+    does not reconcile (warning `summary_totals_mismatch`);
+  - a payment stub (from `Please detach here`, `Return this portion`,
+    `Detach and mail`... to the end of its page, the marker line may carry
+    the amount due) is never read, so its dated `Amount Due` line is no
+    row and its full account number never the statement's;
+  - the card parser is chosen only on card words outside the transaction
+    rows, and the weaker ones (`New Charges`, `Cardmember`) need a second
+    cue, so a checking statement with a `CARDMEMBER SERV` payment row
+    stays a checking statement with its signs as printed;
+  - numeric rows with and without a year in one table are both read.
+
+  A synthetic layout (`tests/fixtures/synth_card_statement.py`: invented
+  issuer, cardholder and merchants, four pages, a year boundary, `CR`
+  credits on the same and the next line, foreign rows, a stub,
+  continuation pages) imports into a credit card account with no review
+  item.
+
+### Changed
+
+- Parser versions: `brokerage_statement_generic` 6,
+  `fidelity_investments_statement` 5, `placeholder_brokerage` 4,
+  `layout_template` 2 (holdings named by their name alone),
+  `statement_generic` and `card_statement_generic` 4 (card statements of
+  account), and the bank and card institution parsers built on
+  it (`sample_national_checking`, `example_fcu_share`, `demo_card_services`,
+  `mock_savings_and_loan`) 2 (their output for the same pages may change:
+  checks tables, a header-only line ending a table).
+
+- A period guessed from the dates in a document (`line_dates`, or the span
+  of its transactions) is no longer stored as the document's period; it is
+  kept as a hint in `document.confidence.period` (with its dates). The
+  document's period now comes from all its parsed statements, brokerage
+  statements included.
+- Statement parsers try every line with a period label until one reads, so
+  a label that matches something else first ("Change from Last Period") no
+  longer hides the real period, and a label alone on its line reads the
+  next line. The generic brokerage parser reads year-less `MM/DD` dates
+  through the period.
+- Importing the same statement again as a different file (OFX after PDF, a
+  second rendering) now waits in review as `statement_overlap` instead of
+  being processed with every row counted as a duplicate.
+
+### Fixed
+
+- "Remember this layout" no longer stores a table header holding figures
+  (a summary row read as a table, `carried in 1 520 40`) in the remembered
+  rules.
+- Multi-account reports no longer misroute an account's first page (the one
+  printing its number beside its value) to the account before it, so an
+  account no longer takes the next account's pages and values (a 529 folded
+  into the IRA). Each account is reconciled and imported on its own; a lone
+  bank or brokerage statement beside statements of other accounts is
+  matched by its own last four digits, never put on the document's account.
+- The brokerage parsers no longer read "Change in Account Value" as the
+  account value.
+- The bank and card statement parsers no longer take a lowercase word
+  after "currency" for a currency code ("charges in a foreign currency
+  are ..." read as `ARE`); the code must be printed in capitals.
+- An opening position for units held before a statement's period and
+  transferred or sold out during it no longer stops the import.
+- The time-weighted return is compounded with guard digits and rounded once,
+  so a period whose exact return sits half-way between two rounded rates
+  (a fall from 20.48 to 0.01 is exactly -0.99951171875) rounds half-even
+  instead of a hair off; the no-flows TWR property test failed on it.
 
 ## [1.0.0-rc.4] - 2026-11-06
 

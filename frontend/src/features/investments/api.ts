@@ -107,3 +107,7 @@ export const createInvestmentTxn = (body: InvestmentTxnCreate) => unwrap(api.POS
 export const deleteInvestmentTxn = async (id: string): Promise<void> => {
   await unwrap(api.DELETE("/api/v1/investments/transactions/{txn_id}", { params: { path: { txn_id: id } } }));
 };
+
+/** Change an investment transaction (e.g. the cost basis of an opening position: its `price`). */
+export const updateInvestmentTxn = (id: string, body: Schemas["InvestmentTxnUpdate"]) =>
+  unwrap(api.PATCH("/api/v1/investments/transactions/{txn_id}", { params: { path: { txn_id: id } }, body }));

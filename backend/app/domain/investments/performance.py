@@ -283,12 +283,7 @@ def performance(
             dates.append(day)
             day += timedelta(days=1)
         end_value = days[-1].value if days else start_value
-        daily = returns.daily_returns(start_value, days)
-        growth = Decimal(1)
-        cumulative: list[Decimal] = []
-        for r in daily:
-            growth *= 1 + r
-            cumulative.append(growth - 1)
+        cumulative = returns.cumulative_returns(start_value, days)
         twr = cumulative[-1] if cumulative else Decimal(0)
         period = (end - start).days
 

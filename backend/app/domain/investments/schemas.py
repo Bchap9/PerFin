@@ -134,7 +134,8 @@ class SecurityUpdate(_Input):
 
 class SecurityOut(_Output):
     id: uuid.UUID
-    symbol: str
+    #: None for a security a statement printed by its name alone.
+    symbol: str | None
     name: str
     asset_class: AssetClass
     currency: str
@@ -283,7 +284,8 @@ class CostMethodOut(_Output):
 
 class SecurityBrief(_Output):
     id: uuid.UUID
-    symbol: str
+    #: None for a security a statement printed by its name alone.
+    symbol: str | None
     name: str
     asset_class: AssetClass
     sector: str | None
