@@ -86,14 +86,17 @@ phrase, for a name other documents print too), `date_styles`,
 | `description_types` | an activity table without an action column: its description is the action |
 | `cash_groups` | holdings groups whose rows are the account's cash (a core or sweep money market): opening/closing cash, no position, included in the printed holdings total |
 | `ignored_tables`, `section_headings` | headings of tables not to read (they would count money twice), and the headings that end them |
+| `metadata_names`, `name_anchors`, `anchors` | for a name printed only in a logo: other names in the PDF's title or author, phrases anywhere that name the institution (a subsidiary in a footer), and the layout's own wording that must appear beside either |
 
 New column names go into the module's `HOLDING_HEADERS` (role `other` for a
 column to recognise but not read) and `ACTIVITY_HEADERS`, asset-class group
 headings into `ASSET_GROUPS`, action words into `ACTIVITY_TYPES` (or
 `TRANSFER_TYPES` for a word whose type depends on whether units moved).
-Several accounts in one PDF need no code: account headings at the top or
-bottom of each account's pages split the document (INGESTION.md "Several
-accounts in one PDF"). The fingerprint names
+Several accounts in one PDF need no code: account headings anywhere on a
+page (also beside an amount) and an account index split the document
+(`app/ingestion/parsers/accounts.py`; INGESTION.md "Several accounts in one
+PDF"). A period printed unlabelled in the page headers needs no code either.
+When a parser reads nothing usable the registry tries the next-best one. The fingerprint names
 `parser: brokerage_statement_generic`. Draw the layout from invented data
 (`SynthBrokerage` in `backend/tests/fixtures/synth_brokerage.py`, or a
 module of its own like `synth_fidelity.py`: several pages of activity with

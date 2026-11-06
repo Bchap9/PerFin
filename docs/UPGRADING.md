@@ -277,6 +277,19 @@ need it ([PORTABILITY.md](PORTABILITY.md)).
 
 ## Notes for specific releases
 
+### Unreleased
+
+- Migration `0010` adds the `statement_record` table (the statement-level
+  duplicate guard) and `0011` the nullable `parser_fingerprint.template`
+  column (layouts remembered by "Teach PerFin"). Both are additive and run
+  on their own during the upgrade. Statements imported before `0010` are not
+  backfilled: they are protected by the row-level duplicate checks only, so
+  uploading one of them again is deduplicated row by row, not held as
+  `statement_overlap`.
+- No new settings. Several parser versions change (see the changelog);
+  re-running the import of an existing document may read it differently,
+  usually more rows and more accounts.
+
 ### 1.0.0-rc.4
 
 - No migration and no new settings. `DELETE /documents/{id}` keeps its

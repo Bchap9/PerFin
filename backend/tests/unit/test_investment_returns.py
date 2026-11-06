@@ -6,7 +6,7 @@ from __future__ import annotations
 from decimal import Decimal
 
 import pytest
-from hypothesis import given, settings
+from hypothesis import example, given, settings
 from hypothesis import strategies as st
 
 from app.domain.investments.returns import (
@@ -75,6 +75,9 @@ _values = st.integers(min_value=1, max_value=10**9).map(lambda n: Decimal(n) / 1
 
 @settings(max_examples=200, deadline=None)
 @given(_values, st.lists(_values, min_size=1, max_size=60))
+# end/start - 1 is exactly halfway between two rounded rates here; the chained
+# daily returns land a hair below it, so the unrounded values are compared.
+@example(Decimal("20.48"), [Decimal("30524.04"), Decimal("0.01")])
 def test_property_twr_equals_mwr_without_flows(start: Decimal, values: list[Decimal]) -> None:
     """With no flows inside the period, TWR and the period MWR are both end/start - 1."""
     days = [Day(v) for v in values]
@@ -82,7 +85,9 @@ def test_property_twr_equals_mwr_without_flows(start: Decimal, values: list[Deci
     growth = xirr_growth([(0, -start), (len(days), values[-1])])
     assert growth is not None
     money_weighted = period_return(growth, len(days))
-    assert round_rate(time_weighted) == round_rate(values[-1] / start - 1)
+    expected = values[-1] / start - 1
+    assert abs(time_weighted - expected) <= Decimal("1e-20") * max(Decimal(1), abs(expected))
+    assert abs(round_rate(time_weighted) - round_rate(expected)) <= Decimal("1e-10")
     assert abs(money_weighted - time_weighted) <= Decimal("1e-12") * max(
         Decimal(1), abs(time_weighted)
     )
