@@ -123,6 +123,10 @@ class Position:
     notes: tuple[str, ...] = ()
     qty_places: int = 3
     price_places: int = 3
+    #: Footnote markers printed after the price / after the cost basis, part of
+    #: the printed cell (``"A"`` gives ``203.15A``, ``" c"`` gives ``$7.10 c``).
+    price_mark: str = ""
+    cost_mark: str = ""
 
     @property
     def market_value(self) -> Decimal:
@@ -261,8 +265,9 @@ def expected_bank_rows(account: Account) -> list[tuple[date, Decimal, str]]:
 # ---------------------------------------------------------------------------
 
 
-def money(value: Decimal, *, dollar: bool = False, plus: bool = False) -> str:
-    sign = "-" if value < 0 else ("+" if plus and value > 0 else "")
+def money(value: Decimal, *, dollar: bool = False, plus: bool = False, minus: str = "-") -> str:
+    """``-$1,234.56`` (``minus`` is the sign printed for a negative value)."""
+    sign = minus if value < 0 else ("+" if plus and value > 0 else "")
     return f"{sign}{'$' if dollar else ''}{abs(value):,.2f}"
 
 

@@ -23,6 +23,8 @@ from decimal import Decimal
 import pytest
 
 from app.ingestion.extract.pdf import extract_pdf
+from app.ingestion.parsers.base import DocumentView
+from app.ingestion.parsers.registry import parser_named
 from app.ingestion.sandbox.protocol import DocumentMeta, ExtractOptions, ExtractResult
 from tests.fixtures import synth_fidelity_report as fidr
 from tests.fixtures import synth_neutral_report as neutral
@@ -69,7 +71,7 @@ def neutral_pdf() -> ExtractResult:
 def test_cusip_and_isin_check_digits() -> None:
     from app.ingestion.parsers.brokerage import is_cusip
 
-    assert is_cusip(cusip("98571UAA"))
+    assert is_cusip(cusip("94136RAC"))
     assert cusip("03783310") == "037833100"  # a published example
     assert isin("US037833100") == "US0378331005"  # a published example
     assert re.fullmatch(r"[A-Z]{2}[A-Z0-9]{9}[0-9]", isin("ZZ0000SMC01"))
@@ -109,6 +111,18 @@ def test_fidelity_institution_only_in_metadata(fid_pdf: ExtractResult) -> None:
     assert fidr.INSTITUTION not in (_meta(bare).title or "")
 
 
+def test_fidelity_is_no_receipt(fid_pdf: ExtractResult) -> None:
+    # The layout's footnotes speak of "the statement period"; the report must not
+    # look like a receipt for a reason the real layout does not have.
+    for page in (1, 2):
+        assert "the statement period." in _lines(fid_pdf, page)
+    receipt = parser_named("receipt_basic")
+    assert receipt is not None
+    bare = _extract(fidr.report_pdf(institution_metadata=False))
+    for result in (fid_pdf, bare):
+        assert receipt.detect(DocumentView.from_result(result)) == 0.0
+
+
 def test_fidelity_account_index_and_first_pages(
     fid_pdf: ExtractResult, fid_report: tuple[Report, fidr.Extras]
 ) -> None:
@@ -116,14 +130,25 @@ def test_fidelity_account_index_and_first_pages(
     page2 = _lines(fid_pdf, 2)
     assert "Accounts Included in This Report" in page2
     assert "Page Account Type/Name Account Number Beginning Value Ending Value" in page2, page2
-    for account in stmt.accounts:
+    printed_pages = []
+    for index, account in enumerate(stmt.accounts):
         row = next(line for line in page2 if account.number in line)
-        first_page = int(row.split()[0])
         assert row.endswith(f"{account.total_value:,.2f}"), row
         # The account's first page names it on the same line as a dollar amount.
+        first_page = next(
+            page.number
+            for page in fid_pdf.pages
+            if re.fullmatch(
+                rf"(Account Value: )?\$[\d,]+\.\d\d Account {account.number}",
+                page.text.splitlines()[3],
+            )
+        )
         banner = _lines(fid_pdf, first_page)[3]
-        assert banner.endswith(f"Account {account.number}"), banner
         assert f"${account.total_value:,.2f}" in banner
+        # The index's page numbers are wrong (module doc): never the first page.
+        printed = int(row.split()[0])
+        assert printed == first_page + fidr.INDEX_PAGE_SHIFT[index] != first_page
+        printed_pages.append(printed)
         # Every later page of the account names it top right with the owner line under it.
         for page in fid_pdf.pages[first_page:]:
             lines = page.text.splitlines()
@@ -138,6 +163,7 @@ def test_fidelity_account_index_and_first_pages(
     }
     assert len(banners) == 3
     assert any(line.startswith("Account Value: $") for line in banners)
+    assert printed_pages[-1] > len(fid_pdf.pages)
 
 
 def test_fidelity_table_traits(fid_pdf: ExtractResult) -> None:
@@ -152,18 +178,39 @@ def test_fidelity_table_traits(fid_pdf: ExtractResult) -> None:
         "Total Unrealized"
     )
     # Bonds: maturity column, per-100 prices, CUSIP continuation lines.
-    assert re.search(r"^SAMPLE CORP NT CV 12/15/27 5,000\.00 \$101\.250 \$5,062\.50", text, re.M)
-    assert "CUSIP: 98571UAA4" in lines
+    assert re.search(r"^SAMPLE CORP NT CV 8/1/28 8,000\.00 \$98\.625 \$7,890\.00", text, re.M)
+    assert f"CUSIP: {cusip('94136RAC')}" in lines
+    # Footnote markers inside numeric cells: after a price, after a cost basis
+    # (attached or standing apart between two amounts).
+    assert re.search(r"^PLACEHOLDER GROUP LIMITED COM STK 60\.00 147\.85A 8,871\.00 ", text, re.M)
+    assert re.search(r" \$6,630\.82t \$6,821\.52 ", text)
+    assert re.search(r" \$7,184\.90 c \$3,821\.56 ", text)
     # Activity header vocabulary and year-less dates.
     assert (
         "Date Security Name CUSIP Transaction Description Quantity Price of Close Cost "
         "Transaction Total"
     ) in lines
-    assert re.search(r"^6/11 MOCK SER TR HIGH YIELD BOND ZZHY You bought 100 ", text, re.M)
+    assert re.search(r"^6/11 MOCK SER TR HIGH YIELD BOND ZZHY You bought 120 ", text, re.M)
+    # The wrapped end of a name and the note under the row share one line.
+    assert "ETF Wash sale of 5/14/19: $193.62" in lines
     # Side-by-side tables: the header twice on one line.
     header = "Date Reference Transaction Description Transaction Total"
     assert f"{header} {header}" in lines
-    assert any(line.endswith("Total Deposits & EFT In $6,815.00") for line in lines)
+    assert any(line.endswith("Total Deposits & EFT In $6,502.50") for line in lines)
+    # A cash transfer between two accounts of the report: no security, both sides.
+    assert "6/28 R57-330642-1 Trans. from account 418-330642 $2,140.00" in lines
+    assert "6/28 R57-205817-1 Trans. to account 418-205817 -$2,140.00" in lines
+    # U+2212 minus signs in some tables, "-" in others.
+    assert "2311 6/30 01 Check paid \u2212$412.86 2324 * 6/23 01 Check paid \u2212793.45" in lines
+    assert any(line.startswith("Total Debit Card Activity \u2212$") for line in lines)
+    assert any(line.startswith("Subtractions \u2212$") for line in lines)  # the IRA summary
+    assert text.count(fidr.MINUS) > 30
+    # An ending balance is one figure in both columns.
+    endings = [line for line in lines if line.startswith("Ending Core Account Balance")]
+    assert len(endings) == 2
+    for line in endings:
+        this_period, year_to_date = line.split()[-2:]
+        assert this_period == year_to_date, line
     for title in (
         "Securities Transferred In",
         "Securities Transferred Out",
@@ -175,7 +222,7 @@ def test_fidelity_table_traits(fid_pdf: ExtractResult) -> None:
         "Daily Additions and Subtractions",
         "Estimated Cash Flow",
         "Core Account Cash Flow Income Summary",
-        "Change from Last Period: $3,192.41",
+        "Change from Last Period: -$7,173.29",
     ):
         assert any(line.startswith(title) for line in lines), title
 
@@ -202,14 +249,19 @@ def test_fidelity_expected_results_reconcile(fid_report: tuple[Report, fidr.Extr
         assert result.total_value == result.positions_value + result.cash_closing
         _check_positions(account)
     individual = stmt.accounts[0]
-    bond = next(p for p in individual.positions if p.cusip == cusip("98571UAA"))
+    bond = next(p for p in individual.positions if p.cusip == cusip("94136RAC"))
     assert bond.per_100
-    assert bond.market_value == Decimal("5062.50")
+    assert bond.market_value == Decimal("7890.00")
     types = {row[1] for row in results[0].activity}
     assert types >= {"buy", "sell", "dividend", "reinvest", "interest", "deposit", "withdrawal"}
     assert {"transfer_in", "transfer_out", "fee"} <= types
-    # In-kind transfers have no cash effect; pending trades are not activity.
-    assert all(row[4] == 0 for row in results[0].activity if row[1].startswith("transfer"))
+    # In-kind transfers have no cash effect; a cash transfer between two accounts
+    # of the report shows on both sides; pending trades are not activity.
+    transfers = [row for r in results for row in r.activity if row[1].startswith("transfer")]
+    assert all(row[4] == 0 for row in transfers if row[3] is not None)
+    cash = [row[4] for row in transfers if row[3] is None]
+    assert len(cash) == 2
+    assert sum(cash, ZERO) == 0
     pending = extras.pending[individual.number][0]
     assert pending.day > stmt.end
     assert all(row[0] <= stmt.end for r in results for row in r.activity)

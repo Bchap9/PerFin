@@ -43,16 +43,20 @@ What remains (details in docs/ROADMAP.md):
     "INVESTMENT REPORT" (Individual - TOD, Traditional IRA, Education 529) in
     the layout of a Fidelity statement. The institution is named only in the
     PDF metadata, the period is printed unlabelled in every page header, an
-    account index sits on page 2, each account's first page prints its
-    number next to a dollar amount, and the tables are side by side or have
-    two-line headers, bonds priced per 100 and year-less dates.
+    account index sits on page 2 with page numbers that are wrong (as the
+    layout's can be), each account's first page prints its number next to a
+    dollar amount, and the tables are side by side or have two-line headers,
+    bonds priced per 100, footnote markers inside amount cells, U+2212 minus
+    signs in some tables, a cash transfer between two accounts of the report
+    and year-less dates.
   - `tests/fixtures/synth_neutral_report.py`: a provider-neutral combined
     statement (checking, savings, brokerage) with a labelled period, account
     headings on their own lines and pages that continue an account without
     repeating its heading.
   - Both share `tests/fixtures/synth_multi_account.py` and give the results a
-    correct parser must return per account, with figures that reconcile.
-    Everything in them is invented.
+    correct parser must return per account, with figures that reconcile
+    (Year-to-Date columns included). Everything in them is invented: no
+    figure, reference or check number is taken from a real statement.
 
 ## [1.0.0-rc.4] - 2026-11-06
 

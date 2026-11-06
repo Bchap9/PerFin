@@ -393,14 +393,18 @@ app/
 - Several accounts in one PDF: `tests/fixtures/synth_fidelity_report.py`
   (three brokerage accounts in the Fidelity "Investment Report" layout:
   the institution only in the metadata, an unlabelled header period, an
-  account index, account numbers next to amounts, side-by-side and two-line
-  tables, bonds per 100) and `tests/fixtures/synth_neutral_report.py`
+  account index whose page numbers cannot be trusted, account numbers next
+  to amounts, side-by-side and two-line tables, bonds per 100, footnote
+  markers in amount cells, U+2212 minus signs, a cash transfer between two
+  of its accounts) and `tests/fixtures/synth_neutral_report.py`
   (checking, savings and brokerage of an invented bank, labelled period,
   headings on their own lines), on the shared model of
   `tests/fixtures/synth_multi_account.py`. `report()` builds the data,
   `report_pdf()` draws it and `expected(...)` gives the per-account results
-  (period, last four digits, positions, activity, cash, values). Smoke
-  tests: `tests/unit/test_synth_multi_account_fixtures.py`.
+  (period, last four digits, positions, activity, cash, values). Every
+  figure is invented: a layout is redrawn, never a real statement's numbers,
+  references or text. Smoke tests:
+  `tests/unit/test_synth_multi_account_fixtures.py`.
 - Loan statements: `tests/fixtures/synth_loans.py` builds monthly
   `SynthLoanStatement`s of the fictional Placeholder Home Lending from a
   schedule of the real amortisation engine (`loan_series(months, extra=,

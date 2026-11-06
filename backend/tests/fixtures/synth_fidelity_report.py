@@ -4,8 +4,10 @@
 Nothing here comes from a real statement: the page layout is redrawn by code
 (reportlab, through :mod:`tests.fixtures.synth_multi_account`) and every
 person, account number, instrument (symbols starting ``ZZ``, CUSIPs starting
-``9`` with valid check digits), quantity, price and amount is invented.
-Every page says it is a synthetic test document.
+``9`` with valid check digits), quantity, price, amount, reference and check
+number is invented. Never copy a figure from a real statement into it, not
+even one row: invent new ones and re-balance the arithmetic below. Every page
+says it is a synthetic test document.
 
 It reproduces the *layout traits* that make the real layout hard to read,
 so the multi-account work (period, account segmentation, table reading,
@@ -19,13 +21,19 @@ detection) is tested against them:
   ``June 1 <en dash> June 30, 2019`` (the year once) in its header, with no
   label. Page 1 also prints ``Change from Last Period: $...`` (a "period"
   label followed by no period) and bond maturities / security names carry
-  dates outside the period (``12/15/27``, ``03/15/2027``).
+  dates outside the period (``8/1/28``, ``09/30/2028``). The footnotes on
+  pages 1 and 2 speak of "the statement period", as the layout's do (it is
+  also what keeps the receipt detector off the report).
 * **Accounts.** Page 2 has an *Accounts Included in This Report* index
   (``Page | Account Type/Name | Account Number | Beginning Value | Ending
   Value``) under group lines (``GENERAL INVESTMENTS``, ``PERSONAL
-  RETIREMENT``, ``EDUCATION (529) ACCOUNTS``). Each account's first page
-  prints its number on the same line as a dollar amount (``$61,083.77
-  Account 418-205817`` / ``Account Value: $70,751.39 Account 418-330642``);
+  RETIREMENT``, ``EDUCATION (529) ACCOUNTS``). **Its page numbers are
+  wrong**, as the layout's can be: each is off by :data:`INDEX_PAGE_SHIFT`
+  and the last one points past the end of the document, so segmentation
+  must follow the account headings, never the index's pages. Each
+  account's first page prints its number on the same line as a dollar
+  amount (``$90,235.56 Account 418-205817`` / ``Account Value: $62,362.06
+  Account 418-330642``);
   every other page of the account prints the section title and ``Account
   NNN-NNNNNN`` on the top line and the owner/type line under it. Account
   types: Individual - TOD, Traditional IRA, Education 529 (no core cash).
@@ -35,17 +43,24 @@ detection) is tested against them:
   two-line headers (``Price`` over ``Per Unit``, ``Ending`` over ``Market
   Value``); names wrapped onto a second line holding the ``(SYMBOL)``;
   bonds priced per 100 of face value with ``CUSIP: ...`` and terms lines
-  under the row; an ``ISIN: ...`` line; ``Total <group> (n% of account
+  under the row; an ``ISIN: ...`` line; footnote markers inside numeric
+  cells (:attr:`Position.price_mark` / ``cost_mark``: ``147.85A``,
+  ``$6,630.82t``, ``$7,184.90 c $3,821.56``); ``Total <group> (n% of account
   holdings)`` subtotals and ``Total Holdings`` (core included). Holdings run
   over several pages with ``Holdings (continued)``.
 * **Activity.** *Securities Bought & Sold* (``Settlement Date | Security
   Name | Symbol/CUSIP | Transaction Description | Quantity | Price | Cost
   Basis of Close | Transaction Cost | Transaction Total``, headers over two
   lines, sells with a negative quantity, gain and wash-sale notes under the
-  row), *Trades Pending Settlement* (dates after the period: not activity),
-  *Securities Transferred In* / *Out* (in-kind, the printed amount is the
-  value moved, not cash), *Dividends, Interest & Other Income* (a
-  reinvestment, a CUSIP in the symbol column), side-by-side *Deposits*,
+  row, on the same line as the wrapped end of the name: ``ETF Wash sale of
+  5/14/19: $193.62``), *Trades Pending Settlement* (dates after the period:
+  not activity), *Securities Transferred In* / *Out* (between the Individual
+  account and the IRA of the same report, both sides printed: a cash row
+  with no security, only an internal reference in the name column, and an
+  in-kind row whose printed amount is the value moved, not cash; plus an
+  in-kind transfer to an account outside the report), *Dividends, Interest
+  & Other Income* (a reinvestment, a CUSIP in the symbol column),
+  side-by-side *Deposits*,
   *Withdrawals*, *Checking Activity*, *Bill Payments*, *Fees and Charges*
   and *Taxes Withheld* (two tables on one line, the total in the right
   half), *Debit Card Activity* (transaction and post dates),
@@ -53,15 +68,20 @@ detection) is tested against them:
   activity (*Daily Additions and Subtractions*, *Estimated Cash Flow*,
   *Core Account Cash Flow*, *Income Summary*, *Top Holdings*). Dates are
   year-less ``M/D`` (``6/1`` and ``6/03`` both occur).
+* **Minus signs.** *Debit Card Activity*, *Checking Activity*, *Fees and
+  Charges*, *Daily Additions and Subtractions* and the IRA's summary pages
+  print negative amounts with U+2212 (:data:`MINUS`, ``\u2212$412.86``);
+  every other table uses ``-``.
 
 The figures reconcile: for each account, quantity x price (/ 100 for bonds)
 = market value, the positions and the core add up to the ending account
 value, the core's opening balance plus every activity row's cash effect is
 its closing balance (also printed as *Core Account Cash Flow*), and the
 account summary's additions, subtractions and change in investment value
-add up. :func:`expected` / :func:`expected_activity` /
-:func:`expected_positions` give what a correct parser must return per
-account.
+add up. The Year-to-Date columns add up as well and end at the same ending
+value or balance as This Period. :func:`expected` /
+:func:`expected_activity` / :func:`expected_positions` give what a correct
+parser must return per account.
 """
 
 from __future__ import annotations
@@ -100,7 +120,9 @@ from tests.fixtures.synth_multi_account import (
 
 __all__ = [
     "EXPECTED_HEADER_LINES",
+    "INDEX_PAGE_SHIFT",
     "INSTITUTION",
+    "MINUS",
     "Expected",
     "expected",
     "expected_activity",
@@ -114,6 +136,10 @@ INSTITUTION: Final = "Fidelity Investments"
 FOOTER_BROKER: Final = "Fidelity Brokerage Services LLC"
 TITLE: Final = "INVESTMENT REPORT"
 START: Final = date(2019, 6, 1)
+#: How far the index's printed page numbers are off each account's real first
+#: page. The layout's index is not reliable: the last one even points past the
+#: end of the document. Segmenting must follow the account headings.
+INDEX_PAGE_SHIFT: Final = (1, 3, 4)
 
 
 def _period_text(start: date, end: date) -> str:
@@ -147,9 +173,11 @@ def report(start: date = START) -> tuple[Report, Extras]:
     def d(day: int) -> date:
         return start.replace(day=day)
 
-    brokerage_bond = cusip("98571UAA")
-    muni = cusip("98971PEN")
-    tbill = cusip("99279ABL")
+    brokerage_bond = cusip("94136RAC")
+    muni = cusip("96205LQK")
+    tbill = cusip("99318WCD")
+    individual_ref = "R57-205817-1"
+    ira_ref = "R57-330642-1"
     individual = Account(
         number="418-205817",
         title="Jordan Q. Sample - Individual - TOD",
@@ -158,47 +186,49 @@ def report(start: date = START) -> tuple[Report, Extras]:
         group="GENERAL INVESTMENTS",
         core_name="PLACEHOLDER INSURED DEPOSIT SWEEP NOT COVERED BY SIPC",
         core_symbol="ZZSWP",
-        cash_opening=Decimal("12407.16"),
+        cash_opening=Decimal("9832.47"),
         positions=(
             Position(
                 "EXAMPLE TOTAL RETURN BOND FD CL I",
                 "Mutual Funds",
-                Decimal("1015.328"),
-                Decimal("11.190"),
-                Decimal("11250.00"),
-                Decimal("7536.91"),
+                Decimal("864.517"),
+                Decimal("10.730"),
+                Decimal("9116.40"),
+                Decimal("8412.36"),
                 symbol="ZZTRB",
                 subgroup="Bond Funds",
-                notes=("\u2014 30-day yield: 4.83%",),
+                notes=("— 30-day yield: 3.96%",),
+                cost_mark=" c",
             ),
             Position(
                 "SAMPLE INSTL MONEY MARKET PORT CL I",
                 "Mutual Funds",
-                Decimal("5025.810"),
+                Decimal("3618.442"),
                 Decimal("1.000"),
-                Decimal("5025.81"),
+                Decimal("3618.44"),
                 symbol="ZZMXX",
                 subgroup="Short-term Funds",
-                notes=("\u2014 7-day yield: 0.01%",),
+                notes=("— 7-day yield: 0.02%",),
             ),
             Position(
                 "MOCK SER TR HIGH YIELD BOND ETF",
                 "Exchange Traded Products",
-                Decimal("250.00"),
-                Decimal("40.66"),
-                Decimal("11940.00"),
-                Decimal("10000.00"),
+                Decimal("320.00"),
+                Decimal("37.84"),
+                Decimal("12971.00"),
+                Decimal("11262.40"),
                 symbol="ZZHY",
                 qty_places=2,
                 price_places=2,
+                cost_mark=" c",
             ),
             Position(
                 "DEMO INTL EQUITY INDEX FDS EUROPE ETF",
                 "Exchange Traded Products",
-                Decimal("100.00"),
-                Decimal("42.97"),
-                Decimal("4350.00"),
-                Decimal("5000.00"),
+                Decimal("75.00"),
+                Decimal("46.18"),
+                Decimal("3360.00"),
+                Decimal("4176.30"),
                 symbol="ZZIEQ",
                 qty_places=2,
                 price_places=2,
@@ -206,22 +236,23 @@ def report(start: date = START) -> tuple[Report, Extras]:
             Position(
                 "FICTIONAL APPLIED DEVICES INC",
                 "Stocks",
-                Decimal("25.00"),
-                Decimal("525.31"),
-                Decimal("12750.00"),
-                Decimal("9350.12"),
+                Decimal("18.00"),
+                Decimal("611.47"),
+                Decimal("10512.00"),
+                Decimal("7184.90"),
                 symbol="ZZAPD",
                 subgroup="Common Stocks",
                 qty_places=2,
                 price_places=2,
+                cost_mark=" c",
             ),
             Position(
                 "SAMPLE HEALTH CARE REIT INC COM USD0.01",
                 "Stocks",
-                Decimal("350.00"),
-                Decimal("11.21"),
+                Decimal("410.00"),
+                Decimal("12.41"),
                 ZERO,
-                Decimal("3881.40"),
+                Decimal("5073.40"),
                 symbol="ZZSHR",
                 subgroup="Common Stocks",
                 qty_places=2,
@@ -230,26 +261,27 @@ def report(start: date = START) -> tuple[Report, Extras]:
             Position(
                 "PLACEHOLDER GROUP LIMITED COM STK USD 1.00",
                 "Stocks",
-                Decimal("100.00"),
-                Decimal("104.10"),
+                Decimal("60.00"),
+                Decimal("147.85"),
                 ZERO,
-                Decimal("9800.00"),
+                Decimal("7920.60"),
                 symbol="ZZPGL",
                 subgroup="Common Stocks",
                 qty_places=2,
                 price_places=2,
+                price_mark="A",
             ),
             Position(
                 "SAMPLE CORP NT CV",
                 "Bonds",
-                Decimal("5000.00"),
-                Decimal("101.250"),
-                Decimal("5043.75"),
-                Decimal("5000.00"),
+                Decimal("8000.00"),
+                Decimal("98.625"),
+                Decimal("7860.00"),
+                Decimal("7985.00"),
                 cusip=brokerage_bond,
                 subgroup="Corporate Bonds",
-                maturity=date(2027, 12, 15),
-                coupon="6.00%",
+                maturity=date(2028, 8, 1),
+                coupon="4.375%",
                 per_100=True,
                 notes=("Int. Semi-Annually",),
                 qty_places=2,
@@ -257,27 +289,28 @@ def report(start: date = START) -> tuple[Report, Extras]:
             Position(
                 "EXAMPLE CITY INDL DEV AGY REV",
                 "Bonds",
-                Decimal("10000.000"),
-                Decimal("107.442"),
-                Decimal("10710.00"),
-                Decimal("10000.00"),
+                Decimal("12000.000"),
+                Decimal("104.318"),
+                Decimal("12462.00"),
+                Decimal("12210.00"),
                 cusip=muni,
                 subgroup="Municipal Bonds",
-                maturity=date(2029, 3, 1),
-                coupon="5.000%",
+                maturity=date(2031, 11, 1),
+                coupon="3.750%",
                 per_100=True,
                 notes=("Fixed Coupon; Insured; Int. Semi-Annually",),
+                cost_mark=" B",
             ),
             Position(
                 "UNITED STATES TREAS BILLS",
                 "Bonds",
-                Decimal("10000.00"),
-                Decimal("99.000"),
-                Decimal("9885.00"),
-                Decimal("9800.00"),
+                Decimal("14000.00"),
+                Decimal("99.412"),
+                Decimal("13874.00"),
+                Decimal("13809.30"),
                 cusip=tbill,
                 subgroup="US Treasury/Agency Securities",
-                maturity=date(2019, 11, 21),
+                maturity=date(2019, 10, 17),
                 coupon="0.00%",
                 per_100=True,
                 notes=("Fixed Coupon",),
@@ -291,77 +324,86 @@ def report(start: date = START) -> tuple[Report, Extras]:
                 "buy",
                 "trades",
                 "You bought",
-                Decimal("-3725.85"),
+                Decimal("-4280.99"),
                 name="MOCK SER TR HIGH YIELD BOND ETF",
                 symbol="ZZHY",
-                quantity=Decimal(100),
-                price=Decimal("37.17900"),
-                cost=Decimal("7.95"),
-                notes=("Wash sale of 5/8/19: $280.55",),
+                quantity=Decimal(120),
+                price=Decimal("35.61700"),
+                cost=Decimal("6.95"),
+                notes=("Wash sale of 5/14/19: $193.62",),
             ),
             Activity(
                 d(11),
                 "buy",
                 "trades",
                 "You bought",
-                Decimal("-2215.95"),
+                Decimal("-3336.05"),
                 name="SAMPLE HEALTH CARE REIT INC COM USD0.01",
                 symbol="ZZSHR",
-                quantity=Decimal(200),
-                price=Decimal("11.04000"),
-                cost=Decimal("7.95"),
+                quantity=Decimal(270),
+                price=Decimal("12.33000"),
+                cost=Decimal("6.95"),
             ),
             Activity(
                 d(11),
                 "buy",
                 "trades",
                 "You bought",
-                Decimal("-1665.45"),
+                Decimal("-1737.35"),
                 name="SAMPLE HEALTH CARE REIT INC COM USD0.01",
                 symbol="ZZSHR",
-                quantity=Decimal(150),
-                price=Decimal("11.05000"),
-                cost=Decimal("7.95"),
+                quantity=Decimal(140),
+                price=Decimal("12.36000"),
+                cost=Decimal("6.95"),
             ),
             Activity(
                 d(12),
                 "sell",
                 "trades",
                 "You sold",
-                Decimal("7368.45"),
+                Decimal("6511.57"),
                 name="MOCK SER TR HIGH YIELD BOND ETF",
                 symbol="ZZHY",
-                quantity=Decimal(200),
-                price=Decimal("36.88200"),
-                cost=Decimal("7.95"),
-                cost_basis=Decimal("7250.00"),
-                notes=("ST gain: $118.45",),
+                quantity=Decimal(180),
+                price=Decimal("36.21400"),
+                cost=Decimal("6.95"),
+                cost_basis=Decimal("6402.60"),
+                notes=("ST gain: $108.97",),
             ),
             Activity(
                 d(18),
                 "buy",
                 "trades",
                 "You bought",
-                Decimal("-1921.90"),
+                Decimal("-1484.67"),
                 name="MOCK SER TR HIGH YIELD BOND ETF",
                 symbol="ZZHY",
-                quantity=Decimal(50),
-                price=Decimal("38.27900"),
-                cost=Decimal("7.95"),
+                quantity=Decimal(40),
+                price=Decimal("36.94300"),
+                cost=Decimal("6.95"),
             ),
-            # Securities Transferred In / Out (in kind: no cash)
+            # Securities Transferred In: cash (no security) and shares from the
+            # IRA of the same report; Out: shares to an account outside it.
             Activity(
                 d(28),
                 "transfer_in",
                 "transferred_in",
-                "Trans. from account X81-004410",
+                "Trans. from account 418-330642",
+                Decimal("2140.00"),
+                name=ira_ref,
+            ),
+            Activity(
+                d(28),
+                "transfer_in",
+                "transferred_in",
+                "Trans. from account 418-330642",
                 ZERO,
                 name="PLACEHOLDER GROUP LIMITED COM STK USD 1.00",
                 symbol="ZZPGL",
-                quantity=Decimal("100.000"),
-                price=Decimal("102.960"),
-                printed=Decimal("10296.00"),
-                notes=("X81-004410-1",),
+                quantity=Decimal("60.000"),
+                price=Decimal("143.250"),
+                printed=Decimal("8595.00"),
+                notes=(ira_ref,),
             ),
             Activity(
                 d(28),
@@ -371,9 +413,9 @@ def report(start: date = START) -> tuple[Report, Extras]:
                 ZERO,
                 name="SAMPLE ENERGY PARTNERS LP",
                 symbol="ZZSEP",
-                quantity=Decimal("150.000"),
-                price=Decimal("33.400"),
-                printed=Decimal("-5010.00"),
+                quantity=Decimal("210.000"),
+                price=Decimal("27.650"),
+                printed=Decimal("-5806.50"),
             ),
             # Dividends, Interest & Other Income
             Activity(
@@ -381,7 +423,7 @@ def report(start: date = START) -> tuple[Report, Extras]:
                 "dividend",
                 "income",
                 "Dividend received",
-                Decimal("171.52"),
+                Decimal("155.77"),
                 name="EXAMPLE TOTAL RETURN BOND FD CL I",
                 symbol="ZZTRB",
             ),
@@ -390,18 +432,18 @@ def report(start: date = START) -> tuple[Report, Extras]:
                 "reinvest",
                 "income",
                 "Reinvestment",
-                Decimal("-171.52"),
+                Decimal("-155.77"),
                 name="EXAMPLE TOTAL RETURN BOND FD CL I",
                 symbol="ZZTRB",
-                quantity=Decimal("15.328"),
-                price=Decimal("11.190"),
+                quantity=Decimal("14.517"),
+                price=Decimal("10.730"),
             ),
             Activity(
                 d(4),
                 "interest",
                 "income",
                 "Muni exempt interest",
-                Decimal("250.00"),
+                Decimal("225.00"),
                 name="EXAMPLE CITY INDL DEV AGY REV",
                 cusip=muni,
             ),
@@ -410,7 +452,7 @@ def report(start: date = START) -> tuple[Report, Extras]:
                 "dividend",
                 "income",
                 "Dividend received",
-                Decimal("19.00"),
+                Decimal("14.04"),
                 name="FICTIONAL APPLIED DEVICES INC",
                 symbol="ZZAPD",
             ),
@@ -419,72 +461,72 @@ def report(start: date = START) -> tuple[Report, Extras]:
                 "interest",
                 "income",
                 "Interest earned",
-                Decimal("0.85"),
+                Decimal("0.73"),
                 name="PLACEHOLDER INSURED DEPOSIT SWEEP",
                 symbol="ZZSWP",
             ),
             # Deposits
-            Activity(d(1), "deposit", "deposits", "Wire transfer from bank", Decimal("5000.00")),
+            Activity(d(1), "deposit", "deposits", "Wire transfer from bank", Decimal("4200.00")),
             Activity(
                 d(3),
                 "deposit",
                 "deposits",
                 "Deposit received",
-                Decimal("15.00"),
-                reference="CHK0042",
+                Decimal("27.50"),
+                reference="CHK3381",
             ),
-            Activity(d(12), "deposit", "deposits", "Wire transfer from bank", Decimal("1000.00")),
+            Activity(d(12), "deposit", "deposits", "Wire transfer from bank", Decimal("1250.00")),
             Activity(
                 d(18),
                 "deposit",
                 "deposits",
                 "Electronic funds transfer received",
-                Decimal("300.00"),
-                reference="EFT1806",
+                Decimal("375.00"),
+                reference="EFT2207",
             ),
-            Activity(d(25), "deposit", "deposits", "Wire transfer from bank", Decimal("500.00")),
+            Activity(d(25), "deposit", "deposits", "Wire transfer from bank", Decimal("650.00")),
             # Withdrawals
             Activity(
-                d(2), "withdrawal", "withdrawals", "Wire transfer to bank", Decimal("-3000.00")
+                d(2), "withdrawal", "withdrawals", "Wire transfer to bank", Decimal("-2600.00")
             ),
-            Activity(d(8), "withdrawal", "withdrawals", "Wire transfer to bank", Decimal("-25.00")),
+            Activity(d(8), "withdrawal", "withdrawals", "Wire transfer to bank", Decimal("-40.00")),
             Activity(
-                d(17), "withdrawal", "withdrawals", "Wire transfer to bank", Decimal("-1000.00")
+                d(17), "withdrawal", "withdrawals", "Wire transfer to bank", Decimal("-1150.00")
             ),
             Activity(
                 d(29),
                 "withdrawal",
                 "withdrawals",
                 "Electronic remit Debit Sample Card Co",
-                Decimal("-210.00"),
+                Decimal("-185.00"),
             ),
             # Debit Card Activity
             Activity(
                 d(1),
                 "withdrawal",
                 "debit_card",
-                "ATM0058 100 MAIN ST, ANYTOWN, ST",
-                Decimal("-304.00"),
+                "ATM3171 220 ELM ST, ANYTOWN, ST",
+                Decimal("-260.00"),
                 post_day=d(4),
-                reference="7425612AB6CD2EFG",
+                reference="5830947QX2RT8WNM",
             ),
             Activity(
                 d(11),
                 "withdrawal",
                 "debit_card",
-                "POS6600 EXAMPLE MART 0001, ANYTOWN, ST",
-                Decimal("-128.12"),
+                "POS4917 EXAMPLE MART 0001, ANYTOWN, ST",
+                Decimal("-87.43"),
                 post_day=d(14),
-                reference="2425131AB6CD2HJK",
+                reference="3302871QX2RT8WPA",
             ),
             Activity(
                 d(21),
                 "deposit",
                 "debit_card",
                 "SAMPLE OUTFITTERS #0506, ANYTOWN, ST",
-                Decimal("46.58"),
+                Decimal("39.12"),
                 post_day=d(24),
-                reference="16510ABCD351321EF",
+                reference="20718QXRT48807VKD",
             ),
             # Bill Payments
             Activity(
@@ -492,24 +534,24 @@ def report(start: date = START) -> tuple[Report, Extras]:
                 "withdrawal",
                 "bill_payments",
                 "Sample Card Co*",
-                Decimal("-1231.12"),
-                reference="**********9999",
+                Decimal("-1186.40"),
+                reference="**********4412",
             ),
             Activity(
                 d(15),
                 "withdrawal",
                 "bill_payments",
                 "Example Card Service",
-                Decimal("-504.78"),
-                reference="**********8888",
+                Decimal("-472.15"),
+                reference="**********6630",
             ),
             Activity(
                 d(18),
                 "withdrawal",
                 "bill_payments",
                 "Demo Rewards Visa",
-                Decimal("-609.15"),
-                reference="**********7777",
+                Decimal("-561.09"),
+                reference="**********2085",
             ),
             # Checking Activity (the reference is the check number)
             Activity(
@@ -517,43 +559,43 @@ def report(start: date = START) -> tuple[Report, Extras]:
                 "withdrawal",
                 "checking",
                 "Check paid",
-                Decimal("-430.72"),
-                reference="1076",
+                Decimal("-412.86"),
+                reference="2311",
             ),
             Activity(
                 d(5),
                 "withdrawal",
                 "checking",
                 "Check paid",
-                Decimal("-1984.21"),
-                reference="1542 *",
+                Decimal("-1876.30"),
+                reference="2318 *",
             ),
             Activity(
                 d(23),
                 "withdrawal",
                 "checking",
                 "Check paid",
-                Decimal("-846.50"),
-                reference="1548 *",
+                Decimal("-793.45"),
+                reference="2324 *",
             ),
             Activity(
                 d(30),
                 "withdrawal",
                 "checking",
                 "Check paid",
-                Decimal("-2165.00"),
-                reference="1549",
+                Decimal("-2240.00"),
+                reference="2325",
             ),
             # Fees and Charges
-            Activity(d(1), "fee", "fees", "Advisor Fee", Decimal("-44.37")),
-            Activity(d(17), "fee", "fees", "ADR fee", Decimal("-2.25")),
+            Activity(d(1), "fee", "fees", "Advisor Fee", Decimal("-39.58")),
+            Activity(d(17), "fee", "fees", "ADR fee", Decimal("-1.80")),
             # Taxes Withheld
             Activity(
                 d(11),
                 "fee",
                 "taxes",
                 "Foreign tax paid",
-                Decimal("-4.12"),
+                Decimal("-2.11"),
                 name="FICTIONAL APPLIED DEVICES INC",
             ),
             Activity(
@@ -561,7 +603,7 @@ def report(start: date = START) -> tuple[Report, Extras]:
                 "fee",
                 "taxes",
                 "Federal tax paid",
-                Decimal("-39.11"),
+                Decimal("-31.40"),
                 name="MOCK SER TR HIGH YIELD BOND ETF",
             ),
             Activity(
@@ -569,13 +611,13 @@ def report(start: date = START) -> tuple[Report, Extras]:
                 "fee",
                 "taxes",
                 "State tax paid",
-                Decimal("-12.78"),
+                Decimal("-9.65"),
                 name="MOCK SER TR HIGH YIELD BOND ETF",
             ),
         ),
     )
-    ira_bond = cusip("99871UAB")
-    ira_note = cusip("99712GAF")
+    ira_bond = cusip("93702MAE")
+    ira_note = cusip("97354HBF")
     ira = Account(
         number="418-330642",
         title="Jordan Q. Sample - Traditional IRA",
@@ -584,38 +626,40 @@ def report(start: date = START) -> tuple[Report, Extras]:
         group="PERSONAL RETIREMENT",
         core_name="FICTIONAL CASH RESERVES",
         core_symbol="ZZCRX",
-        cash_opening=Decimal("1570.57"),
+        cash_opening=Decimal("3486.29"),
         positions=(
             Position(
                 "FICTIONAL APPLIED DEVICES INC",
                 "Stocks",
-                Decimal("30.00"),
-                Decimal("525.31"),
-                Decimal("15300.00"),
-                Decimal("8247.50"),
+                Decimal("22.00"),
+                Decimal("611.47"),
+                Decimal("12848.00"),
+                Decimal("6630.82"),
                 symbol="ZZAPD",
                 subgroup="COMMON STOCK",
                 qty_places=2,
                 price_places=2,
+                cost_mark="t",
             ),
             Position(
                 "EXAMPLE PETROLEUM CORP",
                 "Stocks",
-                Decimal("50.00"),
-                Decimal("87.96"),
-                Decimal("3404.00"),
-                Decimal("4149.75"),
+                Decimal("64.00"),
+                Decimal("79.43"),
+                Decimal("4384.80"),
+                Decimal("4417.36"),
                 symbol="ZZXPC",
                 subgroup="COMMON STOCK",
                 qty_places=2,
                 price_places=2,
+                cost_mark="t",
             ),
             Position(
                 "SAMPLE MOTORS CO USD0.01",
                 "Stocks",
-                Decimal("209.00"),
-                Decimal("35.56"),
-                Decimal("7126.90"),
+                Decimal("185.00"),
+                Decimal("31.27"),
+                Decimal("5550.00"),
                 symbol="ZZSMC",
                 isin=isin("ZZ0000SMC01"),
                 subgroup="COMMON STOCK",
@@ -623,27 +667,28 @@ def report(start: date = START) -> tuple[Report, Extras]:
                 price_places=2,
             ),
             Position(
-                "SAMPLE CPI LKD NT FLTG RATE 0.00% 03/15/2027",
+                "SAMPLE CPI LKD NT FLTG RATE 0.00% 09/30/2028",
                 "Stocks",
-                Decimal("590.00"),
-                Decimal("23.49"),
-                Decimal("13629.00"),
-                Decimal("9090.70"),
+                Decimal("440.00"),
+                Decimal("24.12"),
+                Decimal("10560.00"),
+                Decimal("8908.24"),
                 symbol="ZZSLN",
                 subgroup="COMMON STOCK",
                 qty_places=2,
                 price_places=2,
+                cost_mark="t",
             ),
             Position(
                 "SAMPLE TECH CORP NT CV",
                 "Bonds",
-                Decimal("10000.00"),
-                Decimal("100.000"),
-                Decimal("9975.00"),
-                Decimal("10000.00"),
+                Decimal("6000.00"),
+                Decimal("101.875"),
+                Decimal("6090.00"),
+                Decimal("6000.00"),
                 cusip=ira_bond,
-                maturity=date(2025, 4, 15),
-                coupon="6.00%",
+                maturity=date(2026, 2, 15),
+                coupon="5.250%",
                 per_100=True,
                 notes=("Semi-Annual Interest",),
                 qty_places=2,
@@ -651,23 +696,23 @@ def report(start: date = START) -> tuple[Report, Extras]:
             Position(
                 "EXAMPLE AUTO PARTS JR SB NT",
                 "Bonds",
-                Decimal("15000.00"),
-                Decimal("102.500"),
-                Decimal("15300.00"),
-                Decimal("15025.00"),
+                Decimal("18000.00"),
+                Decimal("97.250"),
+                Decimal("17460.00"),
+                Decimal("17892.00"),
                 cusip=ira_note,
-                maturity=date(2033, 10, 15),
-                coupon="8.250%",
+                maturity=date(2034, 4, 1),
+                coupon="6.125%",
                 per_100=True,
                 notes=("Fixed Coupon; Quarterly Interest",),
                 qty_places=2,
             ),
             Position(
-                "SAMPLE MTRS CO WTS EXP 07/10/2026",
+                "SAMPLE MTRS CO WTS EXP 01/22/2027",
                 "Other",
-                Decimal("190.000"),
-                Decimal("15.290"),
-                Decimal("2812.00"),
+                Decimal("240.000"),
+                Decimal("9.415"),
+                Decimal("2208.00"),
                 symbol="ZZWSA",
             ),
         ),
@@ -677,18 +722,18 @@ def report(start: date = START) -> tuple[Report, Extras]:
                 "buy",
                 "trades",
                 "You bought",
-                Decimal("-865.00"),
+                Decimal("-803.70"),
                 name="EXAMPLE PETROLEUM CORP",
                 symbol="ZZXPC",
                 quantity=Decimal(10),
-                price=Decimal("86.50000"),
+                price=Decimal("80.37000"),
             ),
             Activity(
                 d(9),
                 "dividend",
                 "income",
                 "Dividend received",
-                Decimal("41.20"),
+                Decimal("50.76"),
                 name="EXAMPLE PETROLEUM CORP",
                 symbol="ZZXPC",
             ),
@@ -697,7 +742,7 @@ def report(start: date = START) -> tuple[Report, Extras]:
                 "interest",
                 "income",
                 "Interest",
-                Decimal("300.00"),
+                Decimal("157.50"),
                 name="SAMPLE TECH CORP NT CV",
                 cusip=ira_bond,
             ),
@@ -706,8 +751,8 @@ def report(start: date = START) -> tuple[Report, Extras]:
                 "interest",
                 "income",
                 "Interest",
-                Decimal("64.99"),
-                name="SAMPLE CPI LKD NT FLTG RATE 0.00% 03/15/2027",
+                Decimal("52.47"),
+                name="SAMPLE CPI LKD NT FLTG RATE 0.00% 09/30/2028",
                 symbol="ZZSLN",
             ),
             Activity(
@@ -715,21 +760,42 @@ def report(start: date = START) -> tuple[Report, Extras]:
                 "dividend",
                 "income",
                 "Dividend received",
-                Decimal("0.02"),
+                Decimal("0.03"),
                 name="FICTIONAL CASH RESERVES",
                 symbol="ZZCRX",
+            ),
+            # The other side of the Individual account's transfers in.
+            Activity(
+                d(28),
+                "transfer_out",
+                "transferred_out",
+                "Trans. to account 418-205817",
+                Decimal("-2140.00"),
+                name=individual_ref,
+            ),
+            Activity(
+                d(28),
+                "transfer_out",
+                "transferred_out",
+                "Trans. to account 418-205817",
+                ZERO,
+                name="PLACEHOLDER GROUP LIMITED COM STK USD 1.00",
+                symbol="ZZPGL",
+                quantity=Decimal("60.000"),
+                price=Decimal("143.250"),
+                printed=Decimal("-8595.00"),
             ),
             Activity(
                 d(14),
                 "deposit",
                 "contributions",
                 f"Contribution for {start.year}",
-                Decimal("1000.00"),
+                Decimal("1650.00"),
             ),
             Activity(
-                d(25), "withdrawal", "distributions", "Normal distribution", Decimal("-500.00")
+                d(25), "withdrawal", "distributions", "Normal distribution", Decimal("-820.00")
             ),
-            Activity(d(25), "fee", "taxes", "Federal tax withheld", Decimal("-50.00")),
+            Activity(d(25), "fee", "taxes", "Federal tax withheld", Decimal("-82.00")),
         ),
     )
     college = Account(
@@ -742,17 +808,17 @@ def report(start: date = START) -> tuple[Report, Extras]:
             Position(
                 "Sample College Portfolio 2031",
                 "Holdings",
-                Decimal("1200.291"),
-                Decimal("17.680"),
-                Decimal("20837.05"),
+                Decimal("1046.873"),
+                Decimal("18.940"),
+                Decimal("19412.00"),
                 symbol="ZZC31",
             ),
             Position(
                 "Sample Moderate Growth Portfolio",
                 "Holdings",
-                Decimal("463.301"),
-                Decimal("15.620"),
-                Decimal("7088.51"),
+                Decimal("512.664"),
+                Decimal("14.270"),
+                Decimal("7170.00"),
                 symbol="ZZMGP",
             ),
         ),
@@ -765,15 +831,15 @@ def report(start: date = START) -> tuple[Report, Extras]:
         "buy",
         "pending",
         "You bought",
-        Decimal("-2626.55"),
+        Decimal("-2445.88"),
         name="FICTIONAL APPLIED DEVICES INC",
         symbol="ZZAPD",
-        quantity=Decimal(5),
-        price=Decimal("525.310"),
+        quantity=Decimal(4),
+        price=Decimal("611.470"),
     )
     extras = Extras(
         pending={individual.number: (pending,)},
-        closed_begin={individual.number: Decimal("5010.00")},
+        closed_begin={individual.number: Decimal("5775.00"), ira.number: Decimal("8364.00")},
     )
     stmt = Report(
         INSTITUTION,
@@ -874,6 +940,25 @@ def _ytd(value: Decimal, factor: str = "2.35") -> Decimal:
     return cents(value * Decimal(factor))
 
 
+#: U+2212, the minus sign some of the layout's tables print instead of "-".
+MINUS: Final = "\u2212"
+
+
+def _minus(value: Decimal, *, dollar: bool = False) -> str:
+    return money(value, dollar=dollar, minus=MINUS)
+
+
+def _ytd_column(end: Decimal, flows: list[Decimal]) -> tuple[Decimal, list[Decimal]]:
+    """A Year-to-Date column that adds up: (beginning, flows) for ``end``.
+
+    Each flow is scaled by :func:`_ytd`; the beginning is what makes the
+    column end at the same ``end`` as This Period (an ending balance is one
+    figure, whichever column prints it).
+    """
+    ytd = [_ytd(v) for v in flows]
+    return end - sum(ytd, ZERO), ytd
+
+
 def _pct(part: Decimal, whole: Decimal) -> str:
     return "0%" if not whole else f"{round(part / whole * 100)}%"
 
@@ -967,6 +1052,8 @@ class _Layout:
         cur.line({}, {572: f"Change from Last Period: {money(end - begin, dollar=True)}"}, size=8)
         cur.skip()
         cur.line({40: stmt.owner}, {572: "This Period        Year-to-Date"}, size=8)
+        ytd_begin, ytd_flows = _ytd_column(end, [additions, subtractions, fees, change])
+        ytd_column = [ytd_begin, *ytd_flows, end]
         for index, (label, value) in enumerate(
             (
                 ("Beginning Portfolio Value", begin),
@@ -979,14 +1066,15 @@ class _Layout:
         ):
             left = {40: stmt.address[index]} if index < len(stmt.address) else {}
             dollar = index in (0, 5)
-            ytd = value if index == 5 else _ytd(value)
+            ytd = ytd_column[index]
             cur.line(
                 {**left, 300: label},
                 {500: money(value, dollar=dollar), 572: money(ytd, dollar=dollar)},
                 size=8,
             )
         cur.skip()
-        cur.line({40: "* Market value changes of your holdings in the period, income included."})
+        cur.line({40: "* Price moves of your holdings and the income they paid over"})
+        cur.line({40: "the statement period."})
         cur.line({40: "** Securities without a price are not included."})
         cur.skip(12)
         cur.heading("Contact Information")
@@ -1009,9 +1097,10 @@ class _Layout:
             s = _summary(account, self.extras)
             begin_total += s.begin
             end_total += s.end
+            printed = self.first_page[account.number] + INDEX_PAGE_SHIFT[index]
             cur.line({40: account.group}, font=BOLD)
             cur.line(
-                {40: str(self.first_page[account.number]), 66: account.title, 300: account.number},
+                {40: str(printed), 66: account.title, 300: account.number},
                 {470: money(s.begin, dollar=index == 0), 572: money(s.end, dollar=index == 0)},
             )
         cur.line(
@@ -1021,6 +1110,8 @@ class _Layout:
         )
         cur.skip(14)
         cur.line({40: "* Transfers between accounts included."})
+        cur.line({40: "** Price moves of your holdings and the income they paid over"})
+        cur.line({40: "the statement period."})
         cur.skip(14)
         cur.heading("More from your accounts")
         cur.line({40: "This paragraph is promotional filler text of the synthetic statement"})
@@ -1079,6 +1170,8 @@ class _Layout:
         value = money(s.end, dollar=True)
         left = value if style == "amount" else f"Account Value: {value}"
         self.banner(cur, account, left)
+        # The IRA's summary prints U+2212 minus signs, the others "-".
+        sign = MINUS if account.subtype == "ira" else "-"
         cur.line({40: f"Change in Account Value {money(s.end - s.begin, dollar=True)}"}, size=8)
         cur.skip()
         cur.line({40: "Account Summary", 340: "Account Holdings"}, font=BOLD, size=8)
@@ -1102,17 +1195,29 @@ class _Layout:
         rows.append(("Taxes Withheld", s.taxes, False))
         rows.append(("Change in Investment Value*", s.change, True))
         rows.append(("Ending Account Value", s.end, True))
+        # Year-to-Date: the detail rows scaled, the group rows their sums, the
+        # beginning whatever ends the column at the same ending value.
+        ytd = {label: _ytd(amount) for label, amount, dollar in rows if not dollar}
+        details = [label for label, _, dollar in rows if not dollar]
+        added = sum((ytd[label] for label in details[:2]), ZERO)
+        costs = ytd["Trans. Costs, Fees & Charges"]
+        subtracted = sum((ytd[label] for label in details[2:]), ZERO) - costs
+        change = _ytd(s.change)
+        ytd["Additions"] = added
+        ytd["Subtractions"] = subtracted
+        ytd["Change in Investment Value*"] = change
+        ytd["Ending Account Value"] = s.end
+        ytd["Beginning Account Value"] = s.end - added - subtracted - costs - change
         right_rows = [("Holding Type", "Value", "Percent of Account")] + [
             (kind, f"{round(v):,}", _pct(v, s.end)) for kind, v in holdings
         ]
         right_rows.append(("Ending Market Value of Holdings", f"${round(s.end):,}", "100%"))
         for index, (label, amount, dollar) in enumerate(rows):
             right = right_rows[index] if index < len(right_rows) else None
-            ytd = amount if label == "Ending Account Value" else _ytd(amount)
             left_cells = {40 if dollar else 48: label}
             right_cells = {
-                250: money(amount, dollar=dollar) if amount else "\u2014",
-                320: money(ytd, dollar=dollar) if ytd else "\u2014",
+                250: money(amount, dollar=dollar, minus=sign) if amount else "\u2014",
+                320: money(ytd[label], dollar=dollar, minus=sign) if ytd[label] else "\u2014",
             }
             if right is not None:
                 left_cells[340] = right[0]
@@ -1135,29 +1240,44 @@ class _Layout:
         self.banner(cur, account, "Account Summary (continued)")
         assert account.cash_opening is not None
         assert account.cash_closing is not None
+        sign = MINUS if account.subtype == "ira" else "-"
         trades = account.section("trades")
-        bought = sum((a.amount + a.cost for a in trades if a.type == "buy"), ZERO)
-        sold = sum((a.amount + a.cost for a in trades if a.type == "sell"), ZERO)
-        income = _total(account.section("income"))
-        costs = -sum((a.cost for a in trades), ZERO)
-        investment = bought + sold + income + costs
+        investment_rows = [
+            (
+                "Securities Bought",
+                sum((a.amount + a.cost for a in trades if a.type == "buy"), ZERO),
+            ),
+            ("Securities Sold", sum((a.amount + a.cost for a in trades if a.type == "sell"), ZERO)),
+            ("Dividends, Interest and Other Income D", _total(account.section("income"))),
+            ("Transaction Costs", -sum((a.cost for a in trades), ZERO)),
+        ]
         cash: list[tuple[str, Decimal]] = []
         for label, sections in (
             ("Deposits", ("deposits",)),
             ("Contributions", ("contributions",)),
+            ("Transfers In", ("transferred_in",)),
             ("Withdrawals", ("withdrawals",)),
             ("Distributions", ("distributions",)),
+            ("Transfers Out", ("transferred_out",)),
             ("Taxes Withheld", ("taxes",)),
             ("Checking Activity", ("checking",)),
             ("Debit Card Activity", ("debit_card",)),
             ("Bill Payments", ("bill_payments",)),
             ("Fees & Charges", ("fees",)),
         ):
-            rows = account.section(*sections)
-            if rows:
-                cash.append((label, _total(rows)))
+            total = _total(account.section(*sections))
+            if total:  # in-kind transfers move no cash
+                cash.append((label, total))
+        investment = sum((v for _, v in investment_rows), ZERO)
         management = sum((v for _, v in cash), ZERO)
         assert account.cash_opening + investment + management == account.cash_closing
+        # Year-to-Date adds up too, and ends at the same balance as This Period.
+        ytd_begin, ytd_flows = _ytd_column(
+            account.cash_closing, [v for _, v in investment_rows] + [v for _, v in cash]
+        )
+        ytd_investment = sum(ytd_flows[: len(investment_rows)], ZERO)
+        ytd_management = sum(ytd_flows[len(investment_rows) :], ZERO)
+        assert ytd_begin > 0
         dividends = sum((a.amount for a in account.section("income") if a.type == "dividend"), ZERO)
         interest = sum((a.amount for a in account.section("income") if a.type == "interest"), ZERO)
         side = [
@@ -1169,26 +1289,27 @@ class _Layout:
             ("Long-term Capital Gains", None),
             ("Total", dividends + interest),
         ]
-        lines: list[tuple[str, Decimal | None, bool]] = [
-            ("Core Account Cash Flow", None, True),
-            (f"Core Account: {account.core_name.title()}", None, False),
-            ("Beginning Core Account Balance", account.cash_opening, True),
-            ("INVESTMENT ACTIVITY", None, True),
-            ("Securities Bought", bought, False),
-            ("Securities Sold", sold, False),
-            ("Dividends, Interest and Other Income D", income, False),
-            ("Transaction Costs", costs, False),
-            ("Total Investment Activity", investment, True),
-            ("CASH MANAGEMENT ACTIVITY", None, True),
-            *((label, value, False) for label, value in cash),
-            ("Total Cash Management Activity", management, True),
-            ("Ending Core Account Balance", account.cash_closing, True),
+        rows = iter(ytd_flows)
+        lines: list[tuple[str, Decimal | None, Decimal | None, bool]] = [
+            ("Core Account Cash Flow", None, None, True),
+            (f"Core Account: {account.core_name.title()}", None, None, False),
+            ("Beginning Core Account Balance", account.cash_opening, ytd_begin, True),
+            ("INVESTMENT ACTIVITY", None, None, True),
+            *((label, value, next(rows), False) for label, value in investment_rows),
+            ("Total Investment Activity", investment, ytd_investment, True),
+            ("CASH MANAGEMENT ACTIVITY", None, None, True),
+            *((label, value, next(rows), False) for label, value in cash),
+            ("Total Cash Management Activity", management, ytd_management, True),
+            ("Ending Core Account Balance", account.cash_closing, account.cash_closing, True),
         ]
-        for index, (label, value, strong) in enumerate(lines):
+        for index, (label, value, ytd, strong) in enumerate(lines):
             left = {40: label}
             right: dict[float, str] = {}
-            if value is not None:
-                right = {230: money(value, dollar=strong), 300: money(_ytd(value), dollar=strong)}
+            if value is not None and ytd is not None:
+                right = {
+                    230: money(value, dollar=strong, minus=sign),
+                    300: money(ytd, dollar=strong, minus=sign),
+                }
             if index < len(side):
                 side_label, side_value = side[index]
                 left[340] = side_label
@@ -1258,7 +1379,7 @@ class _Layout:
     def _position_row(self, cur: Cursor, p: Position, *, first: bool) -> None:
         label = p.name if p.symbol is None else f"{p.name} ({p.symbol})"
         name = wrap(label, 24 if p.per_100 else 34)
-        cost = "unknown" if p.cost is None else money(p.cost, dollar=first)
+        cost = "unknown" if p.cost is None else money(p.cost, dollar=first) + p.cost_mark
         gain = "unknown" if p.cost is None else money(p.market_value - p.cost, dollar=first)
         eai = cents(p.market_value * Decimal("0.031"))
         left = {40: name[0]}
@@ -1269,7 +1390,8 @@ class _Layout:
             left,
             {
                 self.QTY: number(p.quantity, p.qty_places),
-                self.PRICE: f"{'$' if first else ''}{number(p.price, p.price_places)}",
+                self.PRICE: f"{'$' if first else ''}{number(p.price, p.price_places)}"
+                + p.price_mark,
                 self.VALUE: money(p.market_value, dollar=first),
                 self.COST: cost,
                 self.GAIN: gain,
@@ -1333,7 +1455,7 @@ class _Layout:
             )
             for extra in name[1:]:
                 cur.line({40: extra})
-            cur.line({40: "\u2014 Interest rate: 0.010%"})
+            cur.line({40: "\u2014 Interest rate: 0.015%"})
             cur.line(
                 {40: f"Total Core Account ({_pct(core, whole)} of account holdings)"},
                 {self.VALUE: money(core, dollar=True)},
@@ -1423,10 +1545,16 @@ class _Layout:
                 },
                 right,
             )
-            for extra in name[1:]:
-                cur.line({self.T_NAME: extra})
-            for note in a.notes:
-                cur.line({self.T_DESC: note})
+            # A wrapped name and a note under the row share their lines
+            # ("ETF Wash sale of ...").
+            extras, notes = name[1:], list(a.notes)
+            for line in range(max(len(extras), len(notes))):
+                cur.line(
+                    {
+                        self.T_NAME: extras[line] if line < len(extras) else "",
+                        self.T_DESC: notes[line] if line < len(notes) else "",
+                    }
+                )
 
     def _security_header(self, cur: Cursor, *, amount: str = "Amount") -> None:
         cur.line(
@@ -1502,6 +1630,9 @@ class _Layout:
                 {self.T_DATE: "Total Trades Pending Settlement"},
                 {self.T_TOTAL: money(_total(pending), dollar=True)},
             )
+        self._transfers(cur, account)
+
+    def _transfers(self, cur: Cursor, account: Account) -> None:
         for section, title in (
             ("transferred_in", "Securities Transferred In"),
             ("transferred_out", "Securities Transferred Out"),
@@ -1605,7 +1736,7 @@ class _Layout:
         self.banner(cur, account, "Activity (continued)")
         cards = account.section("debit_card")
         cur.heading("Debit Card Activity", size=8)
-        cur.line({40: "SAMPLE PLATINUM CHECK CARD (ACCOUNT ...9999)"}, font=BOLD)
+        cur.line({40: "SAMPLE PLATINUM CHECK CARD (ACCOUNT ...3176)"}, font=BOLD)
         cur.line(
             {40: "Trans. Date", 84: "Post Date", 128: "Location / Description", 380: "Reference"},
             {572: "Transaction Total"},
@@ -1615,13 +1746,13 @@ class _Layout:
             assert a.post_day is not None
             cur.line(
                 {40: md(a.day), 84: md(a.post_day), 128: a.description, 380: a.reference},
-                {572: money(a.amount, dollar=index == 0)},
+                {572: _minus(a.amount, dollar=index == 0)},
             )
         cur.line(
-            {40: "Sample Platinum Check Card (...9999) Subtotal"},
-            {572: money(_total(cards), dollar=True)},
+            {40: "Sample Platinum Check Card (...3176) Subtotal"},
+            {572: _minus(_total(cards), dollar=True)},
         )
-        cur.line({40: "Total Debit Card Activity"}, {572: money(_total(cards), dollar=True)})
+        cur.line({40: "Total Debit Card Activity"}, {572: _minus(_total(cards), dollar=True)})
         cur.skip()
         bills = account.section("bill_payments")
         bill_values = [
@@ -1676,11 +1807,11 @@ class _Layout:
                     md(a.day, pad=True),
                     "01",
                     a.description,
-                    money(a.amount, dollar=i == 0),
+                    _minus(a.amount, dollar=i == 0),
                 ]
                 for i, a in enumerate(checks)
             ],
-            [["", "", "", "Total Checking Activity", money(_total(checks), dollar=True)]],
+            [["", "", "", "Total Checking Activity", _minus(_total(checks), dollar=True)]],
         )
         cur.line({40: "* Gap in the check number sequence."})
         cur.skip()
@@ -1690,10 +1821,10 @@ class _Layout:
             "Fees and Charges",
             [(40.0, "Date", False), (64.0, "Description", False), (300.0, "Amount", True)],
             [
-                [md(a.day), a.description, money(a.amount, dollar=i == 0)]
+                [md(a.day), a.description, _minus(a.amount, dollar=i == 0)]
                 for i, a in enumerate(fees)
             ],
-            [["", "Total Fees and Charges", money(_total(fees), dollar=True)]],
+            [["", "Total Fees and Charges", _minus(_total(fees), dollar=True)]],
         )
         cur.skip()
         self._taxes(cur, account)
@@ -1741,10 +1872,10 @@ class _Layout:
             values.append(
                 [
                     md(day, pad=True),
-                    money(added) if added else "\u2014",
-                    money(taken) if taken else "\u2014",
-                    money(added + taken),
-                    money(balance),
+                    _minus(added) if added else "\u2014",
+                    _minus(taken) if taken else "\u2014",
+                    _minus(added + taken),
+                    _minus(balance),
                 ]
             )
         cur.heading("Daily Additions and Subtractions", size=8)
@@ -1786,9 +1917,9 @@ class _Layout:
         month = self.stmt.end + timedelta(days=1)
         grand = ZERO
         for index in range(12):
-            bond = Decimal(413) if index % 3 == 1 else ZERO
-            stock = Decimal(76) if index % 3 == 0 else Decimal(193) if index % 3 == 1 else ZERO
-            fund = Decimal(44)
+            bond = Decimal(287) if index % 3 == 1 else ZERO
+            stock = Decimal(58) if index % 3 == 0 else Decimal(141) if index % 3 == 1 else ZERO
+            fund = Decimal(37)
             total = bond + stock + fund
             grand += total
             label = f"{month:%B}" + (f" {month.year}" if index == 0 or month.month == 1 else "")
@@ -1817,6 +1948,8 @@ class _Layout:
             {self.T_TOTAL: money(_total(trades), dollar=True)},
         )
         cur.skip()
+        self._transfers(cur, account)
+        cur.skip()
         self._income(cur, account, pad=True)
         cur.skip()
         for section, title, total in (
@@ -1838,10 +1971,14 @@ class _Layout:
             size=8,
         )
         cur.line({}, {250: "This Period", 320: "Year-to-Date", 572: "Year-to-Date"}, font=BOLD)
+        cap, contributed = Decimal("400000.00"), Decimal("21915.40")
         details = (
-            (f"{self.stmt.end.year} Plan Contribution Cap:", "$350,000.00"),
-            ("Total Contributions Over Life of Plan:", "23,662.88"),
-            (f"{self.stmt.end.year} Remaining to Contribute:", "$326,337.12"),
+            (f"{self.stmt.end.year} Plan Contribution Cap:", money(cap, dollar=True)),
+            ("Total Contributions Over Life of Plan:", money(contributed)),
+            (
+                f"{self.stmt.end.year} Remaining to Contribute:",
+                money(cap - contributed, dollar=True),
+            ),
         )
         rows = (
             ("Beginning Account Value", s.begin, True),
@@ -1850,13 +1987,14 @@ class _Layout:
             ("Change in Investment Value", s.change, False),
             ("Ending Account Value", s.end, True),
         )
+        ytd_begin, ytd_flows = _ytd_column(s.end, [s.deposits, s.withdrawals, s.change])
+        ytd_column = [ytd_begin, *ytd_flows, s.end]
         for index, (label, value, dollar) in enumerate(rows):
             left = {40: label}
+            ytd = ytd_column[index]
             right = {
                 250: money(value, dollar=dollar) if value else "\u2014",
-                320: money(value if index == 4 else _ytd(value), dollar=dollar)
-                if value
-                else "\u2014",
+                320: money(ytd, dollar=dollar) if ytd else "\u2014",
             }
             if index < len(details):
                 left[360] = details[index][0]
