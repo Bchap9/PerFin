@@ -466,13 +466,16 @@ def _generic(
     cash: tuple[str, str],
     value: str,
     running: list[tuple[float, str]] | None = None,
+    cover: Drawn | None = None,
 ) -> InvestmentStatement:
     """A one-account statement: its summary, then ``rows``; ``more``: later pages.
 
-    ``running``: a running page header printed at the top of every page.
+    ``running``: a running page header printed at the top of every page;
+    ``cover``: lines printed at the top of page 1 only.
     """
     top: Drawn = [running] if running is not None else []
     head: Drawn = [
+        *(cover or []),
         *top,
         [(40, "Brokerage Account Statement")],
         [(40, "Statement Period: 03/01/2024 - 03/31/2024")],
@@ -788,6 +791,161 @@ def test_a_heading_repeated_on_later_pages_is_no_running_header() -> None:
         running=[(30, "Jane Example")],
     )
     _assert_held(statement)
+
+
+def _cells(text: str) -> list[tuple[float, str]]:
+    """``A|B``: cells ``A`` and ``B`` on one baseline."""
+    return [(30.0 + 300.0 * i, part) for i, part in enumerate(text.split("|"))]
+
+
+@pytest.mark.parametrize(
+    ("cover", "block"),
+    [
+        # A running header of two lines naming the account or the page, page 1
+        # a cover page without it.
+        ("", "Jane Example - Account XXXX-1234//March 1, 2024 - March 31, 2024"),
+        ("", "Page 2 of 4//Jane Example"),
+        ("", "Account XXXX-1234//Jane Example"),
+        ("", "Jane Example|Account XXXX-1234//Individual Brokerage Account"),
+        ("Page 1 of 4", "Page 2 of 4//Jane Example"),
+        # A line saying the table runs on.
+        ("", "Account Activity (continued)"),
+        # One cell of a page-1 band line of two cells.
+        ("Example Brokerage|Statement for March 2024", "Example Brokerage"),
+    ],
+)
+def test_a_running_header_of_several_lines_continues_the_section(cover: str, block: str) -> None:
+    """Every line between the page's top and the repeated header is the page's
+    running header: the section runs on and reconciles."""
+    page2: Drawn = [
+        *(_cells(line) for line in block.split("//")),
+        _CASH,
+        [(30, "03/26"), (70, "Example Index Fund"), (220, "12.50")],
+    ]
+    statement = _generic(
+        [*_held(_ZZAB), *_INCOME],
+        page2,
+        cash=("$5,000.00", "$5,025.00"),
+        value="$6,025.00",
+        cover=[_cells(line) for line in cover.split("//")] if cover else None,
+    )
+    assert [r[0] for r in _rows(statement)] == ["dividend", "dividend"]
+    assert statement.reconciliation is not None
+    assert statement.reconciliation.status == "ok"
+
+
+_LABELLED_HEADINGS = [
+    "Other Transactions (Page 2)",
+    "Other Transactions - Page 2 of 2",
+    "Miscellaneous Items, page 2",
+    "Other Transactions|Page 2 of 2",
+    "Other Transactions|Account XXXX-1234",
+    "Other Transactions|XXXX-1234",
+    "Page 2 of 4//Other Transactions",
+    "Page 2 of 4//Wire Transfers",
+]
+
+
+@pytest.mark.parametrize("block", _LABELLED_HEADINGS)
+def test_a_heading_beside_the_page_or_account_still_ends_the_section(block: str) -> None:
+    """A line naming the page or the account names no running header when the
+    rest of it, or a line under it, is a heading: the row is held."""
+    page2: Drawn = [
+        *(_cells(line) for line in block.split("//")),
+        _CASH,
+        [(30, "03/20"), (70, "ATM Example Street"), (220, "-500.00")],
+    ]
+    statement = _generic(
+        [*_held(_ZZAB), *_INCOME], page2, cash=("$5,000.00", "$4,512.50"), value="$5,512.50"
+    )
+    _assert_held(statement)
+
+
+@pytest.mark.parametrize("block", ["Other Items (Page 2)", "Other Items"])
+def test_a_heading_beside_the_page_label_after_a_skipped_section_is_held(block: str) -> None:
+    """Under a skipped section the row is held with a warning, not dropped."""
+    pending: Drawn = [
+        [(30, "Trades Pending Settlement")],
+        _CASH,
+        [(30, "03/29"), (70, "Withdrawal to bank"), (220, "-100.00")],
+    ]
+    page2: Drawn = [
+        _cells(block),
+        _CASH,
+        [(30, "03/20"), (70, "Sent to Example Bank"), (220, "-500.00")],
+    ]
+    result = parse_extraction(
+        _extract(
+            _drawn_pdf(
+                [
+                    [(40, "Brokerage Account Statement")],
+                    [(40, "Statement Period: 03/01/2024 - 03/31/2024")],
+                    [(40, "Account Number: XXXX-1234")],
+                    [(40, "Beginning Cash Balance"), (420, "$5,000.00")],
+                    [(40, "Ending Cash Balance"), (420, "$4,500.00")],
+                    [(40, "Ending Account Value"), (420, "$5,500.00")],
+                    None,
+                    *_held(_ZZAB),
+                    *pending,
+                ],
+                page2,
+            )
+        ),
+        parser_name="brokerage_statement_generic",
+        threshold=0.85,
+    )
+    assert result.parse is not None
+    assert "activity_type_unknown" in result.parse.warnings
+    statement = result.investments[0]
+    assert _rows(statement) == []
+    assert statement.reconciliation is not None
+    assert statement.reconciliation.status == "mismatch"
+
+
+def test_a_heading_that_headed_a_table_on_the_sections_page_is_no_running_header() -> None:
+    """Page 2 opens with a table under a heading, then the section's table;
+    page 3 opens with the same heading over the same columns: the heading is
+    in both pages' header bands, but it headed a table of its own on page 2,
+    so it is a heading there and on page 3, not a running header."""
+    page2: Drawn = [
+        *_withdrawal_under("Other Transactions"),
+        None,
+        [(30, "Dividends and Interest")],
+        _CASH,
+        [(30, "03/12"), (70, "Example Index Fund"), (220, "12.50")],
+    ]
+    page3: Drawn = [
+        [(30, "Other Transactions")],
+        _CASH,
+        [(30, "03/21"), (70, "Sent to Example Bank"), (220, "-100.00")],
+    ]
+    statement = _generic(
+        _held(_ZZAB),
+        page2,
+        page3,
+        cash=("$5,000.00", "$4,412.50"),
+        value="$5,412.50",
+        running=[(30, "Jane Example")],
+    )
+    _assert_held(statement)
+
+
+@pytest.mark.parametrize("running", _RUNNING_HEADERS)
+def test_a_section_continued_over_two_later_pages_keeps_typing_its_rows(running: str) -> None:
+    """The running header that sat over the section's table on page 2 is no
+    heading there: page 3 continues the section too."""
+    page: Drawn = [_CASH, [(30, "03/26"), (70, "Example Index Fund"), (220, "12.50")]]
+    statement = _generic(
+        [*_held(_ZZAB), *_INCOME],
+        page,
+        page,
+        cash=("$5,000.00", "$5,037.50"),
+        value="$6,037.50",
+        running=[(30, running)],
+    )
+    assert [r[0] for r in _rows(statement)] == ["dividend"] * 3
+    assert statement.reconciliation is not None
+    assert statement.reconciliation.status == "ok"
 
 
 @pytest.mark.parametrize("heading", ["Dividends and Interest", "Dividends", "Income"])

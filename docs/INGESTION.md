@@ -651,14 +651,27 @@ OFX `INVSTMTRS` in the sandbox or from a PDF/scan's pages in the worker.
     is a sub-heading (`SAMPLE CHECK CARD (ACCOUNT ...0000)`) and the section
     stays. A table running onto the next page continues its section: the
     section's own header repeated on a later page keeps it at the page's
-    top or under the page's running header, which is a line printed in the
-    header band (the top lines, above the first row or figure) of both that
-    page and the page the section's header was on (the client's name, the
-    institution's), or a line naming the account (`Account Number:
-    XXXX-1234`, its number) or the page (`Page 2 of 4`). Any other line
-    there (`Miscellaneous Items`, `Other Transactions` at the top of the
-    page, or under its running header) is a heading and ends the section,
-    exactly as on one page. A short line over a header that names no column
+    top or under the page's running header: every line above it on the
+    page (at most eight, no amount) must be a line of that header. Such a
+    line is printed in the header band (the top lines, above the first row
+    or figure) of both that page and the page the section's header was on
+    (the client's name, the institution's; one cell of a band line of
+    several cells will do), unless it headed a table of its own on that
+    page; or it names the account (`Account Number: XXXX-1234`, its
+    number) or the page (`Page 2 of 4`); or it is a date or period line
+    (`March 1, 2024 - March 31, 2024`); or it says the table runs on
+    (`Account Activity (continued)`). A line saying none of this (the
+    client's name printed on later pages only) is accepted only when another
+    line of the block names the account or the page. A line holding a word
+    naming a list of entries (`transactions`, `items`, `transfers`,
+    `withdrawals`, `checks`, ...) is a heading, also beside a page label or
+    the account number (`Other Transactions (Page 2)`, `Miscellaneous Items,
+    page 2`), unless both header bands print it. Any other line there
+    (`Miscellaneous Items`, `Other Transactions` at the top of the page, or
+    under its running header) is a heading and ends the section, exactly as
+    on one page; under a skipped section its rows are then held, not
+    dropped. Known limit: under a page label, a heading without a list word
+    (`Bank Sweep Program`) is taken for the running header. A short line over a header that names no column
     the header's other lines do not (it would only add unnamed columns) is a
     heading, never the header's top line, also under a running page header
     (`ATM Withdrawals`, `Wire Transfers`: the rows keep their whole

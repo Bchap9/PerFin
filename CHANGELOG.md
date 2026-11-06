@@ -10,7 +10,7 @@ The current release candidate is `v1.0.0-rc.4`; the final `v1.0.0` follows the
 external security review. Every phase (0-7) is implemented. Alembic head is
 `0011` (unreleased; `0009` in rc.4). Unreleased work, on 2026-11-06: SPDX;
 backend ruff, ruff format, mypy --strict (676 source files), bandit, OpenAPI
-drift and 8036 pytest tests with `-n 8`, of which the OCR and Helm tests (67)
+drift and 8058 pytest tests with `-n 8`, of which the OCR and Helm tests (67)
 need Tesseract and `helm` and could not run in that environment; frontend
 eslint, tsc, 472 vitest tests in 58 files and the production build. As of rc.2: `pip-audit` finds no known vulnerabilities and
 `npm audit --audit-level=high` passes with 10 moderate advisories in dev
@@ -146,10 +146,17 @@ What remains (details in docs/ROADMAP.md):
     read; a line right under a section's heading (a card's name) keeps the
     section, and so does the section's header repeated on a later page at
     its top or under its running header (a table continued on the next
-    page): a line printed in the header band of that page and of the page
-    the section's header was on, or naming the account or the page. Any
-    other line there is a heading no section names and ends the section as
-    it does on one page, and a heading holding a header word (`ATM
+    page): every line above it on the page, each printed in the header band
+    of that page and of the page the section's header was on (one cell of a
+    band line will do; not a line that headed a table of its own there),
+    naming the account or the page, a date or period line or saying the
+    table runs on (`Account Activity (continued)`), or any line without a
+    list word in a block where another line names the account or the page
+    (`Page 2 of 4` over the client's name). A line holding a list word
+    (`Other Transactions (Page 2)`, `Miscellaneous Items, page 2`, also
+    beside the account number) and any other line there is a heading no
+    section names and ends the section as it does on one page, and a
+    heading holding a header word (`ATM
     Withdrawals`, `Checks`) under a running page header is never the
     header's top line (the rows keep their whole description). In a brokerage account, cash tables (date, description,
     amount) are read by the generic parser too; a description naming no
