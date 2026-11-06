@@ -3,13 +3,15 @@
 
 from __future__ import annotations
 
-from decimal import Decimal
+from decimal import Decimal, localcontext
 
 import pytest
-from hypothesis import given, settings
+from hypothesis import example, given, settings
 from hypothesis import strategies as st
 
+from app.core.money import calc_context
 from app.domain.investments.returns import (
+    RATE_QUANTUM,
     Day,
     annualize,
     deannualize,
@@ -75,6 +77,9 @@ _values = st.integers(min_value=1, max_value=10**9).map(lambda n: Decimal(n) / 1
 
 @settings(max_examples=200, deadline=None)
 @given(_values, st.lists(_values, min_size=1, max_size=60))
+# end/start - 1 is exactly -0.99951171875, a tie at RATE_PLACES; the chain of
+# inexact daily ratios lands ~7e-32 below it and rounds to the other side.
+@example(start=Decimal("20.48"), values=[Decimal("30524.04"), Decimal("0.01")])
 def test_property_twr_equals_mwr_without_flows(start: Decimal, values: list[Decimal]) -> None:
     """With no flows inside the period, TWR and the period MWR are both end/start - 1."""
     days = [Day(v) for v in values]
@@ -82,7 +87,19 @@ def test_property_twr_equals_mwr_without_flows(start: Decimal, values: list[Deci
     growth = xirr_growth([(0, -start), (len(days), values[-1])])
     assert growth is not None
     money_weighted = period_return(growth, len(days))
-    assert round_rate(time_weighted) == round_rate(values[-1] / start - 1)
+    with localcontext(calc_context()):
+        direct = values[-1] / start - 1
+    # The chain telescopes to end/start, but each daily return is rounded to 34
+    # digits and stored as ratio - 1, so a day with a tiny ratio (>= 1e-9 here)
+    # carries up to ~1e-34 / ratio relative error; over <= 60 days the chain
+    # matches the direct quotient to well within 1e-22 of the growth factor.
+    # When the true value is a tie at RATE_PLACES (or within that error of one)
+    # the two can round to adjacent quanta, so the rounded rates are compared
+    # within one unit in the last place.
+    with localcontext(calc_context()):
+        tolerance = Decimal("1e-22") * max(Decimal(1), values[-1] / start)
+    assert abs(time_weighted - direct) <= tolerance
+    assert abs(round_rate(time_weighted) - round_rate(direct)) <= RATE_QUANTUM
     assert abs(money_weighted - time_weighted) <= Decimal("1e-12") * max(
         Decimal(1), abs(time_weighted)
     )
