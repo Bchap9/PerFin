@@ -90,12 +90,16 @@ Two halves (INGESTION.md "Brokerage statements", SECURITY.md C12):
     page, each printed in the header band of that page and of the page the
     section's header was on (and heading no table of its own there),
     naming the account or the page, a date or period line or saying the
-    table runs on (``continued``); a line saying nothing of these too, when
-    another line of the block names the account or the page (a name under
-    ``Page 2 of 4``): :meth:`~BrokerageStatementParser._continued`; a line
-    holding a list word (:data:`_LIST_WORDS`: ``Other Transactions``,
-    ``Miscellaneous Items, page 2``) is a heading there, as is any other
-    line, and ends the section as on one page):
+    table runs on (``continued``); a line saying nothing of these too (a
+    figure as well), when another line of the block names the account or
+    the page (a name under ``Page 2 of 4``; known limit: so is a heading
+    without a list word there):
+    :meth:`~BrokerageStatementParser._continued`; a line holding a list
+    word (:data:`_LIST_WORDS`: ``Other Transactions``, ``Miscellaneous
+    Items, page 2``) is a heading there unless it is the statement's title
+    (:func:`_titled`: ``Monthly Activity Statement``, ``Account Activity
+    for XXXX-1234``), as is any other line, and ends the section as on one
+    page):
     trades pending settlement, cash-flow summaries and daily balances are
     no activity; securities transferred in/out move
     units (the amount printed is their value) or, without units, cash;
@@ -1271,7 +1275,8 @@ _PAGE_LABEL: Final = re.compile(r"\bpage \d{1,4}(?: of \d{1,4})?\b")
 _CONTINUED: Final = re.compile(r"\b(?:continued|cont d|contd)\b")
 #: Words naming a list of entries: a line holding one is a table's heading
 #: (``Other Transactions``, ``Miscellaneous Items``, ``Wire Transfers``),
-#: never a running page header, whatever else it names.
+#: never a running page header, whatever else it names, unless it is the
+#: statement's title (:func:`_titled`).
 _LIST_WORDS: Final = frozenset(
     {
         "activity",
@@ -1303,9 +1308,56 @@ _LIST_WORDS: Final = frozenset(
         "withdrawals",
     }
 )
+#: List words naming all of an account's entries, as the statement's title
+#: does (``Account Activity for XXXX-1234``), not one kind of them.
+_ALL_ENTRIES_WORDS: Final = frozenset({"activity", "activities", "transactions"})
+#: Words naming the statement itself: a line holding one is its title
+#: (``Monthly Activity Statement``), never a table's heading.
+_TITLE_WORDS: Final = frozenset({"statement", "statements", "report"})
+#: Words a title says beside all-entries words and the account's number or
+#: the page (``Your Account Activity for XXXX-1234``).
+_TITLE_FILLER: Final = frozenset(
+    {
+        "account",
+        "accounts",
+        "annual",
+        "ending",
+        "for",
+        "in",
+        "monthly",
+        "no",
+        "number",
+        "of",
+        "on",
+        "quarterly",
+        "the",
+        "your",
+    }
+)
 #: What makes a line of a later page's running header
 #: (:meth:`~BrokerageStatementParser._running_line`).
 _RunningLine = Literal["band", "named", "dated", "continued", "plain"]
+
+
+def _titled(norm: str, named: bool) -> bool:
+    """A (normalised) line holding a list word is the statement's title, no
+    table's heading: it names the statement itself (``Monthly Activity
+    Statement``, ``Statement of Transactions``), or it names the account or
+    the page (``named``) and otherwise says only all-entries words and title
+    filler (``Account Activity for XXXX-1234``, ``Account Transactions, Page
+    2``; not ``Other Transactions (Page 2)``, ``Securities Lending Activity -
+    Account XXXX-1234``).
+    """
+    words = _PAGE_LABEL.sub(" ", norm).split()
+    if _TITLE_WORDS.intersection(words):
+        return True
+    return named and all(
+        word in _ALL_ENTRIES_WORDS
+        or word in _TITLE_FILLER
+        or any(ch.isdigit() for ch in word)
+        or set(word) == {"x"}
+        for word in words
+    )
 
 
 def _key(norm: str) -> str:
@@ -2016,17 +2068,20 @@ class BrokerageStatementParser(DocumentParser):
 
         Its column roles are the section's latest header's, it is on a later
         page, and every line above it on its page (at most
-        :data:`HEADING_TOP_LINES`, no amount) is a line of the page's running
+        :data:`HEADING_TOP_LINES`) is a line of the page's running
         header (:meth:`_running_line`): printed in the header band of that page
         and of the page the section's latest header is on (:func:`_page_bands`),
         naming the account (an account heading, its number) or the page
         (``Page 2 of 4``), a date or period line, or a line saying the table
         runs on (``Account Activity (continued)``). Any other line is plain
-        text: a heading no section names (:meth:`_unknown_heading`), which starts
-        a table of its own as it does anywhere on a page, unless a line of the
-        same block names the account or the page (a name under ``Page 2 of 4``
-        is the page's header; a heading under it holds a list word,
-        :data:`_LIST_WORDS`, and is no running header line at all).
+        text (a figure too): a heading no section names (:meth:`_unknown_heading`),
+        which starts a table of its own as it does anywhere on a page, unless a
+        line of the same block names the account or the page (a name under
+        ``Page 2 of 4`` is the page's header; a heading under it holds a list
+        word, :data:`_LIST_WORDS`, and is no running header line at all, unless
+        it is the statement's title, :func:`_titled`). Known limit: a heading
+        without a list word in such a block (``Securities Lending`` under
+        ``Account XXXX-1234``) is taken for the running header too.
         """
         previous = collected.section_header
         if previous is None or start <= 0:
@@ -2056,12 +2111,11 @@ class BrokerageStatementParser(DocumentParser):
         line: ViewLine, header_page: int, collected: _Collected, last4: str | None
     ) -> _RunningLine | None:
         """What makes ``line`` a line of a later page's running header
-        (:meth:`_continued`), ``plain`` for text that says nothing of it; None:
-        it is no running header line (an amount; a line holding a list word
-        not printed in both header bands; a band line that headed a table of
-        its own on the section's header page)."""
-        if find_amounts(line.text):
-            return None
+        (:meth:`_continued`), ``plain`` for text that says nothing of it (also
+        a figure, ``Total Account Value $6,025.00``); None: it is no running
+        header line (a line holding a list word not printed in both header
+        bands, unless it is the statement's title, :func:`_titled`; a band
+        line that headed a table of its own on the section's header page)."""
         norm = line.norm
         if _CONTINUED.search(norm) is not None:
             # "Other Transactions (continued)": that table runs on, not this one.
@@ -2075,19 +2129,23 @@ class BrokerageStatementParser(DocumentParser):
             bool(cells) and all(k in here and k in there for k in cells)
         )
         band = printed and header_page not in collected.headings.get(key, ())
-        listed = bool(_LIST_WORDS & set(norm.split()))
-        if listed:
-            return "band" if band else None
-        if (
+        named = (
             _PAGE_LABEL.search(norm) is not None
             or any(
                 account_heading(t) is not None for t in (line.text, *(c.text for c in line.cells))
             )
             or (last4 is not None and any(number_last4(t) == last4 for t in line.text.split()))
-        ):
+        )
+        if _LIST_WORDS.intersection(norm.split()) and not band and not _titled(norm, named):
+            return None
+        if named:
             return "named"
         if band:
             return "band"
+        if find_amounts(line.text):
+            # A figure (a value box printed on every page) says nothing of
+            # the page; a row's date does not make it a period line.
+            return "plain"
         if find_dates(line.text, FULL_STYLES):
             return "dated"
         return "plain"

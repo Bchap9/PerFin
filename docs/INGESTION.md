@@ -652,7 +652,7 @@ OFX `INVSTMTRS` in the sandbox or from a PDF/scan's pages in the worker.
     stays. A table running onto the next page continues its section: the
     section's own header repeated on a later page keeps it at the page's
     top or under the page's running header: every line above it on the
-    page (at most eight, no amount) must be a line of that header. Such a
+    page (at most eight) must be a line of that header. Such a
     line is printed in the header band (the top lines, above the first row
     or figure) of both that page and the page the section's header was on
     (the client's name, the institution's; one cell of a band line of
@@ -661,17 +661,29 @@ OFX `INVSTMTRS` in the sandbox or from a PDF/scan's pages in the worker.
     number) or the page (`Page 2 of 4`); or it is a date or period line
     (`March 1, 2024 - March 31, 2024`); or it says the table runs on
     (`Account Activity (continued)`). A line saying none of this (the
-    client's name printed on later pages only) is accepted only when another
-    line of the block names the account or the page. A line holding a word
-    naming a list of entries (`transactions`, `items`, `transfers`,
-    `withdrawals`, `checks`, ...) is a heading, also beside a page label or
-    the account number (`Other Transactions (Page 2)`, `Miscellaneous Items,
-    page 2`), unless both header bands print it. Any other line there
+    client's name printed on later pages only, a figure such as `Total
+    Account Value $6,025.00` in a value box on every page) is accepted only
+    when another line of the block names the account or the page. A line
+    holding a word naming a list of entries (`transactions`, `items`,
+    `transfers`, `withdrawals`, `checks`, ...) is a heading, also beside a
+    page label or the account number (`Other Transactions (Page 2)`,
+    `Miscellaneous Items, page 2`, `Securities Lending Activity - Account
+    XXXX-1234`), unless both header bands print it or it is the statement's
+    title: a line naming the statement itself (`statement`, `report`:
+    `Monthly Activity Statement`, `Statement of Transactions - Account
+    XXXX-1234`), or a line naming the account or the page whose other
+    words only name all of its entries (`activity`, `transactions`) or say
+    `account`, `your`, `for`, `monthly` and the like (`Account Activity for
+    XXXX-1234`, `Account Transactions - Page 2 of 2`). Any other line there
     (`Miscellaneous Items`, `Other Transactions` at the top of the page, or
     under its running header) is a heading and ends the section, exactly as
     on one page; under a skipped section its rows are then held, not
-    dropped. Known limit: under a page label, a heading without a list word
-    (`Bank Sweep Program`) is taken for the running header. A short line over a header that names no column
+    dropped. Known limit: a heading without a list word in a block where
+    another line names the account or the page (`Bank Sweep Program` under
+    `Page 2 of 4`, `Securities Lending` under `Account XXXX-1234`) is taken
+    for the running header, like a client's name there, and its rows are
+    read as the section's (a withdrawal under a dividends section is booked
+    as a dividend, and the cash still reconciles). A short line over a header that names no column
     the header's other lines do not (it would only add unnamed columns) is a
     heading, never the header's top line, also under a running page header
     (`ATM Withdrawals`, `Wire Transfers`: the rows keep their whole

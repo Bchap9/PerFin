@@ -812,6 +812,20 @@ def _cells(text: str) -> list[tuple[float, str]]:
         ("", "Account Activity (continued)"),
         # One cell of a page-1 band line of two cells.
         ("Example Brokerage|Statement for March 2024", "Example Brokerage"),
+        # The statement's title holding a list word, page 1 a cover page
+        # without it.
+        (
+            "Example Brokerage",
+            "Example Brokerage//Activity Statement//Jane Example - Account XXXX-1234",
+        ),
+        ("", "Monthly Activity Statement//Jane Example - Account XXXX-1234"),
+        ("Jane Example", "Activity Statement - Account XXXX-1234"),
+        ("", "Account Activity for XXXX-1234"),
+        ("", "Account Transactions - Page 2 of 2"),
+        ("Jane Example", "Jane Example//Statement of Transactions - Account XXXX-1234"),
+        # A value box printed at the top of every later page.
+        ("", "Total Account Value|$6,025.00//Jane Example - Account XXXX-1234"),
+        ("Jane Example", "Jane Example//Total Account Value|$6,025.00//Account XXXX-1234"),
     ],
 )
 def test_a_running_header_of_several_lines_continues_the_section(cover: str, block: str) -> None:
@@ -843,6 +857,10 @@ _LABELLED_HEADINGS = [
     "Other Transactions|XXXX-1234",
     "Page 2 of 4//Other Transactions",
     "Page 2 of 4//Wire Transfers",
+    # Beside the account number, words for one kind of entries are no title.
+    "Miscellaneous Items - Account XXXX-1234",
+    "Securities Lending Activity - Account XXXX-1234",
+    "Monthly Activity Statement//Other Transactions",
 ]
 
 
