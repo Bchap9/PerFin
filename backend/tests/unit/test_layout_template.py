@@ -238,6 +238,23 @@ def test_an_anchor_must_read_the_selected_value_back() -> None:
     assert found.value == "150.00"
 
 
+def test_a_label_in_every_page_header_is_anchored_from_any_page() -> None:
+    """Selected on page 2, a header value is read back (identical) on page 1."""
+    lines: list[Line] = [
+        (40.0, [(60.0, "Holder"), (110.0, "ref:"), (170.0, "QZ-7731")]),
+        (100.0, [(60.0, "Brought"), (110.0, "in"), (400.0, "$100.00")]),
+    ]
+    view = DocumentView.from_result(
+        ExtractResult.model_validate(
+            {"kind": "pdf", "ok": True, "pages": [_page(1, lines), _page(2, lines)]}
+        )
+    )
+    expected = FieldAnchor(field="account_number", direction="right", label="Holder ref")
+    box = (165.0, 38.0, 230.0, 52.0)
+    assert derive_anchor(view, 1, box, "account_number") == expected
+    assert derive_anchor(view, 2, box, "account_number") == expected
+
+
 def test_notes_keep_no_figures() -> None:
     assert note_text("my other account 98765432 sort 12-34-56") == "my other account sort"
     assert note_text("  page\n two  ") == "page two"

@@ -485,6 +485,38 @@ def test_a_note_alone_answers_no_review_item(env: Env) -> None:
     assert held.id in {i.id for i in env.open_items(held_id)}
 
 
+def test_a_fact_that_does_not_answer_the_item_leaves_it_open(env: Env) -> None:
+    """An institution or an account set without rows imported answers no unknown account."""
+    stmt = pdf_synth.sample_national_statement(seed=47)
+    document_id = env.ingest(pdf_synth.sample_national_pdf(stmt))
+    unknown = [i for i in env.open_items(document_id) if i.kind is ReviewKind.UNKNOWN_ACCOUNT]
+    assert unknown
+    target = unknown[0]
+    note = {"field": "other", "page": 1, "bbox": [0, 0, 50, 50], "note": "a bank statement"}
+    out = env.teach(
+        document_id,
+        {"labels": [note], "institution_name": "Another Bank Name", "item_id": str(target.id)},
+    )
+    assert out.applied == ["institution_id"]
+    assert out.item is not None
+    assert out.item.state is ReviewItemState.OPEN
+    assert "item_left_open" in out.warnings
+    account = env.ledger.account(env.household_id, number_last4="9999", currency=stmt.currency)
+    out = env.teach(
+        document_id,
+        {"labels": [note], "account_id": str(account.id), "item_id": str(target.id)},
+    )
+    assert out.applied == ["account_id"]
+    assert out.rerun is None
+    assert out.item is not None
+    assert out.item.state is ReviewItemState.OPEN
+    assert "item_left_open" in out.warnings
+    assert target.id in {i.id for i in env.open_items(document_id)}
+    assert env.document(document_id).status is DocumentStatus.NEEDS_REVIEW
+    rows = env.query(select(Transaction).where(Transaction.source_document_id == document_id))
+    assert rows == []
+
+
 def test_the_same_layout_taught_again_keeps_what_was_taught(env: Env) -> None:
     account = env.ledger.account(env.household_id, number_last4="2468", currency="USD")
     first = synth.statement_one()

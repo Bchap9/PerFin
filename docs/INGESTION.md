@@ -1409,8 +1409,10 @@ the document page.
   the document is ever stored (the same rule as the remembered header
   lines, which now also skip table headers holding digits). A label is kept
   only when reading it on this document finds the selected value again (a
-  label printed twice, such as `Balance` on two summary lines, would read
-  the first one next time). A value with no such label applies to this
+  label printed twice over different figures, such as `Balance` on two
+  summary lines, would read the first one next time); the value may be
+  found on another page (a label in every page header, selected on page 2,
+  reads the same value on page 1). A value with no such label applies to this
   document only (`no_label:<field>`).
 - **Remember for this layout.** With "Remember this layout", the anchors,
   the tables (column headers and roles, the line that ends them), the lines
@@ -1425,13 +1427,20 @@ the document page.
   notes are added; the answer names what was `kept`), and when another
   layout of the same institution is remembered while a taught template
   exists, `409 layout-conflict` asks the person to replace it (`replace`).
+  The dialog offers "Replace" whenever it remembers, so a line, note or
+  label taught by mistake can be dropped by teaching the layout afresh.
 - **The review item.** The item the dialog was opened from is closed only
   when the teaching answers it: a held statement (`reconciliation_*`) once
   it reconciles with the balances entered (its pending rows confirmed, like
-  "Check and accept"), an unread document (`unparsed`) once rows are
-  imported or it is read again with the remembered layout, any other item
-  once a fact of the document changed or the layout was remembered. A note
-  or an ignored line alone leaves it open (warning `item_left_open`).
+  "Check and accept"); any item once the document is read again through
+  the pipeline (reprocessing raises afresh what is still wrong); an unread
+  document (`unparsed`) or an unknown account once the taught rows are
+  imported; a new institution once it is set or the layout remembered; a
+  low-confidence item once a fact it names changed (the period for a
+  period item, the balances for a balance item). A fact that does not
+  answer the item (an institution or an account set without rows imported
+  for an unknown account, anything for a possible duplicate), a note or an
+  ignored line leaves it open (warning `item_left_open`).
 - **Reading the next statement.** When the classifier matches a household
   fingerprint with a template, the parse stage reads the pages with it
   after the parsers (`registry.parse_extraction(template=...)`): a table

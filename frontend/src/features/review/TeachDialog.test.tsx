@@ -253,11 +253,15 @@ describe("teach dialog", () => {
     await user.click(await screen.findByRole("button", { name: "Teach PerFin" }));
     const dialog = await screen.findByRole("dialog", { name: "Teach PerFin" });
     await user.type(within(dialog).getByLabelText("Institution"), "Quill Society");
-    await user.click(within(dialog).getByLabelText("Remember this layout for the next files"));
     expect(within(dialog).queryByLabelText(/Replace the layout remembered/)).toBeNull();
+    await user.click(within(dialog).getByLabelText("Remember this layout for the next files"));
+    expect(within(dialog).getByLabelText(/Replace the layout remembered/)).not.toBeChecked();
     const apply = within(dialog).getByRole("button", { name: "Apply and remember" });
     await user.click(apply);
-    await user.click(await within(dialog).findByLabelText(/Replace the layout remembered/));
+    expect(
+      await within(dialog).findByText(/Another layout of this institution was taught before/),
+    ).toBeInTheDocument();
+    await user.click(within(dialog).getByLabelText(/Replace the layout remembered/));
     await user.click(apply);
     await waitFor(() => {
       expect(api.callsTo("POST", "/api/v1/documents/:id/teach")[1]?.body).toMatchObject({
@@ -269,6 +273,40 @@ describe("teach dialog", () => {
       await within(dialog).findByText(/Still remembered from earlier teaching: statement end date, the transaction table/),
     ).toBeInTheDocument();
     expect(within(dialog).getByText(/The review item stays open/)).toBeInTheDocument();
+  });
+
+  it("lets the same layout be taught afresh without a conflict first", async () => {
+    const api = reviewApi(item(), {
+      "POST /api/v1/documents/:id/teach": () =>
+        json({
+          document_id: "d-1",
+          fields: [],
+          tables: [],
+          ignored: 0,
+          notes: [],
+          applied: [],
+          warnings: [],
+          reprocessed: ["d-1"],
+          fingerprint_id: "f-3",
+          merged_from: null,
+          kept: [],
+        }),
+    });
+    renderApp("/review");
+    const user = userEvent.setup();
+    await user.click(await screen.findByRole("button", { name: "Teach PerFin" }));
+    const dialog = await screen.findByRole("dialog", { name: "Teach PerFin" });
+    await user.type(within(dialog).getByLabelText("Institution"), "Quill Society");
+    await user.click(within(dialog).getByLabelText("Remember this layout for the next files"));
+    expect(within(dialog).getByText(/drop earlier lines, notes or labels taught by mistake/)).toBeInTheDocument();
+    await user.click(within(dialog).getByLabelText(/Replace the layout remembered/));
+    await user.click(within(dialog).getByRole("button", { name: "Apply and remember" }));
+    await waitFor(() => {
+      expect(api.callsTo("POST", "/api/v1/documents/:id/teach")[0]?.body).toMatchObject({
+        remember: true,
+        replace: true,
+      });
+    });
   });
 
   it("words what was kept and the new warnings", () => {

@@ -39,10 +39,13 @@ with a role per column, a line to ignore, or "Other — describe it").
    they are never interpreted.
 5. With ``resolve`` the review item is closed **only when the teaching
    answers it** (:func:`_settles`): a held statement when it now reconciles
-   (its pending rows confirmed, as ``/correct`` does), an unread document
-   when rows are imported or it is read again, any other item when a fact
-   of the document changed or the layout was remembered. Otherwise it stays
-   open (warning ``item_left_open``).
+   (its pending rows confirmed, as ``/correct`` does); any item when the
+   document is read again through the pipeline; an unread document or an
+   unknown account when the taught rows are imported; a new institution
+   when it is set or the layout remembered; a low-confidence item when a
+   fact it names changed (the period for a period item). A fact that does
+   not answer the item (an institution for an unknown account or a
+   possible duplicate) leaves it open (warning ``item_left_open``).
 
 Callers: member or above who may change the document
 (``can_edit_document``); an ``item_id`` must be an open item of the
@@ -308,21 +311,78 @@ def _has_rows(db: Session, document: Document) -> bool:
     )
 
 
-def _settles(item: ReviewItem, *, reconciled: bool, rerun: str | None, applied: list[str]) -> bool:
+#: The document facts that answer a ``low_confidence_field`` item, by the
+#: field (or fields) its payload names; any other field is answered only by
+#: the document being read again.
+_FIELD_FACTS: Final[dict[str, frozenset[str]]] = {
+    "period": frozenset({"period_start", "period_end"}),
+    "period_start": frozenset({"period_start"}),
+    "period_end": frozenset({"period_end"}),
+    "balance": frozenset({"opening_balance", "closing_balance"}),
+    "opening_balance": frozenset({"opening_balance"}),
+    "closing_balance": frozenset({"closing_balance"}),
+    "institution": frozenset({"institution_id"}),
+    "account": frozenset({"account_id"}),
+    "kind": frozenset({"kind"}),
+}
+#: Low-confidence reasons about how the parsers read the page: a taught
+#: table whose rows are imported replaces that reading.
+_READING_REASONS: Final = frozenset({"lines_skipped"})
+
+
+def _item_fields(payload: dict[str, Any]) -> set[str]:
+    named: list[Any] = [payload.get("field")]
+    fields = payload.get("fields")
+    if isinstance(fields, list):
+        named.extend(fields)
+    return {f for f in named if isinstance(f, str)}
+
+
+def _settles(
+    item: ReviewItem,
+    *,
+    reconciled: bool,
+    rerun: str | None,
+    applied: list[str],
+    remembered: bool,
+) -> bool:
     """Whether what was taught answers ``item`` (else it stays open).
 
-    A held statement (``reconciliation_*``) is answered only by balances
-    with which it now adds up (its pending rows are then confirmed, as by
-    ``/correct``); an unread document (``unparsed``) only by rows being
-    imported or the document being read again; any other item by a fact of
-    the document changed or the layout remembered. A note or an ignored line
-    alone answers nothing.
+    - A held statement (``reconciliation_*``): only balances with which it
+      now adds up (its pending rows are then confirmed, as by ``/correct``).
+    - The document read again through the pipeline (``rerun == "pipeline"``)
+      answers any item: reprocessing dismisses the document's open items and
+      raises afresh what is still wrong.
+    - Rows imported from a taught table (``rerun == "import"``) answer what
+      the import re-run answers (``unparsed``, ``unknown_account``:
+      :data:`app.domain.imports.service.RERUN_ANSWERS`) and lines the
+      parsers skipped.
+    - A ``new_institution`` item: the institution set or the layout remembered.
+    - A ``low_confidence_field`` item: a fact applied that is a field the
+      item names (:data:`_FIELD_FACTS`: the period for a period item, the
+      balances for a balance item, ...).
+    - Nothing else: a fact that does not answer the item's question (an
+      account set without its rows imported, an institution for a possible
+      duplicate), a note or an ignored line leaves it open.
     """
-    if (item.payload or {}).get("reason") in WHOLE_STATEMENT_REASONS:
+    payload = item.payload or {}
+    reason = payload.get("reason")
+    if reason in WHOLE_STATEMENT_REASONS:
         return reconciled
-    if item.kind is ReviewKind.UNPARSED:
-        return rerun is not None
-    return bool(applied) or rerun is not None
+    if rerun == "pipeline":
+        return True
+    if rerun == "import" and (
+        item.kind in imports_service.RERUN_ANSWERS or reason in _READING_REASONS
+    ):
+        return True
+    if item.kind is ReviewKind.NEW_INSTITUTION:
+        return remembered or "institution_id" in applied
+    if item.kind is ReviewKind.LOW_CONFIDENCE_FIELD:
+        facts: set[str] = set()
+        for name in _item_fields(payload):
+            facts |= _FIELD_FACTS.get(name, frozenset())
+        return bool(facts.intersection(applied))
+    return False
 
 
 def teach(
@@ -485,7 +545,13 @@ def teach(
         settled = (
             body.resolve
             and "does_not_reconcile" not in lesson.warnings
-            and _settles(item, reconciled=reconciled, rerun=rerun, applied=applied)
+            and _settles(
+                item,
+                reconciled=reconciled,
+                rerun=rerun,
+                applied=applied,
+                remembered=stored_layout is not None,
+            )
         )
         if settled:
             resolution.update(

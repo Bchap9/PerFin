@@ -200,15 +200,19 @@ What remains (details in docs/ROADMAP.md):
   labelled table, reconciled as usual) and imports with no review item.
   Free-text notes are kept for the household, without words that hold a
   digit, and never acted on. A label is remembered only when it reads the
-  selected value back (a label printed twice, such as "Balance", would read
-  the wrong figure next time). Teaching the same layout again adds to what
+  selected value back (a label printed twice over different figures, such
+  as "Balance", would read the wrong figure next time; a label in every
+  page header may be selected on any page). Teaching the same layout again adds to what
   was remembered (`merged_from`, `kept`), "Remember this layout" keeps it
   too, and another layout of the same institution is refused with `409
-  layout-conflict` until the person chooses to replace it (`replace`). The
-  review item the dialog was opened from is closed only when the teaching
-  answers it (a held statement once it reconciles, an unread document once
-  rows are imported or it is read again); otherwise it stays open
-  (`item_left_open`). A line picked from the keyboard list is added with
+  layout-conflict` until the person chooses to replace it (`replace`; the
+  dialog offers it whenever it remembers, so wrongly taught lines can be
+  dropped). The review item the dialog was opened from is closed only when
+  the teaching answers it (a held statement once it reconciles; an unread
+  document or an unknown account once the taught rows are imported or the
+  document is read again; a new institution once it is set; a
+  low-confidence item once a fact it names changed); a fact that does not
+  answer it leaves it open (`item_left_open`). A line picked from the keyboard list is added with
   "Add this line", not on every change of the list. Audited as
   `document.teach`.
 - `POST /review/{id}/correct` takes `opening_balance`, `closing_balance`

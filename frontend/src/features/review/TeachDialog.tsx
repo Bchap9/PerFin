@@ -341,9 +341,14 @@ export function TeachDialog({
               }}
             />
           ) : null}
-          {remember && (conflict || replace) ? (
+          {remember ? (
             <Checkbox
               label="Replace the layout remembered for this institution (what was taught for it before is no longer used)"
+              hint={
+                conflict
+                  ? "Another layout of this institution was taught before: tick this to replace it."
+                  : "Leave it unticked to add to what was taught before; tick it to drop earlier lines, notes or labels taught by mistake."
+              }
               checked={replace}
               onChange={(event) => {
                 setReplace(event.target.checked);

@@ -621,8 +621,10 @@ def derive_anchor(
     is a ``band`` anchor. A ``right`` or ``below`` anchor is kept only when
     reading it on this document finds the selected value (the first line
     holding the label is the one read on the next statement): a label
-    printed twice, such as ``Balance`` on two summary lines, would otherwise
-    read the wrong figure next time.
+    printed twice over different figures, such as ``Balance`` on two summary
+    lines, would otherwise read the wrong figure next time. The value read
+    may sit on another page: a label printed in every page header and
+    selected on page 2 reads the same value on page 1.
     """
     chosen = selected(view, page, box)
     if not chosen:
@@ -637,24 +639,30 @@ def derive_anchor(
         own.append(word)
         if word.text.endswith(":"):
             break
-    target = _box(words)
 
-    def reads_back(anchor: FieldAnchor) -> bool:
-        # The label must find this very value again, not an earlier one
-        # under the same label ("Balance" on two summary lines).
+    def reads_back(anchor: FieldAnchor, value_words: Sequence[Word]) -> bool:
+        # The label must read the selected value again, not another one
+        # under the same label ("Balance" on two summary lines). The value
+        # may be read elsewhere (a label printed in every page header is
+        # read on the first page when the person selected it on page 2).
         found = read_anchor(view, anchor)
-        return found is not None and found.page == page and _overlap(found.bbox, target)
+        if found is None:
+            return False
+        wanted = read_value(field_name, " ".join(w.text for w in value_words))
+        if wanted is not None and found.value == wanted:
+            return True
+        return found.page == page and _overlap(found.bbox, _box(value_words))
 
     if own and len(own) < len(words):
         found = label_text(" ".join(w.text for w in own))
         if found is not None:
             anchor = FieldAnchor(field=field_name, direction="right", label=found)
-            if reads_back(anchor):
+            if reads_back(anchor, words[len(own) :]):
                 return anchor
     found = _left_label(line_words(line), words[0].x0)
     if found is not None:
         anchor = FieldAnchor(field=field_name, direction="right", label=found)
-        if reads_back(anchor):
+        if reads_back(anchor, words):
             return anchor
     lines = page_lines(view, page)
     position = next((i for i, candidate in enumerate(lines) if candidate is line), None)
@@ -667,7 +675,7 @@ def derive_anchor(
         text = label_text(" ".join(w.text for w in above)) if above else None
         if text is not None:
             anchor = FieldAnchor(field=field_name, direction="below", label=text)
-            if reads_back(anchor):
+            if reads_back(anchor, words):
                 return anchor
     if field_name in ("period_start", "period_end"):
         band = header_band_range(page_heads(view))

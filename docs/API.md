@@ -606,9 +606,13 @@ counts, notes and ids, never the values read; notes are never acted on and
 keep no word that holds a digit). With `resolve` the `item_id` item is
 closed only when the teaching answers it: a `reconciliation_*` item when
 the statement now reconciles (its pending rows confirmed, as `/correct`
-does), an `unparsed` item when rows are imported or the document is read
-again, any other item when a document fact changed or the layout was
-remembered; otherwise it stays open and `warnings` holds `item_left_open`.
+does); any item when the document is read again through the pipeline
+(`rerun: "pipeline"`); an `unparsed` or `unknown_account` item when the
+taught rows are imported (`rerun: "import"`); a `new_institution` item when
+the institution is set or the layout remembered; a `low_confidence_field`
+item when a fact named by its `field`/`fields` changed (the period, the
+balances, the institution, the account); otherwise (a fact that does not
+answer the item) it stays open and `warnings` holds `item_left_open`.
 `POST /review/{id}/remember-layout`
 `{"institution_id", "kind"?, "parser"?, "match"?, "reprocess_similar", "replace"}`
 stores a household `parser_fingerprint` (`match` has the shipped
