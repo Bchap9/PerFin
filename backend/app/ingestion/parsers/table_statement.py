@@ -12,16 +12,35 @@ are read the same way:
    A *checks* table (``Check No. | Date Paid | Amount``) is one too: each
    row is ``CHECK <number>``, money out. A line of header words only that
    is no table we read (``Date | Balance | Date | Balance``) ends the table
-   above it.
+   above it. A **headless** header names money columns only, beside a
+   heading naming the table (``New Transactions for JORDAN SAMPLE |
+   Foreign Spending | Amount $``, at most five cells, no figures): all left
+   of the first column heading is the *lead*, read per row as the date (the
+   lead's first cell, or the first words of it on a line with an amount)
+   and then the description. A *Foreign Spending* (*Foreign Amount*,
+   *Original Currency*...) column is informational: it goes to the memo
+   (``Goods or Services; foreign amount 360.00 US Dollar``), never into the
+   amount.
 2. **Rows.** Every later line is split into cells; each cell goes to the
    column it overlaps most. A line with a date in the date column and an
    amount is a transaction; a dated line whose description is an opening or
    closing label is the table's own balance row; a following line with only
-   description text continues the previous row's memo (wrapped text).
+   description text (and foreign-column text) continues the previous row's
+   memo (wrapped text, a category line); a ``CR``/``DR`` alone in the
+   amount column of that line marks the row's amount, as one after the
+   amount does. Dates may carry a mark after them (``January 9 *``: a
+   processing date) and may be month names without a year
+   (``December 16``, ``16 Dec``).
    Section headings set the row type (fees, interest) or start a *pending*
    section whose rows are counted but not imported (they are not posted and
    not part of the balances). Totals, page footers and "continued" lines are
    skipped. A dated line without a readable amount is counted as skipped.
+   A **payment stub** is left out before anything is read
+   (:meth:`TableStatementParser.without_stubs`): from a line saying to
+   detach it (``Please detach here``, ``Return this portion``..., without
+   an amount) to the end of its page, unless a table header follows on
+   that page; so its dated ``Amount Due`` line is no row and its account
+   number with all digits is not the statement's.
 3. **Summary.** Outside the rows: the statement period (``Statement period``,
    ``Billing period``...), the account's last four digits (a masked number
    or "ending in"), the currency, and the opening/closing balances by label.
@@ -40,6 +59,22 @@ are read the same way:
    values when one proves it (``01/07/2015 - 31/07/2015`` is day-first),
    whatever the rows' default; and when the rows fit both orders (or are
    not numeric) the order the period proves is the rows' order too.
+   Labels printed **over their values** (a row of labels over a row of
+   boxes: ``Previous Balance | Payments and Credits | New Charges | New
+   Balance`` over ``9,803.59 - 11.39 + 4,330.71 = 14,122.91``; ``Prepared
+   For | Account Number | Date`` over the values) give each value the label
+   above it; label lines stacked over one value row add up.
+   **Statement date.** With no period printed, a statement date
+   (``Statement Date``, ``Closing Date``..., or a cell reading only
+   ``Date`` on a line naming no column heading) ends the period
+   (:func:`anchored_period`): it starts the day after a printed previous
+   statement date, else the day after the same date a month before, or on
+   the earliest row when one is older. Yearless rows take the latest year
+   that keeps them on or before the statement date (December rows of a
+   January statement are the year before; none lands after it). A row
+   printed with its year after the "statement date" shows it is none (the
+   rows' span is the period, as without one). Its confidence is
+   ``confidence.DERIVED``: a stated period for the duplicate guard.
 4. **Signs.** ``bank``: a signed amount as printed, *Debit* negative and
    *Credit* positive, ``CR``/``DR`` markers honoured. ``card``: charges are
    printed positive and credits negative or with ``CR``; both the amounts and
@@ -47,7 +82,11 @@ are read the same way:
    (a purchase is negative, the balance owed is negative).
 5. **Checks and confidence.** The running balance and the totals are
    reconciled (:mod:`app.ingestion.reconcile`) and every field is scored
-   (:mod:`app.ingestion.parsers.confidence`).
+   (:mod:`app.ingestion.parsers.confidence`). A summary printed as a whole
+   equation (opening + payments and credits - new charges = closing, in the
+   ledger convention) is checked further (:func:`totals_disagree`): the
+   rows' money in must be its credits and their money out its charges, or
+   the statement does not reconcile (warning ``summary_totals_mismatch``).
 6. **Several accounts.** When the pages name two or more accounts that each
    have a transaction table (:func:`app.ingestion.parsers.accounts.segment`:
    account headings, the account index), each account's lines are one
@@ -67,9 +106,10 @@ currency, fingerprint phrases and the institution's name.
 from __future__ import annotations
 
 import re
+from calendar import monthrange
 from collections.abc import Iterable, Mapping, Sequence
-from dataclasses import dataclass, field
-from datetime import date
+from dataclasses import dataclass, field, replace
+from datetime import date, timedelta
 from decimal import Decimal
 from functools import lru_cache
 from typing import ClassVar, Final, Literal
@@ -84,7 +124,14 @@ from app.ingestion.classify.dates import (
 from app.ingestion.classify.dates import find_dates as classify_dates
 from app.ingestion.parsers import confidence as conf
 from app.ingestion.parsers.accounts import AccountSegment, Segmentation, segment
-from app.ingestion.parsers.base import Cell, DocumentParser, DocumentView, ParseOutcome, ViewLine
+from app.ingestion.parsers.base import (
+    Cell,
+    DocumentParser,
+    DocumentView,
+    ParseOutcome,
+    ViewLine,
+    join_cells,
+)
 from app.ingestion.parsers.text import (
     FULL_STYLES,
     MAX_LINE,
@@ -94,12 +141,13 @@ from app.ingestion.parsers.text import (
     find_amounts,
     find_dates,
     guess_numeric_style,
+    month_day,
     normalise,
     numeric_parts,
     read_amount,
     read_date,
 )
-from app.ingestion.reconcile import Row, reconcile
+from app.ingestion.reconcile import TOLERANCE, Row, reconcile
 from app.ingestion.sandbox.protocol import (
     Balance,
     ExtractedTransaction,
@@ -108,7 +156,18 @@ from app.ingestion.sandbox.protocol import (
     StatementAccount,
 )
 
-Role = Literal["date", "post_date", "description", "amount", "debit", "credit", "balance", "check"]
+Role = Literal[
+    "date",
+    "post_date",
+    "description",
+    "amount",
+    "debit",
+    "credit",
+    "balance",
+    "check",
+    "foreign",
+    "lead",
+]
 NUMERIC_ROLES: Final = frozenset({"amount", "debit", "credit", "balance"})
 
 #: Normalised header cell text -> column role.
@@ -151,15 +210,43 @@ HEADERS: Final[Mapping[str, Role]] = {
     "check num": "check",
     "check": "check",
     "chk no": "check",
+    "foreign spending": "foreign",
+    "foreign currency": "foreign",
+    "foreign amount": "foreign",
+    "foreign currency amount": "foreign",
+    "original currency": "foreign",
+    "original amount": "foreign",
 }
+#: Roles whose cells hold the transaction's money (a table needs one).
+MONEY_ROLES: Final = frozenset({"amount", "debit", "credit"})
+#: Words of a heading that names a transaction table without date or
+#: description headings (``New Transactions for JORDAN SAMPLE``).
+TABLE_HEADING_WORDS: Final = frozenset({"transactions", "activity"})
+#: Phrases that start a payment stub (a coupon to detach and send with a
+#: payment): the rest of the page is no part of the statement.
+STUB_MARKERS: Final = (
+    "detach here",
+    "please detach",
+    "detach and return",
+    "tear off here",
+    "return this portion",
+    "return this coupon",
+    "payment coupon",
+    "remittance slip",
+)
+#: A marker after a row's date (``January 9 *``: a processing date).
+_DATE_MARKS: Final = " *\u2020"
+#: Yearless styles a month-named row date may be printed in.
+NAMED_YEARLESS: Final[tuple[DateStyle, ...]] = ("mon_d", "d_mon")
 
 _LAST4: Final = re.compile(
-    r"(?<![A-Za-z0-9])[*xX•]{2}[*xX•\s-]{0,30}?(\d{4})\b"
+    r"(?<![A-Za-z0-9])[*xX•]{2}[*xX•\d\s-]{0,30}?(\d{4})\b"
     r"|\bending(?:\s+in)?\s*:?\s*(\d{4})\b"
     r"|\baccount(?:\s+(?:number|no\.?))?\s*:?\s*\d{0,26}?(\d{4})\b",
     re.IGNORECASE,
 )
-_CURRENCY: Final = re.compile(r"\bcurrency\s*:?\s*([A-Z]{3})\b", re.IGNORECASE)
+#: ``Currency: CAD``; the code in capitals (``currency are`` is no code).
+_CURRENCY: Final = re.compile(r"\b(?i:currency)\s*:?\s*([A-Z]{3})\b")
 #: Line separators between the two dates of a period.
 _RANGE: Final = re.compile(r"\s(?:to|through|until|-|\u2013)\s", re.IGNORECASE)
 
@@ -356,6 +443,8 @@ class _Row:
     memo: list[str] = field(default_factory=list)
     #: A row of a checks table (``Check No. | Date Paid | Amount``): a check paid.
     check: bool = False
+    #: An informational foreign amount and its currency (``360.00``, ``US Dollar``).
+    foreign: list[str] = field(default_factory=list)
 
 
 @dataclass
@@ -369,6 +458,17 @@ class _Summary:
     currency: str | None = None
     #: Pages and boxes of the dated lines skipped (no readable amount).
     skipped_boxes: list[tuple[int, BBox]] = field(default_factory=list)
+    #: The summary's own totals (``Payments and Credits``, ``New Charges``).
+    credits_total: Amount | None = None
+    charges_total: Amount | None = None
+    #: Texts a statement date (``Date``, ``Statement Date``) or the previous
+    #: statement's date was printed in, in order.
+    statement_dates: list[str] = field(default_factory=list)
+    previous_dates: list[str] = field(default_factory=list)
+    #: Label cells of the lines just above (``Previous Balance`` over its box),
+    #: as ``(field, x0, x1)``, and the page and index of the last such line.
+    above: list[tuple[str, float, float]] = field(default_factory=list)
+    above_line: tuple[int, int] | None = None
 
 
 @dataclass
@@ -392,7 +492,7 @@ class TableStatementParser(DocumentParser):
     """Generic: any statement with a recognisable transaction table (module doc)."""
 
     name: ClassVar[str] = "statement_generic"
-    version: ClassVar[str] = "3"
+    version: ClassVar[str] = "4"
     kind: ClassVar[Literal["statement", "payslip"]] = "statement"
     #: The institution's name as accounts know it (account matching).
     display_name: ClassVar[str | None] = None
@@ -428,8 +528,37 @@ class TableStatementParser(DocumentParser):
         "statement dates",
         "for the period",
         "statement from",
+        "opening closing date",
         "period",
     )
+    #: Labels of the summary's own totals (an equation-style summary:
+    #: previous - payments and credits + new charges = new balance).
+    credit_total_labels: ClassVar[tuple[str, ...]] = (
+        "payments and credits",
+        "payments and other credits",
+        "payments credits",
+    )
+    charge_total_labels: ClassVar[tuple[str, ...]] = (
+        "new charges",
+        "purchases and other charges",
+    )
+    #: Labels of a statement date (no period printed); a cell reading only
+    #: ``Date`` is one too.
+    statement_date_labels: ClassVar[tuple[str, ...]] = (
+        "statement date",
+        "statement closing date",
+        "closing date",
+        "date of statement",
+        "billing date",
+        "cycle date",
+    )
+    previous_date_labels: ClassVar[tuple[str, ...]] = (
+        "previous statement date",
+        "last statement date",
+        "previous closing date",
+        "previous statement",
+    )
+    stub_markers: ClassVar[tuple[str, ...]] = STUB_MARKERS
     pending_markers: ClassVar[tuple[str, ...]] = ("pending",)
     #: Section headings (normalised prefix) -> transaction type (None: plain).
     sections: ClassVar[Mapping[str, str | None]] = {
@@ -464,11 +593,28 @@ class TableStatementParser(DocumentParser):
                 continue
             roles.add(role)
             found.append(Column(role, cell.x0, cell.x1))
-        if "date" not in roles or not roles & {"description", "check"}:
+        if "date" in roles and roles & {"description", "check"} and roles & MONEY_ROLES:
+            return sorted(found, key=lambda c: c.x0)
+        return self._headless(line, found, roles)
+
+    def _headless(
+        self, line: ViewLine, found: Sequence[Column], roles: set[Role]
+    ) -> list[Column] | None:
+        """A heading naming the table over money columns only (module doc, "Header").
+
+        ``New Transactions for JORDAN SAMPLE | Foreign Spending | Amount $``:
+        everything left of the first column heading is the **lead**, read
+        row by row as the date then the description.
+        """
+        if roles & {"date", "post_date", "description", "check"} or not roles & MONEY_ROLES:
             return None
-        if not roles & {"amount", "debit", "credit"}:
+        if len(line.cells) > 5 or find_amounts(line.text):
             return None
-        return sorted(found, key=lambda c: c.x0)
+        first = min(c.x0 for c in found)
+        heading = [c for c in line.cells if c.x1 <= first]
+        if not any(TABLE_HEADING_WORDS & set(normalise(c.text).split()) for c in heading):
+            return None
+        return [Column("lead", 0.0, first), *sorted(found, key=lambda c: c.x0)]
 
     def _header_like(self, line: ViewLine) -> bool:
         """Two or more cells, all header words, no amount: a table we do not read."""
@@ -527,7 +673,62 @@ class TableStatementParser(DocumentParser):
     def _date_shaped(self, text: str) -> bool:
         if numeric_parts(text) is not None:
             return True
+        if any(month_day(text, style) is not None for style in NAMED_YEARLESS):
+            return True
         return any(read_date(text, style) is not None for style in ("d_mon_y", "mon_d_y", "ymd"))
+
+    def _split_lead(self, cells: dict[Role, list[Cell]]) -> None:
+        """A headless table's lead cells: a date first, then the description.
+
+        The date is the lead's first cell; when the line has an amount, it
+        may also be the first words of that cell (a date printed close to
+        the description). A lead without a date is description text (a
+        wrapped line).
+        """
+        lead = sorted(cells.pop("lead", []), key=lambda c: c.x0)
+        if not lead:
+            return
+        rest: list[Cell] = lead
+        if self._date_shaped(lead[0].text.strip(_DATE_MARKS)):
+            cells["date"], rest = [lead[0]], lead[1:]
+        elif any(
+            self._amount([c]) is not None
+            for role, found in cells.items()
+            if role in MONEY_ROLES
+            for c in found
+        ):
+            words = lead[0].word_cells()
+            for size in (3, 2, 1):
+                head = " ".join(w.text for w in words[:size]).strip(_DATE_MARKS)
+                if len(words) > size and self._date_shaped(head):
+                    cells["date"] = [join_cells(words[:size])]
+                    rest = [join_cells(words[size:]), *lead[1:]]
+                    break
+        if rest:
+            cells["description"] = [*rest, *cells.get("description", [])]
+
+    def without_stubs(self, lines: Sequence[ViewLine]) -> list[ViewLine]:
+        """``lines`` without payment stubs: a stub marker line (``Please detach
+        here``, no amount) and the rest of its page, unless a table header
+        follows on that page (reading resumes there)."""
+        out: list[ViewLine] = []
+        stub_page: int | None = None
+        for line in lines:
+            if stub_page == line.page:
+                if self.columns(line) is None:
+                    continue
+                stub_page = None
+            elif self._stub_marker(line):
+                stub_page = line.page
+                continue
+            out.append(line)
+        return out
+
+    def _stub_marker(self, line: ViewLine) -> bool:
+        norm = f" {line.norm} "
+        if not any(f" {marker} " in norm for marker in self.stub_markers):
+            return False
+        return not find_amounts(line.text)
 
     def _label_amount(self, line: ViewLine, labels: Sequence[str]) -> Amount | None:
         for label in labels:
@@ -545,7 +746,13 @@ class TableStatementParser(DocumentParser):
         closing = self._label_amount(line, self.closing_labels)
         if closing is not None and summary.closing is None:
             summary.closing = closing
+        if summary.credits_total is None:
+            summary.credits_total = self._label_amount(line, self.credit_total_labels)
+        if summary.charges_total is None:
+            summary.charges_total = self._label_amount(line, self.charge_total_labels)
         summary.period.scan(line.text, self.period_labels)
+        self._scan_dates(line, summary)
+        self._scan_above(line, summary)
         if summary.last4 is None:
             match = _LAST4.search(line.text)
             if match is not None:
@@ -554,6 +761,100 @@ class TableStatementParser(DocumentParser):
             match = _CURRENCY.search(line.text)
             if match is not None:
                 summary.currency = match[1].upper()
+
+    def _scan_dates(self, line: ViewLine, summary: _Summary) -> None:
+        """Statement date and previous statement date candidates on ``line``."""
+        text = line.text
+        for labels, out in (
+            (self.previous_date_labels, summary.previous_dates),
+            (self.statement_date_labels, summary.statement_dates),
+        ):
+            ends = [e for e in (label_end(text, label) for label in labels) if e is not None]
+            if ends:
+                rest = text[min(ends) :]
+                if any(ch.isdigit() for ch in rest) and len(out) < MAX_PERIOD_CANDIDATES:
+                    out.append(rest)
+                break
+        if not self._bare_date_labels(line):
+            return
+        for cell, after in zip(line.cells, line.cells[1:], strict=False):
+            if normalise(cell.text) == "date" and len(summary.statement_dates) < (
+                MAX_PERIOD_CANDIDATES
+            ):
+                summary.statement_dates.append(after.text)
+
+    def _bare_date_labels(self, line: ViewLine) -> bool:
+        """A cell reading only ``Date`` labels the statement date on ``line``:
+        no other cell is a column heading (``Date | Balance`` heads a table)."""
+        return not any(
+            normalise(c.text) in self.headers and normalise(c.text) != "date" for c in line.cells
+        )
+
+    def _label_field(self, text: str) -> str | None:
+        """The summary field a label cell names (``Previous Balance``: ``opening``)."""
+        norm = normalise(text)
+        if norm == "date":
+            return "statement_date"
+        for name, labels in (
+            ("previous_date", self.previous_date_labels),
+            ("statement_date", self.statement_date_labels),
+            ("opening", self.opening_labels),
+            ("closing", self.closing_labels),
+            ("credits", self.credit_total_labels),
+            ("charges", self.charge_total_labels),
+        ):
+            if any(norm == label or norm.startswith(f"{label} ") for label in labels):
+                return name
+        return None
+
+    def _scan_above(self, line: ViewLine, summary: _Summary) -> None:
+        """Values printed under their labels (a row of labels over a row of boxes).
+
+        Lines without digits collect their label cells (stacked label lines
+        add up); the next line gives each label the value cell under it.
+        """
+        here = (line.page, line.index)
+        follows = summary.above_line is not None and here == (
+            summary.above_line[0],
+            summary.above_line[1] + 1,
+        )
+        if not any(ch.isdigit() for ch in line.text):
+            if not follows:
+                summary.above = []
+            bare = self._bare_date_labels(line)
+            labels = [
+                (f, c.x0, c.x1)
+                for c in line.cells
+                if (f := self._label_field(c.text)) and (bare or normalise(c.text) != "date")
+            ]
+            summary.above = [*summary.above, *labels][:20]
+            summary.above_line = here
+            return
+        if follows:
+            for name, x0, x1 in summary.above:
+                cell = max(line.cells, key=lambda c: c.overlap(x0, x1))
+                if cell.overlap(x0, x1) > 0:
+                    self._fill(summary, name, cell.text)
+        summary.above, summary.above_line = [], None
+
+    @staticmethod
+    def _fill(summary: _Summary, name: str, text: str) -> None:
+        if name in ("statement_date", "previous_date"):
+            out = summary.statement_dates if name == "statement_date" else summary.previous_dates
+            if len(out) < MAX_PERIOD_CANDIDATES:
+                out.append(text)
+            return
+        amounts = find_amounts(text)
+        if not amounts:
+            return
+        if name == "opening" and summary.opening is None:
+            summary.opening = amounts[0]
+        elif name == "closing" and summary.closing is None:
+            summary.closing = amounts[0]
+        elif name == "credits" and summary.credits_total is None:
+            summary.credits_total = amounts[0]
+        elif name == "charges" and summary.charges_total is None:
+            summary.charges_total = amounts[0]
 
     def _section(self, norm: str) -> tuple[bool, str | None] | None:
         """``(pending, type)`` when ``norm`` is a section heading."""
@@ -588,7 +889,8 @@ class TableStatementParser(DocumentParser):
                 self._scan_summary(line, summary)
                 continue
             cells = self._assign(line, columns)
-            date_text = " ".join(c.text for c in cells.get("date", []))
+            self._split_lead(cells)
+            date_text = " ".join(c.text for c in cells.get("date", [])).strip(_DATE_MARKS)
             if not date_text or not self._date_shaped(date_text):
                 last = self._not_a_row(line, norm, cells, summary, last)
                 section = self._section(norm) if last is None else None
@@ -637,6 +939,7 @@ class TableStatementParser(DocumentParser):
                 bbox=line.bbox,
                 section_type=section_type,
                 check=is_check,
+                foreign=[c.text for c in cells.get("foreign", [])],
             )
             rows.append(last)
         return rows, summary, pending_items, skipped, found_header
@@ -652,7 +955,15 @@ class TableStatementParser(DocumentParser):
         """Handle an undated line in the table; return the row a wrap may extend."""
         if any(norm.startswith(prefix.strip()) for prefix in self.skip_prefixes):
             return None
-        only_text = set(cells) <= {"description"} and "description" in cells
+        # A credit/debit marker alone in a money column (``CR`` under the amount).
+        marker = {
+            normalise(" ".join(c.text for c in cells[role]))
+            for role in MONEY_ROLES
+            if role in cells
+        }
+        marked = marker in ({"cr"}, {"dr"})
+        text_roles = {r for r in cells if not (marked and r in MONEY_ROLES)}
+        only_text = text_roles <= {"description", "foreign"} and bool(text_roles or marked)
         if (
             last is not None
             and only_text
@@ -661,7 +972,10 @@ class TableStatementParser(DocumentParser):
             and self._section(norm) is None
             and not find_amounts(line.text)
         ):
-            last.memo.extend(c.text for c in cells["description"])
+            last.memo.extend(c.text for c in cells.get("description", []))
+            last.foreign.extend(c.text for c in cells.get("foreign", []))
+            if marked and last.amount is not None and last.amount.credit is None:
+                last.amount = replace(last.amount, credit=marker == {"cr"})
             last.bbox = (
                 min(last.bbox[0], line.bbox[0]),
                 last.bbox[1],
@@ -725,8 +1039,8 @@ class TableStatementParser(DocumentParser):
                 style = "mdy"
             if yearless:
                 style = "md" if style == "mdy" else "dm"
-            return (style, "ymd", "d_mon_y", "mon_d_y"), certain
-        return ("d_mon_y", "mon_d_y", "ymd"), True
+            return (style, "ymd", "d_mon_y", "mon_d_y", *NAMED_YEARLESS), certain
+        return ("d_mon_y", "mon_d_y", "ymd", *NAMED_YEARLESS), True
 
     def _period(
         self,
@@ -735,13 +1049,49 @@ class TableStatementParser(DocumentParser):
         view: DocumentView,
         certain: bool,
     ) -> PeriodRead | None:
+        ordered = self._period_styles(styles)
+        return read_period(summary.period.texts, ordered, view, certain=certain)
+
+    def _period_styles(self, styles: Sequence[DateStyle]) -> list[DateStyle]:
         ordered: list[DateStyle] = [s for s in self.period_styles if s in FULL_STYLES]
         for style in styles:
             numeric = full_style(style)
             if numeric in NUMERIC_DM and numeric in ordered:
                 ordered.remove(numeric)
                 ordered.insert(0, numeric)
-        return read_period(summary.period.texts, ordered, view, certain=certain)
+        return ordered
+
+    @staticmethod
+    def _first_date(texts: Sequence[str], styles: Sequence[DateStyle]) -> date | None:
+        for text in texts:
+            found = find_dates(text, styles)
+            if found:
+                return found[0]
+        return None
+
+    def _statement_date(
+        self, summary: _Summary, styles: Sequence[DateStyle]
+    ) -> tuple[date, date | None] | None:
+        """The statement date and the previous statement's date (module doc, "Summary")."""
+        ordered = self._period_styles(styles)
+        end = self._first_date(summary.statement_dates, ordered)
+        if end is None:
+            return None
+        previous = self._first_date(summary.previous_dates, ordered)
+        return end, previous if previous is not None and previous < end else None
+
+    @staticmethod
+    def _row_date(
+        row: _Row,
+        styles: Sequence[DateStyle],
+        window: tuple[date, date] | None,
+        strict: bool,
+    ) -> date | None:
+        for style in styles:
+            posted = read_date(row.date_text, style, window=window, strict=strict)
+            if posted is not None:
+                return posted
+        return None
 
     # -- the statement ----------------------------------------------------------
 
@@ -757,10 +1107,11 @@ class TableStatementParser(DocumentParser):
     def parse(
         self, view: DocumentView, *, threshold: float, date_order: str | None = None
     ) -> ParseOutcome:
-        split = self._accounts(view)
+        lines = self.without_stubs(view.lines)
+        split = self._accounts(lines)
         if split is not None:
             return self._parse_accounts(view, split, threshold=threshold, date_order=date_order)
-        read = self.read_statement(view, view.lines, threshold=threshold, date_order=date_order)
+        read = self.read_statement(view, lines, threshold=threshold, date_order=date_order)
         outcome = ParseOutcome(
             pending_items=read.pending_items,
             skipped_lines=read.skipped_lines,
@@ -773,9 +1124,9 @@ class TableStatementParser(DocumentParser):
 
     # -- several accounts -------------------------------------------------------
 
-    def _accounts(self, view: DocumentView) -> Segmentation | None:
+    def _accounts(self, lines: Sequence[ViewLine]) -> Segmentation | None:
         """The document's accounts when two or more have a transaction table each."""
-        found = segment(view.lines)
+        found = segment(lines)
         if len(found.accounts) < 2:
             return None
         if sum(1 for a in found.accounts if self.lines_have_table(a.lines)) < 2:
@@ -854,7 +1205,9 @@ class TableStatementParser(DocumentParser):
         account the lines belong to (:mod:`app.ingestion.parsers.accounts`).
         ``statement`` is None when no transaction table header is found.
         """
-        rows, summary, pending_items, skipped, found_header = self._collect(lines)
+        rows, summary, pending_items, skipped, found_header = self._collect(
+            self.without_stubs(lines)
+        )
         outcome = StatementRead(
             pending_items=pending_items,
             skipped_lines=skipped,
@@ -874,15 +1227,22 @@ class TableStatementParser(DocumentParser):
             # The rows fit both orders (or have none); the printed period proves one.
             styles, certain = follow_order(styles, read.order), True
         period = read.span if read is not None else None
+        anchor = self._statement_date(summary, styles) if read is None else None
+        window, strict = period, False
+        if anchor is not None:
+            # Only a statement date: a yearless row is the latest date not after it.
+            window, strict = (anchor[0] - timedelta(days=364), anchor[0]), True
+        dates = [self._row_date(row, styles, window, strict) for row in rows]
+        if anchor is not None and any(d is not None and d > anchor[0] for d in dates):
+            # A row printed with its year after the "statement date": not one.
+            anchor = None
+            dates = [self._row_date(row, styles, None, False) for row in rows]
+        if anchor is not None:
+            period = anchored_period(*anchor, [d for d in dates if d is not None])
         transactions: list[ExtractedTransaction] = []
         fields: list[dict[str, float]] = []
         ledger_rows: list[Row] = []
-        for row in rows:
-            posted: date | None = None
-            for style in styles:
-                posted = read_date(row.date_text, style, window=period)
-                if posted is not None:
-                    break
+        for row, posted in zip(rows, dates, strict=True):
             amount = self._signed(row)
             if posted is None or amount is None:
                 outcome.skipped_lines += 1
@@ -897,7 +1257,7 @@ class TableStatementParser(DocumentParser):
                 "amount": conf.scaled(self.base, row.ocr),
                 "payee": conf.scaled(self.base if payee else conf.MISSING, row.ocr),
             }
-            memo = " ".join(row.memo).strip() or None
+            memo = row_memo(row)
             fields.append(score)
             ledger_rows.append(Row(amount, self._ledger_balance(row.balance)))
             transactions.append(
@@ -923,6 +1283,10 @@ class TableStatementParser(DocumentParser):
             closing = ledger_rows[-1].balance
             statement_conf["closing_balance"] = conf.DERIVED
         result = reconcile(opening, closing, ledger_rows)
+        if result.status == "ok" and totals_disagree(summary, opening, closing, ledger_rows):
+            # The summary's own credits and charges do not match the rows'.
+            result = result.model_copy(update={"status": "mismatch"})
+            outcome.warnings.append("summary_totals_mismatch")
         for index in result.running_mismatches:
             fields[index]["amount"] = min(fields[index]["amount"], conf.CONTRADICTED)
         if result.status == "ok" and any(r.balance is not None for r in ledger_rows):
@@ -936,6 +1300,9 @@ class TableStatementParser(DocumentParser):
                 score["reconciliation"] = cap
         if read is not None:
             statement_conf["period"] = read.confidence(self.base)
+        elif anchor is not None and period is not None:
+            # A printed statement date ends it; its start is the cycle's.
+            statement_conf["period"] = min(self.base, conf.DERIVED)
         elif transactions:
             period = (min(t.posted for t in transactions), max(t.posted for t in transactions))
             # Inferred from the rows: no surer than their dates.
@@ -998,6 +1365,58 @@ class TableStatementParser(DocumentParser):
         return outcome
 
 
+def month_before(day: date) -> date:
+    """The same day a month earlier (the month's last day when it has none)."""
+    year, month = (day.year, day.month - 1) if day.month > 1 else (day.year - 1, 12)
+    return date(year, month, min(day.day, monthrange(year, month)[1]))
+
+
+def anchored_period(end: date, previous: date | None, rows: Sequence[date]) -> tuple[date, date]:
+    """A period from a statement date (module doc, "Summary").
+
+    It ends on the statement date and starts the day after the previous
+    statement's date when one is printed; otherwise the day after the same
+    date a month before (a monthly cycle), or the earliest row when one is
+    older (a charge posted late in the cycle before).
+    """
+    if previous is not None:
+        return previous + timedelta(days=1), end
+    start = month_before(end) + timedelta(days=1)
+    earliest = min((d for d in rows if d <= end), default=start)
+    return min(start, earliest), end
+
+
+def row_memo(row: _Row) -> str | None:
+    """The row's wrapped lines, then its informational foreign amount."""
+    memo = " ".join(row.memo).strip()
+    foreign = " ".join(row.foreign).strip()
+    if foreign:
+        memo = f"{memo}; foreign amount {foreign}" if memo else f"foreign amount {foreign}"
+    return memo or None
+
+
+def totals_disagree(
+    summary: _Summary, opening: Decimal | None, closing: Decimal | None, rows: Sequence[Row]
+) -> bool:
+    """The summary's credits and charges totals contradict the rows.
+
+    Only when the summary is a whole equation (opening + credits - charges =
+    closing, in the ledger convention): then the rows' money in must be the
+    credits and their money out the charges. A summary with more terms
+    (fees, interest printed apart) is not compared.
+    """
+    if opening is None or closing is None:
+        return False
+    if summary.credits_total is None or summary.charges_total is None:
+        return False
+    credits, charges = abs(summary.credits_total.value), abs(summary.charges_total.value)
+    if abs(opening + credits - charges - closing) > TOLERANCE:
+        return False
+    money_in = sum((r.amount for r in rows if r.amount > 0), Decimal(0))
+    money_out = -sum((r.amount for r in rows if r.amount < 0), Decimal(0))
+    return abs(money_in - credits) > TOLERANCE or abs(money_out - charges) > TOLERANCE
+
+
 #: Words on a card statement's first page (the generic card parser's cue).
 CARD_VOCABULARY: Final = (
     "card ending",
@@ -1005,6 +1424,11 @@ CARD_VOCABULARY: Final = (
     "card statement",
     "minimum payment",
     "credit limit",
+    "new charges",
+    "corporate card",
+    "charge card",
+    "cardmember",
+    "card member",
 )
 
 

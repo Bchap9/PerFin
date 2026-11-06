@@ -314,13 +314,48 @@ What remains (details in docs/ROADMAP.md):
   listed by their name among the symbols, are never sent to a price feed,
   merge by name on archive import, and the investments pages show their
   name. The API still creates securities only with a symbol.
+- **Card statements of account** (a charge or corporate card statement
+  that prints a statement date and no period) are read by the generic
+  card parser, for any issuer:
+  - a statement date (`Statement Date`, `Closing Date`, or a cell reading
+    only `Date`, its value beside it or under it) ends the period, which
+    starts the day after a printed previous statement date, else the day
+    after the same date a month before, or on the earliest row when one is
+    older; yearless rows take the latest year on or before the statement
+    date, so December rows of a January statement are last year's (a
+    range after `Opening/Closing Date` is read as the period);
+  - a table headed only by its heading and money columns (`New
+    Transactions for <NAME> | Foreign Spending | Amount $`): each row's
+    date and description are read from the cells left of the columns;
+  - month-named dates without a year (`December 16`, `16 Dec`) and a mark
+    after a date (`January 9 *`);
+  - a category line under the merchant line is the memo, and `CR` (or
+    `DR`) alone under the amount marks it as `CR` after it does;
+  - an informational foreign-currency column (`360.00` over `US Dollar`)
+    is kept in the memo, never booked;
+  - labels printed over their values (a boxed summary `Previous Balance -
+    Payments and Credits + New Charges = New Balance`, `Prepared For |
+    Account Number | Date` over the values) give the balances and the
+    statement date; when the summary is a whole equation, the rows' money
+    in and out must also equal its credits and charges, or the statement
+    does not reconcile (warning `summary_totals_mismatch`);
+  - a payment stub (from `Please detach here`, `Return this portion`... to
+    the end of its page) is never read, so its dated `Amount Due` line is
+    no row and its full account number never the statement's.
+
+  A synthetic layout (`tests/fixtures/synth_card_statement.py`: invented
+  issuer, cardholder and merchants, four pages, a year boundary, `CR`
+  credits on the same and the next line, foreign rows, a stub,
+  continuation pages) imports into a credit card account with no review
+  item.
 
 ### Changed
 
 - Parser versions: `brokerage_statement_generic` 6,
   `fidelity_investments_statement` 5, `placeholder_brokerage` 4,
   `layout_template` 2 (holdings named by their name alone),
-  `statement_generic` 3, and the bank and card institution parsers built on
+  `statement_generic` and `card_statement_generic` 4 (card statements of
+  account), and the bank and card institution parsers built on
   it (`sample_national_checking`, `example_fcu_share`, `demo_card_services`,
   `mock_savings_and_loan`) 2 (their output for the same pages may change:
   checks tables, a header-only line ending a table).
@@ -352,6 +387,9 @@ What remains (details in docs/ROADMAP.md):
   matched by its own last four digits, never put on the document's account.
 - The brokerage parsers no longer read "Change in Account Value" as the
   account value.
+- The bank and card statement parsers no longer take a lowercase word
+  after "currency" for a currency code ("charges in a foreign currency
+  are ..." read as `ARE`); the code must be printed in capitals.
 - An opening position for units held before a statement's period and
   transferred or sold out during it no longer stops the import.
 

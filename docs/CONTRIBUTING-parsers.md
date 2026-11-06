@@ -49,10 +49,11 @@ adding a layout. The design is in [INGESTION.md](INGESTION.md) ("Parse",
    | `institution` | the fingerprint `key` (the classifier's hint) |
    | `display_name` | the institution name accounts carry (account matching) |
    | `fingerprints` | phrases of page 1 for detection without a classification |
-   | `date_styles`, `period_styles` | `mdy`, `dmy`, `ymd`, `d_mon_y`, `mon_d_y`, `md`, `dm` |
+   | `date_styles`, `period_styles` | `mdy`, `dmy`, `ymd`, `d_mon_y`, `mon_d_y`, `md`, `dm`, `mon_d` (`December 16`), `d_mon` (`16 Dec`) |
    | `sign` | `bank` or `card` |
    | `default_currency`, `account_type` | when the statement does not print them |
    | `headers`, `opening_labels`, `closing_labels`, `period_labels`, `sections`, `pending_markers`, `skip_prefixes` | extend the generic vocabularies when the layout uses other words |
+   | `statement_date_labels`, `previous_date_labels`, `credit_total_labels`, `charge_total_labels`, `stub_markers` | a statement date instead of a period, the summary's own totals (an equation summary) and the words that start a payment stub |
    | `base` | 1.0 for an institution parser (its format is declared) |
 
    Add the class to `INSTITUTION_PARSERS`. Write code (override
@@ -68,6 +69,16 @@ adding a layout. The design is in [INGESTION.md](INGESTION.md) ("Parse",
    of layout.
 5. **Docs**: mention the institution in INGESTION.md's institution parser
    list and add a CHANGELOG entry.
+
+A card **statement of account** needs no institution parser: a statement
+date instead of a period, a table headed only `New Transactions for <NAME>
+| Foreign Spending | Amount $`, month-named dates without a year across a
+year boundary, `CR` under the amount, a two-line description, a boxed
+equation summary and a payment stub are read by `card_statement_generic`
+(INGESTION.md "Card statements of account"). Its synthetic layout is
+`backend/tests/fixtures/synth_card_statement.py`
+(`tests/unit/test_card_statement.py`); extend that rather than special-casing
+an issuer.
 
 ## Brokerage layouts
 

@@ -475,7 +475,48 @@ a child answering with parser output is `bad_output`.
   credits negative or `CR`; balances owed become negative). Numeric dates
   whose day/month order the values do not show are guessed `mdy` at low
   confidence; yearless dates take their year from the period. The card
-  variant (`card_statement_generic`) needs card vocabulary on page 1.
+  variant (`card_statement_generic`) needs card vocabulary on page 1
+  ("card ending", "credit card", "card statement", "new charges",
+  "corporate card", "charge card", "cardmember", ...).
+- **Card statements of account** (`table_statement.py`, version 4, any
+  institution): the layout of a charge or corporate card statement that
+  prints a **statement date** and no period.
+  - *Headless table header*: a heading naming the table (`New Transactions
+    for <NAME>`) beside money columns only (`Foreign Spending | Amount $`):
+    left of the first column heading, each row gives its date (the first
+    cell, or its first words on a line with an amount) and then its
+    description. A *Foreign Spending* / *Foreign Amount* / *Original
+    Currency* column is informational, in any table: the memo keeps it
+    (`Goods or Services; foreign amount 360.00 US Dollar`), the amount is
+    the card currency's.
+  - *Rows*: dates with a month name and no year (`December 16`, `16 Dec`),
+    a mark after the date (`January 9 *`, a processing date), a second
+    description line (a category) as the memo, `CR`/`DR` after the amount
+    or alone under it on the next line.
+  - *Statement date*: with no period printed, `Statement Date`, `Closing
+    Date`, ... or a cell reading only `Date` (on a line naming no column
+    heading; its value beside it or in the cell under it) ends the period.
+    It starts the day after a printed previous statement date, else the
+    day after the same date a month before, or the earliest row when one
+    is older. Yearless rows take the latest year on or before the
+    statement date (December rows of a January statement are the year
+    before; no row lands after it); a row printed with a year after the
+    "statement date" drops it (the rows' span is the period, inferred).
+    Confidence 0.9 (`DERIVED`): a stated period for the duplicate guard
+    and `document.period_*`. A range after `Opening/Closing Date` is a
+    period label, not a statement date.
+  - *Labels over values*: a row of labels over a row of boxes (`Previous
+    Balance | Payments and Credits | New Charges | New Balance` over
+    `9,803.59 - 11.39 + 4,330.71 = 14,122.91`; stacked label lines add
+    up) gives each value its label. A summary that is a whole equation
+    (opening + credits - charges = closing, ledger convention) must also
+    match the rows' money in and out, or the statement does not reconcile
+    (warning `summary_totals_mismatch`).
+  - *Payment stub*: from a line saying to detach it (`Please detach here`,
+    `Return this portion`, ..., no amount) to the end of its page nothing
+    is read (unless a table header follows on that page), so its dated
+    `Amount Due` line is no row and its full account number is never the
+    statement's.
 - **Institution parsers** (`institutions.py`): subclasses for the fictional
   institutions of the shipped fingerprints (Sample National Bank checking,
   Example Federal Credit Union, Demo Card Services, Mock Savings and Loan)
