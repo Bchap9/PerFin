@@ -407,6 +407,9 @@ class InvestmentActivity(_Strict):
     security: SecurityRef | None = None
     quantity: Quantity | None = None
     unit_price: Quantity | None = None
+    #: ``unit_price`` is quoted per 100 of face value (a bond trade: ``99.00``
+    #: is 99% of par), as :attr:`InvestmentPosition.price_per_100`.
+    price_per_100: bool = False
     #: A split's ``(new, old)`` units (``(2, 1)`` for a 2-for-1 split).
     split_ratio: tuple[Quantity, Quantity] | None = None
     amount: Amount
@@ -418,6 +421,13 @@ class InvestmentActivity(_Strict):
     low_confidence: list[Code] = Field(default_factory=list, max_length=20)
     page: int | None = Field(default=None, ge=1, le=MAX_PAGES_CEILING)
     bbox: BBox | None = None
+
+    @property
+    def price_per_unit(self) -> Decimal | None:
+        """The price of one unit (``unit_price``, divided by 100 when quoted per 100)."""
+        if self.unit_price is None:
+            return None
+        return self.unit_price / 100 if self.price_per_100 else self.unit_price
 
 
 class InvestmentReconciliation(_Strict):

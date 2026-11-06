@@ -599,6 +599,7 @@ def report(start: date = START) -> tuple[Report, Extras]:
                 "Foreign tax paid",
                 Decimal("-2.11"),
                 name="FICTIONAL APPLIED DEVICES INC",
+                symbol="ZZAPD",  # the held security of that name
             ),
             Activity(
                 d(15),
@@ -607,6 +608,7 @@ def report(start: date = START) -> tuple[Report, Extras]:
                 "Federal tax paid",
                 Decimal("-31.40"),
                 name="MOCK SER TR HIGH YIELD BOND ETF",
+                symbol="ZZHY",
             ),
             Activity(
                 d(15),
@@ -615,6 +617,7 @@ def report(start: date = START) -> tuple[Report, Extras]:
                 "State tax paid",
                 Decimal("-9.65"),
                 name="MOCK SER TR HIGH YIELD BOND ETF",
+                symbol="ZZHY",
             ),
         ),
     )

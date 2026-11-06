@@ -136,24 +136,41 @@ What remains (details in docs/ROADMAP.md):
     Other Income*, *Securities Transferred In/Out* (units moved, or cash),
     *Deposits*, *Withdrawals*, *Contributions*, *Distributions*, *Checking
     Activity*, *Debit Card Activity*, *Bill Payments*, *Cash Activity*,
-    *Fees and Charges* and *Taxes Withheld* type the rows their own words
-    do not; *Trades Pending Settlement*, *Core Account Cash Flow*, *Daily
-    Additions and Subtractions* and other summaries are not activity. In a
-    brokerage account, cash tables (date, description, amount) are read by
-    the generic parser too.
+    *Electronic Funds Transfers*, *Fees and Charges* and *Taxes Withheld*
+    type the rows their own words do not; *Trades Pending Settlement*, *Core
+    Account Cash Flow*, *Daily Additions and Subtractions* and other
+    summaries are not activity. A section ends at the next heading: a table
+    under a heading no section names, after the section's own table, is
+    typed by its rows' own words only (an untyped row is held, never booked
+    as the section above's type), and the table after a skipped section is
+    read; a line right under a section's heading (a card's name) keeps the
+    section. In a brokerage account, cash tables (date, description,
+    amount) are read by the generic parser too; a description naming no
+    action is the row's memo, one that is the name of a held security names
+    that security, and a *Securities Transferred In/Out* row with a quantity
+    moves those units even without a symbol column.
   - Holdings: `CUSIP:` and `ISIN:` lines under a row give its identifiers,
-    the symbol is the ticker in parentheses ending the name (never the
-    name's first word), note lines are no rows, footnote markers in figures
+    the symbol is the ticker in parentheses ending the name, a name wrapped
+    onto a line worded like a section heading (`INCOME FUND (ZZSIX)`) is
+    still the name, and a ticker in front of the name (`ZZAB Example Index
+    Fund`) is read only for a holding nothing else identifies, never in an
+    all-capitals name (its first word is an issuer's), a bond's or a name
+    with parentheses; note lines are no rows, footnote markers in figures
     are dropped, `unknown`/`N/A` cost basis stays unknown, a group heading
     above its table's header (`Core Account`) groups its rows, and a cash
     sweep printed as a holding is the account's cash when the figures say
     so.
   - Bond prices quoted per 100 of face value are recognised
     (`InvestmentPosition.price_per_100`): reconciliation checks quantity x
-    price / 100 and the import stores one unit's price.
+    price / 100 and the import stores one unit's price. A bond trade's price
+    per 100 (`InvestmentActivity.price_per_100`, by the row's figures or as
+    its position is priced) is stored as one unit's in `investment_txn`, so
+    the bond is never valued at 100 times its price after a trade.
   - Cash: `Beginning/Ending Core Account Balance` and a cash balance under a
-    `This Period | Last Period` header are read; a statement printing no
-    closing cash is checked against its account value less its holdings.
+    `This Period | Last Period` header are read; dated cash balance lines
+    (`Cash balance on 03/01/2024`) give the opening (earliest) and closing
+    (latest) cash; a statement printing no closing cash is checked against
+    its account value less its holdings.
 - Bank statements: a *Checks Paid* table (`Check No. | Date Paid | Amount`)
   is read, each check as `CHECK <number>`, money out.
 - Institution parsers are detected by the PDF's title and author and by
@@ -167,8 +184,11 @@ What remains (details in docs/ROADMAP.md):
 ### Changed
 
 - Parser versions: `brokerage_statement_generic` 4,
-  `fidelity_investments_statement` 3, `placeholder_brokerage` 2 and
-  `statement_generic` 3 (their output for the same pages may change).
+  `fidelity_investments_statement` 3, `placeholder_brokerage` 2,
+  `statement_generic` 3, and the bank and card institution parsers built on
+  it (`sample_national_checking`, `example_fcu_share`, `demo_card_services`,
+  `mock_savings_and_loan`) 2 (their output for the same pages may change:
+  checks tables, a header-only line ending a table).
 
 - A period guessed from the dates in a document (`line_dates`, or the span
   of its transactions) is no longer stored as the document's period; it is

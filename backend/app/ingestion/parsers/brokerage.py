@@ -54,12 +54,16 @@ Two halves (INGESTION.md "Brokerage statements", SECURITY.md C12):
     class; ``Total <group>`` lines are subtotals, ``Total Holdings`` (or
     another :data:`GRAND_TOTALS` label, else the first unlabelled ``Total``)
     is the printed holdings total. A security's symbol is the ticker in
-    parentheses ending its name (``APPLE INC (AAPL)``), never its name's
-    first word; a name wrapped onto the next lines is joined until its
-    ``(SYMBOL)``, and ``CUSIP: ...`` / ``ISIN: ...`` lines under a row give
-    its identifiers; note lines (``— 7-day yield: 0.01%``) are read for
-    nothing. Footnote markers in figures (``147.85A``, ``$8,412.36 c``) are
-    dropped, ``unknown``/``N/A`` cost basis is unknown. A price is read per
+    parentheses ending its name (``APPLE INC (AAPL)``); a name wrapped onto
+    the next lines is joined until its ``(SYMBOL)`` (also a line worded like
+    a section heading: ``INCOME FUND (ZZSIX)``), and ``CUSIP: ...`` /
+    ``ISIN: ...`` lines under a row give its identifiers; note lines
+    (``— 7-day yield: 0.01%``) are read for nothing. Only a holding
+    nothing else identifies takes a ticker printed in front of its name
+    (:func:`_leading_ticker`: ``ZZAB Example Index Fund``; never in an
+    all-capitals name, whose first word is an issuer's). Footnote markers
+    in figures (``147.85A``, ``$8,412.36 c``) are dropped,
+    ``unknown``/``N/A`` cost basis is unknown. A price is read per
     100 of face value (a bond: :attr:`InvestmentPosition.price_per_100`)
     when quantity x price / 100 is the printed market value and quantity x
     price is not. A cash sweep printed as a holding, whose value is the
@@ -78,22 +82,32 @@ Two halves (INGESTION.md "Brokerage statements", SECURITY.md C12):
     cells repeat one group is that many **tables side by side**, each read
     in its own half of the lines (``Date | Description | Amount`` twice).
     The **section** heading above a table (:data:`ACTIVITY_SECTIONS`) says
-    how its rows are read: trades pending settlement, cash-flow summaries
-    and daily balances are no activity; securities transferred in/out move
+    how its rows are read, until the next heading (after the section's own
+    table, a heading no section names right above a table ends it; right
+    under the section's heading it is a sub-heading, a card's name):
+    trades pending settlement, cash-flow summaries and daily balances are
+    no activity; securities transferred in/out move
     units (the amount printed is their value) or, without units, cash;
     deposits, withdrawals, checking, debit card and bill payments are cash
     by their sign; income is a dividend or interest; fees and taxes
     withheld are fees. The action text types a row first
-    (:func:`activity_type`, :data:`ACTIVITY_TYPES`), the section the rest;
+    (:func:`activity_type`, :data:`ACTIVITY_TYPES`), the section the rest
+    (text naming no action is then the row's description; a description
+    that is a held security's name names that security);
     an unsigned amount takes the type's direction (a buy takes cash out)
     unless its table prints minus signs (then it is an inflow); a transfer
     of units printed without an amount (``-``) moves no cash; a split's
-    ratio comes from its description (``2-for-1``, ``3:1``). A header line
-    of known column names that is no usable table ends the table above it;
+    ratio comes from its description (``2-for-1``, ``3:1``); a trade's
+    price is per 100 of face value
+    (:attr:`InvestmentActivity.price_per_100`, :func:`_activity_per_100`)
+    by its figures or, when they cannot tell, as its position is priced. A
+    header line of known column names that is no usable table ends the
+    table above it;
   - outside the tables: the period, the account's last four digits, the
     currency, opening/closing cash (also ``Beginning/Ending Core Account
-    Balance``, and a cash balance line with a column for this period and
-    the last), the holdings total and the account value by label
+    Balance``, a cash balance line with a column for this period and the
+    last, and dated cash balance lines: :func:`_dated_cash`), the holdings
+    total and the account value by label
     (``Beginning Account Value`` is consumed, not read as the account
     value; ``Ending Account Value``/``Ending Net Value`` are), and the
     holdings' "as of" date.
@@ -814,6 +828,8 @@ ACTIVITY_SECTIONS: Final[Mapping[str, SectionKind]] = {
     "bill payment": "card",
     "bill payments": "card",
     "cash activity": "cash",
+    "electronic funds transfers": "cash",
+    "electronic funds transfer": "cash",
     "cash transactions": "cash",
     "cash management activity": "cash",
     "fees and charges": "fee",
@@ -882,6 +898,13 @@ class _Header:
     parts: list[_Part] | None
     #: Lines the header takes.
     used: int
+
+    @property
+    def roles(self) -> tuple[tuple[str, ...], ...]:
+        """The column roles, per side-by-side table."""
+        if self.holdings is not None:
+            return (tuple(c.role for c in self.holdings),)
+        return tuple(tuple(c.role for c in p.columns) for p in self.parts or ())
 
 
 #: Words a header cell is split into at most (bounded work).
@@ -1171,6 +1194,8 @@ class _Summary:
     #: The order of a "This Period | Last Period" column header: True when
     #: the current period is the first column.
     current_first: bool | None = None
+    #: Dated cash balance lines (the text after the label, the amount).
+    cash_dated: list[tuple[str, Amount]] = field(default_factory=list)
 
 
 @dataclass
@@ -1197,6 +1222,8 @@ class _Collected:
     section: SectionKind | None = None
     #: Tables read so far (each activity row knows its table).
     tables: int = 0
+    #: Activity tables read since the last section heading.
+    section_tables: int = 0
     group: str | None = None
     last_holding: _HoldingRow | None = None
     #: Inside a table the layout says not to read (``ignored_tables``).
@@ -1420,7 +1447,9 @@ class BrokerageStatementParser(DocumentParser):
         / ``Date``, a date under ``Ending Market Value``) is used when it
         names more known columns than fewer of its lines; a later line with
         an amount is a row, never header, and a heading (a section, an asset
-        group) is never a header's top line.
+        group) is never a header's top line; nor is a short top line (one or
+        two cells) that changes no column the lines under it name (an unknown
+        heading).
         """
         first = lines[index]
         if find_amounts(first.text):
@@ -1448,7 +1477,15 @@ class BrokerageStatementParser(DocumentParser):
                     header = _Header(None, parts, count)
             if header is not None and (best is None or known > best[0]):
                 best = (known, header)
-        return best[1] if best is not None else None
+        if best is None:
+            return None
+        if best[1].used > 1 and len(first.cells) <= 2:
+            below = self._header_at(lines, index + 1, cash_tables=cash_tables)
+            if below is not None and below.roles == best[1].roles:
+                # The top line names no column ("Electronic Funds Transfers"
+                # over "Date | Description | Amount"): a heading, not header.
+                return None
+        return best[1]
 
     def fingerprint_score(self, view: DocumentView) -> float:
         """Share of :attr:`fingerprints` on page 1 (the name also counts from :meth:`named`)."""
@@ -1543,7 +1580,7 @@ class BrokerageStatementParser(DocumentParser):
                 continue
             amounts = find_amounts(line.text[end:])
             if slot == "cash":
-                self._cash_line(amounts, summary)
+                self._cash_line(amounts, summary, line.text[end:])
             elif slot != "ignore" and amounts and getattr(summary, slot) is None:
                 setattr(summary, slot, amounts[0])
             break
@@ -1562,10 +1599,19 @@ class BrokerageStatementParser(DocumentParser):
                 summary.currency = match[1].upper()
 
     @staticmethod
-    def _cash_line(amounts: Sequence[Amount], summary: _Summary) -> None:
+    def _cash_line(amounts: Sequence[Amount], summary: _Summary, rest: str = "") -> None:
         """A cash balance line: one amount is the closing cash; two under a
-        ``This Period | Last Period`` header are the closing and opening cash."""
+        ``This Period | Last Period`` header are the closing and opening cash.
+
+        A dated one (``Cash balance on 03/01/2024 $5,000.00``) waits for the
+        period (:func:`_dated_cash`): the earliest of several is the opening
+        cash, the latest the closing cash.
+        """
         if not amounts:
+            return
+        if len(amounts) == 1 and find_dates(rest, FULL_STYLES):
+            if len(summary.cash_dated) < _MAX_DATED_CASH:
+                summary.cash_dated.append((rest, amounts[0]))
             return
         if len(amounts) >= 2 and summary.current_first is not None:
             closing, opening = amounts[:2] if summary.current_first else amounts[1::-1]
@@ -1669,6 +1715,23 @@ class BrokerageStatementParser(DocumentParser):
         row.bbox = (*row.bbox[:3], line.bbox[3])
         return True
 
+    def _wraps_name(self, line: ViewLine, collected: _Collected) -> bool:
+        """A line worded like a section heading that is the rest of a holding's name.
+
+        Only under an open holding (its name has no ``(SYMBOL)`` yet) that
+        still has no identifier, or when the line ends the name with its
+        ``(SYMBOL)``; :meth:`_continue_holding` decides (name column only,
+        directly under the row) and joins it.
+        """
+        row, columns = collected.last_holding, collected.holdings_columns
+        if row is None or columns is None or row.closed:
+            return False
+        text = line.text.strip()
+        ends_name = any(len(text) - m.end() <= 2 for m in _PAREN_SYMBOL.finditer(text))
+        if not ends_name and (row.symbol is not None or row.cusip is not None):
+            return False
+        return self._continue_holding(line, _assign(line, columns), row)
+
     def _group(self, norm: str, *, prefix: bool = False) -> str | None:
         """The asset-class group a heading names (``prefix``: a ``Total <group> ...`` rest)."""
         if norm.endswith(" continued"):
@@ -1722,13 +1785,16 @@ class BrokerageStatementParser(DocumentParser):
             units_sign=_sign(quantity),
             cash_sign=_sign(amount.value if amount is not None else None),
         )
+        # Text in the action column naming no action (a description standing in
+        # for the action column: "Example Index Fund") describes the row.
+        described = kind is None and bool(type_text) and not named
         section = collected.section
         by_sign = False
         if section in ("transfer_in", "transfer_out"):
             # A securities transfer moves units, its amount is their value; a
             # row without units moves cash.
             inward = section == "transfer_in"
-            if moves:
+            if moves or (described and quantity):
                 kind = "transfer_in" if inward else "transfer_out"
                 amount = Amount(value=Decimal(0))
             else:
@@ -1754,7 +1820,9 @@ class BrokerageStatementParser(DocumentParser):
             collected.skipped += 1
             return
         description = name or _text(cells.get("description"))
-        if not description and kind in CASH_MEMO_TYPES:
+        if not description and described:
+            description = type_text  # typed by its section, the text is its description
+        elif not description and kind in CASH_MEMO_TYPES:
             # A deposit table's action ("Electronic Funds Transfer Received") is its memo.
             description = type_text
         price_text = _unmarked(_text(cells.get("price")))
@@ -1791,6 +1859,25 @@ class BrokerageStatementParser(DocumentParser):
             return None
         return section_rule(line.norm)
 
+    def _unknown_heading(self, lines: Sequence[ViewLine], start: int) -> bool:
+        """The line right above a table header (``lines[start]``) is a heading no
+        activity section names (``Electronic Funds Transfers``).
+
+        A page's top line, a row or total above (an amount), a page number or
+        ``continued`` line, or a known section's heading is not one.
+        """
+        if start <= 0:
+            return False
+        above, header = lines[start - 1], lines[start]
+        if above.page != header.page or len(above.cells) > 2 or find_amounts(above.text):
+            return False
+        norm = above.norm
+        if not any(ch.isalpha() for ch in norm) or section_rule(norm) is not None:
+            return False
+        if any(norm.startswith(prefix.strip()) for prefix in self.skip_prefixes):
+            return False
+        return not _date_shaped(above.cells[0].text)
+
     def _read(self, lines: Sequence[ViewLine], collected: _Collected) -> None:
         """Read one account's lines (or the whole document) into ``collected``.
 
@@ -1804,9 +1891,14 @@ class BrokerageStatementParser(DocumentParser):
         while index < len(lines):
             line = lines[index]
             section = self._section_heading(line)
+            if section is not None and self._wraps_name(line, collected):
+                # "INCOME FUND (ZZSIX)" under "EXAMPLE STRATEGIC": a name, no heading.
+                index += 1
+                continue
             if section is not None and not self._is_heading(line, self.ignored_tables):
                 index += 1
                 collected.section = section
+                collected.section_tables = 0
                 collected.ignoring = False
                 collected.holdings_columns = collected.activity_parts = None
                 continue
@@ -1831,9 +1923,18 @@ class BrokerageStatementParser(DocumentParser):
                     )
                     collected.last_holding = None
                 else:
+                    if collected.section_tables and self._unknown_heading(
+                        lines, index - found.used
+                    ):
+                        # After the section's own table, a heading no section
+                        # names starts a table of its own: the section above
+                        # does not type (or skip) its rows. (Right under the
+                        # section's heading it is a sub-heading: a card's name.)
+                        collected.section = None
                     collected.holdings_columns, collected.activity_parts = None, found.parts
                     collected.activity_header = True
                     collected.tables += 1
+                    collected.section_tables += 1
                 continue
             index += 1
             if self._is_heading(line, self.ignored_tables):
@@ -1974,9 +2075,13 @@ class BrokerageStatementParser(DocumentParser):
         positions: list[InvestmentPosition] = []
         scores: list[dict[str, float]] = []
         for row in collected.holdings:
+            symbol, name = row.symbol, row.name
+            if symbol is None and row.cusip is None and row.isin is None:
+                # Nothing else identifies it: a ticker in front of its name.
+                symbol, name = _leading_ticker(row)
             security = self._security(
-                row.symbol,
-                row.name,
+                symbol,
+                name,
                 {},
                 cusip=row.cusip,
                 isin=row.isin,
@@ -2017,7 +2122,11 @@ class BrokerageStatementParser(DocumentParser):
         certain: bool,
         period: tuple[date, date] | None,
         known: Mapping[str, str | None],
+        held: Mapping[str, SecurityRef] | None = None,
+        per_100: Sequence[InvestmentPosition] = (),
     ) -> tuple[list[InvestmentActivity], list[dict[str, float]]]:
+        held = held or {}
+        bonds = {k for p in per_100 for k in _keys(p.security)}
         rows: list[InvestmentActivity] = []
         scores: list[dict[str, float]] = []
         # A table that prints a minus sign prints every sign: its unsigned amounts are inflows.
@@ -2034,6 +2143,9 @@ class BrokerageStatementParser(DocumentParser):
                 if lead is not None and (lead in known or row.type in SECURITY_TYPES):
                     symbol, name = lead, rest
             security = self._security(symbol, name, known, cusip=row.cusip)
+            if security is None and name is not None and row.type not in _CASH_TYPES:
+                # A description that is a held security's name names it.
+                security = held.get(_name_key(name))
             amount = row.amount.value
             kind = row.type
             if row.by_sign and (row.amount.negative_marked or amount < 0):
@@ -2079,6 +2191,9 @@ class BrokerageStatementParser(DocumentParser):
                     security=security,
                     quantity=quantity if quantity is None or quantity != 0 else None,
                     unit_price=abs(row.price) if row.price is not None else None,
+                    price_per_100=_activity_per_100(
+                        row, security is not None and bool(_keys(security) & bonds)
+                    ),
                     split_ratio=ratio,
                     amount=amount,
                     fees=fees,
@@ -2172,7 +2287,15 @@ class BrokerageStatementParser(DocumentParser):
             as_of = period[1]
         positions, position_scores = self._positions(collected, as_of)
         known = {p.security.symbol: p.security.name for p in positions if p.security.symbol}
-        activity, activity_scores = self._activities(collected, styles, certain, period, known)
+        activity, activity_scores = self._activities(
+            collected,
+            styles,
+            certain,
+            period,
+            known,
+            _held_names(positions),
+            [p for p in positions if p.price_per_100],
+        )
         if read is not None:
             statement_conf["period"] = read.confidence(self.base)
         elif activity:
@@ -2181,7 +2304,7 @@ class BrokerageStatementParser(DocumentParser):
                 [conf.INFERRED, *(s["trade_date"] for s in activity_scores)]
             )
         currency = summary.currency or self.default_currency
-        cash_opening, cash_closing = summary.cash_opening, summary.cash_closing
+        cash_opening, cash_closing = _dated_cash(summary, styles, period)
         positions_value = summary.positions_value
         group_open, group_close, group_total = self._cash_from_groups(collected)
         if collected.cash:
@@ -2449,6 +2572,90 @@ def _per_100(row: _HoldingRow) -> bool:
     )
 
 
+#: Activity types that name no security (a held name in their memo is a payee's).
+_CASH_TYPES: Final = frozenset({"deposit", "withdrawal"})
+
+
+def _name_key(name: str) -> str:
+    """A security name compared without its ``(SYMBOL)``, case or punctuation."""
+    return normalise(_PAREN_SYMBOL.sub(" ", name))
+
+
+def _held_names(positions: Sequence[InvestmentPosition]) -> dict[str, SecurityRef]:
+    """The positions' securities by name (a name two securities share names neither)."""
+    found: dict[str, SecurityRef] = {}
+    shared: set[str] = set()
+    for position in positions:
+        if not position.security.name:
+            continue
+        key = _name_key(position.security.name)
+        if not key:
+            continue
+        if key in found and found[key] != position.security:
+            shared.add(key)
+        found.setdefault(key, position.security)
+    return {k: v for k, v in found.items() if k not in shared}
+
+
+#: Dated cash balance lines kept per account (bounded work).
+_MAX_DATED_CASH: Final = 20
+
+
+def _dated_cash(
+    summary: _Summary, styles: Sequence[DateStyle], period: tuple[date, date] | None
+) -> tuple[Amount | None, Amount | None]:
+    """``(opening, closing)`` cash: the labelled figures, else the dated cash lines'.
+
+    Of two or more dated lines the earliest is the opening and the latest
+    the closing cash; one alone is the closing cash, or the opening cash
+    when it is dated the period's first day.
+    """
+    opening, closing = summary.cash_opening, summary.cash_closing
+    dated: list[tuple[date, Amount]] = []
+    for text, amount in summary.cash_dated:
+        found = find_dates(text, (*styles, *FULL_STYLES))
+        if found:
+            dated.append((found[0], amount))
+    if not dated:
+        return opening, closing
+    dated.sort(key=lambda d: d[0])
+    first, last = dated[0], dated[-1]
+    if first[0] != last[0]:
+        return (
+            first[1] if opening is None else opening,
+            last[1] if closing is None else closing,
+        )
+    if period is not None and first[0] == period[0] != period[1]:
+        return (first[1] if opening is None else opening), closing
+    return opening, (last[1] if closing is None else closing)
+
+
+def _keys(security: SecurityRef) -> set[str]:
+    """A security's identifiers (any one of them names it)."""
+    return {k for k in (security.symbol, security.cusip, security.isin) if k}
+
+
+def _activity_per_100(row: _ActivityRow, held_per_100: bool) -> bool:
+    """An activity row's price is quoted per 100 of face value (a bond trade).
+
+    By its figures when they tell (quantity x price / 100 is within a tenth
+    of the amount and quantity x price is not: fees and accrued interest are
+    in the amount), else as the statement prices the security's position.
+    """
+    if row.price is None or row.price == 0:
+        return False
+    value = abs(row.amount.value)
+    if row.quantity is None or row.quantity == 0 or value == 0:
+        return held_per_100
+    gross = abs(row.quantity * row.price)
+    margin = value / 10
+    if abs(gross - value) <= margin:
+        return False
+    if abs(gross / 100 - value) <= margin:
+        return True
+    return held_per_100
+
+
 def _date_shaped(text: str) -> bool:
     if numeric_parts(text) is not None:
         return True
@@ -2463,6 +2670,34 @@ def _identifier(text: str) -> tuple[str | None, str | None]:
     if is_cusip(text):
         return None, text
     return (text, None) if _SYMBOL.fullmatch(text) else (None, None)
+
+
+#: A ticker printed in front of a security's name (``ZZAB Example Index Fund``).
+_LEADING_TICKER: Final = re.compile(r"[A-Z]{2,5}(?:\.[A-Z]{1,2})?")
+
+
+def _leading_ticker(row: _HoldingRow) -> tuple[str | None, str | None]:
+    """``(symbol, name)`` of a holding nothing else identifies: a ticker-shaped
+    first word in capitals before a name that is not
+    (``ZZAB Example Index Fund``).
+
+    Never when the whole name is in capitals (``ADI NET LEASE INC ...``: the
+    first word is the issuer's), for a bond priced per 100, nor for a name
+    with parentheses (a layout that prints tickers prints them in them:
+    ``NH Portfolio 2015 (Fidelity Funds)`` has none).
+    """
+    raw = (row.raw_name or row.name or "").strip()
+    head, _, rest = raw.partition(" ")
+    rest = rest.strip()
+    if (
+        row.symbol_column
+        or "(" in raw
+        or _per_100(row)
+        or not _LEADING_TICKER.fullmatch(head)
+        or not any(ch.islower() for ch in rest)
+    ):
+        return None, row.name
+    return head, rest
 
 
 def _split_symbol(text: str) -> tuple[str | None, str | None]:

@@ -623,8 +623,10 @@ OFX `INVSTMTRS` in the sandbox or from a PDF/scan's pages in the worker.
     columns, the words of the other lines join the column they lie over
     (`Price` / `Per Unit`, `Settlement` / `Date`, `Cost Basis` / `of
     Close`, `Ending Market Value` / `Accrued Interest (AI)`); a heading is
-    never a header line, and a group heading right above a holdings header
-    (`Core Account`) still groups its rows.
+    never a header line (nor is a short top line that changes no column
+    the lines under it name: an unknown heading such as `Electronic Funds
+    Transfers`), and a group heading right above a holdings header (`Core
+    Account`) still groups its rows.
   - **Side-by-side tables**: a header repeating one group of cells (`Date |
     Reference | Transaction Description | Transaction Total` twice) is
     that many tables, each reading its half of every line (a `Total` in
@@ -639,27 +641,53 @@ OFX `INVSTMTRS` in the sandbox or from a PDF/scan's pages in the worker.
     or interest when they say so; *Deposits*/*Contributions* and
     *Withdrawals*/*Distributions*, *Checking Activity*, *Debit Card
     Activity*, *Bill Payments* and *Cash Activity* are cash by their sign;
-    *Fees and Charges* and *Taxes Withheld* are fees. In an account with a
-    holdings or security table, such a cash table (date, description,
-    amount) is activity even for the generic parser. A table printing
+    *Electronic Funds Transfers* are cash by their sign;
+    *Fees and Charges* and *Taxes Withheld* are fees. A section lasts until
+    the next heading: after its own table, a heading no section names
+    (`Miscellaneous Items`) right above the next table ends it, so that
+    table's rows are typed by their own words only (an untyped row is
+    held, never booked as the section above's type) and the table after a
+    skipped section is read; right under the section's heading such a line
+    is a sub-heading (`SAMPLE CHECK CARD (ACCOUNT ...0000)`) and the section
+    stays. In an account with a holdings or security table, such a cash
+    table (date, description, amount) is activity even for the generic
+    parser; its description naming no action is the row's memo, and in
+    *Securities Transferred In/Out* with a quantity it moves those units. A
+    row's description that is the name of a security the statement holds
+    names that security (not a deposit or withdrawal). A table printing
     minus signs has its unsigned amounts read as inflows (a refund, a fee
     rebate).
-  - **Holdings rows**: the symbol is only the ticker in parentheses ending
-    the name (`APPLE INC (AAPL)`), never the name's first word (a bond's
-    issuer); `CUSIP: ...` and `ISIN: ...` lines under a row are its
-    identifiers, a name wraps until its `(SYMBOL)`, note lines (`— 30-day
+  - **Holdings rows**: the symbol is the ticker in parentheses ending
+    the name (`APPLE INC (AAPL)`); `CUSIP: ...` and `ISIN: ...` lines under
+    a row are its identifiers. Only a holding nothing else identifies (no
+    symbol column, `(SYMBOL)`, CUSIP or ISIN) takes a ticker printed in
+    front of its name: a first word of two to five capitals (`ZZAB
+    Example Index Fund`, `ZZB.A ...`) before a name that is not all
+    capitals, never for a bond priced per 100 or a name with parentheses
+    (`NH Portfolio 2015 (Fidelity Funds)`); in an all-capitals name the
+    first word is the issuer's (`ADI NET LEASE INC ...`). A name wraps until
+    its `(SYMBOL)`, also when its next line reads like a section heading
+    (`EXAMPLE STRATEGIC` / `INCOME FUND (ZZSIX)`), note lines (`— 30-day
     yield`, bond terms) are read for nothing; footnote markers in figures
     (`147.85A`, `$8,412.36 c`) are dropped and `unknown`/`N/A` cost basis
     is unknown. A price is per 100 of face value
     (`InvestmentPosition.price_per_100`) when quantity x price / 100 is the
     printed value and quantity x price is not; reconciliation checks it so
-    and the import stores one unit's price. A cash sweep printed as a
-    holding whose value is the closing cash is the account's cash when the
-    positions add up to the account value only without it.
+    and the import stores one unit's price. A trade's price is per 100
+    (`InvestmentActivity.price_per_100`) when quantity x price / 100 is
+    within a tenth of its amount and quantity x price is not (fees and
+    accrued interest are in the amount), else as the statement prices the
+    security's position; `investment_txn.price` is one unit's, so a bond
+    is never valued at 100 times its price after a trade. A cash sweep
+    printed as a holding whose value is the closing cash is the account's
+    cash when the positions add up to the account value only without it.
   - **Cash figures**: `Beginning/Ending Core Account Balance` are the
     opening and closing cash; a cash balance line (`Cash & Sweep Balance`)
     under a `This Period | Last Period` header gives the closing and the
-    opening cash. A statement printing no closing cash is checked with the
+    opening cash. Dated cash balance lines (`Cash balance on 03/01/2024`,
+    `... on 03/31/2024`) give the opening cash (the earliest) and the
+    closing cash (the latest); one alone is the closing cash, or the
+    opening cash when dated the period's first day. A statement printing no closing cash is checked with the
     account value less the holdings as its closing cash.
   - **Checks tables** of bank statements (`Check No. | Date Paid | Amount`)
     are read: each row is `CHECK <number>`, money out; a line of header

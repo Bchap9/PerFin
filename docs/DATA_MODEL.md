@@ -384,7 +384,8 @@ forced RLS and household-consistent references, ADR-0008):
   the account currency (buy negative, sale/dividend/interest positive, fee
   negative); `fees` (>= 0) is the part of it that was fees; `quantity`
   (units, > 0 for buy/sell/reinvest/transfer_in/transfer_out) and `price`
-  (in the security currency) describe the trade. buy, sell, split,
+  (one unit's, in the security currency; a bond trade quoted per 100 of
+  face value is stored divided by 100) describe the trade. buy, sell, split,
   transfer_in, transfer_out and reinvest must name a security; dividend,
   interest, fee and corporate_action may. `currency` equals the account's.
   `lot_links` is a JSON array of `{"lot_id", "quantity"}` (positive decimal

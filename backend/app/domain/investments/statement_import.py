@@ -81,9 +81,11 @@ statements"). Per statement:
 8. **Prices**: each position's unit price on ``as_of`` becomes a ``price``
    row (``source = statement``) unless one exists for that day from another
    source; a price quoted per 100 of face value (a bond) is stored as one
-   unit's (``InvestmentPosition.price_per_unit``). An opening position for
+   unit's (``InvestmentPosition.price_per_unit``), and so is an activity
+   row's price (``InvestmentActivity.price_per_unit``: a bond trade's
+   ``price`` is one unit's, never 100 times it). An opening position for
    units held before the period and gone by its end (transferred or sold
-   out) is costed at the price its own rows print.
+   out) is costed at the price its own rows print (one unit's).
 9. **Balance snapshot**: holdings + closing cash on ``as_of``
    (``source = statement``) when every check that could run held and both
    are known.
@@ -659,7 +661,7 @@ def _txn(
     security_id: uuid.UUID | None,
     digest: str,
 ) -> InvestmentTxn:
-    quantity, price = activity.quantity, activity.unit_price
+    quantity, price = activity.quantity, activity.price_per_unit
     if activity.type == "split" and activity.split_ratio is not None:
         # The lot engine's convention: ``quantity`` new units per ``price`` old.
         quantity, price = activity.split_ratio

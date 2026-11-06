@@ -28,7 +28,7 @@ class SampleNationalCheckingParser(TableStatementParser):
     """Sample National Bank checking: ``MM/DD/YYYY``, signed *Amount*, running *Balance*."""
 
     name: ClassVar[str] = "sample_national_checking"
-    version: ClassVar[str] = "1"
+    version: ClassVar[str] = "2"
     institution: ClassVar[str | None] = "sample-national-bank-checking"
     display_name: ClassVar[str | None] = "Sample National Bank"
     fingerprints: ClassVar[tuple[str, ...]] = (
@@ -46,7 +46,7 @@ class ExampleFcuShareParser(TableStatementParser):
     """Example Federal Credit Union: ruled table, *Withdrawals*/*Deposits*, ``MM/DD/YYYY``."""
 
     name: ClassVar[str] = "example_fcu_share"
-    version: ClassVar[str] = "1"
+    version: ClassVar[str] = "2"
     institution: ClassVar[str | None] = "example-fcu-share-statement"
     display_name: ClassVar[str | None] = "Example Federal Credit Union"
     fingerprints: ClassVar[tuple[str, ...]] = (
@@ -64,7 +64,7 @@ class DemoCardParser(CardStatementParser):
     """Demo Card Services: ``MM/DD`` rows, ``Mon D, YYYY`` period, charges positive."""
 
     name: ClassVar[str] = "demo_card_services"
-    version: ClassVar[str] = "1"
+    version: ClassVar[str] = "2"
     institution: ClassVar[str | None] = "demo-card-services-card"
     display_name: ClassVar[str | None] = "Demo Card Services"
     fingerprints: ClassVar[tuple[str, ...]] = ("demo card services", "card ending in")
@@ -79,7 +79,7 @@ class MockSavingsParser(TableStatementParser):
     """Mock Savings and Loan: ``DD/MM/YYYY``, *Paid out*/*Paid in*, GBP."""
 
     name: ClassVar[str] = "mock_savings_and_loan"
-    version: ClassVar[str] = "1"
+    version: ClassVar[str] = "2"
     institution: ClassVar[str | None] = "mock-savings-and-loan-statement"
     display_name: ClassVar[str | None] = "Mock Savings and Loan"
     fingerprints: ClassVar[tuple[str, ...]] = (

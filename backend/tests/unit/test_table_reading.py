@@ -10,10 +10,12 @@ invented.
 
 from __future__ import annotations
 
+import io
 from datetime import date
 from decimal import Decimal
 
 import pytest
+from reportlab.pdfgen import canvas
 
 from app.ingestion.classify.fingerprints import (
     compile_fingerprint,
@@ -427,3 +429,339 @@ def test_cash_without_a_closing_figure_is_the_account_value_less_the_holdings() 
     )
     assert wrong.status == "mismatch"
     assert wrong.failed == ["cash"]
+
+
+# ---------------------------------------------------------------------------
+# Hand-drawn one-page statements (generic parser)
+# ---------------------------------------------------------------------------
+
+Drawn = list[list[tuple[float, str]] | None]
+
+_HOLDINGS = [(40.0, "Symbol"), (100.0, "Description"), (250.0, "Quantity"), (330.0, "Price")]
+_CASH = [(30.0, "Date"), (70.0, "Description"), (220.0, "Amount")]
+
+
+def _drawn_pdf(rows: Drawn) -> bytes:
+    """One page: each row's ``(x, text)`` cells on one line, None a gap."""
+    buf = io.BytesIO()
+    pdf = canvas.Canvas(buf, pagesize=(612, 792))
+    y = 760.0
+    for row in rows:
+        if row is None:
+            y -= 14
+            continue
+        for x, text in row:
+            pdf.setFont("Helvetica", 8)
+            pdf.drawString(x, y, text)
+        y -= 12
+    pdf.showPage()
+    pdf.save()
+    return buf.getvalue()
+
+
+def _generic(rows: Drawn, *, cash: tuple[str, str], value: str) -> InvestmentStatement:
+    head: Drawn = [
+        [(40, "Brokerage Account Statement")],
+        [(40, "Statement Period: 03/01/2024 - 03/31/2024")],
+        [(40, "Account Number: XXXX-1234")],
+        [(40, "Beginning Cash Balance"), (420, cash[0])],
+        [(40, "Ending Cash Balance"), (420, cash[1])],
+        [(40, "Ending Account Value"), (420, value)],
+        None,
+    ]
+    result = parse_extraction(
+        _extract(_drawn_pdf([*head, *rows])),
+        parser_name="brokerage_statement_generic",
+        threshold=0.85,
+    )
+    assert len(result.investments) == 1
+    return result.investments[0]
+
+
+def _held(*rows: list[tuple[float, str]]) -> Drawn:
+    return [
+        [(40, "Holdings")],
+        [*_HOLDINGS, (420, "Market Value")],
+        *rows,
+        [(40, "Total Holdings"), (420, "$1,000.00")],
+        None,
+    ]
+
+
+_ZZAB: list[tuple[float, str]] = [
+    (40, "ZZAB"),
+    (100, "Example Index Fund"),
+    (250, "10"),
+    (330, "$100.00"),
+    (420, "$1,000.00"),
+]
+
+
+def _rows(statement: InvestmentStatement) -> list[tuple[str, str | None, Decimal, str | None]]:
+    return [
+        (a.type, a.security.symbol if a.security else None, a.amount, a.memo)
+        for a in statement.activity
+    ]
+
+
+def test_a_heading_no_section_names_ends_the_section_above() -> None:
+    """A table under an unknown heading is not typed by the section above it."""
+    income: Drawn = [
+        [(30, "Dividends and Interest")],
+        _CASH,
+        [(30, "03/12"), (70, "Example Index Fund"), (220, "12.50")],
+        None,
+    ]
+    later: Drawn = [
+        [(30, "Miscellaneous Items")],
+        _CASH,
+        [(30, "03/20"), (70, "Sent to Example Bank"), (220, "-500.00")],
+    ]
+    statement = _generic(
+        [*_held(_ZZAB), *income, *later], cash=("$5,000.00", "$4,512.50"), value="$5,512.50"
+    )
+    # The dividend names its security by its name; the -500 is no dividend.
+    assert _rows(statement) == [
+        ("dividend", "ZZAB", Decimal("12.50"), "Example Index Fund"),
+    ]
+    assert statement.reconciliation is not None
+    assert statement.reconciliation.status == "mismatch"
+    # A heading the vocabulary knows types it by its sign.
+    eft: Drawn = [[(30, "Electronic Funds Transfers")], *later[1:]]
+    statement = _generic(
+        [*_held(_ZZAB), *income, *eft], cash=("$5,000.00", "$4,512.50"), value="$5,512.50"
+    )
+    assert _rows(statement)[1] == (
+        "withdrawal",
+        None,
+        Decimal("-500.00"),
+        "Sent to Example Bank",
+    )
+    assert statement.reconciliation is not None
+    assert statement.reconciliation.status == "ok"
+
+
+def test_rows_after_a_skipped_section_under_an_unknown_heading_are_read() -> None:
+    pending: Drawn = [
+        [(30, "Trades Pending Settlement")],
+        _CASH,
+        [(30, "03/29"), (70, "Withdrawal to bank"), (220, "-100.00")],
+        None,
+        [(30, "Other Items")],
+        _CASH,
+        [(30, "03/20"), (70, "Withdrawal to bank"), (220, "-500.00")],
+    ]
+    statement = _generic(
+        [*_held(_ZZAB), *pending], cash=("$5,000.00", "$4,500.00"), value="$5,500.00"
+    )
+    assert _rows(statement) == [("withdrawal", None, Decimal("-500.00"), "Withdrawal to bank")]
+    assert statement.reconciliation is not None
+    assert statement.reconciliation.status == "ok"
+
+
+def test_a_sub_heading_right_under_a_section_keeps_its_section() -> None:
+    card: Drawn = [
+        [(30, "Debit Card Activity")],
+        [(30, "EXAMPLE CHECK CARD (ACCOUNT ...0000)")],
+        _CASH,
+        [(30, "03/20"), (70, "EXAMPLE MART"), (220, "-500.00")],
+    ]
+    statement = _generic([*_held(_ZZAB), *card], cash=("$5,000.00", "$4,500.00"), value="$5,500.00")
+    assert _rows(statement) == [("withdrawal", None, Decimal("-500.00"), "EXAMPLE MART")]
+
+
+@pytest.mark.parametrize("word", ["INCOME", "DIVIDENDS", "FEES", "TAXES", "TRADES", "POSITIONS"])
+def test_a_wrapped_name_worded_like_a_heading_is_the_name(word: str) -> None:
+    rows: Drawn = [
+        [(40, "Holdings")],
+        [(40, "Description"), (250, "Quantity"), (330, "Price"), (420, "Market Value")],
+        [(40, "EXAMPLE STRATEGIC"), (250, "10"), (330, "$100.00"), (420, "$1,000.00")],
+        [(40, f"{word} FUND (ZZSIX)")],
+        [(40, "EXAMPLE GROWTH (ZZGRX)"), (250, "10"), (330, "$100.00"), (420, "$1,000.00")],
+        [(40, "Total Holdings"), (420, "$2,000.00")],
+    ]
+    statement = _generic(rows, cash=("$1,000.00", "$1,000.00"), value="$3,000.00")
+    assert [(p.security.symbol, p.security.name) for p in statement.positions] == [
+        ("ZZSIX", f"EXAMPLE STRATEGIC {word} FUND"),
+        ("ZZGRX", "EXAMPLE GROWTH"),
+    ]
+    assert statement.reconciliation is not None
+    assert statement.reconciliation.status == "ok"
+
+
+def test_a_leading_ticker_names_a_holding_nothing_else_identifies() -> None:
+    rows: Drawn = [
+        [(40, "Holdings")],
+        [(40, "Security"), (250, "Quantity"), (330, "Price"), (420, "Market Value")],
+        [(40, "ZZAB Example Index Fund"), (250, "10"), (330, "$100.00"), (420, "$1,000.00")],
+        [(40, "ZZCD Example Bond Fund"), (250, "20"), (330, "$50.00"), (420, "$1,000.00")],
+        [(40, "Total Holdings"), (420, "$2,000.00")],
+    ]
+    statement = _generic(rows, cash=("$1,000.00", "$1,000.00"), value="$3,000.00")
+    assert [(p.security.symbol, p.security.name) for p in statement.positions] == [
+        ("ZZAB", "Example Index Fund"),
+        ("ZZCD", "Example Bond Fund"),
+    ]
+    assert statement.reconciliation is not None
+    assert statement.reconciliation.status == "ok"
+
+
+@pytest.mark.parametrize(
+    ("raw", "symbol"),
+    [
+        ("ZZAB Example Index Fund", "ZZAB"),
+        ("ZZB.A Example Class A", "ZZB.A"),
+        # The whole name in capitals: the first word is the issuer's.
+        ("ZZQ NET LEASE INC & GROWTH LP UNIT", None),
+        # Parentheses that hold no ticker: the layout prints none in front.
+        ("ZZ Portfolio 2030 (Example Funds)", None),
+        ("Example Index Fund", None),
+        ("ZZAB", None),
+    ],
+)
+def test_the_leading_ticker_rule(raw: str, symbol: str | None) -> None:
+    from app.ingestion.parsers.brokerage import _HoldingRow, _leading_ticker
+
+    row = _HoldingRow(
+        page=1,
+        bbox=(0.0, 0.0, 1.0, 1.0),
+        symbol=None,
+        name=raw,
+        quantity=Decimal(10),
+        price=None,
+        value=None,
+        cost=None,
+        ocr=None,
+        raw_name=raw,
+    )
+    assert _leading_ticker(row)[0] == symbol
+
+
+def _trade(
+    day: str, symbol: str, name: str, quantity: str, price: str, amount: str
+) -> list[tuple[float, str]]:
+    return [
+        (40, day),
+        (90, "Bought"),
+        (160, symbol),
+        (210, name),
+        (330, quantity),
+        (390, price),
+        (460, amount),
+    ]
+
+
+def test_a_bond_trade_is_priced_per_100_like_its_position() -> None:
+    activity_header = [
+        (40.0, "Date"),
+        (90.0, "Activity"),
+        (160.0, "Symbol"),
+        (210.0, "Description"),
+        (330.0, "Quantity"),
+        (390.0, "Price"),
+        (460.0, "Amount"),
+    ]
+    rows: Drawn = [
+        [(40, "Holdings")],
+        [*_HOLDINGS, (420, "Market Value")],
+        _ZZAB,
+        [
+            (40, "ZZBND"),
+            (100, "Example Corp 5% 2030"),
+            (250, "10,000"),
+            (330, "98.625"),
+            (420, "$9,862.50"),
+        ],
+        [(40, "Total Holdings"), (420, "$10,862.50")],
+        None,
+        [(40, "Activity")],
+        activity_header,
+        _trade("03/05/2024", "ZZBND", "Example Corp 5% 2030", "2,000", "99.00", "1,980.00"),
+        _trade("03/12/2024", "ZZAB", "Example Index Fund", "5", "100.00", "500.00"),
+    ]
+    statement = _generic(rows, cash=("$5,000.00", "$2,520.00"), value="$13,382.50")
+    bond, fund = statement.activity
+    assert bond.price_per_100
+    assert bond.unit_price == Decimal("99.00")
+    assert bond.price_per_unit == Decimal("0.99")
+    assert not fund.price_per_100
+    assert fund.price_per_unit == Decimal("100.00")
+
+
+def test_a_bond_trade_is_per_100_by_its_figures_without_a_position() -> None:
+    from app.ingestion.parsers.brokerage import _activity_per_100, _ActivityRow
+    from app.ingestion.parsers.text import Amount
+
+    def row(quantity: str, price: str, amount: str) -> _ActivityRow:
+        return _ActivityRow(
+            page=1,
+            bbox=(0.0, 0.0, 1.0, 1.0),
+            date_text="03/05/2024",
+            settle_text="",
+            type="sell",
+            description="",
+            symbol=None,
+            quantity=Decimal(quantity),
+            price=Decimal(price),
+            amount=Amount(value=Decimal(amount)),
+            fees=None,
+            ocr=None,
+        )
+
+    assert _activity_per_100(row("5000", "101.25", "5094.10"), False)  # accrued interest in it
+    assert not _activity_per_100(row("100", "37.18", "3725.85"), True)  # per unit by its figures
+    assert _activity_per_100(row("5000", "101.25", "0"), True)  # no cash: as its position
+    assert not _activity_per_100(row("5000", "101.25", "0"), False)
+
+
+def test_securities_transferred_in_without_a_symbol_column_move_units() -> None:
+    rows: Drawn = [
+        [(40, "Holdings")],
+        [*_HOLDINGS, (420, "Market Value")],
+        [(40, "ZZAB"), (100, "Example Index Fund (ZZAB)"), *_ZZAB[2:]],
+        [(40, "Total Holdings"), (420, "$1,000.00")],
+        None,
+        [(30, "Securities Transferred In")],
+        [(30, "Date"), (70, "Description"), (250, "Quantity"), (330, "Amount")],
+        [(30, "03/12"), (70, "Example Index Fund"), (250, "10"), (330, "1,000.00")],
+    ]
+    statement = _generic(rows, cash=("$5,000.00", "$5,000.00"), value="$6,000.00")
+    (moved,) = statement.activity
+    assert (moved.type, moved.quantity, moved.amount) == ("transfer_in", Decimal(10), Decimal(0))
+    assert moved.security is not None
+    assert moved.security.symbol == "ZZAB"
+    assert statement.reconciliation is not None
+    assert statement.reconciliation.status == "ok"
+
+
+def test_dated_cash_balance_lines_are_the_opening_and_closing_cash() -> None:
+    result = parse_extraction(
+        _extract(
+            _drawn_pdf(
+                [
+                    [(40, "Brokerage Account Statement")],
+                    [(40, "Statement Period: 03/01/2024 - 03/31/2024")],
+                    [(40, "Account Number: XXXX-1234")],
+                    [(40, "Cash balance on 03/01/2024"), (420, "$5,000.00")],
+                    [(40, "Cash balance on 03/31/2024"), (420, "$4,500.00")],
+                    [(40, "Ending Account Value"), (420, "$5,500.00")],
+                    None,
+                    *_held(_ZZAB),
+                    [(40, "Activity")],
+                    [(40, "Date"), (90, "Activity"), (210, "Description"), (460, "Amount")],
+                    [(40, "03/20/2024"), (90, "Withdrawal"), (210, "To bank"), (460, "500.00")],
+                ]
+            )
+        ),
+        parser_name="brokerage_statement_generic",
+        threshold=0.85,
+    )
+    (statement,) = result.investments
+    assert statement.cash_opening is not None
+    assert statement.cash_closing is not None
+    assert (statement.cash_opening.amount, statement.cash_closing.amount) == (
+        Decimal("5000.00"),
+        Decimal("4500.00"),
+    )
+    assert statement.reconciliation is not None
+    assert statement.reconciliation.status == "ok"
