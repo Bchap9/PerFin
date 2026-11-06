@@ -26,8 +26,10 @@ import { DocumentAccountsDialog } from "../imports/DocumentAccountsDialog";
 import { getTransaction, txKeys, type Transaction } from "../transactions/api";
 import {
   accountResolution,
+  canImportAsRead,
   dismissItem,
   duplicateResolution,
+  importAsReadResolution,
   listReviewItems,
   payloadIds,
   payloadString,
@@ -419,6 +421,14 @@ export function ReviewItemCard({ item }: { item: ReviewItem }) {
   const teachable =
     item.document_id !== null && item.document?.previewable === true;
   const needsChoice = candidates.length > 1 && chosen === null;
+  // A brokerage statement held back by its figures: its rows are not in the
+  // ledger yet, so there is nothing to confirm; it may be imported as read.
+  const reason = item.reason ?? payloadString(item, "reason");
+  const heldStatement =
+    item.kind === "low_confidence_field" &&
+    (reason === "investment_reconciliation_failed" ||
+      reason === "investment_low_confidence");
+  const asRead = canImportAsRead(item);
   const editableAccounts = (accounts.data ?? []).filter(
     (account) => account.can_edit && !account.is_closed,
   );
@@ -471,8 +481,14 @@ export function ReviewItemCard({ item }: { item: ReviewItem }) {
         item.reason === "reconciliation_unavailable") ? (
         <BalanceTools item={item} actionable={actionable} />
       ) : null}
-      {item.kind === "low_confidence_field" ? (
+      {item.kind === "low_confidence_field" && !heldStatement ? (
         <LowConfidenceTools item={item} actionable={actionable} />
+      ) : null}
+      {asRead && actionable ? (
+        <p className="ledger-muted">
+          “Import as read” imports this statement as printed. PerFin records no
+          account value from it, because its totals do not add up.
+        </p>
       ) : null}
       {item.kind === "new_institution" ? (
         <NewInstitutionTools item={item} actionable={actionable} />
@@ -557,6 +573,18 @@ export function ReviewItemCard({ item }: { item: ReviewItem }) {
               Import into this account
             </Button>
           ) : null}
+          {asRead ? (
+            <Button
+              variant="primary"
+              loading={resolve.isPending}
+              disabled={dismiss.isPending}
+              onClick={() => {
+                resolve.mutate(importAsReadResolution());
+              }}
+            >
+              Import as read
+            </Button>
+          ) : null}
           {teachable ? (
             <Button
               onClick={() => {
@@ -568,7 +596,7 @@ export function ReviewItemCard({ item }: { item: ReviewItem }) {
             </Button>
           ) : null}
           {(item.next_step === "column_mapping" ||
-            item.reason === "investment_low_confidence") &&
+            (reason === "investment_low_confidence" && !asRead)) &&
           item.document_id !== null ? (
             <Link
               to="/documents/$documentId/mapping"

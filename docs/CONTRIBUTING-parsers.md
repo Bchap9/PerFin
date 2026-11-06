@@ -176,5 +176,9 @@ is not suggested well:
 - [ ] Only the last four digits of an account number are kept.
 - [ ] Unit tests pass with and without the hint; tampered variants fail
       reconciliation.
+- [ ] Figures are returned as printed, never adjusted to make a statement
+      add up: a statement that does not reconcile waits in review, where
+      the person can "Import as read" (rows as printed, no balance
+      snapshot) once they have seen what is off.
 - [ ] `uv run ruff check`, `ruff format --check`, `mypy`, `bandit` and
       `pytest -n auto` pass.

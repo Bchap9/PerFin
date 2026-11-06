@@ -18,6 +18,9 @@ from ``tests/fixtures/synth_brokerage.py`` (invented broker and instruments).
 * Account matching respects grants (F3) and the account's type; a chosen
   account re-imports from the stored extraction.
 * An older statement after a newer one is held (out of order).
+* A held statement answered "Import as read" imports as printed, without a
+  balance snapshot, audited; the answer and "import anyway" carry into each
+  other's re-runs.
 """
 
 from __future__ import annotations
@@ -36,9 +39,12 @@ from sqlalchemy import select
 from app.auth.models import GrantLevel, HouseholdRole
 from app.auth.principal import Principal, apply_rls_context
 from app.core.crypto import Keyring
+from app.core.errors import ProblemError
 from app.core.settings import Settings
+from app.db.models import AuditLog
 from app.db.rls import set_context
 from app.domain.accounts.models import Account, AccountType, BalanceSnapshot, BalanceSource
+from app.domain.documents import repo as documents_repo
 from app.domain.documents.blobstore import LocalFSBlobStore
 from app.domain.documents.models import (
     Document,
@@ -62,7 +68,7 @@ from app.domain.investments.models import (
 )
 from app.domain.investments.statement_import import OPENING_MEMO
 from app.domain.review import service as review_service
-from app.domain.review.schemas import ResolveDuplicate
+from app.domain.review.schemas import ResolveDuplicate, ResolveLowConfidence
 from app.domain.transactions.models import Transaction
 from app.ingestion.intake.upload import receive_upload
 from app.ingestion.sandbox.protocol import ExtractResult
@@ -680,3 +686,217 @@ def test_a_chosen_account_never_takes_several_accounts(env: Env) -> None:
     assert env.txns(chosen) == []
     assert env.document(document_id).status is DocumentStatus.NEEDS_REVIEW
     assert "account_not_found" in env.reasons(document_id)
+
+
+# ---------------------------------------------------------------------------
+# Import as read: a held statement imported as printed, on a person's word
+# ---------------------------------------------------------------------------
+
+
+def _import_as_read(env: Env, item: ReviewItem) -> dict[str, Any]:
+    """Answer a held statement's item "Import as read" as the owner; run the job."""
+    with env.factories.transaction() as db:
+        apply_rls_context(db, env.principal())
+        out = review_service.resolve(
+            db,
+            env.principal(),
+            item.id,
+            ResolveLowConfidence(kind="low_confidence_field", import_as_read=True),
+            request=None,
+        )
+        assert out.resolution is not None
+        resolution = dict(out.resolution)
+    assert run_jobs(env.factories, env.household_id, APPLY_MAPPING_JOB_TYPE, done=env.done)
+    return resolution
+
+
+def _audits(env: Env, action: str) -> list[dict[str, Any]]:
+    rows: list[AuditLog] = env.query(
+        select(AuditLog)
+        .where(AuditLog.household_id == env.household_id, AuditLog.action == action)
+        .order_by(AuditLog.seq)
+    )
+    return [dict(r.after or {}) for r in rows]
+
+
+def _held_item(env: Env, document_id: uuid.UUID) -> ReviewItem:
+    (item,) = [
+        r
+        for r in env.open_reviews(document_id)
+        if r.payload.get("reason") == "investment_reconciliation_failed"
+    ]
+    return item
+
+
+@pytest.mark.parametrize(
+    ("tamper", "check"),
+    [("extra_row", "cash"), ("market_value", "positions"), ("total", "total_value")],
+)
+def test_held_statement_imported_as_read(env: Env, tamper: synth.Tamper, check: str) -> None:
+    january, _ = synth.brokerage_series(seed=71)
+    account = env.brokerage(january)
+    document_id = env.ingest(synth.placeholder_pdf(january, tamper=tamper), "statement.pdf")
+    item = _held_item(env, document_id)
+    assert item.payload["statement"] == 0
+    assert item.payload["currency"] == "USD"
+    # What did not add up: per failed check, printed vs computed and the difference.
+    differences = {d["check"]: d for d in item.payload["differences"]}
+    assert check in differences
+    assert set(differences) == set(item.payload["failed"])
+    for found in differences.values():
+        assert Decimal(found["difference"]) == Decimal(found["computed"]) - Decimal(
+            found["printed"]
+        )
+        assert Decimal(found["difference"]) != 0
+    if tamper == "extra_row":
+        assert Decimal(differences["cash"]["difference"]) == Decimal("-777.77")
+    if tamper == "total":
+        assert Decimal(differences["total_value"]["difference"]) == Decimal("-250.00")
+    if tamper == "market_value":
+        assert differences["positions"]["count"] == 1
+    assert env.txns(account) == []
+
+    resolution = _import_as_read(env, item)
+    assert resolution["import_as_read"] is True
+    assert resolution["account_id"] == str(account.id)
+    assert resolution["statement"] == 0
+    assert resolution["failed"] == item.payload["failed"]
+    assert resolution["snapshot"] is False
+
+    assert env.document(document_id).status is DocumentStatus.PROCESSED
+    assert env.open_reviews(document_id) == []
+    # Imported as printed (the forged row too: it is on the page) ...
+    assert env.activity(account) == _expected(january, tamper=tamper)
+    assert env.holdings(account) == _positions(january)
+    assert sorted((t.posted_date, t.amount) for t in env.cash_rows(account)) == _cash(january)
+    # ... but the account's value is never taken from figures that do not add up.
+    assert env.snapshots(account) == []
+    (record,) = env.query(select(StatementRecord).where(StatementRecord.account_id == account.id))
+    assert (record.document_id, record.outcome) == (document_id, "imported")
+    # The acceptance is in the audit log: the answer, the job's request, the import.
+    (resolved,) = _audits(env, "review.resolve")
+    assert resolved["resolution"]["import_as_read"] is True
+    (requested,) = _audits(env, "document.import_requested")
+    assert requested["accept_as_read"] == [str(account.id)]
+    assert requested["assignments"] == [
+        {"target": "investment", "index": 0, "account_id": str(account.id)}
+    ]
+    (imported,) = _audits(env, "investment.import")
+    assert imported["accepted_as_read"] is True
+    assert imported["failed"] == item.payload["failed"]
+    assert imported["snapshot"] is False
+
+
+def test_one_account_of_a_report_imported_as_read(env: Env) -> None:
+    stmt = fid.fidelity_statement(seed=94)
+    accounts = _fid_accounts(env, stmt)
+    document_id = env.ingest(
+        fid.fidelity_pdf(stmt, tamper="total", tamper_account=1), "investment-report.pdf"
+    )
+    item = _held_item(env, document_id)
+    roth = accounts[1]
+    assert roth is not None
+    assert item.payload["statement"] == 1
+    assert [d["check"] for d in item.payload["differences"]] == ["total_value"]
+    others = [a for a in accounts if a is not None and a.id != roth.id]
+    written = {a.id: [t.id for t in env.txns(a)] for a in others}
+    assert all(written.values())
+    snapshots = {a.id: len(env.snapshots(a)) for a in others}
+    assert set(snapshots.values()) == {1}
+
+    _import_as_read(env, item)
+    assert env.document(document_id).status is DocumentStatus.PROCESSED
+    assert env.open_reviews(document_id) == []
+    assert env.activity(roth) == _fid_expected(stmt.accounts[1])
+    assert _fid_holdings(env, roth) == _fid_positions(stmt.accounts[1])
+    assert env.snapshots(roth) == []
+    # The other accounts were imported already: nothing added, nothing doubled.
+    assert {a.id: [t.id for t in env.txns(a)] for a in others} == written
+    assert {a.id: len(env.snapshots(a)) for a in others} == snapshots
+
+
+def test_accepted_and_overlapping_answers_carry_into_each_other(env: Env) -> None:
+    """ "Import anyway" then "Import as read" (one statement, both holds): no loop."""
+    january, _ = synth.brokerage_series(seed=72)
+    account = env.brokerage(january)
+    env.ingest(synth.ofx_investment(january), "statement.ofx")
+    before = env.activity(account)
+    snapshots = [(s.as_of_date, s.balance) for s in env.snapshots(account)]
+    # The same month again as a PDF that does not add up: the overlap holds it first.
+    document_id = env.ingest(synth.placeholder_pdf(january, tamper="total"), "statement.pdf")
+    (overlap,) = env.open_reviews(document_id)
+    assert overlap.payload["reason"] == "statement_overlap"
+    _resolve_overlap(env, overlap, "reject")
+    assert run_jobs(env.factories, env.household_id, APPLY_MAPPING_JOB_TYPE, done=env.done)
+    item = _held_item(env, document_id)
+
+    resolution = _import_as_read(env, item)
+    (requested, *_) = reversed(_audits(env, "document.import_requested"))
+    assert requested["allow_overlap"] == [str(account.id)]
+    assert requested["accept_as_read"] == [str(account.id)]
+    assert requested["assignments"] == [
+        {"target": "investment", "index": 0, "account_id": str(account.id)}
+    ]
+    assert (resolution["target"], resolution["statement"]) == ("investment", 0)
+    assert env.document(document_id).status is DocumentStatus.PROCESSED
+    assert env.open_reviews(document_id) == []
+    # The rows were already recorded: nothing doubled; the OFX's snapshot stays alone.
+    assert env.activity(account) == before
+    assert [(s.as_of_date, s.balance) for s in env.snapshots(account)] == snapshots
+
+
+def test_import_as_read_is_only_for_statements_held_by_their_figures(env: Env) -> None:
+    january, _ = synth.brokerage_series(seed=73)
+    account = env.brokerage(january)
+    document_id = env.ingest(synth.placeholder_pdf(january, tamper="total"), "statement.pdf")
+    with env.factories.transaction() as db:
+        apply_rls_context(db, env.principal())
+        guessed = documents_repo.add_review_item(
+            db,
+            env.household_id,
+            ReviewKind.LOW_CONFIDENCE_FIELD,
+            {
+                "reason": "investment_low_confidence",
+                "fields": ["reconciliation", "trade_date"],
+                "account_id": str(account.id),
+                "statement": 0,
+            },
+            document_id=document_id,
+        )
+        guessed_id = guessed.id
+    with env.factories.transaction() as db:
+        apply_rls_context(db, env.principal())
+        with pytest.raises(ProblemError) as refused:
+            review_service.resolve(
+                db,
+                env.principal(),
+                guessed_id,
+                ResolveLowConfidence(kind="low_confidence_field", import_as_read=True),
+                request=None,
+            )
+    assert refused.value.status == 422
+    assert env.txns(account) == []
+
+
+def test_import_as_read_needs_edit_on_the_account(env: Env) -> None:
+    january, _ = synth.brokerage_series(seed=74)
+    account = env.brokerage(january)
+    document_id = env.ingest(synth.placeholder_pdf(january, tamper="total"), "statement.pdf")
+    item = _held_item(env, document_id)
+    member = env.factories.user(
+        role=HouseholdRole.MEMBER, household=env.owner.household, with_totp=True
+    )
+    env.ledger.grant(env.household_id, member.user.id, account, GrantLevel.VIEW)
+    with env.factories.transaction() as db:
+        apply_rls_context(db, env.principal(member))
+        with pytest.raises(ProblemError) as refused:
+            review_service.resolve(
+                db,
+                env.principal(member),
+                item.id,
+                ResolveLowConfidence(kind="low_confidence_field", import_as_read=True),
+                request=None,
+            )
+    assert refused.value.status in (403, 404)
+    assert [r.id for r in env.open_reviews(document_id)] == [item.id]
+    assert env.txns(account) == []

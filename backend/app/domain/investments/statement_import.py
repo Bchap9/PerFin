@@ -32,7 +32,21 @@ statements"). Per statement:
    **nothing**: investment rows have no pending state, so they are held
    back with a ``low_confidence_field`` item
    (``investment_reconciliation_failed`` / ``investment_low_confidence``)
-   naming the discrepancy. A statement with any date before
+   naming the discrepancy: its ``differences`` (per failed check, what the
+   statement prints, what its rows add up to and the difference; see
+   :func:`differences`), the statement's index and the account's currency.
+   **Import as read**: a re-run naming the account in ``accept_as_read``
+   (``apply-mapping``; the review queue's answer to such an item, see
+   ``app.domain.review.service``) imports a statement that does not add up,
+   or that a document gives nothing to check against, as printed: the
+   ``reconciliation`` doubt every row carries (and the contradicted market
+   value of a position that failed the ``positions`` check) no longer holds
+   it, while any other doubt still does (a guessed date, an unread figure),
+   as do the date range and every later step. An accepted statement writes
+   **no balance snapshot** (step 9): its totals are the figures that did not
+   add up, so the account's value is never taken from them; its audit row
+   (``investment.import``) says it was accepted and which checks failed. A
+   statement with any date before
    ``app.core.dates.MIN_BUSINESS_DATE`` is held the same way
    (``investment_date_out_of_range``, SECURITY.md F8). A structured
    statement (OFX, or an activity table: ``csv``, every value from a named
@@ -106,7 +120,7 @@ statements"). Per statement:
    out) is costed at the price its own rows print (one unit's).
 9. **Balance snapshot**: holdings + closing cash on ``as_of``
    (``source = statement``) when every check that could run held and both
-   are known.
+   are known; never for a statement accepted as read (step 3).
 """
 
 from __future__ import annotations
@@ -202,6 +216,8 @@ class InvestmentImport:
     snapshots: int = 0
     #: Held as overlapping an imported statement, or skipped as the same one.
     overlaps: int = 0
+    #: Imported as read although they did not add up (``accept_as_read``).
+    accepted_as_read: int = 0
     accounts: list[uuid.UUID] = field(default_factory=list)
 
     def summary(self) -> dict[str, Any]:
@@ -218,6 +234,7 @@ class InvestmentImport:
             "opening_positions": self.opening_positions,
             "snapshots": self.snapshots,
             "statement_overlaps": self.overlaps,
+            "accepted_as_read": self.accepted_as_read,
         }
 
 
@@ -382,12 +399,111 @@ def _statement_dates(statement: InvestmentStatement) -> Iterable[date | None]:
         yield activity.settle_date
 
 
+#: Reasons of the items a statement held back by its figures raises; both
+#: can be answered "import as read" (module doc, step 3).
+RECONCILIATION_FAILED: Final = "investment_reconciliation_failed"
+LOW_CONFIDENCE: Final = "investment_low_confidence"
+#: The doubt every row of a statement that did not add up (or could not be
+#: checked) carries; an accepted statement no longer holds for it.
+RECONCILIATION_DOUBT: Final = "reconciliation"
+
+
+def acceptable_as_read(payload: Mapping[str, Any]) -> bool:
+    """The held statement of a review item ``payload`` may be imported as read.
+
+    A statement that did not add up, or a document statement with nothing to
+    check against whose rows carry no other doubt (only ``reconciliation``):
+    a guessed date or an unread figure is never imported on a click.
+    """
+    reason = payload.get("reason")
+    if reason == RECONCILIATION_FAILED:
+        return True
+    fields = payload.get("fields")
+    return (
+        reason == LOW_CONFIDENCE and isinstance(fields, list) and fields == [RECONCILIATION_DOUBT]
+    )
+
+
+def _money_text(value: Decimal) -> str:
+    return f"{to_storage(value):f}"
+
+
+def differences(
+    statement: InvestmentStatement, check: InvestmentReconciliation
+) -> list[dict[str, Any]]:
+    """What did not add up, per failed check: printed, computed, difference.
+
+    ``printed`` is the figure the statement prints and ``computed`` what its
+    rows add up to; ``difference`` is computed - printed. ``positions``
+    sums the positions whose quantity x price is not their printed market
+    value (``count`` of them); ``holdings_total`` compares the positions'
+    sum with the printed holdings total; ``cash`` the opening cash plus the
+    period's activity with the closing cash; ``total_value`` the holdings
+    plus closing cash with the printed account value.
+    """
+    out: list[dict[str, Any]] = []
+
+    def add(name: str, printed: Decimal | None, computed: Decimal | None, **extra: Any) -> None:
+        if printed is None or computed is None:
+            return
+        out.append(
+            {
+                "check": name,
+                "printed": _money_text(printed),
+                "computed": _money_text(computed),
+                "difference": _money_text(computed - printed),
+                **extra,
+            }
+        )
+
+    with localcontext(calc_context()):
+        if "positions" in check.failed:
+            printed = Decimal(0)
+            computed = Decimal(0)
+            count = 0
+            for index in check.position_mismatches:
+                position = statement.positions[index]
+                if position.unit_price is None or position.market_value is None:
+                    continue
+                scale = 100 if position.price_per_100 else 1
+                printed += position.market_value
+                computed += position.quantity * position.unit_price / scale
+                count += 1
+            if count:
+                add("positions", printed, computed, count=count)
+        if "holdings_total" in check.failed:
+            add("holdings_total", check.reported_positions_total, check.positions_total)
+        if "cash" in check.failed and check.cash_opening is not None:
+            computed_cash = (
+                check.cash_opening + check.cash_activity
+                if check.cash_activity is not None
+                else None
+            )
+            add("cash", check.cash_closing, computed_cash)
+        if "total_value" in check.failed:
+            add("total_value", check.reported_total_value, check.total_value)
+    return out
+
+
+def _doubts(fields: Sequence[str], ignored: frozenset[str]) -> list[str]:
+    return [f for f in fields if f not in ignored]
+
+
 def _held(
     ctx: _Context,
     statement: InvestmentStatement,
     check: InvestmentReconciliation,
     account: Account,
+    *,
+    index: int,
+    accepted: bool = False,
 ) -> bool:
+    """Hold the statement back with a review item (module doc, step 3); True: held.
+
+    ``accepted``: the person said to import it as read, so its figures not
+    adding up (or not being checkable) no longer hold it; nothing else
+    changes.
+    """
     if any(d is not None and not in_business_range(d) for d in _statement_dates(statement)):
         # SECURITY.md F8: a date before MIN_BUSINESS_DATE is a misread (or a
         # crafted file); it would make every performance read walk centuries.
@@ -402,16 +518,19 @@ def _held(
             },
         )
         return True
-    if check.status == "mismatch":
+    if check.status == "mismatch" and not accepted:
         ctx.review(
             ReviewKind.LOW_CONFIDENCE_FIELD,
             {
-                "reason": "investment_reconciliation_failed",
+                "reason": RECONCILIATION_FAILED,
                 "field": "reconciliation",
                 "account_id": str(account.id),
+                "statement": index,
+                "currency": account.currency,
                 "parser": _parser(statement),
                 "failed": list(check.failed),
                 "checks": list(check.checks),
+                "differences": differences(statement, check),
                 "positions": [
                     {
                         "index": i,
@@ -435,33 +554,47 @@ def _held(
             },
         )
         return True
-    low_positions = [(i, p) for i, p in enumerate(statement.positions) if p.low_confidence]
-    low_activity = [(i, a) for i, a in enumerate(statement.activity) if a.low_confidence]
+    ignored = frozenset({RECONCILIATION_DOUBT}) if accepted else frozenset()
+    contradicted = frozenset({"market_value"}) | ignored
+    mismatched = set(check.position_mismatches) if accepted else set()
+    low_positions = [
+        (i, doubts)
+        for i, p in enumerate(statement.positions)
+        if (doubts := _doubts(p.low_confidence, contradicted if i in mismatched else ignored))
+    ]
+    low_activity = [
+        (i, doubts)
+        for i, a in enumerate(statement.activity)
+        if (doubts := _doubts(a.low_confidence, ignored))
+    ]
     unchecked_document = (
-        check.status == "unavailable" and statement.source_format in DOCUMENT_STATEMENT_FORMATS
+        check.status == "unavailable"
+        and statement.source_format in DOCUMENT_STATEMENT_FORMATS
+        and not accepted
     )
     if not (low_positions or low_activity or unchecked_document):
         return False
     fields = sorted(
-        {f for _, p in low_positions for f in p.low_confidence}
-        | {f for _, a in low_activity for f in a.low_confidence}
-        | ({"reconciliation"} if unchecked_document else set())
+        {f for _, doubts in low_positions for f in doubts}
+        | {f for _, doubts in low_activity for f in doubts}
+        | ({RECONCILIATION_DOUBT} if unchecked_document else set())
     )
     ctx.review(
         ReviewKind.LOW_CONFIDENCE_FIELD,
         {
-            "reason": "investment_low_confidence",
+            "reason": LOW_CONFIDENCE,
             "fields": fields,
             "account_id": str(account.id),
+            "statement": index,
             "parser": _parser(statement),
             "reconciliation": check.status,
             "positions": [
-                {"index": i, "fields": list(p.low_confidence), "page": p.page}
-                for i, p in low_positions[:IDS_MAX]
+                {"index": i, "fields": doubts, "page": statement.positions[i].page}
+                for i, doubts in low_positions[:IDS_MAX]
             ],
             "activity": [
-                {"index": i, "fields": list(a.low_confidence), "page": a.page}
-                for i, a in low_activity[:IDS_MAX]
+                {"index": i, "fields": doubts, "page": statement.activity[i].page}
+                for i, doubts in low_activity[:IDS_MAX]
             ],
         },
     )
@@ -1172,7 +1305,12 @@ def _write(
 
 
 def _commit(
-    ctx: _Context, statement: InvestmentStatement, account: Account, check: InvestmentReconciliation
+    ctx: _Context,
+    statement: InvestmentStatement,
+    account: Account,
+    check: InvestmentReconciliation,
+    *,
+    accepted: bool = False,
 ) -> bool:
     """Write one reconciled statement; False when it had to be held back."""
     db = ctx.db
@@ -1240,6 +1378,8 @@ def _commit(
 
     values = [position_value(p) for p in statement.positions]
     cash = statement.cash_closing.amount if statement.cash_closing is not None else None
+    # Never from figures that did not add up, even accepted as read (module
+    # doc, step 9): the account's value is not taken from them.
     if (
         check.status == "ok"
         and on is not None
@@ -1269,6 +1409,16 @@ def _commit(
             "opening_positions": written.openings,
             "positions": len(written.positions),
             "transaction_ids": [str(t.id) for t in written.created[:IDS_MAX]],
+            **(
+                {
+                    "accepted_as_read": True,
+                    "reconciliation": check.status,
+                    "failed": list(check.failed),
+                    "snapshot": False,
+                }
+                if accepted and check.status != "ok"
+                else {}
+            ),
         },
         household_id=ctx.household_id,
         user_id=ctx.user_id,
@@ -1347,6 +1497,7 @@ def import_investment_statements(
     statement_index: int | None = None,
     assigned: Mapping[int, uuid.UUID] | None = None,
     allow_overlap: Collection[uuid.UUID] = (),
+    accept_as_read: Collection[uuid.UUID] = (),
     user_id: uuid.UUID | None = None,
     several: bool = False,
 ) -> InvestmentImport:
@@ -1356,7 +1507,9 @@ def import_investment_statements(
     names the one statement it is for (the review item's), else
     :func:`_chosen_takes` decides on a multi-account document.
     ``allow_overlap`` are accounts to import into despite an overlapping
-    statement (module doc, step 2). ``several``: the document also holds
+    statement (module doc, step 2); ``accept_as_read`` accounts whose
+    statements are imported as read although their figures do not add up
+    (step 3). ``several``: the document also holds
     bank statements of other accounts (a combined statement), so even a
     single brokerage statement finds its account by its own digits.
     """
@@ -1396,11 +1549,14 @@ def import_investment_statements(
             ctx.result.overlaps += 1
             continue
         check = statement.reconciliation or reconcile_investment(statement)
-        if _held(ctx, statement, check, account):
+        accepted = account.id in accept_as_read
+        if _held(ctx, statement, check, account, index=index, accepted=accepted):
             ctx.result.held += 1
             continue
-        if _commit(ctx, statement, account, check):
+        if _commit(ctx, statement, account, check, accepted=accepted):
             ctx.result.statements += 1
+            if accepted and check.status != "ok":
+                ctx.result.accepted_as_read += 1
             record_statement(db, document, account, facts)
         else:
             ctx.result.held += 1

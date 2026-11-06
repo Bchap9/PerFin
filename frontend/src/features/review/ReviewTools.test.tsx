@@ -320,6 +320,7 @@ describe("review tools", () => {
       ).toEqual({
         kind: "low_confidence_field",
         confirm: true,
+        import_as_read: false,
         transactions: [
           {
             transaction_id: "t-1",

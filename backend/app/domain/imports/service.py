@@ -1725,6 +1725,7 @@ def import_extraction(
     statement: int | None = None,
     assignments: Sequence[Assignment] = (),
     allow_overlap: Collection[uuid.UUID] = (),
+    accept_as_read: Collection[uuid.UUID] = (),
     user_id: uuid.UUID | None = None,
 ) -> ImportResult:
     """Import the records of ``result`` for ``document`` (module doc, step 2).
@@ -1732,7 +1733,10 @@ def import_extraction(
     ``user_id`` is the person who asked for a re-run (else the uploader
     decides which accounts may be matched); ``mapping_id``/``account_id``
     are their choices, ``group`` the statement of a multi-account table
-    ``account_id`` is for. Runs in the caller's transaction and RLS context.
+    ``account_id`` is for; ``allow_overlap`` and ``accept_as_read`` the
+    accounts whose statements are imported although they overlap an
+    imported one or do not add up. Runs in the caller's transaction and RLS
+    context.
     """
     actor = user_id or document.uploaded_by
     # A PDF/image no parser read: its page table goes through the saved
@@ -1777,6 +1781,7 @@ def import_extraction(
             statement_index=statement,
             assigned={i: a for (t, i), a in run.assigned.items() if t == "investment"},
             allow_overlap=run.allow_overlap,
+            accept_as_read=frozenset(accept_as_read),
             user_id=user_id,
             several=_several_kinds(result),
         )
@@ -1838,8 +1843,8 @@ def request_apply(
         get_visible_account(db, principal, target, need="edit")
     for assignment in data.assignments:
         get_visible_account(db, principal, assignment.account_id, need="edit")
-    for overlap_account in data.allow_overlap:
-        get_visible_account(db, principal, overlap_account, need="edit")
+    for answered_account in (*data.allow_overlap, *data.accept_as_read):
+        get_visible_account(db, principal, answered_account, need="edit")
     payload = ApplyMappingJob(
         document_id=document.id,
         mapping_id=data.mapping_id,
@@ -1848,6 +1853,7 @@ def request_apply(
         statement=data.statement,
         assignments=data.assignments,
         allow_overlap=data.allow_overlap,
+        accept_as_read=data.accept_as_read,
         requested_by=principal.user_id,
     )
     job_id = enqueue(db, APPLY_MAPPING_JOB_TYPE, payload, household_id=household_id)
@@ -1893,6 +1899,7 @@ def run_apply_job(
         statement=payload.statement,
         assignments=payload.assignments,
         allow_overlap=payload.allow_overlap,
+        accept_as_read=payload.accept_as_read,
         user_id=payload.requested_by,
     )
     now = clock.utcnow()

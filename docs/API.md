@@ -362,7 +362,12 @@ none, the one statement nothing matched) and `allow_overlap` (account ids,
 each editable: their statements are imported although their period
 overlaps a statement already imported from another document, the "import
 anyway" of a `statement_overlap` item, also after it was answered "same
-statement": the skipped statement is then imported); a `mapping_id`
+statement": the skipped statement is then imported) and `accept_as_read`
+(account ids, each editable: their brokerage statements are imported as
+printed although their figures do not add up or could not be checked, the
+"import as read" of an `investment_reconciliation_failed` or
+`investment_low_confidence` item; no balance snapshot is written from them
+and rows with any other doubt are still held); a `mapping_id`
 imports the table with that mapping even when it is brokerage activity; the target account
 (the given one, the document's, else the mapping's) must be editable (`404
 account-not-found`); a document that is not `needs_review`/`processed` or
@@ -562,7 +567,22 @@ records that none applies; `next_step` is `attach_receipt`; INGESTION.md
 each one the caller edits, else `422 invalid-resolution`; with `confirm`,
 default `true`, the item's pending rows become `confirmed`, for a
 `reconciliation_failed`/`reconciliation_unavailable` item every pending row
-of the document on the item's account; audited as `transaction.update`).
+of the document on the item's account; audited as `transaction.update`);
+`{"kind": "low_confidence_field", "import_as_read": true}` ("Import as
+read", without `transactions`, else `422`) answers a brokerage statement
+held back because its figures do not add up: an
+`investment_reconciliation_failed` item (`differences`: per failed check
+`printed`, `computed`, `difference`; `currency`, `statement`) or an
+`investment_low_confidence` item whose `fields` are only
+`["reconciliation"]`; any other item is `422 invalid-resolution`. It needs
+edit on the item's account (`404 account-not-found`) and queues
+`imports.apply_mapping` with the item's statement assigned to that account
+and the account in `accept_as_read`: the statement is imported as printed,
+without a balance snapshot. The resolution records `import_as_read`,
+`account_id`, `target`, `statement`, `reason`, `failed`, `snapshot: false`
+and `job_id`; "import anyway" (`import_anyway`) records the same shape, and
+each re-run carries the document's earlier answers of both kinds (their
+accounts and statement assignments, for accounts the caller edits).
 Other kinds can only be dismissed for now (`409
 review-resolution-unsupported`). Review tools, same callers and open-item
 rule as resolve unless noted: `POST /review/{id}/correct` `{"document"?:

@@ -46,7 +46,13 @@ A resolution is a typed body whose ``kind`` must equal the item's kind
   named rows (only rows imported from the item's document, ones the caller
   edits) and, with ``confirm`` (default), moves the item's pending rows to
   ``confirmed`` (for ``reconciliation_*`` items: every pending row of the
-  document on the item's account).
+  document on the item's account). ``{"kind", "import_as_read": true}``
+  answers a brokerage statement held back because its figures do not add
+  up (``investment_reconciliation_failed``, or ``investment_low_confidence``
+  with ``reconciliation`` its only doubt; ``422`` for any other item, or
+  with ``transactions``): the statement is imported again as printed into
+  the item's account (an account the caller edits), without a balance
+  snapshot.
 
 Other kinds can only be dismissed for now (``409
 review-resolution-unsupported``).
@@ -171,6 +177,14 @@ class ResolveLowConfidence(_Input):
     kind: Literal["low_confidence_field"]
     transactions: list[TransactionFix] = Field(default_factory=list, max_length=FIXES_MAX)
     confirm: bool = True
+    #: Import the item's held brokerage statement as printed (module doc).
+    import_as_read: bool = False
+
+    @model_validator(mode="after")
+    def _as_read_alone(self) -> Self:
+        if self.import_as_read and self.transactions:
+            raise ValueError("import_as_read takes no transactions")
+        return self
 
 
 ReviewResolution = Annotated[

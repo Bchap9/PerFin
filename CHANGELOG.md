@@ -9,10 +9,10 @@ All notable changes to PerFin are recorded here. The format follows
 The current release candidate is `v1.0.0-rc.4`; the final `v1.0.0` follows the
 external security review. Every phase (0-7) is implemented. Alembic head is
 `0012` (unreleased; `0009` in rc.4). Unreleased work, on 2026-11-06: SPDX;
-backend ruff, ruff format, mypy --strict (678 source files), bandit, OpenAPI
-drift and 8085 pytest tests with `-n 8`, of which the OCR and Helm tests (67)
+backend ruff, ruff format, mypy --strict (679 source files), bandit, OpenAPI
+drift and 8111 pytest tests with `-n 8`, of which the OCR and Helm tests (67)
 need Tesseract and `helm` and could not run in that environment; frontend
-eslint, tsc, 474 vitest tests in 58 files and the production build. As of rc.2: `pip-audit` finds no known vulnerabilities and
+eslint, tsc, 485 vitest tests in 58 files and the production build. As of rc.2: `pip-audit` finds no known vulnerabilities and
 `npm audit --audit-level=high` passes with 10 moderate advisories in dev
 tooling (eslint, typescript-eslint, minimatch), none high.
 CI is green end to end on GitHub Actions for commit `21d2b38`: `ci` run
@@ -243,6 +243,30 @@ What remains (details in docs/ROADMAP.md):
   `reconciliation_failed`/`reconciliation_unavailable` item is accepted
   once it adds up (its pending rows confirmed, its closing balance
   recorded).
+- **Import as read**: a brokerage statement held back because its figures
+  do not add up (`investment_reconciliation_failed`; or
+  `investment_low_confidence` with nothing to check against and no other
+  doubt) can now be imported on the person's word. The review item spells
+  out what did not add up, per check in plain words (positions, holdings
+  total, cash, account value) with what the statement prints, what its
+  rows come to and the difference (payload `differences`, `currency`,
+  `statement`), and offers **Import as read** beside "Teach PerFin" and
+  "Dismiss". It re-runs the import (`apply-mapping`, new `accept_as_read`
+  account ids) with the item's statement on the item's account: activity,
+  opening positions, prices and cash rows are written as printed, but **no
+  balance snapshot** is taken from totals that did not add up, and any
+  other doubt (a guessed date, an unread figure) still holds the statement.
+  The resolution (`import_as_read`, account, statement, failed checks,
+  `snapshot: false`) and the audit rows (`review.resolve`,
+  `document.import_requested`, `investment.import` with
+  `accepted_as_read`) record the acceptance. "Import anyway" on a
+  `statement_overlap` item goes through the same path and records the same
+  shape (now with `statement`), and each re-run carries the document's
+  earlier answers of both kinds, so a statement that both overlaps and
+  does not add up is not held again for what was already answered. The
+  review queue no longer offers "Confirm as read" on these items (nothing
+  of the statement is in the ledger to confirm), and "Map columns" only for
+  dates that could not be told apart.
 - Review fixes for items that could only be dismissed: cost per unit for
   opening positions with an unknown basis (`PATCH
   /investments/transactions/{id}`), the statement's balances for

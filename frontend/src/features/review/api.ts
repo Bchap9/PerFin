@@ -124,6 +124,77 @@ export function payloadIds(item: ReviewItem, key: string): string[] {
     : [];
 }
 
+/**
+ * One check a held brokerage statement failed (payload ``differences``):
+ * what the statement prints, what its rows add up to, and the difference
+ * (computed - printed). ``count`` is the number of positions for the
+ * ``positions`` check.
+ */
+export interface Difference {
+  check: string;
+  printed: string;
+  computed: string;
+  difference: string;
+  count: number | null;
+}
+
+export function payloadDifferences(item: ReviewItem): Difference[] {
+  const value: unknown = new Map(Object.entries(item.payload)).get(
+    "differences",
+  );
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  const out: Difference[] = [];
+  for (const entry of value as unknown[]) {
+    if (typeof entry !== "object" || entry === null) {
+      continue;
+    }
+    const check = field(entry, "check");
+    const printed = field(entry, "printed");
+    const computed = field(entry, "computed");
+    const difference = field(entry, "difference");
+    const count = field(entry, "count");
+    if (
+      typeof check !== "string" ||
+      typeof printed !== "string" ||
+      typeof computed !== "string" ||
+      typeof difference !== "string"
+    ) {
+      continue;
+    }
+    out.push({
+      check,
+      printed,
+      computed,
+      difference,
+      count: typeof count === "number" ? count : null,
+    });
+  }
+  return out;
+}
+
+/**
+ * A brokerage statement held back by its figures that may be imported as
+ * printed: one that did not add up, or one with nothing to check against
+ * whose rows carry no other doubt (the server's ``acceptable_as_read``).
+ */
+export function canImportAsRead(item: ReviewItem): boolean {
+  if (item.kind !== "low_confidence_field") {
+    return false;
+  }
+  const reason = item.reason ?? payloadString(item, "reason");
+  if (reason === "investment_reconciliation_failed") {
+    return true;
+  }
+  const fields = payloadIds(item, "fields");
+  return (
+    reason === "investment_low_confidence" &&
+    fields.length === 1 &&
+    fields[0] === "reconciliation"
+  );
+}
+
 /** A ranked transaction the receipt matcher suggests (``receipt_match`` items). */
 export interface ReceiptSuggestion {
   transactionId: string;
@@ -296,6 +367,17 @@ export function lowConfidenceResolution(
     kind: "low_confidence_field",
     transactions: [...fixes],
     confirm,
+    import_as_read: false,
+  };
+}
+
+/** "Import as read": the item's held brokerage statement, imported as printed. */
+export function importAsReadResolution(): Schemas["ResolveLowConfidence"] {
+  return {
+    kind: "low_confidence_field",
+    transactions: [],
+    confirm: false,
+    import_as_read: true,
   };
 }
 

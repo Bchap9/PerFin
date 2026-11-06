@@ -561,7 +561,14 @@ def test_overlapping_statement_imported_anyway(env: Env) -> None:
             json={"kind": "possible_duplicate", "decision": "reject"},
         )
         assert resolved.status_code == 200, resolved.text
-        assert resolved.json()["resolution"]["import_anyway"] is True
+        resolution = resolved.json()["resolution"]
+        assert resolution["import_anyway"] is True
+        # The same shape as "import as read" (app.domain.review.service).
+        assert (resolution["account_id"], resolution["target"], resolution["statement"]) == (
+            str(account.id),
+            "statement",
+            0,
+        )
     assert env.run(APPLY_MAPPING_JOB_TYPE)
     assert env.document(second).status is DocumentStatus.PROCESSED
     assert env.open_reviews(second) == []

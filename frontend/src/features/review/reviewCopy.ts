@@ -5,7 +5,15 @@
  * every reason has words a person can act on.
  */
 import { formatDate } from "../../lib/dates";
-import { payloadNumber, payloadString, type ReviewItem } from "./api";
+import { formatDecimal, formatMoney } from "../../lib/money";
+import {
+  payloadDifferences,
+  payloadIds,
+  payloadNumber,
+  payloadString,
+  type Difference,
+  type ReviewItem,
+} from "./api";
 
 export interface Explanation {
   /** Short heading for the card. */
@@ -50,6 +58,56 @@ export function payloadPeriod(
   }
   return `${formatDate(start) ?? start} – ${formatDate(end) ?? end}`;
 }
+
+/** An amount of the item's currency (a plain number when it names none). */
+function money(amount: string, currency: string | null): string {
+  const shown =
+    currency === null
+      ? formatDecimal(amount, {
+          minimumFractionDigits: 2,
+          maximumFractionDigits: 2,
+        })
+      : formatMoney(amount, currency);
+  return shown ?? amount;
+}
+
+function unsigned(amount: string): string {
+  return amount.trim().replace(/^[-+\u2212]/, "");
+}
+
+/** One failed brokerage check in plain words, with its difference. */
+export function differenceText(
+  difference: Difference,
+  currency: string | null,
+): string {
+  const printed = money(difference.printed, currency);
+  const computed = money(difference.computed, currency);
+  const apart = `a difference of ${money(unsigned(difference.difference), currency)}`;
+  switch (difference.check) {
+    case "positions": {
+      const count = difference.count ?? 1;
+      const which = count === 1 ? "1 holding" : `${String(count)} holdings`;
+      return `Positions: for ${which}, quantity × price comes to ${computed}, but the statement prints a market value of ${printed} (${apart}).`;
+    }
+    case "holdings_total":
+      return `Holdings total: the holdings read add up to ${computed}, but the statement prints a total of ${printed} (${apart}).`;
+    case "cash":
+      return `Cash: the opening cash plus this period's activity comes to ${computed}, but the statement prints a closing cash of ${printed} (${apart}).`;
+    case "total_value":
+      return `Account value: the holdings plus the cash come to ${computed}, but the statement prints an account value of ${printed} (${apart}).`;
+    default:
+      return `${difference.check}: ${computed} read against ${printed} printed (${apart}).`;
+  }
+}
+
+/** What did not add up on a held brokerage statement, one sentence per check. */
+export function differenceTexts(item: ReviewItem): string[] {
+  const currency = payloadString(item, "currency");
+  return payloadDifferences(item).map((d) => differenceText(d, currency));
+}
+
+const AS_READ_STEP =
+  "“Import as read” if the statement itself is off (rounding, items it leaves out): its trades, holdings and prices are imported as printed, but no account value is recorded from this statement.";
 
 const ACCOUNT_STEPS = [
   "Choose the account below and import.",
@@ -432,21 +490,47 @@ const COPY: Readonly<Record<string, Copy>> = {
       "If a trade really happened twice, add it by hand.",
     ],
   }),
-  "low_confidence_field:investment_low_confidence": () => ({
-    title: "Dates may be wrong",
-    what: "PerFin could not tell the day from the month in this file's dates, so the statement was held back.",
-    steps: [
-      "Open “Map columns”, choose the right date format, and save.",
-      "For a PDF, use “Teach PerFin” to show the statement period and the table.",
-    ],
-  }),
-  "low_confidence_field:investment_reconciliation_failed": () => ({
-    title: "Holdings do not add up",
-    what: "The positions read from this statement do not add up to its totals, so it was held back.",
-    steps: [
-      "Process the file again; if it still fails, enter the activity by hand.",
-    ],
-  }),
+  "low_confidence_field:investment_low_confidence": (item) => {
+    const fields = payloadIds(item, "fields");
+    if (fields.length === 1 && fields[0] === "reconciliation") {
+      return {
+        title: "Nothing to check against",
+        what: "This statement prints no totals PerFin could check its holdings and cash against, so it was held back.",
+        why: "PerFin checks every statement's rows against its printed totals before importing it.",
+        steps: [
+          "Compare what was read with the statement (“Show document”).",
+          "“Import as read” imports its trades, holdings and prices as printed; no account value is recorded from this statement.",
+          "“Teach PerFin” to show where its totals are.",
+          "“Dismiss” to import nothing from it.",
+        ],
+      };
+    }
+    return {
+      title: "Dates may be wrong",
+      what: "PerFin could not tell the day from the month in this file's dates, so the statement was held back.",
+      steps: [
+        "Open “Map columns”, choose the right date format, and save.",
+        "For a PDF, use “Teach PerFin” to show the statement period and the table.",
+      ],
+    };
+  },
+  "low_confidence_field:investment_reconciliation_failed": (item) => {
+    const texts = differenceTexts(item);
+    return {
+      title: "Statement does not add up",
+      what:
+        texts.length === 0
+          ? "The figures read from this statement do not add up to its totals, so nothing of it was imported."
+          : `The figures read from this statement do not add up, so nothing of it was imported. ${texts.join(" ")}`,
+      why: "A statement can round or leave items out, but a misread table looks the same, so PerFin asks before importing it.",
+      steps: [
+        "Compare the figures with the statement (“Show document”).",
+        AS_READ_STEP,
+        "“Teach PerFin” if a table or a figure was read wrong.",
+        "“Dismiss” to import nothing from it.",
+      ],
+    };
+  },
   "low_confidence_field:position_mismatch": () => ({
     title: "Holdings differ",
     what: "The statement reports fewer shares than the account's history adds up to.",

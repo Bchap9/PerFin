@@ -423,6 +423,7 @@ def test_apply_mapping_queues_a_job_once_per_key(
         "statement": None,
         "assignments": [],
         "allow_overlap": [],
+        "accept_as_read": [],
         "requested_by": str(owner.user.id),
     }
     assert len(audits) == 1
@@ -470,6 +471,11 @@ def test_apply_mapping_refusals(
     assert viewer.post(url, json={}).status_code == 403
     # Unknown fields are refused.
     assert owner.post(url, json={"mapping_id": None, "force": True}).status_code == 422
+    # Every account answered for must be one the caller edits (here: none such).
+    for answer in ("allow_overlap", "accept_as_read"):
+        response = owner.post(url, json={answer: [str(uuid.uuid4())]})
+        assert response.status_code == 404
+        assert problem_type(response) == "account-not-found"
 
 
 def test_apply_mapping_on_a_tsv_result_with_table_and_rerun(

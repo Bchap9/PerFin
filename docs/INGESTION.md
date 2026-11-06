@@ -857,8 +857,27 @@ OFX `INVSTMTRS` in the sandbox or from a PDF/scan's pages in the worker.
   statement that does not reconcile, or has any row or position below the
   threshold, writes **nothing** (investment rows have no pending state) and
   raises `low_confidence_field` `investment_reconciliation_failed` (checks,
-  failed checks, mismatched positions, cash and totals) or
-  `investment_low_confidence`; a statement with any date before
+  failed checks, mismatched positions, cash and totals, the statement's
+  index, the account's currency and `differences`: per failed check
+  `printed`, `computed` and `difference` = computed - printed, `count` for
+  `positions`) or `investment_low_confidence`. Real statements do not
+  always add up on their own (rounding, items the issuer leaves out), so
+  the review queue offers **Import as read** for an
+  `investment_reconciliation_failed` item, and for an
+  `investment_low_confidence` item whose only doubt is `reconciliation` (a
+  document statement with nothing to check against): the stored
+  extraction is imported again (`apply-mapping`) with the item's statement
+  on the item's account and that account in `accept_as_read`. The
+  statement is then imported as printed (activity, opening positions,
+  prices, cash rows, its statement record) but writes **no balance
+  snapshot**: the account's value is never taken from totals that did not
+  add up. Any other doubt (a guessed date, an unread figure, a date before
+  1900) still holds it. The answer is recorded in the item's resolution
+  (`import_as_read`, account, statement, failed checks, `snapshot: false`)
+  and audited (`review.resolve`, `document.import_requested` with
+  `accept_as_read`, `investment.import` with `accepted_as_read`); a later
+  "Import anyway" on the same document keeps it, as "Import as read" keeps
+  an earlier "Import anyway". A statement with any date before
   1900-01-01 is held the same way (`investment_date_out_of_range`,
   SECURITY.md F8); OFX with nothing to check is imported like
   an OFX bank statement. Otherwise: securities by CUSIP, ISIN, then symbol,
@@ -1089,8 +1108,9 @@ reconciliation, per-field confidence).
   `period_start`/`period_end`, `other_document_id` with its
   `other_period_start`/`other_period_end`, `others`) asks. *Confirm*
   ("Same statement — skip") records it as `skipped`; *reject* ("Import
-  anyway") re-runs the import with the account in `allow_overlap`, and the
-  row hashes still skip rows already recorded. Statements that only share
+  anyway") re-runs the import with the account in `allow_overlap` (the
+  same path as "Import as read", carrying the document's earlier answers
+  of both kinds), and the row hashes still skip rows already recorded. Statements that only share
   their edges (one closing on the 31st, the next opening on the 31st) and
   overlapping CSV exports are left to the row hashes. Two OFX/QFX files are
   compared by their declared windows: the same `DTSTART`/`DTEND` is the same
@@ -1531,6 +1551,10 @@ Per-reason fixes in the review UI: cost basis per unit for opening
 positions with an unknown basis (`PATCH /investments/transactions/{id}`),
 opening/closing balance for statements that do not add up ("Check and
 accept": confirmed rows and a balance snapshot once it reconciles),
+"Import as read" for brokerage statements held back by their figures (what
+did not add up is spelled out per check: positions, holdings total, cash,
+account value, with the difference; imported as printed, no balance
+snapshot),
 skipped lines highlighted on the page (parsers record the boxes of the
 lines they skip; `lines_skipped` items carry them) with "Teach PerFin",
 and "Map columns"/"Teach PerFin" for brokerage dates that could not be

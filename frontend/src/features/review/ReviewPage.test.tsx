@@ -196,6 +196,105 @@ describe("review queue", () => {
     });
   });
 
+  it("imports a brokerage statement that does not add up as read", async () => {
+    const held = {
+      reason: "investment_reconciliation_failed",
+      account_id: "a-1",
+      statement: 1,
+      currency: "USD",
+      failed: ["cash"],
+      differences: [
+        {
+          check: "cash",
+          printed: "412.150000",
+          computed: "412.450000",
+          difference: "0.300000",
+        },
+      ],
+    };
+    const api = reviewApi(
+      [
+        item("r-1", "low_confidence_field", held, {
+          reason: "investment_reconciliation_failed",
+          next_step: "correct_fields",
+        }),
+      ],
+      "member",
+      {
+        "POST /api/v1/review/:id/resolve": () =>
+          json(
+            item("r-1", "low_confidence_field", held, { state: "resolved" }),
+          ),
+      },
+    );
+    renderApp("/review");
+    const user = userEvent.setup();
+    expect(
+      await screen.findByText(/a difference of \$0\.30/),
+    ).toBeInTheDocument();
+    expect(screen.getByText(/closing cash of \$412\.15/)).toBeInTheDocument();
+    // Nothing of it is in the ledger: no rows to confirm.
+    expect(
+      screen.queryByRole("button", { name: "Confirm as read" }),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: "Dismiss" }),
+    ).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Import as read" }));
+    await waitFor(() => {
+      expect(
+        api.callsTo("POST", "/api/v1/review/:id/resolve")[0]?.body,
+      ).toEqual({
+        kind: "low_confidence_field",
+        transactions: [],
+        confirm: false,
+        import_as_read: true,
+      });
+    });
+  });
+
+  it("offers no 'import as read' for a statement whose dates are a guess", async () => {
+    reviewApi([
+      item(
+        "r-1",
+        "low_confidence_field",
+        {
+          reason: "investment_low_confidence",
+          account_id: "a-1",
+          fields: ["reconciliation", "trade_date"],
+        },
+        { reason: "investment_low_confidence" },
+      ),
+    ]);
+    renderApp("/review");
+    expect(await screen.findByText("Dates may be wrong")).toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: "Import as read" }),
+    ).not.toBeInTheDocument();
+  });
+
+  it("offers 'import as read' for a statement with nothing to check against", async () => {
+    reviewApi([
+      item(
+        "r-1",
+        "low_confidence_field",
+        {
+          reason: "investment_low_confidence",
+          account_id: "a-1",
+          fields: ["reconciliation"],
+        },
+        { reason: "investment_low_confidence" },
+      ),
+    ]);
+    renderApp("/review");
+    expect(
+      await screen.findByText("Nothing to check against"),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: "Import as read" }),
+    ).toBeInTheDocument();
+  });
+
   it("offers 'same statement' and 'import anyway' for an overlapping statement", async () => {
     const overlap = {
       reason: "statement_overlap",
