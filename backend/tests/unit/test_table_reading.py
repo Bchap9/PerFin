@@ -1109,6 +1109,79 @@ def test_a_holding_printed_by_its_name_alone_is_kept_by_that_name() -> None:
     assert "holdings_total" in statement.reconciliation.checks
 
 
+@pytest.mark.parametrize(
+    ("first", "second"),
+    [
+        ("2031 (Example Funds)", "2034 (Example Funds)"),
+        ("Class R6", "Class R1"),
+        ("Core Total Market Portfolio", "Core Small Cap Portfolio"),
+    ],
+)
+def test_a_wrapped_line_in_title_case_is_the_rest_of_a_name_in_capitals(
+    first: str, second: str
+) -> None:
+    """Only a sentence is a note: a line in title case under a name in capitals
+    is the part that tells two holdings of that name apart."""
+    portfolio = [(100, "EXAMPLE COLLEGE PORTFOLIO"), (250, "10"), (330, "$50.00")]
+    statement = _generic(
+        _held(
+            [*portfolio, (420, "$500.00")],
+            [(100, first)],
+            [*portfolio, (420, "$500.00")],
+            [(100, second)],
+        ),
+        cash=("$0.00", "$0.00"),
+        value="$1,000.00",
+    )
+    assert [(p.security.symbol, p.security.name) for p in statement.positions] == [
+        (None, f"EXAMPLE COLLEGE PORTFOLIO {first}"),
+        (None, f"EXAMPLE COLLEGE PORTFOLIO {second}"),
+    ]
+
+
+def test_a_sentence_under_an_identified_name_stays_part_of_it() -> None:
+    """The note rule is for holdings nothing else identifies: a line under a
+    holding with a symbol, or one a CUSIP line follows, is read as before (part
+    of its name), so income naming it still finds it."""
+    rows: Drawn = [
+        [(40, "Holdings")],
+        [(40.0, "Symbol"), *_HOLDINGS[1:], (420, "Market Value")],
+        [(40, "ZZCR"), (100, "EXAMPLE TR"), (250, "10"), (330, "$50.00"), (420, "$500.00")],
+        [(100, "Core Total Market ETF")],
+        [(40, "ZZCS"), (100, "EXAMPLE TR"), (250, "10"), (330, "$50.00"), (420, "$500.00")],
+        [(100, "Core small cap shares")],
+        [(40, "Total Holdings"), (420, "$1,000.00")],
+        None,
+        [(40, "Dividends")],
+        [(40, "Date"), (100, "Description"), (420, "Amount")],
+        [(40, "03/12"), (100, "EXAMPLE TR Core small cap shares"), (420, "12.50")],
+    ]
+    statement = _generic(rows, cash=("$1,000.00", "$1,012.50"), value="$2,012.50")
+    assert [(p.security.symbol, p.security.name) for p in statement.positions] == [
+        ("ZZCR", "EXAMPLE TR Core Total Market ETF"),
+        ("ZZCS", "EXAMPLE TR Core small cap shares"),
+    ]
+    assert _rows(statement) == [
+        ("dividend", "ZZCS", Decimal("12.50"), "EXAMPLE TR Core small cap shares")
+    ]
+    # Under a name a CUSIP line then identifies: part of the name too.
+    by_cusip = _generic(
+        [
+            [(40, "Holdings")],
+            _BY_NAME,
+            [(40, "EXAMPLE CITY REV"), (250, "10"), (330, "$100.00"), (420, "$1,000.00")],
+            [(40, "Series due serially")],
+            [(40, f"CUSIP: {cusip('99999ZAB')}")],
+            [(40, "Total Holdings"), (420, "$1,000.00")],
+        ],
+        cash=("$0.00", "$0.00"),
+        value="$1,000.00",
+    )
+    assert [(p.security.cusip, p.security.name) for p in by_cusip.positions] == [
+        (cusip("99999ZAB"), "EXAMPLE CITY REV Series due serially")
+    ]
+
+
 def test_a_trade_is_named_by_its_security_name_column_alone() -> None:
     """A sold-out security printed without a symbol is named by its Security Name;
     a description column never names a security that way."""

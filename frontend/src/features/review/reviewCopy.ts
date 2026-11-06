@@ -409,6 +409,14 @@ const COPY: Readonly<Record<string, Copy>> = {
       "Import older statements for this account first, oldest first, then process this file again.",
     ],
   }),
+  "low_confidence_field:investment_same_name_securities": () => ({
+    title: "Two holdings share a name",
+    what: "This statement lists holdings under the same name at different prices, with no ticker or CUSIP to tell them apart, so nothing of it was imported.",
+    steps: [
+      "Compare the holdings on the statement: a name may continue on a second line that tells them apart.",
+      "Use “Teach PerFin” to show the holdings table, or add these holdings by hand in Investments, then dismiss this item.",
+    ],
+  }),
   "low_confidence_field:investment_out_of_order": () => ({
     title: "Older than what is recorded",
     what: "This statement is older than activity already recorded for the account, so its new rows were not added.",

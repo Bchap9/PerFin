@@ -4,13 +4,16 @@
 ``app.domain.investments.statement_import`` step 4: such a security is
 matched by its exact normalised name, else created without a symbol; a later
 statement that prints a symbol or CUSIP for the same name fills it in; two
-different names are never merged. The API and the price feed handle a
-security without a symbol. Everything is synthetic.
+different names are never merged, nor one name in two plans (another
+institution or currency); an account keeps the security it holds. The API
+and the price feed handle a security without a symbol. Everything is
+synthetic.
 """
 
 from __future__ import annotations
 
 import calendar
+from collections import Counter
 from datetime import date
 from decimal import Decimal
 from typing import Any
@@ -20,7 +23,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.domain.accounts.models import Account
-from app.domain.investments.models import Holding, Security, security_name_key
+from app.domain.investments.models import Holding, Price, Security, security_name_key
 from app.domain.investments.statement_import import (
     InvestmentImport,
     import_investment_statements,
@@ -33,7 +36,7 @@ from app.ingestion.sandbox.protocol import (
 from app.integrations.prices.store import household_symbols
 from tests.fixtures.factories import make_household
 from tests.fixtures.imports import make_extracted_document
-from tests.fixtures.ledger import household_context
+from tests.fixtures.ledger import household_context, make_institution
 from tests.fixtures.wealth import make_brokerage, make_security
 
 pytestmark = pytest.mark.integration
@@ -216,6 +219,100 @@ def test_a_symbol_another_security_has_is_not_filled_in(db: Session) -> None:
     )
     assert result.statements == 1
     assert _catalogue(db, account)[0] == (None, "999999997", PLAN)
+
+
+MODERATE = "Moderate Portfolio"
+
+
+def _prices(db: Session, household_id: Any) -> Counter[tuple[str, Decimal]]:
+    """How many securities have each (name, price) on 31 January."""
+    with household_context(db, household_id):
+        rows = db.execute(
+            select(Security.name, Price.close)
+            .join(Price, Price.security_id == Security.id)
+            .where(Price.price_date == date(2024, 1, 31))
+        )
+        return Counter((name, Decimal(close).normalize()) for name, close in rows)
+
+
+def test_one_generic_name_in_two_plans_is_two_securities(db: Session) -> None:
+    hh = make_household(db)
+    with household_context(db, hh.id):
+        first = make_institution(db, hh.id, name="Example Plan A")
+        second = make_institution(db, hh.id, name="Example Plan B")
+    plan_a = make_brokerage(db, hh.id, institution_id=first.id)
+    plan_b = make_brokerage(db, hh.id, institution_id=second.id)
+    plan_eur = make_brokerage(db, hh.id, currency="EUR", institution_id=first.id)
+    ref = SecurityRef(name=MODERATE)
+    for account, price in ((plan_a, "15"), (plan_b, "40"), (plan_eur, "30")):
+        result, reviews = _import(db, account, _statement(1, _position(ref, "10", price)))
+        # Each plan's statement is imported, under a security of its own.
+        assert (result.statements, result.securities_created, reviews) == (1, 1, [])
+    assert [name for _, _, name in _catalogue(db, plan_a)] == [MODERATE] * 3
+    # Each keeps its own price: plan A is still valued at 10 x 15.
+    assert _prices(db, hh.id) == {
+        (MODERATE, Decimal(15)): 1,
+        (MODERATE, Decimal(40)): 1,
+        (MODERATE, Decimal(30)): 1,
+    }
+
+    # Another account at plan A's institution, in its currency: the same
+    # portfolio of the same plan, so the same security.
+    sibling = make_brokerage(db, hh.id, institution_id=first.id)
+    result, _ = _import(db, sibling, _statement(2, _position(ref, "4", "16")))
+    assert (result.statements, result.securities_created) == (1, 0)
+
+
+def test_two_plans_without_an_institution_never_share_a_name(db: Session) -> None:
+    hh = make_household(db)
+    plan_a, plan_b = make_brokerage(db, hh.id), make_brokerage(db, hh.id)
+    ref = SecurityRef(name=MODERATE)
+    _import(db, plan_a, _statement(1, _position(ref, "10", "15")))
+    result, _ = _import(db, plan_b, _statement(1, _position(ref, "10", "40")))
+    assert result.securities_created == 1
+    assert _prices(db, hh.id) == {(MODERATE, Decimal(15)): 1, (MODERATE, Decimal(40)): 1}
+
+
+def test_an_account_keeps_the_security_it_holds_by_that_name(db: Session) -> None:
+    hh = make_household(db)
+    account = make_brokerage(db, hh.id)
+    with household_context(db, hh.id):
+        held = make_security(db, hh.id, symbol="ZZA", name="Example Growth Fund")
+    ref = SecurityRef(name="Example Growth Fund")
+    first, _ = _import(db, account, _statement(1, _position(ref, "10", "20")))
+    # The only security of that name, held by no account: that one.
+    assert first.securities_created == 0
+    with household_context(db, hh.id):
+        make_security(db, hh.id, symbol="ZZB", name="Example Growth Fund")
+    # A second security of that name appears: the account keeps the one it holds.
+    second, _ = _import(db, account, _statement(2, _position(ref, "10", "21")))
+    assert (second.statements, second.securities_created) == (1, 0)
+    with household_context(db, hh.id):
+        rows = db.execute(select(Holding).where(Holding.account_id == account.id)).scalars()
+        assert {(h.security_id, h.quantity) for h in rows if h.quantity} == {(held.id, Decimal(10))}
+
+
+def test_one_name_at_two_prices_in_one_statement_is_held(db: Session) -> None:
+    """Two holdings printed with the same name at different prices are two
+    securities nothing tells apart: nothing is written, a person is told."""
+    hh = make_household(db)
+    account = make_brokerage(db, hh.id)
+    ref = SecurityRef(name="EXAMPLE COLLEGE PORTFOLIO")
+    result, reviews = _import(
+        db, account, _statement(1, _position(ref, "10", "50"), _position(ref, "8", "40"))
+    )
+    assert (result.statements, result.securities_created) == (0, 0)
+    assert [(r["reason"], r["names"]) for r in reviews] == [
+        ("investment_same_name_securities", ["EXAMPLE COLLEGE PORTFOLIO"])
+    ]
+    assert _catalogue(db, account) == []
+    assert _holdings(db, account) == {}
+    # The same name twice at one price is one security held in two places.
+    result, reviews = _import(
+        db, account, _statement(1, _position(ref, "10", "50"), _position(ref, "8", "50"))
+    )
+    assert (result.statements, reviews) == (1, [])
+    assert _holdings(db, account) == {"EXAMPLE COLLEGE PORTFOLIO": Decimal(18)}
 
 
 def test_the_name_key_is_exact_apart_from_case_spacing_and_width() -> None:

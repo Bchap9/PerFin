@@ -63,9 +63,13 @@ Two halves (INGESTION.md "Brokerage statements", SECURITY.md C12):
     (:func:`_leading_ticker`: ``ZZAB Example Index Fund``; never in an
     all-capitals name, whose first word is an issuer's); one with none at
     all is kept, **named by its name alone** (``SecurityRef`` with only a
-    name: an unlisted partnership, a 529 portfolio), and a line in sentence
-    case under a name in capitals is a note on it, not its name
-    (:func:`_sentence_under_capitals`). Footnote markers
+    name: an unlisted partnership, a 529 portfolio), and a sentence under
+    its name in capitals (a word a title would capitalise in lower case:
+    ``Valued from an independent estimate``) is a note on it, not its name
+    (:func:`_sentence_under_capitals`); a line in title case (``Class R6``,
+    ``2031 (Example Funds)``) is the rest of the name, and a holding with a
+    symbol, or a ``CUSIP:`` line after the sentence, keeps the sentence in
+    its name. Footnote markers
     in figures (``147.85A``, ``$8,412.36 c``) are dropped,
     ``unknown``/``N/A`` cost basis is unknown. A price is read per
     100 of face value (a bond: :attr:`InvestmentPosition.price_per_100`)
@@ -1190,6 +1194,10 @@ class _HoldingRow:
     isin: str | None = None
     #: The name is complete (its ``(SYMBOL)`` or a ``CUSIP:`` line was read).
     closed: bool = False
+    #: Sentence-case lines under a name in capitals that nothing identifies
+    #: yet (:func:`_sentence_under_capitals`): a note on the holding unless an
+    #: identifier or more of the name follows, which makes them part of it.
+    notes: list[str] = field(default_factory=list)
 
 
 @dataclass
@@ -1456,7 +1464,7 @@ class BrokerageStatementParser(DocumentParser):
     """
 
     name: ClassVar[str] = "brokerage_statement_generic"
-    version: ClassVar[str] = "5"
+    version: ClassVar[str] = "6"
     kind: ClassVar[Literal["statement", "payslip", "receipt"]] = "statement"
     display_name: ClassVar[str | None] = None
     #: Phrases on the first page that identify the institution (its name first).
@@ -1886,6 +1894,8 @@ class BrokerageStatementParser(DocumentParser):
         text = line.text.strip()
         ident = _IDENT_LINE.fullmatch(text)
         if ident is not None:
+            # Identified: the lines held back as a possible note are its name.
+            self._join_name(row, "")
             value = ident[2].upper()
             if ident[1].lower() == "cusip" and is_cusip(value):
                 row.cusip = row.cusip or value
@@ -1900,19 +1910,35 @@ class BrokerageStatementParser(DocumentParser):
         extra = _text(cells.get("name"))
         if not extra or row.closed:
             return False
-        if _sentence_under_capitals(row.raw_name, extra):
-            # ``Based on an independent appraisal`` under a name in capitals:
-            # a note on the holding, no part of its name.
+        if (
+            row.symbol is None
+            and row.cusip is None
+            and row.isin is None
+            and _sentence_under_capitals(row.raw_name, extra)
+        ):
+            # ``Valued from an independent estimate`` under a name in capitals
+            # nothing identifies: a note on the holding, unless an identifier
+            # or more of the name follows (then it is part of the name).
+            row.notes.append(extra)
             row.bbox = (*row.bbox[:3], line.bbox[3])
             return True
-        row.raw_name = f"{row.raw_name or ''} {extra}".strip()[:200]
+        self._join_name(row, extra)
+        row.bbox = (*row.bbox[:3], line.bbox[3])
+        return True
+
+    def _join_name(self, row: _HoldingRow, extra: str) -> None:
+        """Append the held-back note lines and ``extra`` to the row's name."""
+        parts = [*row.notes, extra] if extra else row.notes
+        if not parts:
+            return
+        row.notes = []
+        row.raw_name = " ".join([row.raw_name or "", *parts]).strip()[:200]
         if row.symbol_column:
             row.name = row.raw_name
         else:
+            closed = row.closed
             row.symbol, row.name = self._name_symbol(row.raw_name)
-            row.closed = row.symbol is not None
-        row.bbox = (*row.bbox[:3], line.bbox[3])
-        return True
+            row.closed = closed or row.symbol is not None
 
     def _wraps_name(self, line: ViewLine, collected: _Collected) -> bool:
         """A line worded like a section heading that is the rest of a holding's name.
@@ -2893,15 +2919,29 @@ def _per_100(row: _HoldingRow) -> bool:
 _CASH_TYPES: Final = frozenset({"deposit", "withdrawal"})
 
 
+#: Words a title in title case leaves in lower case (``Portfolio of the ...``).
+_TITLE_MINOR_WORDS: Final = frozenset(
+    {"and", "the", "for", "from", "with", "into", "per", "via", "des", "del", "der", "von", "van"}
+)
+
+
 def _sentence_under_capitals(name: str | None, line: str) -> bool:
-    """``line`` is in sentence case under a name printed in capitals, and ends no
-    name (no ``(SYMBOL)``): a note on the holding, not the rest of its name."""
+    """``line`` is a sentence under a name printed in capitals: a note on the
+    holding (``Valued from an independent estimate``), not the rest of its name.
+
+    A sentence has a word after its first written in lower case that a title
+    would capitalise (``independent``, ``estimate``); a line in title case or
+    capitals (``Core Total Market ETF``, ``Class R6``, ``2031 (Example
+    Funds)``) is the rest of the name, and so is one ending in ``(SYMBOL)``.
+    """
     letters = [ch for ch in name or "" if ch.isalpha()]
-    return (
-        bool(letters)
-        and not any(ch.islower() for ch in letters)
-        and any(ch.islower() for ch in line)
-        and _PAREN_SYMBOL.search(line) is None
+    if not letters or any(ch.islower() for ch in letters):
+        return False
+    if _PAREN_SYMBOL.search(line) is not None:
+        return False
+    words = [w.strip(".,;:()\"'") for w in line.split()[1:]]
+    return any(
+        len(w) >= 3 and w.isalpha() and w.islower() and w not in _TITLE_MINOR_WORDS for w in words
     )
 
 
@@ -3045,7 +3085,7 @@ class PlaceholderBrokerageParser(BrokerageStatementParser):
     """Placeholder Brokerage (fictional): ``MM/DD/YYYY``, USD, signed amounts."""
 
     name: ClassVar[str] = "placeholder_brokerage"
-    version: ClassVar[str] = "3"
+    version: ClassVar[str] = "4"
     institution: ClassVar[str | None] = "placeholder-brokerage-account"
     display_name: ClassVar[str | None] = "Placeholder Brokerage"
     fingerprints: ClassVar[tuple[str, ...]] = (
@@ -3089,7 +3129,7 @@ class FidelityStatementParser(BrokerageStatementParser):
     """
 
     name: ClassVar[str] = "fidelity_investments_statement"
-    version: ClassVar[str] = "4"
+    version: ClassVar[str] = "5"
     institution: ClassVar[str | None] = "fidelity-investments-statement"
     display_name: ClassVar[str | None] = "Fidelity Investments"
     fingerprints: ClassVar[tuple[str, ...]] = ("fidelity investments", "investment report")

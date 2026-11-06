@@ -715,9 +715,13 @@ OFX `INVSTMTRS` in the sandbox or from a PDF/scan's pages in the worker.
     partnership, a 529 portfolio: `SecurityRef` with only a name, which must
     hold a letter or digit; names are bounded to 200 characters, whitespace
     collapsed and formula-neutralised); it counts in the holdings total like
-    any other. A line in sentence case under a name printed in capitals,
-    with no `(SYMBOL)` (`Valued from an independent estimate`), is a note
-    on the holding, not part of its name. A name wraps until
+    any other. A sentence under such a name printed in capitals (a word a
+    title would capitalise written in lower case, no `(SYMBOL)`: `Valued
+    from an independent estimate`) is a note on the holding, not part of
+    its name; a line in title case (`Class R6`, `2031 (Example Funds)`) is
+    the rest of the name, which may be all that tells two holdings apart,
+    and a holding with a symbol, or one a `CUSIP:` line then identifies,
+    keeps every wrapped line in its name. A name wraps until
     its `(SYMBOL)`, also when its next line reads like a section heading
     and ends the name with its `(SYMBOL)` (`EXAMPLE STRATEGIC` / `INCOME
     FUND (ZZSIX)`); without one such a line is the heading (`Dividends and
@@ -859,12 +863,21 @@ OFX `INVSTMTRS` in the sandbox or from a PDF/scan's pages in the worker.
   SECURITY.md F8); OFX with nothing to check is imported like
   an OFX bank statement. Otherwise: securities by CUSIP, ISIN, then symbol,
   then by name (the same words, case and spacing aside, after Unicode
-  NFKC; never a similar name): a security printed by its name alone is the
-  household's security of that name without identifiers, else the only
-  security carrying that name, else a new security **without a symbol**;
-  one printed with identifiers takes by name only a security that has
-  none (created in the account currency; a CUSIP, ISIN, and a symbol on a
-  security without one, are filled in from later statements);
+  NFKC; never a similar name). By name only a security in the account's
+  currency is taken, looked for in turn among those the account holds or
+  traded, those another account at its institution holds or traded, and
+  those no account holds or traded (added by hand): a generic name in
+  another plan is never the same security, and an account keeps the
+  security it holds when another of that name appears. A security printed
+  by its name alone takes, in the first of these groups with any security
+  of that name, the one without identifiers, else the only one, else (or
+  with none) a new security **without a symbol**; one printed with
+  identifiers takes by name only a security that has none (created in the
+  account currency; a CUSIP, ISIN, and a symbol on a security without
+  one, are filled in from later statements). Two positions of one
+  statement that take one security by name alone at different prices are
+  different securities nothing tells apart: the statement writes nothing
+  and raises `investment_same_name_securities` (`names`);
   activity as `investment_txn` with `import_hash` = sha256 of
   `perfin-invest-v1`, account, trade date, type, security, units, amount
   and the running index among identical rows (the same month as OFX and

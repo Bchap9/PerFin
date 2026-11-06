@@ -43,14 +43,24 @@ statements"). Per statement:
 4. **Securities**: found in the household's catalogue by CUSIP, ISIN, then
    symbol, else by name (:func:`~app.domain.investments.models.security_name_key`:
    the same words, case and spacing aside; never a similar name), else
-   created (quote currency = the account's). A security printed by its
-   name alone (``SecurityRef`` with no symbol, CUSIP or ISIN: an unlisted
-   partnership, a 529 portfolio) is the household's security of that name
-   with no identifier, else the one security carrying that name, else a
-   new one **without a symbol**; one printed with identifiers takes, by
-   name, only a security that has none. Identifiers a later statement adds
-   are filled in: a CUSIP or ISIN, and a symbol on a security without one
-   (unless another security already has that symbol).
+   created (quote currency = the account's). By name, only a security in
+   the account's currency is taken, looked for in turn among those the
+   account holds or traded, those another account at its institution holds
+   or traded, and those no account holds or traded (added by hand), so a
+   generic name (``Moderate Portfolio``) in another plan is never the same
+   security and an account keeps the security it already holds when
+   another of that name appears. A security printed by its name alone
+   (``SecurityRef`` with no symbol, CUSIP or ISIN: an unlisted
+   partnership, a 529 portfolio) takes, in the first of those groups with
+   any security of the name, the one with no identifier, else the only
+   one, else (several) a new one; with none it is created **without a
+   symbol**. One printed with identifiers takes, by name, only a security
+   that has none. Two positions of one statement that take one security
+   by its name alone at different prices are different securities nothing
+   tells apart: the statement writes nothing and an
+   ``investment_same_name_securities`` item names them. Identifiers a
+   later statement adds are filled in: a CUSIP or ISIN, and a symbol on a
+   security without one (unless another security already has that symbol).
 5. **Activity** -> ``investment_txn`` with an ``import_hash`` (account,
    trade date, type, security, quantity, amount, running index among
    identical rows), so the same statement as OFX and as PDF, or overlapping
@@ -129,6 +139,7 @@ from app.domain.imports.statement_records import (
 )
 from app.domain.investments.models import (
     AssetClass,
+    Holding,
     InvestmentTxn,
     InvestmentTxnType,
     Lot,
@@ -252,9 +263,19 @@ class _Context:
     commit_cash: CommitCash
     user_id: uuid.UUID | None
     result: InvestmentImport
-    securities: dict[tuple[str, str, str], Security] = field(default_factory=dict)
+    securities: dict[tuple[uuid.UUID, str, str, str], Security] = field(default_factory=dict)
     #: The household's securities by name key (loaded on first use).
     by_name: dict[str, list[Security]] | None = None
+    #: The accounts that hold or traded each security (loaded on first use).
+    used_by: dict[uuid.UUID, set[uuid.UUID]] | None = None
+    #: The household's accounts at each institution (loaded on first use).
+    peers: dict[uuid.UUID, set[uuid.UUID]] = field(default_factory=dict)
+
+    def forget(self) -> None:
+        """Drop what a rolled-back statement may have added to the caches."""
+        self.securities.clear()
+        self.by_name = None
+        self.used_by = None
 
     @property
     def household_id(self) -> uuid.UUID:
@@ -470,21 +491,77 @@ def _unidentified(security: Security) -> bool:
     return security.symbol is None and security.cusip is None and security.isin is None
 
 
-def _by_name(ctx: _Context, ref: SecurityRef) -> Security | None:
-    """The security ``ref`` names by its name alone (module doc, step 4)."""
+def _used(ctx: _Context) -> dict[uuid.UUID, set[uuid.UUID]]:
+    """The accounts holding or having traded each of the household's securities."""
+    if ctx.used_by is None:
+        held = select(Holding.security_id, Holding.account_id).where(
+            Holding.household_id == ctx.household_id
+        )
+        traded = select(InvestmentTxn.security_id, InvestmentTxn.account_id).where(
+            InvestmentTxn.household_id == ctx.household_id,
+            InvestmentTxn.security_id.is_not(None),
+        )
+        ctx.used_by = defaultdict(set)
+        for security_id, account_id in ctx.db.execute(held.union(traded)):
+            if security_id is not None:
+                ctx.used_by[security_id].add(account_id)
+    return ctx.used_by
+
+
+def _peers(ctx: _Context, account: Account) -> set[uuid.UUID]:
+    """The household's accounts at ``account``'s institution (none when it has none)."""
+    institution = account.institution_id
+    if institution is None:
+        return set()
+    if institution not in ctx.peers:
+        found = ctx.db.execute(
+            select(Account.id).where(
+                Account.household_id == ctx.household_id,
+                Account.institution_id == institution,
+            )
+        )
+        ctx.peers[institution] = set(found.scalars())
+    return ctx.peers[institution]
+
+
+def _by_name(ctx: _Context, ref: SecurityRef, account: Account) -> Security | None:
+    """The security ``ref`` names by its name (module doc, step 4).
+
+    Only a security in the account's currency, looked for in turn among the
+    securities the account itself holds or traded, those another account at
+    its institution holds or traded, and those no account holds or traded
+    (added by hand): never one of another plan's securities that merely
+    shares a generic name. A reference printed by its name alone takes, in
+    the first of these groups with any security of the name, the one
+    without identifiers, else the only one (several: none, a new security
+    is made); one printed with identifiers takes only a security without
+    any.
+    """
     key = security_name_key(ref.name or "")
     if not key:
         return None
-    same = _named(ctx).get(key, [])
-    bare = [s for s in same if _unidentified(s)]
-    if bare:
-        return bare[0]
-    if not ref.identified and len(same) == 1:
-        return same[0]
+    same = [s for s in _named(ctx).get(key, []) if s.currency == account.currency]
+    if not same:
+        return None
+    used = _used(ctx)
+    peers = _peers(ctx, account)
+    groups = (
+        [s for s in same if account.id in used.get(s.id, ())],
+        [s for s in same if used.get(s.id, set()) & peers],
+        [s for s in same if not used.get(s.id)],
+    )
+    for group in groups:
+        if not group:
+            continue
+        bare = [s for s in group if _unidentified(s)]
+        if bare:
+            return bare[0]
+        if not ref.identified:
+            return group[0] if len(group) == 1 else None
     return None
 
 
-def _find_security(ctx: _Context, ref: SecurityRef) -> Security | None:
+def _find_security(ctx: _Context, ref: SecurityRef, account: Account) -> Security | None:
     db, household_id = ctx.db, ctx.household_id
     for column, value in (
         (Security.cusip, ref.cusip),
@@ -500,7 +577,7 @@ def _find_security(ctx: _Context, ref: SecurityRef) -> Security | None:
         security = found.scalar_one_or_none()
         if security is not None:
             return security
-    return _by_name(ctx, ref)
+    return _by_name(ctx, ref, account)
 
 
 def _symbol_free(ctx: _Context, symbol: str) -> bool:
@@ -513,7 +590,9 @@ def _symbol_free(ctx: _Context, symbol: str) -> bool:
 
 
 def _security(ctx: _Context, ref: SecurityRef, account: Account) -> Security:
+    # Per account: which security a name names depends on the account.
     key = (
+        account.id,
         ref.cusip or ref.isin or "",
         ref.symbol or "",
         "" if ref.identified else security_name_key(ref.name or ""),
@@ -521,7 +600,7 @@ def _security(ctx: _Context, ref: SecurityRef, account: Account) -> Security:
     cached = ctx.securities.get(key)
     if cached is not None:
         return cached
-    security = _find_security(ctx, ref)
+    security = _find_security(ctx, ref, account)
     if security is None:
         symbol = ref.symbol or ref.cusip or ref.isin
         security = Security(
@@ -546,6 +625,7 @@ def _security(ctx: _Context, ref: SecurityRef, account: Account) -> Security:
         if security.symbol is None and ref.symbol is not None and _symbol_free(ctx, ref.symbol):
             security.symbol = ref.symbol
     ctx.securities[key] = security
+    _used(ctx)[security.id].add(account.id)
     return security
 
 
@@ -950,6 +1030,34 @@ def _cash_statement(
     )
 
 
+class _NameClashError(Exception):
+    """Positions that name one security by its name print different prices."""
+
+    def __init__(self, names: list[str]) -> None:
+        super().__init__("positions named alike are different securities")
+        self.names = names
+
+
+def _name_clashes(positions: Sequence[tuple[InvestmentPosition, Security]]) -> list[str]:
+    """Names of securities that positions printed by name alone take at two prices.
+
+    One security has one price on a statement's date: two positions of the
+    same name at different prices are different securities the statement
+    tells apart by nothing the importer can read (module doc, step 4).
+    """
+    prices: dict[uuid.UUID, set[Decimal]] = defaultdict(set)
+    by_name: set[uuid.UUID] = set()
+    names: dict[uuid.UUID, str] = {}
+    for position, security in positions:
+        names[security.id] = security.name
+        if not position.security.identified:
+            by_name.add(security.id)
+        price = position.price_per_unit
+        if price is not None:
+            prices[security.id].add(price.normalize())
+    return [names[i] for i in names if i in by_name and len(prices[i]) > 1]
+
+
 @dataclass
 class _Written:
     created: list[InvestmentTxn]
@@ -969,6 +1077,9 @@ def _write(
     """Securities, activity, openings and the lot replay; None: held back (out of order)."""
     db = ctx.db
     positions = [(p, _security(ctx, p.security, account)) for p in statement.positions]
+    clashes = _name_clashes(positions)
+    if clashes:
+        raise _NameClashError(clashes)
     existing = _existing_hashes(ctx, account)
     recorded = _recorded(ctx, account)
     near: list[uuid.UUID] = []
@@ -1071,10 +1182,25 @@ def _commit(
     try:
         with db.begin_nested():
             written = _write(ctx, statement, account, on)
+    except _NameClashError as exc:
+        # Two holdings of one name at different prices: which is which next
+        # month cannot be told, so nothing of the statement is kept.
+        ctx.forget()
+        result.securities_created = created_before
+        ctx.review(
+            ReviewKind.LOW_CONFIDENCE_FIELD,
+            {
+                "reason": "investment_same_name_securities",
+                "field": "security",
+                "account_id": str(account.id),
+                "names": exc.names[:IDS_MAX],
+            },
+        )
+        return False
     except ProblemError as exc:
         # The lot engine refused the history (e.g. a sale of more units than
         # held): nothing of the statement is kept.
-        ctx.securities.clear()
+        ctx.forget()
         result.securities_created = created_before
         ctx.review(
             ReviewKind.LOW_CONFIDENCE_FIELD,

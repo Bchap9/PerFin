@@ -258,13 +258,21 @@ What remains (details in docs/ROADMAP.md):
   Funds)`) is no longer dropped. Statement parsers keep it as a
   `SecurityRef` with only a name (a letter or digit required; bounded,
   whitespace collapsed and formula-neutralised by the protocol), so it
-  counts in the holdings total; a line in sentence case under a name in
-  capitals is a note, not part of the name, and a trade or transfer of
-  units is named by its *Security Name* column (never by a description
-  column). The importer matches such a security by its exact normalised
-  name (NFKC, case-folded, spaces collapsed; never a similar name): the
-  household's security of that name without identifiers, else the only
-  security carrying that name, else a new one **without a symbol**. A
+  counts in the holdings total; a sentence under a name in capitals that
+  nothing else identifies is a note, not part of the name (a line in title
+  case, such as `Class R6` or `2031 (Example Funds)`, is the rest of the
+  name, and a holding with a symbol or CUSIP keeps every wrapped line), and
+  a trade or transfer of units is named by its *Security Name* column
+  (never by a description column). The importer matches such a security
+  by its exact normalised name (NFKC, case-folded, spaces collapsed; never
+  a similar name), only in the account's currency and among the
+  securities the account holds or traded, then those of another account
+  at its institution, then those no account holds (so one generic name in
+  two plans is two securities, and an account keeps the security it
+  holds): the one of that name without identifiers, else the only one,
+  else a new one **without a symbol**. Two positions of one statement
+  taking one security by its name at different prices hold the statement
+  (`investment_same_name_securities`). A
   later statement that prints a symbol, CUSIP or ISIN for the same name
   fills it in (a symbol only when no other security has it). Securities
   without a symbol (migration `0012`: `security.symbol` nullable, unique
@@ -275,8 +283,8 @@ What remains (details in docs/ROADMAP.md):
 
 ### Changed
 
-- Parser versions: `brokerage_statement_generic` 5,
-  `fidelity_investments_statement` 4, `placeholder_brokerage` 3,
+- Parser versions: `brokerage_statement_generic` 6,
+  `fidelity_investments_statement` 5, `placeholder_brokerage` 4,
   `layout_template` 2 (holdings named by their name alone),
   `statement_generic` 3, and the bank and card institution parsers built on
   it (`sample_national_checking`, `example_fcu_share`, `demo_card_services`,

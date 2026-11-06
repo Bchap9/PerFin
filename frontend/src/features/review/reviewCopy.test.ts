@@ -45,6 +45,7 @@ const REASONS: readonly [ReviewItem["kind"], string][] = [
   ["low_confidence_field", "investment_opening_basis_unknown"],
   ["low_confidence_field", "investment_lot_conflict"],
   ["low_confidence_field", "investment_out_of_order"],
+  ["low_confidence_field", "investment_same_name_securities"],
   ["low_confidence_field", "investment_possible_duplicate"],
   ["low_confidence_field", "investment_low_confidence"],
   ["low_confidence_field", "position_mismatch"],

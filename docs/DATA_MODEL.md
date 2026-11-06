@@ -773,7 +773,8 @@ Notes on structured imports (`app/domain/imports/`, Phase 2):
   `investment_low_confidence` (`fields`, `positions`, `activity`),
   `position_mismatch` (`securities`: `history`/`reported` units),
   `investment_lot_conflict` (`code`), `investment_out_of_order`
-  (`rows`) and `investment_date_out_of_range` (`earliest_allowed`), each
+  (`rows`), `investment_same_name_securities` (`names`) and
+  `investment_date_out_of_range` (`earliest_allowed`), each
   with `account_id`; nothing of a held statement is written.
 
 ## Tax vault

@@ -100,9 +100,13 @@ nor does a holding printed by its name alone (no ticker, CUSIP or ISIN: an
 unlisted partnership, a 529 portfolio): it is a `SecurityRef` with only a
 name (which must hold a letter or digit; it is bounded and
 formula-neutralised by the protocol), kept and counted like any other, and
-the importer matches it by its exact normalised name. Never invent a symbol
-for one, and never name a security by an activity's description column (a
-trade's *Security Name* column may).
+the importer matches it by its exact normalised name among the securities
+of the account (then of its institution) in its currency. Keep every
+wrapped line of such a name (`Class R6`, `2031 (Example Funds)` is often
+all that tells two portfolios apart; only a sentence under a name in
+capitals is a note), never invent a symbol for one, and never name a
+security by an activity's description column (a trade's *Security Name*
+column may).
 When a parser reads nothing usable the registry tries the next-best one. The fingerprint names
 `parser: brokerage_statement_generic`. Draw the layout from invented data
 (`SynthBrokerage` in `backend/tests/fixtures/synth_brokerage.py`, or a
