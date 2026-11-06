@@ -4,14 +4,16 @@
 from __future__ import annotations
 
 from decimal import Decimal
+from fractions import Fraction
 
 import pytest
-from hypothesis import given, settings
+from hypothesis import example, given, settings
 from hypothesis import strategies as st
 
 from app.domain.investments.returns import (
     Day,
     annualize,
+    cumulative_returns,
     deannualize,
     period_return,
     round_rate,
@@ -75,6 +77,9 @@ _values = st.integers(min_value=1, max_value=10**9).map(lambda n: Decimal(n) / 1
 
 @settings(max_examples=200, deadline=None)
 @given(_values, st.lists(_values, min_size=1, max_size=60))
+# An exact half-way TWR (-0.99951171875): multiplying the rounded daily
+# returns gave -0.99951171874999..., which rounded to the wrong side of the tie.
+@example(start=Decimal("20.48"), values=[Decimal("30524.04"), Decimal("0.01")])
 def test_property_twr_equals_mwr_without_flows(start: Decimal, values: list[Decimal]) -> None:
     """With no flows inside the period, TWR and the period MWR are both end/start - 1."""
     days = [Day(v) for v in values]
@@ -86,3 +91,35 @@ def test_property_twr_equals_mwr_without_flows(start: Decimal, values: list[Deci
     assert abs(money_weighted - time_weighted) <= Decimal("1e-12") * max(
         Decimal(1), abs(time_weighted)
     )
+
+
+def test_twr_of_a_flat_run_is_one_quotient() -> None:
+    days = [Day(Decimal("30524.04")), Day(Decimal("0.01"))]
+    assert twr(Decimal("20.48"), days) == Decimal("-0.99951171875")
+    assert round_rate(twr(Decimal("20.48"), days)) == Decimal("-0.9995117188")
+
+
+_flow = st.one_of(st.just(Decimal(0)), _values)
+_days = st.builds(Day, st.one_of(st.just(Decimal(0)), _values), _flow, _flow)
+
+
+def _exact_cumulative(start: Decimal, days: list[Day]) -> list[Fraction]:
+    growth, previous, out = Fraction(1), Fraction(start), []
+    for day in days:
+        invested = previous + Fraction(day.inflow)
+        if invested > 0:
+            growth *= (Fraction(day.value) + Fraction(day.outflow)) / invested
+        out.append(growth - 1)
+        previous = Fraction(day.value)
+    return out
+
+
+@settings(max_examples=200, deadline=None)
+@given(st.one_of(st.just(Decimal(0)), _values), st.lists(_days, min_size=1, max_size=40))
+def test_property_cumulative_returns_match_the_exact_chain(start: Decimal, days: list[Day]) -> None:
+    """The telescoped chain equals ``prod(1 + r) - 1`` in exact arithmetic, day by day."""
+    cumulative = cumulative_returns(start, days)
+    assert cumulative[-1] == twr(start, days)
+    for got, exact in zip(cumulative, _exact_cumulative(start, days), strict=True):
+        error = abs(Fraction(got) - exact)
+        assert error <= Fraction(1, 10**28) * max(Fraction(1), abs(exact))

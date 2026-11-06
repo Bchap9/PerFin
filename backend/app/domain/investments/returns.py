@@ -13,7 +13,9 @@ value), both non-negative::
 Inflows count from the start of the day (a first purchase earns that day's
 move), outflows at its end (a full sale ends the day at zero without a
 division by zero). A day with nothing invested (denominator 0) has return 0.
-The period return is ``prod(1 + r[d]) - 1``.
+The period return is ``prod(1 + r[d]) - 1``, evaluated telescoped
+(:func:`cumulative_returns`): a run of days without flows between them
+collapses to one quotient, ``V[last] / V[first-1]``.
 
 **Money-weighted return** (:func:`xirr`): the annual rate ``x`` with
 ``sum(c[i] / (1 + x) ** (days[i] / 365)) = 0`` for the investor's cash flows
@@ -69,30 +71,42 @@ class Day:
     outflow: Decimal = Decimal(0)
 
 
-def daily_returns(start_value: Decimal, days: Sequence[Day]) -> list[Decimal]:
-    """``r[d]`` of every day (module doc), unrounded."""
-    returns: list[Decimal] = []
+def cumulative_returns(start_value: Decimal, days: Sequence[Day]) -> list[Decimal]:
+    """``prod(1 + r[0..d]) - 1`` after every day ``d`` (module doc), unrounded.
+
+    Each day's factor ``1 + r[d]`` is ``N[d] / D[d]`` with ``N[d] = V[d] + Out[d]``
+    and ``D[d] = V[d-1] + In[d]``. When ``N[d] == D[d+1]`` (no flow between the
+    two days) the factors telescope to ``N[d+1] / D[d]``, so a run of days
+    without flows costs a single division instead of one rounded product per
+    day. Multiplying the rounded daily returns instead can push an exact
+    half-way result across the :data:`RATE_PLACES` tie: ``20.48 -> 30524.04 ->
+    0.01`` is exactly ``-0.99951171875`` but chains to ``-0.99951171874999...``.
+    """
+    cumulative: list[Decimal] = []
+    settled = Decimal(1)  # product of the closed runs
+    run: tuple[Decimal, Decimal] | None = None  # (numerator, denominator) of the open run
     previous = start_value
     with localcontext(calc_context()):
         for day in days:
             invested = previous + day.inflow
-            returns.append((day.value + day.outflow) / invested - 1 if invested > 0 else Decimal(0))
+            ending = day.value + day.outflow
+            if invested > 0 and run is not None and run[0] == invested:
+                run = (ending, run[1])
+            else:
+                if run is not None:
+                    settled *= run[0] / run[1]
+                # a day with nothing invested has return 0: it closes the run
+                run = (ending, invested) if invested > 0 else None
+            growth = settled * run[0] / run[1] if run is not None else settled
+            cumulative.append(growth - 1)
             previous = day.value
-    return returns
-
-
-def chain(returns: Sequence[Decimal]) -> Decimal:
-    """``prod(1 + r) - 1``, unrounded."""
-    growth = Decimal(1)
-    with localcontext(calc_context()):
-        for r in returns:
-            growth *= 1 + r
-        return growth - 1
+    return cumulative
 
 
 def twr(start_value: Decimal, days: Sequence[Day]) -> Decimal:
     """Time-weighted return of the period, unrounded (module doc)."""
-    return chain(daily_returns(start_value, days))
+    cumulative = cumulative_returns(start_value, days)
+    return cumulative[-1] if cumulative else Decimal(0)
 
 
 def annualize(period_return: Decimal, days: int) -> Decimal | None:
