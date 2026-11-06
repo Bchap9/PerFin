@@ -105,4 +105,55 @@ describe("document library", () => {
     });
     expect(screen.queryByRole("link", { name: "Download original" })).not.toBeInTheDocument();
   });
+
+  it("deletes only the file from the detail page and returns to the library", async () => {
+    const api = mockApi({
+      "GET /api/v1/auth/session": authedSession({ role: "member" }),
+      "GET /api/v1/documents/:id/regions": () => json(REGIONS),
+      "GET /api/v1/documents/:id/imported": () =>
+        json({ transactions: 3, investment_transactions: 0, loan_payments: 0, balance_snapshots: 1, child_documents: 0 }),
+      "GET /api/v1/documents/:id": () => json(DETAIL),
+      "DELETE /api/v1/documents/:id": () => new Response(null, { status: 204 }),
+      "GET /api/v1/documents": () => json({ items: [], next_cursor: null }),
+    });
+    renderApp("/documents/d-1");
+    const user = userEvent.setup();
+    await user.click(await screen.findByRole("button", { name: "Delete" }));
+    expect(await screen.findByText(/3 transactions, 1 balance snapshot/)).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Delete file" }));
+    await waitFor(() => {
+      expect(api.callsTo("DELETE", "/api/v1/documents/d-1")).toHaveLength(1);
+    });
+    expect(api.callsTo("DELETE", "/api/v1/documents/d-1")[0]?.search).toContain("with_data=false");
+    expect(await screen.findByText("No documents yet.")).toBeInTheDocument();
+  });
+
+  it("deletes a document with its imported data from the library", async () => {
+    const api = mockApi({
+      "GET /api/v1/auth/session": authedSession({ role: "member" }),
+      "GET /api/v1/documents/:id/imported": () =>
+        json({ transactions: 1, investment_transactions: 0, loan_payments: 0, balance_snapshots: 0, child_documents: 0 }),
+      "DELETE /api/v1/documents/:id": () => new Response(null, { status: 204 }),
+      "GET /api/v1/documents": () => json({ items: [row("d-1", "march.pdf")], next_cursor: null }),
+    });
+    renderApp("/documents/library");
+    const user = userEvent.setup();
+    await user.click(await screen.findByRole("button", { name: "Delete march.pdf" }));
+    await user.click(await screen.findByLabelText(/The file and everything imported from it/));
+    await user.click(screen.getByRole("button", { name: "Delete file and data" }));
+    await waitFor(() => {
+      expect(api.callsTo("DELETE", "/api/v1/documents/d-1")).toHaveLength(1);
+    });
+    expect(api.callsTo("DELETE", "/api/v1/documents/d-1")[0]?.search).toContain("with_data=true");
+  });
+
+  it("offers no delete to a viewer", async () => {
+    mockApi({
+      "GET /api/v1/auth/session": authedSession({ role: "viewer" }),
+      "GET /api/v1/documents": () => json({ items: [row("d-1", "march.pdf")], next_cursor: null }),
+    });
+    renderApp("/documents/library");
+    expect(await screen.findByText("march.pdf")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Delete march.pdf" })).not.toBeInTheDocument();
+  });
 });

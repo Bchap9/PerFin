@@ -701,6 +701,10 @@ POLICIES: Final[Mapping[str, Policy]] = MappingProxyType(
         f"GET {API}/documents/{{document_id}}/regions": scoped(
             "documents:read", role=V, params=SDOC
         ),
+        # Counts of the rows a delete with data would remove (visible accounts only).
+        f"GET {API}/documents/{{document_id}}/imported": scoped(
+            "documents:read", role=V, params=SDOC
+        ),
         f"POST {API}/documents/{{document_id}}/reprocess": scoped(
             "documents:write", role=M, params=SDOC
         ),

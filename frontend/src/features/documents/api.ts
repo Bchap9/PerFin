@@ -28,6 +28,7 @@ export const docKeys = {
   list: (filters: DocumentFilters) => [...queryRoots.documents, "library", filters] as const,
   one: (id: string) => [...queryRoots.documents, "detail", id] as const,
   regions: (id: string, page: number) => [...queryRoots.documents, "regions", id, page] as const,
+  imported: (id: string) => [...queryRoots.documents, "imported", id] as const,
 } as const;
 
 export const KIND_LABELS: Readonly<Record<DocumentKind, string>> = {
@@ -98,4 +99,23 @@ export function downloadUrl(id: string): string {
 
 export function reprocessDocument(id: string): Promise<unknown> {
   return unwrap(api.POST("/api/v1/documents/{document_id}/reprocess", { params: { path: { document_id: id } } }));
+}
+
+export type DocumentImported = Schemas["DocumentImportedOut"];
+
+export function getImported(id: string): Promise<DocumentImported> {
+  return unwrap(api.GET("/api/v1/documents/{document_id}/imported", { params: { path: { document_id: id } } }));
+}
+
+/**
+ * Delete a document. With `withData` the transactions, investment
+ * transactions, loan payments, balance snapshots and child documents imported
+ * from it go too; without it they stay, unlinked from the file.
+ */
+export async function deleteDocument(id: string, withData: boolean): Promise<void> {
+  await unwrap(
+    api.DELETE("/api/v1/documents/{document_id}", {
+      params: { path: { document_id: id }, query: { with_data: withData } },
+    }),
+  );
 }

@@ -7902,6 +7902,40 @@
         "title": "DocumentFix",
         "type": "object"
       },
+      "DocumentImportedOut": {
+        "description": "``GET /documents/{id}/imported``: what ``DELETE ?with_data=true`` would also remove.\n\nCounts only rows in accounts the caller can see. ``child_documents`` are\nattachments or archive members received from this file (an email or ZIP);\ntheir own imported rows are included in the other counts.",
+        "properties": {
+          "balance_snapshots": {
+            "title": "Balance Snapshots",
+            "type": "integer"
+          },
+          "child_documents": {
+            "title": "Child Documents",
+            "type": "integer"
+          },
+          "investment_transactions": {
+            "title": "Investment Transactions",
+            "type": "integer"
+          },
+          "loan_payments": {
+            "title": "Loan Payments",
+            "type": "integer"
+          },
+          "transactions": {
+            "title": "Transactions",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "transactions",
+          "investment_transactions",
+          "loan_payments",
+          "balance_snapshots",
+          "child_documents"
+        ],
+        "title": "DocumentImportedOut",
+        "type": "object"
+      },
       "DocumentKind": {
         "enum": [
           "statement",
@@ -22811,7 +22845,7 @@
   },
   "info": {
     "title": "PerFin",
-    "version": "1.0.0-rc.3"
+    "version": "1.0.0-rc.4"
   },
   "openapi": "3.1.0",
   "paths": {
@@ -28613,6 +28647,18 @@
               "title": "Document Id",
               "type": "string"
             }
+          },
+          {
+            "description": "Also delete the transactions, investment transactions, loan payments, balance snapshots and child documents imported from this file. Without it they stay, unlinked from the file.",
+            "in": "query",
+            "name": "with_data",
+            "required": false,
+            "schema": {
+              "default": false,
+              "description": "Also delete the transactions, investment transactions, loan payments, balance snapshots and child documents imported from this file. Without it they stay, unlinked from the file.",
+              "title": "With Data",
+              "type": "boolean"
+            }
           }
         ],
         "responses": {
@@ -28903,6 +28949,63 @@
           }
         },
         "summary": "Download the original (member or above; decrypted as it streams)",
+        "tags": [
+          "documents"
+        ]
+      }
+    },
+    "/api/v1/documents/{document_id}/imported": {
+      "get": {
+        "operationId": "get_document_imported_api_v1_documents__document_id__imported_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "document_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Document Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DocumentImportedOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {}
+            },
+            "description": "Problem details"
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {}
+            },
+            "description": "Problem details"
+          },
+          "409": {
+            "content": {
+              "application/problem+json": {}
+            },
+            "description": "Problem details"
+          },
+          "422": {
+            "content": {
+              "application/problem+json": {}
+            },
+            "description": "Problem details"
+          }
+        },
+        "summary": "Rows imported from a document (what a delete with data removes)",
         "tags": [
           "documents"
         ]

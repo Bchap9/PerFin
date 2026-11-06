@@ -16,8 +16,10 @@ import { Spinner } from "../../components/Spinner";
 import { Table } from "../../components/Table";
 import { errorMessage } from "../../lib/api/client";
 import { formatDateTime } from "../../lib/dates";
+import { useCanWrite } from "../accounts/api";
 import { STATUS_LABELS } from "../imports/api";
 import { statusTone } from "../imports/UploadPage";
+import { DeleteDocumentDialog } from "./DeleteDocumentDialog";
 import {
   docKeys,
   EMPTY_FILTERS,
@@ -72,6 +74,8 @@ export function DocumentsPage() {
   });
   const rows = query.data?.pages.flatMap((page) => page.items) ?? [];
   const searching = applied.q.trim() !== "";
+  const canWrite = useCanWrite();
+  const [deleting, setDeleting] = useState<DocumentRow | null>(null);
   return (
     <section aria-labelledby="page-title" className="ledger-stack">
       <div className="page-header">
@@ -181,6 +185,26 @@ export function DocumentsPage() {
               },
               { id: "year", header: "Tax year", cell: (row) => (row.tax_year === null ? "" : String(row.tax_year)) },
               { id: "when", header: "Received", cell: (row) => formatDateTime(row.created_at) ?? row.created_at },
+              ...(canWrite
+                ? [
+                    {
+                      id: "actions",
+                      header: "Actions",
+                      cell: (row: DocumentRow) => (
+                        <Button
+                          size="sm"
+                          variant="danger"
+                          aria-label={`Delete ${row.original_filename ?? "unnamed file"}`}
+                          onClick={() => {
+                            setDeleting(row);
+                          }}
+                        >
+                          Delete
+                        </Button>
+                      ),
+                    },
+                  ]
+                : []),
             ]}
           />
         ) : null}
@@ -195,6 +219,15 @@ export function DocumentsPage() {
           </Button>
         ) : null}
       </Card>
+      {deleting === null ? null : (
+        <DeleteDocumentDialog
+          documentId={deleting.id}
+          filename={deleting.original_filename ?? "Unnamed file"}
+          onClose={() => {
+            setDeleting(null);
+          }}
+        />
+      )}
     </section>
   );
 }

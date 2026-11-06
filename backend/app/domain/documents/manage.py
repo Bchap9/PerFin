@@ -34,7 +34,7 @@ from dataclasses import dataclass
 from typing import Any, Final
 
 from fastapi.responses import JSONResponse
-from sqlalchemy import func, select, tuple_, update
+from sqlalchemy import and_, func, select, tuple_, update
 from sqlalchemy.orm import Session
 from starlette.requests import HTTPConnection
 
@@ -55,6 +55,7 @@ from app.domain.accounts.visibility import (
     can_edit_account,
     get_visible_account,
     sees_all_accounts,
+    visible_account_filter,
 )
 from app.domain.documents import repo, search, service
 from app.domain.documents.blobstore import BlobStore, BlobStoreError, LocalFSBlobStore
@@ -73,6 +74,7 @@ from app.domain.documents.models import (
 from app.domain.documents.schemas import (
     INGEST_JOB_TYPE,
     DocumentDetailOut,
+    DocumentImportedOut,
     DocumentLinkIn,
     DocumentLinkOut,
     DocumentListItem,
@@ -92,6 +94,10 @@ log = get_logger(__name__)
 #: Household setting (``setting`` row, scope ``household``): ``true`` lets
 #: viewers download originals (SECURITY.md I1: off by default).
 VIEWER_DOWNLOAD_SETTING: Final = "documents.viewer_download"
+
+#: Deepest container nesting followed when deleting a document with its data
+#: (the intake expands one level, ``app.ingestion.children``; this is a guard).
+MAX_CHILD_DEPTH: Final = 8
 
 #: Link targets the Phase 2 API accepts (the others arrive with their phases).
 SUPPORTED_LINK_TARGETS: Final = frozenset({LinkTarget.TRANSACTION, LinkTarget.ACCOUNT})
@@ -666,10 +672,22 @@ def delete(
     *,
     store: BlobStore,
     request: HTTPConnection | None,
+    with_data: bool = False,
 ) -> None:
-    """Crypto-shred and delete a document (``service.delete_document``, G5)."""
+    """Crypto-shred and delete a document (``service.delete_document``, G5).
+
+    With ``with_data`` the rows imported from it go first: its transactions,
+    investment transactions, loan payments and balance snapshots, and the
+    documents received inside it (email attachments, ZIP members) with their
+    own imported rows. Each row goes through its own delete (audit, events,
+    transfer unlinking, lot replay, loan balance), so the caller must be able
+    to edit every one; one refusal rolls the whole deletion back. Without it
+    the imported rows stay and lose their link to the file.
+    """
     household_id = _household(principal)
     document = get_editable_document(db, principal, document_id)
+    if with_data:
+        _delete_imported(db, principal, document, store=store, request=request, depth=0)
     service.delete_document(
         db,
         store,
@@ -677,4 +695,169 @@ def delete(
         document_id=document.id,
         user_id=principal.user_id,
         request=request,
+    )
+
+
+def _imported_not_editable() -> ProblemError:
+    return forbidden(
+        "Some rows imported from this document are in accounts you cannot edit; "
+        "nothing was deleted."
+    )
+
+
+def _child_document_ids(
+    db: Session, household_id: uuid.UUID, document_id: uuid.UUID
+) -> list[uuid.UUID]:
+    return list(
+        db.execute(
+            select(Document.id).where(
+                Document.household_id == household_id,
+                Document.source_meta["parent_document_id"].astext == str(document_id),
+            )
+        ).scalars()
+    )
+
+
+def _delete_imported(
+    db: Session,
+    principal: Principal,
+    document: Document,
+    *,
+    store: BlobStore,
+    request: HTTPConnection | None,
+    depth: int,
+) -> None:
+    """Delete the rows imported from ``document`` and its child documents (see :func:`delete`)."""
+    # Imported here: these domains import the documents package themselves.
+    from app.domain.accounts.models import BalanceSnapshot
+    from app.domain.investments import transactions as investment_txns
+    from app.domain.investments.models import InvestmentTxn
+    from app.domain.loans import service as loans_service
+    from app.domain.loans.models import LoanPayment
+    from app.domain.transactions.models import Transaction
+
+    household_id = document.household_id
+    if depth <= MAX_CHILD_DEPTH:
+        for child_id in _child_document_ids(db, household_id, document.id):
+            child = get_editable_document(db, principal, child_id)
+            _delete_imported(db, principal, child, store=store, request=request, depth=depth + 1)
+            service.delete_document(
+                db,
+                store,
+                household_id=household_id,
+                document_id=child.id,
+                user_id=principal.user_id,
+                request=request,
+            )
+    transaction_ids = db.execute(
+        select(Transaction.id).where(
+            Transaction.household_id == household_id,
+            Transaction.source_document_id == document.id,
+        )
+    ).scalars()
+    for transaction_id in list(transaction_ids):
+        try:
+            row = transactions_service.get_visible_transaction(
+                db, principal, transaction_id, need="edit", lock=True
+            )
+        except ProblemError as error:
+            raise _imported_not_editable() from error
+        transactions_service.delete_transaction(db, principal, row, request=request)
+    # Newest first, so a sale goes before the purchase whose lots it used.
+    txn_ids = db.execute(
+        select(InvestmentTxn.id)
+        .where(
+            InvestmentTxn.household_id == household_id,
+            InvestmentTxn.source_document_id == document.id,
+        )
+        .order_by(InvestmentTxn.trade_date.desc(), InvestmentTxn.created_at.desc())
+    ).scalars()
+    for txn_id in list(txn_ids):
+        investment_txns.delete_txn(db, principal, txn_id, request=request)
+    payments = db.execute(
+        select(LoanPayment.loan_id, LoanPayment.id).where(
+            LoanPayment.household_id == household_id,
+            LoanPayment.source_document_id == document.id,
+        )
+    ).all()
+    for loan_id, payment_id in payments:
+        loans_service.delete_payment(db, principal, loan_id, payment_id, request=request)
+    snapshots = db.execute(
+        select(BalanceSnapshot).where(
+            BalanceSnapshot.household_id == household_id,
+            BalanceSnapshot.source_document_id == document.id,
+        )
+    ).scalars()
+    for snapshot in list(snapshots):
+        try:
+            get_visible_account(db, principal, snapshot.account_id, need="edit", lock=True)
+        except ProblemError as error:
+            raise _imported_not_editable() from error
+        audit(
+            db,
+            action="balance_snapshot.delete",
+            target_type="balance_snapshot",
+            target_id=snapshot.id,
+            before={
+                "account_id": str(snapshot.account_id),
+                "as_of_date": snapshot.as_of_date.isoformat(),
+                "balance": str(snapshot.balance),
+                "source": str(snapshot.source),
+                "source_document_id": str(document.id),
+            },
+            household_id=household_id,
+            user_id=principal.user_id,
+            request=request,
+        )
+        emit(db, household_id, "account.updated", {"account_id": str(snapshot.account_id)})
+        db.delete(snapshot)
+    db.flush()
+
+
+def imported(db: Session, principal: Principal, document_id: uuid.UUID) -> DocumentImportedOut:
+    """``GET /documents/{id}/imported``: the rows ``DELETE ?with_data=true`` would remove."""
+    from app.domain.accounts.models import BalanceSnapshot
+    from app.domain.investments.models import InvestmentTxn
+    from app.domain.loans.models import Loan, LoanPayment
+    from app.domain.transactions.models import Transaction
+
+    household_id = _household(principal)
+    document = service.get_visible_document(db, principal, document_id)
+    ids = [document.id]
+    frontier = [document.id]
+    for _ in range(MAX_CHILD_DEPTH + 1):
+        frontier = [c for p in frontier for c in _child_document_ids(db, household_id, p)]
+        if not frontier:
+            break
+        ids.extend(frontier)
+
+    def count(model: Any, document_column: Any, account_column: Any, *joins: Any) -> int:
+        query = select(func.count()).select_from(model)
+        for target, on in joins:
+            query = query.join(target, on)
+        query = query.where(
+            model.household_id == household_id,
+            document_column.in_(ids),
+            visible_account_filter(principal, account_column),
+        )
+        return int(db.execute(query).scalar_one())
+
+    return DocumentImportedOut(
+        transactions=count(Transaction, Transaction.source_document_id, Transaction.account_id),
+        investment_transactions=count(
+            InvestmentTxn, InvestmentTxn.source_document_id, InvestmentTxn.account_id
+        ),
+        loan_payments=count(
+            LoanPayment,
+            LoanPayment.source_document_id,
+            Loan.account_id,
+            (
+                Loan,
+                and_(Loan.household_id == LoanPayment.household_id, Loan.id == LoanPayment.loan_id),
+            ),
+        ),
+        balance_snapshots=count(
+            BalanceSnapshot, BalanceSnapshot.source_document_id, BalanceSnapshot.account_id
+        ),
+        child_documents=len(ids) - 1,
     )

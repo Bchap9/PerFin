@@ -110,6 +110,21 @@ class DocumentDetailOut(DocumentOut):
     can_edit: bool
 
 
+class DocumentImportedOut(BaseModel):
+    """``GET /documents/{id}/imported``: what ``DELETE ?with_data=true`` would also remove.
+
+    Counts only rows in accounts the caller can see. ``child_documents`` are
+    attachments or archive members received from this file (an email or ZIP);
+    their own imported rows are included in the other counts.
+    """
+
+    transactions: int
+    investment_transactions: int
+    loan_payments: int
+    balance_snapshots: int
+    child_documents: int
+
+
 class DocumentReceivedOut(BaseModel):
     """``POST /documents`` (``202``): the file is stored; ingestion runs in the worker.
 

@@ -6,7 +6,7 @@ All notable changes to PerFin are recorded here. The format follows
 
 ## Status
 
-The current release candidate is `v1.0.0-rc.3`; the final `v1.0.0` follows the
+The current release candidate is `v1.0.0-rc.4`; the final `v1.0.0` follows the
 external security review. Every phase (0-7) is implemented. Alembic head is
 `0009`. On 2026-11-05: SPDX; backend ruff, ruff format, mypy --strict (657
 source files), bandit, OpenAPI drift and 7742 pytest tests with `-n auto`,
@@ -37,6 +37,27 @@ What remains (details in docs/ROADMAP.md):
 ## [Unreleased]
 
 Nothing yet.
+
+## [1.0.0-rc.4] - 2026-11-06
+
+Fourth release candidate of 1.0.0. Documents can be deleted from the app,
+either the file alone or the file with everything imported from it. No
+migration; upgrading is a plain image update.
+
+### Added
+
+- Documents can be deleted from the app: a **Delete** button on the document
+  page and in each row of the document library (members and above who can
+  change the document). The confirmation offers two choices:
+  - **The file only**: the imported transactions, balances and other rows
+    stay, unlinked from the file, and the same file can be uploaded again
+    without being held as a duplicate.
+  - **The file and everything imported from it**: also deletes the
+    transactions, investment transactions, loan payments, balance snapshots
+    and attached documents (email attachments, ZIP members) that came from
+    it, showing how many of each first.
+- API: `DELETE /documents/{id}?with_data=true` deletes the imported rows with
+  the document, all or nothing; `GET /documents/{id}/imported` counts them.
 
 ## [1.0.0-rc.3] - 2026-11-05
 
