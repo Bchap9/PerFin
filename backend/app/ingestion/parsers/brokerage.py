@@ -91,7 +91,12 @@ from pydantic import ValidationError
 from app.core.money import sum_amounts
 from app.ingestion.parsers import confidence as conf
 from app.ingestion.parsers.base import Cell, DocumentParser, DocumentView, ParseOutcome, ViewLine
-from app.ingestion.parsers.table_statement import label_end
+from app.ingestion.parsers.table_statement import (
+    PeriodCandidates,
+    full_style,
+    label_end,
+    read_period,
+)
 from app.ingestion.parsers.text import (
     FULL_STYLES,
     MAX_TOKEN,
@@ -228,7 +233,6 @@ _LAST4: Final = re.compile(
     re.IGNORECASE,
 )
 _CURRENCY: Final = re.compile(r"\bcurrency\s*:?\s*([A-Z]{3})\b", re.IGNORECASE)
-_RANGE: Final = re.compile(r"\s(?:to|through|until|-|\u2013)\s", re.IGNORECASE)
 #: ``Account # Z12-345678``, ``Account Number: 123-456789``, ``Account XXXX-4821``.
 _ACCOUNT_LABELLED: Final = re.compile(
     r"\baccount\s{0,3}(?:#|number|no\.?)?\s{0,3}:?\s{0,3}"
@@ -781,7 +785,7 @@ class _ActivityRow:
 
 @dataclass
 class _Summary:
-    period_text: str | None = None
+    period: PeriodCandidates = field(default_factory=PeriodCandidates)
     as_of_text: str | None = None
     last4: str | None = None
     currency: str | None = None
@@ -1092,12 +1096,7 @@ class BrokerageStatementParser(DocumentParser):
             if slot != "ignore" and amounts and getattr(summary, slot) is None:
                 setattr(summary, slot, amounts[0])
             break
-        if summary.period_text is None:
-            for label in self.period_labels:
-                end = label_end(line.text, label)
-                if end is not None:
-                    summary.period_text = line.text[end:]
-                    break
+        summary.period.scan(line.text, self.period_labels)
         if summary.as_of_text is None:
             end = label_end(line.text, "as of")
             if end is not None:
@@ -1346,26 +1345,20 @@ class BrokerageStatementParser(DocumentParser):
         if hint in NUMERIC_DM and (not certain or style == hint):
             style, certain = hint, True
         chosen: DateStyle = style if style is not None else "mdy"
-        return (chosen, "ymd", "d_mon_y", "mon_d_y"), certain
+        # ``MM/DD`` rows take their year from the period (read_date's window).
+        yearless: DateStyle = "md" if chosen == "mdy" else "dm"
+        return (chosen, yearless, "ymd", "d_mon_y", "mon_d_y"), certain
 
-    def _period(self, summary: _Summary, styles: tuple[DateStyle, ...]) -> tuple[date, date] | None:
-        if summary.period_text is None:
-            return None
+    def _period(
+        self, summary: _Summary, styles: tuple[DateStyle, ...], view: DocumentView
+    ) -> tuple[date, date] | None:
         ordered: list[DateStyle] = [s for s in self.period_styles if s in FULL_STYLES]
         for style in styles:
-            if style in NUMERIC_DM and style in ordered:
-                ordered.remove(style)
-                ordered.insert(0, style)
-        parts = _RANGE.split(summary.period_text, maxsplit=1)
-        if len(parts) == 2:
-            start = find_dates(parts[0], ordered)
-            end = find_dates(parts[1], ordered)
-            if start and end and start[-1] <= end[0]:
-                return start[-1], end[0]
-        found = find_dates(summary.period_text, ordered)
-        if len(found) >= 2 and found[0] <= found[1]:
-            return found[0], found[1]
-        return None
+            numeric = full_style(style)
+            if numeric in NUMERIC_DM and numeric in ordered:
+                ordered.remove(numeric)
+                ordered.insert(0, numeric)
+        return read_period(summary.period.texts, ordered, view)
 
     @staticmethod
     def _read_date(
@@ -1536,11 +1529,13 @@ class BrokerageStatementParser(DocumentParser):
         """One account's statement and whether its dates were read with certainty."""
         summary = collected.summary
         if fallback is not None:
-            for slot in ("period_text", "as_of_text", "currency"):
+            for slot in ("as_of_text", "currency"):
                 if getattr(summary, slot) is None:
                     setattr(summary, slot, getattr(fallback, slot))
+            # The account's own labelled lines first, then the document's.
+            summary.period = PeriodCandidates([*summary.period.texts, *fallback.period.texts])
         styles, certain = self._styles(collected.activity, date_order)
-        period = self._period(summary, styles)
+        period = self._period(summary, styles, view)
         as_of: date | None = None
         if summary.as_of_text is not None:
             found = find_dates(summary.as_of_text, styles)

@@ -28,7 +28,7 @@ from dataclasses import dataclass, field
 from datetime import date
 from decimal import Decimal
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 import pytest
 from sqlalchemy import select
@@ -49,6 +49,7 @@ from app.domain.documents.models import (
     ReviewKind,
 )
 from app.domain.documents.schemas import INGEST_JOB_TYPE
+from app.domain.imports.models import StatementRecord
 from app.domain.imports.schemas import APPLY_MAPPING_JOB_TYPE, ApplyMapping
 from app.domain.imports.service import request_apply
 from app.domain.investments.models import (
@@ -60,12 +61,15 @@ from app.domain.investments.models import (
     Security,
 )
 from app.domain.investments.statement_import import OPENING_MEMO
+from app.domain.review import service as review_service
+from app.domain.review.schemas import ResolveDuplicate
 from app.domain.transactions.models import Transaction
 from app.ingestion.intake.upload import receive_upload
 from app.ingestion.sandbox.protocol import ExtractResult
 from app.workers.handlers import ingest
 from tests.fixtures import synth_brokerage as synth
 from tests.fixtures import synth_fidelity as fid
+from tests.fixtures import synth_fidelity_report as fidr
 from tests.fixtures.factories import Factories, UserRecord
 from tests.fixtures.imports import run_jobs
 from tests.fixtures.ledger import LedgerFactories
@@ -325,11 +329,29 @@ def test_next_month_adds_its_activity_and_moves_the_holdings(env: Env) -> None:
 def test_same_month_as_ofx_after_the_pdf_adds_nothing(env: Env) -> None:
     january, _ = synth.brokerage_series(seed=63)
     account = env.brokerage(january)
-    env.ingest(synth.placeholder_pdf(january), "statement.pdf")
+    pdf = env.ingest(synth.placeholder_pdf(january), "statement.pdf")
     before = env.txns(account)
     cash_before = len(env.cash_rows(account))
 
     document_id = env.ingest(synth.ofx_investment(january), "statement.ofx")
+    # The same month in another format is the same statement: held for review.
+    assert env.document(document_id).status is DocumentStatus.NEEDS_REVIEW
+    (item,) = env.open_reviews(document_id)
+    assert (item.kind, item.payload["reason"]) == (
+        ReviewKind.POSSIBLE_DUPLICATE,
+        "statement_overlap",
+    )
+    assert item.payload["account_id"] == str(account.id)
+    assert item.payload["investment"] is True
+    assert item.payload["other_document_id"] == str(pdf)
+    assert (item.payload["period_start"], item.payload["period_end"]) == (
+        january.start.isoformat(),
+        january.end.isoformat(),
+    )
+    assert [t.id for t in env.txns(account)] == [t.id for t in before]
+    # Imported anyway: the row hashes still add nothing twice.
+    _resolve_overlap(env, item, "reject")
+    assert run_jobs(env.factories, env.household_id, APPLY_MAPPING_JOB_TYPE, done=env.done)
     assert env.document(document_id).status is DocumentStatus.PROCESSED, env.open_reviews(
         document_id
     )
@@ -338,6 +360,42 @@ def test_same_month_as_ofx_after_the_pdf_adds_nothing(env: Env) -> None:
     assert env.holdings(account) == _positions(january)
     # The OFX filled in the CUSIPs of the securities the PDF created.
     assert {s.cusip for s in env.securities().values()} == {s.cusip for s in synth.SECURITIES}
+
+
+def test_rerunning_the_same_document_never_trips_the_statement_guard(env: Env) -> None:
+    january, _ = synth.brokerage_series(seed=71)
+    account = env.brokerage(january)
+    document_id = env.ingest(synth.placeholder_pdf(january), "statement.pdf")
+    before = [t.id for t in env.txns(account)]
+    (record,) = env.query(select(StatementRecord).where(StatementRecord.account_id == account.id))
+    assert (record.kind, record.outcome, record.source_format) == ("investment", "imported", "pdf")
+    assert (record.period_start, record.period_end, record.period_stated) == (
+        january.start,
+        january.end,
+        True,
+    )
+    assert record.total_value == january.total_value
+    _choose(env, document_id, account)
+    assert env.document(document_id).status is DocumentStatus.PROCESSED
+    assert env.open_reviews(document_id) == []
+    assert [t.id for t in env.txns(account)] == before
+    assert len(env.query(select(StatementRecord))) == 1
+
+
+def test_document_period_comes_from_the_header_band_of_its_statements(env: Env) -> None:
+    """The multi-account report prints its period only in every page's header band."""
+    stmt, extras = fidr.report()
+    document_id = env.ingest(fidr.report_pdf(stmt, extras), "investment-report.pdf")
+    document = env.document(document_id)
+    assert document.kind is DocumentKind.STATEMENT
+    assert (document.period_start, document.period_end) == (date(2019, 6, 1), date(2019, 6, 30))
+    assert document.confidence is not None
+    assert document.confidence["period"]["source"] == "header"
+    stored = ExtractResult.model_validate(document.extraction)
+    assert stored.investments
+    assert {(i.period_start, i.period_end) for i in stored.investments} == {
+        (date(2019, 6, 1), date(2019, 6, 30))
+    }
 
 
 @pytest.mark.parametrize("tamper", ["extra_row", "market_value", "total"])
@@ -486,6 +544,19 @@ def _fid_positions(account: fid.FidAccount) -> list[tuple[str, Decimal]]:
     return sorted((p.symbol, p.quantity) for p in account.positions)
 
 
+def _resolve_overlap(env: Env, item: ReviewItem, decision: Literal["confirm", "reject"]) -> None:
+    """Answer a ``statement_overlap`` item as the owner (the review queue's buttons)."""
+    with env.factories.transaction() as db:
+        apply_rls_context(db, env.principal())
+        review_service.resolve(
+            db,
+            env.principal(),
+            item.id,
+            ResolveDuplicate(kind="possible_duplicate", decision=decision),
+            request=None,
+        )
+
+
 def _choose(env: Env, document_id: uuid.UUID, account: Account) -> None:
     with env.factories.transaction() as db:
         apply_rls_context(db, env.principal())
@@ -524,10 +595,21 @@ def test_each_account_of_a_multi_account_pdf_lands_on_its_own_account(env: Env) 
             (stmt.end, synthetic.total_value, BalanceSource.STATEMENT)
         ]
 
-    # The same report again adds nothing to any account.
+    # The same report again is the same statement of every account: each
+    # waits as one, and nothing is added.
     before = {a.id: len(env.txns(a)) for a in accounts if a is not None}
     again = env.ingest(fid.fidelity_pdf(stmt), "investment-report-again.pdf")
-    assert env.document(again).status is DocumentStatus.PROCESSED, env.open_reviews(again)
+    assert env.document(again).status is DocumentStatus.NEEDS_REVIEW
+    items = env.open_reviews(again)
+    assert {(i.payload["reason"], i.payload["account_id"]) for i in items} == {
+        ("statement_overlap", str(a.id)) for a in accounts if a is not None
+    }
+    assert all(i.payload["other_document_id"] == str(document_id) for i in items)
+    assert {a.id: len(env.txns(a)) for a in accounts if a is not None} == before
+    # "Same statement" for each: skipped, the document is done.
+    for item in items:
+        _resolve_overlap(env, item, "confirm")
+    assert env.document(again).status is DocumentStatus.PROCESSED
     assert {a.id: len(env.txns(a)) for a in accounts if a is not None} == before
 
 

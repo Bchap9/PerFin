@@ -4,6 +4,7 @@
  * `reason` (the server's `payload.reason`). Pure data so it is testable and
  * every reason has words a person can act on.
  */
+import { formatDate } from "../../lib/dates";
 import { payloadNumber, payloadString, type ReviewItem } from "./api";
 
 export interface Explanation {
@@ -34,6 +35,20 @@ type Copy = (
 
 function count(item: ReviewItem, key: string): string {
   return String(payloadNumber(item, key) ?? 0);
+}
+
+/** "Jan 1, 2026 – Jan 31, 2026" from two ISO dates of the payload (null if missing). */
+export function payloadPeriod(
+  item: ReviewItem,
+  startKey: string,
+  endKey: string,
+): string | null {
+  const start = payloadString(item, startKey);
+  const end = payloadString(item, endKey);
+  if (start === null || end === null) {
+    return null;
+  }
+  return `${formatDate(start) ?? start} – ${formatDate(end) ?? end}`;
 }
 
 const ACCOUNT_STEPS = [
@@ -91,6 +106,21 @@ const COPY: Readonly<Record<string, Copy>> = {
     why: "Trades and holdings can only go into brokerage or retirement accounts.",
     steps: ["Choose a brokerage or retirement account below, or create one."],
   }),
+  // -- possible_duplicate ----------------------------------------------------
+  "possible_duplicate:statement_overlap": (item) => {
+    const period = payloadPeriod(item, "period_start", "period_end");
+    const other = payloadPeriod(item, "other_period_start", "other_period_end");
+    return {
+      title: "Statement already imported?",
+      what: `This file's statement${period === null ? "" : ` (${period})`} covers the same time as a statement already imported for this account from another file${other === null ? "" : ` (${other})`}. Nothing of it was imported yet.`,
+      why: "The same statement in two files (a PDF and an OFX, or one uploaded twice) would add its rows twice, so PerFin asks first.",
+      steps: [
+        "Open the other file to compare.",
+        "“Same statement — skip” if it is the same statement: nothing more is imported.",
+        "“Import anyway” if it is a different statement: rows already recorded are still skipped.",
+      ],
+    };
+  },
   // -- unparsed --------------------------------------------------------------
   "unparsed:mapping_required": () => ({
     title: "Needs a column mapping",

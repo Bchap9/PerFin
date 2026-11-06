@@ -610,6 +610,10 @@ import_mapping    (household, name, institution_id?, account_id?, header_fingerp
                    spec JSONB, created_by?, use_count, last_used_at?,
                    sign_unverified)
 import_hash_alias (household, account, transaction, import_hash)
+statement_record  (household, account, document, kind: bank|investment,
+                   outcome: imported|skipped, period_start, period_end,
+                   period_stated, source_format, currency, closing_balance?,
+                   closing_cash?, holdings_value?, total_value?)
 dropfolder_route  (household, folder slug, user, account?)
 dropfolder_entry  (household, path_key sha256, rel_path, size, mtime_ns, inode,
                    sha256?, document?, outcome: accepted|rejected|skipped, reason?,
@@ -680,6 +684,20 @@ Notes on the documents foundation (`app/domain/documents/`):
   decisions only.
 
 Notes on structured imports (`app/domain/imports/`, Phase 2):
+
+- `statement_record` (revision 0010, not in the API) is one statement the
+  importer committed for an account, or one a person said is the same as a
+  statement already imported (`outcome = skipped`): the statement-level
+  duplicate guard (INGESTION.md "Match and deduplicate", "Same statement
+  twice"). `period_stated` is true for a period an OFX/QFX file declares or
+  a document parser read from the page, false for the span of a CSV's or
+  QIF's rows (recorded, never compared). Closing figures: a ledger
+  statement's closing balance; a brokerage statement's closing cash,
+  holdings total and account value (`NUMERIC(20, 6)`, the account's
+  currency). Unique per account, document, kind and period start; both
+  references are household-consistent `CASCADE` keys, so a record goes with
+  its document or account. Not exported in a full export (instance import
+  history, like `ingest_job`).
 
 - `import_mapping` is a saved column mapping for one CSV/TSV layout. `spec`
   is `app.domain.imports.schemas.MappingSpec` (zero-based columns for the

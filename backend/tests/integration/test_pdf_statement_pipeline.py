@@ -253,16 +253,24 @@ def test_pdf_statement_is_classified_parsed_reconciled_and_committed(env: Env, l
     )
     assert audits
 
-    # The same statement rendered again (other bytes) imports nothing twice.
+    # The same statement rendered again (other bytes) is the same statement:
+    # held for review (statement_overlap), nothing imported twice.
     again = env.ingest(render(stmt))
-    assert env.document(again).status is DocumentStatus.PROCESSED
+    assert env.document(again).status is DocumentStatus.NEEDS_REVIEW
+    (item,) = env.open_reviews(again)
+    assert (item.kind, item.payload["reason"]) == (
+        ReviewKind.POSSIBLE_DUPLICATE,
+        "statement_overlap",
+    )
+    assert item.payload["other_document_id"] == str(document_id)
+    assert item.payload["account_id"] == str(account.id)
     assert len(env.transactions(account)) == len(rows)
     log = env.query(
         select(IngestJob).where(
             IngestJob.document_id == again, IngestJob.stage == IngestStage.PARSE
         )
     )[-1].log
-    assert (log["imported"], log["duplicates"]) == (0, len(rows))
+    assert (log["imported"], log["statement_overlaps"]) == (0, 1)
 
 
 def test_statement_that_does_not_reconcile_is_held_for_review(env: Env) -> None:

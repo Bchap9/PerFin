@@ -24,7 +24,7 @@ import pytest
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.auth.models import GrantLevel
+from app.auth.models import GrantLevel, HouseholdRole
 from app.auth.principal import Principal, apply_rls_context
 from app.core.crypto import Keyring
 from app.core.settings import Settings
@@ -43,7 +43,7 @@ from app.domain.documents.models import (
 )
 from app.domain.documents.schemas import INGEST_JOB_TYPE
 from app.domain.imports import service as imports_service
-from app.domain.imports.models import ImportMapping
+from app.domain.imports.models import ImportMapping, StatementRecord
 from app.domain.imports.schemas import APPLY_MAPPING_JOB_TYPE, MappingSpec
 from app.domain.transactions.models import ReviewState, Transaction, TransactionSplit
 from app.domain.transactions.schemas import AUTO_PAIR_JOB_TYPE
@@ -449,17 +449,40 @@ def test_reimport_is_idempotent(env: Env) -> None:
     account = env.checking(stmt)
     first = env.ingest(ofx_sgml_bytes(stmt))
     count = len(env.transactions(account))
-    # The same statement again, as different bytes (OFX 2 instead of 1).
+    # The same statement again, as different bytes (OFX 2 instead of 1): the
+    # statement guard holds it (statement_overlap) and imports nothing.
     second = env.ingest(ofx_xml_bytes(stmt))
-    assert env.document(second).status is DocumentStatus.PROCESSED
+    assert env.document(second).status is DocumentStatus.NEEDS_REVIEW
+    (item,) = env.open_reviews(second)
+    assert (item.kind, item.payload["reason"]) == (
+        ReviewKind.POSSIBLE_DUPLICATE,
+        "statement_overlap",
+    )
+    assert item.payload["other_document_id"] == str(first)
+    assert (item.payload["period_start"], item.payload["period_end"]) == (
+        stmt.start.isoformat(),
+        stmt.end.isoformat(),
+    )
     assert len(env.transactions(account)) == count
-    # Re-running the first document's import changes nothing either.
     with Actors.open(env.settings, env.factories) as actors:
         owner = actors.login(env.owner)
-        assert owner.post(f"{API}/imports/{first}/apply-mapping", json={}).status_code == 202
-    assert env.run(APPLY_MAPPING_JOB_TYPE)
+        # "Same statement": skipped, the document is done.
+        resolved = owner.post(
+            f"{API}/review/{item.id}/resolve",
+            json={"kind": "possible_duplicate", "decision": "confirm"},
+        )
+        assert resolved.status_code == 200, resolved.text
+        assert resolved.json()["resolution"]["skipped"] is True
+        assert env.document(second).status is DocumentStatus.PROCESSED
+        # Re-running either document's import changes nothing and asks nothing.
+        for document_id in (first, second):
+            rerun = owner.post(f"{API}/imports/{document_id}/apply-mapping", json={})
+            assert rerun.status_code == 202
+    assert len(env.run(APPLY_MAPPING_JOB_TYPE)) == 2
     assert len(env.transactions(account)) == count
     assert env.document(first).status is DocumentStatus.PROCESSED
+    assert env.document(second).status is DocumentStatus.PROCESSED
+    assert env.open_reviews(second) == []
     for db in env.db():
         logs: list[dict[str, Any]] = [
             a.after or {}
@@ -469,10 +492,11 @@ def test_reimport_is_idempotent(env: Env) -> None:
                 .order_by(AuditLog.seq)
             ).scalars()
         ]
-    assert [(log["imported"], log["duplicates"]) for log in logs] == [
-        (count, 0),
-        (0, count),
-        (0, count),
+    assert [(log["imported"], log["duplicates"], log["statement_overlaps"]) for log in logs] == [
+        (count, 0, 0),
+        (0, 0, 1),
+        (0, count, 0),
+        (0, 0, 1),
     ]
 
 
@@ -491,6 +515,122 @@ def test_overlapping_statements_are_handled_by_hash(env: Env) -> None:
         (jan.end, jan.closing_balance),
         (overlap.end, overlap.closing_balance),
     ]
+
+
+def _records(env: Env, account: Account) -> list[StatementRecord]:
+    for db in env.db():
+        rows = list(
+            db.execute(
+                select(StatementRecord)
+                .where(StatementRecord.account_id == account.id)
+                .order_by(StatementRecord.created_at, StatementRecord.id)
+            ).scalars()
+        )
+        db.expunge_all()
+        return rows
+    raise AssertionError  # pragma: no cover
+
+
+def test_overlapping_statement_imported_anyway(env: Env) -> None:
+    """``statement_overlap`` -> "import anyway": imported, row hashes still dedupe."""
+    stmt = sample_statement(31)
+    account = env.checking(stmt)
+    first = env.ingest(ofx_sgml_bytes(stmt))
+    count = len(env.transactions(account))
+    (record,) = _records(env, account)
+    assert (record.document_id, record.kind, record.outcome) == (first, "bank", "imported")
+    assert (record.period_start, record.period_end, record.period_stated) == (
+        stmt.start,
+        stmt.end,
+        True,
+    )
+    assert (record.source_format, record.currency) == ("ofx", stmt.currency)
+    assert record.closing_balance == stmt.closing_balance
+
+    second = env.ingest(ofx_xml_bytes(stmt))
+    (item,) = env.open_reviews(second)
+    assert item.payload["reason"] == "statement_overlap"
+    assert item.payload["statement"] == 0
+    assert item.payload["investment"] is False
+    assert [o["document_id"] for o in item.payload["others"]] == [str(first)]
+    assert len(env.transactions(account)) == count
+    with Actors.open(env.settings, env.factories) as actors:
+        owner = actors.login(env.owner)
+        resolved = owner.post(
+            f"{API}/review/{item.id}/resolve",
+            json={"kind": "possible_duplicate", "decision": "reject"},
+        )
+        assert resolved.status_code == 200, resolved.text
+        assert resolved.json()["resolution"]["import_anyway"] is True
+    assert env.run(APPLY_MAPPING_JOB_TYPE)
+    assert env.document(second).status is DocumentStatus.PROCESSED
+    assert env.open_reviews(second) == []
+    # The rows were already recorded: nothing doubled.
+    assert len(env.transactions(account)) == count
+    assert [(r.document_id, r.outcome) for r in _records(env, account)] == [
+        (first, "imported"),
+        (second, "imported"),
+    ]
+
+
+def test_statement_overlap_needs_edit_on_the_account(env: Env) -> None:
+    stmt = sample_statement(32)
+    account = env.checking(stmt)
+    env.ingest(ofx_sgml_bytes(stmt))
+    second = env.ingest(ofx_xml_bytes(stmt))
+    (item,) = env.open_reviews(second)
+    # A member who may only view the account (and did not upload the files).
+    member = env.factories.user(
+        role=HouseholdRole.MEMBER, household=env.owner.household, with_totp=True
+    )
+    env.ledger.grant(env.household_id, member.user.id, account, GrantLevel.VIEW)
+    with Actors.open(env.settings, env.factories) as actors:
+        reader = actors.login(member)
+        refused = reader.post(
+            f"{API}/review/{item.id}/resolve",
+            json={"kind": "possible_duplicate", "decision": "confirm"},
+        )
+        assert refused.status_code in (403, 404), refused.text
+    assert [r.state for r in env.reviews(second)] == [ReviewItemState.OPEN]
+    assert len(_records(env, account)) == 1
+
+
+def test_statements_sharing_only_their_edges_are_not_held(env: Env) -> None:
+    """Consecutive statements that share a closing day, exports that overlap: hashes only."""
+    ledger = synth_ledger(33, days=75)
+    jan = statement(ledger, date(2026, 1, 1), date(2026, 1, 31), seed=33)
+    feb = statement(ledger, date(2026, 1, 31), date(2026, 2, 28), seed=33)
+    account = env.checking(jan)
+    env.ingest(ofx_sgml_bytes(jan))
+    second = env.ingest(ofx_sgml_bytes(feb))
+    assert env.document(second).status is DocumentStatus.PROCESSED, env.open_reviews(second)
+    assert len(_records(env, account)) == 2
+
+
+def test_overlapping_csv_exports_are_recorded_not_held(env: Env) -> None:
+    history = synth_ledger(34, days=70)
+    january = statement(history, date(2026, 1, 1), date(2026, 1, 31), seed=34)
+    window = statement(history, date(2026, 1, 10), date(2026, 2, 20), seed=34)
+    account = env.ledger.account(env.household_id, currency=january.currency)
+    with env.factories.transaction() as db:
+        set_context(db, env.household_id)
+        make_import_mapping(
+            db,
+            env.household_id,
+            spec=LAYOUTS["us_signed"].spec,
+            rows=[list(LAYOUTS["us_signed"].header)],
+            account=db.get(Account, account.id),
+        )
+    env.ingest(csv_bytes(january, "us_signed"))
+    second = env.ingest(csv_bytes(window, "us_signed"))
+    assert env.document(second).status is DocumentStatus.PROCESSED, env.open_reviews(second)
+    records = _records(env, account)
+    assert [(r.source_format, r.period_stated) for r in records] == [
+        ("csv", False),
+        ("csv", False),
+    ]
+    union = set(january.transactions) | set(window.transactions)
+    assert _amounts(env.transactions(account)) == sorted((t.posted, t.amount) for t in union)
 
 
 def test_near_duplicates_go_to_review(env: Env) -> None:

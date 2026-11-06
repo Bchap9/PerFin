@@ -245,9 +245,15 @@ institution), `period_start`, `period_end`, `tax_year?`, and per-field
 confidence.
 
 **Time window detection.** Statement period is pulled from explicit "Statement
-period" strings when present; otherwise inferred as `[min(txn date),
-max(txn date)]` with a flag that it was inferred. Receipts use the printed
-date; tax forms use the tax year printed on the form.
+period" strings when present; else from the **header band**: a date range
+printed without a label in the top lines of at least half the pages
+(`July 1 – July 31, 2015` under the title of every page, `07/01/2015 -
+07/31/2015`; dash, en/em dash, "to", "through", "until"), the start
+borrowing the end's year; otherwise inferred as `[min(txn date), max(txn
+date)]` with a flag that it was inferred. An inferred period is a hint only
+(kept in `document.confidence.period`): it is never stored as the
+document's period, which comes from the parsed statements. Receipts use the
+printed date; tax forms use the tax year printed on the form.
 
 Implementation (Phases 3-4, `app/ingestion/classify/`; runs in the worker on
 the validated sandbox output, never on file content):
@@ -313,9 +319,14 @@ the validated sandbox output, never on file content):
   the same generator and so overstates accuracy on real documents.
 - **Period, date, tax year** (`period.py`, `dates.py`): labelled periods
   ("Statement period", "Billing period", "For the period", "Pay period",
-  "Policy period", ...; also on the next line), "Opening/Closing date"
-  pairs, else the inferred `[min, max]` of parsed transaction dates or of
-  dates that start a line (`inferred` flag, lower confidence). Dates: ISO,
+  "Policy period", ...; also on the next line), else the header band
+  (`header_band_range`: the separated range found in the first 8 lines of
+  the most pages, on at least half of them; source `header`, confidence 0.9,
+  0.75 for a one-page document), "Opening/Closing date" pairs, else the
+  inferred `[min, max]` of parsed transaction dates or of dates that start
+  a line (`inferred` flag, lower confidence, never written to
+  `document.period_start/end`). An ambiguous numeric end takes the order the
+  other end proves (`07/01/2015 - 07/31/2015` is month-first). Dates: ISO,
   numeric month-first or day-first (a component above 12 decides, then the
   fingerprint's `date_order`, then the separator, marked ambiguous with
   lower confidence), month names in both orders, two-digit years, ranges
@@ -337,7 +348,7 @@ the validated sandbox output, never on file content):
   structured|fingerprint|classifier|none, kind, fields: {kind, institution,
   last4, account, period, printed_date, tax_year}, fingerprint?: {key,
   origin, version, parser, id?}, institution_name?, period?: {source,
-  inferred}, classifier?: {model, scores}, review?: [...]}`. Structured
+  inferred, start, end}, classifier?: {model, scores}, review?: [...]}`. Structured
   statements (OFX/QIF/CSV) keep the Phase 2 classify step; containers are
   not classified. The pipeline does not raise a review item for a low
   classification confidence by itself: a document whose kind stays
@@ -438,7 +449,13 @@ a child answering with parser output is `bad_output`.
   without a readable amount are counted (`skipped_lines`, a
   `low_confidence_field` `lines_skipped` item). Outside the rows: the period,
   the account's last four digits (masked numbers, "ending in"; never more),
-  the currency and labelled opening/closing balances. Signs: `bank` (signed
+  the currency and labelled opening/closing balances. The period
+  (`read_period`): every line with a period label is a candidate, tried in
+  order until one reads (a label alone on its line offers the next line; a
+  label that matches something else first, "Change from last period", no
+  longer blocks the real one), a range's start borrowing the end's year;
+  without one, the header band (the classifier's `header_band_range` on
+  the parser's page lines). Signs: `bank` (signed
   amount, debit negative, `CR`/`DR`) or `card` (charges printed positive,
   credits negative or `CR`; balances owed become negative). Numeric dates
   whose day/month order the values do not show are guessed `mdy` at low
@@ -486,7 +503,9 @@ a child answering with parser output is `bad_output`.
   `confidence` and `reconciliation`; `extraction.parse` records the parser,
   every score, the threshold, pending/skipped counts, warnings and a
   payslip. `document.parser_version` is `name/version` and
-  `document.confidence.parse` summarises it. Re-importing (choosing an
+  `document.confidence.parse` summarises it. The document's
+  `period_start`/`period_end` is the span of the periods its statements
+  (bank and brokerage) read at or above the threshold. Re-importing (choosing an
   account in review, `imports.apply_mapping`) uses the stored statements;
   `registry.reparse` runs a newer parser on the stored pages, so neither
   needs the file again. A statement then goes through the structured
@@ -516,7 +535,9 @@ OFX `INVSTMTRS` in the sandbox or from a PDF/scan's pages in the worker.
   and estimated income columns are recognised and not read) and an
   **activity** table (date, activity/action and amount; optional settle
   date, description, security name, symbol or CUSIP, quantity, price,
-  fees), each repeated per page; outside them the period, last four digits,
+  fees), each repeated per page; outside them the period (read like the
+  bank parsers': label candidates, then the header band; yearless `MM/DD`
+  activity dates in the generic parser too), last four digits,
   currency, opening/closing cash, holdings total, account value and the
   holdings' "as of" date by label (`Beginning Account Value` is not the
   account value; `Ending Account Value` and `Ending Net Value` are).
@@ -805,6 +826,28 @@ reconciliation, per-field confidence).
   are surfaced as `possible_duplicate`.
 - Overlapping statement periods are expected (e.g. a pending transaction that
   posts in the next cycle) and handled by hash, not by date range.
+- **Same statement twice** (`app/domain/imports/statement_records.py`,
+  table `statement_record`): every statement the importer commits (bank,
+  card, brokerage, a CSV table or activity export when it has rows) records
+  its account, document, period, whether the period was **stated** (an
+  OFX/QFX `DTSTART`/`DTEND`, or a period a document parser read from the
+  page with confidence 0.9 or more; a CSV/QIF period is only the span of
+  its rows), source format and closing figures (closing balance; cash,
+  holdings and account value). A statement with a stated period that
+  shares at least half of the shorter period with an imported, stated
+  record of the same account and kind (bank or brokerage) from **another**
+  document is held: nothing of it is written and a `possible_duplicate`
+  item (`statement_overlap`: `account_id`, `statement` index, `investment`,
+  `period_start`/`period_end`, `other_document_id` with its
+  `other_period_start`/`other_period_end`, `others`) asks. *Confirm*
+  ("Same statement — skip") records it as `skipped`; *reject* ("Import
+  anyway") re-runs the import with the account in `allow_overlap`, and the
+  row hashes still skip rows already recorded. Statements that only share
+  their edges (one closing on the 31st, the next opening on the 31st) and
+  overlapping CSV exports are left to the row hashes. A document that
+  already has a record for the account is never held again, so
+  `apply-mapping` re-runs and reprocessing stay idempotent, and a skipped
+  statement stays skipped.
 - Transfer pairing runs across accounts.
 - Receipt -> transaction linking: match on amount, date within +/- 3 days,
   merchant alias. Confident match links the document; otherwise a review item
@@ -1335,8 +1378,10 @@ A CLI `perfin ingest --dry-run file.pdf` prints every stage's output for
 debugging without writing to the database (`app/ingestion/dryrun.py`): one
 JSON document per stage (`receive` with the sniff and the same refusals as an
 upload, `scan` when ClamAV is configured, `extract` through the real sandbox,
-`classify`, `parse`, and with `--household` a `match` read in a rolled-back
-`READ ONLY` transaction). Nothing is written to the blob store or the
+`classify`, `parse` (the bank statements as read and, per brokerage
+account, its last four digits, period, positions and activity counts,
+figures and reconciliation), and with `--household` a `match` read in a
+rolled-back `READ ONLY` transaction). Nothing is written to the blob store or the
 database; previews and child documents are summarised, not printed.
 
 The steps, the parser contract and the review checklist are in

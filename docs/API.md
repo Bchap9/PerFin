@@ -357,7 +357,10 @@ honoured) takes optional `mapping_id`, `account_id` and `group` (with
 `account_id` only, else `422`: the statement of a multi-account CSV the
 account is for, an `unknown_account` item's `group`; without it the account
 takes only the statements with its own last four digits or, when it records
-none, the one statement nothing matched); a `mapping_id`
+none, the one statement nothing matched) and `allow_overlap` (account ids,
+each editable: their statements are imported although their period
+overlaps a statement already imported from another document, the "import
+anyway" of a `statement_overlap` item); a `mapping_id`
 imports the table with that mapping even when it is brokerage activity; the target account
 (the given one, the document's, else the mapping's) must be editable (`404
 account-not-found`); a document that is not `needs_review`/`processed` or
@@ -517,7 +520,15 @@ review-kind-mismatch`): `{"kind": "possible_duplicate", "decision": "confirm"
 deletes it and records its `import_hash` for the kept transaction, which
 takes the hash when it has none and otherwise gets an `import_hash_alias`;
 reject confirms it; `duplicate_of` must be one of the item's `candidates`
-and is required when there are several, `422 invalid-resolution`); `{"kind":
+and is required when there are several, `422 invalid-resolution`; a
+statement whose period overlaps one already imported for the account,
+`reason: "statement_overlap"` with `account_id`, `statement`, `investment`,
+`period_start`, `period_end`, `other_document_id`, `other_period_start`,
+`other_period_end` and `others`: confirm ("same statement") records it as
+skipped and imports nothing, reject ("import anyway") queues
+`imports.apply_mapping` with the item's statement assigned to its account
+and that account in `allow_overlap`; both need edit on the account, `404
+account-not-found`); `{"kind":
 "unknown_account", "account_id", "remember"}` (an account the caller edits;
 re-imports the stored extraction through `imports.apply_mapping`, or
 reprocesses a document without one; `remember` saves the statement's last

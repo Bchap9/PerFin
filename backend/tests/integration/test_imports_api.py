@@ -422,6 +422,7 @@ def test_apply_mapping_queues_a_job_once_per_key(
         "group": None,
         "statement": None,
         "assignments": [],
+        "allow_overlap": [],
         "requested_by": str(owner.user.id),
     }
     assert len(audits) == 1

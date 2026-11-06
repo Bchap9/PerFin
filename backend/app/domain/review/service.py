@@ -19,6 +19,13 @@ editable by the caller as well. A closed item is ``409 review-item-closed``.
 * ``possible_duplicate`` / ``same_content``: *confirm* -> the document is
   ``rejected`` (kept in quarantine, never downloadable); *reject* -> the
   document goes through the pipeline (``ingest_document``).
+* ``possible_duplicate`` / ``statement_overlap`` (a statement whose period
+  overlaps one already imported for the account from another document;
+  ``app.domain.imports.statement_records``): *confirm* ("same statement")
+  records the statement as skipped and writes nothing; *reject* ("import
+  anyway") re-imports the stored extraction with the item's statement on
+  the item's account and that account in ``allow_overlap``. Both need edit
+  on the account.
 * ``possible_duplicate`` / ``near_match``: *confirm* -> the imported row is
   deleted and its ``import_hash`` recorded for the kept transaction (the
   kept row takes the hash when it has none, else an ``import_hash_alias``);
@@ -60,6 +67,7 @@ from __future__ import annotations
 
 import uuid
 from collections.abc import Sequence
+from datetime import date
 from typing import Any, Final
 
 from sqlalchemy import Boolean, ColumnElement, String, and_, cast, not_, or_, select
@@ -93,7 +101,8 @@ from app.domain.documents.models import (
 from app.domain.documents.service import visible_document_filter
 from app.domain.dropfolder import service as dropfolder_service
 from app.domain.imports import service as imports_service
-from app.domain.imports.schemas import ApplyMapping, MappingUpdate
+from app.domain.imports import statement_records
+from app.domain.imports.schemas import ApplyMapping, Assignment, AssignmentTarget, MappingUpdate
 from app.domain.review import assist, repo
 from app.domain.review.schemas import (
     NextStep,
@@ -411,6 +420,8 @@ def _resolve_duplicate(
     request: HTTPConnection | None,
 ) -> dict[str, Any]:
     payload = item.payload or {}
+    if payload.get("reason") == statement_records.REASON:
+        return _resolve_statement_overlap(db, principal, item, body, request)
     transaction_id = _uuid(payload.get("transaction_id"))
     if transaction_id is None:
         document = _document(db, item)
@@ -434,6 +445,82 @@ def _resolve_duplicate(
         )
         return {"decision": "confirm", "duplicate_of": payload.get("duplicate_of")}
     return _resolve_transaction_duplicate(db, principal, item, transaction_id, body, request)
+
+
+def _payload_date(payload: dict[str, Any], key: str) -> date | None:
+    value = payload.get(key)
+    try:
+        return date.fromisoformat(value) if isinstance(value, str) else None
+    except ValueError:
+        return None
+
+
+def _resolve_statement_overlap(
+    db: Session,
+    principal: Principal,
+    item: ReviewItem,
+    body: ResolveDuplicate,
+    request: HTTPConnection | None,
+) -> dict[str, Any]:
+    """Same statement (skip it) or import anyway (module doc)."""
+    payload = item.payload or {}
+    document = _document(db, item)
+    account_id = _uuid(payload.get("account_id"))
+    if account_id is None:
+        raise _invalid("This item names no account.")
+    account = get_visible_account(db, principal, account_id, need="edit")
+    investment = payload.get("investment") is True
+    index = payload.get("statement")
+    other = payload.get("other_document_id")
+    if body.decision == "confirm":
+        start = _payload_date(payload, "period_start")
+        end = _payload_date(payload, "period_end")
+        source = payload.get("source_format")
+        if start is None or end is None or start > end or not isinstance(source, str):
+            raise _invalid("This item names no statement period.")
+        statement_records.record_statement(
+            db,
+            document,
+            account,
+            statement_records.StatementFacts(
+                kind="investment" if investment else "bank",
+                source_format=source,
+                period_start=start,
+                period_end=end,
+                stated=True,
+            ),
+            outcome="skipped",
+        )
+        db.flush()
+        return {"decision": "confirm", "skipped": True, "duplicate_of": other}
+    if document.extraction is None or document.status not in REIMPORTABLE:
+        raise ProblemError(
+            409,
+            "document-not-importable",
+            "Nothing to import",
+            "The document has no stored statements to import again; reprocess it instead.",
+        )
+    # The item's statement goes to the item's account, whatever matched it.
+    target: AssignmentTarget = "investment" if investment else "statement"
+    assignments = (
+        [Assignment(target=target, index=index, account_id=account.id)]
+        if isinstance(index, int) and index >= 0
+        else []
+    )
+    accepted = imports_service.request_apply(
+        db,
+        principal,
+        document.id,
+        ApplyMapping(assignments=assignments, allow_overlap=[account.id]),
+        request=request,
+    )
+    return {
+        "decision": "reject",
+        "import_anyway": True,
+        "account_id": str(account.id),
+        "rerun": "import",
+        "job_id": str(accepted.job_id),
+    }
 
 
 def _resolve_transaction_duplicate(

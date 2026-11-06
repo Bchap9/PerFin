@@ -8,7 +8,7 @@ All notable changes to PerFin are recorded here. The format follows
 
 The current release candidate is `v1.0.0-rc.4`; the final `v1.0.0` follows the
 external security review. Every phase (0-7) is implemented. Alembic head is
-`0009`. On 2026-11-05: SPDX; backend ruff, ruff format, mypy --strict (657
+`0010` (unreleased; `0009` in rc.4). On 2026-11-05: SPDX; backend ruff, ruff format, mypy --strict (657
 source files), bandit, OpenAPI drift and 7742 pytest tests with `-n auto`,
 of which the OCR and Helm tests (67) need Tesseract and `helm` and were run
 only in CI; frontend eslint, tsc, 439 vitest tests in 57 files and the
@@ -57,6 +57,42 @@ What remains (details in docs/ROADMAP.md):
     correct parser must return per account, with figures that reconcile
     (Year-to-Date columns included). Everything in them is invented: no
     figure, reference or check number is taken from a real statement.
+- Statement period from the **header band**: a date range printed without a
+  label in the top lines of at least half the pages ("July 1 – July 31,
+  2015", "07/01/2015 - 07/31/2015") is the statement period, in the
+  classifier and in every statement parser (bank, card, brokerage). The
+  start of a range borrows the year of its end, and an ambiguous numeric end
+  takes the day/month order the other end proves.
+- **Same statement twice**: every committed statement is recorded
+  (migration `0010`, table `statement_record`: account, document, period,
+  source format, closing figures). A statement whose printed period
+  overlaps, by at least half, one already imported for the same account
+  from another file (a PDF and an OFX of the same month, the same report
+  uploaded twice) is held with a `possible_duplicate` review item
+  (`statement_overlap`). The review queue offers **Same statement — skip**
+  and **Import anyway**; row-level duplicate checks still apply. Re-running
+  the import of the same file never trips it, statements that only share a
+  boundary day are not held, and CSV exports are recorded but never held.
+  `POST /imports/{id}/apply-mapping` takes `allow_overlap` (account ids).
+- `perfin ingest --dry-run` shows the brokerage statements of a PDF in its
+  `parse` stage: per account the last four digits, period, positions and
+  activity counts by type, figures and reconciliation.
+
+### Changed
+
+- A period guessed from the dates in a document (`line_dates`, or the span
+  of its transactions) is no longer stored as the document's period; it is
+  kept as a hint in `document.confidence.period` (with its dates). The
+  document's period now comes from all its parsed statements, brokerage
+  statements included.
+- Statement parsers try every line with a period label until one reads, so
+  a label that matches something else first ("Change from Last Period") no
+  longer hides the real period, and a label alone on its line reads the
+  next line. The generic brokerage parser reads year-less `MM/DD` dates
+  through the period.
+- Importing the same statement again as a different file (OFX after PDF, a
+  second rendering) now waits in review as `statement_overlap` instead of
+  being processed with every row counted as a duplicate.
 
 ## [1.0.0-rc.4] - 2026-11-06
 

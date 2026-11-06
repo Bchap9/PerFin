@@ -196,6 +196,48 @@ describe("review queue", () => {
     });
   });
 
+  it("offers 'same statement' and 'import anyway' for an overlapping statement", async () => {
+    const overlap = {
+      reason: "statement_overlap",
+      account_id: "a-1",
+      statement: 0,
+      period_start: "2026-03-01",
+      period_end: "2026-03-31",
+      other_document_id: "d-1",
+      other_period_start: "2026-03-01",
+      other_period_end: "2026-03-31",
+    };
+    const api = reviewApi(
+      [item("r-1", "possible_duplicate", overlap)],
+      "member",
+      {
+        "POST /api/v1/review/:id/resolve": () =>
+          json(
+            item("r-1", "possible_duplicate", overlap, { state: "resolved" }),
+          ),
+      },
+    );
+    renderApp("/review");
+    const user = userEvent.setup();
+    const group = await screen.findByRole("group", {
+      name: "Compare statements",
+    });
+    expect(
+      await within(group).findByRole("link", { name: "march.ofx" }),
+    ).toHaveAttribute("href", "/documents/d-1");
+    expect(
+      screen.getByRole("button", { name: "Import anyway" }),
+    ).toBeInTheDocument();
+    await user.click(
+      screen.getByRole("button", { name: "Same statement — skip" }),
+    );
+    await waitFor(() => {
+      expect(
+        api.callsTo("POST", "/api/v1/review/:id/resolve")[0]?.body,
+      ).toEqual({ kind: "possible_duplicate", decision: "confirm" });
+    });
+  });
+
   it("asks which account an unknown-account file belongs to", async () => {
     const api = reviewApi([item("r-2", "unknown_account", {})], "member", {
       "POST /api/v1/review/:id/resolve": () =>

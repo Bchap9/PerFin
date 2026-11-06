@@ -48,6 +48,7 @@ const REASONS: readonly [ReviewItem["kind"], string][] = [
   ["low_confidence_field", "investment_possible_duplicate"],
   ["low_confidence_field", "investment_low_confidence"],
   ["low_confidence_field", "position_mismatch"],
+  ["possible_duplicate", "statement_overlap"],
 ];
 
 describe("review explanations", () => {
@@ -73,6 +74,20 @@ describe("review explanations", () => {
     expect(found.what).toBe(
       "3 rows of this file were not imported, 2 of them with an action PerFin does not know. Unknown actions: mystery item.",
     );
+  });
+
+  it("names both periods of an overlapping statement", () => {
+    const found = explain(
+      item("possible_duplicate", {
+        reason: "statement_overlap",
+        period_start: "2026-01-01",
+        period_end: "2026-01-31",
+        other_period_start: "2026-01-01",
+        other_period_end: "2026-01-31",
+      }),
+    );
+    expect(found.title).toBe("Statement already imported?");
+    expect(found.what).toContain("Jan 1, 2026 – Jan 31, 2026");
   });
 
   it("falls back to the kind's own words for an unknown reason", () => {

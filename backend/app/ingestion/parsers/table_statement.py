@@ -21,6 +21,15 @@ are read the same way:
 3. **Summary.** Outside the rows: the statement period (``Statement period``,
    ``Billing period``...), the account's last four digits (a masked number
    or "ending in"), the currency, and the opening/closing balances by label.
+   Every labelled line is a period candidate (a label alone on its line
+   offers the next line), tried in order until one reads, so a label that
+   matches something else first ("Change from last period") blocks
+   nothing; a range's start borrows the end's year (``Jan 1 - Jan 31,
+   2026``). Without a labelled period, the **header band**
+   (:func:`app.ingestion.classify.dates.header_band_range`: a range printed
+   in the top lines of at least half the pages) is the period
+   (:func:`read_period`). Yearless row dates (``MM/DD``) take their year
+   from the period.
 4. **Signs.** ``bank``: a signed amount as printed, *Debit* negative and
    *Credit* positive, ``CR``/``DR`` markers honoured. ``card``: charges are
    printed positive and credits negative or with ``CR``; both the amounts and
@@ -38,13 +47,15 @@ currency, fingerprint phrases and the institution's name.
 from __future__ import annotations
 
 import re
-from collections.abc import Mapping, Sequence
+from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import date
 from decimal import Decimal
 from functools import lru_cache
 from typing import ClassVar, Final, Literal
 
+from app.ingestion.classify.dates import HEADER_BAND_LINES as BAND_LINES
+from app.ingestion.classify.dates import DateOrder, find_ranges, header_band_range
 from app.ingestion.parsers import confidence as conf
 from app.ingestion.parsers.base import Cell, DocumentParser, DocumentView, ParseOutcome, ViewLine
 from app.ingestion.parsers.text import (
@@ -132,6 +143,92 @@ def label_end(text: str, label: str) -> int | None:
     return match.end() if match else None
 
 
+#: Period candidates kept per statement (labelled lines, in order).
+MAX_PERIOD_CANDIDATES: Final = 20
+
+
+@dataclass
+class PeriodCandidates:
+    """Lines a period label was found on (the text after the label), in order.
+
+    A label with nothing after it on its line offers the next line instead
+    (``Statement period`` above ``01/01/2026 - 01/31/2026``).
+    """
+
+    texts: list[str] = field(default_factory=list)
+    next_line: bool = False
+
+    def scan(self, text: str, labels: Sequence[str]) -> None:
+        if self.next_line:
+            self.next_line = False
+            self.add(text)
+        for label in labels:
+            end = label_end(text, label)
+            if end is None:
+                continue
+            rest = text[end:]
+            if any(ch.isdigit() for ch in rest):
+                self.add(rest)
+            else:
+                self.next_line = True
+            break
+
+    def add(self, text: str) -> None:
+        if len(self.texts) < MAX_PERIOD_CANDIDATES:
+            self.texts.append(text)
+
+
+def page_heads(view: DocumentView, lines: int = BAND_LINES) -> list[list[str]]:
+    """The top ``lines`` lines of each page (the header band)."""
+    heads: dict[int, list[str]] = {}
+    for line in view.lines:
+        head = heads.setdefault(line.page, [])
+        if len(head) < lines:
+            head.append(line.text)
+    return [heads[page] for page in sorted(heads)]
+
+
+def full_style(style: DateStyle) -> DateStyle:
+    """The numeric style with a year a yearless one (``md``/``dm``) stands for."""
+    if style == "md":
+        return "mdy"
+    if style == "dm":
+        return "dmy"
+    return style
+
+
+def period_order(styles: Iterable[DateStyle]) -> DateOrder | None:
+    """The day/month order the first numeric style of ``styles`` stands for."""
+    for style in styles:
+        if style in ("mdy", "md"):
+            return "mdy"
+        if style in ("dmy", "dm"):
+            return "dmy"
+    return None
+
+
+def read_period(
+    candidates: Sequence[str], ordered: Sequence[DateStyle], view: DocumentView
+) -> tuple[date, date] | None:
+    """The first candidate that reads as a period, else the header band (module doc)."""
+    order = period_order(ordered)
+    for text in candidates:
+        parts = _RANGE.split(text, maxsplit=1)
+        if len(parts) == 2:
+            start = find_dates(parts[0], ordered)
+            end = find_dates(parts[1], ordered)
+            if start and end and start[-1] <= end[0]:
+                return start[-1], end[0]
+        found = find_dates(text, ordered)
+        if len(found) >= 2 and found[0] <= found[1]:
+            return found[0], found[1]
+        ranges = find_ranges(text, order=order)
+        if ranges:
+            return ranges[0].start, ranges[0].end
+    band = header_band_range(page_heads(view), order=order)
+    return (band.start, band.end) if band is not None else None
+
+
 @dataclass(frozen=True)
 class Column:
     role: Role
@@ -160,7 +257,7 @@ class _Summary:
     closing: Amount | None = None
     opening_in_table: bool = False
     closing_in_table: bool = False
-    period_text: str | None = None
+    period: PeriodCandidates = field(default_factory=PeriodCandidates)
     last4: str | None = None
     currency: str | None = None
 
@@ -316,12 +413,7 @@ class TableStatementParser(DocumentParser):
         closing = self._label_amount(line, self.closing_labels)
         if closing is not None and summary.closing is None:
             summary.closing = closing
-        if summary.period_text is None:
-            for label in self.period_labels:
-                end = label_end(line.text, label)
-                if end is not None:
-                    summary.period_text = line.text[end:]
-                    break
+        summary.period.scan(line.text, self.period_labels)
         if summary.last4 is None:
             match = _LAST4.search(line.text)
             if match is not None:
@@ -493,26 +585,16 @@ class TableStatementParser(DocumentParser):
             return (style, "ymd", "d_mon_y", "mon_d_y"), certain
         return ("d_mon_y", "mon_d_y", "ymd"), True
 
-    def _period(self, summary: _Summary, styles: tuple[DateStyle, ...]) -> tuple[date, date] | None:
-        if summary.period_text is None:
-            return None
+    def _period(
+        self, summary: _Summary, styles: tuple[DateStyle, ...], view: DocumentView
+    ) -> tuple[date, date] | None:
         ordered: list[DateStyle] = [s for s in self.period_styles if s in FULL_STYLES]
         for style in styles:
-            if style in ("md", "dm"):
-                continue
-            if style in NUMERIC_DM and style in ordered:
-                ordered.remove(style)
-                ordered.insert(0, style)
-        parts = _RANGE.split(summary.period_text, maxsplit=1)
-        if len(parts) == 2:
-            start = find_dates(parts[0], ordered)
-            end = find_dates(parts[1], ordered)
-            if start and end and start[-1] <= end[0]:
-                return start[-1], end[0]
-        found = find_dates(summary.period_text, ordered)
-        if len(found) >= 2 and found[0] <= found[1]:
-            return found[0], found[1]
-        return None
+            numeric = full_style(style)
+            if numeric in NUMERIC_DM and numeric in ordered:
+                ordered.remove(numeric)
+                ordered.insert(0, numeric)
+        return read_period(summary.period.texts, ordered, view)
 
     # -- the statement ----------------------------------------------------------
 
@@ -534,7 +616,7 @@ class TableStatementParser(DocumentParser):
             outcome.warnings.append("no_table_header")
             return outcome
         styles, certain = self._row_styles(rows, date_order)
-        period = self._period(summary, styles)
+        period = self._period(summary, styles, view)
         transactions: list[ExtractedTransaction] = []
         fields: list[dict[str, float]] = []
         ledger_rows: list[Row] = []

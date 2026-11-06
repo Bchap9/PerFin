@@ -30,7 +30,9 @@ run as the owner, exactly like ``perfin migrate`` in production, and then:
   downgrade removes exactly that table and the ``notification_channel_type``
   enum type;
 * 0008 adds ``import_mapping.sign_unverified`` (false for existing rows), and
-  its downgrade removes exactly that column.
+  its downgrade removes exactly that column;
+* 0010 creates ``statement_record`` under forced RLS with household-consistent
+  keys, and its downgrade removes exactly that table.
 """
 
 from __future__ import annotations
@@ -169,6 +171,8 @@ PHASE6B_ENUM_TYPES = frozenset({"ai_mode", "ai_transport"})
 PHASE7_TABLES = frozenset({"notification_channel"})
 #: Enum types created by revision 0007.
 PHASE7_ENUM_TYPES = frozenset({"notification_channel_type"})
+#: Statement records (revision 0010), household-scoped.
+STATEMENT_RECORD_TABLES = frozenset({"statement_record"})
 #: Enum types created by revision 0002 (identity).
 PHASE1_ENUM_TYPES = frozenset(
     {
@@ -332,6 +336,7 @@ def test_single_head_and_linear_history() -> None:
     assert script.get_base() == "0001"
     # One revision per phase, each on top of the previous one.
     assert [rev.revision for rev in script.walk_revisions("base", "heads")] == [
+        "0010",
         "0009",
         "0008",
         "0007",
@@ -350,6 +355,7 @@ def test_single_head_and_linear_history() -> None:
     assert script.get_revision("0007").down_revision == "0006"
     assert script.get_revision("0008").down_revision == "0007"
     assert script.get_revision("0009").down_revision == "0008"
+    assert script.get_revision("0010").down_revision == "0009"
 
 
 def test_upgrade_head_matches_models_without_drift(migrated: Scratch) -> None:
@@ -370,6 +376,7 @@ def test_upgrade_head_matches_models_without_drift(migrated: Scratch) -> None:
         | PHASE56_TABLES
         | PHASE6B_TABLES
         | PHASE7_TABLES
+        | STATEMENT_RECORD_TABLES
     )
 
 
@@ -647,6 +654,7 @@ def test_app_role_privileges_are_least(migrated: Scratch) -> None:
         | PHASE56_TABLES
         | PHASE6B_TABLES
         | PHASE7_TABLES
+        | STATEMENT_RECORD_TABLES
     )
     for table in sorted(all_tables - {"audit_log"}):
         assert {p for t, p in privileges if t == table} == {
@@ -1562,7 +1570,7 @@ def test_downgrade_0008_removes_only_the_mapping_sign_column(migrated: Scratch) 
             )
         command.upgrade(cfg, "head")
         command.check(cfg)
-        assert _public_tables(engine) == tables
+        assert _public_tables(engine) == tables | STATEMENT_RECORD_TABLES
         with engine.begin() as conn:
             set_context(conn, household)
             flag = conn.execute(
@@ -1625,3 +1633,82 @@ def test_phase7_notification_channel_refuses_other_households_on_migrated_databa
                 )
     finally:
         app.dispose()
+
+
+def _insert_statement_record(
+    conn: Connection, household: uuid.UUID
+) -> tuple[uuid.UUID, uuid.UUID, uuid.UUID]:
+    """A household with an account and a document, and one statement record."""
+    account = _insert_account(conn, household)
+    document = _insert_document(conn, household, None)
+    record = uuid.uuid4()
+    conn.execute(
+        text(
+            "INSERT INTO statement_record (id, household_id, account_id, document_id, kind, "
+            "period_start, period_end, period_stated, source_format, currency) VALUES "
+            "(:id, :h, :a, :d, 'bank', '2026-01-01', '2026-01-31', true, 'pdf', 'USD')"
+        ),
+        {"id": record, "h": household, "a": account, "d": document},
+    )
+    return account, document, record
+
+
+def test_0010_statement_record_is_household_isolated_and_downgrades(migrated: Scratch) -> None:
+    """0010 creates ``statement_record`` under forced RLS; its downgrade removes only it."""
+    app = migrated.app_engine()
+    a, b = uuid.uuid4(), uuid.uuid4()
+    try:
+        for household in (a, b):
+            with app.begin() as conn:
+                set_context(conn, household)
+                conn.execute(
+                    text("INSERT INTO household (id, name) VALUES (:id, 'Synthetic')"),
+                    {"id": household},
+                )
+        with app.begin() as conn:
+            set_context(conn, a)
+            account_a, document_a, record_a = _insert_statement_record(conn, a)
+        with app.begin() as conn:
+            set_context(conn, b)
+            assert conn.execute(text("SELECT count(*) FROM statement_record")).scalar_one() == 0
+            updated = conn.execute(
+                text("UPDATE statement_record SET outcome = 'skipped' WHERE id = :id"),
+                {"id": record_a},
+            )
+            assert updated.rowcount == 0
+            account_b, _, _ = _insert_statement_record(conn, b)
+        with app.connect() as conn, conn.begin():
+            set_context(conn, b)
+            # Household B's record cannot point at household A's document.
+            with pytest.raises(DBAPIError):
+                conn.execute(
+                    text(
+                        "INSERT INTO statement_record (id, household_id, account_id, "
+                        "document_id, kind, period_start, period_end, period_stated, "
+                        "source_format, currency) VALUES (:id, :h, :a, :d, 'bank', "
+                        "'2026-02-01', '2026-02-28', true, 'pdf', 'USD')"
+                    ),
+                    {"id": uuid.uuid4(), "h": b, "a": account_b, "d": document_a},
+                )
+        with app.connect() as conn, conn.begin():
+            set_context(conn, a)
+            with pytest.raises(DBAPIError, match="check constraint"):
+                conn.execute(
+                    text("UPDATE statement_record SET outcome = 'maybe' WHERE id = :id"),
+                    {"id": record_a},
+                )
+        assert account_a != account_b
+    finally:
+        app.dispose()
+    cfg = migrated.config()
+    engine = migrated.owner_engine()
+    try:
+        tables = _public_tables(engine)
+        assert tables >= STATEMENT_RECORD_TABLES
+        command.downgrade(cfg, "0009")
+        assert _public_tables(engine) == tables - STATEMENT_RECORD_TABLES
+        command.upgrade(cfg, "head")
+        command.check(cfg)
+        assert _public_tables(engine) == tables
+    finally:
+        engine.dispose()

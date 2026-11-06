@@ -379,6 +379,10 @@ class ApplyMapping(_Input):
     no account matched. ``statement`` (with ``account_id``) does the same for
     the brokerage statements of a document (an investment ``unknown_account``
     item's ``statement``: an activity export's account, a PDF's).
+    ``allow_overlap`` names accounts whose statements are imported although
+    their period overlaps a statement already imported from another
+    document (a ``statement_overlap`` item answered "import anyway"; each
+    must be editable).
     """
 
     mapping_id: uuid.UUID | None = None
@@ -387,6 +391,8 @@ class ApplyMapping(_Input):
     statement: int | None = Field(default=None, ge=0, le=MAX_GROUP)
     #: An account per statement of the document (each must be editable).
     assignments: list[Assignment] = Field(default_factory=list, max_length=ASSIGNMENTS_MAX)
+    #: Accounts to import into despite an overlapping statement (each must be editable).
+    allow_overlap: list[uuid.UUID] = Field(default_factory=list, max_length=ASSIGNMENTS_MAX)
 
     @model_validator(mode="after")
     def _group_needs_account(self) -> Self:
@@ -408,6 +414,7 @@ class ApplyMappingJob(BaseModel):
     group: int | None = None
     statement: int | None = None
     assignments: list[Assignment] = Field(default_factory=list, max_length=ASSIGNMENTS_MAX)
+    allow_overlap: list[uuid.UUID] = Field(default_factory=list, max_length=ASSIGNMENTS_MAX)
     requested_by: uuid.UUID | None = None
 
 

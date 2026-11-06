@@ -4376,10 +4376,16 @@ export interface components {
          *     no account matched. ``statement`` (with ``account_id``) does the same for
          *     the brokerage statements of a document (an investment ``unknown_account``
          *     item's ``statement``: an activity export's account, a PDF's).
+         *     ``allow_overlap`` names accounts whose statements are imported although
+         *     their period overlaps a statement already imported from another
+         *     document (a ``statement_overlap`` item answered "import anyway"; each
+         *     must be editable).
          */
         ApplyMapping: {
             /** Account Id */
             account_id?: string | null;
+            /** Allow Overlap */
+            allow_overlap?: string[];
             /** Assignments */
             assignments?: components["schemas"]["Assignment"][];
             /** Group */

@@ -20,7 +20,12 @@ statements"). Per statement:
    nothing matched, so one choice never pours several accounts into one. It must be a brokerage or
    retirement account in the statement's currency; otherwise an
    ``unknown_account`` item and nothing is written.
-2. **Hold** (SECURITY.md C12): a statement whose figures do not reconcile
+2. **Same statement** (``app.domain.imports.statement_records``): a
+   statement whose printed period overlaps one already imported for the
+   account from another document is held with a ``possible_duplicate``
+   item (``statement_overlap``) unless the person said to import it anyway
+   (``allow_overlap``); every committed statement leaves a record.
+3. **Hold** (SECURITY.md C12): a statement whose figures do not reconcile
    (:func:`app.ingestion.parsers.brokerage.reconcile_investment`: positions
    x prices vs market values, holdings total, cash, account value), or with
    any row or position read below the confidence threshold, writes
@@ -35,10 +40,10 @@ statements"). Per statement:
    document one cannot be (its rows score below the threshold). An activity
    table whose day/month order was a guess marks every row
    ``low_confidence`` (``trade_date``) and is held like any such row.
-3. **Securities**: found in the household's catalogue by CUSIP, ISIN, then
+4. **Securities**: found in the household's catalogue by CUSIP, ISIN, then
    symbol, else created (quote currency = the account's); identifiers a
    later statement adds are filled in.
-4. **Activity** -> ``investment_txn`` with an ``import_hash`` (account,
+5. **Activity** -> ``investment_txn`` with an ``import_hash`` (account,
    trade date, type, security, quantity, amount, running index among
    identical rows), so the same statement as OFX and as PDF, or overlapping
    statements, add each row once. A row the account already records from
@@ -54,11 +59,11 @@ statements"). Per statement:
    date are left to the hash. Cash ``deposit``/``withdrawal`` rows are
    ledger transactions on the account (through the structured importer:
    transaction ``import_hash`` dedupe, rules, provenance).
-5. **Out of order**: new rows of a statement older than activity already
+6. **Out of order**: new rows of a statement older than activity already
    recorded for the account are not written (an opening position may
    already count them); an ``investment_out_of_order`` item says so.
    Import statements oldest first.
-6. **Opening positions and lots**: the reported positions are the truth on
+7. **Opening positions and lots**: the reported positions are the truth on
    ``as_of``. Units the account's history does not explain (held before
    the first imported statement) enter as one ``transfer_in`` per security
    on the period's first day (memo ``Opening position from statement``;
@@ -73,10 +78,10 @@ statements"). Per statement:
    ``investment_opening_basis_unknown`` item asking for the cost basis. A
    history the engine still refuses (selling units never held) rolls the
    statement back (savepoint) with an ``investment_lot_conflict`` item.
-7. **Prices**: each position's unit price on ``as_of`` becomes a ``price``
+8. **Prices**: each position's unit price on ``as_of`` becomes a ``price``
    row (``source = statement``) unless one exists for that day from another
    source.
-8. **Balance snapshot**: holdings + closing cash on ``as_of``
+9. **Balance snapshot**: holdings + closing cash on ``as_of``
    (``source = statement``) when every check that could run held and both
    are known.
 """
@@ -104,6 +109,11 @@ from app.core.money import calc_context, to_storage
 from app.domain.accounts import repo as accounts_repo
 from app.domain.accounts.models import Account, AccountType, BalanceSource
 from app.domain.documents.models import Document, ReviewKind
+from app.domain.imports.statement_records import (
+    check_overlap,
+    investment_facts,
+    record_statement,
+)
 from app.domain.investments.models import (
     AssetClass,
     InvestmentTxn,
@@ -147,7 +157,7 @@ CLOSING_TYPES: Final = frozenset({InvestmentTxnType.SELL, InvestmentTxnType.TRAN
 _SEP: Final = "\x1f"
 
 Review = Callable[[ReviewKind, dict[str, Any]], None]
-CommitCash = Callable[[Statement, Account], None]
+CommitCash = Callable[[Statement, Account], object]
 
 
 @dataclass
@@ -165,6 +175,8 @@ class InvestmentImport:
     prices: int = 0
     opening_positions: int = 0
     snapshots: int = 0
+    #: Held as overlapping an imported statement, or skipped as the same one.
+    overlaps: int = 0
     accounts: list[uuid.UUID] = field(default_factory=list)
 
     def summary(self) -> dict[str, Any]:
@@ -180,6 +192,7 @@ class InvestmentImport:
             "prices": self.prices,
             "opening_positions": self.opening_positions,
             "snapshots": self.snapshots,
+            "statement_overlaps": self.overlaps,
         }
 
 
@@ -197,7 +210,7 @@ def activity_hash(
     security_id: uuid.UUID | None,
     index: int,
 ) -> str:
-    """``investment_txn.import_hash`` (module doc, step 4); the same in every format."""
+    """``investment_txn.import_hash`` (module doc, step 5); the same in every format."""
     parts = (
         HASH_VERSION,
         str(account_id),
@@ -1137,6 +1150,7 @@ def import_investment_statements(
     account_id: uuid.UUID | None = None,
     statement_index: int | None = None,
     assigned: Mapping[int, uuid.UUID] | None = None,
+    allow_overlap: Collection[uuid.UUID] = (),
     user_id: uuid.UUID | None = None,
 ) -> InvestmentImport:
     """Commit the brokerage statements of ``document`` (module doc).
@@ -1144,6 +1158,8 @@ def import_investment_statements(
     ``account_id`` is the account a person chose on a re-run; ``statement_index``
     names the one statement it is for (the review item's), else
     :func:`_chosen_takes` decides on a multi-account document.
+    ``allow_overlap`` are accounts to import into despite an overlapping
+    statement (module doc, step 2).
     """
     ctx = _Context(
         db=db,
@@ -1173,12 +1189,20 @@ def import_investment_statements(
             continue
         if account.id not in ctx.result.accounts:
             ctx.result.accounts.append(account.id)
+        facts = investment_facts(statement)
+        verdict = check_overlap(
+            db, document, account, facts, index=index, allowed=allow_overlap, review=review
+        )
+        if verdict != "import":
+            ctx.result.overlaps += 1
+            continue
         check = statement.reconciliation or reconcile_investment(statement)
         if _held(ctx, statement, check, account):
             ctx.result.held += 1
             continue
         if _commit(ctx, statement, account, check):
             ctx.result.statements += 1
+            record_statement(db, document, account, facts)
         else:
             ctx.result.held += 1
     return ctx.result

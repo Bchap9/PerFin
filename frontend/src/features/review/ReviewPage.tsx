@@ -40,7 +40,7 @@ import {
   type ReviewFilter,
   type ReviewItem,
 } from "./api";
-import { explain, type Explanation } from "./reviewCopy";
+import { explain, payloadPeriod, type Explanation } from "./reviewCopy";
 import {
   LowConfidenceTools,
   NewInstitutionTools,
@@ -184,6 +184,11 @@ function TransactionLookup({ id, title }: { id: string; title: string }) {
 }
 
 /** Side by side: the imported row against each kept candidate. */
+/** A statement whose period overlaps one already imported (``statement_overlap``). */
+function isStatementOverlap(item: ReviewItem): boolean {
+  return (item.reason ?? payloadString(item, "reason")) === "statement_overlap";
+}
+
 function DuplicateBody({
   item,
   chosen,
@@ -196,11 +201,45 @@ function DuplicateBody({
   const transactionId = payloadString(item, "transaction_id");
   const candidates = payloadIds(item, "candidates");
   const documentId = item.document_id;
+  const overlap = isStatementOverlap(item);
+  const otherId = payloadString(item, "other_document_id");
   const document = useQuery({
     queryKey: importKeys.document(documentId ?? ""),
     queryFn: () => getDocument(documentId ?? ""),
-    enabled: documentId !== null && transactionId === null,
+    enabled: documentId !== null && transactionId === null && !overlap,
   });
+  const other = useQuery({
+    queryKey: importKeys.document(otherId ?? ""),
+    queryFn: () => getDocument(otherId ?? ""),
+    enabled: overlap && otherId !== null,
+    retry: false,
+  });
+  if (overlap) {
+    const period = payloadPeriod(item, "period_start", "period_end");
+    const otherPeriod = payloadPeriod(
+      item,
+      "other_period_start",
+      "other_period_end",
+    );
+    return (
+      <div role="group" aria-label="Compare statements">
+        <p>
+          This statement{period === null ? "" : ` (${period})`} overlaps one
+          already imported for the account
+          {otherPeriod === null ? "" : ` (${otherPeriod})`}.
+        </p>
+        {otherId === null ? null : (
+          <p>
+            Imported from{" "}
+            <Link to="/documents/$documentId" params={{ documentId: otherId }}>
+              {other.data?.original_filename ?? "another file"}
+            </Link>
+            .
+          </p>
+        )}
+      </div>
+    );
+  }
   if (transactionId === null) {
     return (
       <p>
@@ -442,9 +481,11 @@ export function ReviewItemCard({ item }: { item: ReviewItem }) {
                   resolve.mutate(duplicateResolution(item, "confirm", chosen));
                 }}
               >
-                {payloadString(item, "transaction_id") === null
-                  ? "Reject this upload"
-                  : "It is a duplicate"}
+                {isStatementOverlap(item)
+                  ? "Same statement — skip"
+                  : payloadString(item, "transaction_id") === null
+                    ? "Reject this upload"
+                    : "It is a duplicate"}
               </Button>
               <Button
                 disabled={busy}
@@ -452,7 +493,7 @@ export function ReviewItemCard({ item }: { item: ReviewItem }) {
                   resolve.mutate(duplicateResolution(item, "reject", null));
                 }}
               >
-                Not a duplicate
+                {isStatementOverlap(item) ? "Import anyway" : "Not a duplicate"}
               </Button>
             </>
           ) : null}

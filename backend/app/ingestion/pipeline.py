@@ -53,7 +53,9 @@ Phase 2 routes only **structured** formats (CSV, TSV, OFX, QFX, QIF):
   reconcile); a PDF of several accounts gives one brokerage statement per
   account, each matched to its account by its own last four digits, and the
   document itself is linked to no account (an account the classifier
-  matched is undone; one chosen at upload stays); a payslip is kept on the
+  matched is undone; one chosen at upload stays); the document's period
+  is the span of the periods its statements (bank and brokerage) read
+  with confidence, replacing the classifier's; a payslip is kept on the
   document (``kind = payslip``, period) and goes to review when its figures
   do not add up; a loan statement (``app.ingestion.parsers.loan_statement``)
   records its payment split and balances on the matching loan
@@ -455,13 +457,18 @@ def _parse_document(
     ]
     if read:
         document.kind = DocumentKind.STATEMENT
-        first = read[0]
-        if (
-            first.period_start is not None
-            and first.period_end is not None
-            and first.confidence.get("period", 0.0) >= threshold
-        ):
-            document.period_start, document.period_end = first.period_start, first.period_end
+        # The document's period: what its statements (bank and brokerage)
+        # read with confidence, all of them together.
+        periods = [
+            (s.period_start, s.period_end)
+            for s in read
+            if s.period_start is not None
+            and s.period_end is not None
+            and s.confidence.get("period", 0.0) >= threshold
+        ]
+        if periods:
+            document.period_start = min(start for start, _ in periods)
+            document.period_end = max(end for _, end in periods)
     document.confidence = {
         **(document.confidence or {}),
         "parse": {
