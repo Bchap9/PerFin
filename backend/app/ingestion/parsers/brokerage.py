@@ -93,6 +93,8 @@ from app.ingestion.parsers import confidence as conf
 from app.ingestion.parsers.base import Cell, DocumentParser, DocumentView, ParseOutcome, ViewLine
 from app.ingestion.parsers.table_statement import (
     PeriodCandidates,
+    PeriodRead,
+    follow_order,
     full_style,
     label_end,
     read_period,
@@ -1350,15 +1352,19 @@ class BrokerageStatementParser(DocumentParser):
         return (chosen, yearless, "ymd", "d_mon_y", "mon_d_y"), certain
 
     def _period(
-        self, summary: _Summary, styles: tuple[DateStyle, ...], view: DocumentView
-    ) -> tuple[date, date] | None:
+        self,
+        summary: _Summary,
+        styles: tuple[DateStyle, ...],
+        view: DocumentView,
+        certain: bool,
+    ) -> PeriodRead | None:
         ordered: list[DateStyle] = [s for s in self.period_styles if s in FULL_STYLES]
         for style in styles:
             numeric = full_style(style)
             if numeric in NUMERIC_DM and numeric in ordered:
                 ordered.remove(numeric)
                 ordered.insert(0, numeric)
-        return read_period(summary.period.texts, ordered, view)
+        return read_period(summary.period.texts, ordered, view, certain=certain)
 
     @staticmethod
     def _read_date(
@@ -1535,7 +1541,15 @@ class BrokerageStatementParser(DocumentParser):
             # The account's own labelled lines first, then the document's.
             summary.period = PeriodCandidates([*summary.period.texts, *fallback.period.texts])
         styles, certain = self._styles(collected.activity, date_order)
-        period = self._period(summary, styles, view)
+        # The day/month order is known when pinned or proven by numeric rows.
+        order_known = bool(self.date_styles) or (
+            certain and any(numeric_parts(r.date_text) is not None for r in collected.activity)
+        )
+        read = self._period(summary, styles, view, order_known)
+        if read is not None and not order_known and read.order is not None:
+            # The rows fit both orders (or have none); the printed period proves one.
+            styles, certain = follow_order(styles, read.order), True
+        period = read.span if read is not None else None
         as_of: date | None = None
         if summary.as_of_text is not None:
             found = find_dates(summary.as_of_text, styles)
@@ -1546,8 +1560,8 @@ class BrokerageStatementParser(DocumentParser):
         positions, position_scores = self._positions(collected, as_of)
         known = {p.security.symbol: p.security.name for p in positions if p.security.symbol}
         activity, activity_scores = self._activities(collected, styles, certain, period, known)
-        if period is not None:
-            statement_conf["period"] = self.base
+        if read is not None:
+            statement_conf["period"] = read.confidence(self.base)
         elif activity:
             period = (min(a.trade_date for a in activity), max(a.trade_date for a in activity))
             statement_conf["period"] = min(

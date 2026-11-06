@@ -4379,7 +4379,8 @@ export interface components {
          *     ``allow_overlap`` names accounts whose statements are imported although
          *     their period overlaps a statement already imported from another
          *     document (a ``statement_overlap`` item answered "import anyway"; each
-         *     must be editable).
+         *     must be editable). It also takes back a "same statement" answer: a
+         *     statement recorded as skipped is imported.
          */
         ApplyMapping: {
             /** Account Id */

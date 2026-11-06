@@ -14,6 +14,7 @@ parser) on small synthetic PDFs. Everything is invented.
 from __future__ import annotations
 
 import io
+from collections.abc import Callable
 from datetime import date
 from decimal import Decimal
 from typing import cast
@@ -22,6 +23,7 @@ import pytest
 from reportlab.pdfgen import canvas
 
 from app.domain.documents.models import Document
+from app.domain.imports.statement_records import period_stated
 from app.ingestion.classify.dates import find_ranges, header_band_range
 from app.ingestion.classify.period import detect_period
 from app.ingestion.classify.service import apply_classification, classify_extraction
@@ -188,9 +190,11 @@ def test_fixture_report_periods() -> None:
 
 
 def test_fixture_reports_parse_with_the_header_period() -> None:
-    for data, period in (
-        (fidr.report_pdf(), (date(2019, 6, 1), date(2019, 6, 30))),
-        (neutral.report_pdf(), (neutral.START, neutral.END)),
+    # The header band (on every page) is believed as far as the classifier
+    # believes it (0.9: stated); a labelled period gets the parser's own.
+    for data, period, believed in (
+        (fidr.report_pdf(), (date(2019, 6, 1), date(2019, 6, 30)), 0.9),
+        (neutral.report_pdf(), (neutral.START, neutral.END), 0.95),
     ):
         result = _extract(data)
         parsed = parse_extraction(result, kind=classify_extraction(result).kind)
@@ -201,7 +205,7 @@ def test_fixture_reports_parse_with_the_header_period() -> None:
         assert found
         for start, end, confidence in found:
             assert (start, end) == period
-            assert confidence >= 0.95
+            assert confidence >= believed
 
 
 def test_an_inferred_period_is_a_hint_only() -> None:
@@ -238,7 +242,9 @@ def test_label_candidates_do_not_latch_on_the_first_match() -> None:
         candidates.scan(line, labels)
     assert candidates.texts == [": $21,000.37", "July 1 \u2013 July 31, 2015"]
     view = DocumentView(lines=(), source_format="pdf", truncated=False, page_count=0)
-    assert read_period(candidates.texts, ("mdy", "mon_d_y"), view) == JULY
+    found = read_period(candidates.texts, ("mdy", "mon_d_y"), view)
+    assert found is not None
+    assert (found.span, found.source) == (JULY, "label")
 
 
 _HEADER: Cells = [(50, "Date"), (130, "Description"), (400, "Amount"), (500, "Balance")]
@@ -310,3 +316,150 @@ def test_generic_brokerage_parser_reads_yearless_activity_through_the_period() -
         (date(2015, 7, 6), "dividend", Decimal("12.34")),
         (date(2015, 7, 20), "interest", Decimal("1.05")),
     ]
+
+
+# ---------------------------------------------------------------------------
+# Day-first periods, day-only ranges, how far a band is believed
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("line", "expected"),
+    [
+        ("July 1-31, 2015", JULY),
+        ("Statement Period: July 1 - 31, 2015", JULY),
+        ("Jul 1st \u2013 31st, 2015", JULY),
+        ("1-31 July 2015", JULY),
+        ("1 \u2013 31 Jul 2015", JULY),
+        ("Feb 1 to 28, 2026", (date(2026, 2, 1), date(2026, 2, 28))),
+    ],
+)
+def test_ranges_whose_end_is_only_a_day(line: str, expected: tuple[date, date]) -> None:
+    (found,) = find_ranges(line)
+    assert (found.start, found.end) == expected
+    assert not found.ambiguous
+
+
+@pytest.mark.parametrize(
+    "line",
+    [
+        "July 31-1, 2015",  # ends before it starts
+        "Feb 1 - 30, 2026",  # no such day
+        "Page 3 of 12 2015",
+    ],
+)
+def test_no_day_only_range(line: str) -> None:
+    assert find_ranges(line) == []
+
+
+def test_the_values_beat_the_order_hint() -> None:
+    # Day-first: 31 is no month. A month-first hint (a default) does not
+    # turn the start into January 7.
+    for order in (None, "mdy", "dmy"):
+        (found,) = find_ranges("01/07/2015 - 31/07/2015", order=order)
+        assert (found.start, found.end, found.order, found.ambiguous) == (*JULY, "dmy", False)
+    (us,) = find_ranges("07/01/2015 - 07/31/2015", order="dmy")
+    assert (us.start, us.end, us.order) == (*JULY, "mdy")
+    band = header_band_range([["SYNTHETIC BANK", "01/07/2015 - 31/07/2015"]] * 3, order="mdy")
+    assert band is not None
+    assert (band.start, band.end, band.order) == (*JULY, "dmy")
+
+
+def test_classifier_reads_day_first_and_day_only_periods() -> None:
+    for lines in (
+        ("Synthetic Bank", "Statement period: 01/07/2015 - 31/07/2015"),
+        ("Synthetic Bank", "Statement Period: July 1-31, 2015"),
+        ("Synthetic Bank", "Statement period:", "1 - 31 July 2015"),
+    ):
+        view = ClassifyView(lines=lines, header=lines, page_heads=(lines,))
+        period = detect_period(view, order="mdy")
+        assert (period.start, period.end, period.source) == (*JULY, "label"), lines
+        assert period.confidence == 0.95
+
+
+def _day_first_pages(band: str, rows: list[Cells]) -> list[list[Cells]]:
+    head: list[Cells] = [[(50, "RIVERBEND TEST BANK")], [(50, band)]]
+    first: list[Cells] = [
+        *head,
+        [(50, "Account ending in 4821")],
+        [(50, "Beginning balance"), (400, "1,000.00")],
+        [(50, "Ending balance"), (400, "1,040.00")],
+        _HEADER,
+        *rows,
+    ]
+    return [first, [*head, [(50, "Notices")]]]
+
+
+@pytest.mark.parametrize(
+    "row_date",
+    [
+        # Named-month rows say nothing about the numeric order.
+        lambda day, month: f"{day} {('Jul', 'Aug')[month - 7]} 2015",
+        # Day-first rows that fit both orders: the period proves day-first.
+        lambda day, month: f"{day:02d}/{month:02d}/2015",
+    ],
+    ids=["named-rows", "ambiguous-rows"],
+)
+def test_bank_statement_day_first_header_band(row_date: Callable[[int, int], str]) -> None:
+    periods = []
+    for month in (7, 8):
+        band = f"01/{month:02d}/2015 - 31/{month:02d}/2015"
+        rows: list[Cells] = [
+            [(50, row_date(2, month)), (130, "Payroll"), (400, "100.00"), (500, "1,100.00")],
+            [(50, row_date(11, month)), (130, "Grocery"), (400, "-60.00"), (500, "1,040.00")],
+        ]
+        result = _extract(_pdf(_day_first_pages(band, rows)))
+        outcome = TableStatementParser().parse(DocumentView.from_result(result), threshold=0.85)
+        (statement,) = outcome.statements
+        periods.append((statement.period_start, statement.period_end))
+        assert statement.confidence["period"] == 0.9
+        assert "date_order_guessed" not in outcome.warnings
+        assert [t.posted for t in statement.transactions] == [
+            date(2015, month, 2),
+            date(2015, month, 11),
+        ]
+    # Consecutive months, not one month read twice (the duplicate guard's input).
+    assert periods == [JULY, (date(2015, 8, 1), date(2015, 8, 31))]
+
+
+def test_bank_statement_day_first_label_with_ambiguous_rows() -> None:
+    rows: list[Cells] = [
+        [(50, "02/07/2015"), (130, "Payroll"), (400, "100.00"), (500, "1,100.00")],
+        [(50, "11/07/2015"), (130, "Grocery"), (400, "-60.00"), (500, "1,040.00")],
+    ]
+    pages = _day_first_pages("Statement period: 01/07/2015 - 31/07/2015", rows)
+    result = _extract(_pdf(pages))
+    outcome = TableStatementParser().parse(DocumentView.from_result(result), threshold=0.85)
+    (statement,) = outcome.statements
+    assert (statement.period_start, statement.period_end) == JULY
+    assert statement.confidence["period"] == 0.95
+    assert [t.posted for t in statement.transactions] == [date(2015, 7, 2), date(2015, 7, 11)]
+
+
+def test_brokerage_day_first_header_band_dates_the_activity() -> None:
+    page: list[Cells] = [
+        [(50, "SYNTHETIC BROKERAGE REPORT")],
+        [(50, "01/07/2015 - 31/07/2015")],
+        [(50, "Account 999-123456")],
+        [(50, "Activity")],
+        [(50, "Date"), (110, "Activity"), (200, "Description"), (420, "Quantity"), (500, "Amount")],
+        [(50, "06/07/2015"), (110, "Dividend"), (200, "EXMPL Example Index Fund"), (500, "12.34")],
+        [(50, "10/07/2015"), (110, "Interest"), (200, "Core cash"), (500, "1.05")],
+    ]
+    result = _extract(_pdf([page, page[:2]]))
+    outcome = BrokerageStatementParser().parse(DocumentView.from_result(result), threshold=0.85)
+    (statement,) = outcome.investments
+    assert (statement.period_start, statement.period_end) == JULY
+    assert statement.confidence["period"] == 0.9
+    assert [a.trade_date for a in statement.activity] == [date(2015, 7, 6), date(2015, 7, 10)]
+
+
+def test_a_one_page_header_band_is_not_a_stated_period() -> None:
+    (page, _) = _bank_pages("July 1 \u2013 July 31, 2015")
+    result = _extract(_pdf([page]))
+    outcome = TableStatementParser().parse(DocumentView.from_result(result), threshold=0.85)
+    (statement,) = outcome.statements
+    assert (statement.period_start, statement.period_end) == JULY
+    # As far as the classifier believes a one-page band: below "stated".
+    assert statement.confidence["period"] == 0.75
+    assert not period_stated("pdf", *JULY, statement.confidence)

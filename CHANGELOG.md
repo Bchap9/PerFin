@@ -61,8 +61,13 @@ What remains (details in docs/ROADMAP.md):
   label in the top lines of at least half the pages ("July 1 – July 31,
   2015", "07/01/2015 - 07/31/2015") is the statement period, in the
   classifier and in every statement parser (bank, card, brokerage). The
-  start of a range borrows the year of its end, and an ambiguous numeric end
-  takes the day/month order the other end proves.
+  start of a range borrows the year of its end, a range whose end is only a
+  day ("July 1-31, 2015", "1 - 31 July 2015") is read, and an ambiguous
+  numeric end takes the day/month order the other end proves, over any
+  default ("01/07/2015 - 31/07/2015" is July, day-first). When a
+  statement's rows fit both orders, the order its period proves dates them.
+  Parsers believe a header band as far as the classifier does: 0.9 on two
+  or more pages, 0.75 on a one-page document (not a stated period).
 - **Same statement twice**: every committed statement is recorded
   (migration `0010`, table `statement_record`: account, document, period,
   source format, closing figures). A statement whose printed period
@@ -73,7 +78,11 @@ What remains (details in docs/ROADMAP.md):
   and **Import anyway**; row-level duplicate checks still apply. Re-running
   the import of the same file never trips it, statements that only share a
   boundary day are not held, and CSV exports are recorded but never held.
-  `POST /imports/{id}/apply-mapping` takes `allow_overlap` (account ids).
+  Two OFX/QFX downloads are held only when they declare the same window:
+  rolling "last 90 days" downloads that overlap keep importing, deduplicated
+  by their rows as before. `POST /imports/{id}/apply-mapping` takes
+  `allow_overlap` (account ids), which also takes back a "same statement"
+  answer.
 - `perfin ingest --dry-run` shows the brokerage statements of a PDF in its
   `parse` stage: per account the last four digits, period, positions and
   activity counts by type, figures and reconciliation.

@@ -360,7 +360,8 @@ takes only the statements with its own last four digits or, when it records
 none, the one statement nothing matched) and `allow_overlap` (account ids,
 each editable: their statements are imported although their period
 overlaps a statement already imported from another document, the "import
-anyway" of a `statement_overlap` item); a `mapping_id`
+anyway" of a `statement_overlap` item, also after it was answered "same
+statement": the skipped statement is then imported); a `mapping_id`
 imports the table with that mapping even when it is brokerage activity; the target account
 (the given one, the document's, else the mapping's) must be editable (`404
 account-not-found`); a document that is not `needs_review`/`processed` or

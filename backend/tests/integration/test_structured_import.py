@@ -607,6 +607,54 @@ def test_statements_sharing_only_their_edges_are_not_held(env: Env) -> None:
     assert len(_records(env, account)) == 2
 
 
+def test_rolling_ofx_download_windows_are_not_held(env: Env) -> None:
+    """A bank's "last 90 days" OFX downloads overlap by design: the row hashes handle them."""
+    ledger = synth_ledger(36, days=125)
+    first = statement(ledger, date(2026, 1, 1), date(2026, 3, 31), seed=36)
+    later = statement(ledger, date(2026, 2, 1), date(2026, 4, 30), seed=36)
+    account = env.checking(first)
+    env.ingest(ofx_sgml_bytes(first))
+    second = env.ingest(ofx_sgml_bytes(later))
+    assert env.document(second).status is DocumentStatus.PROCESSED, env.open_reviews(second)
+    union = sorted(set(first.transactions) | set(later.transactions), key=lambda t: t.fitid)
+    assert _amounts(env.transactions(account)) == sorted((t.posted, t.amount) for t in union)
+    assert [r.outcome for r in _records(env, account)] == ["imported", "imported"]
+
+
+def test_same_statement_answer_can_be_taken_back(env: Env) -> None:
+    """``allow_overlap`` imports a statement recorded as skipped ("same statement")."""
+    stmt = sample_statement(37)
+    account = env.checking(stmt)
+    first = env.ingest(ofx_sgml_bytes(stmt))
+    count = len(env.transactions(account))
+    second = env.ingest(ofx_xml_bytes(stmt))
+    (item,) = env.open_reviews(second)
+    with Actors.open(env.settings, env.factories) as actors:
+        owner = actors.login(env.owner)
+        resolved = owner.post(
+            f"{API}/review/{item.id}/resolve",
+            json={"kind": "possible_duplicate", "decision": "confirm"},
+        )
+        assert resolved.status_code == 200, resolved.text
+        assert [(r.document_id, r.outcome) for r in _records(env, account)] == [
+            (first, "imported"),
+            (second, "skipped"),
+        ]
+        rerun = owner.post(
+            f"{API}/imports/{second}/apply-mapping", json={"allow_overlap": [str(account.id)]}
+        )
+        assert rerun.status_code == 202, rerun.text
+    assert env.run(APPLY_MAPPING_JOB_TYPE)
+    assert env.document(second).status is DocumentStatus.PROCESSED
+    assert env.open_reviews(second) == []
+    assert [(r.document_id, r.outcome) for r in _records(env, account)] == [
+        (first, "imported"),
+        (second, "imported"),
+    ]
+    # The rows were already recorded: nothing doubled.
+    assert len(env.transactions(account)) == count
+
+
 def test_overlapping_csv_exports_are_recorded_not_held(env: Env) -> None:
     history = synth_ledger(34, days=70)
     january = statement(history, date(2026, 1, 1), date(2026, 1, 31), seed=34)

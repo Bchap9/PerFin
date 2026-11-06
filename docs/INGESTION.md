@@ -248,8 +248,8 @@ confidence.
 period" strings when present; else from the **header band**: a date range
 printed without a label in the top lines of at least half the pages
 (`July 1 – July 31, 2015` under the title of every page, `07/01/2015 -
-07/31/2015`; dash, en/em dash, "to", "through", "until"), the start
-borrowing the end's year; otherwise inferred as `[min(txn date), max(txn
+07/31/2015`, `July 1-31, 2015`; dash, en/em dash, "to", "through",
+"until"), the start borrowing the end's year; otherwise inferred as `[min(txn date), max(txn
 date)]` with a flag that it was inferred. An inferred period is a hint only
 (kept in `document.confidence.period`): it is never stored as the
 document's period, which comes from the parsed statements. Receipts use the
@@ -326,7 +326,10 @@ the validated sandbox output, never on file content):
   inferred `[min, max]` of parsed transaction dates or of dates that start
   a line (`inferred` flag, lower confidence, never written to
   `document.period_start/end`). An ambiguous numeric end takes the order the
-  other end proves (`07/01/2015 - 07/31/2015` is month-first). Dates: ISO,
+  other end proves (`07/01/2015 - 07/31/2015` is month-first,
+  `01/07/2015 - 31/07/2015` day-first), and that proof beats the
+  fingerprint's `date_order` (`settle_order`). Ranges whose end is only a
+  day: `July 1-31, 2015`, `1 - 31 July 2015`. Dates: ISO,
   numeric month-first or day-first (a component above 12 decides, then the
   fingerprint's `date_order`, then the separator, marked ambiguous with
   lower confidence), month names in both orders, two-digit years, ranges
@@ -455,7 +458,15 @@ a child answering with parser output is `bad_output`.
   label that matches something else first, "Change from last period", no
   longer blocks the real one), a range's start borrowing the end's year;
   without one, the header band (the classifier's `header_band_range` on
-  the parser's page lines). Signs: `bank` (signed
+  the parser's page lines), scored as the classifier scores it
+  (`band_confidence`: 0.9 on two or more pages, 0.75 on a one-page document,
+  0.1 less with a guessed day/month order), so a range atop a one-page PDF
+  is no stated period for the duplicate guard or `document.period_*`; a
+  labelled period gets the parser's confidence. The day/month order of a
+  numeric period is the one its values prove (a part above 12), whatever
+  default the rows suggest; when the rows fit both orders or are not
+  numeric (`2 Jul 2015`), the order the period proves dates the rows too
+  (`01/07/2015 - 31/07/2015` with rows `06/07/2015`: 6 July). Signs: `bank` (signed
   amount, debit negative, `CR`/`DR`) or `card` (charges printed positive,
   credits negative or `CR`; balances owed become negative). Numeric dates
   whose day/month order the values do not show are guessed `mdy` at low
@@ -844,10 +855,15 @@ reconciliation, per-field confidence).
   anyway") re-runs the import with the account in `allow_overlap`, and the
   row hashes still skip rows already recorded. Statements that only share
   their edges (one closing on the 31st, the next opening on the 31st) and
-  overlapping CSV exports are left to the row hashes. A document that
-  already has a record for the account is never held again, so
-  `apply-mapping` re-runs and reprocessing stay idempotent, and a skipped
-  statement stays skipped.
+  overlapping CSV exports are left to the row hashes. Two OFX/QFX files are
+  compared by their declared windows: the same `DTSTART`/`DTEND` is the same
+  download again and is held, different windows (a bank's rolling "last 90
+  days" downloads) are left to the row hashes; an OFX/QFX against a printed
+  statement is compared like any other pair. A document that already has a
+  record for the account is never held again, so `apply-mapping` re-runs
+  and reprocessing stay idempotent, and a skipped statement stays skipped
+  unless `apply-mapping` names its account in `allow_overlap`, which
+  imports it (a "same statement" answer taken back).
 - Transfer pairing runs across accounts.
 - Receipt -> transaction linking: match on amount, date within +/- 3 days,
   merchant alias. Confident match links the document; otherwise a review item

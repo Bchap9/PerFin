@@ -18,12 +18,18 @@ nested quantifiers, and only ever run over single capped lines.
 
 Ranges: :func:`find_ranges` reads ``START <sep> END`` where the separator is
 a dash (``-``, en or em dash) or ``to``/``through``/``thru``/``until``, the
-start borrowing the end's year (``July 1 \u2013 July 31, 2015``). An
-ambiguous numeric end takes the order the other end settles
-(``07/01/2015 - 07/31/2015`` is month-first: 31 is no month).
-:func:`header_band_range` finds the statement period a document prints,
-unlabelled, in the top lines of most of its pages (INGESTION.md "Time window
-detection"); the classifier and the statement parsers both use it.
+start borrowing the end's year (``July 1 \u2013 July 31, 2015``), and a
+range whose end is only a day (``July 1-31, 2015``, ``1 - 31 July 2015``).
+An ambiguous numeric end takes the order the other end settles
+(``07/01/2015 - 07/31/2015`` is month-first: 31 is no month;
+``01/07/2015 - 31/07/2015`` is day-first), and that proof beats the
+caller's ``order`` hint: the values are what the line prints, the hint is
+a default (:func:`settle_order`). :func:`header_band_range` finds the
+statement period a document prints, unlabelled, in the top lines of most of
+its pages (INGESTION.md "Time window detection"); the classifier and the
+statement parsers both use it and score it alike (:func:`band_confidence`:
+0.9 when two or more pages print it, 0.75 on one page, 0.1 less when its
+day/month order is a guess).
 """
 
 from __future__ import annotations
@@ -181,6 +187,25 @@ def complete_range(first: DateHit, second: DateHit) -> tuple[date, date] | None:
     return start, end
 
 
+def settle_order(
+    line: str, hits: list[DateHit], order: DateOrder | None, *, after: int = 0
+) -> list[DateHit]:
+    """``hits`` re-read in the day/month order the line's own values prove.
+
+    One numeric date with a part above 12 proves the order every other
+    numeric date of the line is written in, and beats the ``order`` hint (a
+    fingerprint's or the rows' default). Lines whose values prove both
+    orders, or none, keep their hits.
+    """
+    settled = {h.settles for h in hits if h.settles is not None}
+    if len(settled) != 1:
+        return hits
+    proven = settled.pop()
+    if proven == order and not any(h.ambiguous for h in hits):
+        return hits
+    return [replace(h, ambiguous=False) for h in find_dates(line, order=proven) if h.start >= after]
+
+
 #: Longest period a range is believed for (a statement covers at most about a year).
 MAX_RANGE_DAYS: Final = 400
 #: Text allowed between the two ends of a range read without a label.
@@ -191,6 +216,22 @@ _SEPARATOR: Final = re.compile(
 HEADER_BAND_LINES: Final = 8
 #: Pages looked at for the header band (bounded work).
 HEADER_BAND_PAGES: Final = 500
+#: Confidence of a header-band period printed on two or more pages, on one
+#: page, and how much a guessed day/month order takes off.
+BAND_CONFIDENCE: Final = 0.9
+ONE_PAGE_BAND_CONFIDENCE: Final = 0.75
+AMBIGUOUS_PENALTY: Final = 0.1
+#: ``July 1-31, 2015`` / ``1-31 July 2015``: a range whose end is only a day.
+_DAY_SEP: Final = r"\s*(?:-{1,2}|\u2013|\u2014|to|through|thru|until|till)\s*"
+_MDY_DAYS: Final = re.compile(
+    rf"(?<![a-z]){_MONTH}\s?(\d{{1,2}}){_ORD}{_DAY_SEP}(\d{{1,2}}){_ORD},?\s?(\d{{4}})(?!\d)",
+    re.IGNORECASE,
+)
+_DMY_DAYS: Final = re.compile(
+    rf"(?<![\d/.-])(\d{{1,2}}){_ORD}{_DAY_SEP}(\d{{1,2}}){_ORD}[\s-]?{_MONTH}(?![a-z])"
+    rf"[,\s-]{{1,2}}(\d{{4}})(?!\d)",
+    re.IGNORECASE,
+)
 
 
 @dataclass(frozen=True)
@@ -202,6 +243,28 @@ class DateRange:
     ambiguous: bool
     at: int
     stop: int
+    #: The day/month order the range's own values prove, if any.
+    order: DateOrder | None = None
+
+
+def day_ranges(line: str, after: int = 0) -> list[DateRange]:
+    """``July 1-31, 2015`` and ``1-31 July 2015`` (one month, the end only a day)."""
+    text = line[:_MAX_LINE]
+    out: list[DateRange] = []
+    for pattern, month_group, first_group, last_group in (
+        (_MDY_DAYS, 1, 2, 3),
+        (_DMY_DAYS, 3, 1, 2),
+    ):
+        for m in pattern.finditer(text):
+            if m.start() < after:
+                continue
+            month = _MONTHS[m.group(month_group)[:3].lower()]
+            year = int(m.group(4))
+            start = _make(year, month, int(m.group(first_group)))
+            end = _make(year, month, int(m.group(last_group)))
+            if start is not None and end is not None and start <= end:
+                out.append(DateRange(start, end, False, m.start(), m.end()))
+    return out
 
 
 def find_ranges(
@@ -213,19 +276,16 @@ def find_ranges(
 ) -> list[DateRange]:
     """Every separated range in ``line`` after offset ``after`` (module doc)."""
     hits = [h for h in find_dates(line, order=order) if h.start >= after]
-    settled = {h.settles for h in hits if h.settles is not None}
-    if order is None and len(settled) == 1 and any(h.ambiguous for h in hits):
-        # One end proves the order the other end is written in.
-        proven = settled.pop()
-        hits = [
-            replace(h, ambiguous=False) for h in find_dates(line, order=proven) if h.start >= after
-        ]
+    # One end proves the order the other end is written in.
+    hits = settle_order(line, hits, order, after=after)
     text = line[:_MAX_LINE]
-    out: list[DateRange] = []
+    days = day_ranges(text, after)
+    out: list[DateRange] = list(days)
     index = 0
     while index + 1 < len(hits):
         first, second = hits[index], hits[index + 1]
-        if _SEPARATOR.fullmatch(text[first.end : second.start]) is not None:
+        inside = any(d.at < second.end and first.start < d.stop for d in days)
+        if not inside and _SEPARATOR.fullmatch(text[first.end : second.start]) is not None:
             both = complete_range(first, second)
             if both is not None and (both[1] - both[0]).days <= max_days:
                 out.append(
@@ -235,12 +295,13 @@ def find_ranges(
                         first.ambiguous or second.ambiguous,
                         first.start,
                         second.end,
+                        first.settles or second.settles,
                     )
                 )
                 index += 2
                 continue
         index += 1
-    return out
+    return sorted(out, key=lambda found: found.at)
 
 
 @dataclass(frozen=True)
@@ -252,6 +313,14 @@ class BandRange:
     ambiguous: bool
     pages: int
     total: int
+    #: The day/month order the printed range proves, if any.
+    order: DateOrder | None = None
+
+
+def band_confidence(band: BandRange) -> float:
+    """How far a header-band period is believed (module doc)."""
+    confidence = BAND_CONFIDENCE if band.pages >= 2 else ONE_PAGE_BAND_CONFIDENCE
+    return confidence - (AMBIGUOUS_PENALTY if band.ambiguous else 0.0)
 
 
 def header_band_range(
@@ -269,6 +338,7 @@ def header_band_range(
     """
     counts: dict[tuple[date, date], int] = {}
     ambiguous: dict[tuple[date, date], bool] = {}
+    orders: dict[tuple[date, date], DateOrder] = {}
     total = 0
     for number, page in enumerate(pages):
         if number >= HEADER_BAND_PAGES:
@@ -285,9 +355,11 @@ def header_band_range(
                     seen.add(key)
                     counts[key] = counts.get(key, 0) + 1
                     ambiguous[key] = ambiguous.get(key, False) or found.ambiguous
+                    if found.order is not None:
+                        orders.setdefault(key, found.order)
     if not counts:
         return None
     best = max(counts, key=lambda key: counts[key])
     if counts[best] * 2 < total:
         return None
-    return BandRange(best[0], best[1], ambiguous[best], counts[best], total)
+    return BandRange(best[0], best[1], ambiguous[best], counts[best], total, orders.get(best))

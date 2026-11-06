@@ -28,16 +28,19 @@ from __future__ import annotations
 import itertools
 import re
 from collections.abc import Sequence
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 from datetime import date
 from typing import Final
 
 from app.ingestion.classify.dates import (
     DateHit,
     DateOrder,
+    band_confidence,
     complete_range,
+    day_ranges,
     find_dates,
     header_band_range,
+    settle_order,
 )
 from app.ingestion.classify.text import DocumentView
 
@@ -114,15 +117,19 @@ def _plausible(start: date, end: date) -> bool:
 
 def _range_after(line: str, at: int, order: DateOrder | None) -> tuple[date, date, bool] | None:
     hits = [h for h in find_dates(line, order=order) if h.end > at]
-    settled = {h.settles for h in hits if h.settles is not None}
-    if order is None and len(settled) == 1 and any(h.ambiguous for h in hits):
-        # ``03/01/2024 - 03/31/2024``: the end proves the line is month-first.
-        proven = settled.pop()
-        hits = [replace(h, ambiguous=False) for h in find_dates(line, order=proven) if h.end > at]
+    # ``03/01/2024 - 03/31/2024``: the end proves the line is month-first,
+    # whatever the hint says (``01/07/2015 - 31/07/2015`` is day-first).
+    hits = [h for h in settle_order(line, hits, order) if h.end > at]
+    days = day_ranges(line, at)
     for first, second in itertools.pairwise(hits):
+        if any(d.at < second.end and first.start < d.stop for d in days):
+            break  # ``July 1-31, 2015``: read below as one range.
         both = complete_range(first, second)
         if both is not None and _plausible(*both):
             return both[0], both[1], first.ambiguous or second.ambiguous
+    for found in days:
+        if _plausible(found.start, found.end):
+            return found.start, found.end, found.ambiguous
     return None
 
 
@@ -167,10 +174,7 @@ def detect_period(
                 return Period(start, end, False, "label", 0.8 if ambiguous else 0.95)
     band = header_band_range(view.page_heads, order=order)
     if band is not None and _plausible(band.start, band.end):
-        confidence = 0.9 if band.pages >= 2 else 0.75
-        return Period(
-            band.start, band.end, False, "header", confidence - (0.1 if band.ambiguous else 0.0)
-        )
+        return Period(band.start, band.end, False, "header", band_confidence(band))
     opening = _labelled_date(view.lines, view.normalised, _OPENING_LABELS, order)
     closing = _labelled_date(view.lines, view.normalised, _CLOSING_LABELS, order)
     if opening is not None and closing is not None:

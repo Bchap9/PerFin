@@ -22,16 +22,22 @@ committed :func:`check_overlap` compares it with the account's records:
   (:data:`MIN_OVERLAP_SHARE`) is held. A few shared days at the edges (a
   statement closing on the 15th and the next one opening on the 15th, a
   download window reaching into last month's statement) are left to the
-  row hashes. Held: nothing of it is written and a ``possible_duplicate``
-  review item (``statement_overlap``) names the account, the statement, its
-  period and the other documents with theirs. Resolving it: *confirm*
-  ("same statement") records the statement as ``skipped`` and writes
-  nothing; *reject* ("import anyway") re-runs the import with the account
-  in ``allow_overlap``.
+  row hashes. Two OFX/QFX files are compared by their declared windows
+  only: the same ``DTSTART``/``DTEND`` is the same statement downloaded
+  again, while different windows (a rolling "last 90 days" download) are
+  left to the row hashes; an OFX/QFX against a printed statement is
+  compared like any other pair. Held: nothing of it is written and a
+  ``possible_duplicate`` review item (``statement_overlap``) names the
+  account, the statement, its period and the other documents with theirs.
+  Resolving it: *confirm* ("same statement") records the statement as
+  ``skipped`` and writes nothing; *reject* ("import anyway") re-runs the
+  import with the account in ``allow_overlap``.
 * A document that already has a record for the account is never held
   again: a re-run (``apply-mapping``, reprocess) of an imported statement
   goes on (the row hashes keep it idempotent) and a ``skipped`` one stays
-  skipped, silently.
+  skipped, silently, unless the re-run names the account in
+  ``allow_overlap`` (``apply-mapping``): that imports it, so a "same
+  statement" answer can be taken back.
 
 Payloads and audit rows carry ids, dates and counts only.
 """
@@ -196,6 +202,20 @@ def _same_period(start: date, end: date, record: StatementRecord) -> bool:
     return shared > 0 and shared >= MIN_OVERLAP_SHARE * shorter
 
 
+def _same_statement(source_format: str, start: date, end: date, record: StatementRecord) -> bool:
+    """Whether ``start .. end`` is the statement ``record`` holds (module doc).
+
+    Two OFX/QFX downloads are one statement only when they declare the same
+    window: a bank's "last 90 days" export overlaps the previous one by
+    design, and its rows are recognised by their hashes.
+    """
+    if source_format in DECLARED_PERIOD_FORMATS and record.source_format in (
+        DECLARED_PERIOD_FORMATS
+    ):
+        return (start, end) == (record.period_start, record.period_end)
+    return _same_period(start, end, record)
+
+
 def check_overlap(
     db: Session,
     document: Document,
@@ -213,12 +233,15 @@ def check_overlap(
     period = facts.period
     if period is None or not facts.stated:
         return "import"
+    if account.id in allowed:
+        # "Import anyway", also after an earlier "same statement".
+        return "import"
     start, end = period
     records = _overlapping(db, account, facts.kind, start, end)
     own = [r for r in records if r.document_id == document.id]
     if any(r.outcome == "skipped" for r in own):
         return "skipped"
-    if own or account.id in allowed:
+    if own:
         return "import"
     others = [
         r
@@ -226,7 +249,7 @@ def check_overlap(
         if r.outcome == "imported"
         and r.period_stated
         and r.document_id != document.id
-        and _same_period(start, end, r)
+        and _same_statement(facts.source_format, start, end, r)
     ]
     if not others:
         return "import"

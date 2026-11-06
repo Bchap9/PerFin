@@ -28,8 +28,14 @@ are read the same way:
    2026``). Without a labelled period, the **header band**
    (:func:`app.ingestion.classify.dates.header_band_range`: a range printed
    in the top lines of at least half the pages) is the period
-   (:func:`read_period`). Yearless row dates (``MM/DD``) take their year
-   from the period.
+   (:func:`read_period`), believed as far as the classifier believes it
+   (:func:`~app.ingestion.classify.dates.band_confidence`: 0.9 on two or
+   more pages, 0.75 on one, so a range atop a one-page document is no
+   stated period). Yearless row dates (``MM/DD``) take their year from the
+   period. The day/month order of a numeric period comes from its own
+   values when one proves it (``01/07/2015 - 31/07/2015`` is day-first),
+   whatever the rows' default; and when the rows fit both orders (or are
+   not numeric) the order the period proves is the rows' order too.
 4. **Signs.** ``bank``: a signed amount as printed, *Debit* negative and
    *Credit* positive, ``CR``/``DR`` markers honoured. ``card``: charges are
    printed positive and credits negative or with ``CR``; both the amounts and
@@ -55,7 +61,13 @@ from functools import lru_cache
 from typing import ClassVar, Final, Literal
 
 from app.ingestion.classify.dates import HEADER_BAND_LINES as BAND_LINES
-from app.ingestion.classify.dates import DateOrder, find_ranges, header_band_range
+from app.ingestion.classify.dates import (
+    DateOrder,
+    band_confidence,
+    find_ranges,
+    header_band_range,
+)
+from app.ingestion.classify.dates import find_dates as classify_dates
 from app.ingestion.parsers import confidence as conf
 from app.ingestion.parsers.base import Cell, DocumentParser, DocumentView, ParseOutcome, ViewLine
 from app.ingestion.parsers.text import (
@@ -197,6 +209,21 @@ def full_style(style: DateStyle) -> DateStyle:
     return style
 
 
+_SWAPPED: Final[dict[DateStyle, DateStyle]] = {"mdy": "dmy", "dmy": "mdy", "md": "dm", "dm": "md"}
+
+
+def follow_order(styles: Sequence[DateStyle], order: DateOrder) -> tuple[DateStyle, ...]:
+    """``styles`` with each numeric style turned to ``order`` (``md``/``dm`` likewise)."""
+    out: list[DateStyle] = []
+    for style in styles:
+        numeric = full_style(style)
+        if numeric in NUMERIC_DM and numeric != order:
+            style = _SWAPPED[style]
+        if style not in out:
+            out.append(style)
+    return tuple(out)
+
+
 def period_order(styles: Iterable[DateStyle]) -> DateOrder | None:
     """The day/month order the first numeric style of ``styles`` stands for."""
     for style in styles:
@@ -207,26 +234,79 @@ def period_order(styles: Iterable[DateStyle]) -> DateOrder | None:
     return None
 
 
+@dataclass(frozen=True)
+class PeriodRead:
+    """A statement period as :func:`read_period` read it."""
+
+    start: date
+    end: date
+    #: ``label``: next to a period label; ``header``: the header band.
+    source: Literal["label", "header"]
+    #: Confidence cap of the source (a band on one page is believed less).
+    cap: float = 1.0
+    #: The day/month order the printed period proves (a part above 12).
+    order: DateOrder | None = None
+
+    @property
+    def span(self) -> tuple[date, date]:
+        return self.start, self.end
+
+    def confidence(self, base: float) -> float:
+        """The parser's ``base`` confidence, at most the source's cap."""
+        return min(base, self.cap)
+
+
+def _proven_order(text: str) -> DateOrder | None:
+    """The day/month order a numeric date of ``text`` proves, if exactly one."""
+    settled = {h.settles for h in classify_dates(text) if h.settles is not None}
+    return settled.pop() if len(settled) == 1 else None
+
+
+def _first(styles: Sequence[DateStyle], order: DateOrder | None) -> list[DateStyle]:
+    """``styles`` with the numeric style of ``order`` first and the other one dropped."""
+    if order is None:
+        return list(styles)
+    wanted: DateStyle = "mdy" if order == "mdy" else "dmy"
+    other: DateStyle = "dmy" if order == "mdy" else "mdy"
+    return [wanted, *(s for s in styles if s not in (wanted, other))]
+
+
 def read_period(
-    candidates: Sequence[str], ordered: Sequence[DateStyle], view: DocumentView
-) -> tuple[date, date] | None:
-    """The first candidate that reads as a period, else the header band (module doc)."""
-    order = period_order(ordered)
+    candidates: Sequence[str],
+    ordered: Sequence[DateStyle],
+    view: DocumentView,
+    *,
+    certain: bool = True,
+) -> PeriodRead | None:
+    """The first candidate that reads as a period, else the header band (module doc).
+
+    ``ordered`` are the styles to read numeric dates in; ``certain`` says
+    whether their day/month order is known (pinned by the parser, or proven
+    by the rows). When it is not, it is only a default: a period whose own
+    values prove the other order (``01/07/2015 - 31/07/2015``) is read in
+    that order, and :attr:`PeriodRead.order` tells the caller so its rows
+    can follow.
+    """
+    order = period_order(ordered) if certain else None
     for text in candidates:
+        proven = _proven_order(text)
+        styles = _first(ordered, proven) if proven is not None else list(ordered)
         parts = _RANGE.split(text, maxsplit=1)
         if len(parts) == 2:
-            start = find_dates(parts[0], ordered)
-            end = find_dates(parts[1], ordered)
+            start = find_dates(parts[0], styles)
+            end = find_dates(parts[1], styles)
             if start and end and start[-1] <= end[0]:
-                return start[-1], end[0]
-        found = find_dates(text, ordered)
+                return PeriodRead(start[-1], end[0], "label", order=proven)
+        found = find_dates(text, styles)
         if len(found) >= 2 and found[0] <= found[1]:
-            return found[0], found[1]
+            return PeriodRead(found[0], found[1], "label", order=proven)
         ranges = find_ranges(text, order=order)
         if ranges:
-            return ranges[0].start, ranges[0].end
+            return PeriodRead(ranges[0].start, ranges[0].end, "label", order=ranges[0].order)
     band = header_band_range(page_heads(view), order=order)
-    return (band.start, band.end) if band is not None else None
+    if band is None:
+        return None
+    return PeriodRead(band.start, band.end, "header", band_confidence(band), band.order)
 
 
 @dataclass(frozen=True)
@@ -586,15 +666,19 @@ class TableStatementParser(DocumentParser):
         return ("d_mon_y", "mon_d_y", "ymd"), True
 
     def _period(
-        self, summary: _Summary, styles: tuple[DateStyle, ...], view: DocumentView
-    ) -> tuple[date, date] | None:
+        self,
+        summary: _Summary,
+        styles: tuple[DateStyle, ...],
+        view: DocumentView,
+        certain: bool,
+    ) -> PeriodRead | None:
         ordered: list[DateStyle] = [s for s in self.period_styles if s in FULL_STYLES]
         for style in styles:
             numeric = full_style(style)
             if numeric in NUMERIC_DM and numeric in ordered:
                 ordered.remove(numeric)
                 ordered.insert(0, numeric)
-        return read_period(summary.period.texts, ordered, view)
+        return read_period(summary.period.texts, ordered, view, certain=certain)
 
     # -- the statement ----------------------------------------------------------
 
@@ -616,7 +700,15 @@ class TableStatementParser(DocumentParser):
             outcome.warnings.append("no_table_header")
             return outcome
         styles, certain = self._row_styles(rows, date_order)
-        period = self._period(summary, styles, view)
+        # The day/month order is known when pinned or proven by numeric rows.
+        order_known = bool(self.date_styles) or (
+            certain and any(numeric_parts(r.date_text) is not None for r in rows)
+        )
+        read = self._period(summary, styles, view, order_known)
+        if read is not None and not order_known and read.order is not None:
+            # The rows fit both orders (or have none); the printed period proves one.
+            styles, certain = follow_order(styles, read.order), True
+        period = read.span if read is not None else None
         transactions: list[ExtractedTransaction] = []
         fields: list[dict[str, float]] = []
         ledger_rows: list[Row] = []
@@ -676,8 +768,8 @@ class TableStatementParser(DocumentParser):
         if cap is not None:
             for score in fields:
                 score["reconciliation"] = cap
-        if period is not None:
-            statement_conf["period"] = self.base
+        if read is not None:
+            statement_conf["period"] = read.confidence(self.base)
         elif transactions:
             period = (min(t.posted for t in transactions), max(t.posted for t in transactions))
             # Inferred from the rows: no surer than their dates.
