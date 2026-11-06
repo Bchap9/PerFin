@@ -17,13 +17,14 @@ import { Field } from "../../components/Field";
 import { Input } from "../../components/Input";
 import { Select } from "../../components/Select";
 import { useToast } from "../../components/Toast";
-import { errorMessage } from "../../lib/api/client";
+import { errorMessage, isApiError } from "../../lib/api/client";
 import { queryRoots } from "../../lib/queryKeys";
 import { PageViewer } from "../documents/PageViewer";
 import { payloadString, teachDocument, type ReviewItem, type TeachOut } from "./api";
 import {
   SELECTION_CHOICES,
   isTable,
+  keptText,
   newSelection,
   problems,
   rolesForTable,
@@ -195,6 +196,14 @@ function Outcome({ out }: { out: TeachOut }) {
           : `Applied and remembered. ${String(out.reprocessed?.length ?? 0)} file(s) are being read again.`}
         {out.rerun === "import" ? " Its rows are being imported." : ""}
       </p>
+      {out.merged_from === null || out.merged_from === undefined ? null : (
+        <p>
+          Added to the layout remembered before.
+          {(out.kept ?? []).length > 0
+            ? ` Still remembered from earlier teaching: ${keptText(out.kept ?? [])}.`
+            : ""}
+        </p>
+      )}
       {out.tables.map((table) => (
         <p key={table.kind}>
           {table.kind === "transactions" ? "Transaction table" : "Holdings table"}: {table.rows}{" "}
@@ -225,6 +234,9 @@ export function TeachDialog({
   const [institutionName, setInstitutionName] = useState(institution);
   const [remember, setRemember] = useState(false);
   const [similar, setSimilar] = useState(true);
+  const [replace, setReplace] = useState(false);
+  /** Another layout of the institution was taught before (409 layout-conflict). */
+  const [conflict, setConflict] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const missing = problems(selections);
   const named = selections.find((s) => s.kind === "institution");
@@ -237,6 +249,7 @@ export function TeachDialog({
           remember,
           reprocessSimilar: similar,
           itemId: item?.id ?? null,
+          replace,
         }),
       ),
     onSuccess: () => {
@@ -247,6 +260,7 @@ export function TeachDialog({
       toast.notify({ title: "PerFin learned from this file", tone: "success" });
     },
     onError: (caught) => {
+      setConflict(isApiError(caught) && caught.slug === "layout-conflict");
       setError(errorMessage(caught));
     },
   });
@@ -324,6 +338,15 @@ export function TeachDialog({
               checked={similar}
               onChange={(event) => {
                 setSimilar(event.target.checked);
+              }}
+            />
+          ) : null}
+          {remember && (conflict || replace) ? (
+            <Checkbox
+              label="Replace the layout remembered for this institution (what was taught for it before is no longer used)"
+              checked={replace}
+              onChange={(event) => {
+                setReplace(event.target.checked);
               }}
             />
           ) : null}

@@ -198,8 +198,19 @@ What remains (details in docs/ROADMAP.md):
   digit are refused. The next statement of the layout is read with it
   (parser `layout_template/1`: period, account digits, balances, the
   labelled table, reconciled as usual) and imports with no review item.
-  Free-text notes are kept for the household and never acted on. Audited
-  as `document.teach`.
+  Free-text notes are kept for the household, without words that hold a
+  digit, and never acted on. A label is remembered only when it reads the
+  selected value back (a label printed twice, such as "Balance", would read
+  the wrong figure next time). Teaching the same layout again adds to what
+  was remembered (`merged_from`, `kept`), "Remember this layout" keeps it
+  too, and another layout of the same institution is refused with `409
+  layout-conflict` until the person chooses to replace it (`replace`). The
+  review item the dialog was opened from is closed only when the teaching
+  answers it (a held statement once it reconciles, an unread document once
+  rows are imported or it is read again); otherwise it stays open
+  (`item_left_open`). A line picked from the keyboard list is added with
+  "Add this line", not on every change of the list. Audited as
+  `document.teach`.
 - `POST /review/{id}/correct` takes `opening_balance`, `closing_balance`
   and `statement`: the stored statement is reconciled again, and a
   `reconciliation_failed`/`reconciliation_unavailable` item is accepted

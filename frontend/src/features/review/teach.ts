@@ -277,6 +277,8 @@ export interface TeachOptions {
   remember: boolean;
   reprocessSimilar: boolean;
   itemId: string | null;
+  /** Start the remembered layout afresh instead of adding to what was taught. */
+  replace?: boolean;
 }
 
 /** The request body for the selections (selections without a kind are left out). */
@@ -317,6 +319,7 @@ export function teachBody(selections: readonly Selection[], options: TeachOption
     tables,
     remember: options.remember,
     reprocess_similar: options.reprocessSimilar,
+    replace: options.remember && options.replace === true,
     resolve: options.itemId !== null,
     ...(name === "" ? {} : { institution_name: name }),
     ...(options.itemId === null ? {} : { item_id: options.itemId }),
@@ -342,7 +345,26 @@ export function warningText(code: string): string {
       return "No row could be read from the table with these columns.";
     case "template_field_missing":
       return `The ${named} was not found again on the page.`;
+    case "item_left_open":
+      return "The review item stays open: what was taught does not settle it yet.";
+    case "note_without_words":
+      return "A note held only figures, so it was not kept (notes keep no numbers).";
     default:
       return code;
   }
+}
+
+/** Plain words for what a remembered layout kept from earlier teaching. */
+export function keptText(kept: readonly string[]): string {
+  return kept
+    .map((code) => {
+      if (code === "table:transactions") {
+        return "the transaction table";
+      }
+      if (code === "table:holdings") {
+        return "the holdings table";
+      }
+      return selectionLabel(code as SelectionKind).toLowerCase();
+    })
+    .join(", ");
 }

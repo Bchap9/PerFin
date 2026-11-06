@@ -421,30 +421,68 @@ def household_fingerprints(db: Session, household_id: uuid.UUID) -> list[Fingerp
     ).all()
     out: list[Fingerprint] = []
     for row, name, country in rows:
-        if row.kind is DocumentKind.UNKNOWN:
-            continue
-        try:
-            match = parse_match_rules(row.match_rules)
-            spec = FingerprintSpec.model_validate(
-                {
-                    "schema": SCHEMA_VERSION,
-                    "key": f"household-{row.id.hex[:16]}",
-                    "institution": name,
-                    "country": country,
-                    "kind": row.kind.value,
-                    "parser": row.parser_name,
-                    "version": row.version,
-                    "match": match,
-                }
-            )
-        except (FingerprintError, ValidationError):
-            continue
-        out.append(
-            compile_fingerprint(
-                spec, origin="household", fingerprint_id=row.id, institution_id=row.institution_id
-            )
-        )
+        compiled = compile_row(row, name, country)
+        if compiled is not None:
+            out.append(compiled)
     return out
+
+
+def compile_row(
+    row: ParserFingerprint, institution: str, country: str | None
+) -> Fingerprint | None:
+    """A stored household fingerprint, compiled; None when it no longer validates."""
+    if row.kind is DocumentKind.UNKNOWN:
+        return None
+    try:
+        match = parse_match_rules(row.match_rules)
+        spec = FingerprintSpec.model_validate(
+            {
+                "schema": SCHEMA_VERSION,
+                "key": f"household-{row.id.hex[:16]}",
+                "institution": institution,
+                "country": country,
+                "kind": row.kind.value,
+                "parser": row.parser_name,
+                "version": row.version,
+                "match": match,
+            }
+        )
+    except (FingerprintError, ValidationError):
+        return None
+    return compile_fingerprint(
+        spec, origin="household", fingerprint_id=row.id, institution_id=row.institution_id
+    )
+
+
+def lock_layouts(db: Session, household_id: uuid.UUID) -> None:
+    """Serialise changes to the household's remembered layouts (until the transaction ends)."""
+    db.execute(_LOCK_LAYOUTS, {"k": f"perfin:fingerprints:{household_id}"})
+
+
+def latest_layout(
+    db: Session,
+    household_id: uuid.UUID,
+    *,
+    institution_id: uuid.UUID,
+    kind: DocumentKind,
+    parser_name: str,
+) -> ParserFingerprint | None:
+    """The newest version of the remembered layout (institution, kind, parser), if any."""
+    return db.execute(
+        select(ParserFingerprint)
+        .where(
+            ParserFingerprint.household_id == household_id,
+            ParserFingerprint.institution_id == institution_id,
+            ParserFingerprint.kind == kind,
+            ParserFingerprint.parser_name == parser_name,
+        )
+        .order_by(
+            ParserFingerprint.version.desc(),
+            ParserFingerprint.created_at.desc(),
+            ParserFingerprint.id.desc(),
+        )
+        .limit(1)
+    ).scalar_one_or_none()
 
 
 def remember_layout(
@@ -486,7 +524,7 @@ def remember_layout(
         )
     except ValidationError as exc:
         raise FingerprintError(_summary(exc)) from exc
-    db.execute(_LOCK_LAYOUTS, {"k": f"perfin:fingerprints:{household_id}"})
+    lock_layouts(db, household_id)
     existing = db.execute(
         select(ParserFingerprint.version)
         .where(

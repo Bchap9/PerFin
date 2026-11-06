@@ -244,6 +244,10 @@ class RememberLayout(_Input):
     parser: ParserName | None = None
     match: MatchSpec | None = None
     reprocess_similar: bool = True
+    #: Drop what was taught for the remembered layout of this institution
+    #: (kept when the same layout is remembered again; ``409
+    #: layout-conflict`` when it is another layout).
+    replace: bool = False
 
 
 class Region(BaseModel):
@@ -334,6 +338,9 @@ class RememberLayoutOut(BaseModel):
     ambiguous: bool
     reprocessed: list[uuid.UUID]
     item: ReviewItemOut
+    #: The earlier version whose taught template was kept, and what of it.
+    merged_from: int | None = None
+    kept: list[str] = Field(default_factory=list)
 
 
 class RuleDraftOut(BaseModel):
@@ -485,6 +492,11 @@ class TeachRequest(_Input):
     account_id: uuid.UUID | None = None
     remember: bool = False
     reprocess_similar: bool = True
+    #: With ``remember``: start the remembered template afresh instead of
+    #: adding to what was taught for this layout before (``409
+    #: layout-conflict`` asks for it when another layout of the institution
+    #: was taught).
+    replace: bool = False
     item_id: uuid.UUID | None = None
     resolve: bool = True
 
@@ -540,8 +552,14 @@ class TeachOut(BaseModel):
     job_id: uuid.UUID | None = None
     fingerprint_id: uuid.UUID | None = None
     reprocessed: list[uuid.UUID] = Field(default_factory=list)
+    #: The earlier version of the remembered layout whose teaching was kept
+    #: (the same layout taught again), and what of it is still remembered
+    #: (field names, ``table:<kind>``).
+    merged_from: int | None = None
+    kept: list[str] = Field(default_factory=list)
     #: Short codes: ``no_label:<field>`` (no label next to the value, it is
     #: not remembered), ``unreadable:<field>``, ``rows_already_imported``,
-    #: ``does_not_reconcile``, ``ignore_not_rememberable``...
+    #: ``does_not_reconcile``, ``ignore_not_rememberable``,
+    #: ``item_left_open`` (the review item is not settled by what was taught)...
     warnings: list[str] = Field(default_factory=list)
     item: ReviewItemOut | None = None

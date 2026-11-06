@@ -587,7 +587,7 @@ confirmed and its closing balance recorded as a statement snapshot
 "institution" | "ignore" | "other", "page", "bbox", "value"?, "note"?}],
 "tables": [{"kind": "transactions" | "holdings", "page", "bbox", "columns":
 [{"x0", "x1", "role", "note"?}]}], "institution_id"? | "institution_name"?,
-"account_id"?, "remember", "reprocess_similar", "item_id"?, "resolve"}`
+"account_id"?, "remember", "reprocess_similar", "replace", "item_id"?, "resolve"}`
 (at most 40 labels and 2 tables; `other` needs a `note`; column roles
 `date`, `payee`, `memo`, `amount`, `debit`, `credit`, `balance` or
 `symbol`, `security`, `quantity`, `price`, `market_value`, `cost_basis`,
@@ -597,13 +597,20 @@ plus `ignore` and `other`) applies the labels to the document and, with
 invalid-table` (no date and amount column, roles twice, fewer than two
 headers), `422 institution-required` (remember without an institution),
 `422 teach-item-mismatch`, `409 layout-unavailable`, and the
-remember-layout errors. It answers `{"document_id", "fields": [{"field",
+remember-layout errors (with `409 layout-conflict`). It answers `{"document_id", "fields": [{"field",
 "value", "page", "anchor", "direction", "note"}], "tables": [{"kind",
 "rows", "columns": [{"header", "role"}]}], "ignored", "notes", "applied",
 "rerun": "import" | "pipeline" | null, "job_id", "fingerprint_id",
-"reprocessed", "warnings", "item"}` (audit `document.teach`: field names,
-counts, notes and ids, never the values read; notes are never acted on). `POST /review/{id}/remember-layout`
-`{"institution_id", "kind"?, "parser"?, "match"?, "reprocess_similar"}`
+"reprocessed", "merged_from", "kept", "warnings", "item"}` (audit `document.teach`: field names,
+counts, notes and ids, never the values read; notes are never acted on and
+keep no word that holds a digit). With `resolve` the `item_id` item is
+closed only when the teaching answers it: a `reconciliation_*` item when
+the statement now reconciles (its pending rows confirmed, as `/correct`
+does), an `unparsed` item when rows are imported or the document is read
+again, any other item when a document fact changed or the layout was
+remembered; otherwise it stays open and `warnings` holds `item_left_open`.
+`POST /review/{id}/remember-layout`
+`{"institution_id", "kind"?, "parser"?, "match"?, "reprocess_similar", "replace"}`
 stores a household `parser_fingerprint` (`match` has the shipped
 fingerprints' schema: `all`, `one_of`, `any`, `min_any`, rules `header`,
 `text`, `regex`, `account_mask`, `columns`, `metadata`; derived from the document's header lines and table
@@ -612,6 +619,10 @@ kind-required`, `422 parser-unknown`, `422` for rules outside the schema or
 with an unsafe regex, `422 layout-not-distinctive`, `422 layout-does-not-match`
 (the rules must recognise this document), `422 layout-too-costly` (the rules
 did not finish within the household matching budget on this document), `409
+layout-conflict` (the institution's remembered layout of this kind carries a
+taught template whose rules do not recognise this document; `replace: true`
+replaces it, else a template is never dropped: the same layout remembered
+again keeps it, answered as `merged_from` and `kept`), `409
 fingerprint-limit` (the household already remembers 100 layouts, or the
 layout 10 000 versions); it resolves the item, reprocesses the document and
 up to 50 `needs_review` documents the caller may change whose stored layout

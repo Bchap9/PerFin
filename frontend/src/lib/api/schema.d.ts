@@ -8328,6 +8328,11 @@ export interface components {
             /** Parser */
             parser?: string | null;
             /**
+             * Replace
+             * @default false
+             */
+            replace: boolean;
+            /**
              * Reprocess Similar
              * @default true
              */
@@ -8351,11 +8356,15 @@ export interface components {
              */
             institution_id: string;
             item: components["schemas"]["ReviewItemOut"];
+            /** Kept */
+            kept?: string[];
             kind: components["schemas"]["DocumentKind"];
             /** Match */
             match: {
                 [key: string]: unknown;
             };
+            /** Merged From */
+            merged_from?: number | null;
             /** Parser */
             parser: string;
             /** Reprocessed */
@@ -10135,6 +10144,10 @@ export interface components {
             item?: components["schemas"]["ReviewItemOut"] | null;
             /** Job Id */
             job_id?: string | null;
+            /** Kept */
+            kept?: string[];
+            /** Merged From */
+            merged_from?: number | null;
             /** Notes */
             notes: string[];
             /** Reprocessed */
@@ -10173,6 +10186,11 @@ export interface components {
              * @default false
              */
             remember: boolean;
+            /**
+             * Replace
+             * @default false
+             */
+            replace: boolean;
             /**
              * Reprocess Similar
              * @default true

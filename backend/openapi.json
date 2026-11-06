@@ -15607,6 +15607,11 @@
             ],
             "title": "Parser"
           },
+          "replace": {
+            "default": false,
+            "title": "Replace",
+            "type": "boolean"
+          },
           "reprocess_similar": {
             "default": true,
             "title": "Reprocess Similar",
@@ -15639,6 +15644,13 @@
           "item": {
             "$ref": "#/components/schemas/ReviewItemOut"
           },
+          "kept": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Kept",
+            "type": "array"
+          },
           "kind": {
             "$ref": "#/components/schemas/DocumentKind"
           },
@@ -15646,6 +15658,17 @@
             "additionalProperties": true,
             "title": "Match",
             "type": "object"
+          },
+          "merged_from": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Merged From"
           },
           "parser": {
             "title": "Parser",
@@ -21312,6 +21335,24 @@
             ],
             "title": "Job Id"
           },
+          "kept": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Kept",
+            "type": "array"
+          },
+          "merged_from": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Merged From"
+          },
           "notes": {
             "items": {
               "type": "string"
@@ -21432,6 +21473,11 @@
           "remember": {
             "default": false,
             "title": "Remember",
+            "type": "boolean"
+          },
+          "replace": {
+            "default": false,
+            "title": "Replace",
             "type": "boolean"
           },
           "reprocess_similar": {

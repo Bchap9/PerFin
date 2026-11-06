@@ -27,7 +27,10 @@ resolution needs (member or above who may change the item's document,
   layout-does-not-match``) within the household matching budget (``422
   layout-too-costly``). A household remembers at most
   :data:`app.ingestion.classify.fingerprints.MAX_HOUSEHOLD_FINGERPRINTS`
-  layouts (``409 fingerprint-limit``). The parser must exist. The item is resolved,
+  layouts (``409 fingerprint-limit``). The parser must exist. A learned
+  template of the layout's earlier version is kept, never dropped silently
+  (:func:`store_layout`: ``409 layout-conflict`` for another layout unless
+  ``replace``). The item is resolved,
   then the document and up to :data:`SIMILAR_MAX` other ``needs_review``
   documents the caller may change whose stored layout the new fingerprint
   matches go through the pipeline again (a new extraction in the sandbox,
@@ -89,7 +92,7 @@ from app.ingestion.classify.fingerprints import MatchSpec
 from app.ingestion.classify.service import all_fingerprints
 from app.ingestion.classify.text import DocumentView
 from app.ingestion.parsers.registry import parser_named
-from app.ingestion.parsers.template import rebalance
+from app.ingestion.parsers.template import merge_templates, parse_template, rebalance
 from app.ingestion.sandbox.protocol import Balance, ExtractResult
 
 #: Other documents one "remember this layout" sends through the pipeline again.
@@ -434,6 +437,10 @@ class StoredLayout:
     row: ParserFingerprint
     ambiguous: bool
     similar: list[Document]
+    #: The version whose learned template was carried into this one.
+    merged_from: int | None = None
+    #: What was kept from that template (field names, ``table:<kind>``).
+    kept: tuple[str, ...] = ()
 
 
 def layout_unavailable() -> ProblemError:
@@ -457,11 +464,21 @@ def store_layout(
     template: dict[str, Any] | None,
     reprocess_similar: bool,
     request: HTTPConnection | None,
+    replace: bool = False,
 ) -> StoredLayout:
     """A household fingerprint for ``document``'s layout (module doc), audited.
 
     ``match`` defaults to the rules derived from the document; they must
     hold on it. ``template`` is a learned layout ("Teach PerFin").
+
+    A new version of a layout replaces the earlier one (one version per
+    institution, kind and parser is used). When the earlier version carries
+    a learned template it is not dropped silently: if its rules still
+    recognise this document (the same layout) the template is carried into
+    the new version, what is taught now winning
+    (:func:`app.ingestion.parsers.template.merge_templates`); if they do not
+    (another layout of the same institution), ``409 layout-conflict``.
+    ``replace`` starts the template afresh in both cases.
     """
     household_id = document.household_id
     result = stored_result(document.extraction)
@@ -503,6 +520,29 @@ def store_layout(
             "Rules do not match",
             "The rules must recognise the document they are learned from.",
         )
+    fingerprints.lock_layouts(db, household_id)
+    merged_from: int | None = None
+    kept: list[str] = []
+    if not replace:
+        earlier_row = fingerprints.latest_layout(
+            db, household_id, institution_id=institution.id, kind=kind, parser_name=parser
+        )
+        earlier = parse_template(earlier_row.template) if earlier_row is not None else None
+        if earlier_row is not None and earlier is not None:
+            if not _same_layout(earlier_row, institution, view):
+                raise ProblemError(
+                    409,
+                    "layout-conflict",
+                    "Another layout is remembered",
+                    f"PerFin already remembers a taught layout of {institution.name} that "
+                    "does not recognise this document. Replace it to remember this one "
+                    "instead (the earlier teaching is then no longer used).",
+                )
+            merged, kept = merge_templates(
+                earlier, parse_template(template) if template is not None else None
+            )
+            template = merged.model_dump(mode="json")
+            merged_from = earlier_row.version
     try:
         row = fingerprints.remember_layout(
             db,
@@ -536,6 +576,11 @@ def store_layout(
             "fields": len(template.get("fields") or []),
             "tables": len(template.get("tables") or []),
         }
+    if merged_from is not None:
+        after["merged_from_version"] = merged_from
+        after["kept"] = kept
+    if replace:
+        after["replaced"] = True
     audit(
         db,
         action="parser_fingerprint.create",
@@ -546,7 +591,16 @@ def store_layout(
         user_id=principal.user_id,
         request=request,
     )
-    return StoredLayout(row, ambiguous, similar)
+    return StoredLayout(row, ambiguous, similar, merged_from, tuple(kept))
+
+
+def _same_layout(row: ParserFingerprint, institution: Institution, view: DocumentView) -> bool:
+    """Whether the stored version ``row`` still recognises the document in ``view``."""
+    earlier = fingerprints.compile_row(row, institution.name, institution.country)
+    if earlier is None:
+        return False
+    budget = fingerprints.MatchBudget(fingerprints.HOUSEHOLD_MATCH_SECONDS)
+    return fingerprints.match_fingerprint(earlier, view, budget) is not None
 
 
 def remember_layout(
@@ -579,6 +633,7 @@ def remember_layout(
         template=None,
         reprocess_similar=body.reprocess_similar,
         request=request,
+        replace=body.replace,
     )
     row, similar = stored.row, stored.similar
     service.close_item(
@@ -604,6 +659,8 @@ def remember_layout(
         ambiguous=stored.ambiguous,
         reprocessed=reprocessed,
         item=service.item_out(db, principal, item),
+        merged_from=stored.merged_from,
+        kept=list(stored.kept),
     )
 
 

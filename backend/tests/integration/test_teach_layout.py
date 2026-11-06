@@ -40,6 +40,7 @@ from app.domain.accounts.models import Account, BalanceSnapshot, Institution
 from app.domain.documents.blobstore import LocalFSBlobStore
 from app.domain.documents.models import (
     Document,
+    DocumentKind,
     DocumentStatus,
     ParserFingerprint,
     ReviewItem,
@@ -442,3 +443,140 @@ def test_balances_entered_for_a_held_statement_reconcile_it(env: Env) -> None:
     stored = ExtractResult.model_validate(env.document(document_id).extraction)
     assert stored.statements[0].reconciliation is not None
     assert stored.statements[0].reconciliation.status == "ok"
+
+
+def test_a_note_alone_answers_no_review_item(env: Env) -> None:
+    """Teaching that applies nothing leaves the item it was opened from open."""
+    first = synth.statement_one()
+    document_id = env.ingest(synth.pdf(first))
+    unread = env.open_items(document_id)
+    assert [i.payload.get("reason") for i in unread] == ["mapping_required"]
+    note = {"field": "other", "page": 1, "bbox": [0, 0, 50, 50], "note": "a bank statement"}
+    out = env.teach(document_id, {"labels": [note], "item_id": str(unread[0].id)})
+    assert out.applied == []
+    assert out.item is not None
+    assert out.item.state is ReviewItemState.OPEN
+    assert "item_left_open" in out.warnings
+    assert [i.id for i in env.open_items(document_id)] == [unread[0].id]
+    assert env.document(document_id).status is DocumentStatus.NEEDS_REVIEW
+
+    # A held statement is answered only by balances it adds up with.
+    stmt = pdf_synth.sample_national_statement(seed=43)
+    institution = env.ledger.institution(env.household_id, name=stmt.institution.name)
+    env.ledger.account(
+        env.household_id,
+        number_last4=stmt.last4,
+        currency=stmt.currency,
+        institution_id=institution.id,
+    )
+    held_id = env.ingest(pdf_synth.sample_national_pdf(stmt, tamper="closing"))
+    held = next(
+        i for i in env.open_items(held_id) if i.payload.get("reason") == "reconciliation_failed"
+    )
+    out = env.teach(held_id, {"labels": [note], "item_id": str(held.id)})
+    assert out.item is not None
+    assert out.item.state is ReviewItemState.OPEN
+    assert "item_left_open" in out.warnings
+    rows: list[Transaction] = env.query(
+        select(Transaction).where(Transaction.source_document_id == held_id)
+    )
+    assert rows
+    assert all(r.review_state is ReviewState.PENDING for r in rows)
+    assert held.id in {i.id for i in env.open_items(held_id)}
+
+
+def test_the_same_layout_taught_again_keeps_what_was_taught(env: Env) -> None:
+    account = env.ledger.account(env.household_id, number_last4="2468", currency="USD")
+    first = synth.statement_one()
+    document_id = env.ingest(synth.pdf(first))
+    body = _labels(env.document(document_id), first)
+    out = env.teach(document_id, {**body, "remember": True})
+    assert out.merged_from is None
+    env.run(INGEST_JOB_TYPE)
+
+    # One more fact on the same layout, remembered again, with a note that
+    # holds figures (they are not kept).
+    note = {
+        "field": "other",
+        "page": 1,
+        "bbox": [0, 0, 50, 50],
+        "note": "my other account 98765432 sort 12-34-56",
+    }
+    again = env.teach(
+        document_id,
+        {
+            "labels": [body["labels"][0], note],
+            "institution_name": synth.INSTITUTION,
+            "remember": True,
+        },
+    )
+    assert again.merged_from == 1
+    assert "table:transactions" in again.kept
+    assert "period_end" in again.kept
+    assert "account_number" not in again.kept  # taught again: the new anchor wins
+    assert again.notes == ["my other account sort"]
+    env.run(INGEST_JOB_TYPE)
+    versions: list[ParserFingerprint] = env.query(
+        select(ParserFingerprint).order_by(ParserFingerprint.version)
+    )
+    assert [v.version for v in versions] == [1, 2]
+    latest = parse_template(versions[-1].template)
+    assert latest is not None
+    assert [t.kind for t in latest.tables] == ["transactions"]
+    assert NOTE in latest.notes
+    assert "my other account sort" in latest.notes
+    stored = json.dumps(versions[-1].template)
+    assert re.search(r"\d{2,}", stored) is None, stored
+    assert "98765432" not in stored
+    assert "12-34-56" not in stored
+
+    # "Remember this layout" (no template of its own) keeps it too.
+    with env.factories.transaction() as db:
+        apply_rls_context(db, env.principal())
+        document = db.get(Document, document_id)
+        assert document is not None
+        institution = db.get(Institution, versions[-1].institution_id)
+        assert institution is not None
+        remembered = actions.store_layout(
+            db,
+            env.principal(),
+            document,
+            institution=institution,
+            kind=DocumentKind.STATEMENT,
+            parser=teach_service.TAUGHT_PARSER,
+            match=None,
+            template=None,
+            reprocess_similar=False,
+            request=None,
+        )
+        assert remembered.merged_from == 2
+        assert parse_template(remembered.row.template) == latest
+
+    # The next statement is still read with the whole template.
+    second = synth.statement_two()
+    second_id = env.ingest(synth.pdf(second), name="ledger-june.pdf")
+    assert env.open_items(second_id) == []
+    assert _rows(env, account, second_id) == _expected(second)
+
+
+def test_another_layout_of_the_institution_is_not_replaced_silently(env: Env) -> None:
+    first = synth.statement_one()
+    document_id = env.ingest(synth.pdf(first))
+    env.teach(document_id, {**_labels(env.document(document_id), first), "remember": True})
+    env.run(INGEST_JOB_TYPE)
+
+    other = pdf_synth.sample_national_statement(seed=44)
+    other_id = env.ingest(pdf_synth.sample_national_pdf(other), name="other.pdf")
+    body = {"institution_name": synth.INSTITUTION, "remember": True}
+    with pytest.raises(ProblemError) as caught:
+        env.teach(other_id, body)
+    assert caught.value.slug == "layout-conflict"
+    assert [v.version for v in env.query(select(ParserFingerprint))] == [1]
+
+    out = env.teach(other_id, {**body, "replace": True})
+    assert out.merged_from is None
+    assert out.kept == []
+    versions: list[ParserFingerprint] = env.query(
+        select(ParserFingerprint).order_by(ParserFingerprint.version)
+    )
+    assert [(v.version, v.template is None) for v in versions] == [(1, False), (2, True)]

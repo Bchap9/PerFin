@@ -2,7 +2,7 @@
 import { screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 
-import { authedSession, json, mockApi, renderApp, type Handler } from "../auth/testing";
+import { authedSession, json, mockApi, problem, renderApp, type Handler } from "../auth/testing";
 import { account, lookupHandlers, NOW } from "../transactions/fixtures";
 import type { ReviewItem } from "./api";
 import {
@@ -10,10 +10,12 @@ import {
   OTHER_LABEL,
   SELECTION_CHOICES,
   columnsFromWords,
+  keptText,
   newSelection,
   problems,
   rolesForTable,
   teachBody,
+  warningText,
   type PageWord,
   type TeachRole,
 } from "./teach";
@@ -142,6 +144,7 @@ describe("teach helpers", () => {
       ],
       remember: true,
       reprocess_similar: false,
+      replace: false,
       resolve: false,
       institution_name: "Quill Society",
     });
@@ -168,7 +171,16 @@ describe("teach dialog", () => {
     await user.click(await screen.findByRole("button", { name: "Teach PerFin" }));
     const dialog = await screen.findByRole("dialog", { name: "Teach PerFin" });
     const lines = await within(dialog).findByLabelText("Choose a line");
+    const add = within(dialog).getByRole("button", { name: "Add this line" });
+    expect(add).toBeDisabled();
+    // Choosing a line (as arrowing through the list does) adds nothing yet.
     await user.selectOptions(lines, "0");
+    expect(within(dialog).queryByLabelText("What is this?")).toBeNull();
+    await user.selectOptions(lines, "1");
+    await user.selectOptions(lines, "0");
+    expect(within(dialog).queryAllByTestId("selection-box")).toHaveLength(0);
+    await user.click(add);
+    expect(within(dialog).getAllByTestId("selection-box")).toHaveLength(1);
     const what = within(dialog).getByLabelText("What is this?");
     const offered = within(what)
       .getAllByRole("option")
@@ -178,6 +190,7 @@ describe("teach dialog", () => {
     await user.selectOptions(what, "closing_balance");
 
     await user.selectOptions(within(dialog).getByLabelText("Choose a line"), "1");
+    await user.click(within(dialog).getByRole("button", { name: "Add this line" }));
     const second = within(dialog).getAllByLabelText("What is this?")[1];
     expect(second).toBeDefined();
     if (second === undefined) {
@@ -203,6 +216,7 @@ describe("teach dialog", () => {
         tables: [],
         remember: false,
         reprocess_similar: true,
+        replace: false,
         resolve: true,
         item_id: "r-1",
       });
@@ -210,6 +224,57 @@ describe("teach dialog", () => {
     expect(
       await within(dialog).findByText(/No label is printed next to the closing balance/),
     ).toBeInTheDocument();
+  });
+
+  it("asks before replacing another taught layout and says what earlier teaching is kept", async () => {
+    let calls = 0;
+    const api = reviewApi(item(), {
+      "POST /api/v1/documents/:id/teach": () => {
+        calls += 1;
+        return calls === 1
+          ? problem(409, "layout-conflict")
+          : json({
+              document_id: "d-1",
+              fields: [],
+              tables: [],
+              ignored: 0,
+              notes: [],
+              applied: [],
+              warnings: ["item_left_open"],
+              reprocessed: ["d-1"],
+              fingerprint_id: "f-2",
+              merged_from: 1,
+              kept: ["period_end", "table:transactions"],
+            });
+      },
+    });
+    renderApp("/review");
+    const user = userEvent.setup();
+    await user.click(await screen.findByRole("button", { name: "Teach PerFin" }));
+    const dialog = await screen.findByRole("dialog", { name: "Teach PerFin" });
+    await user.type(within(dialog).getByLabelText("Institution"), "Quill Society");
+    await user.click(within(dialog).getByLabelText("Remember this layout for the next files"));
+    expect(within(dialog).queryByLabelText(/Replace the layout remembered/)).toBeNull();
+    const apply = within(dialog).getByRole("button", { name: "Apply and remember" });
+    await user.click(apply);
+    await user.click(await within(dialog).findByLabelText(/Replace the layout remembered/));
+    await user.click(apply);
+    await waitFor(() => {
+      expect(api.callsTo("POST", "/api/v1/documents/:id/teach")[1]?.body).toMatchObject({
+        remember: true,
+        replace: true,
+      });
+    });
+    expect(
+      await within(dialog).findByText(/Still remembered from earlier teaching: statement end date, the transaction table/),
+    ).toBeInTheDocument();
+    expect(within(dialog).getByText(/The review item stays open/)).toBeInTheDocument();
+  });
+
+  it("words what was kept and the new warnings", () => {
+    expect(keptText(["account_number", "table:holdings"])).toBe("account number, the holdings table");
+    expect(warningText("item_left_open")).toMatch(/stays open/);
+    expect(warningText("note_without_words")).toMatch(/no numbers/);
   });
 
   it("enters the cost basis of an opening position", async () => {

@@ -64,6 +64,8 @@ export function PageViewer({
   const [page, setPage] = useState(initialPage ?? first);
   const [words, setWords] = useState(false);
   const [imageFailed, setImageFailed] = useState(false);
+  /** The line chosen in the keyboard picker; added only with "Add this line". */
+  const [chosenLine, setChosenLine] = useState("");
   const [drag, setDrag] = useState<{ start: [number, number]; end: [number, number] } | null>(
     null,
   );
@@ -142,6 +144,7 @@ export function PageViewer({
           onClick={() => {
             setPage(page - 1);
             setImageFailed(false);
+            setChosenLine("");
           }}
         >
           Previous page
@@ -155,6 +158,7 @@ export function PageViewer({
           onClick={() => {
             setPage(page + 1);
             setImageFailed(false);
+            setChosenLine("");
           }}
         >
           Next page
@@ -261,25 +265,41 @@ export function PageViewer({
       {info.data.words_truncated && words ? <p className="ledger-muted">Only the first words are outlined.</p> : null}
       {selecting ? (
         info.data.text_included ? (
-          <Field
-            label="Choose a line"
-            hint="Click a word or drag a box on the page, or pick a whole line here."
-          >
-            <Select
-              placeholder="Pick a line of this page"
-              value=""
-              options={lines.map((line) => ({
-                value: String(line.line),
-                label: line.text.length > 90 ? `${line.text.slice(0, 90)}…` : line.text,
-              }))}
-              onChange={(event) => {
-                const found = lines.find((line) => String(line.line) === event.target.value);
-                if (found !== undefined) {
-                  onSelect(page, found.bbox, pageWords);
-                }
-              }}
-            />
-          </Field>
+          <div className="ledger-stack">
+            <Field
+              label="Choose a line"
+              hint="Click a word or drag a box on the page, or pick a whole line here and add it."
+            >
+              <Select
+                placeholder="Pick a line of this page"
+                value={chosenLine}
+                options={lines.map((line) => ({
+                  value: String(line.line),
+                  label: line.text.length > 90 ? `${line.text.slice(0, 90)}…` : line.text,
+                }))}
+                onChange={(event) => {
+                  // Choosing only moves the choice (arrow keys on a closed
+                  // select fire change); the button adds it (WCAG 3.2.2).
+                  setChosenLine(event.target.value);
+                }}
+              />
+            </Field>
+            <div className="ledger-actions">
+              <Button
+                size="sm"
+                disabled={chosenLine === ""}
+                onClick={() => {
+                  const found = lines.find((line) => String(line.line) === chosenLine);
+                  if (found !== undefined) {
+                    onSelect(page, found.bbox, pageWords);
+                    setChosenLine("");
+                  }
+                }}
+              >
+                Add this line
+              </Button>
+            </div>
+          </div>
         ) : (
           <p className="ledger-muted">Your role cannot see the words of this page.</p>
         )

@@ -21,7 +21,11 @@ next to the rules that recognise the layout:
   for a holdings table), with the text of the line that ends the table.
 * **Ignored lines** and **notes**: label text the person said to ignore
   (never read as a row or a value), and free-text notes ("Other — describe
-  it") kept for the household to read. Notes are data, never interpreted.
+  it") kept for the household to read, without any word that holds a digit
+  (:func:`note_text`). Notes are data, never interpreted.
+
+The same layout taught again adds to what was remembered
+(:func:`merge_templates`: what was taught again wins, the rest is kept).
 
 Reading (:func:`read_template`) is deterministic and bounded by the view
 (``DocumentView``, at most ``MAX_LINES`` lines): an anchor's label is found
@@ -163,6 +167,18 @@ def label_text(text: str, *, limit: int = MAX_LABEL) -> str | None:
     return clean
 
 
+def note_text(text: str | None, *, limit: int = MAX_NOTE) -> str | None:
+    """A free-text note as it may be kept: one line, **words holding a digit left out**.
+
+    Notes ("Other — describe it") are stored on the remembered layout and in
+    the audit log, which outlive the document, so an account or sort number
+    typed into one is not kept (the rule labels and headers follow).
+    """
+    words = [w for w in (text or "").split() if not _DIGIT.search(w)]
+    clean = " ".join(words)[:limit].strip()
+    return clean if clean and clean.isprintable() else None
+
+
 def _tokens(text: str) -> tuple[str, ...]:
     return tuple(t for t in _TOKEN.split(text.casefold()) if t)
 
@@ -264,6 +280,11 @@ class LayoutTemplate(_Strict):
     def _ignore(cls, values: list[str]) -> list[str]:
         return [_label_value(v) for v in values]
 
+    @field_validator("notes")
+    @classmethod
+    def _notes(cls, values: list[str]) -> list[str]:
+        return [n for n in (note_text(v) for v in values) if n is not None]
+
     @model_validator(mode="after")
     def _check(self) -> LayoutTemplate:
         kinds = [t.kind for t in self.tables]
@@ -284,6 +305,32 @@ def parse_template(data: Any) -> LayoutTemplate | None:
         return LayoutTemplate.model_validate(data)
     except ValidationError:
         return None
+
+
+def merge_templates(
+    earlier: LayoutTemplate, later: LayoutTemplate | None
+) -> tuple[LayoutTemplate, list[str]]:
+    """``later`` taught on top of ``earlier`` (the same layout taught again).
+
+    What was taught again wins (an anchor per field, a table per kind); the
+    rest of ``earlier`` is kept, ignored lines and notes are added to. The
+    second value names what was kept from ``earlier`` (field names and
+    ``table:<kind>``), so the person can be told.
+    """
+    if later is None:
+        later = LayoutTemplate()
+    taught = {a.field for a in later.fields}
+    kinds = {t.kind for t in later.tables}
+    fields = [*later.fields, *(a for a in earlier.fields if a.field not in taught)]
+    tables = [*later.tables, *(t for t in earlier.tables if t.kind not in kinds)]
+    kept: list[str] = [a.field for a in earlier.fields if a.field not in taught]
+    kept += [f"table:{t.kind}" for t in earlier.tables if t.kind not in kinds]
+    ignore = list(dict.fromkeys([*later.ignore, *earlier.ignore]))[:MAX_IGNORED]
+    notes = list(dict.fromkeys([*later.notes, *earlier.notes]))[:MAX_NOTES]
+    merged = LayoutTemplate(
+        fields=fields[:MAX_FIELDS], tables=tables[:MAX_TABLES], ignore=ignore, notes=notes
+    )
+    return merged, kept
 
 
 # ---------------------------------------------------------------------------
@@ -439,6 +486,11 @@ def _box(words: Sequence[Word]) -> BBox:
     )
 
 
+def _overlap(a: Sequence[float], b: Sequence[float]) -> bool:
+    """Whether two boxes share some area (or touch)."""
+    return a[0] <= b[2] and b[0] <= a[2] and a[1] <= b[3] and b[1] <= a[3]
+
+
 def _ignored(line: ViewLine, ignore: Sequence[str]) -> bool:
     return any(_has(line, label) for label in ignore)
 
@@ -566,7 +618,11 @@ def derive_anchor(
     (``right``), else the text right above it (``below``). A selection that
     includes its own label (``Account number: 1234``) is split at the first
     word that is not label text. An unlabelled date range in the header band
-    is a ``band`` anchor.
+    is a ``band`` anchor. A ``right`` or ``below`` anchor is kept only when
+    reading it on this document finds the selected value (the first line
+    holding the label is the one read on the next statement): a label
+    printed twice, such as ``Balance`` on two summary lines, would otherwise
+    read the wrong figure next time.
     """
     chosen = selected(view, page, box)
     if not chosen:
@@ -581,14 +637,25 @@ def derive_anchor(
         own.append(word)
         if word.text.endswith(":"):
             break
+    target = _box(words)
+
+    def reads_back(anchor: FieldAnchor) -> bool:
+        # The label must find this very value again, not an earlier one
+        # under the same label ("Balance" on two summary lines).
+        found = read_anchor(view, anchor)
+        return found is not None and found.page == page and _overlap(found.bbox, target)
+
     if own and len(own) < len(words):
         found = label_text(" ".join(w.text for w in own))
         if found is not None:
-            return FieldAnchor(field=field_name, direction="right", label=found)
-    value_x0 = words[0].x0
-    found = _left_label(line_words(line), value_x0)
+            anchor = FieldAnchor(field=field_name, direction="right", label=found)
+            if reads_back(anchor):
+                return anchor
+    found = _left_label(line_words(line), words[0].x0)
     if found is not None:
-        return FieldAnchor(field=field_name, direction="right", label=found)
+        anchor = FieldAnchor(field=field_name, direction="right", label=found)
+        if reads_back(anchor):
+            return anchor
     lines = page_lines(view, page)
     position = next((i for i, candidate in enumerate(lines) if candidate is line), None)
     if position is not None and position > 0:
@@ -600,8 +667,7 @@ def derive_anchor(
         text = label_text(" ".join(w.text for w in above)) if above else None
         if text is not None:
             anchor = FieldAnchor(field=field_name, direction="below", label=text)
-            # The label must find this very value again.
-            if read_anchor(view, anchor) is not None:
+            if reads_back(anchor):
                 return anchor
     if field_name in ("period_start", "period_end"):
         band = header_band_range(page_heads(view))

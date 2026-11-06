@@ -607,8 +607,9 @@ review_item       (household, document?, kind: unknown_owner|unknown_account|
 parser_fingerprint(institution, kind, match rules JSONB, parser name, version,
                    learned_from_document_id?, template JSONB?: a learned layout
                    ("Teach PerFin": field anchors as label text + direction,
-                   table column headers + roles, ignored lines, notes; never a
-                   value of the document))
+                   table column headers + roles, ignored lines, notes without
+                   digits; never a value of the document; a new version of the
+                   same layout carries the earlier template forward))
 ingest_job        (document, stage, attempt, started, finished, error, log JSONB)
 import_mapping    (household, name, institution_id?, account_id?, header_fingerprint,
                    spec JSONB, created_by?, use_count, last_used_at?,

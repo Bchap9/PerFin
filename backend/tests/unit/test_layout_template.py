@@ -25,7 +25,10 @@ from app.ingestion.parsers.template import (
     TableTemplate,
     derive_anchor,
     label_text,
+    merge_templates,
+    note_text,
     parse_template,
+    read_anchor,
     read_template,
     read_value,
     table_from_selection,
@@ -209,6 +212,64 @@ def test_anchors_are_derived_from_the_label_next_to_or_above_a_value() -> None:
     # Nothing labels the institution's name: no anchor.
     name = [w for w in page.words if w.line == 0]
     assert derive_anchor(view, 1, list(name[0].bbox), "account_name") is None
+
+
+def test_an_anchor_must_read_the_selected_value_back() -> None:
+    """A label printed twice would read the first figure on the next statement."""
+    lines: list[Line] = [
+        (100.0, [(60.0, "Balance"), (400.0, "$100.00")]),
+        (120.0, [(60.0, "Payments"), (400.0, "$20.00")]),
+        (140.0, [(60.0, "Balance"), (400.0, "$150.00")]),
+        (160.0, [(60.0, "New"), (100.0, "balance"), (400.0, "$150.00")]),
+    ]
+    view = DocumentView.from_result(
+        ExtractResult.model_validate({"kind": "pdf", "ok": True, "pages": [_page(1, lines)]})
+    )
+    # The second "Balance": no label finds it again, so it is not remembered.
+    assert derive_anchor(view, 1, (390.0, 138.0, 460.0, 152.0), "closing_balance") is None
+    # The first one reads back.
+    first = derive_anchor(view, 1, (390.0, 98.0, 460.0, 112.0), "opening_balance")
+    assert first == FieldAnchor(field="opening_balance", direction="right", label="Balance")
+    # A distinct label reads its own value.
+    last = derive_anchor(view, 1, (390.0, 158.0, 460.0, 172.0), "closing_balance")
+    assert last == FieldAnchor(field="closing_balance", direction="right", label="New balance")
+    found = read_anchor(view, last)
+    assert found is not None
+    assert found.value == "150.00"
+
+
+def test_notes_keep_no_figures() -> None:
+    assert note_text("my other account 98765432 sort 12-34-56") == "my other account sort"
+    assert note_text("  page\n two  ") == "page two"
+    assert note_text("12345678") is None
+    assert note_text(None) is None
+    template = LayoutTemplate(notes=["ref 4821 is the joint one", "1234"])
+    assert template.notes == ["ref is the joint one"]
+
+
+def test_teaching_a_layout_again_adds_to_what_was_taught() -> None:
+    earlier = _template()
+    later = LayoutTemplate(
+        fields=[FieldAnchor(field="account_number", direction="right", label="Card ref")],
+        ignore=["Carried forward"],
+        notes=["second lesson"],
+    )
+    merged, kept = merge_templates(earlier, later)
+    anchors = {a.field: a for a in merged.fields}
+    assert anchors["account_number"].label == "Card ref"
+    assert {a.field for a in merged.fields} == {a.field for a in earlier.fields} | {
+        "account_number"
+    }
+    assert [t.kind for t in merged.tables] == [t.kind for t in earlier.tables]
+    assert "account_number" not in kept
+    assert all(f"table:{t.kind}" in kept for t in earlier.tables)
+    assert merged.ignore[0] == "Carried forward"
+    assert set(earlier.ignore) <= set(merged.ignore)
+    assert merged.notes[0] == "second lesson"
+    # Nothing new: the earlier template as it was.
+    same, kept_all = merge_templates(earlier, None)
+    assert same == earlier
+    assert len(kept_all) == len(earlier.fields) + len(earlier.tables)
 
 
 def test_a_table_is_read_on_every_page_its_header_starts() -> None:

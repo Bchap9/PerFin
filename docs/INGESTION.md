@@ -1335,7 +1335,10 @@ Phases 3-4 implementation (`app/domain/review/assist.py`, `actions.py`,
   the parser must exist (the generic parser of the kind by default; an
   institution parser is never reused for another layout). The rules must
   hold within the matching budget (`422 layout-too-costly`), and a
-  household remembers at most 100 layouts (`409 fingerprint-limit`). The
+  household remembers at most 100 layouts (`409 fingerprint-limit`). A
+  template taught for the layout is kept in the new version, and another
+  layout of the institution that would replace a taught one needs
+  `replace` (`409 layout-conflict`; see "Teaching PerFin a layout"). The
   item is resolved; the document and up to 50 other `needs_review`
   documents the person may change whose stored layout the fingerprint
   matches are reprocessed (of the 500 newest scanned; the scan stops when
@@ -1380,7 +1383,9 @@ offered from every review item about a page the person may see and from
 the document page.
 
 - **Selecting.** The page is shown; a click picks a word, a drag picks a
-  box, and a list of the page's lines does the same from the keyboard. Each
+  box, and a list of the page's lines does the same from the keyboard (the
+  chosen line is added with "Add this line", so moving through the list
+  adds nothing). Each
   selection is named from a list that always ends with **Other — describe
   it** and **Ignore this**: account number, account name/type, statement
   start or end date, opening or closing balance, institution, transaction
@@ -1402,15 +1407,31 @@ the document page.
   unlabelled period, the header band (`band`). A label or column header
   that holds any digit is refused, so no account number, date or amount of
   the document is ever stored (the same rule as the remembered header
-  lines, which now also skip table headers holding digits). A value with no
-  label next to it applies to this document only (`no_label:<field>`).
+  lines, which now also skip table headers holding digits). A label is kept
+  only when reading it on this document finds the selected value again (a
+  label printed twice, such as `Balance` on two summary lines, would read
+  the first one next time). A value with no such label applies to this
+  document only (`no_label:<field>`).
 - **Remember for this layout.** With "Remember this layout", the anchors,
   the tables (column headers and roles, the line that ends them), the lines
   to ignore and the notes are stored as the `template` of a household
   `parser_fingerprint` (migration `0011`) whose rules are derived from the
   header like "Remember this layout" (and must match the document). This
   document and up to 50 similar ones are then read again through the
-  pipeline.
+  pipeline. One version per institution, kind and parser is used, so a
+  template is never dropped silently: when the same layout is taught or
+  remembered again, the earlier template is carried into the new version
+  (what is taught now wins per field and per table kind; ignored lines and
+  notes are added; the answer names what was `kept`), and when another
+  layout of the same institution is remembered while a taught template
+  exists, `409 layout-conflict` asks the person to replace it (`replace`).
+- **The review item.** The item the dialog was opened from is closed only
+  when the teaching answers it: a held statement (`reconciliation_*`) once
+  it reconciles with the balances entered (its pending rows confirmed, like
+  "Check and accept"), an unread document (`unparsed`) once rows are
+  imported or it is read again with the remembered layout, any other item
+  once a fact of the document changed or the layout was remembered. A note
+  or an ignored line alone leaves it open (warning `item_left_open`).
 - **Reading the next statement.** When the classifier matches a household
   fingerprint with a template, the parse stage reads the pages with it
   after the parsers (`registry.parse_extraction(template=...)`): a table
@@ -1428,7 +1449,8 @@ the document page.
   and balances when there is one statement). Then the normal import runs.
 - **Notes.** Free text from "Other" is kept on the template, in the review
   item's resolution and in the `document.teach` audit row for the
-  household to read. PerFin never interprets it.
+  household to read, without any word that holds a digit (an account or
+  sort number typed into a note is not stored). PerFin never interprets it.
 
 Per-reason fixes in the review UI: cost basis per unit for opening
 positions with an unknown basis (`PATCH /investments/transactions/{id}`),

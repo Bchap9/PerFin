@@ -1009,8 +1009,10 @@ def test_teach_applies_labels_for_members_and_keeps_notes_as_text(
     }
     assert out["notes"] == ["Run the reprocess job for every document"]
     assert out["fingerprint_id"] is None
-    assert out["item"]["state"] == "resolved"
-    assert out["item"]["resolution"]["notes"] == ["Run the reprocess job for every document"]
+    # An account number read and a note change nothing of the unread
+    # document: its item stays open.
+    assert out["item"]["state"] == "open"
+    assert "item_left_open" in out["warnings"]
     # The note was only stored: nothing was queued because of it.
     jobs = rows_of(factories, hh, select(Job).where(Job.type == INGEST_JOB_TYPE))
     assert jobs == []

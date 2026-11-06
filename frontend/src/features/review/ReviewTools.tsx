@@ -12,7 +12,7 @@ import { MoneyText } from "../../components/MoneyText";
 import { Select } from "../../components/Select";
 import { Spinner } from "../../components/Spinner";
 import { useToast } from "../../components/Toast";
-import { errorMessage } from "../../lib/api/client";
+import { errorMessage, isApiError } from "../../lib/api/client";
 import { formatDate } from "../../lib/dates";
 import { queryRoots } from "../../lib/queryKeys";
 import { useAccounts, accountLabel } from "../accounts/api";
@@ -42,6 +42,7 @@ import {
   type ReviewItem,
   type TransactionFix,
 } from "./api";
+import { keptText } from "./teach";
 
 /** The item with its regions and alternatives (the list omits them). */
 export function useItemDetail(item: ReviewItem, enabled = true) {
@@ -343,16 +344,19 @@ export function NewInstitutionTools({
   const detail = useItemDetail(item);
   const [institution, setInstitution] = useState("");
   const [similar, setSimilar] = useState(true);
+  const [replace, setReplace] = useState(false);
+  const [conflict, setConflict] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const remember = useMutation({
     mutationFn: () =>
-      rememberLayout(item.id, layoutRequest(institution, similar)),
+      rememberLayout(item.id, layoutRequest(institution, similar, replace)),
     onSuccess: () => {
       setError(null);
       void queryClient.invalidateQueries({ queryKey: queryRoots.review });
       void queryClient.invalidateQueries({ queryKey: queryRoots.documents });
     },
     onError: (caught) => {
+      setConflict(isApiError(caught) && caught.slug === "layout-conflict");
       setError(errorMessage(caught));
     },
   });
@@ -397,6 +401,15 @@ export function NewInstitutionTools({
               setSimilar(event.target.checked);
             }}
           />
+          {conflict || replace ? (
+            <Checkbox
+              label="Replace the layout remembered for this institution (what was taught for it before is no longer used)"
+              checked={replace}
+              onChange={(event) => {
+                setReplace(event.target.checked);
+              }}
+            />
+          ) : null}
           <div className="ledger-actions">
             <Button
               variant="primary"
@@ -415,6 +428,9 @@ export function NewInstitutionTools({
         <p role="status">
           Layout remembered. {out.reprocessed.length} file(s) are being read
           again.
+          {(out.kept ?? []).length > 0
+            ? ` What was taught for it before is kept: ${keptText(out.kept ?? [])}.`
+            : ""}
           {out.ambiguous
             ? " The layout also matches other institutions, so check the next import."
             : ""}

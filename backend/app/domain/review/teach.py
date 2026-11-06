@@ -28,10 +28,21 @@ with a role per column, a line to ignore, or "Other — describe it").
    learned template** (anchors, tables, ignored lines and notes; never a
    value: labels and headers holding a digit are refused), then reads this
    document and up to 50 similar ones again through the pipeline, where the
-   template fills what the parsers could not.
+   template fills what the parsers could not. The same layout taught again
+   **adds to** what was remembered (what is taught now wins, field by field
+   and table by table; ``kept`` names the rest); another layout of the same
+   institution needs ``replace`` (``409 layout-conflict``), so earlier
+   teaching is never dropped silently (:func:`app.domain.review.actions.store_layout`).
 4. Free-text notes ("Other") are kept on the template, on the review item's
-   resolution and in the audit row for the household to read; they are
-   never interpreted.
+   resolution and in the audit row for the household to read, without the
+   words that hold a digit (:func:`~app.ingestion.parsers.template.note_text`);
+   they are never interpreted.
+5. With ``resolve`` the review item is closed **only when the teaching
+   answers it** (:func:`_settles`): a held statement when it now reconciles
+   (its pending rows confirmed, as ``/correct`` does), an unread document
+   when rows are imported or it is read again, any other item when a fact
+   of the document changed or the layout was remembered. Otherwise it stays
+   open (warning ``item_left_open``).
 
 Callers: member or above who may change the document
 (``can_edit_document``); an ``item_id`` must be an open item of the
@@ -60,7 +71,13 @@ from app.domain.accounts.models import Institution
 from app.domain.accounts.service import find_or_create_institution
 from app.domain.accounts.visibility import get_visible_account
 from app.domain.documents.manage import can_edit_document
-from app.domain.documents.models import Document, DocumentKind, ReviewItem
+from app.domain.documents.models import (
+    Document,
+    DocumentKind,
+    ReviewItem,
+    ReviewItemState,
+    ReviewKind,
+)
 from app.domain.documents.service import get_visible_document
 from app.domain.imports import service as imports_service
 from app.domain.imports.schemas import ApplyMapping
@@ -87,6 +104,7 @@ from app.ingestion.parsers.template import (
     TableTemplate,
     derive_anchor,
     label_text,
+    note_text,
     read_template,
     read_value,
     selection_text,
@@ -158,10 +176,13 @@ class _Lesson:
             raise _invalid("page-not-found", "No such page", f"The document has no page {number}.")
         return number
 
-    def note(self, text: str | None) -> None:
-        clean = " ".join((text or "").split())[:500]
-        if clean and len(self.notes) < MAX_NOTES:
+    def note(self, text: str | None) -> str | None:
+        clean = note_text(text)
+        if clean is None:
+            self.warnings.append("note_without_words")
+        elif len(self.notes) < MAX_NOTES and clean not in self.notes:
             self.notes.append(clean)
+        return clean
 
     def template(self) -> LayoutTemplate:
         return LayoutTemplate(
@@ -178,8 +199,8 @@ def _read_labels(lesson: _Lesson, body: TeachRequest) -> None:
         page = lesson.page(label.page)
         text = selection_text(view, page, label.bbox)
         if label.field == "other":
-            lesson.note(label.note)
-            lesson.fields.append(TaughtField(field="other", value=None, page=page, note=label.note))
+            note = lesson.note(label.note)
+            lesson.fields.append(TaughtField(field="other", value=None, page=page, note=note))
             continue
         if label.field == "ignore":
             found = _ignore_label(text)
@@ -287,6 +308,23 @@ def _has_rows(db: Session, document: Document) -> bool:
     )
 
 
+def _settles(item: ReviewItem, *, reconciled: bool, rerun: str | None, applied: list[str]) -> bool:
+    """Whether what was taught answers ``item`` (else it stays open).
+
+    A held statement (``reconciliation_*``) is answered only by balances
+    with which it now adds up (its pending rows are then confirmed, as by
+    ``/correct``); an unread document (``unparsed``) only by rows being
+    imported or the document being read again; any other item by a fact of
+    the document changed or the layout remembered. A note or an ignored line
+    alone answers nothing.
+    """
+    if (item.payload or {}).get("reason") in WHOLE_STATEMENT_REASONS:
+        return reconciled
+    if item.kind is ReviewKind.UNPARSED:
+        return rerun is not None
+    return bool(applied) or rerun is not None
+
+
 def teach(
     db: Session,
     principal: Principal,
@@ -341,6 +379,7 @@ def teach(
 
     rerun: str | None = None
     job_id: uuid.UUID | None = None
+    reconciled = False
     resolution: dict[str, Any] = {"action": "teach"}
     if taught.read:
         document.extraction = _with_statements(result, taught).model_dump(mode="json")
@@ -383,6 +422,7 @@ def teach(
                 resolution.update(
                     actions.accept_statement(db, principal, item, document, balanced, request)
                 )
+                reconciled = True
 
     stored_layout: actions.StoredLayout | None = None
     reprocessed: list[uuid.UUID] = []
@@ -408,6 +448,7 @@ def teach(
             else template.model_dump(mode="json"),
             reprocess_similar=body.reprocess_similar,
             request=request,
+            replace=body.replace,
         )
         resolution["fingerprint_id"] = str(stored_layout.row.id)
     db.flush()
@@ -441,7 +482,12 @@ def teach(
     ]
     out_item = None
     if item is not None:
-        if body.resolve and "does_not_reconcile" not in lesson.warnings:
+        settled = (
+            body.resolve
+            and "does_not_reconcile" not in lesson.warnings
+            and _settles(item, reconciled=reconciled, rerun=rerun, applied=applied)
+        )
+        if settled:
             resolution.update(
                 {
                     "fields": sorted({f.field for f in lesson.fields}),
@@ -450,6 +496,8 @@ def teach(
                 }
             )
             service.close_item(db, principal, item, resolution, request=request)
+        elif body.resolve and item.state is ReviewItemState.OPEN:
+            lesson.warnings.append("item_left_open")
         out_item = service.item_out(db, principal, item)
     audit(
         db,
@@ -490,6 +538,8 @@ def teach(
         job_id=job_id,
         fingerprint_id=stored_layout.row.id if stored_layout is not None else None,
         reprocessed=reprocessed,
+        merged_from=stored_layout.merged_from if stored_layout is not None else None,
+        kept=list(stored_layout.kept) if stored_layout is not None else [],
         warnings=list(dict.fromkeys([*lesson.warnings, *taught.warnings]))[:50],
         item=out_item,
     )

@@ -224,8 +224,13 @@ export function ownerResolution(
 export function layoutRequest(
   institutionId: string,
   reprocessSimilar: boolean,
+  replace = false,
 ): Schemas["RememberLayout"] {
-  return { institution_id: institutionId, reprocess_similar: reprocessSimilar };
+  return {
+    institution_id: institutionId,
+    reprocess_similar: reprocessSimilar,
+    replace,
+  };
 }
 
 /** Institutions the server offers for a ``new_institution`` item. */
