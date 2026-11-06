@@ -264,6 +264,10 @@ class DryRun:
                 {
                     "source_format": s.source_format,
                     "last4": s.account.last4,
+                    "name": s.account.name,
+                    "account_type": s.account.account_type,
+                    "subtype": s.account.subtype,
+                    "pages": [s.first_page, s.last_page],
                     "period": [s.period_start, s.period_end],
                     "transactions": len(s.transactions),
                 }
@@ -340,7 +344,10 @@ def _investment_summary(statement: InvestmentStatement) -> dict[str, Any]:
     return {
         "source_format": statement.source_format,
         "last4": statement.account.last4,
+        "name": statement.account.name,
         "account_type": statement.account.account_type,
+        "subtype": statement.account.subtype,
+        "pages": [statement.first_page, statement.last_page],
         "institution": statement.account.institution,
         "currency": statement.account.currency,
         "period": [statement.period_start, statement.period_end],

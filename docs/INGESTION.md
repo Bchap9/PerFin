@@ -579,7 +579,7 @@ OFX `INVSTMTRS` in the sandbox or from a PDF/scan's pages in the worker.
   no cash. An unsigned amount takes the type's direction; a symbol is read
   from its column (a valid CUSIP there is the CUSIP), from the
   description's first word when the row needs a security or the symbol is
-  held, or from `(SYMBOL)`. `brokerage_statement_generic` (version 2)
+  held, or from `(SYMBOL)`. `brokerage_statement_generic` (version 3)
   scores 0.5-0.7 when it sees these tables (above the bank parsers'
   0.4-0.45 for the same activity table); `placeholder_brokerage` pins the
   fictional Placeholder Brokerage (`MM/DD/YYYY`, USD) and needs the
@@ -593,24 +593,63 @@ OFX `INVSTMTRS` in the sandbox or from a PDF/scan's pages in the worker.
   printed holdings total, so the cash check covers every trade, income and
   transfer; the *Core Fund Activity* table (the core's own trades settling
   them) is not read.
-- **Several accounts in one PDF** (a statement "of all accounts"): account
-  headings (`Account # Z12-345678`, `Account Number: 123-456789`, `Account
-  XXXX-4821` at the start of a line or cell, after at most an all-capitals
-  title, or an all-capitals title ending in a number such as `INDIVIDUAL -
-  TOD Z12-345678`; never a line with an amount) among a page's first six
-  or last three lines mark each account's pages. Two or more accounts: one
-  `InvestmentStatement` per account with its own last four digits,
-  positions, activity, cash, totals and reconciliation. A page whose
-  headings name one account belongs to it; on a page naming several, the
-  lines before the first heading continue the previous page's account;
-  pages before the first heading (an overview) only give the period,
-  currency and "as of" date to fall back on, and a table row there belongs
-  to no account (skipped, warning `rows_outside_account`); an account
-  without tables gives no statement (`account_without_tables`). A document
-  naming one account is one statement, read as before (its last four
-  digits from the first account number, else from the heading). A line
-  given to the wrong account breaks that account's reconciliation, so it is
-  held, never imported silently. Only last four digits are kept.
+- **Several accounts in one PDF** (a statement "of all accounts", a bank's
+  combined statement; `app/ingestion/parsers/accounts.py`, for any
+  institution):
+  - **Account headings**: `Account # Z12-345678`, `Account Number:
+    123-456789`, `Account XXXX-4821` at the start of a line or cell, after
+    at most an all-capitals title, or an all-capitals title ending in a
+    number such as `INDIVIDUAL - TOD Z12-345678`. They are looked for in
+    each **cell** of a line, so in a page's header band (its first eight
+    lines above its first dated row, and its last three) a cell beside an
+    amount is a heading: `$103,351.18 | Account 111-111111`, `Account
+    Value: $142,413.12 | Account 222-222222`. Lines of the header band
+    naming two or more accounts beside amounts are an overview, not
+    headings. A heading mid-page counts only on a line without amounts and
+    only for an account the account index lists (a combined statement
+    starting its next account half-way down a page). A mention never
+    switches the account: `Trans. from account 222-222222` in a transfer
+    row, a dated row in the header band, a line with an amount mid-page.
+  - **Account index**: a table whose header names an account number column
+    (`Account Number`, `Account #`, `Account No`) and a name or type column
+    (`Account Type/Name`, `Account Name`), such as *Accounts Included in
+    This Report* or *Your Accounts at a Glance*, is the document's map of
+    its accounts: each row's last four digits and printed name, the
+    all-capitals group lines between the rows (`PERSONAL RETIREMENT`,
+    `EDUCATION (529) ACCOUNTS`) qualifying the rows under them, an owner's
+    name printed before every account's name dropped. The name, then the
+    group, give the account's type and subtype (`account_kind`, through
+    `app.domain.accounts.subtypes.guess_subtype`; bank words such as
+    checking or savings win over a brokerage subtype, a retirement or
+    education plan's own words over a bank word): `StatementAccount.name`,
+    `account_type` (`brokerage`/`retirement` for brokerage statements,
+    `checking`/`savings`/... for bank ones) and `subtype`, which account
+    proposals use. The index's page numbers are never used (layouts print
+    wrong ones); the headings decide.
+  - **Pages**: a page whose headings name one account belongs to it; on a
+    page naming several, the lines before the first heading continue the
+    previous page's account and each heading starts its account; a page
+    without a heading continues the account before it; pages before the
+    first heading (an overview) belong to no account and only give the
+    period, currency and "as of" date to fall back on, and a table row
+    there belongs to no account (skipped, warning `rows_outside_account`).
+    Each statement records its `first_page` and `last_page`.
+  - **Statements**: two or more accounts give one statement per account
+    with its own last four digits, name, type, pages, rows, totals and
+    reconciliation. In a brokerage report (`brokerage_statement_generic`
+    and the institution parsers built on it) an account with holdings or
+    activity tables is an `InvestmentStatement`; one without them but with
+    a bank transaction table (a combined statement's checking or savings)
+    is read by the table statement parser into a bank `Statement`; one
+    with neither gives no statement (`account_without_tables`). A bank
+    statement of two or more accounts with a transaction table each
+    (`statement_generic`, the card and institution parsers) is likewise
+    one `Statement` per account. A document naming one account is one
+    statement, read as before (its last four digits from the first account
+    number, else from the heading). Each statement is imported or held on
+    its own: one account that does not reconcile holds only itself, and a
+    line given to the wrong account breaks that account's reconciliation,
+    so it is held, never imported silently. Only last four digits are kept.
 - **Reconciliation** (`reconcile_investment`, SECURITY.md C12), for every
   source: each position's quantity x price = market value (within half a
   unit of the price's last printed decimal per unit plus 0.005), the
@@ -625,7 +664,10 @@ OFX `INVSTMTRS` in the sandbox or from a PDF/scan's pages in the worker.
   chosen on re-run, else last four digits + institution among the
   accounts the uploader may edit) and of type brokerage or retirement in
   the statement's currency. In a document of several accounts each
-  statement is matched by its own last four digits; the document is linked
+  statement (brokerage, and the bank statements of a combined statement:
+  a lone bank or brokerage statement beside the other kind is never taken
+  for the document's only account) is matched by its own last four
+  digits; the document is linked
   to no account (the pipeline undoes an account the classifier matched; one
   chosen at upload stays), and an account chosen on a re-run takes only the
   statements with its own last four digits or, when it records none, the
@@ -1394,9 +1436,10 @@ A CLI `perfin ingest --dry-run file.pdf` prints every stage's output for
 debugging without writing to the database (`app/ingestion/dryrun.py`): one
 JSON document per stage (`receive` with the sniff and the same refusals as an
 upload, `scan` when ClamAV is configured, `extract` through the real sandbox,
-`classify`, `parse` (the bank statements as read and, per brokerage
-account, its last four digits, period, positions and activity counts,
-figures and reconciliation), and with `--household` a `match` read in a
+`classify`, `parse` (per bank statement and per brokerage account its last
+four digits, printed name, type, subtype and pages; the bank statements'
+period and row counts; the brokerage accounts' period, positions and
+activity counts, figures and reconciliation), and with `--household` a `match` read in a
 rolled-back `READ ONLY` transaction). Nothing is written to the blob store or the
 database; previews and child documents are summarised, not printed.
 

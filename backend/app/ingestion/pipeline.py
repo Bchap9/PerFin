@@ -50,10 +50,12 @@ Phase 2 routes only **structured** formats (CSV, TSV, OFX, QFX, QIF):
   brokerage statements (``app.ingestion.parsers.brokerage``: holdings and
   activity, reconciled positions x prices and cash) go the same way into
   ``app.domain.investments.statement_import`` (held back when they do not
-  reconcile); a PDF of several accounts gives one brokerage statement per
-  account, each matched to its account by its own last four digits, and the
-  document itself is linked to no account (an account the classifier
-  matched is undone; one chosen at upload stays); the document's period
+  reconcile); a PDF of several accounts gives one statement per account
+  (``app.ingestion.parsers.accounts``: brokerage, and bank accounts of a
+  combined statement), each matched to its account by its own last four
+  digits and imported or held on its own, and the document itself is
+  linked to no account (an account the classifier matched is undone; one
+  chosen at upload stays); the document's period
   is the span of the periods its statements (bank and brokerage) read
   with confidence, replacing the classifier's; a payslip is kept on the
   document (``kind = payslip``, period) and goes to review when its figures
@@ -446,10 +448,15 @@ def _parse_document(
     document.parser_version = f"{info.parser.name}/{info.parser.version}"[:64]
     parsed = [s for s in result.statements if s.parser is not None]
     brokerage = [i for i in result.investments if i.parser is not None]
-    if len({i.account.last4 for i in brokerage}) > 1:
-        # Several accounts in one document: each statement finds its own
-        # account by its last four digits; the document is on none of them.
-        facts["investment_accounts"] = len(brokerage)
+    named = {s.account.last4 for s in parsed} | {i.account.last4 for i in brokerage}
+    if len(named) > 1:
+        # Several accounts in one document (a brokerage report of several, a
+        # combined bank statement): each statement finds its own account by
+        # its last four digits; the document is on none of them.
+        if brokerage:
+            facts["investment_accounts"] = len(brokerage)
+        if len(parsed) > 1:
+            facts["statement_accounts"] = len(parsed)
         _unlink_classified_account(document)
     read: list[Statement | InvestmentStatement] = [
         *(s for s in parsed if s.transactions),

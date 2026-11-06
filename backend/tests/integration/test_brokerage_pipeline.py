@@ -574,7 +574,7 @@ def test_each_account_of_a_multi_account_pdf_lands_on_its_own_account(env: Env) 
     document = env.document(document_id)
     assert document.status is DocumentStatus.PROCESSED, env.open_reviews(document_id)
     assert document.kind is DocumentKind.STATEMENT
-    assert document.parser_version == "fidelity_investments_statement/1"
+    assert document.parser_version == "fidelity_investments_statement/2"
     # The document spans three accounts: it is linked to none of them.
     assert document.account_id is None
     assert (document.period_start, document.period_end) == (stmt.start, stmt.end)

@@ -737,7 +737,10 @@ Notes on structured imports (`app/domain/imports/`, Phase 2):
   "Parse"): the parsed statements are `extraction.statements` with
   `source_format` `pdf`/`image` (rows with `confidence`, `low_confidence`,
   `page`, `bbox`; the statement with `opening_balance`, `parser`,
-  per-field `confidence`, `reconciliation`), and `extraction.parse` records
+  per-field `confidence`, `reconciliation`; in a document of several
+  accounts `first_page`/`last_page` and the account's printed `name`,
+  `account_type` and `subtype`, never more than its last four digits), and
+  `extraction.parse` records
   the parser run (parser and version, scores, threshold, pending and skipped
   line counts, warnings, a `payslip`). `document.parser_version` is the
   parser's `name/version`; `document.confidence.parse` summarises the run
@@ -752,7 +755,8 @@ Notes on structured imports (`app/domain/imports/`, Phase 2):
   `payslip_does_not_add_up`/`low_confidence` (`fields`, `adds_up`). A
   statement that does not reconcile writes no balance snapshot. Brokerage
   statements are `extraction.investments` (positions, activity, cash and
-  totals, `parser`, `confidence`, `reconciliation`; INGESTION.md
+  totals, `parser`, `confidence`, `reconciliation`, the pages and account
+  facts as above; INGESTION.md
   "Brokerage statements"); their items are `investment_reconciliation_failed`
   (`checks`, `failed`, `positions`, cash and totals as decimal strings),
   `investment_low_confidence` (`fields`, `positions`, `activity`),

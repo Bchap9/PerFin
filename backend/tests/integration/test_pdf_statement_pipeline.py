@@ -322,7 +322,7 @@ def test_low_confidence_fields_are_imported_pending(env: Env) -> None:
     low = [i for i in items if i.kind is ReviewKind.LOW_CONFIDENCE_FIELD]
     assert [i.payload["reason"] for i in low] == ["low_confidence"]
     assert low[0].payload["fields"] == ["posted_date"]
-    assert low[0].payload["parser"] == "statement_generic/1"
+    assert low[0].payload["parser"] == "statement_generic/2"
     assert {t["transaction_id"] for t in low[0].payload["transactions"]} == {
         str(r.id) for r in rows
     }

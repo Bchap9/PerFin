@@ -1152,6 +1152,7 @@ def import_investment_statements(
     assigned: Mapping[int, uuid.UUID] | None = None,
     allow_overlap: Collection[uuid.UUID] = (),
     user_id: uuid.UUID | None = None,
+    several: bool = False,
 ) -> InvestmentImport:
     """Commit the brokerage statements of ``document`` (module doc).
 
@@ -1159,7 +1160,9 @@ def import_investment_statements(
     names the one statement it is for (the review item's), else
     :func:`_chosen_takes` decides on a multi-account document.
     ``allow_overlap`` are accounts to import into despite an overlapping
-    statement (module doc, step 2).
+    statement (module doc, step 2). ``several``: the document also holds
+    bank statements of other accounts (a combined statement), so even a
+    single brokerage statement finds its account by its own digits.
     """
     ctx = _Context(
         db=db,
@@ -1170,7 +1173,7 @@ def import_investment_statements(
         user_id=user_id,
         result=InvestmentImport(),
     )
-    single = len(statements) == 1
+    single = len(statements) == 1 and not several
     takes: Collection[int] = range(len(statements))
     if account_id is not None and statement_index is not None:
         takes = {statement_index} if 0 <= statement_index < len(statements) else set()

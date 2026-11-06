@@ -89,6 +89,7 @@ def _bounded_amount(value: Decimal) -> Decimal:
 Amount = Annotated[Decimal, AfterValidator(_bounded_amount)]
 ShortText = Annotated[str, Field(max_length=TEXT_MAX)]
 Code = Annotated[str, Field(max_length=64, pattern=r"^[A-Za-z0-9_.:-]*$")]
+PageNumber = Annotated[int, Field(ge=1, le=MAX_PAGES_CEILING)]
 
 
 class _Strict(BaseModel):
@@ -266,6 +267,10 @@ class StatementAccount(_Strict):
     name: ShortText | None = None
     #: The financial institution named by the file (OFX ``FI/ORG``), free text.
     institution: Annotated[str, Field(max_length=200)] | None = None
+    #: The account's subtype the document prints (``traditional_ira``,
+    #: ``education_529``; ``app.domain.accounts.subtypes``), read by the
+    #: worker's document parsers from an account's name or index group.
+    subtype: Code | None = None
 
 
 class Statement(_Strict):
@@ -287,6 +292,9 @@ class Statement(_Strict):
     # -- set by the worker's document parsers (``app.ingestion.parsers``) -------
     #: The opening balance the statement prints (ledger sign convention).
     opening_balance: Balance | None = None
+    #: The pages the statement was read from (one account of a document of several).
+    first_page: PageNumber | None = None
+    last_page: PageNumber | None = None
     parser: ParserRef | None = None
     #: Per-field confidence of the statement's own facts (0..1).
     confidence: dict[Code, Confidence01] = Field(default_factory=dict, max_length=50)
@@ -451,6 +459,9 @@ class InvestmentStatement(_Strict):
     total_value: Balance | None = None
     truncated: bool = False
     # -- set by the worker's document parsers -----------------------------------
+    #: The pages the statement was read from (one account of a document of several).
+    first_page: PageNumber | None = None
+    last_page: PageNumber | None = None
     parser: ParserRef | None = None
     confidence: dict[Code, Confidence01] = Field(default_factory=dict, max_length=50)
     reconciliation: InvestmentReconciliation | None = None
@@ -862,12 +873,14 @@ class ExtractResult(_Strict):
                 s.source_format in WORKER_STATEMENT_FORMATS
                 or s.parser is not None
                 or s.reconciliation is not None
+                or s.first_page is not None
                 for s in self.statements
             )
             or any(
                 i.source_format in WORKER_STATEMENT_FORMATS
                 or i.parser is not None
                 or i.reconciliation is not None
+                or i.first_page is not None
                 or bool(i.confidence)
                 or any(p.confidence is not None or p.low_confidence for p in i.positions)
                 or any(a.confidence is not None or a.low_confidence for a in i.activity)

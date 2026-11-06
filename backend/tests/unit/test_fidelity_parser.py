@@ -26,12 +26,12 @@ from reportlab.pdfgen import canvas
 from app.domain.documents.models import Document
 from app.ingestion.classify.service import classify_extraction
 from app.ingestion.extract.pdf import extract_pdf
+from app.ingestion.parsers.accounts import account_heading
 from app.ingestion.parsers.base import DocumentView
 from app.ingestion.parsers.brokerage import (
     ACTIVITY_HEADERS,
     HOLDING_HEADERS,
     FidelityStatementParser,
-    account_heading,
     activity_type,
     header_key,
     is_cusip,

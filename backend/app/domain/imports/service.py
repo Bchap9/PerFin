@@ -1059,8 +1059,22 @@ def _split_lines(run: _Run, amount: Decimal, splits: Sequence[Any]) -> list[dict
     ]
 
 
+def _several_kinds(result: ExtractResult) -> bool:
+    """Bank and brokerage statements of different accounts in one document.
+
+    A combined statement (checking, savings and brokerage in one PDF): one
+    bank statement there is not the document's only account, so it is
+    matched by its own last four digits like the others.
+    """
+    if not (result.statements and result.investments):
+        return False
+    named = {s.account.last4 for s in result.statements}
+    named |= {i.account.last4 for i in result.investments}
+    return len(named) > 1
+
+
 def _import_statements(run: _Run, result: ExtractResult, *, account_id: uuid.UUID | None) -> None:
-    single = len(result.statements) == 1
+    single = len(result.statements) == 1 and not _several_kinds(result)
     for index, statement in enumerate(result.statements):
         parsed = from_statement(statement)
         account: Account | None = None
@@ -1764,6 +1778,7 @@ def import_extraction(
             assigned={i: a for (t, i), a in run.assigned.items() if t == "investment"},
             allow_overlap=run.allow_overlap,
             user_id=user_id,
+            several=_several_kinds(result),
         )
         run.overlaps += done.overlaps
         for investment_account in done.accounts:

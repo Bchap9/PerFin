@@ -49,7 +49,7 @@ from app.core.errors import ProblemError
 from app.domain.accounts import service as accounts_service
 from app.domain.accounts.models import AccountType, Institution
 from app.domain.accounts.schemas import AccountCreate
-from app.domain.accounts.subtypes import guess_subtype
+from app.domain.accounts.subtypes import guess_subtype, valid_subtype
 from app.domain.accounts.visibility import get_visible_account
 from app.domain.documents.manage import get_editable_document
 from app.domain.documents.models import Document, ReviewItem, ReviewItemState, ReviewKind
@@ -130,6 +130,8 @@ class _Found:
     transactions: int
     #: Filled in from the local model's hints (ADR-0010).
     from_model: bool = False
+    #: The subtype the document prints (an account index's group, a PDF parser).
+    subtype: str | None = None
 
 
 def _statements(result: ExtractResult) -> list[_Found]:
@@ -158,6 +160,7 @@ def _bank(index: int, statement: Statement) -> _Found:
             statement.ledger_balance.amount if statement.ledger_balance is not None else None
         ),
         transactions=len(statement.transactions),
+        subtype=account.subtype,
     )
 
 
@@ -177,6 +180,7 @@ def _investment(index: int, statement: InvestmentStatement) -> _Found:
         opening_balance=None,
         closing_balance=closing.amount if closing is not None else None,
         transactions=len(statement.activity),
+        subtype=account.subtype,
     )
 
 
@@ -317,6 +321,9 @@ def _proposal(found: _Found, institution: str | None, base_currency: str | None)
     guessed, subtype = guess_subtype(found.name, None if kind in INVESTMENT_TYPES else kind)
     if kind in INVESTMENT_TYPES and guessed is not None:
         kind = guessed
+    if found.subtype is not None and valid_subtype(kind, found.subtype):
+        # The document said so (an index's ``EDUCATION (529) ACCOUNTS`` group).
+        subtype = found.subtype
     label = TYPE_LABELS.get(kind, "Account")
     if found.name and institution and institution.lower() not in found.name.lower():
         name = f"{institution.split()[0]} {found.name}"

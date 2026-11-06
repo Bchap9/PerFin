@@ -44,6 +44,16 @@ are read the same way:
 5. **Checks and confidence.** The running balance and the totals are
    reconciled (:mod:`app.ingestion.reconcile`) and every field is scored
    (:mod:`app.ingestion.parsers.confidence`).
+6. **Several accounts.** When the pages name two or more accounts that each
+   have a transaction table (:func:`app.ingestion.parsers.accounts.segment`:
+   account headings, the account index), each account's lines are one
+   statement, with the account's last four digits, printed name, type and
+   pages; the lines before the first account (an overview) only offer their
+   period, and a row there belongs to no account (skipped,
+   ``rows_outside_account``). Otherwise the whole document is one statement,
+   as before. :meth:`TableStatementParser.read_statement` reads one
+   account's lines for the brokerage parsers too (a combined statement's
+   checking account).
 
 Institution parsers (:mod:`app.ingestion.parsers.institutions`) subclass it
 and pin what the generic one has to guess: date format, sign convention,
@@ -69,6 +79,7 @@ from app.ingestion.classify.dates import (
 )
 from app.ingestion.classify.dates import find_dates as classify_dates
 from app.ingestion.parsers import confidence as conf
+from app.ingestion.parsers.accounts import AccountSegment, Segmentation, segment
 from app.ingestion.parsers.base import Cell, DocumentParser, DocumentView, ParseOutcome, ViewLine
 from app.ingestion.parsers.text import (
     FULL_STYLES,
@@ -342,6 +353,16 @@ class _Summary:
     currency: str | None = None
 
 
+@dataclass
+class StatementRead:
+    """One statement as :meth:`TableStatementParser.read_statement` read it."""
+
+    statement: Statement | None = None
+    pending_items: int = 0
+    skipped_lines: int = 0
+    warnings: list[str] = field(default_factory=list)
+
+
 def _min(*values: float | None) -> float | None:
     present = [v for v in values if v is not None]
     return min(present) if present else None
@@ -351,7 +372,7 @@ class TableStatementParser(DocumentParser):
     """Generic: any statement with a recognisable transaction table (module doc)."""
 
     name: ClassVar[str] = "statement_generic"
-    version: ClassVar[str] = "1"
+    version: ClassVar[str] = "2"
     kind: ClassVar[Literal["statement", "payslip"]] = "statement"
     #: The institution's name as accounts know it (account matching).
     display_name: ClassVar[str | None] = None
@@ -430,7 +451,10 @@ class TableStatementParser(DocumentParser):
         return sorted(found, key=lambda c: c.x0)
 
     def has_table(self, view: DocumentView) -> bool:
-        return any(self.columns(line) is not None for line in view.lines)
+        return self.lines_have_table(view.lines)
+
+    def lines_have_table(self, lines: Iterable[ViewLine]) -> bool:
+        return any(self.columns(line) is not None for line in lines)
 
     def fingerprint_score(self, view: DocumentView) -> float:
         if not self.fingerprints:
@@ -513,7 +537,7 @@ class TableStatementParser(DocumentParser):
                 return False, kind
         return None
 
-    def _collect(self, view: DocumentView) -> tuple[list[_Row], _Summary, int, int, bool]:
+    def _collect(self, lines: Sequence[ViewLine]) -> tuple[list[_Row], _Summary, int, int, bool]:
         rows: list[_Row] = []
         summary = _Summary()
         pending_items = skipped = 0
@@ -522,7 +546,7 @@ class TableStatementParser(DocumentParser):
         section_type: str | None = None
         last: _Row | None = None
         found_header = False
-        for line in view.lines:
+        for line in lines:
             header = self.columns(line)
             if header is not None:
                 columns, pending, section_type, last = header, False, None, None
@@ -694,11 +718,105 @@ class TableStatementParser(DocumentParser):
     def parse(
         self, view: DocumentView, *, threshold: float, date_order: str | None = None
     ) -> ParseOutcome:
-        rows, summary, pending_items, skipped, found_header = self._collect(view)
-        outcome = ParseOutcome(pending_items=pending_items, skipped_lines=skipped)
+        split = self._accounts(view)
+        if split is not None:
+            return self._parse_accounts(view, split, threshold=threshold, date_order=date_order)
+        read = self.read_statement(view, view.lines, threshold=threshold, date_order=date_order)
+        outcome = ParseOutcome(
+            pending_items=read.pending_items,
+            skipped_lines=read.skipped_lines,
+            warnings=list(read.warnings),
+        )
+        if read.statement is not None:
+            outcome.statements.append(read.statement)
+        return outcome
+
+    # -- several accounts -------------------------------------------------------
+
+    def _accounts(self, view: DocumentView) -> Segmentation | None:
+        """The document's accounts when two or more have a transaction table each."""
+        found = segment(view.lines)
+        if len(found.accounts) < 2:
+            return None
+        if sum(1 for a in found.accounts if self.lines_have_table(a.lines)) < 2:
+            return None
+        return found
+
+    def _parse_accounts(
+        self,
+        view: DocumentView,
+        split: Segmentation,
+        *,
+        threshold: float,
+        date_order: str | None,
+    ) -> ParseOutcome:
+        """One statement per account (INGESTION.md "Several accounts")."""
+        outcome = ParseOutcome()
+        rows, preamble, pending, skipped, _ = self._collect(split.preamble)
+        outcome.pending_items += pending
+        outcome.skipped_lines += skipped + len(rows)
+        warnings: list[str] = ["rows_outside_account"] if rows else []
+        for account in split.accounts:
+            if not self.lines_have_table(account.lines):
+                warnings.append("account_without_tables")
+                continue
+            read = self.read_statement(
+                view,
+                account.lines,
+                threshold=threshold,
+                date_order=date_order,
+                period_texts=preamble.period.texts,
+                account=account,
+            )
+            outcome.pending_items += read.pending_items
+            outcome.skipped_lines += read.skipped_lines
+            warnings.extend(read.warnings)
+            if read.statement is not None:
+                outcome.statements.append(read.statement)
+        outcome.warnings.extend(dict.fromkeys(warnings))
+        return outcome
+
+    # -- one statement ----------------------------------------------------------
+
+    def statement_account(
+        self, summary_last4: str | None, currency: str | None, account: AccountSegment | None
+    ) -> StatementAccount:
+        """The statement's account: the parser's type, else what the document names."""
+        info = account.info if account is not None else None
+        kind = self.account_type or (info.account_type if info is not None else None)
+        subtype = info.subtype if info is not None and info.account_type == kind else None
+        return StatementAccount(
+            account_type=kind,
+            last4=info.last4 if info is not None else summary_last4,
+            currency=currency,
+            name=info.name if info is not None else None,
+            institution=self.display_name,
+            subtype=subtype,
+        )
+
+    def read_statement(
+        self,
+        view: DocumentView,
+        lines: Sequence[ViewLine],
+        *,
+        threshold: float,
+        date_order: str | None = None,
+        period_texts: Sequence[str] = (),
+        account: AccountSegment | None = None,
+    ) -> StatementRead:
+        """The statement ``lines`` hold (all of ``view``'s, or one account's).
+
+        ``period_texts`` are period candidates from outside the lines (the
+        document's overview) tried after the lines' own; ``account`` is the
+        account the lines belong to (:mod:`app.ingestion.parsers.accounts`).
+        ``statement`` is None when no transaction table header is found.
+        """
+        rows, summary, pending_items, skipped, found_header = self._collect(lines)
+        outcome = StatementRead(pending_items=pending_items, skipped_lines=skipped)
         if not found_header:
             outcome.warnings.append("no_table_header")
             return outcome
+        summary.period = PeriodCandidates([*summary.period.texts, *period_texts])
         styles, certain = self._row_styles(rows, date_order)
         # The day/month order is known when pinned or proven by numeric rows.
         order_known = bool(self.date_styles) or (
@@ -800,39 +918,34 @@ class TableStatementParser(DocumentParser):
             date_order = "mdy"
         elif styles[0] == "dm":
             date_order = "dmy"
-        outcome.statements.append(
-            Statement(
-                source_format=view.source_format,
-                account=StatementAccount(
-                    account_type=self.account_type,
-                    last4=summary.last4,
-                    currency=currency,
-                    institution=self.display_name,
-                ),
-                period_start=period[0] if period else None,
-                period_end=period[1] if period else None,
-                opening_balance=(
-                    Balance(amount=opening, as_of=period[0] if period else None)
-                    if opening is not None
-                    else None
-                ),
-                ledger_balance=(
-                    Balance(amount=closing, as_of=period[1] if period else None)
-                    if closing is not None
-                    else None
-                ),
-                transactions=transactions,
-                date_order=date_order,  # type: ignore[arg-type]
-                truncated=view.truncated,
-                parser=ParserRef(
-                    name=self.name,
-                    version=self.version,
-                    institution=self.institution,
-                    kind="statement",
-                ),
-                confidence={k: round(v, 4) for k, v in statement_conf.items()},
-                reconciliation=result,
-            )
+        outcome.statement = Statement(
+            source_format=view.source_format,
+            account=self.statement_account(summary.last4, currency, account),
+            period_start=period[0] if period else None,
+            period_end=period[1] if period else None,
+            opening_balance=(
+                Balance(amount=opening, as_of=period[0] if period else None)
+                if opening is not None
+                else None
+            ),
+            ledger_balance=(
+                Balance(amount=closing, as_of=period[1] if period else None)
+                if closing is not None
+                else None
+            ),
+            transactions=transactions,
+            date_order=date_order,  # type: ignore[arg-type]
+            truncated=view.truncated,
+            first_page=account.first_page if account is not None else None,
+            last_page=account.last_page if account is not None else None,
+            parser=ParserRef(
+                name=self.name,
+                version=self.version,
+                institution=self.institution,
+                kind="statement",
+            ),
+            confidence={k: round(v, 4) for k, v in statement_conf.items()},
+            reconciliation=result,
         )
         return outcome
 

@@ -86,6 +86,25 @@ What remains (details in docs/ROADMAP.md):
 - `perfin ingest --dry-run` shows the brokerage statements of a PDF in its
   `parse` stage: per account the last four digits, period, positions and
   activity counts by type, figures and reconciliation.
+- **Several accounts in one PDF**, for any institution
+  (`app/ingestion/parsers/accounts.py`):
+  - Account headings are found per cell, so `Account 111-111111` printed
+    next to `$103,351.18` or `Account Value: $142,413.12` at the top of a
+    page starts that account. A transfer row naming another account
+    (`Trans. from account 222-222222`) never switches the page.
+  - An account index ("Accounts Included in This Report", "Your Accounts at
+    a Glance", any table with an Account Number column and a name or type
+    column) is read as the document's map of accounts. Each statement gets
+    the account's printed name (without the owner's name), its type and its
+    subtype (`education_529` from an `EDUCATION (529) ACCOUNTS` group,
+    `traditional_ira`, `checking`), and account proposals use them. The
+    index's page numbers are not trusted.
+  - A combined statement (checking, savings and brokerage in one PDF) gives
+    a bank statement for each bank account and a brokerage statement for
+    the brokerage account. A bank statement of two or more accounts gives
+    one statement per account.
+  - Statements record the pages they were read from (`first_page`,
+    `last_page`).
 
 ### Changed
 
@@ -102,6 +121,17 @@ What remains (details in docs/ROADMAP.md):
 - Importing the same statement again as a different file (OFX after PDF, a
   second rendering) now waits in review as `statement_overlap` instead of
   being processed with every row counted as a duplicate.
+
+### Fixed
+
+- Multi-account reports no longer misroute an account's first page (the one
+  printing its number beside its value) to the account before it, so an
+  account no longer takes the next account's pages and values (a 529 folded
+  into the IRA). Each account is reconciled and imported on its own; a lone
+  bank or brokerage statement beside statements of other accounts is
+  matched by its own last four digits, never put on the document's account.
+- The brokerage parsers no longer read "Change in Account Value" as the
+  account value.
 
 ## [1.0.0-rc.4] - 2026-11-06
 

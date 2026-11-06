@@ -23,10 +23,14 @@ Two halves (INGESTION.md "Brokerage statements", SECURITY.md C12):
   ADR-0006) in the worker:
 
   - **accounts**: one statement per account when the pages name several
-    (account headings such as ``Account # Z12-345678`` or ``INDIVIDUAL -
-    TOD Z12-345678`` repeated on each account's pages), each with its own
-    last four digits, tables, totals and reconciliation; a document naming
-    one account is read as one statement (the parser's class doc);
+    (:mod:`app.ingestion.parsers.accounts`: account headings such as
+    ``Account # Z12-345678`` or ``INDIVIDUAL - TOD Z12-345678`` on each
+    account's pages, also beside an amount at the top of a page, and the
+    account index's names and types), each with its own last four digits,
+    name, type, pages, tables, totals and reconciliation, and a bank
+    account among them (a combined statement's checking) read as a bank
+    statement; a document naming one account is read as one statement
+    (the parser's class doc);
   - a **holdings** table: a header naming a quantity, a market value and a
     symbol or security name (optional price, cost basis, beginning market
     value; columns such as unrealized gain/loss or estimated income are
@@ -90,10 +94,16 @@ from pydantic import ValidationError
 
 from app.core.money import sum_amounts
 from app.ingestion.parsers import confidence as conf
+from app.ingestion.parsers.accounts import (
+    AccountInfo,
+    AccountSegment,
+    segment,
+)
 from app.ingestion.parsers.base import Cell, DocumentParser, DocumentView, ParseOutcome, ViewLine
 from app.ingestion.parsers.table_statement import (
     PeriodCandidates,
     PeriodRead,
+    TableStatementParser,
     follow_order,
     full_style,
     label_end,
@@ -125,6 +135,7 @@ from app.ingestion.sandbox.protocol import (
     InvestmentStatement,
     ParserRef,
     SecurityRef,
+    Statement,
     StatementAccount,
 )
 
@@ -235,26 +246,10 @@ _LAST4: Final = re.compile(
     re.IGNORECASE,
 )
 _CURRENCY: Final = re.compile(r"\bcurrency\s*:?\s*([A-Z]{3})\b", re.IGNORECASE)
-#: ``Account # Z12-345678``, ``Account Number: 123-456789``, ``Account XXXX-4821``.
-_ACCOUNT_LABELLED: Final = re.compile(
-    r"\baccount\s{0,3}(?:#|number|no\.?)?\s{0,3}:?\s{0,3}"
-    r"(?P<num>(?:[A-Z]{1,3}|[*xX\u2022]{2,12})?[ -]?\d(?:[\d-]| (?=\d)){2,24}\d)(?![\w-])",
-    re.IGNORECASE,
-)
-#: The number ending an all-capitals account title (``INDIVIDUAL - TOD Z12-345678``).
-_TITLE_NUMBER: Final = re.compile(r"[A-Z]{0,3}\d{2,4}-\d{4,8}")
-_TITLE_WORD: Final = re.compile(r"[A-Z][A-Z&'./]{0,30}")
 #: A date at the end of a (normalised) header cell: ``ending market value oct 31 2026``.
 _TRAILING_DATE: Final = re.compile(
     r"(?:\sas\sof)?\s(?:[a-z]{3,9}\s\d{1,2}\s\d{4}|\d{1,2}\s\d{1,2}\s\d{2,4}|\d{4}\s\d{1,2}\s\d{1,2})$"
 )
-#: Characters of a line an account heading is looked for in.
-_HEADING_CHARS: Final = 200
-_DASHES: Final = frozenset({"-", "\u2013"})
-#: Account headings are looked for in a page's first and last lines (where
-#: layouts print and repeat them), never mid-page.
-HEADING_TOP_LINES: Final = 6
-HEADING_BOTTOM_LINES: Final = 3
 
 
 def read_number(text: str) -> Decimal | None:
@@ -284,44 +279,6 @@ def is_cusip(text: str) -> bool:
             value *= 2
         total += value // 10 + value % 10
     return (10 - total % 10) % 10 == int(text[8])
-
-
-def account_heading(text: str) -> str | None:
-    """The last four digits of the account a heading (a line or a cell) names, or None.
-
-    A heading starts with ``Account # Z12-345678`` / ``Account Number:
-    123-456789`` / ``Account XXXX-4821``, after at most an all-capitals
-    account title (``INDIVIDUAL - TOD Account # Z12-345678``), or is an
-    all-capitals title ending in a number (``INDIVIDUAL - TOD Z12-345678``).
-    A text that merely mentions an account (``Linked bank account
-    XXXX-9999``) or prints an amount (a row of an accounts overview) is no
-    heading. Only the last four digits are returned; the number is not kept.
-    """
-    text = text[:_HEADING_CHARS]
-    if find_amounts(text):
-        return None
-    tokens = text.split()
-    title = 0
-    while (
-        title < len(tokens)
-        and normalise(tokens[title]) != "account"
-        and (tokens[title] in _DASHES or _TITLE_WORD.fullmatch(tokens[title]))
-    ):
-        title += 1
-    match = _ACCOUNT_LABELLED.match(" ".join(tokens[title:]))
-    number: str | None = match["num"] if match is not None else None
-    if (
-        number is None
-        and 2 <= len(tokens) <= 12
-        and _TITLE_NUMBER.fullmatch(tokens[-1])
-        and any(_TITLE_WORD.fullmatch(t) for t in tokens[:-1])
-        and all(t in _DASHES or _TITLE_WORD.fullmatch(t) for t in tokens[:-1])
-    ):
-        number = tokens[-1]
-    if number is None:
-        return None
-    digits = "".join(c for c in number if c.isdigit())
-    return digits[-4:] if len(digits) >= 4 else None
 
 
 #: Normalised activity word -> type (the first word(s) of the activity cell).
@@ -427,6 +384,8 @@ SIGNED_TYPES: Final[Mapping[str, tuple[InvestmentActivityType, InvestmentActivit
     "assigned": ("buy", "sell"),
     "expired": ("buy", "sell"),
 }
+#: Account types an investment statement may take from the document (``account_kind``).
+INVESTMENT_KINDS: Final = frozenset({"brokerage", "retirement"})
 #: Types whose cash effect is an outflow when the amount is printed unsigned.
 OUTFLOW_TYPES: Final = frozenset({"buy", "fee", "withdrawal", "reinvest"})
 #: Types that must name a security / carry a quantity (``investment_txn`` checks).
@@ -801,6 +760,10 @@ class _Summary:
 class _Collected:
     """What one account's lines yield (the whole document for one account)."""
 
+    #: The account's lines (a document of several accounts).
+    account: AccountSegment | None = None
+    #: What the document says about the account (its index or heading).
+    info: AccountInfo | None = None
     holdings: list[_HoldingRow] = field(default_factory=list)
     activity: list[_ActivityRow] = field(default_factory=list)
     #: Rows under a cash group heading (``cash_groups``): the account's cash.
@@ -833,16 +796,15 @@ class _Collected:
 class BrokerageStatementParser(DocumentParser):
     """Generic brokerage statement: holdings and activity tables, one or more accounts.
 
-    **Accounts.** A heading naming an account (:func:`account_heading`, on
-    the line or in one of its cells) among a page's first
-    :data:`HEADING_TOP_LINES` or last :data:`HEADING_BOTTOM_LINES` lines
-    marks where that account's pages are; a mention mid-page is no heading.
-    When the headings name one account (or
-    none) the document is one statement, read exactly as a single-account
-    statement always was (its last four digits from the first account
-    number found, else from the heading). When they name two or more, each
-    account is its own :class:`InvestmentStatement` (own last four digits,
-    positions, activity, cash, totals and reconciliation):
+    **Accounts.** Where each account's pages are is found by
+    :func:`app.ingestion.parsers.accounts.segment` (account headings in a
+    page's header band, also beside amounts; the account index's names and
+    types). When the headings name one account (or none) the document is
+    one statement, read exactly as a single-account statement always was
+    (its last four digits from the first account number found, else from
+    the heading). When they name two or more, each account is its own
+    statement (own last four digits, name, type and subtype from the
+    index, pages, positions, activity, cash, totals and reconciliation):
 
     * a page whose headings all name one account belongs to it entirely (a
       heading repeated at the top or the bottom of each page);
@@ -853,8 +815,11 @@ class BrokerageStatementParser(DocumentParser):
       period, currency and "as of" date every account falls back on, and a
       holdings or activity row there belongs to no account (skipped,
       ``rows_outside_account``);
-    * an account without a holdings or activity table gives no statement
-      (``account_without_tables``); at most :data:`MAX_STATEMENTS` accounts.
+    * an account without a holdings or activity table is read as a bank
+      account by :attr:`bank_parser` (a combined statement's checking and
+      savings: a :class:`~app.ingestion.sandbox.protocol.Statement`), else it
+      gives no statement (``account_without_tables``); at most
+      :data:`MAX_STATEMENTS` accounts.
 
     Misplaced lines cannot pass silently: they break that account's
     reconciliation, and the importer holds a statement that does not
@@ -862,7 +827,7 @@ class BrokerageStatementParser(DocumentParser):
     """
 
     name: ClassVar[str] = "brokerage_statement_generic"
-    version: ClassVar[str] = "2"
+    version: ClassVar[str] = "3"
     kind: ClassVar[Literal["statement", "payslip", "receipt"]] = "statement"
     display_name: ClassVar[str | None] = None
     #: Phrases on the first page that identify the institution (its name first).
@@ -882,10 +847,12 @@ class BrokerageStatementParser(DocumentParser):
         "period",
     )
     #: Summary labels in the order they are tried on a line (longest first);
-    #: ``ignore`` consumes a label no slot takes (a beginning account value
-    #: is not the account value).
+    #: ``ignore`` consumes a label no slot takes (a beginning account value,
+    #: or the change in it, is not the account value).
     summary_labels: ClassVar[tuple[tuple[str, str], ...]] = (
         ("beginning account value", "ignore"),
+        ("change in account value", "ignore"),
+        ("change in portfolio value", "ignore"),
         ("beginning net value", "ignore"),
         ("beginning portfolio value", "ignore"),
         ("beginning cash balance", "cash_opening"),
@@ -920,6 +887,9 @@ class BrokerageStatementParser(DocumentParser):
     #: count the same money twice), until one of ``section_headings``.
     ignored_tables: ClassVar[tuple[str, ...]] = ()
     section_headings: ClassVar[tuple[str, ...]] = ()
+    #: Reads an account of a document of several that has no brokerage table
+    #: but a bank transaction table (a combined statement's checking account).
+    bank_parser: ClassVar[type[TableStatementParser]] = TableStatementParser
 
     # -- detection ----------------------------------------------------------------
 
@@ -1035,57 +1005,24 @@ class BrokerageStatementParser(DocumentParser):
 
     def _sections(self, view: DocumentView) -> tuple[list[_Collected], _Collected | None, int]:
         """``(accounts, preamble, accounts dropped)`` (class doc); one account: no preamble."""
-        pages: dict[int, list[ViewLine]] = {}
-        for line in view.lines:
-            pages.setdefault(line.page, []).append(line)
-        headings: dict[int, str | None] = {}
-        for page_lines in pages.values():
-            last = len(page_lines) - HEADING_BOTTOM_LINES
-            for position, line in enumerate(page_lines):
-                zone = position < HEADING_TOP_LINES or position >= last
-                headings[line.index] = self._heading(line) if zone else None
-        named = list(dict.fromkeys(v for v in headings.values() if v is not None))
-        if len(named) < 2:
+        split = segment(view.lines)
+        if len(split.accounts) < 2:
             single = _Collected()
             self._read(view.lines, single)
-            if single.summary.last4 is None and named:
-                single.summary.last4 = named[0]
+            if single.summary.last4 is None and split.accounts:
+                single.summary.last4 = split.accounts[0].last4
+            single.info = split.info(single.summary.last4)
             return [single], None, 0
-        routed: dict[str | None, list[ViewLine]] = {None: []}
-        current: str | None = None
-        for page_lines in pages.values():
-            marks = [headings[line.index] for line in page_lines if headings[line.index]]
-            if marks and len(set(marks)) == 1:
-                current = marks[0]
-                routed.setdefault(current, []).extend(page_lines)
-                continue
-            for line in page_lines:
-                mark = headings[line.index]
-                if mark is not None:
-                    current = mark
-                routed.setdefault(current, []).append(line)
         preamble = _Collected()
-        self._read(routed.pop(None), preamble)
+        self._read(split.preamble, preamble)
         accounts: list[_Collected] = []
-        for last4, lines in routed.items():
-            collected = _Collected()
-            self._read(lines, collected)
-            collected.summary.last4 = last4
+        for account in split.accounts:
+            collected = _Collected(account=account, info=account.info)
+            self._read(account.lines, collected)
+            collected.summary.last4 = account.last4
             accounts.append(collected)
         kept = accounts[:MAX_STATEMENTS]
         return kept, preamble, len(accounts) - len(kept)
-
-    @staticmethod
-    def _heading(line: ViewLine) -> str | None:
-        """The account a line names (the line, else one of its cells; no amounts)."""
-        if find_amounts(line.text):
-            return None
-        found = account_heading(line.text)
-        if found is None and len(line.cells) > 1:
-            found = next(
-                (h for c in line.cells if (h := account_heading(c.text)) is not None), None
-            )
-        return found
 
     # -- collecting -----------------------------------------------------------------
 
@@ -1597,12 +1534,7 @@ class BrokerageStatementParser(DocumentParser):
 
         statement = InvestmentStatement(
             source_format=view.source_format,
-            account=StatementAccount(
-                account_type=self.account_type,
-                last4=summary.last4,
-                currency=currency,
-                institution=self.display_name,
-            ),
+            account=self._account(summary.last4, currency, collected.info),
             period_start=period[0] if period else None,
             period_end=period[1] if period else None,
             as_of=as_of,
@@ -1613,6 +1545,8 @@ class BrokerageStatementParser(DocumentParser):
             positions_value=balance(positions_value, as_of),
             total_value=balance(summary.total_value, as_of),
             truncated=view.truncated,
+            first_page=collected.account.first_page if collected.account else None,
+            last_page=collected.account.last_page if collected.account else None,
         )
         check = reconcile_investment(statement)
         for index in check.position_mismatches:
@@ -1654,6 +1588,62 @@ class BrokerageStatementParser(DocumentParser):
         )
         return statement, certain
 
+    def _account(
+        self, last4: str | None, currency: str | None, info: AccountInfo | None
+    ) -> StatementAccount:
+        """The statement's account: an investment type the document names, else the parser's."""
+        kind = self.account_type
+        if info is not None and info.account_type in INVESTMENT_KINDS:
+            kind = info.account_type
+        return StatementAccount(
+            account_type=kind,
+            last4=last4,
+            currency=currency,
+            name=info.name if info is not None else None,
+            institution=self.display_name,
+            subtype=info.subtype if info is not None and info.account_type == kind else None,
+        )
+
+    def _bank(
+        self,
+        view: DocumentView,
+        collected: _Collected,
+        preamble: _Collected | None,
+        outcome: ParseOutcome,
+        warnings: list[str],
+        *,
+        threshold: float,
+        date_order: str | None,
+    ) -> Statement | None:
+        """An account without a brokerage table read as a bank statement (class doc)."""
+        account = collected.account
+        if account is None:
+            return None
+        read = self.bank_parser().read_statement(
+            view,
+            account.lines,
+            threshold=threshold,
+            date_order=date_order,
+            period_texts=preamble.summary.period.texts if preamble is not None else (),
+            account=account,
+        )
+        if read.statement is None or not read.statement.transactions:
+            return None
+        outcome.pending_items += read.pending_items
+        outcome.skipped_lines += read.skipped_lines
+        warnings.extend(read.warnings)
+        institution = self.display_name or read.statement.account.institution
+        return read.statement.model_copy(
+            update={
+                "account": read.statement.account.model_copy(
+                    update={
+                        "institution": institution,
+                        "currency": read.statement.account.currency or self.default_currency,
+                    }
+                )
+            }
+        )
+
     def parse(
         self, view: DocumentView, *, threshold: float, date_order: str | None = None
     ) -> ParseOutcome:
@@ -1668,7 +1658,19 @@ class BrokerageStatementParser(DocumentParser):
         guessed = False
         for collected in accounts:
             if not collected.found_table:
-                warnings.append("account_without_tables")
+                bank = self._bank(
+                    view,
+                    collected,
+                    preamble,
+                    outcome,
+                    warnings,
+                    threshold=threshold,
+                    date_order=date_order,
+                )
+                if bank is not None:
+                    outcome.statements.append(bank)
+                else:
+                    warnings.append("account_without_tables")
                 continue
             statement, certain = self._statement(
                 view,
@@ -1689,14 +1691,14 @@ class BrokerageStatementParser(DocumentParser):
                 warnings.append("rows_outside_account")
         if dropped:
             warnings.append("too_many_accounts")
-        outcome.skipped_lines = skipped
+        outcome.skipped_lines += skipped
         if unknown:
             outcome.warnings.append("activity_type_unknown")
         if view.truncated:
             outcome.warnings.append("truncated")
         if guessed:
             outcome.warnings.append("date_order_guessed")
-        outcome.warnings.extend(dict.fromkeys(warnings))
+        outcome.warnings = list(dict.fromkeys([*outcome.warnings, *warnings]))
         return outcome
 
 
@@ -1776,7 +1778,7 @@ class FidelityStatementParser(BrokerageStatementParser):
     """
 
     name: ClassVar[str] = "fidelity_investments_statement"
-    version: ClassVar[str] = "1"
+    version: ClassVar[str] = "2"
     institution: ClassVar[str | None] = "fidelity-investments-statement"
     display_name: ClassVar[str | None] = "Fidelity Investments"
     fingerprints: ClassVar[tuple[str, ...]] = ("fidelity investments", "investment report")
