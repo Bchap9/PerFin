@@ -649,7 +649,12 @@ OFX `INVSTMTRS` in the sandbox or from a PDF/scan's pages in the worker.
     held, never booked as the section above's type) and the table after a
     skipped section is read; right under the section's heading such a line
     is a sub-heading (`SAMPLE CHECK CARD (ACCOUNT ...0000)`) and the section
-    stays. In an account with a holdings or security table, such a cash
+    stays. A table running onto the next page continues its section: the
+    section's own header repeated on a later page, under the page's running
+    header (`Account Number: XXXX-1234`, the client's name), keeps it, and
+    a short line over a header that names no column the header does not
+    (it would only add unnamed columns) is a heading, never the header's
+    top line. In an account with a holdings or security table, such a cash
     table (date, description, amount) is activity even for the generic
     parser; its description naming no action is the row's memo, and in
     *Securities Transferred In/Out* with a quantity it moves those units. A
@@ -667,7 +672,9 @@ OFX `INVSTMTRS` in the sandbox or from a PDF/scan's pages in the worker.
     (`NH Portfolio 2015 (Fidelity Funds)`); in an all-capitals name the
     first word is the issuer's (`ADI NET LEASE INC ...`). A name wraps until
     its `(SYMBOL)`, also when its next line reads like a section heading
-    (`EXAMPLE STRATEGIC` / `INCOME FUND (ZZSIX)`), note lines (`— 30-day
+    and ends the name with its `(SYMBOL)` (`EXAMPLE STRATEGIC` / `INCOME
+    FUND (ZZSIX)`); without one such a line is the heading (`Dividends and
+    Interest` under `ZZCD Example Bond Fund`), note lines (`— 30-day
     yield`, bond terms) are read for nothing; footnote markers in figures
     (`147.85A`, `$8,412.36 c`) are dropped and `unknown`/`N/A` cost basis
     is unknown. A price is per 100 of face value

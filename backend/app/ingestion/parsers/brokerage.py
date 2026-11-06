@@ -84,7 +84,9 @@ Two halves (INGESTION.md "Brokerage statements", SECURITY.md C12):
     The **section** heading above a table (:data:`ACTIVITY_SECTIONS`) says
     how its rows are read, until the next heading (after the section's own
     table, a heading no section names right above a table ends it; right
-    under the section's heading it is a sub-heading, a card's name):
+    under the section's heading it is a sub-heading, a card's name; the
+    section's header repeated on a later page under a running page header
+    continues it):
     trades pending settlement, cash-flow summaries and daily balances are
     no activity; securities transferred in/out move
     units (the amount printed is their value) or, without units, cash;
@@ -906,6 +908,11 @@ class _Header:
             return (tuple(c.role for c in self.holdings),)
         return tuple(tuple(c.role for c in p.columns) for p in self.parts or ())
 
+    @property
+    def known_roles(self) -> tuple[tuple[str, ...], ...]:
+        """:attr:`roles` without the columns no header word names (``other``)."""
+        return tuple(tuple(r for r in part if r != "other") for part in self.roles)
+
 
 #: Words a header cell is split into at most (bounded work).
 _MAX_HEADER_WORDS: Final = 12
@@ -1224,6 +1231,9 @@ class _Collected:
     tables: int = 0
     #: Activity tables read since the last section heading.
     section_tables: int = 0
+    #: The column roles and page of the section's latest table header: the
+    #: same header repeated on a later page continues the section.
+    section_header: tuple[tuple[tuple[str, ...], ...], int] | None = None
     group: str | None = None
     last_holding: _HoldingRow | None = None
     #: Inside a table the layout says not to read (``ignored_tables``).
@@ -1448,8 +1458,9 @@ class BrokerageStatementParser(DocumentParser):
         names more known columns than fewer of its lines; a later line with
         an amount is a row, never header, and a heading (a section, an asset
         group) is never a header's top line; nor is a short top line (one or
-        two cells) that changes no column the lines under it name (an unknown
-        heading).
+        two cells) that names no column the lines under it do not (an unknown
+        heading, a running page header: its words would only add or widen
+        ``other`` columns).
         """
         first = lines[index]
         if find_amounts(first.text):
@@ -1481,8 +1492,9 @@ class BrokerageStatementParser(DocumentParser):
             return None
         if best[1].used > 1 and len(first.cells) <= 2:
             below = self._header_at(lines, index + 1, cash_tables=cash_tables)
-            if below is not None and below.roles == best[1].roles:
-                # The top line names no column ("Electronic Funds Transfers"
+            if below is not None and below.known_roles == best[1].known_roles:
+                # The top line names no column ("Electronic Funds Transfers",
+                # a running page header "Jane Example - Account XXXX-1234"
                 # over "Date | Description | Amount"): a heading, not header.
                 return None
         return best[1]
@@ -1718,17 +1730,19 @@ class BrokerageStatementParser(DocumentParser):
     def _wraps_name(self, line: ViewLine, collected: _Collected) -> bool:
         """A line worded like a section heading that is the rest of a holding's name.
 
-        Only under an open holding (its name has no ``(SYMBOL)`` yet) that
-        still has no identifier, or when the line ends the name with its
-        ``(SYMBOL)``; :meth:`_continue_holding` decides (name column only,
-        directly under the row) and joins it.
+        Only a line that ends the open holding's name (it has no ``(SYMBOL)``
+        yet) with its ``(SYMBOL)``: ``INCOME FUND (ZZSIX)``;
+        :meth:`_continue_holding` decides (name column only, directly under
+        the row) and joins it. Any other heading-worded line is the heading.
         """
         row, columns = collected.last_holding, collected.holdings_columns
         if row is None or columns is None or row.closed:
             return False
         text = line.text.strip()
-        ends_name = any(len(text) - m.end() <= 2 for m in _PAREN_SYMBOL.finditer(text))
-        if not ends_name and (row.symbol is not None or row.cusip is not None):
+        if not any(len(text) - m.end() <= 2 for m in _PAREN_SYMBOL.finditer(text)):
+            # Without its (SYMBOL) the line is the heading it reads as: a
+            # holding nothing identifies yet (a plain or leading-ticker name)
+            # does not take the next section's title into its name.
             return False
         return self._continue_holding(line, _assign(line, columns), row)
 
@@ -1899,6 +1913,7 @@ class BrokerageStatementParser(DocumentParser):
                 index += 1
                 collected.section = section
                 collected.section_tables = 0
+                collected.section_header = None
                 collected.ignoring = False
                 collected.holdings_columns = collected.activity_parts = None
                 continue
@@ -1923,14 +1938,24 @@ class BrokerageStatementParser(DocumentParser):
                     )
                     collected.last_holding = None
                 else:
-                    if collected.section_tables and self._unknown_heading(
-                        lines, index - found.used
+                    start = lines[index - found.used]
+                    continued = collected.section_header is not None and (
+                        collected.section_header[0] == found.roles
+                        and start.page > collected.section_header[1]
+                    )
+                    if (
+                        collected.section_tables
+                        and not continued
+                        and self._unknown_heading(lines, index - found.used)
                     ):
                         # After the section's own table, a heading no section
                         # names starts a table of its own: the section above
                         # does not type (or skip) its rows. (Right under the
-                        # section's heading it is a sub-heading: a card's name.)
+                        # section's heading it is a sub-heading: a card's name.
+                        # The section's header repeated on a later page under
+                        # the page's running header continues its table.)
                         collected.section = None
+                    collected.section_header = (found.roles, start.page)
                     collected.holdings_columns, collected.activity_parts = None, found.parts
                     collected.activity_header = True
                     collected.tables += 1

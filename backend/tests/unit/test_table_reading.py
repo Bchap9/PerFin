@@ -441,25 +441,27 @@ _HOLDINGS = [(40.0, "Symbol"), (100.0, "Description"), (250.0, "Quantity"), (330
 _CASH = [(30.0, "Date"), (70.0, "Description"), (220.0, "Amount")]
 
 
-def _drawn_pdf(rows: Drawn) -> bytes:
-    """One page: each row's ``(x, text)`` cells on one line, None a gap."""
+def _drawn_pdf(rows: Drawn, *more: Drawn) -> bytes:
+    """One page per argument: each row's ``(x, text)`` cells on one line, None a gap."""
     buf = io.BytesIO()
     pdf = canvas.Canvas(buf, pagesize=(612, 792))
-    y = 760.0
-    for row in rows:
-        if row is None:
-            y -= 14
-            continue
-        for x, text in row:
-            pdf.setFont("Helvetica", 8)
-            pdf.drawString(x, y, text)
-        y -= 12
-    pdf.showPage()
+    for page in (rows, *more):
+        y = 760.0
+        for row in page:
+            if row is None:
+                y -= 14
+                continue
+            for x, text in row:
+                pdf.setFont("Helvetica", 8)
+                pdf.drawString(x, y, text)
+            y -= 12
+        pdf.showPage()
     pdf.save()
     return buf.getvalue()
 
 
-def _generic(rows: Drawn, *, cash: tuple[str, str], value: str) -> InvestmentStatement:
+def _generic(rows: Drawn, *more: Drawn, cash: tuple[str, str], value: str) -> InvestmentStatement:
+    """A one-account statement: its summary, then ``rows``; ``more``: later pages."""
     head: Drawn = [
         [(40, "Brokerage Account Statement")],
         [(40, "Statement Period: 03/01/2024 - 03/31/2024")],
@@ -470,7 +472,7 @@ def _generic(rows: Drawn, *, cash: tuple[str, str], value: str) -> InvestmentSta
         None,
     ]
     result = parse_extraction(
-        _extract(_drawn_pdf([*head, *rows])),
+        _extract(_drawn_pdf([*head, *rows], *more)),
         parser_name="brokerage_statement_generic",
         threshold=0.85,
     )
@@ -568,6 +570,134 @@ def test_a_sub_heading_right_under_a_section_keeps_its_section() -> None:
     ]
     statement = _generic([*_held(_ZZAB), *card], cash=("$5,000.00", "$4,500.00"), value="$5,500.00")
     assert _rows(statement) == [("withdrawal", None, Decimal("-500.00"), "EXAMPLE MART")]
+
+
+#: Lines a statement prints at the top of every page (none names a section).
+_RUNNING_HEADERS = [
+    "Account Number: XXXX-1234",
+    "Example Brokerage",
+    "Jane Example",
+    "Jane Example - Account XXXX-1234",
+]
+
+
+@pytest.mark.parametrize("running", _RUNNING_HEADERS)
+def test_a_skipped_section_continued_on_the_next_page_stays_skipped(running: str) -> None:
+    """The section's header repeated under a running page header continues it."""
+    trades = [
+        (30.0, "Trade Date"),
+        (90.0, "Description"),
+        (220.0, "Symbol"),
+        (280.0, "Quantity"),
+        (340.0, "Price"),
+        (420.0, "Amount"),
+    ]
+    pending: Drawn = [
+        [(30, "Trades Pending Settlement")],
+        trades,
+        [
+            (30, "03/29/2024"),
+            (90, "Bought"),
+            (220, "ZZAB"),
+            (280, "5"),
+            (340, "100.00"),
+            (420, "-500.00"),
+        ],
+    ]
+    page2: Drawn = [
+        [(40, running)],
+        trades,
+        [
+            (30, "03/29/2024"),
+            (90, "Bought"),
+            (220, "ZZCD"),
+            (280, "5"),
+            (340, "100.00"),
+            (420, "-500.00"),
+        ],
+        [
+            (30, "03/29/2024"),
+            (90, "Sold"),
+            (220, "ZZAB"),
+            (280, "5"),
+            (340, "100.00"),
+            (420, "500.00"),
+        ],
+    ]
+    statement = _generic(
+        [*_held(_ZZAB), *pending], page2, cash=("$5,000.00", "$5,000.00"), value="$6,000.00"
+    )
+    assert _rows(statement) == []
+    assert statement.reconciliation is not None
+    assert statement.reconciliation.status == "ok"
+
+
+@pytest.mark.parametrize("running", _RUNNING_HEADERS)
+def test_a_cash_section_continued_on_the_next_page_keeps_typing_its_rows(running: str) -> None:
+    deposits: Drawn = [
+        [(30, "Deposits")],
+        _CASH,
+        [(30, "03/12"), (70, "Payroll Example Co"), (220, "1,000.00")],
+    ]
+    page2: Drawn = [
+        [(40, running)],
+        _CASH,
+        [(30, "03/26"), (70, "Payroll Example Co"), (220, "1,000.00")],
+    ]
+    statement = _generic(
+        [*_held(_ZZAB), *deposits], page2, cash=("$5,000.00", "$7,000.00"), value="$8,000.00"
+    )
+    assert _rows(statement) == [
+        ("deposit", None, Decimal("1000.00"), "Payroll Example Co"),
+        ("deposit", None, Decimal("1000.00"), "Payroll Example Co"),
+    ]
+    assert statement.reconciliation is not None
+    assert statement.reconciliation.status == "ok"
+
+
+@pytest.mark.parametrize("running", _RUNNING_HEADERS)
+def test_a_continued_income_row_keeps_its_memo_and_security(running: str) -> None:
+    """A running page header over the repeated header is no header line: the
+    description column keeps its width."""
+    income: Drawn = [
+        [(30, "Dividends and Interest")],
+        _CASH,
+        [(30, "03/12"), (70, "Example Index Fund"), (220, "12.50")],
+    ]
+    page2: Drawn = [
+        [(30, running)],
+        _CASH,
+        [(30, "03/26"), (70, "Example Index Fund"), (220, "12.50")],
+    ]
+    statement = _generic(
+        [*_held(_ZZAB), *income], page2, cash=("$5,000.00", "$5,025.00"), value="$6,025.00"
+    )
+    assert _rows(statement) == [
+        ("dividend", "ZZAB", Decimal("12.50"), "Example Index Fund"),
+        ("dividend", "ZZAB", Decimal("12.50"), "Example Index Fund"),
+    ]
+
+
+@pytest.mark.parametrize("heading", ["Dividends and Interest", "Dividends", "Income"])
+def test_a_heading_under_an_unidentified_holding_is_no_part_of_its_name(heading: str) -> None:
+    """Without a ``(SYMBOL)`` ending it, a heading-worded line is the heading."""
+    rows: Drawn = [
+        [(40, "Holdings")],
+        [(40, "Security"), (250, "Quantity"), (330, "Price"), (420, "Market Value")],
+        [(40, "ZZAB Example Index Fund"), (250, "10"), (330, "$100.00"), (420, "$1,000.00")],
+        [(40, "ZZCD Example Bond Fund"), (250, "20"), (330, "$50.00"), (420, "$1,000.00")],
+        [(40, heading)],
+        [(40, "Date"), (100, "Description"), (420, "Amount")],
+        [(40, "03/12"), (100, "Example Index Fund"), (420, "12.50")],
+    ]
+    statement = _generic(rows, cash=("$1,000.00", "$1,012.50"), value="$3,012.50")
+    assert [(p.security.symbol, p.security.name) for p in statement.positions] == [
+        ("ZZAB", "Example Index Fund"),
+        ("ZZCD", "Example Bond Fund"),
+    ]
+    assert _rows(statement) == [("dividend", "ZZAB", Decimal("12.50"), "Example Index Fund")]
+    assert statement.reconciliation is not None
+    assert statement.reconciliation.status == "ok"
 
 
 @pytest.mark.parametrize("word", ["INCOME", "DIVIDENDS", "FEES", "TAXES", "TRADES", "POSITIONS"])

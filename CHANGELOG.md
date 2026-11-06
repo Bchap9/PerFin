@@ -144,15 +144,17 @@ What remains (details in docs/ROADMAP.md):
     typed by its rows' own words only (an untyped row is held, never booked
     as the section above's type), and the table after a skipped section is
     read; a line right under a section's heading (a card's name) keeps the
-    section. In a brokerage account, cash tables (date, description,
+    section, and so does the section's header repeated on a later page under
+    the page's running header (a table continued on the next page). In a brokerage account, cash tables (date, description,
     amount) are read by the generic parser too; a description naming no
     action is the row's memo, one that is the name of a held security names
     that security, and a *Securities Transferred In/Out* row with a quantity
     moves those units even without a symbol column.
   - Holdings: `CUSIP:` and `ISIN:` lines under a row give its identifiers,
     the symbol is the ticker in parentheses ending the name, a name wrapped
-    onto a line worded like a section heading (`INCOME FUND (ZZSIX)`) is
-    still the name, and a ticker in front of the name (`ZZAB Example Index
+    onto a line worded like a section heading that ends it with its
+    `(SYMBOL)` (`INCOME FUND (ZZSIX)`) is still the name (without one the
+    line is the heading), and a ticker in front of the name (`ZZAB Example Index
     Fund`) is read only for a holding nothing else identifies, never in an
     all-capitals name (its first word is an issuer's), a bond's or a name
     with parentheses; note lines are no rows, footnote markers in figures
