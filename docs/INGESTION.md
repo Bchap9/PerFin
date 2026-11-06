@@ -609,7 +609,15 @@ OFX `INVSTMTRS` in the sandbox or from a PDF/scan's pages in the worker.
     only for an account the account index lists (a combined statement
     starting its next account half-way down a page). A mention never
     switches the account: `Trans. from account 222-222222` in a transfer
-    row, a dated row in the header band, a line with an amount mid-page.
+    row, a dated row in the header band, a line with an amount mid-page,
+    a description wrapped under its row (an undated line at the row's
+    spacing starting right of the row's date, such as `TO SAVINGS ACCOUNT
+    XXXX-2468` or `Account XXXX-2468`, anywhere on the page, also in its
+    last lines and for an account the index lists), a title holding a
+    transaction word (`TO SAVINGS`, `ONLINE TRANSFER`, `ACH DEBIT`: a
+    description, not an account's title), or a number shaped like a date
+    (`2026-07-31`) or a telephone number (`1-800-555-0100`, a toll-free
+    area code).
   - **Account index**: a table whose header names an account number column
     (`Account Number`, `Account #`, `Account No`) and a name or type column
     (`Account Type/Name`, `Account Name`), such as *Accounts Included in
@@ -646,7 +654,11 @@ OFX `INVSTMTRS` in the sandbox or from a PDF/scan's pages in the worker.
     (`statement_generic`, the card and institution parsers) is likewise
     one `Statement` per account. A document naming one account is one
     statement, read as before (its last four digits from the first account
-    number, else from the heading). Each statement is imported or held on
+    number, else from the heading); a lone brokerage account also takes
+    the name, type and subtype its heading's title or the index prints
+    (`HEALTH SAVINGS ACCOUNT`: `retirement`, `hsa`) for its account
+    proposal, while a lone bank account keeps the parser's type and no
+    name. Each statement is imported or held on
     its own: one account that does not reconcile holds only itself, and a
     line given to the wrong account breaks that account's reconciliation,
     so it is held, never imported silently. Only last four digits are kept.

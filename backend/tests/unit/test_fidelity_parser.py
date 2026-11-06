@@ -243,6 +243,17 @@ def test_a_single_account_report_is_one_statement() -> None:
     assert statement.reconciliation.status == "ok"
 
 
+def test_a_single_account_report_names_its_account() -> None:
+    """The heading's title gives a lone account its name, type and subtype."""
+    stmt = fid.fidelity_statement(seed=84)
+    single = fid.FidStatement(stmt.start, stmt.end, stmt.accounts[2:])
+    (statement,) = _parse(fid.fidelity_pdf(single)).investments
+    assert statement.account.last4 == "6074"
+    assert statement.account.name == "HEALTH SAVINGS ACCOUNT"
+    assert (statement.account.account_type, statement.account.subtype) == ("retirement", "hsa")
+    assert (statement.first_page, statement.last_page) == (None, None)
+
+
 @pytest.mark.parametrize(
     ("tamper", "failed"),
     [

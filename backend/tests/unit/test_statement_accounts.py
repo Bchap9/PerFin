@@ -191,7 +191,13 @@ def test_combined_statement_gives_bank_and_brokerage_statements(
     assert brokerage.reconciliation.status == "ok"
 
 
-def _bank_page(c: canvas.Canvas, heading: list[str], rows: list[tuple[str, str, str]]) -> None:
+def _bank_page(
+    c: canvas.Canvas,
+    heading: list[str],
+    rows: list[tuple[str, str, str]],
+    wrapped: dict[int, str] | None = None,
+) -> None:
+    """One page of a bank statement; ``wrapped``: a row's description continued below it."""
     y = 750.0
     c.setFont("Helvetica", 9)
     for text in ["SAMPLE COMMUNITY TEST BANK", "Statement Period: 01/01/2026 - 01/31/2026"]:
@@ -203,11 +209,14 @@ def _bank_page(c: canvas.Canvas, heading: list[str], rows: list[tuple[str, str, 
     for x, text in ((72, "Date"), (150, "Description"), (480, "Amount")):
         c.drawString(x, y, text)
     y -= 14
-    for day, text, amount in rows:
+    for number, (day, text, amount) in enumerate(rows):
         c.drawString(72, y, day)
         c.drawString(150, y, text)
         c.drawRightString(520, y, amount)
         y -= 14
+        if wrapped and number in wrapped:
+            c.drawString(150, y, wrapped[number])
+            y -= 14
     c.drawString(72, 60, "Synthetic test document from the PerFin test suite.")
     c.showPage()
 
@@ -274,6 +283,35 @@ def test_one_bank_account_is_read_as_before() -> None:
     assert result.statements[0].account.name is None
 
 
+def test_a_wrapped_transfer_description_does_not_split_a_bank_statement() -> None:
+    """A description continued near a page's bottom naming another account is no heading."""
+    buf = io.BytesIO()
+    c = canvas.Canvas(buf, pagesize=letter)
+    _bank_page(
+        c,
+        ["Basic Checking", "Account Number: XXXX-1357", "Beginning Balance $500.00"],
+        [("01/03", "PAYROLL EXAMPLE CO", "1,200.00"), ("01/09", "ONLINE TRANSFER", "-80.00")],
+        wrapped={1: "TO SAVINGS ACCOUNT XXXX-2468"},
+    )
+    _bank_page(
+        c,
+        ["Ending Balance $1,570.00"],
+        [("01/20", "SAMPLE GROCER", "-50.00")],
+        wrapped={0: "Account XXXX-2468"},
+    )
+    c.save()
+    result = parse_extraction(_extract(buf.getvalue()), threshold=0.85)
+    (statement,) = result.statements
+    assert statement.account.last4 == "1357"
+    assert [t.amount for t in statement.transactions] == [
+        Decimal("1200.00"),
+        Decimal("-80.00"),
+        Decimal("-50.00"),
+    ]
+    assert statement.reconciliation is not None
+    assert statement.reconciliation.status == "ok"
+
+
 # ---------------------------------------------------------------------------
 # Headings, the index and segments on hand-built lines
 # ---------------------------------------------------------------------------
@@ -311,6 +349,15 @@ def _filler(count: int) -> list[list[tuple[int, str]]]:
         ("ROTH IRA Z30-118293", "8293", "ROTH IRA"),
         ("Trans. from account 418-330642", None, None),
         ("Account Value: $62,362.06", None, None),
+        # Transaction descriptions naming another account.
+        ("TO SAVINGS ACCOUNT XXXX-2468", None, None),
+        ("ONLINE TRANSFER TO SAVINGS ACCOUNT XXXXXX2468", None, None),
+        ("ACH DEBIT 12-3456789", None, None),
+        # Numbers that are no account's: a telephone number, a date.
+        ("Account # 1-800-555-0100", None, None),
+        ("Questions about your account? 888-555-0100", None, None),
+        ("Account No. 2026-07-31", None, None),
+        ("Account Number 07-31-2026", None, None),
     ],
 )
 def test_read_heading(text: str, last4: str | None, title: str | None) -> None:
@@ -353,6 +400,47 @@ def test_mentions_of_another_account_do_not_switch_the_page() -> None:
         ("2222", 2, 2),
     ]
     assert len(found.accounts[0].lines) == len(page)
+
+
+def test_a_wrapped_description_naming_an_indexed_account_is_no_heading() -> None:
+    """Transfers between the user's own accounts name accounts the index lists."""
+    index = [
+        [(40, "Account Name"), (220, "Account Number"), (400, "Closing Balance")],
+        [(40, "Basic Checking"), (220, "XXXX-1357"), (400, "$1,520.00")],
+        [(40, "Rainy Day Savings"), (220, "XXXX-2468"), (400, "$150.00")],
+    ]
+    page = [
+        [(40, "Basic Checking")],
+        [(40, "Account Number: XXXX-1357")],
+        [(40, "Date"), (80, "Description"), (480, "Amount")],
+        [(40, "01/05"), (80, "ONLINE TRANSFER"), (480, "-100.00")],
+        [(80, "TO SAVINGS ACCOUNT XXXX-2468")],
+        [(40, "01/07"), (80, "ONLINE TRANSFER FROM"), (480, "40.00")],
+        [(80, "Account XXXX-2468")],  # no description word: the wrap decides
+        [(40, "01/09"), (80, "SAMPLE GROCER"), (480, "-80.00")],
+        *_filler(6),
+    ]
+    found = segment(_lines(index, page))
+    assert [(a.last4, len(a.lines)) for a in found.accounts] == [("1357", len(page))]
+
+
+def test_a_left_aligned_heading_after_a_table_row_still_counts() -> None:
+    index = [
+        [(40, "Account Name"), (220, "Account Number"), (400, "Closing Balance")],
+        [(40, "Basic Checking"), (220, "XXXX-1357"), (400, "$1,520.00")],
+        [(40, "Rainy Day Savings"), (220, "XXXX-2468"), (400, "$150.00")],
+    ]
+    page = [
+        [(40, "Account Number: XXXX-1357")],
+        [(40, "Date"), (80, "Description"), (480, "Amount")],
+        [(40, "01/09"), (80, "SAMPLE GROCER"), (480, "-80.00")],
+        [(40, "Account Number: XXXX-2468")],  # straight under the row, at the margin
+        [(40, "Date"), (80, "Description"), (480, "Amount")],
+        [(40, "01/12"), (80, "INTEREST PAID"), (480, "0.15")],
+        *_filler(6),
+    ]
+    found = segment(_lines(index, page))
+    assert [(a.last4, len(a.lines)) for a in found.accounts] == [("1357", 3), ("2468", 9)]
 
 
 def test_a_mid_page_heading_counts_when_the_index_lists_it() -> None:

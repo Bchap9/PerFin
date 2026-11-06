@@ -13,7 +13,11 @@ this module finds where each account's lines are, for any institution:
   all-capitals title (``INDIVIDUAL - TOD Account # Z12-345678``), or an
   all-capitals title ending in a number (``INDIVIDUAL - TOD Z12-345678``).
   A text that merely mentions an account (``Trans. from account
-  418-330642``, ``Linked bank account XXXX-9999``) is no heading.
+  418-330642``, ``Linked bank account XXXX-9999``) is no heading, nor is
+  one whose title holds a transaction word (``TO SAVINGS ACCOUNT
+  XXXX-2468``, ``ACH DEBIT 12-3456789``: a description naming another
+  account) or whose number is shaped like a date (``2026-07-31``) or a
+  telephone number (``1-800-555-0100``, a toll-free area code).
   A heading is looked for
 
   - on a whole line without amounts, and in each of its **cells**;
@@ -28,7 +32,12 @@ this module finds where each account's lines are, for any institution:
   - **mid-page** only on a line without amounts naming an account the
     document's account index lists (a combined statement starting its
     next account half-way down a page), so a body line never switches
-    the account of a document that has no index.
+    the account of a document that has no index;
+  - never on a row's **continuation**: an undated line at a line's
+    spacing under a table row (or under an earlier continuation of it)
+    starting right of the row's date, i.e. a wrapped description. A
+    transfer between the user's own accounts names an account the index
+    lists, and layouts wrap such descriptions onto the page's last lines.
 
 * **The account index** (:func:`read_index`): a table whose header names
   an account number column (``Account Number``, ``Account #``, ``Account
@@ -81,6 +90,21 @@ _NUMBER_CELL: Final = re.compile(
     r"(?P<prefix>[A-Z]{1,3}|[*xX\u2022]{2,12})?[ -]?\d(?:[\d-]| (?=\d)){2,24}\d"
 )
 _ISO_DATE: Final = re.compile(r"\d{4}-\d{2}-\d{2}")
+#: A heading's number shaped like a date (``2015-07-31``, ``07-31-2015``).
+_DATE_SHAPED: Final = re.compile(r"\d{4}-\d{1,2}-\d{1,2}|\d{1,2}-\d{1,2}-(?:\d{2}|\d{4})")
+#: A heading's number shaped like a telephone number: a ``1-`` trunk prefix
+#: or a toll-free area code (``1-800-555-0100``, ``888-555-0100``).
+_PHONE_SHAPED: Final = re.compile(r"(?:1[ -]\d{3}|8(?:00|33|44|55|66|77|88))[ -]\d{3}[ -]\d{4}")
+#: Words that make an all-capitals title a transaction description
+#: (``TO SAVINGS``, ``ONLINE TRANSFER FROM``, ``ACH DEBIT``), never an
+#: account's title.
+_DESCRIPTION_WORDS: Final = frozenset(
+    {
+        *("to", "from", "into", "via", "transfer", "transfers", "trans", "xfer", "tfr"),
+        *("payment", "pmt", "deposit", "withdrawal", "debit", "ach", "wire", "online"),
+        *("mobile", "check", "chk", "pos", "purchase"),
+    }
+)
 #: Characters of a line an account heading is looked for in.
 _HEADING_CHARS: Final = 200
 _DASHES: Final = frozenset({"-", "\u2013"})
@@ -135,6 +159,10 @@ def read_heading(text: str) -> Heading | None:
         number = tokens[-1]
         title_words = tokens[:-1]
     if number is None:
+        return None
+    if any(normalise(t) in _DESCRIPTION_WORDS for t in title_words):
+        return None  # a transfer's description naming the other account
+    if _DATE_SHAPED.fullmatch(number) or _PHONE_SHAPED.fullmatch(number.strip()):
         return None
     digits = "".join(c for c in number if c.isdigit())
     if len(digits) < 4:
@@ -357,6 +385,22 @@ def _index_row(line: ViewLine, column: tuple[float, float]) -> tuple[str, str] |
 # ---------------------------------------------------------------------------
 
 
+def _continues_row(line: ViewLine, above: ViewLine, row: ViewLine) -> bool:
+    """``line`` is an undated continuation of a table row (a wrapped description).
+
+    It follows ``above`` (the row or an earlier continuation of it) at a
+    line's spacing and starts right of where the dated ``row`` starts:
+    ``TO SAVINGS ACCOUNT XXXX-2468`` printed under its row's description is
+    part of that row, never an account heading.
+    """
+    if line.page != above.page or numeric_parts(line.cells[0].text) is not None:
+        return False
+    height = max(line.height, above.height, 1.0)
+    if line.bbox[1] - above.bbox[3] > height:
+        return False
+    return line.cells[0].x0 > row.cells[0].x0 + height
+
+
 def _heading_of(line: ViewLine, *, band: bool) -> tuple[Heading | None, bool]:
     """``(heading, printed beside amounts)`` of one line (module doc)."""
     if not find_amounts(line.text):
@@ -430,10 +474,16 @@ def segment(lines: Sequence[ViewLine]) -> Segmentation:
         last = len(page_lines) - HEADING_BOTTOM_LINES
         beside: dict[int, str] = {}
         rows = False
+        row: ViewLine | None = None  # the table row the lines above belong to
+        above: ViewLine | None = None
         for position, line in enumerate(page_lines):
             # The top band ends at the page's first table row (a line led by a date).
-            rows = rows or numeric_parts(line.cells[0].text) is not None
-            if line.index in index_lines:
+            dated = numeric_parts(line.cells[0].text) is not None
+            rows = rows or dated
+            continued = row is not None and above is not None and _continues_row(line, above, row)
+            row = line if dated else (row if continued else None)
+            above = line
+            if line.index in index_lines or continued:
                 continue
             band = (position < HEADING_TOP_LINES and not rows) or position >= last
             found, with_amounts = _heading_of(line, band=band)

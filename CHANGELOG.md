@@ -91,7 +91,12 @@ What remains (details in docs/ROADMAP.md):
   - Account headings are found per cell, so `Account 111-111111` printed
     next to `$103,351.18` or `Account Value: $142,413.12` at the top of a
     page starts that account. A transfer row naming another account
-    (`Trans. from account 222-222222`) never switches the page.
+    (`Trans. from account 222-222222`) never switches the page, nor does
+    its description wrapped onto the next line (`TO SAVINGS ACCOUNT
+    XXXX-2468`), even in a page's last lines or for an account the index
+    lists, so a single-account bank statement is never split by one.
+    Transaction descriptions (`ACH DEBIT 12-3456789`), telephone numbers
+    and dates after "Account" are not account headings.
   - An account index ("Accounts Included in This Report", "Your Accounts at
     a Glance", any table with an Account Number column and a name or type
     column) is read as the document's map of accounts. Each statement gets
@@ -103,6 +108,10 @@ What remains (details in docs/ROADMAP.md):
     a bank statement for each bank account and a brokerage statement for
     the brokerage account. A bank statement of two or more accounts gives
     one statement per account.
+  - A brokerage statement of a single account takes the name, type and
+    subtype its heading or index prints (`HEALTH SAVINGS ACCOUNT`:
+    retirement, `hsa`), which its account proposal shows; matching is
+    unchanged.
   - Statements record the pages they were read from (`first_page`,
     `last_page`).
 
