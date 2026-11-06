@@ -6,7 +6,7 @@ from __future__ import annotations
 from decimal import Decimal
 
 import pytest
-from hypothesis import given, settings
+from hypothesis import example, given, settings
 from hypothesis import strategies as st
 
 from app.domain.investments.returns import (
@@ -75,6 +75,9 @@ _values = st.integers(min_value=1, max_value=10**9).map(lambda n: Decimal(n) / 1
 
 @settings(max_examples=200, deadline=None)
 @given(_values, st.lists(_values, min_size=1, max_size=60))
+# 0.01 / 20.48 - 1 is exactly the half-way rate -0.99951171875; compounding
+# 34-digit daily returns once landed just above it and rounded to ...87.
+@example(start=Decimal("20.48"), values=[Decimal("30524.04"), Decimal("0.01")])
 def test_property_twr_equals_mwr_without_flows(start: Decimal, values: list[Decimal]) -> None:
     """With no flows inside the period, TWR and the period MWR are both end/start - 1."""
     days = [Day(v) for v in values]
