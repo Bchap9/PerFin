@@ -26,7 +26,8 @@ bracket when Newton jumps too far, stalls or does not converge; ``None``
 when the flows do not change sign or no bracket is found.
 :func:`period_return` turns ``g`` into the return over the period.
 
-Arithmetic runs in a 34-digit half-even context (``calc_context``); results
+Arithmetic runs in a 34-digit half-even context (``calc_context``; the TWR
+product in :data:`CHAIN_PRECISION` digits, rounded to 34 at the end); results
 are rounded **once**, half-even, to :data:`RATE_PLACES` decimals
 (:func:`round_rate`). Rates are fractions (``0.0525`` = 5.25 %).
 """
@@ -35,14 +36,19 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 from dataclasses import dataclass
-from decimal import ROUND_HALF_EVEN, Decimal, localcontext
+from decimal import ROUND_HALF_EVEN, Context, Decimal, localcontext
 from typing import Final
 
-from app.core.money import calc_context
+from app.core.money import DECIMAL_PRECISION, calc_context
 
 #: Decimals of every rate in API output.
 RATE_PLACES: Final = 10
 RATE_QUANTUM: Final = Decimal(1).scaleb(-RATE_PLACES)
+#: Working precision of the TWR product (:func:`cumulative_returns`). The guard
+#: digits keep the error of a long chain far below one unit of the 34-digit
+#: result, so a growth that is exact in 34 digits (``end / start`` when there
+#: are no flows) comes out exact instead of a hair off a rounding half.
+CHAIN_PRECISION: Final = 2 * DECIMAL_PRECISION
 DAYS_PER_YEAR: Final = Decimal(365)
 #: Solver tolerances: |npv| relative to the largest flow, and the rate step.
 NPV_TOLERANCE: Final = Decimal("1e-24")
@@ -81,18 +87,32 @@ def daily_returns(start_value: Decimal, days: Sequence[Day]) -> list[Decimal]:
     return returns
 
 
-def chain(returns: Sequence[Decimal]) -> Decimal:
-    """``prod(1 + r) - 1``, unrounded."""
+def cumulative_returns(start_value: Decimal, days: Sequence[Day]) -> list[Decimal]:
+    """The return from the start to the end of each day, ``prod(1 + r) - 1``, unrounded.
+
+    The product is taken over the daily ratios ``(V[d] + Out[d]) / (V[d-1] + In[d])``
+    themselves, not over ``1 + r[d]`` (rounding ``r[d] = ratio - 1`` to 34 digits
+    and adding the 1 back drops digits of ratios far from 1), in
+    :data:`CHAIN_PRECISION`; each result is then rounded once to the calc context.
+    """
+    calc = calc_context()
     growth = Decimal(1)
-    with localcontext(calc_context()):
-        for r in returns:
-            growth *= 1 + r
-        return growth - 1
+    previous = start_value
+    result: list[Decimal] = []
+    with localcontext(Context(prec=CHAIN_PRECISION, rounding=ROUND_HALF_EVEN)):
+        for day in days:
+            invested = previous + day.inflow
+            if invested > 0:
+                growth *= (day.value + day.outflow) / invested
+            previous = day.value
+            result.append(calc.subtract(growth, Decimal(1)))
+    return result
 
 
 def twr(start_value: Decimal, days: Sequence[Day]) -> Decimal:
     """Time-weighted return of the period, unrounded (module doc)."""
-    return chain(daily_returns(start_value, days))
+    cumulative = cumulative_returns(start_value, days)
+    return cumulative[-1] if cumulative else Decimal(0)
 
 
 def annualize(period_return: Decimal, days: int) -> Decimal | None:
