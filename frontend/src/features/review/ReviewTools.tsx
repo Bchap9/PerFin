@@ -7,19 +7,24 @@ import { useState } from "react";
 import { Button } from "../../components/Button";
 import { Checkbox } from "../../components/Checkbox";
 import { Field } from "../../components/Field";
+import { Input } from "../../components/Input";
 import { MoneyText } from "../../components/MoneyText";
 import { Select } from "../../components/Select";
 import { Spinner } from "../../components/Spinner";
 import { useToast } from "../../components/Toast";
 import { errorMessage } from "../../lib/api/client";
+import { formatDate } from "../../lib/dates";
 import { queryRoots } from "../../lib/queryKeys";
 import { useAccounts, accountLabel } from "../accounts/api";
 import { useAuthSession } from "../auth/session";
 import { PageViewer } from "../documents/PageViewer";
+import { updateInvestmentTxn } from "../investments/api";
 import { createRule } from "../rules/api";
 import { listMembers, settingsKeys } from "../settings/api";
 import { getTransaction, txKeys } from "../transactions/api";
 import {
+  balanceCorrection,
+  correctItem,
   fixFromAlternative,
   getReviewItem,
   getRuleDraft,
@@ -28,6 +33,7 @@ import {
   lowConfidenceResolution,
   mergeFix,
   ownerResolution,
+  payloadString,
   rememberLayout,
   resolveItem,
   reviewKeys,
@@ -532,6 +538,190 @@ export function ReceiptPreview({ item }: { item: ReviewItem }) {
         {shown ? "Hide receipt" : "Show receipt"}
       </Button>
       {shown ? <PageViewer documentId={item.document_id} /> : null}
+    </div>
+  );
+}
+
+/** An opening position whose cost basis is unknown (``investment_opening_basis_unknown``). */
+interface OpeningPosition {
+  transactionId: string;
+  quantity: string;
+  tradeDate: string;
+}
+
+export function openingPositions(item: ReviewItem): OpeningPosition[] {
+  const value: unknown = new Map(Object.entries(item.payload)).get("securities");
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  const out: OpeningPosition[] = [];
+  for (const entry of value as unknown[]) {
+    if (typeof entry !== "object" || entry === null) {
+      continue;
+    }
+    const fields = new Map<string, unknown>(Object.entries(entry));
+    const id = fields.get("transaction_id");
+    if (typeof id !== "string") {
+      continue;
+    }
+    const quantity = fields.get("quantity");
+    const day = fields.get("trade_date");
+    out.push({
+      transactionId: id,
+      quantity: typeof quantity === "string" ? quantity : "",
+      tradeDate: typeof day === "string" ? day : "",
+    });
+  }
+  return out;
+}
+
+function CostBasisRow({ position }: { position: OpeningPosition }) {
+  const queryClient = useQueryClient();
+  const toast = useToast();
+  const [price, setPrice] = useState("");
+  const [error, setError] = useState<string | null>(null);
+  const save = useMutation({
+    mutationFn: () => updateInvestmentTxn(position.transactionId, { price: price.trim() }),
+    onSuccess: () => {
+      setError(null);
+      void queryClient.invalidateQueries({ queryKey: queryRoots.investments });
+      toast.notify({ title: "Cost basis saved", tone: "success" });
+    },
+    onError: (caught) => {
+      setError(errorMessage(caught));
+    },
+  });
+  const text = price.trim();
+  const valid = text !== "" && Number.isFinite(Number(text)) && Number(text) >= 0;
+  return (
+    <div className="ledger-stack" role="group" aria-label={`Opening position of ${position.quantity} units`}>
+      <p>
+        {position.quantity} units held before {formatDate(position.tradeDate) ?? position.tradeDate}
+      </p>
+      <Field label="Cost per unit" hint="What one unit cost when it was bought.">
+        <Input
+          inputMode="decimal"
+          value={price}
+          onChange={(event) => {
+            setPrice(event.target.value);
+          }}
+        />
+      </Field>
+      <div className="ledger-actions">
+        <Button
+          size="sm"
+          variant="primary"
+          disabled={!valid}
+          loading={save.isPending}
+          onClick={() => {
+            save.mutate();
+          }}
+        >
+          Save cost basis
+        </Button>
+        {save.isSuccess ? <span role="status">Saved.</span> : null}
+      </div>
+      {error === null ? null : (
+        <p role="alert" className="ledger-error">
+          {error}
+        </p>
+      )}
+    </div>
+  );
+}
+
+/** Enter the cost basis of opening positions (``PATCH /investments/transactions/{id}``). */
+export function CostBasisTools({ item, actionable }: { item: ReviewItem; actionable: boolean }) {
+  const positions = openingPositions(item);
+  if (!actionable || positions.length === 0) {
+    return null;
+  }
+  return (
+    <div className="ledger-stack">
+      {positions.map((position) => (
+        <CostBasisRow key={position.transactionId} position={position} />
+      ))}
+      <p className="ledger-muted">Dismiss this item once every basis is entered.</p>
+    </div>
+  );
+}
+
+/** Enter the statement's opening and closing balance (``POST /review/{id}/correct``). */
+export function BalanceTools({ item, actionable }: { item: ReviewItem; actionable: boolean }) {
+  const queryClient = useQueryClient();
+  const toast = useToast();
+  const [opening, setOpening] = useState(payloadString(item, "opening") ?? "");
+  const [closing, setClosing] = useState(payloadString(item, "closing") ?? "");
+  const [error, setError] = useState<string | null>(null);
+  const save = useMutation({
+    mutationFn: (resolve: boolean) => correctItem(item.id, balanceCorrection(opening, closing, resolve)),
+    onSuccess: (out, resolve) => {
+      setError(null);
+      void queryClient.invalidateQueries({ queryKey: queryRoots.review });
+      void queryClient.invalidateQueries({ queryKey: queryRoots.documents });
+      void queryClient.invalidateQueries({ queryKey: queryRoots.transactions });
+      toast.notify({
+        title: resolve ? "Statement accepted" : "Balances saved",
+        tone: out.payload["status"] === "mismatch" ? "warning" : "success",
+      });
+    },
+    onError: (caught) => {
+      setError(errorMessage(caught));
+    },
+  });
+  const difference = payloadString(item, "difference");
+  if (!actionable) {
+    return null;
+  }
+  return (
+    <div className="ledger-stack" role="group" aria-label="Statement balances">
+      <p>
+        If PerFin misread a balance, enter the balances the statement prints.
+        {difference === null ? "" : ` The rows differ from them by ${difference}.`}
+      </p>
+      <Field label="Opening balance">
+        <Input
+          inputMode="decimal"
+          value={opening}
+          onChange={(event) => {
+            setOpening(event.target.value);
+          }}
+        />
+      </Field>
+      <Field label="Closing balance">
+        <Input
+          inputMode="decimal"
+          value={closing}
+          onChange={(event) => {
+            setClosing(event.target.value);
+          }}
+        />
+      </Field>
+      <div className="ledger-actions">
+        <Button
+          variant="primary"
+          loading={save.isPending}
+          disabled={opening.trim() === "" && closing.trim() === ""}
+          onClick={() => {
+            save.mutate(true);
+          }}
+        >
+          Check and accept
+        </Button>
+        <Button
+          disabled={save.isPending || (opening.trim() === "" && closing.trim() === "")}
+          onClick={() => {
+            save.mutate(false);
+          }}
+        >
+          Save balances only
+        </Button>
+      </div>
+      {error === null ? null : (
+        <p role="alert" className="ledger-error">
+          {error}
+        </p>
+      )}
     </div>
   );
 }

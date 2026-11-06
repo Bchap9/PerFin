@@ -456,6 +456,7 @@ def remember_layout(
     match_rules: Any,
     parser_name: str,
     document_id: uuid.UUID | None = None,
+    template: dict[str, Any] | None = None,
 ) -> ParserFingerprint:
     """Store a user's fingerprint ("remember this layout"); the rules are validated first.
 
@@ -465,7 +466,8 @@ def remember_layout(
     :data:`MAX_HOUSEHOLD_FINGERPRINTS`, or a version beyond
     :data:`MAX_VERSION`, raises :class:`FingerprintLimitError`; the check
     holds a per-household transaction lock so concurrent calls cannot pass it
-    together.
+    together. ``template`` is a validated learned layout
+    (``app.ingestion.parsers.template.LayoutTemplate``, "Teach PerFin").
     """
     if kind is DocumentKind.UNKNOWN:
         raise FingerprintError("a fingerprint names a known kind")
@@ -522,6 +524,7 @@ def remember_layout(
         parser_name=parser_name,
         version=(existing or 0) + 1,
         learned_from_document_id=document_id,
+        template=template,
     )
     db.add(row)
     db.flush()

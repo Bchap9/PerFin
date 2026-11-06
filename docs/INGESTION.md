@@ -1371,6 +1371,74 @@ Phases 3-4 implementation (`app/domain/review/assist.py`, `actions.py`,
   was corrected and confirmed and a rule saved through this UI in headless
   Chrome against a live API and worker (Phases 3+4 finalization).
 
+### Teaching PerFin a layout
+
+When no parser reads a statement, or reads it wrong, the person shows
+PerFin where things are ("Teach PerFin", `POST /documents/{id}/teach`;
+`app/domain/review/teach.py`, `app/ingestion/parsers/template.py`). It is
+offered from every review item about a page the person may see and from
+the document page.
+
+- **Selecting.** The page is shown; a click picks a word, a drag picks a
+  box, and a list of the page's lines does the same from the keyboard. Each
+  selection is named from a list that always ends with **Other — describe
+  it** and **Ignore this**: account number, account name/type, statement
+  start or end date, opening or closing balance, institution, transaction
+  table or holdings table. A table gets a role per column (the mapping
+  editor's roles; holdings add market value and cost basis), each list
+  again with Other and Ignore. Next to each field the dialog shows what
+  PerFin read so far.
+- **This document.** Each selection is read from the stored words (a value
+  the person types wins): the period, the institution (one of the
+  household's, or created by name), the account and the balances are
+  applied at once. A labelled table is read over the whole document and its
+  statement replaces what the parsers read in the stored extraction; when
+  no row of the document was imported yet, the normal import runs on it
+  (reconciliation, deduplication, account matching by the last four
+  digits, review items). Balances for a statement already imported go
+  through the same correction as `POST /review/{id}/correct`.
+- **Anchors, not values.** For each field PerFin derives an **anchor**: the
+  label printed next to the value (`right`), above it (`below`), or, for an
+  unlabelled period, the header band (`band`). A label or column header
+  that holds any digit is refused, so no account number, date or amount of
+  the document is ever stored (the same rule as the remembered header
+  lines, which now also skip table headers holding digits). A value with no
+  label next to it applies to this document only (`no_label:<field>`).
+- **Remember for this layout.** With "Remember this layout", the anchors,
+  the tables (column headers and roles, the line that ends them), the lines
+  to ignore and the notes are stored as the `template` of a household
+  `parser_fingerprint` (migration `0011`) whose rules are derived from the
+  header like "Remember this layout" (and must match the document). This
+  document and up to 50 similar ones are then read again through the
+  pipeline.
+- **Reading the next statement.** When the classifier matches a household
+  fingerprint with a template, the parse stage reads the pages with it
+  after the parsers (`registry.parse_extraction(template=...)`): a table
+  starts at every line holding its column headers in order (a header
+  repeated on a later page continues it), words go to the column whose
+  span holds their centre, a row needs a date and an amount (a holdings row
+  a quantity and a symbol or name), description text right under a row
+  continues it, ignored lines and lines after the end label are skipped,
+  and a dated line without an amount is skipped with its box recorded. The
+  anchors give the period (yearless row dates take its year), the account's
+  last four digits and the balances, and the statement is reconciled and
+  scored like a parser's (parser `layout_template/1`), so a template that
+  misreads a statement is held back the same way. A template without
+  tables only fills a parser's statement (the period always; the account
+  and balances when there is one statement). Then the normal import runs.
+- **Notes.** Free text from "Other" is kept on the template, in the review
+  item's resolution and in the `document.teach` audit row for the
+  household to read. PerFin never interprets it.
+
+Per-reason fixes in the review UI: cost basis per unit for opening
+positions with an unknown basis (`PATCH /investments/transactions/{id}`),
+opening/closing balance for statements that do not add up ("Check and
+accept": confirmed rows and a balance snapshot once it reconciles),
+skipped lines highlighted on the page (parsers record the boxes of the
+lines they skip; `lines_skipped` items carry them) with "Teach PerFin",
+and "Map columns"/"Teach PerFin" for brokerage dates that could not be
+told apart.
+
 ## Drop folder specifics
 
 - Mounted **read-only** into the worker where possible; the worker copies into

@@ -293,3 +293,48 @@ export function lowConfidenceResolution(
     confirm,
   };
 }
+
+// ---- corrections and teaching -------------------------------------------------------
+
+export type Correction = Schemas["Correction"];
+export type TeachRequest = Schemas["TeachRequest"];
+export type TeachOut = Schemas["TeachOut"];
+
+/** `POST /review/{id}/correct`: document facts (period, balances...) and row values. */
+export function correctItem(id: string, body: Correction): Promise<ReviewItem> {
+  return unwrap(
+    api.POST("/api/v1/review/{item_id}/correct", {
+      params: { path: { item_id: id } },
+      body,
+    }),
+  );
+}
+
+/** `POST /documents/{id}/teach`: what the person labelled on the page. */
+export function teachDocument(
+  documentId: string,
+  body: TeachRequest,
+): Promise<TeachOut> {
+  return unwrap(
+    api.POST("/api/v1/documents/{document_id}/teach", {
+      params: { path: { document_id: documentId } },
+      body,
+    }),
+  );
+}
+
+/** Opening and closing balance a reconciliation item proposes (its figures). */
+export function balanceCorrection(
+  opening: string,
+  closing: string,
+  resolve: boolean,
+): Correction {
+  const document: NonNullable<Correction["document"]> = {};
+  if (opening.trim() !== "") {
+    document.opening_balance = opening.trim();
+  }
+  if (closing.trim() !== "") {
+    document.closing_balance = closing.trim();
+  }
+  return { document, resolve };
+}

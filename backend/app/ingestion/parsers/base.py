@@ -251,6 +251,10 @@ class ParseOutcome:
     pending_items: int = 0
     skipped_lines: int = 0
     warnings: list[str] = field(default_factory=list)
+    #: Pages and boxes of skipped lines where the parser knows them (review highlight).
+    skipped_regions: list[tuple[int, tuple[float, float, float, float]]] = field(
+        default_factory=list
+    )
 
     @property
     def empty(self) -> bool:

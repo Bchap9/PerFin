@@ -49,6 +49,23 @@ const REASONS: readonly [ReviewItem["kind"], string][] = [
   ["low_confidence_field", "investment_low_confidence"],
   ["low_confidence_field", "position_mismatch"],
   ["possible_duplicate", "statement_overlap"],
+  ["possible_duplicate", "same_content"],
+  ["possible_duplicate", "near_match"],
+  ["unparsed", "loan_unmatched"],
+  ["low_confidence_field", "rows_skipped"],
+  ["low_confidence_field", "balance_mismatch"],
+  ["low_confidence_field", "date_order_assumed"],
+  ["low_confidence_field", "truncated"],
+  ["low_confidence_field", "currency_mismatch"],
+  ["low_confidence_field", "payslip_does_not_add_up"],
+  ["low_confidence_field", "tax_form_low_confidence"],
+  ["low_confidence_field", "tax_form_unread"],
+  ["low_confidence_field", "loan_low_confidence"],
+  ["low_confidence_field", "loan_payment_out_of_range"],
+  ["low_confidence_field", "loan_reconciliation_failed"],
+  ["low_confidence_field", "loan_currency_mismatch"],
+  ["low_confidence_field", "loan_rate_differs"],
+  ["low_confidence_field", "investment_date_out_of_range"],
 ];
 
 describe("review explanations", () => {

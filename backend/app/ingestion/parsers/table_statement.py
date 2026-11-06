@@ -337,6 +337,10 @@ class Column:
     x1: float
 
 
+#: A box on a page in page units (``x0, y0, x1, y1``).
+BBox = tuple[float, float, float, float]
+
+
 @dataclass
 class _Row:
     page: int
@@ -363,6 +367,8 @@ class _Summary:
     period: PeriodCandidates = field(default_factory=PeriodCandidates)
     last4: str | None = None
     currency: str | None = None
+    #: Pages and boxes of the dated lines skipped (no readable amount).
+    skipped_boxes: list[tuple[int, BBox]] = field(default_factory=list)
 
 
 @dataclass
@@ -373,6 +379,8 @@ class StatementRead:
     pending_items: int = 0
     skipped_lines: int = 0
     warnings: list[str] = field(default_factory=list)
+    #: Where the skipped lines are (page, box), for the review highlight.
+    skipped_regions: list[tuple[int, BBox]] = field(default_factory=list)
 
 
 def _min(*values: float | None) -> float | None:
@@ -609,6 +617,7 @@ class TableStatementParser(DocumentParser):
                 if pending:
                     continue
                 skipped += 1
+                summary.skipped_boxes.append((line.page, line.bbox))
                 last = None
                 continue
             if pending:
@@ -756,6 +765,7 @@ class TableStatementParser(DocumentParser):
             pending_items=read.pending_items,
             skipped_lines=read.skipped_lines,
             warnings=list(read.warnings),
+            skipped_regions=list(read.skipped_regions),
         )
         if read.statement is not None:
             outcome.statements.append(read.statement)
@@ -785,6 +795,8 @@ class TableStatementParser(DocumentParser):
         rows, preamble, pending, skipped, _ = self._collect(split.preamble)
         outcome.pending_items += pending
         outcome.skipped_lines += skipped + len(rows)
+        outcome.skipped_regions.extend(preamble.skipped_boxes)
+        outcome.skipped_regions.extend((row.page, row.bbox) for row in rows)
         warnings: list[str] = ["rows_outside_account"] if rows else []
         for account in split.accounts:
             if not self.lines_have_table(account.lines):
@@ -800,6 +812,7 @@ class TableStatementParser(DocumentParser):
             )
             outcome.pending_items += read.pending_items
             outcome.skipped_lines += read.skipped_lines
+            outcome.skipped_regions.extend(read.skipped_regions)
             warnings.extend(read.warnings)
             if read.statement is not None:
                 outcome.statements.append(read.statement)
@@ -842,7 +855,11 @@ class TableStatementParser(DocumentParser):
         ``statement`` is None when no transaction table header is found.
         """
         rows, summary, pending_items, skipped, found_header = self._collect(lines)
-        outcome = StatementRead(pending_items=pending_items, skipped_lines=skipped)
+        outcome = StatementRead(
+            pending_items=pending_items,
+            skipped_lines=skipped,
+            skipped_regions=list(summary.skipped_boxes),
+        )
         if not found_header:
             outcome.warnings.append("no_table_header")
             return outcome
@@ -869,6 +886,7 @@ class TableStatementParser(DocumentParser):
             amount = self._signed(row)
             if posted is None or amount is None:
                 outcome.skipped_lines += 1
+                outcome.skipped_regions.append((row.page, row.bbox))
                 continue
             date_conf = self.base if certain else conf.GUESSED
             if period is not None and not (period[0] <= posted <= period[1]):

@@ -194,6 +194,7 @@ GET             /documents/{id}
 GET             /documents/{id}/download        decrypts and streams, attachment
 GET             /documents/{id}/preview?page=   rendered PNG, sandboxed
 GET             /documents/{id}/regions?page=   word boxes for review highlighting
+POST            /documents/{id}/teach           Teach PerFin: labels applied, layout remembered
 POST            /documents/{id}/reprocess
 GET             /documents/{id}/imported        rows a delete with data would remove
 DELETE          /documents/{id}                 ?with_data=true also deletes the imported rows
@@ -487,7 +488,9 @@ the pipeline or importer, never file content; `next_step` is
 `confirm_duplicate`, `choose_account`, `column_mapping`, `reprocess`,
 `choose_owner`, `attach_receipt` or `correct_fields`; `GET /review/{id}`
 also returns `regions` (`[{"page", "bbox", "label": "transaction" |
-"account_number" | "page", "transaction_id"?, "fields"}]`) and
+"account_number" | "page" | "skipped_line", "transaction_id"?, "fields"}]`;
+`skipped_line`: a line a parser skipped, from a `lines_skipped` item's
+`lines`) and
 `alternatives` (`[{"field", "value", "label", "score", "transaction_id",
 "source": "document" | "ledger" | "household"}]`; values read from the
 document only for callers the download rule allows), both `null` in lists).
@@ -564,11 +567,42 @@ Other kinds can only be dismissed for now (`409
 review-resolution-unsupported`). Review tools, same callers and open-item
 rule as resolve unless noted: `POST /review/{id}/correct` `{"document"?:
 {"institution_id"?, "account_id"?, "period_start"?, "period_end"?,
-"tax_year"?, "kind"?}, "transactions": [...as above], "resolve"}` (an
+"tax_year"?, "kind"?, "opening_balance"?, "closing_balance"?,
+"statement"?}, "transactions": [...as above], "resolve"}` (an
 institution of the household, `404 institution-not-found`; an account the
 caller edits; `null` clears institution, period and tax year; a period that
 ends before it starts is `422`; audit `document.correct`; `resolve` closes
-the item) answers the item. `POST /review/{id}/remember-layout`
+the item) answers the item. Balances (decimal strings) correct one
+statement of the stored extraction (`statement`: its index; default the
+item's, the only one, or the one of the item's account; `422
+statement-required`, `409 statement-unavailable`) and reconcile it again;
+a `reconciliation_*` item's figures (`opening`, `closing`, `total`,
+`difference`, `status`) are updated, and with `resolve` the statement must
+now add up (`409 statement-does-not-reconcile`): its pending rows are
+confirmed and its closing balance recorded as a statement snapshot
+(resolution `reconciled`, `confirmed`, `snapshot`). `POST
+/documents/{id}/teach` (member or above who may change the document;
+`documents:write`) `{"labels": [{"field": "account_number" | "account_name"
+| "period_start" | "period_end" | "opening_balance" | "closing_balance" |
+"institution" | "ignore" | "other", "page", "bbox", "value"?, "note"?}],
+"tables": [{"kind": "transactions" | "holdings", "page", "bbox", "columns":
+[{"x0", "x1", "role", "note"?}]}], "institution_id"? | "institution_name"?,
+"account_id"?, "remember", "reprocess_similar", "item_id"?, "resolve"}`
+(at most 40 labels and 2 tables; `other` needs a `note`; column roles
+`date`, `payee`, `memo`, `amount`, `debit`, `credit`, `balance` or
+`symbol`, `security`, `quantity`, `price`, `market_value`, `cost_basis`,
+plus `ignore` and `other`) applies the labels to the document and, with
+`remember`, stores a household fingerprint carrying the learned template
+(INGESTION.md "Teaching PerFin a layout"): `422 page-not-found`, `422
+invalid-table` (no date and amount column, roles twice, fewer than two
+headers), `422 institution-required` (remember without an institution),
+`422 teach-item-mismatch`, `409 layout-unavailable`, and the
+remember-layout errors. It answers `{"document_id", "fields": [{"field",
+"value", "page", "anchor", "direction", "note"}], "tables": [{"kind",
+"rows", "columns": [{"header", "role"}]}], "ignored", "notes", "applied",
+"rerun": "import" | "pipeline" | null, "job_id", "fingerprint_id",
+"reprocessed", "warnings", "item"}` (audit `document.teach`: field names,
+counts, notes and ids, never the values read; notes are never acted on). `POST /review/{id}/remember-layout`
 `{"institution_id", "kind"?, "parser"?, "match"?, "reprocess_similar"}`
 stores a household `parser_fingerprint` (`match` has the shipped
 fingerprints' schema: `all`, `one_of`, `any`, `min_any`, rules `header`,

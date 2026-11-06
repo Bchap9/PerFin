@@ -41,7 +41,10 @@ import {
   type ReviewItem,
 } from "./api";
 import { explain, payloadPeriod, type Explanation } from "./reviewCopy";
+import { TeachDialog, currentReadings } from "./TeachDialog";
 import {
+  BalanceTools,
+  CostBasisTools,
   LowConfidenceTools,
   NewInstitutionTools,
   ReceiptPreview,
@@ -377,6 +380,7 @@ export function ReviewItemCard({ item }: { item: ReviewItem }) {
   const [error, setError] = useState<string | null>(null);
   const [fixing, setFixing] = useState(false);
   const [settingUp, setSettingUp] = useState(false);
+  const [teaching, setTeaching] = useState(false);
   const explanation = explain(item);
   const open = item.state === "open";
   const actionable = open && item.can_resolve;
@@ -411,6 +415,9 @@ export function ReviewItemCard({ item }: { item: ReviewItem }) {
     },
   });
   const busy = resolve.isPending || dismiss.isPending;
+  // Any item about a page the caller may see can be taught from.
+  const teachable =
+    item.document_id !== null && item.document?.previewable === true;
   const needsChoice = candidates.length > 1 && chosen === null;
   const editableAccounts = (accounts.data ?? []).filter(
     (account) => account.can_edit && !account.is_closed,
@@ -454,6 +461,15 @@ export function ReviewItemCard({ item }: { item: ReviewItem }) {
           <ReceiptBody item={item} chosen={chosen} onChoose={setChosen} />
           <ReceiptPreview item={item} />
         </>
+      ) : null}
+      {item.kind === "low_confidence_field" &&
+      item.reason === "investment_opening_basis_unknown" ? (
+        <CostBasisTools item={item} actionable={actionable} />
+      ) : null}
+      {item.kind === "low_confidence_field" &&
+      (item.reason === "reconciliation_failed" ||
+        item.reason === "reconciliation_unavailable") ? (
+        <BalanceTools item={item} actionable={actionable} />
       ) : null}
       {item.kind === "low_confidence_field" ? (
         <LowConfidenceTools item={item} actionable={actionable} />
@@ -541,7 +557,19 @@ export function ReviewItemCard({ item }: { item: ReviewItem }) {
               Import into this account
             </Button>
           ) : null}
-          {item.next_step === "column_mapping" && item.document_id !== null ? (
+          {teachable ? (
+            <Button
+              onClick={() => {
+                setFixing(false);
+                setTeaching(true);
+              }}
+            >
+              Teach PerFin
+            </Button>
+          ) : null}
+          {(item.next_step === "column_mapping" ||
+            item.reason === "investment_low_confidence") &&
+          item.document_id !== null ? (
             <Link
               to="/documents/$documentId/mapping"
               params={{ documentId: item.document_id }}
@@ -605,6 +633,16 @@ export function ReviewItemCard({ item }: { item: ReviewItem }) {
           </>
         )}
       </article>
+      {teaching && item.document_id !== null ? (
+        <TeachDialog
+          documentId={item.document_id}
+          item={item}
+          readings={currentReadings(item.document, item)}
+          onClose={() => {
+            setTeaching(false);
+          }}
+        />
+      ) : null}
       {settingUp && item.document_id !== null ? (
         <DocumentAccountsDialog
           documentId={item.document_id}

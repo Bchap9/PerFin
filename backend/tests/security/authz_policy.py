@@ -711,6 +711,10 @@ POLICIES: Final[Mapping[str, Policy]] = MappingProxyType(
         f"POST {API}/documents/{{document_id}}/link": scoped(
             "documents:write", role=M, params=SDOC
         ),
+        # Teach PerFin: labels applied to the document (and a learned layout).
+        f"POST {API}/documents/{{document_id}}/teach": scoped(
+            "documents:write", role=M, params=SDOC
+        ),
         f"DELETE {API}/documents/{{document_id}}": scoped("documents:write", role=M, params=SDOC),
         # --- review queue (Phase 2): items of visible documents -------------
         f"GET {API}/review": scoped("review:read", role=V),

@@ -8,7 +8,7 @@ All notable changes to PerFin are recorded here. The format follows
 
 The current release candidate is `v1.0.0-rc.4`; the final `v1.0.0` follows the
 external security review. Every phase (0-7) is implemented. Alembic head is
-`0010` (unreleased; `0009` in rc.4). On 2026-11-05: SPDX; backend ruff, ruff format, mypy --strict (657
+`0011` (unreleased; `0009` in rc.4). On 2026-11-05: SPDX; backend ruff, ruff format, mypy --strict (657
 source files), bandit, OpenAPI drift and 7742 pytest tests with `-n auto`,
 of which the OCR and Helm tests (67) need Tesseract and `helm` and were run
 only in CI; frontend eslint, tsc, 439 vitest tests in 57 files and the
@@ -182,6 +182,38 @@ What remains (details in docs/ROADMAP.md):
   (version 2) takes the name from the header or the metadata.
 - When the chosen parser reads nothing, the next-best parser is tried
   (warning `parser_fallback:<name>`).
+- **Teach PerFin**: a dialog, opened from any review item about a page and
+  from the document page, shows the page; a click picks a word and a drag
+  picks a box (a list of the page's lines does the same by keyboard). Each
+  selection is named: account number, account name/type, statement start
+  or end, opening or closing balance, institution, transaction or holdings
+  table (with a role per column), and always **Other — describe it** and
+  **Ignore this**. What PerFin read so far is shown next to the fields.
+  `POST /documents/{id}/teach` applies the labels to the document (period,
+  institution, account, balances; a labelled table is imported through the
+  normal importer) and, with **Remember this layout**, stores them as a
+  learned template on a household fingerprint (migration `0011`,
+  `parser_fingerprint.template`). The template keeps label text, a
+  direction and column headers and roles, never a value: labels with any
+  digit are refused. The next statement of the layout is read with it
+  (parser `layout_template/1`: period, account digits, balances, the
+  labelled table, reconciled as usual) and imports with no review item.
+  Free-text notes are kept for the household and never acted on. Audited
+  as `document.teach`.
+- `POST /review/{id}/correct` takes `opening_balance`, `closing_balance`
+  and `statement`: the stored statement is reconciled again, and a
+  `reconciliation_failed`/`reconciliation_unavailable` item is accepted
+  once it adds up (its pending rows confirmed, its closing balance
+  recorded).
+- Review fixes for items that could only be dismissed: cost per unit for
+  opening positions with an unknown basis (`PATCH
+  /investments/transactions/{id}`), the statement's balances for
+  reconciliation items, skipped lines highlighted on the page (parsers
+  record their boxes; region label `skipped_line`), "Map columns" and
+  "Teach PerFin" for brokerage dates that could not be told apart, and
+  explanations for every reason the server raises (skipped rows, running
+  balance mismatches, assumed date order, truncated files, payslips, tax
+  forms, loan statements, duplicates).
 
 ### Changed
 
@@ -208,6 +240,9 @@ What remains (details in docs/ROADMAP.md):
 
 ### Fixed
 
+- "Remember this layout" no longer stores a table header holding figures
+  (a summary row read as a table, `carried in 1 520 40`) in the remembered
+  rules.
 - Multi-account reports no longer misroute an account's first page (the one
   printing its number beside its value) to the account before it, so an
   account no longer takes the next account's pages and values (a 529 folded

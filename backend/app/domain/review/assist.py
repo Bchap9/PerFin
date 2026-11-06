@@ -259,6 +259,27 @@ def _row_alternatives(row: Transaction, fields: list[str], line: str) -> list[Al
     return out
 
 
+def _skipped_lines(payload: dict[str, Any], result: ExtractResult | None) -> list[Region]:
+    """The boxes of skipped lines a ``lines_skipped`` item names (on pages of the document)."""
+    if result is None:
+        return []
+    out: list[Region] = []
+    for entry in payload.get("lines") or []:
+        if not isinstance(entry, dict) or not isinstance(entry.get("page"), int):
+            continue
+        box = entry.get("bbox")
+        found = page_of(result, entry["page"])
+        if (
+            found is None
+            or not isinstance(box, list)
+            or len(box) != 4
+            or not all(isinstance(v, int | float) for v in box)
+        ):
+            continue
+        out.append(Region(page=found.number, bbox=[float(v) for v in box], label="skipped_line"))
+    return out
+
+
 def _low_confidence(
     db: Session,
     principal: Principal,
@@ -270,7 +291,7 @@ def _low_confidence(
     entries = [e for e in payload.get("transactions") or [] if isinstance(e, dict)]
     ids = [i for i in (_uuid(e.get("transaction_id")) for e in entries) if i is not None]
     rows = _visible_transactions(db, principal, item.household_id, ids)
-    regions_out: list[Region] = []
+    regions_out: list[Region] = _skipped_lines(payload, result)
     alternatives: list[Alternative] = []
     for entry in entries:
         row = rows.get(_uuid(entry.get("transaction_id")) or uuid.UUID(int=0))

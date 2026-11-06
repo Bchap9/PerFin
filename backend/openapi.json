@@ -7834,7 +7834,7 @@
       },
       "DocumentFix": {
         "additionalProperties": false,
-        "description": "Corrected document facts; ``null`` clears institution, period and tax year.",
+        "description": "Corrected document facts; ``null`` clears institution, period and tax year.\n\n``opening_balance``/``closing_balance`` correct the balances of one\nstatement of the document's stored extraction (``statement``: its index;\ndefault the item's statement, else the document's only one, else the one\nof the item's account), which is then reconciled again: a statement held\nbecause it did not add up (``reconciliation_failed``/``_unavailable``)\nis accepted once it does.",
         "properties": {
           "account_id": {
             "anyOf": [
@@ -7847,6 +7847,20 @@
               }
             ],
             "title": "Account Id"
+          },
+          "closing_balance": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Closing Balance"
           },
           "institution_id": {
             "anyOf": [
@@ -7869,6 +7883,20 @@
                 "type": "null"
               }
             ]
+          },
+          "opening_balance": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Opening Balance"
           },
           "period_end": {
             "anyOf": [
@@ -7893,6 +7921,19 @@
               }
             ],
             "title": "Period Start"
+          },
+          "statement": {
+            "anyOf": [
+              {
+                "maximum": 10000.0,
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Statement"
           },
           "tax_year": {
             "anyOf": [
@@ -15445,7 +15486,8 @@
             "enum": [
               "transaction",
               "account_number",
-              "page"
+              "page",
+              "skipped_line"
             ],
             "title": "Label",
             "type": "string"
@@ -20367,6 +20409,123 @@
         "title": "TagUpdate",
         "type": "object"
       },
+      "TaughtColumn": {
+        "properties": {
+          "header": {
+            "title": "Header",
+            "type": "string"
+          },
+          "role": {
+            "title": "Role",
+            "type": "string"
+          }
+        },
+        "required": [
+          "header",
+          "role"
+        ],
+        "title": "TaughtColumn",
+        "type": "object"
+      },
+      "TaughtField": {
+        "description": "One label as PerFin understood it.",
+        "properties": {
+          "anchor": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Anchor"
+          },
+          "direction": {
+            "anyOf": [
+              {
+                "enum": [
+                  "right",
+                  "below",
+                  "band"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Direction"
+          },
+          "field": {
+            "title": "Field",
+            "type": "string"
+          },
+          "note": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Note"
+          },
+          "page": {
+            "title": "Page",
+            "type": "integer"
+          },
+          "value": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Value"
+          }
+        },
+        "required": [
+          "field",
+          "value",
+          "page"
+        ],
+        "title": "TaughtField",
+        "type": "object"
+      },
+      "TaughtTable": {
+        "properties": {
+          "columns": {
+            "items": {
+              "$ref": "#/components/schemas/TaughtColumn"
+            },
+            "title": "Columns",
+            "type": "array"
+          },
+          "kind": {
+            "enum": [
+              "transactions",
+              "holdings"
+            ],
+            "title": "Kind",
+            "type": "string"
+          },
+          "rows": {
+            "title": "Rows",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "kind",
+          "rows",
+          "columns"
+        ],
+        "title": "TaughtTable",
+        "type": "object"
+      },
       "TaxBoxAi": {
         "additionalProperties": false,
         "properties": {
@@ -20963,6 +21122,384 @@
           }
         },
         "title": "TaxYearUpdate",
+        "type": "object"
+      },
+      "TeachColumn": {
+        "additionalProperties": false,
+        "description": "A column of a labelled table: its horizontal span (page units) and role.",
+        "properties": {
+          "note": {
+            "anyOf": [
+              {
+                "maxLength": 500,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Note"
+          },
+          "role": {
+            "enum": [
+              "ignore",
+              "other",
+              "date",
+              "payee",
+              "memo",
+              "amount",
+              "debit",
+              "credit",
+              "balance",
+              "symbol",
+              "security",
+              "quantity",
+              "price",
+              "market_value",
+              "cost_basis"
+            ],
+            "title": "Role",
+            "type": "string"
+          },
+          "x0": {
+            "maximum": 100000.0,
+            "minimum": -1.0,
+            "title": "X0",
+            "type": "number"
+          },
+          "x1": {
+            "maximum": 100000.0,
+            "minimum": -1.0,
+            "title": "X1",
+            "type": "number"
+          }
+        },
+        "required": [
+          "x0",
+          "x1",
+          "role"
+        ],
+        "title": "TeachColumn",
+        "type": "object"
+      },
+      "TeachLabel": {
+        "additionalProperties": false,
+        "description": "One selection (a word clicked or a box dragged on a page) and what it is.",
+        "properties": {
+          "bbox": {
+            "items": {
+              "type": "number"
+            },
+            "maxItems": 4,
+            "minItems": 4,
+            "title": "Bbox",
+            "type": "array"
+          },
+          "field": {
+            "enum": [
+              "account_number",
+              "account_name",
+              "period_start",
+              "period_end",
+              "opening_balance",
+              "closing_balance",
+              "institution",
+              "ignore",
+              "other"
+            ],
+            "title": "Field",
+            "type": "string"
+          },
+          "note": {
+            "anyOf": [
+              {
+                "maxLength": 500,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Note"
+          },
+          "page": {
+            "maximum": 10000.0,
+            "minimum": 1.0,
+            "title": "Page",
+            "type": "integer"
+          },
+          "value": {
+            "anyOf": [
+              {
+                "maxLength": 200,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Value"
+          }
+        },
+        "required": [
+          "field",
+          "page",
+          "bbox"
+        ],
+        "title": "TeachLabel",
+        "type": "object"
+      },
+      "TeachOut": {
+        "description": "What was applied to the document and what was remembered.",
+        "properties": {
+          "applied": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Applied",
+            "type": "array"
+          },
+          "document_id": {
+            "format": "uuid",
+            "title": "Document Id",
+            "type": "string"
+          },
+          "fields": {
+            "items": {
+              "$ref": "#/components/schemas/TaughtField"
+            },
+            "title": "Fields",
+            "type": "array"
+          },
+          "fingerprint_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Fingerprint Id"
+          },
+          "ignored": {
+            "title": "Ignored",
+            "type": "integer"
+          },
+          "item": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ReviewItemOut"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "job_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Job Id"
+          },
+          "notes": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Notes",
+            "type": "array"
+          },
+          "reprocessed": {
+            "items": {
+              "format": "uuid",
+              "type": "string"
+            },
+            "title": "Reprocessed",
+            "type": "array"
+          },
+          "rerun": {
+            "anyOf": [
+              {
+                "enum": [
+                  "import",
+                  "pipeline"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Rerun"
+          },
+          "tables": {
+            "items": {
+              "$ref": "#/components/schemas/TaughtTable"
+            },
+            "title": "Tables",
+            "type": "array"
+          },
+          "warnings": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Warnings",
+            "type": "array"
+          }
+        },
+        "required": [
+          "document_id",
+          "fields",
+          "tables",
+          "ignored",
+          "notes",
+          "applied"
+        ],
+        "title": "TeachOut",
+        "type": "object"
+      },
+      "TeachRequest": {
+        "additionalProperties": false,
+        "description": "``POST /documents/{id}/teach``: what the person labelled on the document.\n\nThe labels are applied to this document at once (period, institution,\naccount, balances, the labelled table re-imported); with ``remember``\nthe layout is also kept as a household fingerprint with the labels'\nanchors (label text and direction, never the values), and this document\nand similar ones are read again with it. ``item_id`` names the review\nitem the teaching answers (closed with ``resolve``).",
+        "properties": {
+          "account_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Account Id"
+          },
+          "institution_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Institution Id"
+          },
+          "institution_name": {
+            "anyOf": [
+              {
+                "maxLength": 200,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Institution Name"
+          },
+          "item_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Item Id"
+          },
+          "labels": {
+            "items": {
+              "$ref": "#/components/schemas/TeachLabel"
+            },
+            "maxItems": 40,
+            "title": "Labels",
+            "type": "array"
+          },
+          "remember": {
+            "default": false,
+            "title": "Remember",
+            "type": "boolean"
+          },
+          "reprocess_similar": {
+            "default": true,
+            "title": "Reprocess Similar",
+            "type": "boolean"
+          },
+          "resolve": {
+            "default": true,
+            "title": "Resolve",
+            "type": "boolean"
+          },
+          "tables": {
+            "items": {
+              "$ref": "#/components/schemas/TeachTable"
+            },
+            "maxItems": 2,
+            "title": "Tables",
+            "type": "array"
+          }
+        },
+        "title": "TeachRequest",
+        "type": "object"
+      },
+      "TeachTable": {
+        "additionalProperties": false,
+        "description": "A table selected on a page: the box starts at its header line.",
+        "properties": {
+          "bbox": {
+            "items": {
+              "type": "number"
+            },
+            "maxItems": 4,
+            "minItems": 4,
+            "title": "Bbox",
+            "type": "array"
+          },
+          "columns": {
+            "items": {
+              "$ref": "#/components/schemas/TeachColumn"
+            },
+            "maxItems": 20,
+            "minItems": 2,
+            "title": "Columns",
+            "type": "array"
+          },
+          "kind": {
+            "enum": [
+              "transactions",
+              "holdings"
+            ],
+            "title": "Kind",
+            "type": "string"
+          },
+          "page": {
+            "maximum": 10000.0,
+            "minimum": 1.0,
+            "title": "Page",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "kind",
+          "page",
+          "bbox",
+          "columns"
+        ],
+        "title": "TeachTable",
         "type": "object"
       },
       "TextChange": {
@@ -29318,6 +29855,73 @@
           }
         },
         "summary": "Run the import pipeline again",
+        "tags": [
+          "documents"
+        ]
+      }
+    },
+    "/api/v1/documents/{document_id}/teach": {
+      "post": {
+        "operationId": "post_teach_api_v1_documents__document_id__teach_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "document_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Document Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TeachRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TeachOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {}
+            },
+            "description": "Problem details"
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {}
+            },
+            "description": "Problem details"
+          },
+          "409": {
+            "content": {
+              "application/problem+json": {}
+            },
+            "description": "Problem details"
+          },
+          "422": {
+            "content": {
+              "application/problem+json": {}
+            },
+            "description": "Problem details"
+          }
+        },
+        "summary": "Teach PerFin what is where on the document (and remember the layout)",
         "tags": [
           "documents"
         ]

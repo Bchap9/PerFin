@@ -792,6 +792,28 @@ def _pending_rows(
     return rows
 
 
+def confirm_pending(
+    db: Session,
+    principal: Principal,
+    item: ReviewItem,
+    document: Document,
+    *,
+    request: HTTPConnection | None,
+) -> int:
+    """Move the item's pending rows (the statement's, for a reconciliation item) to confirmed."""
+    count = 0
+    for row in _pending_rows(db, principal, item, document):
+        transactions_service.update_transaction(
+            db,
+            principal,
+            row,
+            TransactionUpdate(review_state=ReviewState.CONFIRMED),
+            request=request,
+        )
+        count += 1
+    return count
+
+
 def _resolve_low_confidence(
     db: Session,
     principal: Principal,

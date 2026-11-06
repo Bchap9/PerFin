@@ -2455,6 +2455,7 @@ class BrokerageStatementParser(DocumentParser):
             return None
         outcome.pending_items += read.pending_items
         outcome.skipped_lines += read.skipped_lines
+        outcome.skipped_regions.extend(read.skipped_regions)
         warnings.extend(read.warnings)
         institution = self.display_name or read.statement.account.institution
         return read.statement.model_copy(

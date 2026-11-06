@@ -120,6 +120,7 @@ from app.ingestion.classify.fingerprints import (
     parse_match_rules,
 )
 from app.ingestion.intake.sniff import SNIFF_BYTES, Rejected, sniff
+from app.ingestion.parsers.template import parse_template
 from app.ingestion.sandbox.protocol import InvestmentActivity
 
 MANIFEST_MAX_BYTES: Final = 16 * 1024 * 1024
@@ -756,6 +757,15 @@ class _Importer:
         except (FingerprintError, ValidationError):
             raise _fail("archive-invalid-value", "a parser fingerprint does not validate") from None
         row["match_rules"] = spec.model_dump(mode="json", exclude_defaults=True)
+        # A learned layout ("Teach PerFin") validates like one taught here.
+        template = row.get("template")
+        if template is not None:
+            learned = parse_template(template)
+            if learned is None:
+                raise _fail("archive-invalid-value", "a learned layout does not validate")
+            row["template"] = learned.model_dump(mode="json")
+        else:
+            row["template"] = None
 
     def securities(self) -> None:
         """Merged into the catalogue by symbol and exchange (same quote currency)."""

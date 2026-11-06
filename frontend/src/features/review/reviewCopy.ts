@@ -121,6 +121,22 @@ const COPY: Readonly<Record<string, Copy>> = {
       ],
     };
   },
+  "possible_duplicate:same_content": () => ({
+    title: "Uploaded before",
+    what: "A file with exactly the same content is already in PerFin.",
+    steps: [
+      "“Reject this upload” if it is the same file.",
+      "“Not a duplicate” to import it anyway.",
+    ],
+  }),
+  "possible_duplicate:near_match": () => ({
+    title: "Possible duplicate row",
+    what: "A row of this file has the same date and amount as a transaction already recorded.",
+    steps: [
+      "Compare the two rows.",
+      "“It is a duplicate” removes the new one; “Not a duplicate” keeps both.",
+    ],
+  }),
   // -- unparsed --------------------------------------------------------------
   "unparsed:mapping_required": () => ({
     title: "Needs a column mapping",
@@ -184,10 +200,19 @@ const COPY: Readonly<Record<string, Copy>> = {
   }),
   "unparsed:no_records": () => ({
     title: "Nothing to import",
-    what: "The file was read, but it holds no transactions or statements.",
+    what: "The file was read, but PerFin found no transactions or statements in it.",
+    why: "The layout may be one PerFin does not know yet.",
     steps: [
-      "Check that you exported the right date range, then upload again.",
-      "Dismiss this item.",
+      "If it is a statement, use “Teach PerFin”: select the period, account number, balances and the transaction table on the page. Tick “Remember this layout” so the next file is read on its own.",
+      "Otherwise check that you exported the right date range and upload again, or dismiss this item.",
+    ],
+  }),
+  "unparsed:loan_unmatched": () => ({
+    title: "Which loan?",
+    what: "This loan statement does not match any loan recorded in PerFin.",
+    steps: [
+      "Create the loan (Loans, New loan) with the account number's last four digits, then “Process again”.",
+      "Or dismiss this item if you do not track this loan.",
     ],
   }),
   "unparsed:scan_failed": () => ({
@@ -225,11 +250,122 @@ const COPY: Readonly<Record<string, Copy>> = {
       what: `${count(item, "count")} rows of this file were not imported${payloadNumber(item, "unknown_activity") ? `, ${count(item, "unknown_activity")} of them with an action PerFin does not know` : ""}.${examples.length > 0 ? ` Unknown actions: ${examples.join(", ")}.` : ""}`,
       why: "PerFin never guesses what an unknown row means; everything else in the file was imported.",
       steps: [
-        "Look at the skipped rows in the file and add any that matter by hand (Investments or Transactions).",
+        "The skipped lines are highlighted on the page where PerFin knows them.",
+        "Add any that matter by hand (Investments or Transactions), or use “Teach PerFin” to show it the table and its columns.",
         "Dismiss this item once you are done.",
       ],
     };
   },
+  "low_confidence_field:rows_skipped": (item) => ({
+    title: "Some rows were skipped",
+    what: `${count(item, "count")} rows of this file could not be read (a date or amount PerFin could not make out) and were not imported.`,
+    steps: [
+      "Open “Map columns” and check the date format and the amount columns, or add the rows by hand.",
+      "Dismiss this item once you are done.",
+    ],
+  }),
+  "low_confidence_field:balance_mismatch": (item) => ({
+    title: "Running balance does not match",
+    what: `On ${count(item, "count")} rows the running balance the file prints does not follow from the amounts.`,
+    why: "A row may be missing or misread, so the rows are held as pending.",
+    steps: [
+      "Compare the rows with the file and correct the wrong ones.",
+      "Confirm when they are right.",
+    ],
+  }),
+  "low_confidence_field:date_order_assumed": () => ({
+    title: "Month or day first?",
+    what: "Every date in this file fits both month-first and day-first, so PerFin assumed month-first.",
+    steps: [
+      "Check a few dates against the file.",
+      "If they are wrong, open “Map columns”, choose the right date format and save; otherwise confirm.",
+    ],
+  }),
+  "low_confidence_field:truncated": () => ({
+    title: "File cut short",
+    what: "This file is larger than PerFin reads in one go, so only its first part was imported.",
+    steps: [
+      "Export a shorter date range and upload it in parts.",
+      "Dismiss this item once the rest is in.",
+    ],
+  }),
+  "low_confidence_field:currency_mismatch": (item) => ({
+    title: "Rows in another currency",
+    what: `${count(item, "count")} rows are in a different currency from the account and were not imported.`,
+    steps: [
+      "Import them into an account in that currency, or add them by hand.",
+      "Dismiss this item.",
+    ],
+  }),
+  "low_confidence_field:payslip_does_not_add_up": () => ({
+    title: "Payslip does not add up",
+    what: "The gross pay less the deductions read from this payslip is not its net pay.",
+    steps: [
+      "Compare the amounts with the payslip and correct them on the document.",
+      "Dismiss this item once it is right.",
+    ],
+  }),
+  "low_confidence_field:tax_form_low_confidence": () => ({
+    title: "Check the tax form",
+    what: "Some boxes of this tax form were read with low confidence.",
+    steps: [
+      "Compare the amounts in Tax with the form and correct them there.",
+      "Dismiss this item once they are right.",
+    ],
+  }),
+  "low_confidence_field:tax_form_unread": () => ({
+    title: "Tax form not read",
+    what: "This looks like a tax form, but PerFin could not read its boxes.",
+    steps: [
+      "Enter the amounts in Tax by hand.",
+      "Dismiss this item.",
+    ],
+  }),
+  "low_confidence_field:loan_low_confidence": () => ({
+    title: "Check the loan statement",
+    what: "Some figures of this loan statement were read with low confidence, so the payment was not recorded.",
+    steps: [
+      "Compare the statement with the loan's payments and record the payment by hand if needed.",
+      "Dismiss this item.",
+    ],
+  }),
+  "low_confidence_field:loan_payment_out_of_range": () => ({
+    title: "Unusual loan payment",
+    what: "The payment on this loan statement is far from the loan's usual payment, so it was not recorded.",
+    steps: [
+      "Check the statement; record the payment by hand if it is right.",
+      "Dismiss this item.",
+    ],
+  }),
+  "low_confidence_field:loan_reconciliation_failed": () => ({
+    title: "Loan statement does not add up",
+    what: "Principal, interest and escrow read from this statement do not add up to its payment or balance.",
+    steps: [
+      "Compare the statement with the loan and record the payment by hand.",
+      "Dismiss this item.",
+    ],
+  }),
+  "low_confidence_field:loan_currency_mismatch": () => ({
+    title: "Loan in another currency",
+    what: "This loan statement is in a different currency from the loan it matched.",
+    steps: ["Check which loan it belongs to.", "Dismiss this item."],
+  }),
+  "low_confidence_field:loan_rate_differs": () => ({
+    title: "Interest rate changed?",
+    what: "The rate on this statement differs from the rate recorded for the loan.",
+    steps: [
+      "If the rate changed, update it on the loan.",
+      "Dismiss this item.",
+    ],
+  }),
+  "low_confidence_field:investment_date_out_of_range": () => ({
+    title: "Dates outside the statement",
+    what: "Some activity of this brokerage statement is dated outside its period, so it was held back.",
+    steps: [
+      "Check the dates against the statement; use “Teach PerFin” to show PerFin the statement period.",
+      "Process the file again once it is right.",
+    ],
+  }),
   "low_confidence_field:low_confidence": () => ({
     title: "Check what was read",
     what: "Some values were read with low confidence and are held as pending.",
@@ -243,21 +379,25 @@ const COPY: Readonly<Record<string, Copy>> = {
     what: "The rows read from this statement do not add up to its opening and closing balance.",
     why: "A row may have been misread or missed, so every row is pending and no balance was recorded.",
     steps: [
-      "Compare the rows with the document and correct the wrong ones.",
+      "If PerFin misread a balance, enter the balances the statement prints and “Check and accept”.",
+      "Otherwise compare the rows with the document and correct the wrong ones.",
       "Confirm when the totals match.",
     ],
   }),
   "low_confidence_field:reconciliation_unavailable": () => ({
     title: "Could not check the totals",
-    what: "This statement prints no balances to check its rows against, so they are pending.",
-    steps: ["Glance over the rows and confirm them."],
+    what: "PerFin found no balances on this statement to check its rows against, so they are pending.",
+    steps: [
+      "If the statement prints its opening and closing balance, enter them and “Check and accept”.",
+      "Or glance over the rows and confirm them.",
+    ],
   }),
   "low_confidence_field:investment_opening_basis_unknown": () => ({
     title: "Cost basis needed",
     what: "This export sells shares that were bought before its first row. PerFin added them as an opening position with an unknown cost basis (zero for now).",
     why: "Gains on these sales are overstated until the real cost is entered.",
     steps: [
-      "Enter the cost basis on the opening transaction (Investments, the account, the “Opening position before this export” row).",
+      "Enter the cost per unit of each opening position below (or on the opening transaction in Investments).",
       "Or import an older export or statement for this account first.",
       "Dismiss this item once the basis is right.",
     ],
@@ -287,7 +427,10 @@ const COPY: Readonly<Record<string, Copy>> = {
   "low_confidence_field:investment_low_confidence": () => ({
     title: "Dates may be wrong",
     what: "PerFin could not tell the day from the month in this file's dates, so the statement was held back.",
-    steps: ["Open “Map columns”, choose the right date format, and save."],
+    steps: [
+      "Open “Map columns”, choose the right date format, and save.",
+      "For a PDF, use “Teach PerFin” to show the statement period and the table.",
+    ],
   }),
   "low_confidence_field:investment_reconciliation_failed": () => ({
     title: "Holdings do not add up",

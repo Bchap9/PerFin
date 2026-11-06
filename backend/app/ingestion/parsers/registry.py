@@ -20,6 +20,12 @@ one extraction (:func:`parse_extraction`):
    turn and the first that reads something is used (warning
    ``parser_fallback:<the parser that read nothing>``).
 
+4. **Learned layout.** With a household ``template`` (a layout taught in
+   "Teach PerFin", :mod:`app.ingestion.parsers.template`), its labelled
+   tables replace what the parsers read (parser ``layout_template``) and
+   its anchors fill the period, the account's last four digits and the
+   balances (:func:`_with_template`).
+
 The chosen parser's statements (and brokerage ``investments``) replace any
 an earlier parser run left in the result (``source_format`` ``pdf``/``image``);
 structured statements from the sandbox (OFX, QFX, QIF) are never touched. What happened
@@ -42,10 +48,18 @@ from app.ingestion.parsers.payslip import PayslipParser
 from app.ingestion.parsers.receipt import ReceiptParser
 from app.ingestion.parsers.table_statement import CardStatementParser, TableStatementParser
 from app.ingestion.parsers.tax_forms import TaxFormParser
+from app.ingestion.parsers.template import (
+    TEMPLATE_REF,
+    LayoutTemplate,
+    fill_statement,
+    read_template,
+)
 from app.ingestion.sandbox.protocol import (
     DOCUMENT_STATEMENT_FORMATS,
     IMAGE_KINDS,
+    MAX_SKIPPED_REGIONS,
     ExtractResult,
+    LineRegion,
     ParseInfo,
     ParserRef,
     ParserScore,
@@ -127,6 +141,31 @@ def _fallback(
     return chosen, outcome
 
 
+def _with_template(
+    view: DocumentView, template: LayoutTemplate, outcome: ParseOutcome, threshold: float
+) -> tuple[ParseOutcome, bool]:
+    """``outcome`` read again with a learned layout; True when its tables were used."""
+    taught = read_template(view, template, threshold=threshold)
+    outcome.skipped_lines += taught.skipped_lines
+    outcome.skipped_regions.extend(taught.skipped)
+    outcome.warnings.extend(taught.warnings)
+    if taught.read:
+        if taught.statements:
+            outcome.statements = taught.statements
+        if taught.investments:
+            outcome.investments = taught.investments
+        outcome.warnings = [w for w in outcome.warnings if w != "no_parser"]
+        outcome.warnings.append("layout_template")
+        return outcome, True
+    if taught.fields:
+        single = len(outcome.statements) + len(outcome.investments) == 1
+        outcome.statements = [
+            fill_statement(s, taught.fields, single=single) for s in outcome.statements
+        ]
+        outcome.warnings.append("layout_template_fields")
+    return outcome, False
+
+
 def parse_extraction(
     result: ExtractResult,
     *,
@@ -135,6 +174,7 @@ def parse_extraction(
     institution: str | None = None,
     kind: str | None = None,
     date_order: str | None = None,
+    template: LayoutTemplate | None = None,
 ) -> ExtractResult:
     """``result`` with the document parsers' statements and :class:`ParseInfo`."""
     view = DocumentView.from_result(result)
@@ -150,12 +190,16 @@ def parse_extraction(
             chosen, outcome = _fallback(view, scores, chosen, outcome, threshold, date_order)
     else:
         outcome.warnings.append("no_parser")
+    taught = False
+    if template is not None and not template.empty:
+        outcome, taught = _with_template(view, template, outcome, threshold)
+    ref = TEMPLATE_REF if taught else (_ref(chosen) if chosen is not None else None)
     kept = [s for s in result.statements if s.source_format not in DOCUMENT_STATEMENT_FORMATS]
     kept_investments = [
         i for i in result.investments if i.source_format not in DOCUMENT_STATEMENT_FORMATS
     ]
     info = ParseInfo(
-        parser=_ref(chosen) if chosen is not None else None,
+        parser=ref,
         scores=[
             ParserScore(name=name, score=score)
             for name, score in sorted(scores.items(), key=lambda kv: -kv[1])
@@ -163,6 +207,10 @@ def parse_extraction(
         threshold=threshold,
         pending_items=outcome.pending_items,
         skipped_lines=outcome.skipped_lines,
+        skipped_regions=[
+            LineRegion(page=page, bbox=bbox)
+            for page, bbox in outcome.skipped_regions[:MAX_SKIPPED_REGIONS]
+        ],
         payslip=outcome.payslip,
         receipt=outcome.receipt,
         loan=outcome.loan,

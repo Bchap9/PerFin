@@ -42,7 +42,11 @@ Phase 2 routes only **structured** formats (CSV, TSV, OFX, QFX, QIF):
   one, the document waits in ``needs_review`` (``unparsed``/``import_pending``).
 * **parse (PDF, images)**: the document parsers (``app.ingestion.parsers``)
   read the stored pages in the worker, hinted by the classifier's
-  fingerprint (institution key, parser name, date order): statements with
+  fingerprint (institution key, parser name, date order; a household
+  fingerprint's learned template, "Teach PerFin",
+  ``app.ingestion.parsers.template``, then reads its labelled tables and
+  fills the period, account digits and balances; a ``lines_skipped`` item
+  carries the boxes of skipped lines): statements with
   per-field confidence and a reconciliation (``app.ingestion.reconcile``)
   go through the structured importer like an OFX statement (rows below
   ``confidence_threshold`` or of a statement that does not reconcile are
@@ -102,6 +106,7 @@ from app.domain.documents.models import (
     DocumentStatus,
     IngestJob,
     IngestStage,
+    ParserFingerprint,
     ReviewItem,
     ReviewItemState,
     ReviewKind,
@@ -124,6 +129,7 @@ from app.ingestion.parsers.receipt import PARSER_VERSION as RECEIPT_PARSER_VERSI
 from app.ingestion.parsers.receipt import parse_email_receipt
 from app.ingestion.parsers.registry import DOCUMENT_KINDS, parse_extraction
 from app.ingestion.parsers.tax_forms import carries_tax_identity, redact_identity
+from app.ingestion.parsers.template import LayoutTemplate, parse_template
 from app.ingestion.sandbox.protocol import (
     CONTAINER_KINDS,
     REVIEW_ERROR_CODES,
@@ -345,6 +351,25 @@ def _ml_hints(
     db.flush()
 
 
+def _learned_template(db: Session, document: Document) -> LayoutTemplate | None:
+    """The learned layout of the household fingerprint the classifier matched, if any."""
+    facts = document.confidence or {}
+    fingerprint = facts.get("fingerprint") if isinstance(facts, dict) else None
+    if not isinstance(fingerprint, dict) or fingerprint.get("origin") != "household":
+        return None
+    try:
+        fingerprint_id = uuid.UUID(str(fingerprint.get("id")))
+    except ValueError:
+        return None
+    stored = db.execute(
+        select(ParserFingerprint.template).where(
+            ParserFingerprint.household_id == document.household_id,
+            ParserFingerprint.id == fingerprint_id,
+        )
+    ).scalar_one_or_none()
+    return parse_template(stored)
+
+
 def _parse_hints(document: Document) -> dict[str, str | None]:
     """The classifier's fingerprint match (``document.confidence``) as parser hints."""
     facts = document.confidence or {}
@@ -399,6 +424,7 @@ def _parse_document(
         institution=hints.get("institution"),
         kind=hints.get("kind"),
         date_order=hints.get("date_order"),
+        template=_learned_template(db, document),
     )
     info = result.parse
     if info is None:  # pragma: no cover - parse_extraction always records it
@@ -500,7 +526,16 @@ def _parse_document(
             db,
             document,
             ReviewKind.LOW_CONFIDENCE_FIELD,
-            {"reason": "lines_skipped", "count": info.skipped_lines, "parser": info.parser.name},
+            {
+                "reason": "lines_skipped",
+                "count": info.skipped_lines,
+                "parser": info.parser.name,
+                # Where they are (page and box), when the parser knows.
+                "lines": [
+                    {"page": r.page, "bbox": [round(v, 2) for v in r.bbox]}
+                    for r in info.skipped_regions
+                ],
+            },
         )
     return result, facts
 

@@ -32,7 +32,9 @@ run as the owner, exactly like ``perfin migrate`` in production, and then:
 * 0008 adds ``import_mapping.sign_unverified`` (false for existing rows), and
   its downgrade removes exactly that column;
 * 0010 creates ``statement_record`` under forced RLS with household-consistent
-  keys, and its downgrade removes exactly that table.
+  keys, and its downgrade removes exactly that table;
+* 0011 adds ``parser_fingerprint.template`` (NULL for existing rows), and its
+  downgrade removes exactly that column.
 """
 
 from __future__ import annotations
@@ -336,6 +338,7 @@ def test_single_head_and_linear_history() -> None:
     assert script.get_base() == "0001"
     # One revision per phase, each on top of the previous one.
     assert [rev.revision for rev in script.walk_revisions("base", "heads")] == [
+        "0011",
         "0010",
         "0009",
         "0008",
@@ -356,6 +359,7 @@ def test_single_head_and_linear_history() -> None:
     assert script.get_revision("0008").down_revision == "0007"
     assert script.get_revision("0009").down_revision == "0008"
     assert script.get_revision("0010").down_revision == "0009"
+    assert script.get_revision("0011").down_revision == "0010"
 
 
 def test_upgrade_head_matches_models_without_drift(migrated: Scratch) -> None:
@@ -1710,5 +1714,41 @@ def test_0010_statement_record_is_household_isolated_and_downgrades(migrated: Sc
         command.upgrade(cfg, "head")
         command.check(cfg)
         assert _public_tables(engine) == tables
+    finally:
+        engine.dispose()
+
+
+def _fingerprint_columns(engine: Engine) -> set[str]:
+    with engine.connect() as conn:
+        rows = conn.execute(
+            text(
+                "SELECT column_name FROM information_schema.columns "
+                "WHERE table_schema = 'public' AND table_name = 'parser_fingerprint'"
+            )
+        ).scalars()
+        return {str(r) for r in rows}
+
+
+def test_0011_fingerprint_template_column_downgrades(migrated: Scratch) -> None:
+    """0011 adds ``parser_fingerprint.template`` (a JSON object or NULL); downgrade drops it."""
+    cfg = migrated.config()
+    engine = migrated.owner_engine()
+    try:
+        assert "template" in _fingerprint_columns(engine)
+        tables = _public_tables(engine)
+        command.downgrade(cfg, "0010")
+        assert "template" not in _fingerprint_columns(engine)
+        assert _public_tables(engine) == tables
+        command.upgrade(cfg, "head")
+        command.check(cfg)
+        assert "template" in _fingerprint_columns(engine)
+        with engine.connect() as conn:
+            check = conn.execute(
+                text(
+                    "SELECT pg_get_constraintdef(oid) FROM pg_constraint "
+                    "WHERE conname = 'ck_parser_fingerprint_template_object'"
+                )
+            ).scalar_one()
+        assert "jsonb_typeof(template)" in check
     finally:
         engine.dispose()

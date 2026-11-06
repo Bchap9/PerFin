@@ -355,7 +355,7 @@ _deny_table(
 _deny_table(
     "parser_fingerprint",
     R_INGEST,
-    "institution_id kind match_rules parser_name version learned_from_document_id id "
+    "institution_id kind match_rules template parser_name version learned_from_document_id id "
     "created_at updated_at household_id",
 )
 _deny_table(

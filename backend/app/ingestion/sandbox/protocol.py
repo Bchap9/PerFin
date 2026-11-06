@@ -819,6 +819,17 @@ class ParserScore(_Strict):
     score: Confidence01
 
 
+class LineRegion(_Strict):
+    """A line on a page (page units), e.g. one a parser skipped."""
+
+    page: PageNumber
+    bbox: BBox
+
+
+#: Skipped lines whose boxes are kept with the parse (review highlight).
+MAX_SKIPPED_REGIONS: Final = 50
+
+
 class ParseInfo(_Strict):
     """What the worker's document parsers did with the stored pages (worker-written).
 
@@ -834,6 +845,8 @@ class ParseInfo(_Strict):
     #: lines whose amount could not be read.
     pending_items: int = Field(default=0, ge=0)
     skipped_lines: int = Field(default=0, ge=0)
+    #: Where skipped lines are, when the parser knows (the first ones).
+    skipped_regions: list[LineRegion] = Field(default_factory=list, max_length=MAX_SKIPPED_REGIONS)
     payslip: Payslip | None = None
     receipt: Receipt | None = None
     #: A loan or mortgage statement (``app.ingestion.parsers.loan_statement``).
