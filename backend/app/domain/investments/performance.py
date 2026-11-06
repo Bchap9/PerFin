@@ -23,7 +23,7 @@ external flow.
   interest takes it out); a transfer in adds and a transfer out removes the
   units' value at that day's close. Positive flows are inflows, negative
   ones outflows (``returns`` module doc for how they enter the chain).
-* **TWR**: the daily chain (``returns.twr``); ``twr_annualized`` only for
+* **TWR**: the daily chain (``returns.cumulative_twr``); ``twr_annualized`` only for
   periods of at least 365 days. **MWR**: XIRR of the starting value (paid
   in), the daily net flows and the ending value (received), as an annual
   rate (``mwr_annualized``, periods of a year or more) and over the period
@@ -283,12 +283,7 @@ def performance(
             dates.append(day)
             day += timedelta(days=1)
         end_value = days[-1].value if days else start_value
-        daily = returns.daily_returns(start_value, days)
-        growth = Decimal(1)
-        cumulative: list[Decimal] = []
-        for r in daily:
-            growth *= 1 + r
-            cumulative.append(growth - 1)
+        cumulative = returns.cumulative_twr(start_value, days)
         twr = cumulative[-1] if cumulative else Decimal(0)
         period = (end - start).days
 

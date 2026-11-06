@@ -36,7 +36,17 @@ What remains (details in docs/ROADMAP.md):
 
 ## [Unreleased]
 
-Nothing yet.
+### Fixed
+
+- Time-weighted returns (`twr` and every point of the performance series) are
+  rounded once, half-even, as documented. The daily chain is now computed with
+  16 guard digits, then rounded to 34 digits. Before, a period whose exact
+  return lay half-way between two 10-decimal rates (a fall from 2048 to 1 is
+  -0.99951171875) could round either way depending on the prices in between,
+  and the performance endpoint ran its chain at the default 28 digits instead
+  of 34. This made
+  `test_property_twr_equals_mwr_without_flows` fail for such inputs. The
+  reproduced case is now a fixed `@example` of that test.
 
 ## [1.0.0-rc.4] - 2026-11-06
 

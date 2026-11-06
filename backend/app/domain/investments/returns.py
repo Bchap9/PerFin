@@ -15,6 +15,16 @@ move), outflows at its end (a full sale ends the day at zero without a
 division by zero). A day with nothing invested (denominator 0) has return 0.
 The period return is ``prod(1 + r[d]) - 1``.
 
+The chain is computed with :data:`CHAIN_GUARD_DIGITS` extra digits and rounded
+to the 34-digit working precision before anything else uses it. Each daily
+ratio is inexact (``1 / 3``), so a chain run at 34 digits ends a few units in
+the 34th digit off the exact product. When the exact product sits on a
+half-way point of :func:`round_rate` (``-0.99951171875`` for a fall from 2048
+to 1), that error, not half-even, would decide the last decimal, and the
+rate would depend on the path in between. With the guard digits the error
+stays far below one unit in the 34th digit and is rounded away, so such a
+period is rounded once, as the rule below says.
+
 **Money-weighted return** (:func:`xirr`): the annual rate ``x`` with
 ``sum(c[i] / (1 + x) ** (days[i] / 365)) = 0`` for the investor's cash flows
 (paid in negative, received positive; the starting value is paid in on the
@@ -35,15 +45,18 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 from dataclasses import dataclass
-from decimal import ROUND_HALF_EVEN, Decimal, localcontext
+from decimal import ROUND_HALF_EVEN, Context, Decimal, localcontext
 from typing import Final
 
-from app.core.money import calc_context
+from app.core.money import DECIMAL_PRECISION, calc_context
 
 #: Decimals of every rate in API output.
 RATE_PLACES: Final = 10
 RATE_QUANTUM: Final = Decimal(1).scaleb(-RATE_PLACES)
 DAYS_PER_YEAR: Final = Decimal(365)
+#: Extra digits for the TWR chain: its error (about one unit in the last digit
+#: per day) must stay far below one unit in the 34th digit for any history.
+CHAIN_GUARD_DIGITS: Final = 16
 #: Solver tolerances: |npv| relative to the largest flow, and the rate step.
 NPV_TOLERANCE: Final = Decimal("1e-24")
 STEP_TOLERANCE: Final = Decimal("1e-28")
@@ -69,30 +82,36 @@ class Day:
     outflow: Decimal = Decimal(0)
 
 
-def daily_returns(start_value: Decimal, days: Sequence[Day]) -> list[Decimal]:
-    """``r[d]`` of every day (module doc), unrounded."""
-    returns: list[Decimal] = []
+def _chain_context() -> Context:
+    """``calc_context`` widened by :data:`CHAIN_GUARD_DIGITS` for the TWR chain (module doc)."""
+    return Context(prec=DECIMAL_PRECISION + CHAIN_GUARD_DIGITS, rounding=ROUND_HALF_EVEN)
+
+
+def cumulative_twr(start_value: Decimal, days: Sequence[Day]) -> list[Decimal]:
+    """The time-weighted return from the start through each day (module doc).
+
+    Element ``d`` is ``prod(1 + r[0..d]) - 1``. The growth factors and their
+    running product are computed in :func:`_chain_context`; each element is
+    then rounded once to ``calc_context`` precision.
+    """
+    result: list[Decimal] = []
     previous = start_value
-    with localcontext(calc_context()):
+    growth = Decimal(1)
+    working = calc_context()
+    with localcontext(_chain_context()):
         for day in days:
             invested = previous + day.inflow
-            returns.append((day.value + day.outflow) / invested - 1 if invested > 0 else Decimal(0))
+            if invested > 0:
+                growth *= (day.value + day.outflow) / invested
+            result.append(working.plus(growth - 1))
             previous = day.value
-    return returns
-
-
-def chain(returns: Sequence[Decimal]) -> Decimal:
-    """``prod(1 + r) - 1``, unrounded."""
-    growth = Decimal(1)
-    with localcontext(calc_context()):
-        for r in returns:
-            growth *= 1 + r
-        return growth - 1
+    return result
 
 
 def twr(start_value: Decimal, days: Sequence[Day]) -> Decimal:
-    """Time-weighted return of the period, unrounded (module doc)."""
-    return chain(daily_returns(start_value, days))
+    """Time-weighted return of the period, unrounded (module doc); 0 without days."""
+    cumulative = cumulative_twr(start_value, days)
+    return cumulative[-1] if cumulative else Decimal(0)
 
 
 def annualize(period_return: Decimal, days: int) -> Decimal | None:
