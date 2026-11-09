@@ -28,14 +28,19 @@ when the flows do not change sign or no bracket is found.
 
 Arithmetic runs in a 34-digit half-even context (``calc_context``); results
 are rounded **once**, half-even, to :data:`RATE_PLACES` decimals
-(:func:`round_rate`). Rates are fractions (``0.0525`` = 5.25 %).
+(:func:`round_rate`). Rates are fractions (``0.0525`` = 5.25 %). The
+time-weighted chain compounds its daily ratios with
+:data:`CHAIN_GUARD_DIGITS` extra digits and rounds each point of the chain
+to 34 digits once, so per-day rounding does not build up in the product
+(a chain whose exact value fits in 34 digits comes out exact, and a
+half-way rate rounds the way its exact value does).
 """
 
 from __future__ import annotations
 
 from collections.abc import Sequence
 from dataclasses import dataclass
-from decimal import ROUND_HALF_EVEN, Decimal, localcontext
+from decimal import ROUND_HALF_EVEN, Context, Decimal, localcontext
 from typing import Final
 
 from app.core.money import calc_context
@@ -53,6 +58,17 @@ BISECTION_ITERATIONS: Final = 400
 #: about ``e ** 253``) and the largest Newton step taken before bisecting.
 LOG_GROWTH_CEILING: Final = Decimal(100_000)
 NEWTON_MAX_STEP: Final = Decimal(5)
+#: Digits beyond ``calc_context`` kept while compounding the time-weighted
+#: chain. Each day's ratio and the running product are rounded at this
+#: wider precision (relative error about ``days * 1e-53``), far below the
+#: half unit of the 34th digit that the final rounding removes.
+CHAIN_GUARD_DIGITS: Final = 20
+
+
+def _chain_context() -> Context:
+    context = calc_context()
+    context.prec += CHAIN_GUARD_DIGITS
+    return context
 
 
 def round_rate(value: Decimal) -> Decimal:
@@ -82,17 +98,41 @@ def daily_returns(start_value: Decimal, days: Sequence[Day]) -> list[Decimal]:
 
 
 def chain(returns: Sequence[Decimal]) -> Decimal:
-    """``prod(1 + r) - 1``, unrounded."""
+    """``prod(1 + r) - 1``, unrounded: compounded with guard digits, rounded once."""
     growth = Decimal(1)
-    with localcontext(calc_context()):
+    with localcontext(_chain_context()):
         for r in returns:
             growth *= 1 + r
-        return growth - 1
+    return calc_context().subtract(growth, Decimal(1))
+
+
+def cumulative_returns(start_value: Decimal, days: Sequence[Day]) -> list[Decimal]:
+    """The time-weighted return from the start to the end of each day, unrounded.
+
+    ``prod(1 + r[d]) - 1`` over the days so far (module doc). The ratios
+    ``1 + r[d]`` are taken straight from the values and compounded with
+    :data:`CHAIN_GUARD_DIGITS` guard digits; each point is rounded to
+    ``calc_context`` once. (Chaining the 34-digit :func:`daily_returns`
+    would round every day and could miss a half-way rate by its last digit.)
+    """
+    narrow = calc_context()
+    cumulative: list[Decimal] = []
+    growth = Decimal(1)
+    previous = start_value
+    with localcontext(_chain_context()):
+        for day in days:
+            invested = previous + day.inflow
+            if invested > 0:
+                growth *= (day.value + day.outflow) / invested
+            previous = day.value
+            cumulative.append(narrow.subtract(growth, Decimal(1)))
+    return cumulative
 
 
 def twr(start_value: Decimal, days: Sequence[Day]) -> Decimal:
     """Time-weighted return of the period, unrounded (module doc)."""
-    return chain(daily_returns(start_value, days))
+    cumulative = cumulative_returns(start_value, days)
+    return cumulative[-1] if cumulative else Decimal(0)
 
 
 def annualize(period_return: Decimal, days: int) -> Decimal | None:

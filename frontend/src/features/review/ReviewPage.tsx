@@ -26,8 +26,10 @@ import { DocumentAccountsDialog } from "../imports/DocumentAccountsDialog";
 import { getTransaction, txKeys, type Transaction } from "../transactions/api";
 import {
   accountResolution,
+  canImportAsRead,
   dismissItem,
   duplicateResolution,
+  importAsReadResolution,
   listReviewItems,
   payloadIds,
   payloadString,
@@ -40,8 +42,11 @@ import {
   type ReviewFilter,
   type ReviewItem,
 } from "./api";
-import { explain, type Explanation } from "./reviewCopy";
+import { explain, payloadPeriod, type Explanation } from "./reviewCopy";
+import { TeachDialog, currentReadings } from "./TeachDialog";
 import {
+  BalanceTools,
+  CostBasisTools,
   LowConfidenceTools,
   NewInstitutionTools,
   ReceiptPreview,
@@ -184,6 +189,11 @@ function TransactionLookup({ id, title }: { id: string; title: string }) {
 }
 
 /** Side by side: the imported row against each kept candidate. */
+/** A statement whose period overlaps one already imported (``statement_overlap``). */
+function isStatementOverlap(item: ReviewItem): boolean {
+  return (item.reason ?? payloadString(item, "reason")) === "statement_overlap";
+}
+
 function DuplicateBody({
   item,
   chosen,
@@ -196,11 +206,45 @@ function DuplicateBody({
   const transactionId = payloadString(item, "transaction_id");
   const candidates = payloadIds(item, "candidates");
   const documentId = item.document_id;
+  const overlap = isStatementOverlap(item);
+  const otherId = payloadString(item, "other_document_id");
   const document = useQuery({
     queryKey: importKeys.document(documentId ?? ""),
     queryFn: () => getDocument(documentId ?? ""),
-    enabled: documentId !== null && transactionId === null,
+    enabled: documentId !== null && transactionId === null && !overlap,
   });
+  const other = useQuery({
+    queryKey: importKeys.document(otherId ?? ""),
+    queryFn: () => getDocument(otherId ?? ""),
+    enabled: overlap && otherId !== null,
+    retry: false,
+  });
+  if (overlap) {
+    const period = payloadPeriod(item, "period_start", "period_end");
+    const otherPeriod = payloadPeriod(
+      item,
+      "other_period_start",
+      "other_period_end",
+    );
+    return (
+      <div role="group" aria-label="Compare statements">
+        <p>
+          This statement{period === null ? "" : ` (${period})`} overlaps one
+          already imported for the account
+          {otherPeriod === null ? "" : ` (${otherPeriod})`}.
+        </p>
+        {otherId === null ? null : (
+          <p>
+            Imported from{" "}
+            <Link to="/documents/$documentId" params={{ documentId: otherId }}>
+              {other.data?.original_filename ?? "another file"}
+            </Link>
+            .
+          </p>
+        )}
+      </div>
+    );
+  }
   if (transactionId === null) {
     return (
       <p>
@@ -338,6 +382,7 @@ export function ReviewItemCard({ item }: { item: ReviewItem }) {
   const [error, setError] = useState<string | null>(null);
   const [fixing, setFixing] = useState(false);
   const [settingUp, setSettingUp] = useState(false);
+  const [teaching, setTeaching] = useState(false);
   const explanation = explain(item);
   const open = item.state === "open";
   const actionable = open && item.can_resolve;
@@ -372,7 +417,18 @@ export function ReviewItemCard({ item }: { item: ReviewItem }) {
     },
   });
   const busy = resolve.isPending || dismiss.isPending;
+  // Any item about a page the caller may see can be taught from.
+  const teachable =
+    item.document_id !== null && item.document?.previewable === true;
   const needsChoice = candidates.length > 1 && chosen === null;
+  // A brokerage statement held back by its figures: its rows are not in the
+  // ledger yet, so there is nothing to confirm; it may be imported as read.
+  const reason = item.reason ?? payloadString(item, "reason");
+  const heldStatement =
+    item.kind === "low_confidence_field" &&
+    (reason === "investment_reconciliation_failed" ||
+      reason === "investment_low_confidence");
+  const asRead = canImportAsRead(item);
   const editableAccounts = (accounts.data ?? []).filter(
     (account) => account.can_edit && !account.is_closed,
   );
@@ -416,8 +472,24 @@ export function ReviewItemCard({ item }: { item: ReviewItem }) {
           <ReceiptPreview item={item} />
         </>
       ) : null}
-      {item.kind === "low_confidence_field" ? (
+      {item.kind === "low_confidence_field" &&
+      item.reason === "investment_opening_basis_unknown" ? (
+        <CostBasisTools item={item} actionable={actionable} />
+      ) : null}
+      {item.kind === "low_confidence_field" &&
+      (item.reason === "reconciliation_failed" ||
+        item.reason === "reconciliation_unavailable") ? (
+        <BalanceTools item={item} actionable={actionable} />
+      ) : null}
+      {item.kind === "low_confidence_field" && !heldStatement ? (
         <LowConfidenceTools item={item} actionable={actionable} />
+      ) : null}
+      {asRead && actionable ? (
+        <p className="ledger-muted">
+          {reason === "investment_reconciliation_failed"
+            ? "“Import as read” imports this statement as printed. PerFin records no account value from it, because its totals do not add up."
+            : "“Import as read” imports this statement as printed. PerFin records no account value from it, because its totals could not be checked."}
+        </p>
       ) : null}
       {item.kind === "new_institution" ? (
         <NewInstitutionTools item={item} actionable={actionable} />
@@ -442,9 +514,11 @@ export function ReviewItemCard({ item }: { item: ReviewItem }) {
                   resolve.mutate(duplicateResolution(item, "confirm", chosen));
                 }}
               >
-                {payloadString(item, "transaction_id") === null
-                  ? "Reject this upload"
-                  : "It is a duplicate"}
+                {isStatementOverlap(item)
+                  ? "Same statement — skip"
+                  : payloadString(item, "transaction_id") === null
+                    ? "Reject this upload"
+                    : "It is a duplicate"}
               </Button>
               <Button
                 disabled={busy}
@@ -452,7 +526,7 @@ export function ReviewItemCard({ item }: { item: ReviewItem }) {
                   resolve.mutate(duplicateResolution(item, "reject", null));
                 }}
               >
-                Not a duplicate
+                {isStatementOverlap(item) ? "Import anyway" : "Not a duplicate"}
               </Button>
             </>
           ) : null}
@@ -500,7 +574,31 @@ export function ReviewItemCard({ item }: { item: ReviewItem }) {
               Import into this account
             </Button>
           ) : null}
-          {item.next_step === "column_mapping" && item.document_id !== null ? (
+          {asRead ? (
+            <Button
+              variant="primary"
+              loading={resolve.isPending}
+              disabled={dismiss.isPending}
+              onClick={() => {
+                resolve.mutate(importAsReadResolution());
+              }}
+            >
+              Import as read
+            </Button>
+          ) : null}
+          {teachable ? (
+            <Button
+              onClick={() => {
+                setFixing(false);
+                setTeaching(true);
+              }}
+            >
+              Teach PerFin
+            </Button>
+          ) : null}
+          {(item.next_step === "column_mapping" ||
+            (reason === "investment_low_confidence" && !asRead)) &&
+          item.document_id !== null ? (
             <Link
               to="/documents/$documentId/mapping"
               params={{ documentId: item.document_id }}
@@ -564,6 +662,16 @@ export function ReviewItemCard({ item }: { item: ReviewItem }) {
           </>
         )}
       </article>
+      {teaching && item.document_id !== null ? (
+        <TeachDialog
+          documentId={item.document_id}
+          item={item}
+          readings={currentReadings(item.document, item)}
+          onClose={() => {
+            setTeaching(false);
+          }}
+        />
+      ) : null}
       {settingUp && item.document_id !== null ? (
         <DocumentAccountsDialog
           documentId={item.document_id}

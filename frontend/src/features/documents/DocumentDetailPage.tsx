@@ -24,6 +24,7 @@ import {
 } from "./api";
 import { DeleteDocumentDialog } from "./DeleteDocumentDialog";
 import { PageViewer } from "./PageViewer";
+import { TeachDialog, currentReadings } from "../review/TeachDialog";
 
 export function DocumentDetailPage() {
   const documentId = useParams({
@@ -38,6 +39,7 @@ export function DocumentDetailPage() {
   const doc = detail.data;
   const [accountsOpen, setAccountsOpen] = useState(false);
   const [deleting, setDeleting] = useState(false);
+  const [teaching, setTeaching] = useState(false);
   const navigate = useNavigate();
   return (
     <section aria-labelledby="page-title" className="ledger-stack">
@@ -121,6 +123,15 @@ export function DocumentDetailPage() {
                   Accounts in this file
                 </Button>
               ) : null}
+              {doc.can_edit && !doc.quarantined ? (
+                <Button
+                  onClick={() => {
+                    setTeaching(true);
+                  }}
+                >
+                  Teach PerFin
+                </Button>
+              ) : null}
               {doc.can_edit ? (
                 <Button
                   variant="danger"
@@ -141,6 +152,15 @@ export function DocumentDetailPage() {
                 }}
                 onDeleted={() => {
                   void navigate({ to: "/documents/library" });
+                }}
+              />
+            ) : null}
+            {teaching ? (
+              <TeachDialog
+                documentId={doc.id}
+                readings={currentReadings(doc)}
+                onClose={() => {
+                  setTeaching(false);
                 }}
               />
             ) : null}

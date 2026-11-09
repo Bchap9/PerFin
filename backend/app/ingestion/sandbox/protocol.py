@@ -21,6 +21,8 @@ from typing import Annotated, Final, Literal
 
 from pydantic import AfterValidator, BaseModel, ConfigDict, Field, model_validator
 
+from app.core.csv_safety import neutralise_formula
+
 FORMAT_VERSION: Final = 1
 
 #: Extractor kinds the child knows: structured formats (Phase 2) and the
@@ -89,6 +91,7 @@ def _bounded_amount(value: Decimal) -> Decimal:
 Amount = Annotated[Decimal, AfterValidator(_bounded_amount)]
 ShortText = Annotated[str, Field(max_length=TEXT_MAX)]
 Code = Annotated[str, Field(max_length=64, pattern=r"^[A-Za-z0-9_.:-]*$")]
+PageNumber = Annotated[int, Field(ge=1, le=MAX_PAGES_CEILING)]
 
 
 class _Strict(BaseModel):
@@ -266,6 +269,10 @@ class StatementAccount(_Strict):
     name: ShortText | None = None
     #: The financial institution named by the file (OFX ``FI/ORG``), free text.
     institution: Annotated[str, Field(max_length=200)] | None = None
+    #: The account's subtype the document prints (``traditional_ira``,
+    #: ``education_529``; ``app.domain.accounts.subtypes``), read by the
+    #: worker's document parsers from an account's name or index group.
+    subtype: Code | None = None
 
 
 class Statement(_Strict):
@@ -287,6 +294,9 @@ class Statement(_Strict):
     # -- set by the worker's document parsers (``app.ingestion.parsers``) -------
     #: The opening balance the statement prints (ledger sign convention).
     opening_balance: Balance | None = None
+    #: The pages the statement was read from (one account of a document of several).
+    first_page: PageNumber | None = None
+    last_page: PageNumber | None = None
     parser: ParserRef | None = None
     #: Per-field confidence of the statement's own facts (0..1).
     confidence: dict[Code, Confidence01] = Field(default_factory=dict, max_length=50)
@@ -342,19 +352,48 @@ AssetClassCode = Literal[
 ]
 
 
+#: Longest security name carried (``security.name`` holds as much).
+SECURITY_NAME_MAX: Final = 200
+
+
+def _security_name(value: str) -> str:
+    """Whitespace collapsed and a formula neutralised (C7), as the extractors do."""
+    return neutralise_formula(" ".join(value.split()))[:SECURITY_NAME_MAX]
+
+
+def has_word(text: str | None) -> bool:
+    """``text`` holds a letter or a digit (a name that can stand for a security)."""
+    return text is not None and any(ch.isalnum() for ch in text)
+
+
 class SecurityRef(_Strict):
-    """How a statement names an instrument (no holder identity, ever)."""
+    """How a statement names an instrument (no holder identity, ever).
+
+    A symbol, CUSIP or ISIN identifies it; without any of them the name
+    alone does (a holding printed only by its name: an unlisted
+    partnership, a 529 portfolio), when it holds a letter or a digit. The
+    importer matches such a security by its name
+    (``app.domain.investments.statement_import``). Names are bounded,
+    whitespace collapsed and formula-neutralised (SECURITY.md C7).
+    """
 
     symbol: Annotated[str, Field(pattern=r"^[A-Za-z0-9.^/:_-]{1,32}$")] | None = None
     cusip: Annotated[str, Field(pattern=r"^[0-9A-Z*@#]{9}$")] | None = None
     isin: Annotated[str, Field(pattern=r"^[A-Z]{2}[A-Z0-9]{9}[0-9]$")] | None = None
-    name: Annotated[str, Field(max_length=200)] | None = None
+    name: (
+        Annotated[str, Field(max_length=SECURITY_NAME_MAX), AfterValidator(_security_name)] | None
+    ) = None
     asset_class: AssetClassCode | None = None
+
+    @property
+    def identified(self) -> bool:
+        """A symbol, CUSIP or ISIN names it (not its name alone)."""
+        return bool(self.symbol or self.cusip or self.isin)
 
     @model_validator(mode="after")
     def _named(self) -> SecurityRef:
-        if not (self.symbol or self.cusip or self.isin):
-            raise ValueError("a security needs a symbol, CUSIP or ISIN")
+        if not (self.identified or has_word(self.name)):
+            raise ValueError("a security needs a symbol, CUSIP, ISIN or name")
         return self
 
 
@@ -365,6 +404,9 @@ class InvestmentPosition(_Strict):
     #: Units held (negative for a short position).
     quantity: Quantity
     unit_price: Quantity | None = None
+    #: ``unit_price`` is quoted per 100 of face value (a bond: ``98.625`` is
+    #: 98.625% of par), so the market value is quantity x price / 100.
+    price_per_100: bool = False
     market_value: Amount | None = None
     cost_basis: Amount | None = None
     price_as_of: date | None = None
@@ -373,6 +415,13 @@ class InvestmentPosition(_Strict):
     low_confidence: list[Code] = Field(default_factory=list, max_length=20)
     page: int | None = Field(default=None, ge=1, le=MAX_PAGES_CEILING)
     bbox: BBox | None = None
+
+    @property
+    def price_per_unit(self) -> Decimal | None:
+        """The price of one unit (``unit_price``, divided by 100 when quoted per 100)."""
+        if self.unit_price is None:
+            return None
+        return self.unit_price / 100 if self.price_per_100 else self.unit_price
 
 
 class InvestmentActivity(_Strict):
@@ -389,6 +438,9 @@ class InvestmentActivity(_Strict):
     security: SecurityRef | None = None
     quantity: Quantity | None = None
     unit_price: Quantity | None = None
+    #: ``unit_price`` is quoted per 100 of face value (a bond trade: ``99.00``
+    #: is 99% of par), as :attr:`InvestmentPosition.price_per_100`.
+    price_per_100: bool = False
     #: A split's ``(new, old)`` units (``(2, 1)`` for a 2-for-1 split).
     split_ratio: tuple[Quantity, Quantity] | None = None
     amount: Amount
@@ -400,6 +452,13 @@ class InvestmentActivity(_Strict):
     low_confidence: list[Code] = Field(default_factory=list, max_length=20)
     page: int | None = Field(default=None, ge=1, le=MAX_PAGES_CEILING)
     bbox: BBox | None = None
+
+    @property
+    def price_per_unit(self) -> Decimal | None:
+        """The price of one unit (``unit_price``, divided by 100 when quoted per 100)."""
+        if self.unit_price is None:
+            return None
+        return self.unit_price / 100 if self.price_per_100 else self.unit_price
 
 
 class InvestmentReconciliation(_Strict):
@@ -451,6 +510,9 @@ class InvestmentStatement(_Strict):
     total_value: Balance | None = None
     truncated: bool = False
     # -- set by the worker's document parsers -----------------------------------
+    #: The pages the statement was read from (one account of a document of several).
+    first_page: PageNumber | None = None
+    last_page: PageNumber | None = None
     parser: ParserRef | None = None
     confidence: dict[Code, Confidence01] = Field(default_factory=dict, max_length=50)
     reconciliation: InvestmentReconciliation | None = None
@@ -788,6 +850,17 @@ class ParserScore(_Strict):
     score: Confidence01
 
 
+class LineRegion(_Strict):
+    """A line on a page (page units), e.g. one a parser skipped."""
+
+    page: PageNumber
+    bbox: BBox
+
+
+#: Skipped lines whose boxes are kept with the parse (review highlight).
+MAX_SKIPPED_REGIONS: Final = 50
+
+
 class ParseInfo(_Strict):
     """What the worker's document parsers did with the stored pages (worker-written).
 
@@ -803,6 +876,8 @@ class ParseInfo(_Strict):
     #: lines whose amount could not be read.
     pending_items: int = Field(default=0, ge=0)
     skipped_lines: int = Field(default=0, ge=0)
+    #: Where skipped lines are, when the parser knows (the first ones).
+    skipped_regions: list[LineRegion] = Field(default_factory=list, max_length=MAX_SKIPPED_REGIONS)
     payslip: Payslip | None = None
     receipt: Receipt | None = None
     #: A loan or mortgage statement (``app.ingestion.parsers.loan_statement``).
@@ -862,12 +937,14 @@ class ExtractResult(_Strict):
                 s.source_format in WORKER_STATEMENT_FORMATS
                 or s.parser is not None
                 or s.reconciliation is not None
+                or s.first_page is not None
                 for s in self.statements
             )
             or any(
                 i.source_format in WORKER_STATEMENT_FORMATS
                 or i.parser is not None
                 or i.reconciliation is not None
+                or i.first_page is not None
                 or bool(i.confidence)
                 or any(p.confidence is not None or p.low_confidence for p in i.positions)
                 or any(a.confidence is not None or a.low_confidence for a in i.activity)

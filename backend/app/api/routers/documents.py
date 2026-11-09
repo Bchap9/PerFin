@@ -33,6 +33,10 @@
 * ``GET /documents/{id}/regions?page=``: the page's word boxes for review
   highlighting (any role that can see the document; the words only where
   the download rule allows, else page geometry with no words).
+* ``POST /documents/{id}/teach``: "Teach PerFin" (``app.domain.review.teach``):
+  labels selected on the page (fields, tables, lines to ignore, notes) are
+  applied to the document and, with ``remember``, kept as a learned layout
+  on a household fingerprint; member or above who can change the document.
 
 Tokens need ``documents:read`` / ``documents:write``.
 
@@ -74,7 +78,8 @@ from app.domain.documents.schemas import (
 )
 from app.domain.documents.search import Q_MAX as SEARCH_Q_MAX
 from app.domain.review import assist as review_assist
-from app.domain.review.schemas import DocumentRegions
+from app.domain.review import teach as review_teach
+from app.domain.review.schemas import DocumentRegions, TeachOut, TeachRequest
 from app.ingestion.intake.multipart import MultipartFile, boundary_of
 from app.ingestion.sandbox.protocol import MAX_PAGES_CEILING
 
@@ -308,6 +313,22 @@ def require_document_writer(document_id: uuid.UUID, db: DbSession, principal: Wr
 
 
 DocumentWriter = Annotated[Principal, Depends(require_document_writer)]
+
+
+@router.post(
+    "/documents/{document_id}/teach",
+    response_model=TeachOut,
+    responses=PROBLEMS,
+    summary="Teach PerFin what is where on the document (and remember the layout)",
+)
+def post_teach(
+    document_id: uuid.UUID,
+    body: TeachRequest,
+    request: Request,
+    db: DbSession,
+    principal: DocumentWriter,
+) -> TeachOut:
+    return review_teach.teach(db, principal, document_id, body, request=request)
 
 
 @router.post(

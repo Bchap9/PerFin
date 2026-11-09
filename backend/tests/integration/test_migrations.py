@@ -30,7 +30,13 @@ run as the owner, exactly like ``perfin migrate`` in production, and then:
   downgrade removes exactly that table and the ``notification_channel_type``
   enum type;
 * 0008 adds ``import_mapping.sign_unverified`` (false for existing rows), and
-  its downgrade removes exactly that column.
+  its downgrade removes exactly that column;
+* 0010 creates ``statement_record`` under forced RLS with household-consistent
+  keys, and its downgrade removes exactly that table;
+* 0011 adds ``parser_fingerprint.template`` (NULL for existing rows), and its
+  downgrade removes exactly that column;
+* 0012 lets ``security.symbol`` be NULL (unique only where there is one), and
+  its downgrade restores ``NOT NULL`` and the unique constraint.
 """
 
 from __future__ import annotations
@@ -169,6 +175,8 @@ PHASE6B_ENUM_TYPES = frozenset({"ai_mode", "ai_transport"})
 PHASE7_TABLES = frozenset({"notification_channel"})
 #: Enum types created by revision 0007.
 PHASE7_ENUM_TYPES = frozenset({"notification_channel_type"})
+#: Statement records (revision 0010), household-scoped.
+STATEMENT_RECORD_TABLES = frozenset({"statement_record"})
 #: Enum types created by revision 0002 (identity).
 PHASE1_ENUM_TYPES = frozenset(
     {
@@ -332,6 +340,9 @@ def test_single_head_and_linear_history() -> None:
     assert script.get_base() == "0001"
     # One revision per phase, each on top of the previous one.
     assert [rev.revision for rev in script.walk_revisions("base", "heads")] == [
+        "0012",
+        "0011",
+        "0010",
         "0009",
         "0008",
         "0007",
@@ -350,6 +361,9 @@ def test_single_head_and_linear_history() -> None:
     assert script.get_revision("0007").down_revision == "0006"
     assert script.get_revision("0008").down_revision == "0007"
     assert script.get_revision("0009").down_revision == "0008"
+    assert script.get_revision("0010").down_revision == "0009"
+    assert script.get_revision("0011").down_revision == "0010"
+    assert script.get_revision("0012").down_revision == "0011"
 
 
 def test_upgrade_head_matches_models_without_drift(migrated: Scratch) -> None:
@@ -370,6 +384,7 @@ def test_upgrade_head_matches_models_without_drift(migrated: Scratch) -> None:
         | PHASE56_TABLES
         | PHASE6B_TABLES
         | PHASE7_TABLES
+        | STATEMENT_RECORD_TABLES
     )
 
 
@@ -647,6 +662,7 @@ def test_app_role_privileges_are_least(migrated: Scratch) -> None:
         | PHASE56_TABLES
         | PHASE6B_TABLES
         | PHASE7_TABLES
+        | STATEMENT_RECORD_TABLES
     )
     for table in sorted(all_tables - {"audit_log"}):
         assert {p for t, p in privileges if t == table} == {
@@ -1562,7 +1578,7 @@ def test_downgrade_0008_removes_only_the_mapping_sign_column(migrated: Scratch) 
             )
         command.upgrade(cfg, "head")
         command.check(cfg)
-        assert _public_tables(engine) == tables
+        assert _public_tables(engine) == tables | STATEMENT_RECORD_TABLES
         with engine.begin() as conn:
             set_context(conn, household)
             flag = conn.execute(
@@ -1623,5 +1639,176 @@ def test_phase7_notification_channel_refuses_other_households_on_migrated_databa
                     text("UPDATE notification_channel SET events = '{}'::jsonb WHERE id = :id"),
                     {"id": channel_a},
                 )
+    finally:
+        app.dispose()
+
+
+def _insert_statement_record(
+    conn: Connection, household: uuid.UUID
+) -> tuple[uuid.UUID, uuid.UUID, uuid.UUID]:
+    """A household with an account and a document, and one statement record."""
+    account = _insert_account(conn, household)
+    document = _insert_document(conn, household, None)
+    record = uuid.uuid4()
+    conn.execute(
+        text(
+            "INSERT INTO statement_record (id, household_id, account_id, document_id, kind, "
+            "period_start, period_end, period_stated, source_format, currency) VALUES "
+            "(:id, :h, :a, :d, 'bank', '2026-01-01', '2026-01-31', true, 'pdf', 'USD')"
+        ),
+        {"id": record, "h": household, "a": account, "d": document},
+    )
+    return account, document, record
+
+
+def test_0010_statement_record_is_household_isolated_and_downgrades(migrated: Scratch) -> None:
+    """0010 creates ``statement_record`` under forced RLS; its downgrade removes only it."""
+    app = migrated.app_engine()
+    a, b = uuid.uuid4(), uuid.uuid4()
+    try:
+        for household in (a, b):
+            with app.begin() as conn:
+                set_context(conn, household)
+                conn.execute(
+                    text("INSERT INTO household (id, name) VALUES (:id, 'Synthetic')"),
+                    {"id": household},
+                )
+        with app.begin() as conn:
+            set_context(conn, a)
+            account_a, document_a, record_a = _insert_statement_record(conn, a)
+        with app.begin() as conn:
+            set_context(conn, b)
+            assert conn.execute(text("SELECT count(*) FROM statement_record")).scalar_one() == 0
+            updated = conn.execute(
+                text("UPDATE statement_record SET outcome = 'skipped' WHERE id = :id"),
+                {"id": record_a},
+            )
+            assert updated.rowcount == 0
+            account_b, _, _ = _insert_statement_record(conn, b)
+        with app.connect() as conn, conn.begin():
+            set_context(conn, b)
+            # Household B's record cannot point at household A's document.
+            with pytest.raises(DBAPIError):
+                conn.execute(
+                    text(
+                        "INSERT INTO statement_record (id, household_id, account_id, "
+                        "document_id, kind, period_start, period_end, period_stated, "
+                        "source_format, currency) VALUES (:id, :h, :a, :d, 'bank', "
+                        "'2026-02-01', '2026-02-28', true, 'pdf', 'USD')"
+                    ),
+                    {"id": uuid.uuid4(), "h": b, "a": account_b, "d": document_a},
+                )
+        with app.connect() as conn, conn.begin():
+            set_context(conn, a)
+            with pytest.raises(DBAPIError, match="check constraint"):
+                conn.execute(
+                    text("UPDATE statement_record SET outcome = 'maybe' WHERE id = :id"),
+                    {"id": record_a},
+                )
+        assert account_a != account_b
+    finally:
+        app.dispose()
+    cfg = migrated.config()
+    engine = migrated.owner_engine()
+    try:
+        tables = _public_tables(engine)
+        assert tables >= STATEMENT_RECORD_TABLES
+        command.downgrade(cfg, "0009")
+        assert _public_tables(engine) == tables - STATEMENT_RECORD_TABLES
+        command.upgrade(cfg, "head")
+        command.check(cfg)
+        assert _public_tables(engine) == tables
+    finally:
+        engine.dispose()
+
+
+def _fingerprint_columns(engine: Engine) -> set[str]:
+    with engine.connect() as conn:
+        rows = conn.execute(
+            text(
+                "SELECT column_name FROM information_schema.columns "
+                "WHERE table_schema = 'public' AND table_name = 'parser_fingerprint'"
+            )
+        ).scalars()
+        return {str(r) for r in rows}
+
+
+def test_0011_fingerprint_template_column_downgrades(migrated: Scratch) -> None:
+    """0011 adds ``parser_fingerprint.template`` (a JSON object or NULL); downgrade drops it."""
+    cfg = migrated.config()
+    engine = migrated.owner_engine()
+    try:
+        assert "template" in _fingerprint_columns(engine)
+        tables = _public_tables(engine)
+        command.downgrade(cfg, "0010")
+        assert "template" not in _fingerprint_columns(engine)
+        assert _public_tables(engine) == tables
+        command.upgrade(cfg, "head")
+        command.check(cfg)
+        assert "template" in _fingerprint_columns(engine)
+        with engine.connect() as conn:
+            check = conn.execute(
+                text(
+                    "SELECT pg_get_constraintdef(oid) FROM pg_constraint "
+                    "WHERE conname = 'ck_parser_fingerprint_template_object'"
+                )
+            ).scalar_one()
+        assert "jsonb_typeof(template)" in check
+    finally:
+        engine.dispose()
+
+
+def _insert_symbol(conn: Connection, household: uuid.UUID, symbol: str | None) -> None:
+    conn.execute(
+        text(
+            "INSERT INTO security (id, household_id, symbol, name, asset_class, currency) "
+            "VALUES (:id, :h, :s, 'Synthetic Portfolio', 'other', 'USD')"
+        ),
+        {"id": uuid.uuid4(), "h": household, "s": symbol},
+    )
+
+
+def test_0012_securities_without_a_symbol(migrated: Scratch) -> None:
+    """0012 lets ``security.symbol`` be NULL (several per household); a symbol stays
+    unique with its exchange. Downgrade restores ``NOT NULL`` once every security
+    has a symbol."""
+    app = migrated.app_engine()
+    household = uuid.uuid4()
+    try:
+        with app.begin() as conn:
+            set_context(conn, household)
+            conn.execute(
+                text("INSERT INTO household (id, name) VALUES (:id, 'Synthetic')"),
+                {"id": household},
+            )
+            _insert_symbol(conn, household, None)
+            _insert_symbol(conn, household, None)
+            _insert_symbol(conn, household, "ZZAB")
+        with app.connect() as conn, conn.begin():
+            set_context(conn, household)
+            with pytest.raises(DBAPIError, match="uq_security_household_symbol_exchange"):
+                _insert_symbol(conn, household, "ZZAB")
+        with app.connect() as conn, conn.begin():
+            set_context(conn, household)
+            with pytest.raises(DBAPIError, match="check constraint"):
+                _insert_symbol(conn, household, "not a symbol")
+        cfg = migrated.config()
+        with pytest.raises(DBAPIError):
+            command.downgrade(cfg, "0011")
+        with app.begin() as conn:
+            set_context(conn, household)
+            conn.execute(
+                text(
+                    "UPDATE security SET symbol = 'ZZ' || left(md5(id::text), 6) "
+                    "WHERE symbol IS NULL"
+                )
+            )
+        command.downgrade(cfg, "0011")
+        with app.connect() as conn, conn.begin():
+            set_context(conn, household)
+            with pytest.raises(DBAPIError):
+                _insert_symbol(conn, household, None)
+        command.upgrade(cfg, "head")
+        command.check(cfg)
     finally:
         app.dispose()

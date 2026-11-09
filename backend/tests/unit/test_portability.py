@@ -274,6 +274,8 @@ def test_not_exported_only_holds_justified_tables() -> None:
         "event",
         "holding",
         "import_hash_alias",
+        # Import history of this instance (like ingest_job): the statement guard.
+        "statement_record",
         "portability_archive",
         "tax_export",
         "review_item",

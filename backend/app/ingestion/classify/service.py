@@ -101,7 +101,12 @@ class Classification:
         if self.institution:
             out["institution_name"] = self.institution
         if self.period.start is not None:
-            out["period"] = {"source": self.period.source, "inferred": self.period.inferred}
+            out["period"] = {
+                "source": self.period.source,
+                "inferred": self.period.inferred,
+                "start": self.period.start.isoformat(),
+                "end": self.period.end.isoformat() if self.period.end else None,
+            }
         if self.printed_date.value is not None:
             out["printed_date"] = self.printed_date.value.isoformat()
         if self.scores:
@@ -237,8 +242,11 @@ def apply_classification(
     """Write ``classification`` on ``document``; returns facts for the ingest log.
 
     Fields below :data:`FIELD_THRESHOLD` are not written. An explicit
-    ``account_id`` given at upload is never replaced. A period is stored
-    with its source; ``document.confidence`` carries per-field confidence.
+    ``account_id`` given at upload is never replaced. A printed period is
+    stored with its source; an inferred one (transaction or line dates) is
+    only a hint in ``document.confidence`` (``period``), never the
+    document's period: the parsed statements set that (pipeline).
+    ``document.confidence`` carries per-field confidence.
     """
     c = classification
     facts: dict[str, Any] = {"method": c.method, "kind": c.kind}
@@ -250,7 +258,11 @@ def apply_classification(
         if institution_id is not None and document.institution_id is None:
             document.institution_id = institution_id
         facts["institution_known"] = institution_id is not None
-    if c.period.start is not None and c.period.confidence >= FIELD_THRESHOLD:
+    if (
+        c.period.start is not None
+        and not c.period.inferred
+        and c.period.confidence >= FIELD_THRESHOLD
+    ):
         document.period_start, document.period_end = c.period.start, c.period.end
     elif c.printed_date.value is not None and c.printed_date.confidence >= FIELD_THRESHOLD:
         document.period_start = document.period_end = c.printed_date.value

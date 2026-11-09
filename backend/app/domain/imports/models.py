@@ -31,19 +31,34 @@ liability account on its own (a card export may list purchases as
 positive); a person saving the mapping's spec (``PATCH`` with ``spec``)
 clears it, and choosing the mapping explicitly for a re-run uses it as is.
 It is not part of the API.
+
+``statement_record`` is one statement the importer committed for an account
+(the statement-level duplicate guard, INGESTION.md "Match and
+deduplicate"): the account, the document it came from, its period, where
+the period came from (``period_stated``: printed by the statement or
+declared by the format, else the span of its rows), the source format and
+its closing figures (a bank statement's closing balance; a brokerage
+statement's cash, holdings and account value). ``outcome`` is ``imported``,
+or ``skipped`` when a person said the statement is the same as one already
+imported (it then stays out). A new statement whose stated period overlaps
+an imported, stated one of the same account from another document waits in
+review (``statement_overlap``). Both references cascade: the record goes
+with its account or document.
 """
 
 from __future__ import annotations
 
 import uuid
-from datetime import datetime
-from typing import Any
+from datetime import date, datetime
+from decimal import Decimal
+from typing import Any, Final
 
 from sqlalchemy import (
     CHAR,
     BigInteger,
     Boolean,
     CheckConstraint,
+    Date,
     DateTime,
     ForeignKey,
     Index,
@@ -59,9 +74,20 @@ from sqlalchemy.orm import Mapped, mapped_column
 import app.auth.models
 import app.domain.accounts.models  # noqa: F401
 from app.db.base import Base, HouseholdScoped, Timestamps, UUIDPk
-from app.db.types import household_key, household_ref_fk
+from app.db.types import (
+    AMOUNT,
+    CURRENCY,
+    currency_check,
+    household_fk,
+    household_key,
+    household_ref_fk,
+)
 
 NAME_MAX = 200
+#: ``statement_record.kind``: a ledger (bank, card, loan) or a brokerage statement.
+STATEMENT_KINDS: Final = ("bank", "investment")
+#: ``statement_record.outcome`` values.
+STATEMENT_OUTCOMES: Final = ("imported", "skipped")
 
 
 class ImportMapping(UUIDPk, Timestamps, HouseholdScoped, Base):
@@ -102,3 +128,48 @@ class ImportMapping(UUIDPk, Timestamps, HouseholdScoped, Base):
 
     def __repr__(self) -> str:
         return f"ImportMapping(id={self.id!s})"
+
+
+class StatementRecord(UUIDPk, Timestamps, HouseholdScoped, Base):
+    """One statement committed for an account (module doc)."""
+
+    __tablename__ = "statement_record"
+    __table_args__ = (
+        household_fk("statement_record", "account_id", "account"),
+        household_fk("statement_record", "document_id", "document"),
+        UniqueConstraint(
+            "account_id",
+            "document_id",
+            "kind",
+            "period_start",
+            name="uq_statement_record_account_document_kind_start",
+        ),
+        CheckConstraint("period_start <= period_end", name="period_ordered"),
+        CheckConstraint("kind IN ('bank', 'investment')", name="kind_known"),
+        CheckConstraint("outcome IN ('imported', 'skipped')", name="outcome_known"),
+        CheckConstraint("source_format ~ '^[a-z]{1,16}$'", name="source_format_code"),
+        currency_check(),
+        Index("ix_statement_record_account_period", "household_id", "account_id", "period_start"),
+    )
+
+    account_id: Mapped[uuid.UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
+    document_id: Mapped[uuid.UUID] = mapped_column(Uuid(as_uuid=True), nullable=False, index=True)
+    kind: Mapped[str] = mapped_column(String(16), nullable=False)
+    outcome: Mapped[str] = mapped_column(
+        String(16), nullable=False, default="imported", server_default=text("'imported'")
+    )
+    period_start: Mapped[date] = mapped_column(Date, nullable=False)
+    period_end: Mapped[date] = mapped_column(Date, nullable=False)
+    #: Printed or declared by the statement (else the span of its rows).
+    period_stated: Mapped[bool] = mapped_column(Boolean, nullable=False)
+    source_format: Mapped[str] = mapped_column(String(16), nullable=False)
+    currency: Mapped[str] = mapped_column(CURRENCY, nullable=False)
+    #: A bank statement's closing balance.
+    closing_balance: Mapped[Decimal | None] = mapped_column(AMOUNT)
+    #: A brokerage statement's closing cash, holdings total and account value.
+    closing_cash: Mapped[Decimal | None] = mapped_column(AMOUNT)
+    holdings_value: Mapped[Decimal | None] = mapped_column(AMOUNT)
+    total_value: Mapped[Decimal | None] = mapped_column(AMOUNT)
+
+    def __repr__(self) -> str:
+        return f"StatementRecord(id={self.id!s}, kind={self.kind})"

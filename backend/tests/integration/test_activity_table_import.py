@@ -182,7 +182,7 @@ class Env:
         return [j.log or {} for j in jobs]
 
     def activity(self, account: Account) -> list[Row]:
-        names = {s.id: s.symbol for s in self.query(select(Security))}
+        names = {s.id: s.symbol or s.name for s in self.query(select(Security))}
         txns: list[InvestmentTxn] = self.query(
             select(InvestmentTxn).where(InvestmentTxn.account_id == account.id)
         )
@@ -204,7 +204,7 @@ class Env:
         return sorted((t.posted_date, t.amount, t.raw_payee) for t in rows)
 
     def holdings(self, account: Account) -> list[tuple[str, Decimal]]:
-        names = {s.id: s.symbol for s in self.query(select(Security))}
+        names = {s.id: s.symbol or s.name for s in self.query(select(Security))}
         rows: list[Holding] = self.query(select(Holding).where(Holding.account_id == account.id))
         return sorted((names[h.security_id], h.quantity) for h in rows if h.quantity != 0)
 

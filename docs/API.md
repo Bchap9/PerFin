@@ -194,6 +194,7 @@ GET             /documents/{id}
 GET             /documents/{id}/download        decrypts and streams, attachment
 GET             /documents/{id}/preview?page=   rendered PNG, sandboxed
 GET             /documents/{id}/regions?page=   word boxes for review highlighting
+POST            /documents/{id}/teach           Teach PerFin: labels applied, layout remembered
 POST            /documents/{id}/reprocess
 GET             /documents/{id}/imported        rows a delete with data would remove
 DELETE          /documents/{id}                 ?with_data=true also deletes the imported rows
@@ -357,7 +358,16 @@ honoured) takes optional `mapping_id`, `account_id` and `group` (with
 `account_id` only, else `422`: the statement of a multi-account CSV the
 account is for, an `unknown_account` item's `group`; without it the account
 takes only the statements with its own last four digits or, when it records
-none, the one statement nothing matched); a `mapping_id`
+none, the one statement nothing matched) and `allow_overlap` (account ids,
+each editable: their statements are imported although their period
+overlaps a statement already imported from another document, the "import
+anyway" of a `statement_overlap` item, also after it was answered "same
+statement": the skipped statement is then imported; this run only). Every
+re-run also applies the document's "import anyway" and "import as read"
+review answers, each to the one statement it was given about (by
+`statement_key`, wherever that statement now sits); a statement whose
+figures do not add up is imported only on such an answer, never through
+this endpoint alone; a `mapping_id`
 imports the table with that mapping even when it is brokerage activity; the target account
 (the given one, the document's, else the mapping's) must be editable (`404
 account-not-found`); a document that is not `needs_review`/`processed` or
@@ -483,7 +493,9 @@ the pipeline or importer, never file content; `next_step` is
 `confirm_duplicate`, `choose_account`, `column_mapping`, `reprocess`,
 `choose_owner`, `attach_receipt` or `correct_fields`; `GET /review/{id}`
 also returns `regions` (`[{"page", "bbox", "label": "transaction" |
-"account_number" | "page", "transaction_id"?, "fields"}]`) and
+"account_number" | "page" | "skipped_line", "transaction_id"?, "fields"}]`;
+`skipped_line`: a line a parser skipped, from a `lines_skipped` item's
+`lines`) and
 `alternatives` (`[{"field", "value", "label", "score", "transaction_id",
 "source": "document" | "ledger" | "household"}]`; values read from the
 document only for callers the download rule allows), both `null` in lists).
@@ -517,7 +529,16 @@ review-kind-mismatch`): `{"kind": "possible_duplicate", "decision": "confirm"
 deletes it and records its `import_hash` for the kept transaction, which
 takes the hash when it has none and otherwise gets an `import_hash_alias`;
 reject confirms it; `duplicate_of` must be one of the item's `candidates`
-and is required when there are several, `422 invalid-resolution`); `{"kind":
+and is required when there are several, `422 invalid-resolution`; a
+statement whose period overlaps one already imported for the account,
+`reason: "statement_overlap"` with `account_id`, `statement`,
+`statement_key`, `investment`,
+`period_start`, `period_end`, `other_document_id`, `other_period_start`,
+`other_period_end` and `others`: confirm ("same statement") records it as
+skipped and imports nothing, reject ("import anyway") records the answer
+for the item's statement and account and queues `imports.apply_mapping`
+(below); both need edit on the account, `404 account-not-found`);
+`{"kind":
 "unknown_account", "account_id", "remember"}` (an account the caller edits;
 re-imports the stored extraction through `imports.apply_mapping`, or
 reprocesses a document without one; `remember` saves the statement's last
@@ -547,24 +568,92 @@ records that none applies; `next_step` is `attach_receipt`; INGESTION.md
 each one the caller edits, else `422 invalid-resolution`; with `confirm`,
 default `true`, the item's pending rows become `confirmed`, for a
 `reconciliation_failed`/`reconciliation_unavailable` item every pending row
-of the document on the item's account; audited as `transaction.update`).
+of the document on the item's account; audited as `transaction.update`);
+`{"kind": "low_confidence_field", "import_as_read": true}` ("Import as
+read", without `transactions`, else `422`) answers a brokerage statement
+held back because its figures do not add up: an
+`investment_reconciliation_failed` item (`differences`: per failed check
+`printed`, `computed`, `difference`; `currency`, `statement`,
+`statement_key`) or an
+`investment_low_confidence` item whose `fields` are only
+`["reconciliation"]`; any other item is `422 invalid-resolution`. It needs
+edit on the item's account (`404 account-not-found`) and queues
+`imports.apply_mapping`: the statement is imported as printed into that
+account, without a balance snapshot. The resolution records
+`import_as_read`, `account_id`, `target`, `statement`, `statement_key`,
+`reason`, `failed`, `snapshot: false` and `job_id`; "import anyway"
+(`import_anyway`) records the same shape. An answer covers the item's
+statement only (its `statement_key`: a digest of the statement as read)
+and lasts: every later import of the document, whoever starts it, puts
+that statement on that account wherever it now sits and does not hold it
+again for what was answered, for an account the importing user may import
+into; a statement read differently (after a reprocess) is a new statement.
+An item without `statement_key` (raised before keys existed) is `409
+review-item-stale`.
 Other kinds can only be dismissed for now (`409
 review-resolution-unsupported`). Review tools, same callers and open-item
 rule as resolve unless noted: `POST /review/{id}/correct` `{"document"?:
 {"institution_id"?, "account_id"?, "period_start"?, "period_end"?,
-"tax_year"?, "kind"?}, "transactions": [...as above], "resolve"}` (an
+"tax_year"?, "kind"?, "opening_balance"?, "closing_balance"?,
+"statement"?}, "transactions": [...as above], "resolve"}` (an
 institution of the household, `404 institution-not-found`; an account the
 caller edits; `null` clears institution, period and tax year; a period that
 ends before it starts is `422`; audit `document.correct`; `resolve` closes
-the item) answers the item. `POST /review/{id}/remember-layout`
-`{"institution_id", "kind"?, "parser"?, "match"?, "reprocess_similar"}`
+the item) answers the item. Balances (decimal strings) correct one
+statement of the stored extraction (`statement`: its index; default the
+item's, the only one, or the one of the item's account; `422
+statement-required`, `409 statement-unavailable`) and reconcile it again;
+a `reconciliation_*` item's figures (`opening`, `closing`, `total`,
+`difference`, `status`) are updated, and with `resolve` the statement must
+now add up (`409 statement-does-not-reconcile`): its pending rows are
+confirmed and its closing balance recorded as a statement snapshot
+(resolution `reconciled`, `confirmed`, `snapshot`). `POST
+/documents/{id}/teach` (member or above who may change the document;
+`documents:write`) `{"labels": [{"field": "account_number" | "account_name"
+| "period_start" | "period_end" | "opening_balance" | "closing_balance" |
+"institution" | "ignore" | "other", "page", "bbox", "value"?, "note"?}],
+"tables": [{"kind": "transactions" | "holdings", "page", "bbox", "columns":
+[{"x0", "x1", "role", "note"?}]}], "institution_id"? | "institution_name"?,
+"account_id"?, "remember", "reprocess_similar", "replace", "item_id"?, "resolve"}`
+(at most 40 labels and 2 tables; `other` needs a `note`; column roles
+`date`, `payee`, `memo`, `amount`, `debit`, `credit`, `balance` or
+`symbol`, `security`, `quantity`, `price`, `market_value`, `cost_basis`,
+plus `ignore` and `other`) applies the labels to the document and, with
+`remember`, stores a household fingerprint carrying the learned template
+(INGESTION.md "Teaching PerFin a layout"): `422 page-not-found`, `422
+invalid-table` (no date and amount column, roles twice, fewer than two
+headers), `422 institution-required` (remember without an institution),
+`422 teach-item-mismatch`, `409 layout-unavailable`, and the
+remember-layout errors (with `409 layout-conflict`). It answers `{"document_id", "fields": [{"field",
+"value", "page", "anchor", "direction", "note"}], "tables": [{"kind",
+"rows", "columns": [{"header", "role"}]}], "ignored", "notes", "applied",
+"rerun": "import" | "pipeline" | null, "job_id", "fingerprint_id",
+"reprocessed", "merged_from", "kept", "warnings", "item"}` (audit `document.teach`: field names,
+counts, notes and ids, never the values read; notes are never acted on and
+keep no word that holds a digit). With `resolve` the `item_id` item is
+closed only when the teaching answers it: a `reconciliation_*` item when
+the statement now reconciles (its pending rows confirmed, as `/correct`
+does); any item when the document is read again through the pipeline
+(`rerun: "pipeline"`); an `unparsed` or `unknown_account` item when the
+taught rows are imported (`rerun: "import"`); a `new_institution` item when
+the institution is set or the layout remembered; a `low_confidence_field`
+item when a fact named by its `field`/`fields` changed (the period, the
+balances, the institution, the account); otherwise (a fact that does not
+answer the item) it stays open and `warnings` holds `item_left_open`.
+`POST /review/{id}/remember-layout`
+`{"institution_id", "kind"?, "parser"?, "match"?, "reprocess_similar", "replace"}`
 stores a household `parser_fingerprint` (`match` has the shipped
-fingerprints' schema, derived from the document's header lines and table
+fingerprints' schema: `all`, `one_of`, `any`, `min_any`, rules `header`,
+`text`, `regex`, `account_mask`, `columns`, `metadata`; derived from the document's header lines and table
 layout when absent): `409 layout-unavailable` without extracted pages, `422
 kind-required`, `422 parser-unknown`, `422` for rules outside the schema or
 with an unsafe regex, `422 layout-not-distinctive`, `422 layout-does-not-match`
 (the rules must recognise this document), `422 layout-too-costly` (the rules
 did not finish within the household matching budget on this document), `409
+layout-conflict` (the institution's remembered layout of this kind carries a
+taught template whose rules do not recognise this document; `replace: true`
+replaces it, else a template is never dropped: the same layout remembered
+again keeps it, answered as `merged_from` and `kept`), `409
 fingerprint-limit` (the household already remembers 100 layouts, or the
 layout 10 000 versions); it resolves the item, reprocesses the document and
 up to 50 `needs_review` documents the caller may change whose stored layout
@@ -968,15 +1057,19 @@ fractions rounded half-even to 10 decimals (`"0.2100000000"` = 21 %).
 
 - **Securities** (`{"id", "symbol", "name", "asset_class", "currency",
   "isin", "cusip", "sector", "exchange", "created_at", "updated_at"}`): the
-  household's catalogue. Owners and admins see all of it; members and
+  household's catalogue. `symbol` is `null` for a security an imported
+  statement printed by its name alone (an unlisted partnership, a 529
+  portfolio), also in a holding's `security`; clients show its name. Owners and admins see all of it; members and
   viewers see securities with activity on an account they can see, or with
   none at all (a security used only on hidden accounts is `404
   security-not-found`, like another household's). `GET
-  /securities?q=&asset_class=&cursor=&limit=` (by symbol); `POST`
-  (`Idempotency-Key` honoured; symbol and exchange unique, `409
-  security-exists`; ISIN/CUSIP format-checked and upper-cased); `PATCH`
-  (currency only while there are no prices or transactions, `409
-  security-currency-locked`); `DELETE` (`409 security-in-use` with
+  /securities?q=&asset_class=&cursor=&limit=` (by symbol, a security
+  without one by its name); `POST` (`Idempotency-Key` honoured; a symbol
+  is required; symbol and exchange unique, `409 security-exists`;
+  ISIN/CUSIP format-checked and upper-cased); `PATCH` (currency only while
+  there are no prices or transactions, `409 security-currency-locked`; a
+  symbol may be given to a security without one, never set back to
+  `null`); `DELETE` (`409 security-in-use` with
   transactions or lots; prices go with it). Prices: `GET
   /securities/{id}/prices?from=&to=` (newest first), `POST` `{"price_date",
   "close"}` sets that day's close (`source` `manual`, replaces the day's

@@ -16,6 +16,7 @@ import { queryRoots } from "../../lib/queryKeys";
 import { ErrorLine, QueryState } from "../planning/PlanningPage";
 import { useAction } from "../planning/useAction";
 import { deletePrice, investmentKeys, listPrices, listSecurities, setPrice, type Price } from "./api";
+import { securityOptionLabel } from "./format";
 import { SecurityDialog } from "./SecurityDialog";
 
 /** Manual closing prices per security; a price replaces the one for that day. */
@@ -65,7 +66,7 @@ export function PricesTab({ currency }: { currency: string }) {
                 <Select
                   value={securityId}
                   onChange={(event) => { setChosen(event.target.value); }}
-                  options={(securities.data ?? []).map((entry) => ({ value: entry.id, label: `${entry.symbol} - ${entry.name}` }))}
+                  options={(securities.data ?? []).map((entry) => ({ value: entry.id, label: securityOptionLabel(entry) }))}
                 />
               </Field>
               <form

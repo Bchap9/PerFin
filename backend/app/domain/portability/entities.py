@@ -269,6 +269,10 @@ NOT_EXPORTED: Final[Mapping[str, str]] = MappingProxyType(
         "import_hash_alias": (
             "the hash of a deleted duplicate cannot be recomputed for new account ids"
         ),
+        "statement_record": (
+            "the statement duplicate guard's history of this instance's imports; documents "
+            "imported again record their statements anew"
+        ),
         # Jobs and workflow history of this instance's pipelines.
         "portability_archive": "the export and import jobs themselves",
         "tax_export": "a transient, one-time accountant export (like portability_archive)",

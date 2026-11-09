@@ -7,9 +7,13 @@ tables include ``household_id`` (ADR-0008, ``app.db.types``).
 * ``security``: the household's own catalogue (no shared instance-wide
   table: what a household holds is not visible to another one, not even the
   fact that a ticker exists). ``(household_id, symbol, exchange)`` is unique
-  (NULL exchange counts as one value). ``currency`` is the quote currency;
-  ``price`` rows are in it (composite key on ``(household_id, id,
-  currency)``).
+  among securities with a symbol (NULL exchange counts as one value). A
+  security may have **no symbol**: one a statement prints by its name alone
+  (an unlisted partnership, a 529 portfolio); the importer matches those by
+  :func:`security_name_key` (``app.domain.investments.statement_import``)
+  and fills the symbol in when a later statement prints one. ``currency``
+  is the quote currency; ``price`` rows are in it (composite key on
+  ``(household_id, id, currency)``).
 * ``price``: closing price of a security on a date, at most one per security
   and date. ``source`` is ``manual`` or a provider name (Phase 5 price feeds
   are opt-in and send only the symbol).
@@ -48,6 +52,7 @@ of a hidden account are never shown to a member or viewer.
 from __future__ import annotations
 
 import enum
+import unicodedata
 import uuid
 from datetime import date
 from decimal import Decimal
@@ -163,22 +168,27 @@ class Security(UUIDPk, Timestamps, HouseholdScoped, Base):
         UniqueConstraint(
             "household_id", "id", "currency", name="uq_security_household_id_id_currency"
         ),
-        UniqueConstraint(
+        # Securities without a symbol are not unique by it (several may have none).
+        Index(
+            "uq_security_household_symbol_exchange",
             "household_id",
             "symbol",
             "exchange",
-            name="uq_security_household_symbol_exchange",
+            unique=True,
             postgresql_nulls_not_distinct=True,
+            postgresql_where=text("symbol IS NOT NULL"),
         ),
         Index("ix_security_household_isin", "household_id", "isin"),
         Index("ix_security_household_cusip", "household_id", "cusip"),
         currency_check(),
-        CheckConstraint("symbol ~ '^[A-Za-z0-9.^/_:-]{1,32}$'", name="symbol_format"),
+        CheckConstraint(
+            "symbol IS NULL OR symbol ~ '^[A-Za-z0-9.^/_:-]{1,32}$'", name="symbol_format"
+        ),
         CheckConstraint("isin IS NULL OR isin ~ '^[A-Z]{2}[A-Z0-9]{9}[0-9]$'", name="isin_format"),
         CheckConstraint("cusip IS NULL OR cusip ~ '^[0-9A-Z*@#]{9}$'", name="cusip_format"),
     )
 
-    symbol: Mapped[str] = mapped_column(String(SYMBOL_MAX), nullable=False)
+    symbol: Mapped[str | None] = mapped_column(String(SYMBOL_MAX))
     isin: Mapped[str | None] = mapped_column(CHAR(12))
     cusip: Mapped[str | None] = mapped_column(CHAR(9))
     name: Mapped[str] = mapped_column(String(NAME_MAX), nullable=False)
@@ -188,6 +198,15 @@ class Security(UUIDPk, Timestamps, HouseholdScoped, Base):
     sector: Mapped[str | None] = mapped_column(String(SECTOR_MAX))
     exchange: Mapped[str | None] = mapped_column(String(EXCHANGE_MAX))
     currency: Mapped[str] = mapped_column(CURRENCY, nullable=False)
+
+
+def security_name_key(name: str) -> str:
+    """A security name as compared: Unicode-normalised (NFKC), case-folded, spaces collapsed.
+
+    Two names are the same security's only when their keys are equal; no
+    similarity, abbreviation or punctuation rule ever merges two names.
+    """
+    return " ".join(unicodedata.normalize("NFKC", name).casefold().split())
 
 
 class Price(UUIDPk, Timestamps, HouseholdScoped, Base):

@@ -20,8 +20,8 @@ nothing opens or parses the original file (ADR-0006/0009).
   fingerprint from the document's header lines and table header: the
   first distinctive header line must hold (``all``), further header lines
   and the column layout corroborate (``any``). Lines with digits runs
-  (dates, amounts, account numbers) are never used, so no account number
-  ends up in a fingerprint.
+  (dates, amounts, account numbers) are never used, nor a table header with
+  any digit in it, so no account number or figure ends up in a fingerprint.
 * **Regions.** :func:`page_of` and :func:`row_region` find a page and the
   box a parser read a row from, for the review UI's highlight.
 """
@@ -59,6 +59,7 @@ MAX_HEADER_CHARS: Final = 120
 #: A header line with a run of this many digits is not layout (dates, amounts, numbers).
 _DIGIT_RUN: Final = re.compile(r"\d{2,}")
 _LETTERS: Final = re.compile(r"[^\W\d_]{3,}")
+_DIGIT: Final = re.compile(r"\d")
 
 
 def stored_result(extraction: dict[str, Any] | None) -> ExtractResult | None:
@@ -177,7 +178,9 @@ def derive_match(result: ExtractResult) -> MatchSpec | None:
     rules: list[dict[str, Any]] = [{"header": lines[0]}]
     corroborating: list[dict[str, Any]] = [{"header": text} for text in lines[1:MAX_HEADER_RULES]]
     columns = [c for c in (view.table_headers[0] if view.table_headers else ()) if c][:20]
-    if len(columns) >= 2 and all(1 <= len(c) <= 64 for c in columns):
+    # A "header" with figures in it (a summary row read as a table) is no
+    # layout, and its digits must never be stored.
+    if len(columns) >= 2 and all(1 <= len(c) <= 64 and not _DIGIT.search(c) for c in columns):
         corroborating.append({"columns": list(columns)})
     data: dict[str, Any] = {"all": rules}
     if corroborating:

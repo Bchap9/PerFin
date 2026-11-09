@@ -24,6 +24,7 @@ than a column gap), with the page, box and the lowest OCR word confidence.
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 from statistics import median
 from typing import ClassVar, Final, Literal
@@ -58,6 +59,8 @@ class Cell:
     y1: float
     #: Lowest OCR confidence of the cell's words (0..1); None for a text layer.
     conf: float | None = None
+    #: The cell's words as ``(text, x0, x1)`` (empty: not known, see :meth:`word_cells`).
+    words: tuple[tuple[str, float, float], ...] = ()
 
     @property
     def centre(self) -> float:
@@ -65,6 +68,45 @@ class Cell:
 
     def overlap(self, x0: float, x1: float) -> float:
         return max(0.0, min(self.x1, x1) - max(self.x0, x0))
+
+    def word_cells(self) -> tuple[Cell, ...]:
+        """One cell per word: the extracted word boxes, else spans by character offset.
+
+        Two columns whose words sit closer than the cell gap (``120 $35.617``,
+        ``Transaction Description Quantity``) are one cell; a table reader
+        splits such a cell back into its words to give each column its own.
+        """
+        if self.words:
+            return tuple(
+                Cell(text, x0, self.y0, x1, self.y1, self.conf, ((text, x0, x1),))
+                for text, x0, x1 in self.words
+            )
+        parts = self.text.split()
+        if len(parts) <= 1:
+            return (self,)
+        width = (self.x1 - self.x0) / max(len(self.text), 1)
+        out: list[Cell] = []
+        offset = 0
+        for part in parts:
+            start = self.text.index(part, offset)
+            offset = start + len(part)
+            x0, x1 = self.x0 + start * width, self.x0 + offset * width
+            out.append(Cell(part, x0, self.y0, x1, self.y1, self.conf, ((part, x0, x1),)))
+        return tuple(out)
+
+
+def join_cells(cells: Sequence[Cell]) -> Cell:
+    """One cell of adjacent ``cells`` (left to right), keeping their words."""
+    confs = [c.conf for c in cells if c.conf is not None]
+    return Cell(
+        " ".join(c.text for c in cells),
+        min(c.x0 for c in cells),
+        min(c.y0 for c in cells),
+        max(c.x1 for c in cells),
+        max(c.y1 for c in cells),
+        min(confs) if confs else None,
+        tuple(w for c in cells for w in (c.words or ((c.text, c.x0, c.x1),))),
+    )
 
 
 @dataclass(frozen=True)
@@ -99,23 +141,33 @@ def _cells(page: Page, first: int, count: int, gap: float) -> tuple[Cell, ...]:
     words = page.words[first : first + count]
     cells: list[Cell] = []
     texts: list[str] = []
+    spans: list[tuple[str, float, float]] = []
     confs: list[float] = []
     box: list[float] = []
 
     def close() -> None:
         if texts:
             cells.append(
-                Cell(" ".join(texts), box[0], box[1], box[2], box[3], min(confs) if confs else None)
+                Cell(
+                    " ".join(texts),
+                    box[0],
+                    box[1],
+                    box[2],
+                    box[3],
+                    min(confs) if confs else None,
+                    tuple(spans),
+                )
             )
 
     for word in words:
         x0, y0, x1, y1 = word.bbox
         if texts and x0 - box[2] <= gap:
             texts.append(word.text)
+            spans.append((word.text, x0, x1))
             box = [box[0], min(box[1], y0), max(box[2], x1), max(box[3], y1)]
         else:
             close()
-            texts, confs, box = [word.text], [], [x0, y0, x1, y1]
+            texts, spans, confs, box = [word.text], [(word.text, x0, x1)], [], [x0, y0, x1, y1]
         if word.conf is not None:
             confs.append(word.conf / 100)
     close()
@@ -130,6 +182,9 @@ class DocumentView:
     source_format: Literal["pdf", "image"]
     truncated: bool
     page_count: int
+    #: The document's own title and author (PDF metadata), normalised; an
+    #: institution may name itself only there (its name on page 1 is a logo).
+    metadata: tuple[str, ...] = ()
 
     @classmethod
     def from_result(cls, result: ExtractResult) -> DocumentView:
@@ -153,16 +208,33 @@ class DocumentView:
                         height=line.bbox[3] - line.bbox[1] or unit,
                     )
                 )
+        meta = result.meta
+        metadata = (
+            tuple(normalise(v) for v in (meta.title, meta.author) if v) if meta is not None else ()
+        )
         return cls(
             lines=tuple(lines),
             source_format="image" if result.kind in IMAGE_KINDS else "pdf",
             truncated=result.truncated,
             page_count=len(result.pages),
+            metadata=metadata,
         )
 
     def head_text(self, pages: int = 1) -> str:
         """Normalised text of the first ``pages`` pages (for fingerprints)."""
         return " ".join(line.norm for line in self.lines if line.page <= pages)
+
+    def has_phrase(self, phrase: str, *, pages: int | None = None) -> bool:
+        """``phrase`` (normalised, whole words) on a line of the first ``pages`` (all: None)."""
+        needle = f" {normalise(phrase)} "
+        return any(
+            needle in f" {line.norm} " for line in self.lines if pages is None or line.page <= pages
+        )
+
+    def in_metadata(self, phrase: str) -> bool:
+        """``phrase`` (normalised, whole words) in the document's title or author."""
+        needle = f" {normalise(phrase)} "
+        return any(needle in f" {value} " for value in self.metadata)
 
 
 @dataclass
@@ -179,6 +251,10 @@ class ParseOutcome:
     pending_items: int = 0
     skipped_lines: int = 0
     warnings: list[str] = field(default_factory=list)
+    #: Pages and boxes of skipped lines where the parser knows them (review highlight).
+    skipped_regions: list[tuple[int, tuple[float, float, float, float]]] = field(
+        default_factory=list
+    )
 
     @property
     def empty(self) -> bool:

@@ -16,6 +16,9 @@ institutions, invented numbers).
 * A payslip is kept on the document; one that does not add up waits in review.
 * The stored extraction carries the parser output, so choosing an account
   later re-imports without a new upload or extraction.
+* A card "Statement of Account" with only a statement date
+  (``tests/fixtures/synth_card_statement.py``) imports into its credit card
+  account with no review item.
 """
 
 from __future__ import annotations
@@ -55,6 +58,7 @@ from app.domain.transactions.models import ReviewState, Transaction
 from app.ingestion.intake.upload import receive_upload
 from app.ingestion.sandbox.protocol import ExtractResult
 from app.workers.handlers import ingest
+from tests.fixtures import synth_card_statement as card
 from tests.fixtures import synth_pdf_statements as synth
 from tests.fixtures.factories import Factories, UserRecord
 from tests.fixtures.imports import run_jobs
@@ -210,7 +214,7 @@ def test_pdf_statement_is_classified_parsed_reconciled_and_committed(env: Env, l
     assert document.institution_id == account.institution_id
     assert (document.period_start, document.period_end) == (stmt.start, stmt.end)
     assert document.parser_version is not None
-    assert document.parser_version.endswith("/1")
+    assert document.parser_version.endswith("/2")
     assert document.confidence is not None
     assert document.confidence["parse"]["reconciliation"] == ["ok"]
 
@@ -253,16 +257,60 @@ def test_pdf_statement_is_classified_parsed_reconciled_and_committed(env: Env, l
     )
     assert audits
 
-    # The same statement rendered again (other bytes) imports nothing twice.
+    # The same statement rendered again (other bytes) is the same statement:
+    # held for review (statement_overlap), nothing imported twice.
     again = env.ingest(render(stmt))
-    assert env.document(again).status is DocumentStatus.PROCESSED
+    assert env.document(again).status is DocumentStatus.NEEDS_REVIEW
+    (item,) = env.open_reviews(again)
+    assert (item.kind, item.payload["reason"]) == (
+        ReviewKind.POSSIBLE_DUPLICATE,
+        "statement_overlap",
+    )
+    assert item.payload["other_document_id"] == str(document_id)
+    assert item.payload["account_id"] == str(account.id)
     assert len(env.transactions(account)) == len(rows)
     log = env.query(
         select(IngestJob).where(
             IngestJob.document_id == again, IngestJob.stage == IngestStage.PARSE
         )
     )[-1].log
-    assert (log["imported"], log["duplicates"]) == (0, len(rows))
+    assert (log["imported"], log["statement_overlaps"]) == (0, 1)
+
+
+def test_card_statement_of_account_imports_into_its_card_account(env: Env) -> None:
+    stmt = card.card_statement()
+    account = env.ledger.account(
+        env.household_id,
+        number_last4=stmt.last4,
+        type=AccountType.CREDIT_CARD,
+        currency="CAD",
+        name="Corporate card",
+    )
+    document_id = env.ingest(card.card_pdf(stmt))
+
+    document = env.document(document_id)
+    assert document.status is DocumentStatus.PROCESSED, env.open_reviews(document_id)
+    assert env.reviews(document_id) == []
+    assert document.kind is DocumentKind.STATEMENT
+    assert document.account_id == account.id
+    assert (document.period_start, document.period_end) == (
+        stmt.period_start,
+        stmt.statement_date,
+    )
+    assert document.parser_version == "card_statement_generic/4"
+    assert document.confidence is not None
+    assert document.confidence["parse"]["reconciliation"] == ["ok"]
+
+    rows = env.transactions(account)
+    assert len(rows) == len(stmt.rows)
+    assert _rows(rows) == [
+        (d, a.quantize(Decimal("0.000001")), p) for d, a, p in card.expected(stmt)
+    ]
+    assert all(r.review_state is ReviewState.NONE for r in rows)
+    assert all(r.currency == "CAD" for r in rows)
+    assert max(r.posted_date for r in rows) <= stmt.statement_date
+    snapshots = env.snapshots(account)
+    assert [s.balance for s in snapshots] == [stmt.closing_balance]
 
 
 def test_statement_that_does_not_reconcile_is_held_for_review(env: Env) -> None:
@@ -314,7 +362,7 @@ def test_low_confidence_fields_are_imported_pending(env: Env) -> None:
     low = [i for i in items if i.kind is ReviewKind.LOW_CONFIDENCE_FIELD]
     assert [i.payload["reason"] for i in low] == ["low_confidence"]
     assert low[0].payload["fields"] == ["posted_date"]
-    assert low[0].payload["parser"] == "statement_generic/1"
+    assert low[0].payload["parser"] == "statement_generic/4"
     assert {t["transaction_id"] for t in low[0].payload["transactions"]} == {
         str(r.id) for r in rows
     }

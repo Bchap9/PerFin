@@ -16,7 +16,10 @@ JSON document:
 4. ``classify``: kind, institution fingerprint, last four digits, period,
    per-field confidence (shipped fingerprints; the household's own too with
    ``--household``).
-5. ``parse``: document parsers on PDF/image pages; for tables the suggested
+5. ``parse``: document parsers on PDF/image pages (bank statements as
+   read, and the investment statements per account: last four digits,
+   period, positions and activity counts by type, reconciliation with the
+   failed checks); for tables the suggested
    column mapping and the rows it reads, and for a brokerage activity export
    (``app.ingestion.parsers.brokerage_table``) the investment statements the
    importer would commit instead (per account: last four digits, rows by
@@ -54,7 +57,7 @@ from app.ingestion.intake.sniff import (
     RejectReason,
     sniff,
 )
-from app.ingestion.sandbox.protocol import ExtractOptions, ExtractResult
+from app.ingestion.sandbox.protocol import ExtractOptions, ExtractResult, InvestmentStatement
 from app.ingestion.sandbox.runner import SandboxConfig, SandboxError, run_extraction
 
 if TYPE_CHECKING:
@@ -217,6 +220,7 @@ class DryRun:
                 "parse",
                 parse=parsed.parse.model_dump(mode="json") if parsed.parse else None,
                 statements=[s.model_dump(mode="json") for s in parsed.statements],
+                investments=[_investment_summary(i) for i in parsed.investments],
             )
             return parsed
         if result.tables:
@@ -260,6 +264,10 @@ class DryRun:
                 {
                     "source_format": s.source_format,
                     "last4": s.account.last4,
+                    "name": s.account.name,
+                    "account_type": s.account.account_type,
+                    "subtype": s.account.subtype,
+                    "pages": [s.first_page, s.last_page],
                     "period": [s.period_start, s.period_end],
                     "transactions": len(s.transactions),
                 }
@@ -328,6 +336,38 @@ class DryRun:
             result = self.parse(kind, result, found)
             self.match(result, found, db)
         return 0
+
+
+def _investment_summary(statement: InvestmentStatement) -> dict[str, Any]:
+    """One brokerage statement as the parse stage shows it (counts, no rows)."""
+    check = statement.reconciliation
+    return {
+        "source_format": statement.source_format,
+        "last4": statement.account.last4,
+        "name": statement.account.name,
+        "account_type": statement.account.account_type,
+        "subtype": statement.account.subtype,
+        "pages": [statement.first_page, statement.last_page],
+        "institution": statement.account.institution,
+        "currency": statement.account.currency,
+        "period": [statement.period_start, statement.period_end],
+        "as_of": statement.as_of,
+        "positions": len(statement.positions),
+        "activity": len(statement.activity),
+        "activity_types": dict(Counter(a.type for a in statement.activity)),
+        "cash_opening": statement.cash_opening.amount if statement.cash_opening else None,
+        "cash_closing": statement.cash_closing.amount if statement.cash_closing else None,
+        "positions_value": statement.positions_value.amount if statement.positions_value else None,
+        "total_value": statement.total_value.amount if statement.total_value else None,
+        "reconciliation": (
+            {"status": check.status, "checks": list(check.checks), "failed": list(check.failed)}
+            if check is not None
+            else None
+        ),
+        "low_confidence_rows": sum(1 for a in statement.activity if a.low_confidence)
+        + sum(1 for p in statement.positions if p.low_confidence),
+        "confidence": statement.confidence,
+    }
 
 
 def _sniffed(data: bytes) -> str:

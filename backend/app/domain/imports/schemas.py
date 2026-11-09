@@ -379,6 +379,15 @@ class ApplyMapping(_Input):
     no account matched. ``statement`` (with ``account_id``) does the same for
     the brokerage statements of a document (an investment ``unknown_account``
     item's ``statement``: an activity export's account, a PDF's).
+    ``allow_overlap`` names accounts whose statements this run imports
+    although their period overlaps a statement already imported from
+    another document (each must be editable); it also takes back a "same
+    statement" answer: a statement recorded as skipped is imported. Every
+    re-run also carries the document's "import anyway" and "import as read"
+    answers from the review queue, each for the one statement it was given
+    about (``app.domain.imports.statement_answers``). A statement whose
+    figures do not add up is imported as read only on such an answer, never
+    by naming its account here.
     """
 
     mapping_id: uuid.UUID | None = None
@@ -387,6 +396,9 @@ class ApplyMapping(_Input):
     statement: int | None = Field(default=None, ge=0, le=MAX_GROUP)
     #: An account per statement of the document (each must be editable).
     assignments: list[Assignment] = Field(default_factory=list, max_length=ASSIGNMENTS_MAX)
+    #: Accounts this run imports into despite an overlapping statement (each
+    #: must be editable).
+    allow_overlap: list[uuid.UUID] = Field(default_factory=list, max_length=ASSIGNMENTS_MAX)
 
     @model_validator(mode="after")
     def _group_needs_account(self) -> Self:
@@ -408,6 +420,7 @@ class ApplyMappingJob(BaseModel):
     group: int | None = None
     statement: int | None = None
     assignments: list[Assignment] = Field(default_factory=list, max_length=ASSIGNMENTS_MAX)
+    allow_overlap: list[uuid.UUID] = Field(default_factory=list, max_length=ASSIGNMENTS_MAX)
     requested_by: uuid.UUID | None = None
 
 

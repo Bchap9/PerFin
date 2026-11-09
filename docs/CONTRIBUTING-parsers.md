@@ -49,10 +49,11 @@ adding a layout. The design is in [INGESTION.md](INGESTION.md) ("Parse",
    | `institution` | the fingerprint `key` (the classifier's hint) |
    | `display_name` | the institution name accounts carry (account matching) |
    | `fingerprints` | phrases of page 1 for detection without a classification |
-   | `date_styles`, `period_styles` | `mdy`, `dmy`, `ymd`, `d_mon_y`, `mon_d_y`, `md`, `dm` |
+   | `date_styles`, `period_styles` | `mdy`, `dmy`, `ymd`, `d_mon_y`, `mon_d_y`, `md`, `dm`, `mon_d` (`December 16`), `d_mon` (`16 Dec`) |
    | `sign` | `bank` or `card` |
    | `default_currency`, `account_type` | when the statement does not print them |
    | `headers`, `opening_labels`, `closing_labels`, `period_labels`, `sections`, `pending_markers`, `skip_prefixes` | extend the generic vocabularies when the layout uses other words |
+   | `statement_date_labels`, `previous_date_labels`, `credit_total_labels`, `charge_total_labels`, `stub_markers` | a statement date instead of a period, the summary's own totals (an equation summary) and the words that start a payment stub |
    | `base` | 1.0 for an institution parser (its format is declared) |
 
    Add the class to `INSTITUTION_PARSERS`. Write code (override
@@ -68,6 +69,18 @@ adding a layout. The design is in [INGESTION.md](INGESTION.md) ("Parse",
    of layout.
 5. **Docs**: mention the institution in INGESTION.md's institution parser
    list and add a CHANGELOG entry.
+
+A card **statement of account** needs no institution parser: a statement
+date instead of a period, a table headed only `New Transactions for <NAME>
+| Foreign Spending | Amount $`, month-named dates without a year across a
+year boundary, `CR` under the amount, a two-line description, a boxed
+equation summary and a payment stub are read by `card_statement_generic`
+(INGESTION.md "Card statements of account"); it is chosen over
+`statement_generic` only on card words printed outside the rows (a card
+payee on a checking statement is no cue). Its synthetic layout is
+`backend/tests/fixtures/synth_card_statement.py`
+(`tests/unit/test_card_statement.py`); extend that rather than special-casing
+an issuer.
 
 ## Brokerage layouts
 
@@ -86,14 +99,28 @@ phrase, for a name other documents print too), `date_styles`,
 | `description_types` | an activity table without an action column: its description is the action |
 | `cash_groups` | holdings groups whose rows are the account's cash (a core or sweep money market): opening/closing cash, no position, included in the printed holdings total |
 | `ignored_tables`, `section_headings` | headings of tables not to read (they would count money twice), and the headings that end them |
+| `metadata_names`, `name_anchors`, `anchors` | for a name printed only in a logo: other names in the PDF's title or author, phrases anywhere that name the institution (a subsidiary in a footer), and the layout's own wording that must appear beside either |
 
 New column names go into the module's `HOLDING_HEADERS` (role `other` for a
 column to recognise but not read) and `ACTIVITY_HEADERS`, asset-class group
 headings into `ASSET_GROUPS`, action words into `ACTIVITY_TYPES` (or
 `TRANSFER_TYPES` for a word whose type depends on whether units moved).
-Several accounts in one PDF need no code: account headings at the top or
-bottom of each account's pages split the document (INGESTION.md "Several
-accounts in one PDF"). The fingerprint names
+Several accounts in one PDF need no code: account headings anywhere on a
+page (also beside an amount) and an account index split the document
+(`app/ingestion/parsers/accounts.py`; INGESTION.md "Several accounts in one
+PDF"). A period printed unlabelled in the page headers needs no code either,
+nor does a holding printed by its name alone (no ticker, CUSIP or ISIN: an
+unlisted partnership, a 529 portfolio): it is a `SecurityRef` with only a
+name (which must hold a letter or digit; it is bounded and
+formula-neutralised by the protocol), kept and counted like any other, and
+the importer matches it by its exact normalised name among the securities
+of the account (then of its institution) in its currency. Keep every
+wrapped line of such a name (`Class R6`, `2031 (Example Funds)` is often
+all that tells two portfolios apart; only a sentence under a name in
+capitals is a note), never invent a symbol for one, and never name a
+security by an activity's description column (a trade's *Security Name*
+column may).
+When a parser reads nothing usable the registry tries the next-best one. The fingerprint names
 `parser: brokerage_statement_generic`. Draw the layout from invented data
 (`SynthBrokerage` in `backend/tests/fixtures/synth_brokerage.py`, or a
 module of its own like `synth_fidelity.py`: several pages of activity with
@@ -162,5 +189,12 @@ is not suggested well:
 - [ ] Only the last four digits of an account number are kept.
 - [ ] Unit tests pass with and without the hint; tampered variants fail
       reconciliation.
+- [ ] Figures are returned as printed, never adjusted to make a statement
+      add up: a statement that does not reconcile waits in review, where
+      the person can "Import as read" (rows as printed, no balance
+      snapshot) once they have seen what is off. That answer is bound to
+      the statement exactly as your parser returned it (every figure, the
+      parser's name and version): when a new version reads it
+      differently, the person is asked again.
 - [ ] `uv run ruff check`, `ruff format --check`, `mypy`, `bandit` and
       `pytest -n auto` pass.

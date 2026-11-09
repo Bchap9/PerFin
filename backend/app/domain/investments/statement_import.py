@@ -15,19 +15,47 @@ statements"). Per statement:
    (``importable_account_ids``, SECURITY.md F3). A document of several
    accounts (a PDF with one statement per account,
    ``app.ingestion.parsers.brokerage``) matches each statement by its own
-   last four digits; a chosen account there takes only the statements with
+   last four digits; a statement answered "import anyway" or "import as
+   read" goes to the account it was answered on, wherever it now sits in
+   the document (``app.domain.imports.statement_answers``), unless the
+   run assigns it elsewhere; a chosen account there takes only the statements with
    its own last four digits or, when it records none, the single statement
    nothing matched, so one choice never pours several accounts into one. It must be a brokerage or
    retirement account in the statement's currency; otherwise an
    ``unknown_account`` item and nothing is written.
-2. **Hold** (SECURITY.md C12): a statement whose figures do not reconcile
+2. **Same statement** (``app.domain.imports.statement_records``): a
+   statement whose printed period overlaps one already imported for the
+   account from another document is held with a ``possible_duplicate``
+   item (``statement_overlap``) unless the person said to import this
+   statement into this account anyway (``statement_answers``) or the run
+   names the account in ``allow_overlap`` (``apply-mapping``); every
+   committed statement leaves a record.
+3. **Hold** (SECURITY.md C12): a statement whose figures do not reconcile
    (:func:`app.ingestion.parsers.brokerage.reconcile_investment`: positions
    x prices vs market values, holdings total, cash, account value), or with
    any row or position read below the confidence threshold, writes
    **nothing**: investment rows have no pending state, so they are held
    back with a ``low_confidence_field`` item
    (``investment_reconciliation_failed`` / ``investment_low_confidence``)
-   naming the discrepancy. A statement with any date before
+   naming the discrepancy: its ``differences`` (per failed check, what the
+   statement prints, what its rows add up to and the difference; see
+   :func:`differences`), the statement's index and key
+   (``statement_answers.statement_key``) and the account's currency.
+   **Import as read** (the review queue's answer to such an item, see
+   ``app.domain.review.service``; recorded per statement key and account
+   by ``app.domain.imports.statement_answers``): every later import of the
+   document imports that statement, on that account only, as printed
+   although it does not add up or a document gives it nothing to check
+   against. Another statement, even of the same account, is not covered by
+   it. For the answered statement the
+   ``reconciliation`` doubt every row carries (and the contradicted market
+   value of a position that failed the ``positions`` check) no longer holds
+   it, while any other doubt still does (a guessed date, an unread figure),
+   as do the date range and every later step. An accepted statement writes
+   **no balance snapshot** (step 9): its totals are the figures that did not
+   add up, so the account's value is never taken from them; its audit row
+   (``investment.import``) says it was accepted and which checks failed. A
+   statement with any date before
    ``app.core.dates.MIN_BUSINESS_DATE`` is held the same way
    (``investment_date_out_of_range``, SECURITY.md F8). A structured
    statement (OFX, or an activity table: ``csv``, every value from a named
@@ -35,10 +63,28 @@ statements"). Per statement:
    document one cannot be (its rows score below the threshold). An activity
    table whose day/month order was a guess marks every row
    ``low_confidence`` (``trade_date``) and is held like any such row.
-3. **Securities**: found in the household's catalogue by CUSIP, ISIN, then
-   symbol, else created (quote currency = the account's); identifiers a
-   later statement adds are filled in.
-4. **Activity** -> ``investment_txn`` with an ``import_hash`` (account,
+4. **Securities**: found in the household's catalogue by CUSIP, ISIN, then
+   symbol, else by name (:func:`~app.domain.investments.models.security_name_key`:
+   the same words, case and spacing aside; never a similar name), else
+   created (quote currency = the account's). By name, only a security in
+   the account's currency is taken, looked for in turn among those the
+   account holds or traded, those another account at its institution holds
+   or traded, and those no account holds or traded (added by hand), so a
+   generic name (``Moderate Portfolio``) in another plan is never the same
+   security and an account keeps the security it already holds when
+   another of that name appears. A security printed by its name alone
+   (``SecurityRef`` with no symbol, CUSIP or ISIN: an unlisted
+   partnership, a 529 portfolio) takes, in the first of those groups with
+   any security of the name, the one with no identifier, else the only
+   one, else (several) a new one; with none it is created **without a
+   symbol**. One printed with identifiers takes, by name, only a security
+   that has none. Two positions of one statement that take one security
+   by its name alone at different prices are different securities nothing
+   tells apart: the statement writes nothing and an
+   ``investment_same_name_securities`` item names them. Identifiers a
+   later statement adds are filled in: a CUSIP or ISIN, and a symbol on a
+   security without one (unless another security already has that symbol).
+5. **Activity** -> ``investment_txn`` with an ``import_hash`` (account,
    trade date, type, security, quantity, amount, running index among
    identical rows), so the same statement as OFX and as PDF, or overlapping
    statements, add each row once. A row the account already records from
@@ -54,16 +100,18 @@ statements"). Per statement:
    date are left to the hash. Cash ``deposit``/``withdrawal`` rows are
    ledger transactions on the account (through the structured importer:
    transaction ``import_hash`` dedupe, rules, provenance).
-5. **Out of order**: new rows of a statement older than activity already
+6. **Out of order**: new rows of a statement older than activity already
    recorded for the account are not written (an opening position may
    already count them); an ``investment_out_of_order`` item says so.
    Import statements oldest first.
-6. **Opening positions and lots**: the reported positions are the truth on
+7. **Opening positions and lots**: the reported positions are the truth on
    ``as_of``. Units the account's history does not explain (held before
    the first imported statement) enter as one ``transfer_in`` per security
    on the period's first day (memo ``Opening position from statement``;
    cost per unit from the printed cost basis, else the price); history
-   holding more than reported raises a ``position_mismatch`` item. Lots,
+   holding more than reported raises a ``position_mismatch`` item (a
+   short position, a negative quantity, counts as none: the lot engine
+   holds no short positions). Lots,
    ``lot_links`` and the ``holding`` cache are then written by the
    investments lot engine (``service.replay_position``, FIFO or average
    cost per account). An activity export (``csv``, no positions) that
@@ -73,12 +121,18 @@ statements"). Per statement:
    ``investment_opening_basis_unknown`` item asking for the cost basis. A
    history the engine still refuses (selling units never held) rolls the
    statement back (savepoint) with an ``investment_lot_conflict`` item.
-7. **Prices**: each position's unit price on ``as_of`` becomes a ``price``
+8. **Prices**: each position's unit price on ``as_of`` becomes a ``price``
    row (``source = statement``) unless one exists for that day from another
-   source.
-8. **Balance snapshot**: holdings + closing cash on ``as_of``
+   source; a price quoted per 100 of face value (a bond) is stored as one
+   unit's (``InvestmentPosition.price_per_unit``), and so is an activity
+   row's price (``InvestmentActivity.price_per_unit``: a bond trade's
+   ``price`` is one unit's, never 100 times it). An opening position for
+   units held before the period and gone by its end (transferred or sold
+   out) is costed at the price its own rows print (one unit's).
+9. **Balance snapshot**: holdings + closing cash on ``as_of``
    (``source = statement``) when every check that could run held and both
-   are known.
+   are known (a statement printing no cash gives none); never for a
+   statement accepted as read (step 3).
 """
 
 from __future__ import annotations
@@ -104,13 +158,21 @@ from app.core.money import calc_context, to_storage
 from app.domain.accounts import repo as accounts_repo
 from app.domain.accounts.models import Account, AccountType, BalanceSource
 from app.domain.documents.models import Document, ReviewKind
+from app.domain.imports.statement_answers import StatementAnswers, statement_key
+from app.domain.imports.statement_records import (
+    check_overlap,
+    investment_facts,
+    record_statement,
+)
 from app.domain.investments.models import (
     AssetClass,
+    Holding,
     InvestmentTxn,
     InvestmentTxnType,
     Lot,
     Price,
     Security,
+    security_name_key,
 )
 from app.domain.investments.service import replay_position
 from app.ingestion.match.accounts import match_account
@@ -147,7 +209,7 @@ CLOSING_TYPES: Final = frozenset({InvestmentTxnType.SELL, InvestmentTxnType.TRAN
 _SEP: Final = "\x1f"
 
 Review = Callable[[ReviewKind, dict[str, Any]], None]
-CommitCash = Callable[[Statement, Account], None]
+CommitCash = Callable[[Statement, Account], object]
 
 
 @dataclass
@@ -165,6 +227,10 @@ class InvestmentImport:
     prices: int = 0
     opening_positions: int = 0
     snapshots: int = 0
+    #: Held as overlapping an imported statement, or skipped as the same one.
+    overlaps: int = 0
+    #: Imported as read although they did not add up (an answer, step 3).
+    accepted_as_read: int = 0
     accounts: list[uuid.UUID] = field(default_factory=list)
 
     def summary(self) -> dict[str, Any]:
@@ -180,6 +246,8 @@ class InvestmentImport:
             "prices": self.prices,
             "opening_positions": self.opening_positions,
             "snapshots": self.snapshots,
+            "statement_overlaps": self.overlaps,
+            "accepted_as_read": self.accepted_as_read,
         }
 
 
@@ -197,7 +265,7 @@ def activity_hash(
     security_id: uuid.UUID | None,
     index: int,
 ) -> str:
-    """``investment_txn.import_hash`` (module doc, step 4); the same in every format."""
+    """``investment_txn.import_hash`` (module doc, step 5); the same in every format."""
     parts = (
         HASH_VERSION,
         str(account_id),
@@ -225,7 +293,19 @@ class _Context:
     commit_cash: CommitCash
     user_id: uuid.UUID | None
     result: InvestmentImport
-    securities: dict[tuple[str, str], Security] = field(default_factory=dict)
+    securities: dict[tuple[uuid.UUID, str, str, str], Security] = field(default_factory=dict)
+    #: The household's securities by name key (loaded on first use).
+    by_name: dict[str, list[Security]] | None = None
+    #: The accounts that hold or traded each security (loaded on first use).
+    used_by: dict[uuid.UUID, set[uuid.UUID]] | None = None
+    #: The household's accounts at each institution (loaded on first use).
+    peers: dict[uuid.UUID, set[uuid.UUID]] = field(default_factory=dict)
+
+    def forget(self) -> None:
+        """Drop what a rolled-back statement may have added to the caches."""
+        self.securities.clear()
+        self.by_name = None
+        self.used_by = None
 
     @property
     def household_id(self) -> uuid.UUID:
@@ -332,12 +412,112 @@ def _statement_dates(statement: InvestmentStatement) -> Iterable[date | None]:
         yield activity.settle_date
 
 
+#: Reasons of the items a statement held back by its figures raises; both
+#: can be answered "import as read" (module doc, step 3).
+RECONCILIATION_FAILED: Final = "investment_reconciliation_failed"
+LOW_CONFIDENCE: Final = "investment_low_confidence"
+#: The doubt every row of a statement that did not add up (or could not be
+#: checked) carries; an accepted statement no longer holds for it.
+RECONCILIATION_DOUBT: Final = "reconciliation"
+
+
+def acceptable_as_read(payload: Mapping[str, Any]) -> bool:
+    """The held statement of a review item ``payload`` may be imported as read.
+
+    A statement that did not add up, or a document statement with nothing to
+    check against whose rows carry no other doubt (only ``reconciliation``):
+    a guessed date or an unread figure is never imported on a click.
+    """
+    reason = payload.get("reason")
+    if reason == RECONCILIATION_FAILED:
+        return True
+    fields = payload.get("fields")
+    return (
+        reason == LOW_CONFIDENCE and isinstance(fields, list) and fields == [RECONCILIATION_DOUBT]
+    )
+
+
+def _money_text(value: Decimal) -> str:
+    return f"{to_storage(value):f}"
+
+
+def differences(
+    statement: InvestmentStatement, check: InvestmentReconciliation
+) -> list[dict[str, Any]]:
+    """What did not add up, per failed check: printed, computed, difference.
+
+    ``printed`` is the figure the statement prints and ``computed`` what its
+    rows add up to; ``difference`` is computed - printed. ``positions``
+    sums the positions whose quantity x price is not their printed market
+    value (``count`` of them); ``holdings_total`` compares the positions'
+    sum with the printed holdings total; ``cash`` the opening cash plus the
+    period's activity with the closing cash; ``total_value`` the holdings
+    plus closing cash with the printed account value.
+    """
+    out: list[dict[str, Any]] = []
+
+    def add(name: str, printed: Decimal | None, computed: Decimal | None, **extra: Any) -> None:
+        if printed is None or computed is None:
+            return
+        out.append(
+            {
+                "check": name,
+                "printed": _money_text(printed),
+                "computed": _money_text(computed),
+                "difference": _money_text(computed - printed),
+                **extra,
+            }
+        )
+
+    with localcontext(calc_context()):
+        if "positions" in check.failed:
+            printed = Decimal(0)
+            computed = Decimal(0)
+            count = 0
+            for index in check.position_mismatches:
+                position = statement.positions[index]
+                if position.unit_price is None or position.market_value is None:
+                    continue
+                scale = 100 if position.price_per_100 else 1
+                printed += position.market_value
+                computed += position.quantity * position.unit_price / scale
+                count += 1
+            if count:
+                add("positions", printed, computed, count=count)
+        if "holdings_total" in check.failed:
+            add("holdings_total", check.reported_positions_total, check.positions_total)
+        if "cash" in check.failed and check.cash_opening is not None:
+            computed_cash = (
+                check.cash_opening + check.cash_activity
+                if check.cash_activity is not None
+                else None
+            )
+            add("cash", check.cash_closing, computed_cash)
+        if "total_value" in check.failed:
+            add("total_value", check.reported_total_value, check.total_value)
+    return out
+
+
+def _doubts(fields: Sequence[str], ignored: frozenset[str]) -> list[str]:
+    return [f for f in fields if f not in ignored]
+
+
 def _held(
     ctx: _Context,
     statement: InvestmentStatement,
     check: InvestmentReconciliation,
     account: Account,
+    *,
+    index: int,
+    key: str,
+    accepted: bool = False,
 ) -> bool:
+    """Hold the statement back with a review item (module doc, step 3); True: held.
+
+    ``accepted``: the person said to import it as read, so its figures not
+    adding up (or not being checkable) no longer hold it; nothing else
+    changes.
+    """
     if any(d is not None and not in_business_range(d) for d in _statement_dates(statement)):
         # SECURITY.md F8: a date before MIN_BUSINESS_DATE is a misread (or a
         # crafted file); it would make every performance read walk centuries.
@@ -352,20 +532,25 @@ def _held(
             },
         )
         return True
-    if check.status == "mismatch":
+    if check.status == "mismatch" and not accepted:
         ctx.review(
             ReviewKind.LOW_CONFIDENCE_FIELD,
             {
-                "reason": "investment_reconciliation_failed",
+                "reason": RECONCILIATION_FAILED,
                 "field": "reconciliation",
                 "account_id": str(account.id),
+                "statement": index,
+                "statement_key": key,
+                "currency": account.currency,
                 "parser": _parser(statement),
                 "failed": list(check.failed),
                 "checks": list(check.checks),
+                "differences": differences(statement, check),
                 "positions": [
                     {
                         "index": i,
                         "symbol": statement.positions[i].security.symbol,
+                        "name": statement.positions[i].security.name,
                         "quantity": _text(statement.positions[i].quantity),
                         "unit_price": _text(statement.positions[i].unit_price),
                         "market_value": _text(statement.positions[i].market_value),
@@ -384,33 +569,48 @@ def _held(
             },
         )
         return True
-    low_positions = [(i, p) for i, p in enumerate(statement.positions) if p.low_confidence]
-    low_activity = [(i, a) for i, a in enumerate(statement.activity) if a.low_confidence]
+    ignored = frozenset({RECONCILIATION_DOUBT}) if accepted else frozenset()
+    contradicted = frozenset({"market_value"}) | ignored
+    mismatched = set(check.position_mismatches) if accepted else set()
+    low_positions = [
+        (i, doubts)
+        for i, p in enumerate(statement.positions)
+        if (doubts := _doubts(p.low_confidence, contradicted if i in mismatched else ignored))
+    ]
+    low_activity = [
+        (i, doubts)
+        for i, a in enumerate(statement.activity)
+        if (doubts := _doubts(a.low_confidence, ignored))
+    ]
     unchecked_document = (
-        check.status == "unavailable" and statement.source_format in DOCUMENT_STATEMENT_FORMATS
+        check.status == "unavailable"
+        and statement.source_format in DOCUMENT_STATEMENT_FORMATS
+        and not accepted
     )
     if not (low_positions or low_activity or unchecked_document):
         return False
     fields = sorted(
-        {f for _, p in low_positions for f in p.low_confidence}
-        | {f for _, a in low_activity for f in a.low_confidence}
-        | ({"reconciliation"} if unchecked_document else set())
+        {f for _, doubts in low_positions for f in doubts}
+        | {f for _, doubts in low_activity for f in doubts}
+        | ({RECONCILIATION_DOUBT} if unchecked_document else set())
     )
     ctx.review(
         ReviewKind.LOW_CONFIDENCE_FIELD,
         {
-            "reason": "investment_low_confidence",
+            "reason": LOW_CONFIDENCE,
             "fields": fields,
             "account_id": str(account.id),
+            "statement": index,
+            "statement_key": key,
             "parser": _parser(statement),
             "reconciliation": check.status,
             "positions": [
-                {"index": i, "fields": list(p.low_confidence), "page": p.page}
-                for i, p in low_positions[:IDS_MAX]
+                {"index": i, "fields": doubts, "page": statement.positions[i].page}
+                for i, doubts in low_positions[:IDS_MAX]
             ],
             "activity": [
-                {"index": i, "fields": list(a.low_confidence), "page": a.page}
-                for i, a in low_activity[:IDS_MAX]
+                {"index": i, "fields": doubts, "page": statement.activity[i].page}
+                for i, doubts in low_activity[:IDS_MAX]
             ],
         },
     )
@@ -422,7 +622,95 @@ def _held(
 # ---------------------------------------------------------------------------
 
 
-def _find_security(ctx: _Context, ref: SecurityRef) -> Security | None:
+def _named(ctx: _Context) -> dict[str, list[Security]]:
+    """The household's securities by :func:`security_name_key`, oldest first."""
+    if ctx.by_name is None:
+        found = ctx.db.execute(
+            select(Security)
+            .where(Security.household_id == ctx.household_id)
+            .order_by(Security.created_at, Security.id)
+        )
+        ctx.by_name = defaultdict(list)
+        for security in found.scalars():
+            ctx.by_name[security_name_key(security.name)].append(security)
+    return ctx.by_name
+
+
+def _unidentified(security: Security) -> bool:
+    return security.symbol is None and security.cusip is None and security.isin is None
+
+
+def _used(ctx: _Context) -> dict[uuid.UUID, set[uuid.UUID]]:
+    """The accounts holding or having traded each of the household's securities."""
+    if ctx.used_by is None:
+        held = select(Holding.security_id, Holding.account_id).where(
+            Holding.household_id == ctx.household_id
+        )
+        traded = select(InvestmentTxn.security_id, InvestmentTxn.account_id).where(
+            InvestmentTxn.household_id == ctx.household_id,
+            InvestmentTxn.security_id.is_not(None),
+        )
+        ctx.used_by = defaultdict(set)
+        for security_id, account_id in ctx.db.execute(held.union(traded)):
+            if security_id is not None:
+                ctx.used_by[security_id].add(account_id)
+    return ctx.used_by
+
+
+def _peers(ctx: _Context, account: Account) -> set[uuid.UUID]:
+    """The household's accounts at ``account``'s institution (none when it has none)."""
+    institution = account.institution_id
+    if institution is None:
+        return set()
+    if institution not in ctx.peers:
+        found = ctx.db.execute(
+            select(Account.id).where(
+                Account.household_id == ctx.household_id,
+                Account.institution_id == institution,
+            )
+        )
+        ctx.peers[institution] = set(found.scalars())
+    return ctx.peers[institution]
+
+
+def _by_name(ctx: _Context, ref: SecurityRef, account: Account) -> Security | None:
+    """The security ``ref`` names by its name (module doc, step 4).
+
+    Only a security in the account's currency, looked for in turn among the
+    securities the account itself holds or traded, those another account at
+    its institution holds or traded, and those no account holds or traded
+    (added by hand): never one of another plan's securities that merely
+    shares a generic name. A reference printed by its name alone takes, in
+    the first of these groups with any security of the name, the one
+    without identifiers, else the only one (several: none, a new security
+    is made); one printed with identifiers takes only a security without
+    any.
+    """
+    key = security_name_key(ref.name or "")
+    if not key:
+        return None
+    same = [s for s in _named(ctx).get(key, []) if s.currency == account.currency]
+    if not same:
+        return None
+    used = _used(ctx)
+    peers = _peers(ctx, account)
+    groups = (
+        [s for s in same if account.id in used.get(s.id, ())],
+        [s for s in same if used.get(s.id, set()) & peers],
+        [s for s in same if not used.get(s.id)],
+    )
+    for group in groups:
+        if not group:
+            continue
+        bare = [s for s in group if _unidentified(s)]
+        if bare:
+            return bare[0]
+        if not ref.identified:
+            return group[0] if len(group) == 1 else None
+    return None
+
+
+def _find_security(ctx: _Context, ref: SecurityRef, account: Account) -> Security | None:
     db, household_id = ctx.db, ctx.household_id
     for column, value in (
         (Security.cusip, ref.cusip),
@@ -438,36 +726,55 @@ def _find_security(ctx: _Context, ref: SecurityRef) -> Security | None:
         security = found.scalar_one_or_none()
         if security is not None:
             return security
-    return None
+    return _by_name(ctx, ref, account)
+
+
+def _symbol_free(ctx: _Context, symbol: str) -> bool:
+    taken = select(Security.id).where(
+        Security.household_id == ctx.household_id,
+        Security.symbol == symbol,
+        Security.exchange.is_(None),
+    )
+    return ctx.db.execute(taken.limit(1)).first() is None
 
 
 def _security(ctx: _Context, ref: SecurityRef, account: Account) -> Security:
-    key = (ref.cusip or ref.isin or "", ref.symbol or "")
+    # Per account: which security a name names depends on the account.
+    key = (
+        account.id,
+        ref.cusip or ref.isin or "",
+        ref.symbol or "",
+        "" if ref.identified else security_name_key(ref.name or ""),
+    )
     cached = ctx.securities.get(key)
     if cached is not None:
         return cached
-    security = _find_security(ctx, ref)
+    security = _find_security(ctx, ref, account)
     if security is None:
-        symbol = ref.symbol or ref.cusip or ref.isin or ""
+        symbol = ref.symbol or ref.cusip or ref.isin
         security = Security(
             id=uuid7(),
             household_id=ctx.household_id,
             symbol=symbol,
             cusip=ref.cusip,
             isin=ref.isin,
-            name=(ref.name or symbol)[:200],
+            name=(ref.name or symbol or "")[:200],
             asset_class=AssetClass(ref.asset_class or AssetClass.OTHER),
             currency=account.currency,
         )
         ctx.db.add(security)
         ctx.db.flush()
         ctx.result.securities_created += 1
+        _named(ctx)[security_name_key(security.name)].append(security)
     else:
         if security.cusip is None and ref.cusip is not None:
             security.cusip = ref.cusip
         if security.isin is None and ref.isin is not None:
             security.isin = ref.isin
+        if security.symbol is None and ref.symbol is not None and _symbol_free(ctx, ref.symbol):
+            security.symbol = ref.symbol
     ctx.securities[key] = security
+    _used(ctx)[security.id].add(account.id)
     return security
 
 
@@ -475,7 +782,8 @@ def _record_price(
     ctx: _Context, security: Security, position: InvestmentPosition, on: date | None
 ) -> None:
     day = position.price_as_of or on
-    price = position.unit_price
+    # One unit's price (a bond's price per 100 of face value, divided by 100).
+    price = position.price_per_unit
     if day is None or price is None or price <= 0:
         return
     existing = ctx.db.execute(
@@ -642,7 +950,7 @@ def _txn(
     security_id: uuid.UUID | None,
     digest: str,
 ) -> InvestmentTxn:
-    quantity, price = activity.quantity, activity.unit_price
+    quantity, price = activity.quantity, activity.price_per_unit
     if activity.type == "split" and activity.split_ratio is not None:
         # The lot engine's convention: ``quantity`` new units per ``price`` old.
         quantity, price = activity.split_ratio
@@ -718,12 +1026,16 @@ def _openings(
             continue
         if missing <= UNIT_TOLERANCE:
             continue
-        position = sample[security_id]
+        held_at_end = sample.get(security_id)
         with localcontext(calc_context()):
-            if position.cost_basis is not None and position.quantity > 0:
-                cost = abs(position.cost_basis) / position.quantity
+            if held_at_end is None:
+                # Held before the period and gone by its end (transferred or
+                # sold out): the price its own rows print, else unknown.
+                cost = next((r.price for r in rows if r.price), None) or Decimal(0)
+            elif held_at_end.cost_basis is not None and held_at_end.quantity > 0:
+                cost = abs(held_at_end.cost_basis) / held_at_end.quantity
             else:
-                cost = position.unit_price or Decimal(0)
+                cost = held_at_end.price_per_unit or Decimal(0)
         digest = hashlib.sha256(
             _SEP.join(
                 (HASH_VERSION, str(account.id), "opening", str(security_id), opened_on.isoformat())
@@ -867,6 +1179,34 @@ def _cash_statement(
     )
 
 
+class _NameClashError(Exception):
+    """Positions that name one security by its name print different prices."""
+
+    def __init__(self, names: list[str]) -> None:
+        super().__init__("positions named alike are different securities")
+        self.names = names
+
+
+def _name_clashes(positions: Sequence[tuple[InvestmentPosition, Security]]) -> list[str]:
+    """Names of securities that positions printed by name alone take at two prices.
+
+    One security has one price on a statement's date: two positions of the
+    same name at different prices are different securities the statement
+    tells apart by nothing the importer can read (module doc, step 4).
+    """
+    prices: dict[uuid.UUID, set[Decimal]] = defaultdict(set)
+    by_name: set[uuid.UUID] = set()
+    names: dict[uuid.UUID, str] = {}
+    for position, security in positions:
+        names[security.id] = security.name
+        if not position.security.identified:
+            by_name.add(security.id)
+        price = position.price_per_unit
+        if price is not None:
+            prices[security.id].add(price.normalize())
+    return [names[i] for i in names if i in by_name and len(prices[i]) > 1]
+
+
 @dataclass
 class _Written:
     created: list[InvestmentTxn]
@@ -886,6 +1226,9 @@ def _write(
     """Securities, activity, openings and the lot replay; None: held back (out of order)."""
     db = ctx.db
     positions = [(p, _security(ctx, p.security, account)) for p in statement.positions]
+    clashes = _name_clashes(positions)
+    if clashes:
+        raise _NameClashError(clashes)
     existing = _existing_hashes(ctx, account)
     recorded = _recorded(ctx, account)
     near: list[uuid.UUID] = []
@@ -978,7 +1321,12 @@ def _write(
 
 
 def _commit(
-    ctx: _Context, statement: InvestmentStatement, account: Account, check: InvestmentReconciliation
+    ctx: _Context,
+    statement: InvestmentStatement,
+    account: Account,
+    check: InvestmentReconciliation,
+    *,
+    accepted: bool = False,
 ) -> bool:
     """Write one reconciled statement; False when it had to be held back."""
     db = ctx.db
@@ -988,10 +1336,25 @@ def _commit(
     try:
         with db.begin_nested():
             written = _write(ctx, statement, account, on)
+    except _NameClashError as exc:
+        # Two holdings of one name at different prices: which is which next
+        # month cannot be told, so nothing of the statement is kept.
+        ctx.forget()
+        result.securities_created = created_before
+        ctx.review(
+            ReviewKind.LOW_CONFIDENCE_FIELD,
+            {
+                "reason": "investment_same_name_securities",
+                "field": "security",
+                "account_id": str(account.id),
+                "names": exc.names[:IDS_MAX],
+            },
+        )
+        return False
     except ProblemError as exc:
         # The lot engine refused the history (e.g. a sale of more units than
         # held): nothing of the statement is kept.
-        ctx.securities.clear()
+        ctx.forget()
         result.securities_created = created_before
         ctx.review(
             ReviewKind.LOW_CONFIDENCE_FIELD,
@@ -1031,6 +1394,8 @@ def _commit(
 
     values = [position_value(p) for p in statement.positions]
     cash = statement.cash_closing.amount if statement.cash_closing is not None else None
+    # Never from figures that did not add up, even accepted as read (module
+    # doc, step 9): the account's value is not taken from them.
     if (
         check.status == "ok"
         and on is not None
@@ -1060,6 +1425,16 @@ def _commit(
             "opening_positions": written.openings,
             "positions": len(written.positions),
             "transaction_ids": [str(t.id) for t in written.created[:IDS_MAX]],
+            **(
+                {
+                    "accepted_as_read": True,
+                    "reconciliation": check.status,
+                    "failed": list(check.failed),
+                    "snapshot": False,
+                }
+                if accepted and check.status != "ok"
+                else {}
+            ),
         },
         household_id=ctx.household_id,
         user_id=ctx.user_id,
@@ -1137,13 +1512,23 @@ def import_investment_statements(
     account_id: uuid.UUID | None = None,
     statement_index: int | None = None,
     assigned: Mapping[int, uuid.UUID] | None = None,
+    allow_overlap: Collection[uuid.UUID] = (),
+    answers: StatementAnswers | None = None,
     user_id: uuid.UUID | None = None,
+    several: bool = False,
 ) -> InvestmentImport:
     """Commit the brokerage statements of ``document`` (module doc).
 
     ``account_id`` is the account a person chose on a re-run; ``statement_index``
     names the one statement it is for (the review item's), else
     :func:`_chosen_takes` decides on a multi-account document.
+    ``assigned`` are the accounts the run puts statements on, by index;
+    ``allow_overlap`` accounts the run imports into despite an overlapping
+    statement (``apply-mapping``); ``answers`` the document's "import
+    anyway" / "import as read" answers, by statement key (module doc, steps
+    1-3). ``several``: the document also holds bank statements of other
+    accounts (a combined statement), so even a
+    single brokerage statement finds its account by its own digits.
     """
     ctx = _Context(
         db=db,
@@ -1154,31 +1539,51 @@ def import_investment_statements(
         user_id=user_id,
         result=InvestmentImport(),
     )
-    single = len(statements) == 1
+    single = len(statements) == 1 and not several
     takes: Collection[int] = range(len(statements))
     if account_id is not None and statement_index is not None:
         takes = {statement_index} if 0 <= statement_index < len(statements) else set()
     elif account_id is not None and _several_accounts(statements):
         takes = _chosen_takes(ctx, statements, account_id)
+    answered = answers or StatementAnswers()
     for index, statement in enumerate(statements):
+        key = statement_key(statement)
         account = _account(
             ctx,
             statement,
             index,
             single=single,
             account_id=account_id if index in takes else None,
-            forced=(assigned or {}).get(index),
+            forced=(assigned or {}).get(index) or answered.account("investment", key),
         )
         if account is None:
             continue
         if account.id not in ctx.result.accounts:
             ctx.result.accounts.append(account.id)
+        facts = investment_facts(statement)
+        verdict = check_overlap(
+            db,
+            document,
+            account,
+            facts,
+            index=index,
+            key=key,
+            allow=account.id in allow_overlap or answered.overlap("investment", key, account.id),
+            review=review,
+        )
+        if verdict != "import":
+            ctx.result.overlaps += 1
+            continue
         check = statement.reconciliation or reconcile_investment(statement)
-        if _held(ctx, statement, check, account):
+        accepted = answered.as_read("investment", key, account.id)
+        if _held(ctx, statement, check, account, index=index, key=key, accepted=accepted):
             ctx.result.held += 1
             continue
-        if _commit(ctx, statement, account, check):
+        if _commit(ctx, statement, account, check, accepted=accepted):
             ctx.result.statements += 1
+            if accepted and check.status != "ok":
+                ctx.result.accepted_as_read += 1
+            record_statement(db, document, account, facts)
         else:
             ctx.result.held += 1
     return ctx.result

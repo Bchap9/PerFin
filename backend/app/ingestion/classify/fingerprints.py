@@ -17,7 +17,9 @@ validation before they are used:
   lines; account masks through :func:`app.ingestion.classify.accounts.mask_regex`.
 
 Matching (:func:`match_fingerprint`): every rule in ``match.all`` must hold
-(a fingerprint has at least one), and at least ``min_any`` of ``match.any``.
+(a fingerprint has at least one), at least one of ``match.one_of`` when it
+lists any (the institution's name on page 1 *or* in the PDF's metadata),
+and at least ``min_any`` of ``match.any``.
 The confidence is ``0.85`` plus up to ``0.14`` for the share of ``any`` rules
 that hold, so a fingerprint with more corroborating evidence wins a tie.
 
@@ -47,6 +49,8 @@ Rules (exactly one key each):
 ``regex``    safe pattern searched in each line (``region: header|text``)
 ``account_mask``  a mask such as ``XXXX-XXXX-XXXX-####`` found in a line
 ``columns``  a table whose header row starts with these cells (normalised)
+``metadata`` case-insensitive substring of the document's title or author
+             (PDF metadata; an institution whose name is only in its logo)
 """
 
 from __future__ import annotations
@@ -151,16 +155,19 @@ class Rule(_Strict):
     region: Literal["header", "text"] = "text"
     account_mask: Annotated[str, Field(min_length=4, max_length=40)] | None = None
     columns: list[Cell] | None = Field(default=None, min_length=2, max_length=20)
+    metadata: Needle | None = None
 
     @model_validator(mode="after")
     def _one_kind(self) -> Rule:
         set_keys = [
             k
-            for k in ("header", "text", "regex", "account_mask", "columns")
+            for k in ("header", "text", "regex", "account_mask", "columns", "metadata")
             if getattr(self, k) is not None
         ]
         if len(set_keys) != 1:
-            raise ValueError("a rule has exactly one of header, text, regex, account_mask, columns")
+            raise ValueError(
+                "a rule has exactly one of header, text, regex, account_mask, columns, metadata"
+            )
         if self.regex is not None:
             try:
                 compile_safe(self.regex, ignore_case=self.ignore_case)
@@ -176,6 +183,8 @@ class Rule(_Strict):
 
 class MatchSpec(_Strict):
     all: list[Rule] = Field(min_length=1, max_length=MAX_RULES)
+    #: At least one of these must hold (when any are listed).
+    one_of: list[Rule] = Field(default_factory=list, max_length=MAX_RULES)
     any: list[Rule] = Field(default_factory=list, max_length=MAX_RULES)
     min_any: int = Field(default=0, ge=0, le=MAX_RULES)
 
@@ -220,6 +229,8 @@ class _CompiledRule:
             return any(self.needle in normalise(line) for line in view.header)
         if rule.text is not None:
             return any(self.needle in line for line in view.normalised)
+        if rule.metadata is not None:
+            return any(self.needle in value for value in view.metadata)
         if self.pattern is not None:
             lines = view.header if rule.region == "header" else view.lines
             if budget is None:
@@ -247,6 +258,7 @@ class Fingerprint:
     origin: Literal["builtin", "household"] = "builtin"
     fingerprint_id: uuid.UUID | None = None
     institution_id: uuid.UUID | None = None
+    one_of_rules: tuple[_CompiledRule, ...] = ()
 
     @property
     def key(self) -> str:
@@ -267,7 +279,7 @@ def _compile_rule(rule: Rule) -> _CompiledRule:
         return _CompiledRule(rule, pattern=mask_regex(rule.account_mask))
     if rule.columns is not None:
         return _CompiledRule(rule, columns=tuple(normalise_cell(c) for c in rule.columns))
-    return _CompiledRule(rule, needle=normalise(rule.header or rule.text or ""))
+    return _CompiledRule(rule, needle=normalise(rule.header or rule.text or rule.metadata or ""))
 
 
 def compile_fingerprint(
@@ -277,12 +289,13 @@ def compile_fingerprint(
     fingerprint_id: uuid.UUID | None = None,
     institution_id: uuid.UUID | None = None,
 ) -> Fingerprint:
-    rules = [*spec.match.all, *spec.match.any]
+    rules = [*spec.match.all, *spec.match.one_of, *spec.match.any]
     masks = tuple(mask_regex(r.account_mask) for r in rules if r.account_mask is not None)
     return Fingerprint(
         spec=spec,
         all_rules=tuple(_compile_rule(r) for r in spec.match.all),
         any_rules=tuple(_compile_rule(r) for r in spec.match.any),
+        one_of_rules=tuple(_compile_rule(r) for r in spec.match.one_of),
         masks=masks,
         origin=origin,
         fingerprint_id=fingerprint_id,
@@ -408,30 +421,68 @@ def household_fingerprints(db: Session, household_id: uuid.UUID) -> list[Fingerp
     ).all()
     out: list[Fingerprint] = []
     for row, name, country in rows:
-        if row.kind is DocumentKind.UNKNOWN:
-            continue
-        try:
-            match = parse_match_rules(row.match_rules)
-            spec = FingerprintSpec.model_validate(
-                {
-                    "schema": SCHEMA_VERSION,
-                    "key": f"household-{row.id.hex[:16]}",
-                    "institution": name,
-                    "country": country,
-                    "kind": row.kind.value,
-                    "parser": row.parser_name,
-                    "version": row.version,
-                    "match": match,
-                }
-            )
-        except (FingerprintError, ValidationError):
-            continue
-        out.append(
-            compile_fingerprint(
-                spec, origin="household", fingerprint_id=row.id, institution_id=row.institution_id
-            )
-        )
+        compiled = compile_row(row, name, country)
+        if compiled is not None:
+            out.append(compiled)
     return out
+
+
+def compile_row(
+    row: ParserFingerprint, institution: str, country: str | None
+) -> Fingerprint | None:
+    """A stored household fingerprint, compiled; None when it no longer validates."""
+    if row.kind is DocumentKind.UNKNOWN:
+        return None
+    try:
+        match = parse_match_rules(row.match_rules)
+        spec = FingerprintSpec.model_validate(
+            {
+                "schema": SCHEMA_VERSION,
+                "key": f"household-{row.id.hex[:16]}",
+                "institution": institution,
+                "country": country,
+                "kind": row.kind.value,
+                "parser": row.parser_name,
+                "version": row.version,
+                "match": match,
+            }
+        )
+    except (FingerprintError, ValidationError):
+        return None
+    return compile_fingerprint(
+        spec, origin="household", fingerprint_id=row.id, institution_id=row.institution_id
+    )
+
+
+def lock_layouts(db: Session, household_id: uuid.UUID) -> None:
+    """Serialise changes to the household's remembered layouts (until the transaction ends)."""
+    db.execute(_LOCK_LAYOUTS, {"k": f"perfin:fingerprints:{household_id}"})
+
+
+def latest_layout(
+    db: Session,
+    household_id: uuid.UUID,
+    *,
+    institution_id: uuid.UUID,
+    kind: DocumentKind,
+    parser_name: str,
+) -> ParserFingerprint | None:
+    """The newest version of the remembered layout (institution, kind, parser), if any."""
+    return db.execute(
+        select(ParserFingerprint)
+        .where(
+            ParserFingerprint.household_id == household_id,
+            ParserFingerprint.institution_id == institution_id,
+            ParserFingerprint.kind == kind,
+            ParserFingerprint.parser_name == parser_name,
+        )
+        .order_by(
+            ParserFingerprint.version.desc(),
+            ParserFingerprint.created_at.desc(),
+            ParserFingerprint.id.desc(),
+        )
+        .limit(1)
+    ).scalar_one_or_none()
 
 
 def remember_layout(
@@ -443,6 +494,7 @@ def remember_layout(
     match_rules: Any,
     parser_name: str,
     document_id: uuid.UUID | None = None,
+    template: dict[str, Any] | None = None,
 ) -> ParserFingerprint:
     """Store a user's fingerprint ("remember this layout"); the rules are validated first.
 
@@ -452,7 +504,8 @@ def remember_layout(
     :data:`MAX_HOUSEHOLD_FINGERPRINTS`, or a version beyond
     :data:`MAX_VERSION`, raises :class:`FingerprintLimitError`; the check
     holds a per-household transaction lock so concurrent calls cannot pass it
-    together.
+    together. ``template`` is a validated learned layout
+    (``app.ingestion.parsers.template.LayoutTemplate``, "Teach PerFin").
     """
     if kind is DocumentKind.UNKNOWN:
         raise FingerprintError("a fingerprint names a known kind")
@@ -471,7 +524,7 @@ def remember_layout(
         )
     except ValidationError as exc:
         raise FingerprintError(_summary(exc)) from exc
-    db.execute(_LOCK_LAYOUTS, {"k": f"perfin:fingerprints:{household_id}"})
+    lock_layouts(db, household_id)
     existing = db.execute(
         select(ParserFingerprint.version)
         .where(
@@ -509,6 +562,7 @@ def remember_layout(
         parser_name=parser_name,
         version=(existing or 0) + 1,
         learned_from_document_id=document_id,
+        template=template,
     )
     db.add(row)
     db.flush()
@@ -530,6 +584,10 @@ def match_fingerprint(
     if budget is not None and budget.spent():
         return None
     if not all(rule.holds(view, budget) for rule in fingerprint.all_rules):
+        return None
+    if fingerprint.one_of_rules and not any(
+        rule.holds(view, budget) for rule in fingerprint.one_of_rules
+    ):
         return None
     held = sum(1 for rule in fingerprint.any_rules if rule.holds(view, budget))
     if budget is not None and budget.exhausted:

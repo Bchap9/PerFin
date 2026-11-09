@@ -13,7 +13,7 @@ import { formatDate } from "../../lib/dates";
 import { nameLookup, useAccounts } from "../planning/queries";
 import { QueryState } from "../planning/PlanningPage";
 import { getHoldings, investmentKeys, type Holding, type Holdings, type Lot } from "./api";
-import { formatFraction, formatQuantity } from "./format";
+import { formatFraction, formatQuantity, securityLabel } from "./format";
 import { AllocationBars, GainText, titleCase } from "./parts";
 
 function LotsDialog({ holding, onClose }: { holding: Holding; onClose: () => void }) {
@@ -37,7 +37,7 @@ function LotsDialog({ holding, onClose }: { holding: Holding; onClose: () => voi
     { id: "term", header: "Term", cell: (lot) => <Badge tone={lot.term === "long" ? "info" : "neutral"}>{lot.term === "long" ? "Long term" : "Short term"}</Badge> },
   ];
   return (
-    <Dialog open onClose={onClose} size="lg" title={`Lots of ${holding.security.symbol}`} footer={<Button onClick={onClose}>Close</Button>}>
+    <Dialog open onClose={onClose} size="lg" title={`Lots of ${securityLabel(holding.security)}`} footer={<Button onClick={onClose}>Close</Button>}>
       <Table caption={`Lots of ${holding.security.name}`} captionHidden columns={columns} rows={holding.lots} rowKey={(lot) => lot.id} maxHeight="md" empty="No open lots." />
     </Dialog>
   );
@@ -96,7 +96,13 @@ export function HoldingsTab({ account }: { account: string }) {
       rowHeader: true,
       cell: (h) => (
         <>
-          <strong>{h.security.symbol}</strong> <span className="muted">{h.security.name}</span>
+          {h.security.symbol === null ? (
+            <strong>{h.security.name}</strong>
+          ) : (
+            <>
+              <strong>{h.security.symbol}</strong> <span className="muted">{h.security.name}</span>
+            </>
+          )}
         </>
       ),
     },
@@ -135,7 +141,7 @@ export function HoldingsTab({ account }: { account: string }) {
       header: <span className="visually-hidden">Lots</span>,
       align: "end",
       cell: (h) => (
-        <Button size="sm" aria-label={`Show lots of ${h.security.symbol} in ${accountName(h.account_id)}`} onClick={() => { setLotsOf(h); }}>
+        <Button size="sm" aria-label={`Show lots of ${securityLabel(h.security)} in ${accountName(h.account_id)}`} onClick={() => { setLotsOf(h); }}>
           Lots
         </Button>
       ),

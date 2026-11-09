@@ -6,8 +6,11 @@
 never opens file content itself. Everything is capped: at most
 :data:`MAX_LINES` lines of at most :data:`MAX_LINE_CHARS` characters, the
 "header" is the first :data:`HEADER_LINES` lines of the first page (or the
-mail subject and the first body lines), and table headers are the first row
-of each table. The view holds only what the extraction already holds (last
+mail subject and the first body lines), the "page heads" are the first
+:data:`PAGE_HEAD_LINES` lines of each of the first :data:`MAX_PAGE_HEADS`
+pages (where a statement prints its period on every page), and table
+headers are the first row of each table, and the metadata is the PDF's own
+title and author. The view holds only what the extraction already holds (last
 four digits of account numbers at most; masked numbers stay masked).
 """
 
@@ -25,6 +28,8 @@ from app.ingestion.sandbox.protocol import ExtractResult
 MAX_LINES: Final = 4000
 MAX_LINE_CHARS: Final = 300
 HEADER_LINES: Final = 15
+PAGE_HEAD_LINES: Final = 8
+MAX_PAGE_HEADS: Final = 500
 MAX_TABLE_HEADERS: Final = 50
 MAX_TOKENS: Final = 20_000
 
@@ -84,6 +89,10 @@ class DocumentView:
     #: Periods reported by a structured statement.
     statement_periods: tuple[tuple[date | None, date | None], ...] = ()
     source: str = "text"
+    #: The top lines of each page (pages only; the header-band period).
+    page_heads: tuple[tuple[str, ...], ...] = ()
+    #: The document's title and author (PDF metadata), normalised.
+    metadata: tuple[str, ...] = ()
     normalised: tuple[str, ...] = field(default=(), compare=False)
 
     def __post_init__(self) -> None:
@@ -107,6 +116,7 @@ class DocumentView:
         raw: list[str] = []
         header: list[str] = []
         source = "text"
+        heads: list[tuple[str, ...]] = []
         if result.pages:
             source = "pages"
             for index, page in enumerate(result.pages):
@@ -114,9 +124,10 @@ class DocumentView:
                 clipped = _clip(page_lines)
                 if index == 0:
                     header = clipped[:HEADER_LINES]
-                raw.extend(clipped)
-                if len(raw) >= MAX_LINES:
-                    break
+                if index < MAX_PAGE_HEADS:
+                    heads.append(tuple(clipped[:PAGE_HEAD_LINES]))
+                if len(raw) < MAX_LINES:
+                    raw.extend(clipped)
         elif result.email is not None:
             source = "email"
             subject = result.email.headers.subject or ""
@@ -155,4 +166,10 @@ class DocumentView:
             statement_institutions=tuple(dict.fromkeys(institutions)),
             statement_periods=tuple(periods),
             source=source,
+            page_heads=tuple(heads),
+            metadata=tuple(
+                normalise(value)[:MAX_LINE_CHARS]
+                for value in ((result.meta.title, result.meta.author) if result.meta else ())
+                if value
+            ),
         )

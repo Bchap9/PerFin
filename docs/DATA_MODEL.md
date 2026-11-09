@@ -348,7 +348,7 @@ budget's currency, one per category, and goes with its category.
 ## Investments
 
 ```
-security          (household, symbol, isin?, cusip?, name, asset_class, sector?, exchange?,
+security          (household, symbol?, isin?, cusip?, name, asset_class, sector?, exchange?,
                    currency)
 holding           (account, security, quantity, cost_basis, currency, as_of)  -- derived cache
 lot               (account, security, open_date, quantity, remaining_quantity, cost_per_unit,
@@ -371,7 +371,13 @@ forced RLS and household-consistent references, ADR-0008):
   another household never learns that a ticker is held).
   `asset_class` is one of equity, etf, mutual_fund, bond, cash_equivalent,
   option, crypto, real_estate, commodity, other. `(household, symbol,
-  exchange)` is unique (a NULL exchange counts as one value); `isin` (12,
+  exchange)` is unique among securities with a symbol (a NULL exchange
+  counts as one value; partial unique index, migration `0012`). `symbol`
+  is NULL for a security an imported statement printed by its name alone
+  (an unlisted partnership, a 529 portfolio): the statement importer
+  matches those by their exact normalised name (NFKC, case-folded, spaces
+  collapsed) and fills the symbol in when a later statement prints one;
+  the API creates securities only with a symbol. `isin` (12,
   check digit last) and `cusip` (9) are format-checked and indexed, not
   unique. `currency` is the quote currency: `price.currency` must equal it
   (composite key on `(household_id, id, currency)`). A security with
@@ -384,7 +390,8 @@ forced RLS and household-consistent references, ADR-0008):
   the account currency (buy negative, sale/dividend/interest positive, fee
   negative); `fees` (>= 0) is the part of it that was fees; `quantity`
   (units, > 0 for buy/sell/reinvest/transfer_in/transfer_out) and `price`
-  (in the security currency) describe the trade. buy, sell, split,
+  (one unit's, in the security currency; a bond trade quoted per 100 of
+  face value is stored divided by 100) describe the trade. buy, sell, split,
   transfer_in, transfer_out and reinvest must name a security; dividend,
   interest, fee and corporate_action may. `currency` equals the account's.
   `lot_links` is a JSON array of `{"lot_id", "quantity"}` (positive decimal
@@ -604,12 +611,20 @@ review_item       (household, document?, kind: unknown_owner|unknown_account|
                    state: open|resolved|dismissed,
                    resolved_by?, resolution JSONB)
 parser_fingerprint(institution, kind, match rules JSONB, parser name, version,
-                   learned_from_document_id?)
+                   learned_from_document_id?, template JSONB?: a learned layout
+                   ("Teach PerFin": field anchors as label text + direction,
+                   table column headers + roles, ignored lines, notes without
+                   digits; never a value of the document; a new version of the
+                   same layout carries the earlier template forward))
 ingest_job        (document, stage, attempt, started, finished, error, log JSONB)
 import_mapping    (household, name, institution_id?, account_id?, header_fingerprint,
                    spec JSONB, created_by?, use_count, last_used_at?,
                    sign_unverified)
 import_hash_alias (household, account, transaction, import_hash)
+statement_record  (household, account, document, kind: bank|investment,
+                   outcome: imported|skipped, period_start, period_end,
+                   period_stated, source_format, currency, closing_balance?,
+                   closing_cash?, holdings_value?, total_value?)
 dropfolder_route  (household, folder slug, user, account?)
 dropfolder_entry  (household, path_key sha256, rel_path, size, mtime_ns, inode,
                    sha256?, document?, outcome: accepted|rejected|skipped, reason?,
@@ -681,6 +696,20 @@ Notes on the documents foundation (`app/domain/documents/`):
 
 Notes on structured imports (`app/domain/imports/`, Phase 2):
 
+- `statement_record` (revision 0010, not in the API) is one statement the
+  importer committed for an account, or one a person said is the same as a
+  statement already imported (`outcome = skipped`): the statement-level
+  duplicate guard (INGESTION.md "Match and deduplicate", "Same statement
+  twice"). `period_stated` is true for a period an OFX/QFX file declares or
+  a document parser read from the page, false for the span of a CSV's or
+  QIF's rows (recorded, never compared). Closing figures: a ledger
+  statement's closing balance; a brokerage statement's closing cash,
+  holdings total and account value (`NUMERIC(20, 6)`, the account's
+  currency). Unique per account, document, kind and period start; both
+  references are household-consistent `CASCADE` keys, so a record goes with
+  its document or account. Not exported in a full export (instance import
+  history, like `ingest_job`).
+
 - `import_mapping` is a saved column mapping for one CSV/TSV layout. `spec`
   is `app.domain.imports.schemas.MappingSpec` (zero-based columns for the
   date and its format, the amount as one signed column with a sign
@@ -719,7 +748,10 @@ Notes on structured imports (`app/domain/imports/`, Phase 2):
   "Parse"): the parsed statements are `extraction.statements` with
   `source_format` `pdf`/`image` (rows with `confidence`, `low_confidence`,
   `page`, `bbox`; the statement with `opening_balance`, `parser`,
-  per-field `confidence`, `reconciliation`), and `extraction.parse` records
+  per-field `confidence`, `reconciliation`; in a document of several
+  accounts `first_page`/`last_page` and the account's printed `name`,
+  `account_type` and `subtype`, never more than its last four digits), and
+  `extraction.parse` records
   the parser run (parser and version, scores, threshold, pending and skipped
   line counts, warnings, a `payslip`). `document.parser_version` is the
   parser's `name/version`; `document.confidence.parse` summarises the run
@@ -734,13 +766,15 @@ Notes on structured imports (`app/domain/imports/`, Phase 2):
   `payslip_does_not_add_up`/`low_confidence` (`fields`, `adds_up`). A
   statement that does not reconcile writes no balance snapshot. Brokerage
   statements are `extraction.investments` (positions, activity, cash and
-  totals, `parser`, `confidence`, `reconciliation`; INGESTION.md
+  totals, `parser`, `confidence`, `reconciliation`, the pages and account
+  facts as above; INGESTION.md
   "Brokerage statements"); their items are `investment_reconciliation_failed`
   (`checks`, `failed`, `positions`, cash and totals as decimal strings),
   `investment_low_confidence` (`fields`, `positions`, `activity`),
   `position_mismatch` (`securities`: `history`/`reported` units),
   `investment_lot_conflict` (`code`), `investment_out_of_order`
-  (`rows`) and `investment_date_out_of_range` (`earliest_allowed`), each
+  (`rows`), `investment_same_name_securities` (`names`) and
+  `investment_date_out_of_range` (`earliest_allowed`), each
   with `account_id`; nothing of a held statement is written.
 
 ## Tax vault

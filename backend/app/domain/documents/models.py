@@ -310,6 +310,9 @@ class ParserFingerprint(UUIDPk, Timestamps, HouseholdScoped, Base):
         household_ref_fk("parser_fingerprint", "learned_from_document_id", "document"),
         CheckConstraint("jsonb_typeof(match_rules) = 'object'", name="match_rules_object"),
         CheckConstraint("version >= 1", name="version_positive"),
+        CheckConstraint(
+            "template IS NULL OR jsonb_typeof(template) = 'object'", name="template_object"
+        ),
     )
 
     institution_id: Mapped[uuid.UUID] = mapped_column(
@@ -322,6 +325,9 @@ class ParserFingerprint(UUIDPk, Timestamps, HouseholdScoped, Base):
     learned_from_document_id: Mapped[uuid.UUID | None] = mapped_column(
         Uuid(as_uuid=True), ForeignKey("document.id", ondelete="SET NULL")
     )
+    #: What the household taught about the layout ("Teach PerFin":
+    #: ``app.ingestion.parsers.template.LayoutTemplate``; labels, never values).
+    template: Mapped[dict[str, Any] | None] = mapped_column(JSONB(none_as_null=True))
 
 
 class IngestJob(UUIDPk, Timestamps, HouseholdScoped, Base):
