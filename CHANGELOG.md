@@ -36,7 +36,132 @@ What remains (details in docs/ROADMAP.md):
 
 ## [Unreleased]
 
-Nothing yet.
+A usability pass over the whole product: every working endpoint a person
+needs now has a screen, and the readers get a household's first statement
+from a bank they have never seen right more often, and get better as the
+household names things. No migration.
+
+### Added
+
+- **Statements from an institution PerFin has never seen** (the generic
+  readers, no fingerprint, no template, no person):
+  - The **institution** is read from the statement's header
+    (`app/ingestion/classify/institution.py`): `Northwind Bank, N.A.`,
+    `Issued by Meridian Card Bank`, `Thistle & Wren Building Society`,
+    `Prairie Lakes Credit Union`. It is offered as the institution when the
+    account is set up from the file and resolves to the household's
+    institution on the next statement; a heading (`Your Financial Summary`,
+    `Mortgage Statement`) or a name with nothing distinctive (`Federal
+    Credit Union`) is none. Until now a never-seen statement proposed an
+    account with no institution.
+  - **Accounts without a number**: a credit union's shares printed one
+    after the other (`PRIMARY SAVINGS - ID 0000`, `FREE CHECKING - ID
+    0010`), each with its own opening and closing balance row, are one
+    statement each, found by the balance starting over
+    (`TableStatementParser.balance_sections`, warning
+    `accounts_by_balance`). They were read as one statement that could not
+    reconcile. A balance brought forward at the top of a page continues its
+    account.
+  - The **currency** from the symbol the amounts carry when it names one
+    (`£`, `€`): a statement in pounds is proposed as a GBP account, not in
+    the household's base currency.
+- **Exports**:
+  - A CSV that opens with lines about the account (name, masked number,
+    date range) before its header is a table (`_rows_after_preamble`); it
+    was refused as an unsupported text file. The account's last four
+    digits are read from those lines (`preamble_last4`), so the file finds
+    its account. A text file stored as unsupported by an earlier release is
+    sniffed again on "Process again".
+  - Header words of German, French, Spanish, Dutch, Italian and Portuguese
+    exports (`Buchungstag`, `Betrag`, `Libellé`, `Débit`/`Crédit`, `Fecha`,
+    `Importe`, `Omschrijving`, `Af Bij`, `Saldo`...) and a unit after a
+    money header (`Bedrag (EUR)`), so such files map without a person.
+- **Payees and categories of imported rows**
+  (`app/domain/imports/payees.py`): a row is the payee whose name or alias
+  its description is or **contains** (`Card Purchase 01/14 Corner Grocer
+  #204 ...` is `Corner Grocer`), and a row neither the file nor a rule
+  categorised takes its payee's **default category**. The default category
+  could be set under "Categories, payees and tags" but was never applied.
+  The run summary counts `payee_categorised`.
+- **What PerFin has learned** (`/documents/learned`; `GET /imports/layouts`,
+  `DELETE /imports/layouts/{id}`): the layouts taught in the review queue
+  and the saved column mappings, with what each recognises and reads, and
+  a way to forget a layout (every version of it) or rename and delete a
+  mapping. A layout learned from a wrong answer could not be removed
+  before.
+- **Screens for endpoints that had none** (the SPA called 0 of these
+  before; each has vitest coverage and was driven in headless Chrome
+  against a live API and worker):
+  - **Transactions**: "Add transaction" (`POST /transactions`, with an
+    `Idempotency-Key`; also on an account's page), edit date, amount,
+    description, memo and status (`PATCH`), delete (`DELETE`), "Mark
+    confirmed" on a row awaiting review, and "Find transfers" (`POST
+    /transactions/transfers/auto-pair`). A person tracking cash could not
+    record anything before. The row's actions sit behind one menu button
+    (WAI-ARIA menu button pattern), so a row is one line tall instead of
+    three.
+  - **"Always categorise like this…"** on a row: saves a rule from the
+    words of its description that come back every month (dates and
+    reference numbers dropped; the person edits them), shows how many
+    uncategorised transactions match (`POST /rules/test`) and can apply it
+    to them at once. The rule only fills a missing category.
+  - **Reports** (`/reports`; `/reports/spending`, `/income`, `/cashflow`,
+    `/trends`): spending and income by category, payee, month or account,
+    cash flow per month, and month-on-month / year-on-year trends, with a
+    period and account filter, a chart and an accessible table each,
+    amounts that could not be converted shown in their own currency, and a
+    CSV download (formula-neutralised). A category or account row opens its
+    transactions for those dates (`/transactions?category=&date_from=&date_to=`).
+  - **Accounts**: delete an account (`DELETE /accounts/{id}`; the dialog
+    lists what goes and asks for the account's name).
+  - **Investments**: edit and delete a security (`PATCH`/`DELETE
+    /securities/{id}`) and the cost-basis method per account
+    (`/investments/accounts/{id}/cost-method`).
+  - **Loans**: edit a loan's terms (`PATCH /loans/{id}`).
+  - **Tax**: delete a tax year (`DELETE /tax-years/{year}`).
+  - **Rules**: export and import (`/rules/export`, `/rules/import`; append
+    or replace, checked on the device first).
+  - **Settings → Exchange rates** (`/fx-rates`): list, add and delete the
+    manual rates that net worth and reports convert with.
+  - **Settings → Users** (instance admins; `/admin/users`): list users,
+    create a local user, disable and enable, the break-glass and
+    email-verified flags, reset second factors (all through step-up).
+  - **Documents**: attach a document to a transaction or an account
+    (`POST /documents/{id}/link`) and see what it is attached to.
+- A "Start here" card on the dashboard of a household with no accounts.
+- Test fixtures `tests/fixtures/synth_unseen_layouts.py`: five statements
+  in layouts nothing shipped knows (a summary-block checking statement and
+  its next month, deposits and withdrawals in separate tables, a card
+  statement with a closing date only, a two-page sterling current account
+  with balances brought forward, two credit-union shares), with the
+  results a correct reading returns. All invented.
+
+### Changed
+
+- Parser versions: `statement_generic` and `card_statement_generic` 5, the
+  institution parsers built on them 3, `brokerage_statement_generic` 7,
+  `placeholder_brokerage` 5, `fidelity_investments_statement` 6 (their
+  output for the same pages may change: the account's last four digits, the
+  currency, accounts without a number).
+- The dashboard's cash-flow card says "Money in" and "Money out" (what
+  `/reports/cashflow` returns) instead of "Income" and "Spending", which
+  the Reports page computes differently (a refund reduces spending there).
+- The upload page names every kind of file it takes (PDF, CSV, TSV, XLSX,
+  OFX, QFX, QIF, photos and scans, email files, ZIP archives), not four.
+
+### Fixed
+
+- The last four digits of an account number printed in groups (`Account
+  number: 4410 0092 6654`) were those of its **first** group (`4410`), so
+  the statement matched no account or the wrong one. The number is now
+  read whole (`summary_last4`, bank, card and brokerage statements);
+  `Account Ending 4-71009` is read; `Period ending 2026` is no account.
+- The page header pushed every page 14 px sideways on a phone (the
+  household and user names did not give way); the names now truncate and
+  the household's is hidden under 30rem.
+- A statement printing `Balance carried forward` at the foot of every page
+  took the first page's figure as its closing balance and did not
+  reconcile; the last one printed is the closing balance.
 
 ## [1.0.0-rc.5] - 2026-11-06
 

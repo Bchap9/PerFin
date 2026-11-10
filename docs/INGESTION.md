@@ -49,7 +49,15 @@ sniffer reads a text file as CSV/TSV when its first non-empty lines carry
 the same number of delimiters, or when a leading block of most lines, two
 at least, are rows of three columns or more followed only by notes (a short
 brokerage export's disclaimer paragraphs and "Date downloaded" line; rows of
-five delimiters or more need only two, however many notes follow). A file
+five delimiters or more need only two, however many notes follow), or when
+a table of four columns or more (three lines at least: a header and two
+rows) stands under a few lines that carry fewer delimiters, the way a bank's
+export opens with the account's name, masked number and date range
+(`_rows_after_preamble`; the column mapping finds the header row,
+`skip_rows`, and the account's last four digits are read from those lines
+when they name one account, `preamble_last4`). A text file stored as
+unsupported by an earlier release is sniffed again when it is reprocessed,
+so "Process again" reads it. A file
 that writes `a, "b, c"` (a space between the delimiter and a quote) is read
 with the space after each delimiter skipped, so its quoted fields hold. A ZIP is expanded once
 inside the sandbox and each member becomes a document of its own (below).
@@ -339,6 +347,25 @@ the validated sandbox output, never on file content):
   reversed are refused. Receipts and invoices: labelled printed date, else
   the first date (stored as `period_start = period_end`). Tax forms: "Tax
   year 2025", "2025 Form 1098", "Form W-2 ... 2025", "For calendar year".
+- **Institution of a never-seen layout** (`institution.py`): when no
+  fingerprint matches a statement, the header lines (the first 15 of page
+  1) are read for the name of who sent it: a run of capitalised words
+  ending in a word that says what kind of company it is (`Bank`, `Credit
+  Union`, `Building Society`, `Savings and Loan`, `FCU`; weaker: `Financial`,
+  `Brokerage`, `Securities`, `Investments`, `Insurance`, `Mortgage`, `Card
+  Services`...), with its corporate form (`N.A.`, `FSB`, `Inc.`) and, for a
+  bank, `of <Place>`. `Northwind Bank, N.A.`, `Issued by Meridian Card
+  Bank`, `Thistle & Wren Building Society` are names; `Your Financial
+  Summary`, `Mortgage Statement`, `Federal Credit Union` (nothing
+  distinctive left), a line with digits and a payee in a transaction row
+  (never in the header) are not. Confidence 0.7 (0.6 for the weaker
+  words), kept as `confidence.institution_name`. It is a suggestion: it
+  resolves to one of the household's institutions by name
+  (`match.institutions`), breaks a tie between accounts sharing their last
+  four digits, and is offered as the institution when an account is set up
+  from the file ("Accounts in this file"). It never creates an institution
+  by itself. So the first statement of a new bank proposes the bank, and
+  the next one is recognised by it.
 - **Account** (`accounts.py`, `service.py`): last four digits from a
   structured statement, the fingerprint's mask, generic masks ("ending in
   1234", `****1234`, `xxxx-1234`) or a labelled number cut to its last four
@@ -804,6 +831,36 @@ OFX `INVSTMTRS` in the sandbox or from a PDF/scan's pages in the worker.
   - **Parser fallback** (`app/ingestion/parsers/registry.py`): when the
     chosen parser reads nothing usable, the next-best parsers scoring at
     least 0.35 are tried in turn (warning `parser_fallback:<name>`).
+- **The account's number in a statement's summary**
+  (`parsers/accounts.py`, `summary_last4`; bank, card and brokerage
+  statements): a masked number (`****1234`), `ending in 1234` or `Account
+  Ending 4-71009` (not `Period ending 2026`), or a labelled number read
+  **whole**: a number printed in three or more short groups (`Account
+  number: 4410 0092 6654`, `4111 1111 1111 1111`) ends in the digits of its
+  last group, not its first; two numbers side by side (`12345678 2026`)
+  stay apart; a group that starts a date or an amount is not part of it; a
+  number shaped like a date or a telephone number is none. Only four
+  digits are kept.
+- **The currency** of a bank or card statement: a printed code
+  (`Currency: CAD`), else the symbol its amounts carry when that names one
+  currency (`£`, `€`), every symbol-bearing amount carries the same one and
+  two amounts at least do (`symbol_currency`), else the layout's own. A
+  dollar sign is no evidence. A statement in pounds is then proposed, and
+  matched, as a GBP account instead of the household's base currency.
+- **Accounts without a number** (`TableStatementParser.balance_sections`):
+  a credit union prints a member's shares one after the other under titles
+  (`PRIMARY SAVINGS - ID 0000`, `FREE CHECKING - ID 0010`), each with its
+  own opening and closing balance row and no account number. They are
+  found by the balance **starting over**: an opening-balance row in a table
+  whose figure is not the balance the rows before it ended on. Each such
+  section is one statement, named by the title over its table (which also
+  gives the account type), reconciled on its own; its last four digits are
+  the title's own number when that has four digits or more, never the
+  member number printed once for all of them (parse warning
+  `accounts_by_balance`). A balance **brought forward** at the top of a
+  page (the figure carried forward at the foot of the page before)
+  continues its account, and the last `Balance carried forward` printed is
+  the statement's closing balance.
 - **Several accounts in one PDF** (a statement "of all accounts", a bank's
   combined statement; `app/ingestion/parsers/accounts.py`, for any
   institution):
@@ -1236,6 +1293,16 @@ same database transaction.
   `indicator_values_unknown`: a `CHECK` row would otherwise read as money
   in); it reports a score, per-role reasons (role, column, match
   kind, share of cells that fit) and its doubts.
+- **Header words.** The suggestion knows the words English exports use
+  for each role and those of German, French, Spanish, Dutch, Italian and
+  Portuguese ones (`Buchungstag`, `Betrag`, `Libellé`, `Débit`/`Crédit`,
+  `Fecha`, `Importe`, `Omschrijving`, `Af Bij`, `Saldo`...; `ROLE_WORDS`),
+  and reads a unit after a money header as part of it (`Bedrag (EUR)`,
+  `Amount (USD)`). A word alone never assigns a role: the column's values
+  must fit it, which also settles a word two languages use differently
+  (`Valuta` is a value date in German and the currency in Dutch and
+  Italian). Decimal commas and day-first dates are detected from the
+  values as before.
 - **Never-seen layouts.** When no saved mapping fits and the suggestion is
   confident, a CSV, TSV or XLSX whose person (the uploader, or who asked for
   the re-run) is a member or above is imported with it, and the suggestion
@@ -1427,6 +1494,24 @@ and per row the transaction id, fields, confidence and page). Confirming them
 is a transaction change (`PATCH /transactions/{id}` or the bulk `confirm`
 action); resolving the item itself is only "dismiss" so far.
 
+**Payee and category of an imported row** (`app/domain/imports/payees.py`,
+`_commit_statement`). A row's description is kept as printed (`raw_payee`).
+Its payee is the household payee whose normalised name or alias the
+description **is**, or **contains** as whole words: `Card Purchase 01/14
+Corner Grocer #204 Springfield IL Card 7731` is payee `Corner Grocer`, and
+`POS QB COFFEE 0042` is the payee with the alias `QB Coffee`. When one
+payee's name is part of another's the longer wins (`Corner Grocer Deli`); a
+description naming two different payees side by side is no match; names
+under four characters or made of digits match only as the whole description.
+The category is, in this order: the file's own (QIF, a category column);
+what a rule sets; else the payee's **default category**
+(`payee.default_category_id`, edited under "Categories, payees and tags";
+a row a rule split is left alone). The run summary counts the last as
+`payee_categorised`. So naming a payee once, with its usual category and
+any odd spelling as an alias, categorises that merchant's rows on every
+later import, with no model involved and nothing learned that a person
+did not write down.
+
 ## Review queue
 
 The review UI is where the user teaches the system. Each item shows the source
@@ -1609,6 +1694,16 @@ the document page.
   misreads a statement is held back the same way. A template without
   tables only fills a parser's statement (the period always; the account
   and balances when there is one statement). Then the normal import runs.
+- **Looking at it and taking it back.** `GET /imports/layouts` lists the
+  layouts in use (one per institution, kind and parser: the version the
+  classifier uses) with the phrases that recognise them, the facts and
+  table columns taught, the number of ignored lines and the notes;
+  `DELETE /imports/layouts/{id}` (member or above) forgets every version of
+  one, so an older version is not used in its place
+  (`app/domain/imports/layouts.py`; audit `parser_fingerprint.delete`). The
+  next statement of that layout is read by the ordinary parsers again and
+  can be taught afresh. The SPA shows both, with the saved column mappings
+  (rename, delete), on "What PerFin has learned" (`/documents/learned`).
 - **Notes.** Free text from "Other" is kept on the template, in the review
   item's resolution and in the `document.teach` audit row for the
   household to read, without any word that holds a digit (an account or
