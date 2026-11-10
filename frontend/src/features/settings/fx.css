@@ -1,0 +1,19 @@
+/* SPDX-License-Identifier: AGPL-3.0-or-later */
+/* Exchange rates: the four fields of a rate side by side, and the pair filter. */
+.fx-fields {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(9rem, 13rem));
+  gap: var(--space-3);
+  align-items: start;
+}
+
+.fx-filter {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-3);
+  align-items: flex-end;
+}
+
+.fx-filter .field {
+  width: 9rem;
+}

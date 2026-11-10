@@ -11,6 +11,9 @@ export type RuleTestBody = Schemas["RuleTest"];
 export type RuleTestResult = Schemas["RuleTestResult"];
 export type RuleTestItem = Schemas["RuleTestItem"];
 export type Job = Schemas["JobOut"];
+export type RuleExport = Schemas["RuleExport"];
+export type RuleImport = Schemas["RuleImport"];
+export type RuleImportMode = RuleImport["mode"];
 
 export const ruleKeys = {
   list: [...queryRoots.rules, "list"],
@@ -39,6 +42,16 @@ export const reorderRules = (ruleIds: string[]) => unwrap(api.POST("/api/v1/rule
 export const testRule = (body: RuleTestBody) => unwrap(api.POST("/api/v1/rules/test", { body }));
 
 export const applyRules = (body: Schemas["RuleApply"]) => unwrap(api.POST("/api/v1/rules/apply", { body }));
+
+/** Every rule plus the names of what the rules refer to, as one portable document. */
+export const exportRules = () => unwrap(api.GET("/api/v1/rules/export"));
+
+/**
+ * Add the rules of an export document after the existing ones (`append`) or
+ * in their place (`replace`). Answers the whole rule list afterwards.
+ */
+export const importRules = (body: RuleImport, idempotencyKey: string) =>
+  unwrap(api.POST("/api/v1/rules/import", { body, params: { header: { "Idempotency-Key": idempotencyKey } } }));
 
 export const getJob = (id: string) => unwrap(api.GET("/api/v1/jobs/{job_id}", { params: { path: { job_id: id } } }));
 

@@ -6,6 +6,7 @@ import type { ReactNode } from "react";
 
 import { Card } from "../../components/Card";
 import { formatDateTime } from "../../lib/dates";
+import { useAuthSession } from "../auth/session";
 import { StepUpProvider } from "../auth/StepUp";
 
 /** Every settings page can ask for step-up; the dialog lives here. */
@@ -34,7 +35,15 @@ export function SettingsPage({ title, children }: { title: string; children: Rea
   );
 }
 
-const SECTIONS = [
+interface Section {
+  to: string;
+  title: string;
+  text: string;
+  /** Listed only for an instance administrator (the page itself checks again). */
+  instanceAdmin?: true;
+}
+
+const SECTIONS: readonly Section[] = [
   { to: "/settings/profile", title: "Profile", text: "Your name, language, theme and time zone." },
   {
     to: "/settings/security",
@@ -43,6 +52,11 @@ const SECTIONS = [
   },
   { to: "/settings/household", title: "Household members", text: "Who can see this household's finances, and their roles." },
   { to: "/settings/general", title: "Household", text: "The household's name and base currency." },
+  {
+    to: "/settings/exchange-rates",
+    title: "Exchange rates",
+    text: "The rates net worth and reports use to convert accounts in other currencies.",
+  },
   { to: "/settings/access", title: "Account access", text: "Which accounts each member or viewer can see or edit." },
   { to: "/settings/categories", title: "Categories, payees and tags", text: "Organise how transactions are grouped." },
   { to: "/settings/intake", title: "Intake", text: "Receipts mailbox, its alias, the drop folder and virus scanning." },
@@ -57,16 +71,24 @@ const SECTIONS = [
     title: "Notifications",
     text: "Email, webhook, ntfy, Gotify or Matrix alerts for sign-in security, roles, reviews, tax and backups.",
   },
-] as const;
+  {
+    to: "/settings/users",
+    title: "Users",
+    text: "Everyone with a sign-in on this PerFin instance: create accounts, disable them, reset second factors.",
+    instanceAdmin: true,
+  },
+];
 
 export function SettingsIndexPage() {
+  const { session } = useAuthSession();
+  const isInstanceAdmin = session?.user.is_instance_admin === true;
   return (
     <section aria-labelledby="page-title" className="settings-stack">
       <div className="page-header">
         <h1 id="page-title">Settings</h1>
       </div>
       <ul className="settings-links">
-        {SECTIONS.map((section) => (
+        {SECTIONS.filter((section) => section.instanceAdmin !== true || isInstanceAdmin).map((section) => (
           <li key={section.to}>
             <Card>
               <h2 className="card__title">
