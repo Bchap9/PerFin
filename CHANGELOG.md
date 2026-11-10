@@ -37,9 +37,7 @@ What remains (details in docs/ROADMAP.md):
 
 ## [Unreleased]
 
-### Fixed
-
-- The `perfin-egress` and `perfin-ml` images now apply pending Debian security updates at build time, as the application image already did. The `v1.0.0-rc.5` release stopped at the image scan because the `python:3.12-slim` base still carried a `zlib1g` with fixed HIGH findings (CVE-2026-76844, CVE-2026-85091).
+Nothing yet.
 
 ## [1.0.0-rc.6] - 2026-11-10
 
@@ -170,6 +168,12 @@ and forgotten). No migration.
 - The page header pushed every page 14 px sideways on a phone (the
   household and user names did not give way); the names now truncate and
   the household's is hidden under 30rem.
+- The `perfin-egress` and `perfin-ml` images now apply pending Debian
+  security updates at build time, as the application image already did. The
+  first `v1.0.0-rc.5` release run stopped at the image scan because the
+  `python:3.12-slim` base still carried a `zlib1g` with fixed HIGH findings
+  (CVE-2026-76844, CVE-2026-85091). The published rc.5 images were built
+  after this fix and already carry it.
 - A statement printing `Balance carried forward` at the foot of every page
   took the first page's figure as its closing balance and did not
   reconcile; the last one printed is the closing balance.
