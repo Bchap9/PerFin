@@ -158,6 +158,7 @@ from app.domain.documents.models import (
 from app.domain.documents.service import get_visible_document
 from app.domain.imports import repo
 from app.domain.imports.models import NAME_MAX, ImportMapping
+from app.domain.imports.payees import PayeeMatcher
 from app.domain.imports.schemas import (
     ACTIVITY_COLUMNS,
     APPLY_MAPPING_JOB_TYPE,
@@ -195,7 +196,7 @@ from app.domain.investments.statement_import import import_investment_statements
 from app.domain.review.layout import with_layout_tables
 from app.domain.rules.service import apply_rules_to
 from app.domain.transactions import repo as transactions_repo
-from app.domain.transactions.import_hash import HashInput, normalize_payee
+from app.domain.transactions.import_hash import HashInput
 from app.domain.transactions.models import (
     MEMO_MAX,
     PAYEE_MAX,
@@ -658,6 +659,8 @@ class _Run:
     skipped_currency: int = 0
     snapshots: int = 0
     rules_changed: int = 0
+    #: Rows that took their payee's default category.
+    payee_categorised: int = 0
     review_items: int = 0
     statements: int = 0
     low_confidence: int = 0
@@ -680,7 +683,8 @@ class _Run:
     answers: StatementAnswers = field(default_factory=StatementAnswers)
     #: Statements held (``statement_overlap``) or skipped as already imported.
     overlaps: int = 0
-    _payees: dict[str, uuid.UUID] | None = None
+    _payees: PayeeMatcher | None = None
+    _payee_categories: dict[uuid.UUID, uuid.UUID] | None = None
     _categories: dict[str, uuid.UUID] | None = None
     _open: list[tuple[ReviewKind, dict[str, Any]]] | None = None
 
@@ -710,10 +714,15 @@ class _Run:
         )
         self.review_items += 1
 
-    def payees(self) -> dict[str, uuid.UUID]:
+    def payees(self) -> PayeeMatcher:
         if self._payees is None:
-            self._payees = repo.payee_lookup(self.db, self.household_id)
+            self._payees = PayeeMatcher(repo.payee_lookup(self.db, self.household_id))
         return self._payees
+
+    def payee_categories(self) -> dict[uuid.UUID, uuid.UUID]:
+        if self._payee_categories is None:
+            self._payee_categories = repo.payee_default_categories(self.db, self.household_id)
+        return self._payee_categories
 
     def categories(self) -> dict[str, uuid.UUID]:
         if self._categories is None:
@@ -729,6 +738,7 @@ class _Run:
             "skipped_currency": self.skipped_currency,
             "snapshots": self.snapshots,
             "rules_changed": self.rules_changed,
+            "payee_categorised": self.payee_categorised,
             "review_items": self.review_items,
             "statements": self.statements,
             "low_confidence": self.low_confidence,
@@ -921,7 +931,7 @@ def _commit_statement(
         [HashInput(t.posted_date, t.amount, t.raw_payee) for t in rows],
     )
     run.duplicates += len(plan.exact)
-    payees = run.payees() if plan.to_insert else {}
+    payees = run.payees() if plan.to_insert else None
     created: list[tuple[Transaction, bool]] = []
     split_lines: dict[int, list[dict[str, Any]]] = {}
     for index in plan.to_insert:
@@ -933,7 +943,7 @@ def _commit_statement(
             posted_date=txn.posted_date,
             amount=to_storage(txn.amount),
             currency=account.currency,
-            payee_id=payees.get(normalize_payee(txn.raw_payee)) if txn.raw_payee else None,
+            payee_id=payees.match(txn.raw_payee) if payees is not None else None,
             category_id=category_id,
             raw_payee=txn.raw_payee[:PAYEE_MAX] if txn.raw_payee else None,
             memo=txn.memo[:MEMO_MAX] if txn.memo else None,
@@ -967,6 +977,21 @@ def _commit_statement(
                 user_id=run.user_id,
             )
             run.rules_changed += outcome.changed
+    # What neither the file nor a rule categorised takes its payee's default
+    # category (set under "Categories, payees and tags").
+    defaults = run.payee_categories() if created else {}
+    open_rows = [
+        row
+        for row, categorised in created
+        if not categorised and row.category_id is None and row.payee_id in defaults
+    ]
+    if open_rows:
+        # A rule may have split a row: its lines carry the categories.
+        split = transactions_repo.splits_for(db, run.household_id, [row.id for row in open_rows])
+        for row in open_rows:
+            if row.payee_id is not None and not split.get(row.id):
+                row.category_id = defaults[row.payee_id]
+                run.payee_categorised += 1
     positions = {index: position for position, index in enumerate(plan.to_insert)}
     for index, candidates in plan.near.items():
         position = positions[index]

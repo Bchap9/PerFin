@@ -105,6 +105,20 @@ def payee_lookup(db: Session, household_id: uuid.UUID) -> dict[str, uuid.UUID]:
     return lookup
 
 
+def payee_default_categories(db: Session, household_id: uuid.UUID) -> dict[uuid.UUID, uuid.UUID]:
+    """Payee id -> its default category, for the payees that have one."""
+    rows = db.execute(
+        select(Payee.id, Payee.default_category_id).where(
+            Payee.household_id == household_id, Payee.default_category_id.is_not(None)
+        )
+    )
+    out: dict[uuid.UUID, uuid.UUID] = {}
+    for payee_id, category_id in rows:
+        if category_id is not None:
+            out[payee_id] = category_id
+    return out
+
+
 def category_lookup(db: Session, household_id: uuid.UUID) -> dict[str, uuid.UUID]:
     """Case-folded category path (``Parent:Child``) and unique leaf name -> id."""
     rows = list(

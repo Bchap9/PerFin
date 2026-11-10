@@ -1367,3 +1367,51 @@ def test_an_account_bound_mapping_wins_over_a_members_household_one(env: Env) ->
             )
         ).scalar_one()
         assert log["mapping_id"] == str(bound_id)
+
+
+# ---------------------------------------------------------------------------
+# Payees inside a bank's description, and their default category
+# ---------------------------------------------------------------------------
+
+_PAYEE_CSV = (
+    b"Date,Description,Amount\n"
+    b"2026-03-02,OAKFIELD RENTALS DES:RENT ID:88123 INDN:JORDAN SAMPLE,-950.00\n"
+    b"2026-03-05,CHECKCARD 0304 BLUE OWL GROCERS SPRINGFIELD IL 2443106,-88.12\n"
+    b"2026-03-11,POS QB COFFEE 0042,-4.50\n"
+    b"2026-03-13,INITECH DES:PAYROLL ID:XXXXX4471,1240.00\n"
+    b"2026-03-19,TRANSFER FROM OAKFIELD RENTALS TO BLUE OWL GROCERS,-1.00\n"
+    b"2026-03-24,MAPLE HARDWARE SPRINGFIELD IL,-43.28\n"
+)
+
+
+def test_rows_take_the_payee_they_name_and_its_default_category(env: Env) -> None:
+    household = env.household_id
+    rent = env.ledger.category(household, name="Rent")
+    groceries = env.ledger.category(household, name="Groceries")
+    coffee = env.ledger.category(household, name="Coffee")
+    eating_out = env.ledger.category(household, name="Eating out")
+    landlord = env.ledger.payee(household, name="Oakfield Rentals", default_category=rent)
+    grocer = env.ledger.payee(household, name="Blue Owl Grocers", default_category=groceries)
+    cafe = env.ledger.payee(
+        household, name="Quiet Bean Coffee", aliases=["QB Coffee"], default_category=coffee
+    )
+    employer = env.ledger.payee(household, name="Initech")  # no default category
+    # A rule decides before a payee's default does.
+    env.ledger.rule(
+        household,
+        conditions={"type": "payee", "op": "contains", "value": "qb coffee"},
+        actions=[{"type": "set_category", "category_id": str(eating_out.id)}],
+    )
+    account = env.ledger.account(household, currency="USD")
+    document_id = env.ingest(_PAYEE_CSV, account=account, name="march.csv")
+    assert env.document(document_id).status is DocumentStatus.PROCESSED
+    rows = {t.posted_date.day: t for t in env.transactions(account)}
+    assert (rows[2].payee_id, rows[2].category_id) == (landlord.id, rent.id)
+    assert (rows[5].payee_id, rows[5].category_id) == (grocer.id, groceries.id)
+    assert (rows[11].payee_id, rows[11].category_id) == (cafe.id, eating_out.id)
+    assert (rows[13].payee_id, rows[13].category_id) == (employer.id, None)
+    # Two payees side by side, and a payee nobody named: left for a person.
+    assert (rows[19].payee_id, rows[19].category_id) == (None, None)
+    assert (rows[24].payee_id, rows[24].category_id) == (None, None)
+    # The description is kept as printed.
+    assert rows[2].raw_payee == "OAKFIELD RENTALS DES:RENT ID:88123 INDN:JORDAN SAMPLE"
