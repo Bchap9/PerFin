@@ -13,19 +13,25 @@ import { Table, type TableColumn } from "../../components/Table";
 import { formatDate, isIsoDate, todayIsoDate } from "../../lib/dates";
 import { amountSign, isDecimalString } from "../../lib/money";
 import { queryRoots } from "../../lib/queryKeys";
+import { useCanWrite } from "../accounts/api";
 import { ErrorLine, QueryState } from "../planning/PlanningPage";
 import { useAction } from "../planning/useAction";
-import { deletePrice, investmentKeys, listPrices, listSecurities, setPrice, type Price } from "./api";
+import { deletePrice, investmentKeys, listPrices, listSecurities, setPrice, type Price, type Security } from "./api";
 import { securityOptionLabel } from "./format";
-import { SecurityDialog } from "./SecurityDialog";
+import { DeleteSecurityDialog, SecurityDialog } from "./SecurityDialog";
 
 /** Manual closing prices per security; a price replaces the one for that day. */
 export function PricesTab({ currency }: { currency: string }) {
   const securities = useQuery({ queryKey: investmentKeys.securities, queryFn: listSecurities });
   const [chosen, setChosen] = useState("");
   const [adding, setAdding] = useState(false);
-  const securityId = chosen !== "" ? chosen : (securities.data?.[0]?.id ?? "");
-  const security = securities.data?.find((entry) => entry.id === securityId);
+  // The security being edited or deleted is held as chosen, so a refreshed list cannot swap it under the dialog.
+  const [editing, setEditing] = useState<Security | null>(null);
+  const [deleting, setDeleting] = useState<Security | null>(null);
+  const canWrite = useCanWrite();
+  // The chosen security, or the first one (also once the chosen one has been deleted).
+  const security = securities.data?.find((entry) => entry.id === chosen) ?? securities.data?.[0];
+  const securityId = security?.id ?? "";
   const prices = useQuery({ queryKey: investmentKeys.prices(securityId), queryFn: () => listPrices(securityId), enabled: securityId !== "" });
   const [date, setDate] = useState(todayIsoDate());
   const [close, setClose] = useState("");
@@ -62,13 +68,21 @@ export function PricesTab({ currency }: { currency: string }) {
         ) : (
           <Card title="Manual prices" headingLevel={2} actions={<Button onClick={() => { setAdding(true); }}>New security</Button>}>
             <div className="planning-form">
-              <Field label="Security">
-                <Select
-                  value={securityId}
-                  onChange={(event) => { setChosen(event.target.value); }}
-                  options={(securities.data ?? []).map((entry) => ({ value: entry.id, label: securityOptionLabel(entry) }))}
-                />
-              </Field>
+              <div className="planning-row">
+                <Field label="Security">
+                  <Select
+                    value={securityId}
+                    onChange={(event) => { setChosen(event.target.value); }}
+                    options={(securities.data ?? []).map((entry) => ({ value: entry.id, label: securityOptionLabel(entry) }))}
+                  />
+                </Field>
+                {canWrite && security !== undefined ? (
+                  <>
+                    <Button onClick={() => { setEditing(security); }}>Edit security</Button>
+                    <Button variant="danger" onClick={() => { setDeleting(security); }}>Delete security</Button>
+                  </>
+                ) : null}
+              </div>
               <form
                 className="planning-row"
                 aria-label="Add a price"
@@ -109,6 +123,8 @@ export function PricesTab({ currency }: { currency: string }) {
         )}
       </QueryState>
       {adding ? <SecurityDialog defaultCurrency={currency} onClose={() => { setAdding(false); }} onCreated={(created) => { setChosen(created.id); }} /> : null}
+      {editing === null ? null : <SecurityDialog defaultCurrency={currency} security={editing} onClose={() => { setEditing(null); }} />}
+      {deleting === null ? null : <DeleteSecurityDialog security={deleting} onClose={() => { setDeleting(null); }} onDeleted={() => { setChosen(""); }} />}
     </div>
   );
 }

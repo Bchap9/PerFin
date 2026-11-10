@@ -8,6 +8,7 @@ type Schemas = components["schemas"];
 
 export type Loan = Schemas["LoanOut"];
 export type LoanCreate = Schemas["LoanCreate"];
+export type LoanUpdate = Schemas["LoanUpdate"];
 export type LoanSchedule = Schemas["app__domain__loans__schemas__ScheduleOut"];
 export type ScheduleRow = Schemas["ScheduleRowOut"];
 export type ScheduleBasis = LoanSchedule["basis"];
@@ -33,6 +34,9 @@ export function listLoans(): Promise<Loan[]> {
 
 export const getLoan = (id: string) => unwrap(api.GET("/api/v1/loans/{loan_id}", { params: { path: { loan_id: id } } }));
 export const createLoan = (body: LoanCreate) => unwrap(api.POST("/api/v1/loans", { body }));
+/** Only the terms given change (`escrow_amount` and `lender` may be null to clear them). */
+export const updateLoan = (id: string, body: LoanUpdate) =>
+  unwrap(api.PATCH("/api/v1/loans/{loan_id}", { params: { path: { loan_id: id } }, body }));
 export const deleteLoan = async (id: string): Promise<void> => {
   await unwrap(api.DELETE("/api/v1/loans/{loan_id}", { params: { path: { loan_id: id } } }));
 };

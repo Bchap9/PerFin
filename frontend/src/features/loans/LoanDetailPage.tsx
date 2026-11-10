@@ -16,6 +16,7 @@ import { nameLookup, useAccounts } from "../planning/queries";
 import { useAction } from "../planning/useAction";
 import { useRouteParam } from "../planning/useRouteParam";
 import { deleteLoan, getLoan, getSchedule, loanKeys, type Loan, type ScheduleBasis } from "./api";
+import { EditLoanDialog } from "./EditLoanDialog";
 import { PaymentsTab } from "./PaymentsTab";
 import { RateChangesTab } from "./RateChangesTab";
 import { ScheduleTable } from "./ScheduleTable";
@@ -73,8 +74,11 @@ export function LoanDetailPage() {
   const accounts = useAccounts();
   const accountName = nameLookup(accounts.data);
   const [confirming, setConfirming] = useState(false);
+  const [editing, setEditing] = useState(false);
   const remove = useAction(() => deleteLoan(loanId), { invalidate: [queryRoots.loans, queryRoots.netWorth, queryRoots.accounts], success: "Loan deleted" });
   const loan = query.data;
+  // Terms may be changed by someone who can edit the loan's account; the server checks again.
+  const editable = loan !== undefined && accounts.data?.find((entry) => entry.id === loan.account_id)?.can_edit === true;
 
   return (
     <PlanningPage
@@ -84,6 +88,11 @@ export function LoanDetailPage() {
           <Link to="/loans" className="btn btn--secondary btn--md">
             All loans
           </Link>
+          {editable ? (
+            <Button onClick={() => { setEditing(true); }}>
+              Edit loan
+            </Button>
+          ) : null}
           {loan === undefined ? null : (
             <Button variant="danger" onClick={() => { setConfirming(true); }}>
               Delete loan
@@ -153,6 +162,7 @@ export function LoanDetailPage() {
           </>
         )}
       </QueryState>
+      {editing && loan !== undefined ? <EditLoanDialog loan={loan} accountName={accountName(loan.account_id)} onClose={() => { setEditing(false); }} /> : null}
       {confirming ? (
         <Dialog
           open

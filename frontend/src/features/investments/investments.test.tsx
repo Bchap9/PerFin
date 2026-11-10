@@ -2,7 +2,7 @@
 import { screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 
-import { json, mockApi, renderApp } from "../auth/testing";
+import { authedSession, json, mockApi, noContent, problem, renderApp, type Handler } from "../auth/testing";
 import { money, ownerSession, referenceHandlers } from "../planning/testing";
 
 const BROKERAGE = "a0000000-0000-4000-8000-0000000000b1";
@@ -137,5 +137,207 @@ describe("investments page", () => {
       price: "10.10",
       amount: { amount: "-30.30", currency: "USD" },
     });
+  });
+});
+
+const security = (patch: Record<string, unknown> = {}) => ({
+  id: SEC,
+  symbol: "ACME",
+  name: "Acme Crop",
+  asset_class: "equity",
+  currency: "USD",
+  isin: null,
+  cusip: null,
+  sector: "technology",
+  exchange: null,
+  created_at: STAMP,
+  updated_at: STAMP,
+  ...patch,
+});
+
+const OTHER = "5e000000-0000-4000-8000-000000000002";
+
+function pricesHandlers(extra: Record<string, Handler> = {}): Record<string, Handler> {
+  return {
+    ...ownerSession(),
+    "GET /api/v1/accounts": accounts(),
+    "GET /api/v1/investments/holdings": () => json(holdings),
+    "GET /api/v1/securities": () => json({ items: [security(), security({ id: OTHER, symbol: "ZED", name: "Zed Fund" })], next_cursor: null }),
+    "GET /api/v1/securities/:id/prices": () => json({ items: [], next_cursor: null }),
+    ...extra,
+  };
+}
+
+async function openPrices(user: ReturnType<typeof userEvent.setup>) {
+  renderApp("/investments");
+  await user.click(await screen.findByRole("tab", { name: "Prices" }));
+  await screen.findByRole("combobox", { name: "Security" });
+}
+
+describe("editing and deleting a security", () => {
+  it("corrects a security and sends only what changed", async () => {
+    const api = mockApi(pricesHandlers({ "PATCH /api/v1/securities/:id": () => json(security({ name: "Acme Corp", sector: null, isin: "US0378331005" })) }));
+    const user = userEvent.setup();
+    await openPrices(user);
+    await user.click(screen.getByRole("button", { name: "Edit security" }));
+    const dialog = await screen.findByRole("dialog", { name: "Edit security" });
+    expect(within(dialog).getByLabelText(/^Symbol/)).toHaveValue("ACME");
+    const name = within(dialog).getByLabelText(/^Name/);
+    await user.clear(name);
+    await user.type(name, "Acme Corp");
+    await user.clear(within(dialog).getByLabelText(/^Sector/));
+    await user.type(within(dialog).getByLabelText(/^ISIN/), "us0378331005");
+    await user.click(within(dialog).getByRole("button", { name: "Save changes" }));
+    await vi.waitFor(() => { expect(api.callsTo("PATCH", `/api/v1/securities/${SEC}`)).toHaveLength(1); });
+    const call = api.callsTo("PATCH", `/api/v1/securities/${SEC}`)[0];
+    expect(call?.body).toEqual({ name: "Acme Corp", sector: null, isin: "US0378331005" });
+    expect(call?.headers.get("X-CSRF-Token")).toBe("session-token");
+    expect(await screen.findByText("Security updated")).toBeInTheDocument();
+    await vi.waitFor(() => { expect(screen.queryByRole("dialog", { name: "Edit security" })).not.toBeInTheDocument(); });
+  });
+
+  it("checks the identifiers before sending and shows a refused currency change", async () => {
+    const api = mockApi(pricesHandlers({ "PATCH /api/v1/securities/:id": () => problem(409, "security-currency-locked") }));
+    const user = userEvent.setup();
+    await openPrices(user);
+    await user.click(screen.getByRole("button", { name: "Edit security" }));
+    const dialog = await screen.findByRole("dialog", { name: "Edit security" });
+    await user.type(within(dialog).getByLabelText(/^CUSIP/), "123");
+    await user.click(within(dialog).getByRole("button", { name: "Save changes" }));
+    expect(await within(dialog).findByText("A CUSIP has 9 characters.")).toBeInTheDocument();
+    expect(api.callsTo("PATCH", "/api/v1/securities/:id")).toHaveLength(0);
+    await user.clear(within(dialog).getByLabelText(/^CUSIP/));
+    const currency = within(dialog).getByLabelText(/^Currency/);
+    await user.clear(currency);
+    await user.type(currency, "eur");
+    await user.click(within(dialog).getByRole("button", { name: "Save changes" }));
+    expect(await within(dialog).findByText("detail of security-currency-locked")).toBeInTheDocument();
+    expect(api.callsTo("PATCH", `/api/v1/securities/${SEC}`)[0]?.body).toEqual({ currency: "EUR" });
+  });
+
+  it("closes without a request when nothing changed", async () => {
+    const api = mockApi(pricesHandlers());
+    const user = userEvent.setup();
+    await openPrices(user);
+    await user.click(screen.getByRole("button", { name: "Edit security" }));
+    const dialog = await screen.findByRole("dialog", { name: "Edit security" });
+    await user.click(within(dialog).getByRole("button", { name: "Save changes" }));
+    await vi.waitFor(() => { expect(screen.queryByRole("dialog", { name: "Edit security" })).not.toBeInTheDocument(); });
+    expect(api.callsTo("PATCH", "/api/v1/securities/:id")).toHaveLength(0);
+  });
+
+  it("deletes the chosen security after confirmation", async () => {
+    const state = { deleted: false };
+    const api = mockApi(
+      pricesHandlers({
+        "GET /api/v1/securities": () =>
+          json({ items: [...(state.deleted ? [] : [security()]), security({ id: OTHER, symbol: "ZED", name: "Zed Fund" })], next_cursor: null }),
+        "DELETE /api/v1/securities/:id": () => {
+          state.deleted = true;
+          return noContent();
+        },
+      }),
+    );
+    const user = userEvent.setup();
+    await openPrices(user);
+    await user.click(screen.getByRole("button", { name: "Delete security" }));
+    const dialog = await screen.findByRole("dialog", { name: "Delete ACME?" });
+    expect(dialog).toHaveTextContent("A security that has transactions or lots cannot be deleted.");
+    expect(api.callsTo("DELETE", "/api/v1/securities/:id")).toHaveLength(0);
+    await user.click(within(dialog).getByRole("button", { name: "Delete security" }));
+    expect(await screen.findByText("Security deleted")).toBeInTheDocument();
+    const calls = api.callsTo("DELETE", `/api/v1/securities/${SEC}`);
+    expect(calls).toHaveLength(1);
+    expect(calls[0]?.headers.get("X-CSRF-Token")).toBe("session-token");
+    await vi.waitFor(() => { expect(screen.getByRole("combobox", { name: "Security" })).toHaveValue(OTHER); });
+    expect(screen.queryByRole("dialog", { name: /^Delete/ })).not.toBeInTheDocument();
+    // Its prices went with it and are not asked for again.
+    expect(api.callsTo("GET", `/api/v1/securities/${SEC}/prices`)).toHaveLength(1);
+    expect(api.callsTo("GET", `/api/v1/securities/${OTHER}/prices`)).toHaveLength(1);
+  });
+
+  it("shows why a security in use cannot be deleted", async () => {
+    mockApi(pricesHandlers({ "DELETE /api/v1/securities/:id": () => problem(409, "security-in-use") }));
+    const user = userEvent.setup();
+    await openPrices(user);
+    await user.click(screen.getByRole("button", { name: "Delete security" }));
+    const dialog = await screen.findByRole("dialog", { name: "Delete ACME?" });
+    await user.click(within(dialog).getByRole("button", { name: "Delete security" }));
+    expect(await within(dialog).findByText("detail of security-in-use")).toBeInTheDocument();
+    expect(screen.getByRole("combobox", { name: "Security" })).toHaveValue(SEC);
+  });
+
+  it("has no edit or delete for a viewer", async () => {
+    mockApi(pricesHandlers({ "GET /api/v1/auth/session": authedSession({ role: "viewer" }) }));
+    const user = userEvent.setup();
+    await openPrices(user);
+    expect(screen.queryByRole("button", { name: "Edit security" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Delete security" })).not.toBeInTheDocument();
+  });
+});
+
+describe("cost basis method", () => {
+  const costHandlers = (extra: Record<string, Handler> = {}): Record<string, Handler> => ({
+    ...ownerSession(),
+    "GET /api/v1/accounts": accounts(),
+    "GET /api/v1/investments/holdings": () => json(holdings),
+    "GET /api/v1/investments/accounts/:id/cost-method": () => json({ account_id: BROKERAGE, method: "fifo" }),
+    ...extra,
+  });
+
+  it("shows each investment account's method and changes it", async () => {
+    const state = { method: "fifo" };
+    const api = mockApi(
+      costHandlers({
+        "GET /api/v1/investments/accounts/:id/cost-method": () => json({ account_id: BROKERAGE, method: state.method }),
+        "PUT /api/v1/investments/accounts/:id/cost-method": (call) => {
+          state.method = (call.body as { method: string }).method;
+          return json({ account_id: BROKERAGE, method: state.method });
+        },
+      }),
+    );
+    renderApp("/investments");
+    const user = userEvent.setup();
+    const card = await screen.findByRole("region", { name: "Cost basis method" });
+    const list = within(card).getByRole("list", { name: "Cost basis method by account" });
+    expect(within(list).getAllByRole("listitem")).toHaveLength(1); // the checking account is not an investment account
+    expect(await within(list).findByText("First in, first out (FIFO)")).toBeInTheDocument();
+    await user.click(within(list).getByRole("button", { name: "Change the cost basis method of Brokerage" }));
+    const dialog = await screen.findByRole("dialog", { name: "Cost basis method of Brokerage" });
+    expect(dialog).toHaveTextContent("recalculates this account's lots, cost basis and realised gains");
+    await user.selectOptions(within(dialog).getByLabelText("Method"), "average");
+    expect(dialog).toHaveTextContent("A sale uses the average cost of all units held");
+    await user.click(within(dialog).getByRole("button", { name: "Save method" }));
+    await vi.waitFor(() => { expect(api.callsTo("PUT", `/api/v1/investments/accounts/${BROKERAGE}/cost-method`)).toHaveLength(1); });
+    const call = api.callsTo("PUT", `/api/v1/investments/accounts/${BROKERAGE}/cost-method`)[0];
+    expect(call?.body).toEqual({ method: "average" });
+    expect(call?.headers.get("X-CSRF-Token")).toBe("session-token");
+    expect(await within(list).findByText("Average cost")).toBeInTheDocument();
+    expect(screen.queryByRole("dialog", { name: "Cost basis method of Brokerage" })).not.toBeInTheDocument();
+  });
+
+  it("keeps the dialog open with the server's reason when the lots do not fit the method", async () => {
+    mockApi(costHandlers({ "PUT /api/v1/investments/accounts/:id/cost-method": () => problem(422, "lot-selection-not-allowed") }));
+    renderApp("/investments");
+    const user = userEvent.setup();
+    const card = await screen.findByRole("region", { name: "Cost basis method" });
+    await user.click(await within(card).findByRole("button", { name: "Change the cost basis method of Brokerage" }));
+    const dialog = await screen.findByRole("dialog", { name: "Cost basis method of Brokerage" });
+    await user.selectOptions(within(dialog).getByLabelText("Method"), "average");
+    await user.click(within(dialog).getByRole("button", { name: "Save method" }));
+    expect(await within(dialog).findByText("detail of lot-selection-not-allowed")).toBeInTheDocument();
+    expect(within(card).getByText("First in, first out (FIFO)", { selector: "span" })).toBeInTheDocument(); // the row, not the dialog's option
+  });
+
+  it("is read only on an account the person cannot edit", async () => {
+    const readOnly: Handler = async (call) => {
+      const body = (await (await accounts()(call)).json()) as { items: Record<string, unknown>[] };
+      return json({ items: body.items.map((entry) => ({ ...entry, can_edit: false })), next_cursor: null });
+    };
+    mockApi(costHandlers({ "GET /api/v1/auth/session": authedSession({ role: "viewer" }), "GET /api/v1/accounts": readOnly }));
+    renderApp("/investments");
+    const card = await screen.findByRole("region", { name: "Cost basis method" });
+    expect(await within(card).findByText("First in, first out (FIFO)")).toBeInTheDocument();
+    expect(within(card).queryByRole("button", { name: /Change the cost basis method/ })).not.toBeInTheDocument();
   });
 });

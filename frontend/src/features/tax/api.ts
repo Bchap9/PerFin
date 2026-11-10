@@ -55,6 +55,11 @@ export const createTaxYear = (body: Schemas["TaxYearCreate"]) => unwrap(api.POST
 export const updateTaxYear = (year: number, body: Schemas["TaxYearUpdate"]) =>
   unwrap(api.PATCH("/api/v1/tax-years/{year}", { params: { path: { year } }, body }));
 
+/** Owner or admin: removes the year and its checklist; documents and the amounts read from them stay. */
+export const deleteTaxYear = async (year: number): Promise<void> => {
+  await unwrap(api.DELETE("/api/v1/tax-years/{year}", { params: { path: { year } } }));
+};
+
 export const getChecklist = (year: number) =>
   unwrap(api.GET("/api/v1/tax-years/{year}/checklist", { params: { path: { year } } }));
 

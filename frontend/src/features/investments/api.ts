@@ -8,6 +8,7 @@ type Schemas = components["schemas"];
 
 export type Security = Schemas["SecurityOut"];
 export type SecurityCreate = Schemas["SecurityCreate"];
+export type SecurityUpdate = Schemas["SecurityUpdate"];
 export type AssetClass = Schemas["AssetClass"];
 export type Price = Schemas["PriceOut"];
 export type Holdings = Schemas["HoldingsOut"];
@@ -28,6 +29,7 @@ export const investmentKeys = {
   prices: (securityId: string) => [...queryRoots.investments, "prices", securityId],
   holdings: (account: string) => [...queryRoots.investments, "holdings", account],
   performance: (range: string, account: string) => [...queryRoots.investments, "performance", range, account],
+  costMethod: (accountId: string) => [...queryRoots.investments, "cost-method", accountId],
   transactions: (account: string, security: string, type: string) => [
     ...queryRoots.investments,
     "transactions",
@@ -46,6 +48,15 @@ export function listSecurities(): Promise<Security[]> {
 }
 
 export const createSecurity = (body: SecurityCreate) => unwrap(api.POST("/api/v1/securities", { body }));
+
+/** Only the fields given change; `currency` only while the security has no prices or transactions. */
+export const updateSecurity = (id: string, body: SecurityUpdate) =>
+  unwrap(api.PATCH("/api/v1/securities/{security_id}", { params: { path: { security_id: id } }, body }));
+
+/** Refused (`409 security-in-use`) for a security with transactions or lots; its prices go with it. */
+export const deleteSecurity = async (id: string): Promise<void> => {
+  await unwrap(api.DELETE("/api/v1/securities/{security_id}", { params: { path: { security_id: id } } }));
+};
 
 export function listPrices(securityId: string): Promise<Price[]> {
   return collectPages((cursor) =>
@@ -111,3 +122,15 @@ export const deleteInvestmentTxn = async (id: string): Promise<void> => {
 /** Change an investment transaction (e.g. the cost basis of an opening position: its `price`). */
 export const updateInvestmentTxn = (id: string, body: Schemas["InvestmentTxnUpdate"]) =>
   unwrap(api.PATCH("/api/v1/investments/transactions/{txn_id}", { params: { path: { txn_id: id } }, body }));
+
+export const getCostMethod = (accountId: string) =>
+  unwrap(api.GET("/api/v1/investments/accounts/{account_id}/cost-method", { params: { path: { account_id: accountId } } }));
+
+/** Changing the method replays every lot of the account. */
+export const setCostMethod = (accountId: string, method: CostMethod) =>
+  unwrap(
+    api.PUT("/api/v1/investments/accounts/{account_id}/cost-method", {
+      params: { path: { account_id: accountId } },
+      body: { method },
+    }),
+  );

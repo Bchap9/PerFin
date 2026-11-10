@@ -46,6 +46,7 @@ import {
   type TaxYear,
   type TaxYearState,
 } from "./api";
+import { DeleteTaxYearButton } from "./DeleteTaxYear";
 import { ExportCard } from "./ExportCard";
 
 const STATUS_OPTIONS = Object.entries(STATUS_LABEL).map(([value, label]) => ({ value, label }));
@@ -371,6 +372,7 @@ export function TaxYearPage() {
             All tax years
           </Link>
           {data === undefined ? null : <YearActions year={data} canWrite={canWrite} isAdmin={isAdmin} />}
+          {data !== undefined && isAdmin ? <DeleteTaxYearButton year={data} /> : null}
         </>
       }
     >
