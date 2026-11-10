@@ -6,13 +6,14 @@ All notable changes to PerFin are recorded here. The format follows
 
 ## Status
 
-The current release candidate is `v1.0.0-rc.5`; the final `v1.0.0` follows the
+The current release candidate is `v1.0.0-rc.6`; the final `v1.0.0` follows the
 external security review. Every phase (0-7) is implemented. Alembic head is
-`0012`. On 2026-11-06: SPDX;
-backend ruff, ruff format, mypy --strict (683 source files), bandit, OpenAPI
-drift and 8160 pytest tests with `-n 8`, of which the OCR and Helm tests (67)
-need Tesseract and `helm` and could not run in that environment; frontend
-eslint, tsc, 487 vitest tests in 58 files and the production build. As of rc.2: `pip-audit` finds no known vulnerabilities and
+`0012`. On 2026-11-10: SPDX;
+backend ruff, ruff format, mypy --strict (689 source files), bandit, OpenAPI
+drift and 8267 pytest tests with `-n 8`, of which the Helm tests (48) need
+`helm` and could not run in that environment (the OCR tests ran, with
+Tesseract 5.3); frontend
+eslint, tsc, 656 vitest tests in 74 files and the production build. As of rc.2: `pip-audit` finds no known vulnerabilities and
 `npm audit --audit-level=high` passes with 10 moderate advisories in dev
 tooling (eslint, typescript-eslint, minimatch), none high.
 CI is green end to end on GitHub Actions for commit `21d2b38`: `ci` run
@@ -36,10 +37,18 @@ What remains (details in docs/ROADMAP.md):
 
 ## [Unreleased]
 
-A usability pass over the whole product: every working endpoint a person
-needs now has a screen, and the readers get a household's first statement
-from a bank they have never seen right more often, and get better as the
-household names things. No migration.
+Nothing yet.
+
+## [1.0.0-rc.6] - 2026-11-10
+
+Sixth release candidate of 1.0.0. A usability pass over the whole product:
+every working endpoint a person needs now has a screen (adding and deleting
+transactions, reports, exchange rates, users and more), the readers get a
+household's first statement from a bank they have never seen right more
+often (its institution, account number, currency and sub-accounts), and
+imports get better as the household names things (payees with a default
+category, rules made from a correction, learned layouts that can be seen
+and forgotten). No migration.
 
 ### Added
 

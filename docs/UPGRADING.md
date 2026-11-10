@@ -277,6 +277,26 @@ need it ([PORTABILITY.md](PORTABILITY.md)).
 
 ## Notes for specific releases
 
+### 1.0.0-rc.6
+
+- No migration and no new settings.
+- Imports now give a row the payee whose name or alias its description
+  contains, and apply a payee's default category to rows that neither the
+  file nor a rule categorised. Until now a default category set under
+  "Categories, payees and tags" had no effect, so check the ones you have
+  set before the next import. Rows already imported are not changed.
+- Several parser versions change (see the changelog); re-running the import
+  of an existing document may read it differently: the account's last four
+  digits (a number printed in groups now ends in its last group), the
+  currency of a statement printed in pounds or euros, and one statement per
+  share for a credit union statement that numbers none. A statement that
+  matched an account by the wrong four digits before will ask for its
+  account again.
+- A CSV stored as "format not supported" by an earlier release because of
+  lines above its header is read by "Process again" in the review queue.
+- New endpoints: `GET /imports/layouts` and `DELETE /imports/layouts/{id}`
+  (`documents:read` / `documents:write`). No endpoint changed shape.
+
 ### 1.0.0-rc.5
 
 - Migration `0010` adds the `statement_record` table (the statement-level
