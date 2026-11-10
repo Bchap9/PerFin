@@ -31,6 +31,7 @@ from __future__ import annotations
 
 import io
 import random
+import re
 from collections.abc import Iterable, Sequence
 from dataclasses import dataclass, field, replace
 from decimal import Decimal
@@ -78,6 +79,29 @@ IDENTITY_TOKENS: Final = (
     "policy0000777",
     "01/01/1900",
 )
+
+
+def identity_tokens_in(text: str) -> list[str]:
+    """The :data:`IDENTITY_TOKENS` found in ``text`` (compared in lower case).
+
+    The name and address tokens are letters only, and the fixture prints them
+    as words, so they are matched as whole words: a database scan also reads
+    password hashes, salts and other random base32/base64 strings, and a short
+    word such as "quill" turns up inside one of those now and then. The number
+    tokens are matched anywhere, because the forms print them glued to a
+    prefix ("ACCT0000111122").
+    """
+    low = text.lower()
+    found = []
+    for token in IDENTITY_TOKENS:
+        if token.isalpha():
+            hit = re.search(rf"(?<![a-z0-9]){re.escape(token)}(?![a-z0-9])", low)
+        else:
+            hit = re.search(re.escape(token), low)
+        if hit:
+            found.append(token)
+    return found
+
 
 #: A fictional issuer per form type (kept as the issuer name).
 ISSUERS: Final = {

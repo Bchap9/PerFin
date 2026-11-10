@@ -163,9 +163,8 @@ def _database_text(admin_engine: Engine) -> str:
 
 
 def _assert_no_identity(blob: str, where: str) -> None:
-    low = blob.lower()
-    for token in synth.IDENTITY_TOKENS:
-        assert token not in low, f"{token!r} found in {where}"
+    found = synth.identity_tokens_in(blob)
+    assert found == [], f"{found!r} found in {where}"
 
 
 def test_forms_reach_the_vault_and_identity_reaches_nothing(env: Env, admin_engine: Engine) -> None:
