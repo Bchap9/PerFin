@@ -9,6 +9,7 @@ the file into them.
 
 from __future__ import annotations
 
+from decimal import Decimal
 from typing import Any
 
 import pytest
@@ -18,9 +19,11 @@ from app.auth.principal import apply_rls_context
 from app.core.errors import ProblemError
 from app.domain.accounts.models import Account, AccountType, Institution
 from app.domain.accounts.schemas import AccountCreate
-from app.domain.documents.models import ReviewKind
+from app.domain.documents.models import DocumentStatus, ReviewKind
 from app.domain.imports import proposals
 from app.domain.imports.schemas import AccountChoice, DocumentAccounts, DocumentAccountsApply
+from app.domain.transactions.models import Transaction
+from tests.fixtures import synth_unseen_layouts as unseen
 from tests.fixtures.synth_activity_csv import (
     ActivityAccount,
     activity_accounts,
@@ -209,3 +212,70 @@ def test_a_bank_statement_proposal_carries_its_opening_balance() -> None:
         AccountType.CREDIT_CARD,
         "USD",
     )
+
+
+# ---------------------------------------------------------------------------
+# A bank PerFin has never seen (tests/fixtures/synth_unseen_layouts.py)
+# ---------------------------------------------------------------------------
+
+
+def _bank_rows(env: Env, account_id: Any) -> list[tuple[Any, Any]]:
+    rows = env.query(select(Transaction).where(Transaction.account_id == account_id))
+    return sorted((t.posted_date, t.amount) for t in rows)
+
+
+def test_a_new_banks_first_statement_sets_it_up_and_the_next_imports_itself(env: Env) -> None:
+    first_id = env.ingest(unseen.summary_block_checking(), "january.pdf")
+    # Nothing shipped knows the layout: the header names the sender.
+    confidence = env.document(first_id).confidence
+    assert confidence is not None
+    assert confidence["method"] == "classifier"
+    assert confidence["institution_name"] == "Northwind Bank, N.A."
+    (found,) = _detect(env, first_id).accounts
+    assert (found.status, found.last4) == ("new", "3377")
+    assert found.institution_name == "Northwind Bank, N.A."
+    assert found.proposal is not None
+    assert found.proposal.name == "Northwind Checking 3377"
+    assert found.proposal.institution_name == "Northwind Bank, N.A."
+    assert found.proposal.number_last4 == "3377"
+    assert found.proposal.opening_balance == "2418.77"
+
+    (account_id,) = _apply(env, first_id, _create(found))
+    (institution,) = env.query(select(Institution))
+    assert institution.name == "Northwind Bank, N.A."
+    (account,) = env.query(select(Account).where(Account.id == account_id))
+    assert (account.number_last4, account.institution_id) == ("3377", institution.id)
+    assert len(_bank_rows(env, account_id)) == 9
+    assert not env.open_reviews(first_id)
+
+    # The next month's statement: the bank and the account are known now.
+    second_id = env.ingest(unseen.summary_block_checking_next(), "february.pdf")
+    second = env.document(second_id)
+    assert second.status is DocumentStatus.PROCESSED, env.open_reviews(second_id)
+    assert (second.account_id, second.institution_id) == (account_id, institution.id)
+    assert not env.open_reviews(second_id)
+    assert len(_bank_rows(env, account_id)) == 12
+
+
+def test_shares_of_one_member_become_two_accounts(env: Env) -> None:
+    document_id = env.ingest(unseen.credit_union_shares(), "april.pdf")
+    savings, checking = _detect(env, document_id).accounts
+    assert [(a.status, a.last4, a.name) for a in (savings, checking)] == [
+        ("new", "0000", "PRIMARY SAVINGS"),
+        ("new", "0010", "FREE CHECKING"),
+    ]
+    assert savings.proposal is not None
+    assert checking.proposal is not None
+    assert (savings.proposal.type, checking.proposal.type) == (
+        AccountType.SAVINGS,
+        AccountType.CHECKING,
+    )
+    assert savings.proposal.institution_name == "Prairie Lakes Credit Union"
+    assert (savings.proposal.opening_balance, checking.proposal.opening_balance) == (
+        "5000.00",
+        "812.44",
+    )
+    one, two = _apply(env, document_id, _create(savings), _create(checking))
+    assert [amount for _, amount in _bank_rows(env, one)] == [Decimal("300"), Decimal("1.09")]
+    assert len(_bank_rows(env, two)) == 4
+    assert not env.open_reviews(document_id)

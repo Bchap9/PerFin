@@ -38,6 +38,7 @@ from app.ingestion.classify.fingerprints import (
     builtin_fingerprints,
     household_fingerprints,
 )
+from app.ingestion.classify.institution import detect_institution
 from app.ingestion.classify.model import KindModel, predict, shipped_model
 from app.ingestion.classify.period import (
     Period,
@@ -157,6 +158,12 @@ def classify_view(
             if prediction.kind is not None and prediction.confidence >= KIND_THRESHOLD:
                 kind = prediction.kind
                 confidence["kind"] = prediction.confidence
+                if kind == "statement":
+                    # A layout no fingerprint knows still prints who sent it.
+                    named = detect_institution(view.header)
+                    if named is not None:
+                        institution = named.name
+                        confidence["institution"] = named.confidence
             else:
                 kind = None
                 method = "none" if prediction.kind is None else "classifier"

@@ -231,6 +231,39 @@ def _rows_then_notes(counts: list[int]) -> bool:
     return block >= needed and not any(rows[block:])
 
 
+#: Delimiters per row from which a table may follow a preamble (four columns).
+PREAMBLE_ROW: Final = 3
+#: Table lines (header and rows) needed after a preamble.
+PREAMBLE_BLOCK: Final = 3
+
+
+def _rows_after_preamble(counts: list[int]) -> bool:
+    """A table printed under a few lines about the account (``counts``: delimiters per line).
+
+    A bank's export may open with the account's name, its masked number and
+    the date range, one per line (``Account Number : ****3377``), before the
+    header row. The table is the first run of :data:`PREAMBLE_BLOCK` lines or
+    more that share a shape of four columns or more (a third more or fewer
+    delimiters is still the shape: quoted fields hold the delimiter), and
+    every line before it carries fewer delimiters than the shape allows, so
+    prose with commas is no table. What follows the run (totals, notes) is
+    not looked at; the column mapping reads past it.
+    """
+    for start, shape in enumerate(counts):
+        if shape < PREAMBLE_ROW:
+            continue
+        tolerance = max(1, shape // 3)
+        if any(c >= shape - tolerance for c in counts[:start]):
+            return False
+        block = 0
+        for count in counts[start:]:
+            if abs(count - shape) > tolerance:
+                break
+            block += 1
+        return block >= PREAMBLE_BLOCK
+    return False
+
+
 def _delimited_type(text: bytes, *, window_full: bool) -> FileType:
     """CSV/TSV when most of the first non-empty lines carry the same delimiter count."""
     lines = text.splitlines()
@@ -244,7 +277,7 @@ def _delimited_type(text: bytes, *, window_full: bool) -> FileType:
         # Quoted fields may hold the delimiter, so allow a little variation.
         if min(counts) >= 1 and max(counts) - min(counts) <= max(2, min(counts) // 2):
             return file_type
-        if _rows_then_notes(counts):
+        if _rows_then_notes(counts) or _rows_after_preamble(counts):
             return file_type
     return FileType.TEXT
 

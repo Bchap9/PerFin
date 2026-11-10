@@ -100,10 +100,21 @@ are read the same way:
    statement, with the account's last four digits, printed name, type and
    pages; the lines before the first account (an overview) only offer their
    period, and a row there belongs to no account (skipped,
-   ``rows_outside_account``). Otherwise the whole document is one statement,
-   as before. :meth:`TableStatementParser.read_statement` reads one
-   account's lines for the brokerage parsers too (a combined statement's
-   checking account).
+   ``rows_outside_account``). :meth:`TableStatementParser.read_statement`
+   reads one account's lines for the brokerage parsers too (a combined
+   statement's checking account).
+7. **Accounts without a number.** A credit union prints a member's shares
+   one after the other under titles (``PRIMARY SAVINGS - ID 0000``, ``FREE
+   CHECKING - ID 0010``), each with its own opening and closing balance row
+   and no account number. :meth:`TableStatementParser.balance_sections`
+   finds them by the balance **starting over**: an opening-balance row in a
+   table whose figure is not the balance the rows before it ended on. A
+   balance brought forward at the top of a page (the same figure as the one
+   carried forward) continues its account. Each section is one statement
+   named by the title over its table; its last four digits are the title's
+   own number when that has four digits or more, never the member number
+   printed once for all of them (warning ``accounts_by_balance``).
+   Otherwise the whole document is one statement.
 
 Institution parsers (:mod:`app.ingestion.parsers.institutions`) subclass it
 and pin what the generic one has to guess: date format, sign convention,
@@ -130,7 +141,13 @@ from app.ingestion.classify.dates import (
 )
 from app.ingestion.classify.dates import find_dates as classify_dates
 from app.ingestion.parsers import confidence as conf
-from app.ingestion.parsers.accounts import AccountSegment, Segmentation, segment
+from app.ingestion.parsers.accounts import (
+    AccountSegment,
+    Segmentation,
+    account_kind,
+    segment,
+    summary_last4,
+)
 from app.ingestion.parsers.base import (
     Cell,
     DocumentParser,
@@ -153,6 +170,7 @@ from app.ingestion.parsers.text import (
     numeric_parts,
     read_amount,
     read_date,
+    symbol_currency,
 )
 from app.ingestion.reconcile import TOLERANCE, Row, reconcile
 from app.ingestion.sandbox.protocol import (
@@ -253,12 +271,6 @@ _DATE_MARKS: Final = " *\u2020"
 #: Yearless styles a month-named row date may be printed in.
 NAMED_YEARLESS: Final[tuple[DateStyle, ...]] = ("mon_d", "d_mon")
 
-_LAST4: Final = re.compile(
-    r"(?<![A-Za-z0-9])[*xX•]{2}[*xX•\d\s-]{0,30}?(\d{4})\b"
-    r"|\bending(?:\s+in)?\s*:?\s*(\d{4})\b"
-    r"|\baccount(?:\s+(?:number|no\.?))?\s*:?\s*\d{0,26}?(\d{4})\b",
-    re.IGNORECASE,
-)
 #: ``Currency: CAD``; the code in capitals (``currency are`` is no code).
 _CURRENCY: Final = re.compile(r"\b(?i:currency)\s*:?\s*([A-Z]{3})\b")
 #: Line separators between the two dates of a period.
@@ -497,6 +509,47 @@ class StatementRead:
     skipped_regions: list[tuple[int, BBox]] = field(default_factory=list)
 
 
+@dataclass
+class BalanceSection:
+    """One account's lines of a document that numbers none (module doc, 7)."""
+
+    lines: list[ViewLine]
+    #: The title printed over the account's table (``FREE CHECKING - ID 0010``).
+    title: str | None = None
+
+
+#: The number ending a section's title: ``- ID 0010``, ``Share 01``, ``#0070``.
+_SECTION_ID: Final = re.compile(
+    r"[\s\u2013-]*(?:\b(?:id|share|suffix|sub|account|acct|number|no\.?)|#)\s*[:#]?\s*(\d{1,12})\s*$",
+    re.IGNORECASE,
+)
+#: Lines above a table's header searched for the account's title.
+SECTION_TITLE_LINES: Final = 3
+#: Digits a title's number needs to stand for the account (its last four).
+_LAST4_DIGITS: Final = 4
+_MIN_SECTIONS: Final = 2
+TITLE_MAX: Final = 200
+
+
+def section_name(title: str | None) -> tuple[str | None, str | None]:
+    """``(printed name, last four digits)`` of a section's title.
+
+    ``FREE CHECKING - ID 0010`` is ``("FREE CHECKING", "0010")``; a shorter
+    number (``Share 01``) names no account by itself and is dropped.
+    """
+    if not title:
+        return None, None
+    match = _SECTION_ID.search(title)
+    if match is None:
+        return title.strip()[:TITLE_MAX] or None, None
+    name = title[: match.start()].strip(" -\u2013:") or None
+    digits = match[1]
+    return (
+        name[:TITLE_MAX] if name else None,
+        digits[-_LAST4_DIGITS:] if len(digits) >= _LAST4_DIGITS else None,
+    )
+
+
 def _min(*values: float | None) -> float | None:
     present = [v for v in values if v is not None]
     return min(present) if present else None
@@ -506,7 +559,7 @@ class TableStatementParser(DocumentParser):
     """Generic: any statement with a recognisable transaction table (module doc)."""
 
     name: ClassVar[str] = "statement_generic"
-    version: ClassVar[str] = "4"
+    version: ClassVar[str] = "5"
     kind: ClassVar[Literal["statement", "payslip"]] = "statement"
     #: The institution's name as accounts know it (account matching).
     display_name: ClassVar[str | None] = None
@@ -799,9 +852,7 @@ class TableStatementParser(DocumentParser):
         self._scan_dates(line, summary)
         self._scan_above(line, summary)
         if summary.last4 is None:
-            match = _LAST4.search(line.text)
-            if match is not None:
-                summary.last4 = next(g for g in match.groups() if g)
+            summary.last4 = summary_last4(line.text)
         if summary.currency is None:
             match = _CURRENCY.search(line.text)
             if match is not None:
@@ -1056,6 +1107,15 @@ class TableStatementParser(DocumentParser):
                 line.bbox[3],
             )
             return last
+        carried = self._amount(cells.get("balance"))
+        if carried is not None and not any(role in cells for role in MONEY_ROLES):
+            described = normalise(" ".join(c.text for c in cells.get("description", [])))
+            if any(described.startswith(label) for label in self.closing_labels):
+                # An undated closing row of the table (``BALANCE CARRIED
+                # FORWARD`` at the foot of every page): the last one printed
+                # is the statement's, as for a dated one.
+                summary.closing, summary.closing_in_table = carried, True
+                return None
         self._scan_summary(line, summary)
         return None
 
@@ -1185,6 +1245,9 @@ class TableStatementParser(DocumentParser):
         split = self._accounts(lines)
         if split is not None:
             return self._parse_accounts(view, split, threshold=threshold, date_order=date_order)
+        sections = self.balance_sections(lines)
+        if sections is not None:
+            return self._parse_sections(view, *sections, threshold=threshold, date_order=date_order)
         read = self.read_statement(view, lines, threshold=threshold, date_order=date_order)
         outcome = ParseOutcome(
             pending_items=read.pending_items,
@@ -1241,6 +1304,144 @@ class TableStatementParser(DocumentParser):
             warnings.extend(read.warnings)
             if read.statement is not None:
                 outcome.statements.append(read.statement)
+        outcome.warnings.extend(dict.fromkeys(warnings))
+        return outcome
+
+    # -- accounts without a number ----------------------------------------------
+
+    def _opening_row(self, cells: Mapping[Role, list[Cell]]) -> Amount | None:
+        """The balance of an opening-balance row (``04/01 Beginning Balance 812.44``)."""
+        money: tuple[Role, ...] = ("amount", "debit", "credit")
+        if any(self._amount(cells.get(role)) is not None for role in money):
+            return None
+        description = normalise(" ".join(c.text for c in cells.get("description", [])))
+        if not any(description.startswith(label) for label in self.opening_labels):
+            return None
+        return self._amount(cells.get("balance"))
+
+    def _section_title(self, lines: Sequence[ViewLine], below: int, floor: int) -> int | None:
+        """The index of the title over line ``below``: the nearest line of words above it."""
+        for index in range(below - 1, max(floor, below - 1 - SECTION_TITLE_LINES), -1):
+            line = lines[index]
+            if line.page != lines[below].page:
+                break
+            if (
+                any(c.isalpha() for c in line.text)
+                and not find_amounts(line.text)
+                and numeric_parts(line.cells[0].text) is None
+                and self.columns(line) is None
+            ):
+                return index
+        return None
+
+    def balance_sections(
+        self, lines: Sequence[ViewLine]
+    ) -> tuple[list[ViewLine], list[BalanceSection]] | None:
+        """``(preamble, sections)`` when the balance starts over (module doc, 7), else None."""
+        columns: list[Column] | None = None
+        header: int | None = None
+        balance: Decimal | None = None
+        #: (opening row, the header it stands under) of each account found.
+        starts: list[tuple[int, int]] = []
+        for index, line in enumerate(lines):
+            found = self.columns(line)
+            if found is not None:
+                columns, header = found, index
+                continue
+            if columns is None or header is None:
+                continue
+            if self._header_like(line):
+                columns = None
+                continue
+            cells = self._assign(line, columns)
+            self._split_lead(cells)
+            opening = self._opening_row(cells)
+            if opening is not None:
+                if balance is None or opening.value != balance:
+                    starts.append((index, header))
+                balance = opening.value
+                continue
+            printed = self._amount(cells.get("balance"))
+            if printed is not None:
+                balance = printed.value
+        if len(starts) < _MIN_SECTIONS:  # one account, as before
+            return None
+        bounds: list[int] = []
+        titles: list[str | None] = []
+        floor = -1
+        for row, head in starts:
+            # The table header is the account's own unless the account before used it.
+            top = head if head > floor else row
+            title = self._section_title(lines, top, floor)
+            bounds.append(title if title is not None else top)
+            titles.append(lines[title].text if title is not None else None)
+            floor = row
+        sections: list[BalanceSection] = []
+        for position, (_, head) in enumerate(starts):
+            start = bounds[position]
+            end = bounds[position + 1] if position + 1 < len(bounds) else len(lines)
+            body = list(lines[start:end])
+            if not start <= head < end:
+                # The header is printed once, over the first account only.
+                body.insert(0, lines[head])
+            sections.append(BalanceSection(body, titles[position]))
+        return list(lines[: bounds[0]]), sections
+
+    def _parse_sections(
+        self,
+        view: DocumentView,
+        preamble_lines: Sequence[ViewLine],
+        sections: Sequence[BalanceSection],
+        *,
+        threshold: float,
+        date_order: str | None,
+    ) -> ParseOutcome:
+        """One statement per section (module doc, 7)."""
+        outcome = ParseOutcome()
+        _, preamble, pending, skipped, _ = self._collect(preamble_lines)
+        outcome.pending_items += pending
+        outcome.skipped_lines += skipped
+        outcome.skipped_regions.extend(preamble.skipped_boxes)
+        warnings: list[str] = ["accounts_by_balance"]
+        for section in sections:
+            read = self.read_statement(
+                view,
+                section.lines,
+                threshold=threshold,
+                date_order=date_order,
+                period_texts=preamble.period.texts,
+            )
+            outcome.pending_items += read.pending_items
+            outcome.skipped_lines += read.skipped_lines
+            outcome.skipped_regions.extend(read.skipped_regions)
+            warnings.extend(read.warnings)
+            if read.statement is None:
+                continue
+            name, last4 = section_name(section.title)
+            kind, subtype = account_kind(name)
+            kind = self.account_type or kind
+            pages = [line.page for line in section.lines]
+            outcome.statements.append(
+                read.statement.model_copy(
+                    update={
+                        "account": read.statement.account.model_copy(
+                            update={
+                                "name": name,
+                                # Never the member number printed once for every share.
+                                "last4": last4,
+                                "account_type": kind,
+                                "subtype": subtype if kind is not None else None,
+                            }
+                        ),
+                        "confidence": {
+                            **read.statement.confidence,
+                            "account_number": self.base if last4 else conf.MISSING,
+                        },
+                        "first_page": min(pages),
+                        "last_page": max(pages),
+                    }
+                )
+            )
         outcome.warnings.extend(dict.fromkeys(warnings))
         return outcome
 
@@ -1390,7 +1591,12 @@ class TableStatementParser(DocumentParser):
                 [conf.INFERRED, *(score["posted_date"] for score in fields)]
             )
         statement_conf["account_number"] = self.base if summary.last4 else conf.MISSING
-        currency = summary.currency or self.default_currency
+        # A printed code, else the amounts' own symbol, else the layout's currency.
+        currency = (
+            summary.currency
+            or symbol_currency(line.text for line in lines)
+            or self.default_currency
+        )
         statement_conf["currency"] = self.base if currency else conf.MISSING
         statement_conf["reconciliation"] = (
             1.0 if result.status == "ok" else (cap if cap is not None else 1.0)

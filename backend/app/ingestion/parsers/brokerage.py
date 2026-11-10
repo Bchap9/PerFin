@@ -184,6 +184,7 @@ from app.ingestion.parsers.accounts import (
     account_heading,
     number_last4,
     segment,
+    summary_last4,
 )
 from app.ingestion.parsers.base import (
     Cell,
@@ -351,12 +352,6 @@ _SYMBOL: Final = re.compile(r"[A-Z][A-Z0-9.]{0,9}")
 _PAREN_SYMBOL: Final = re.compile(r"\(([A-Z][A-Z0-9.]{0,9})\)")
 _CUSIP: Final = re.compile(r"[0-9A-Z]{8}[0-9]")
 _RATIO: Final = re.compile(r"\b(\d{1,6})(?:\s?-?\s?for\s?-?\s?|\s?:\s?)(\d{1,6})\b", re.IGNORECASE)
-_LAST4: Final = re.compile(
-    r"(?<![A-Za-z0-9])[*xX\u2022]{2}[*xX\u2022\s-]{0,30}?(\d{4})\b"
-    r"|\bending(?:\s+in)?\s*:?\s*(\d{4})\b"
-    r"|\baccount(?:\s+(?:number|no\.?))?\s*:?\s*\d{0,26}?(\d{4})\b",
-    re.IGNORECASE,
-)
 _CURRENCY: Final = re.compile(r"\bcurrency\s*:?\s*([A-Z]{3})\b", re.IGNORECASE)
 #: A date at the end of a (normalised) header cell: ``ending market value oct 31 2026``.
 _TRAILING_DATE: Final = re.compile(
@@ -1464,7 +1459,7 @@ class BrokerageStatementParser(DocumentParser):
     """
 
     name: ClassVar[str] = "brokerage_statement_generic"
-    version: ClassVar[str] = "6"
+    version: ClassVar[str] = "7"
     kind: ClassVar[Literal["statement", "payslip", "receipt"]] = "statement"
     display_name: ClassVar[str | None] = None
     #: Phrases on the first page that identify the institution (its name first).
@@ -1792,9 +1787,7 @@ class BrokerageStatementParser(DocumentParser):
             if end is not None:
                 summary.as_of_text = line.text[end:]
         if summary.last4 is None:
-            match = _LAST4.search(line.text)
-            if match is not None:
-                summary.last4 = next(g for g in match.groups() if g)
+            summary.last4 = summary_last4(line.text, masked_digits=False)
         if summary.currency is None:
             match = _CURRENCY.search(line.text)
             if match is not None:
@@ -3085,7 +3078,7 @@ class PlaceholderBrokerageParser(BrokerageStatementParser):
     """Placeholder Brokerage (fictional): ``MM/DD/YYYY``, USD, signed amounts."""
 
     name: ClassVar[str] = "placeholder_brokerage"
-    version: ClassVar[str] = "4"
+    version: ClassVar[str] = "5"
     institution: ClassVar[str | None] = "placeholder-brokerage-account"
     display_name: ClassVar[str | None] = "Placeholder Brokerage"
     fingerprints: ClassVar[tuple[str, ...]] = (
@@ -3129,7 +3122,7 @@ class FidelityStatementParser(BrokerageStatementParser):
     """
 
     name: ClassVar[str] = "fidelity_investments_statement"
-    version: ClassVar[str] = "5"
+    version: ClassVar[str] = "6"
     institution: ClassVar[str | None] = "fidelity-investments-statement"
     display_name: ClassVar[str | None] = "Fidelity Investments"
     fingerprints: ClassVar[tuple[str, ...]] = ("fidelity investments", "investment report")
