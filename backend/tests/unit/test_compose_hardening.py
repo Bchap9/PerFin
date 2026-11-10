@@ -313,6 +313,16 @@ def test_base_images_are_pinned(path: str) -> None:
         assert re.search(uv_pin, text, flags=re.M), "uv must be pinned to an exact version"
 
 
+@pytest.mark.parametrize("path", ["Dockerfile", "egress/Dockerfile", "ml/Dockerfile"])
+def test_images_apply_pending_security_updates(path: str) -> None:
+    # The release scan fails on any fixable HIGH/CRITICAL finding, and the
+    # slim base often lags Debian's security fixes: every image upgrades its
+    # base packages at build time.
+    text = (DEPLOY / path).read_text(encoding="utf-8")
+    assert re.search(r"apt-get update --error-on=any \\\n\s+&& apt-get -y upgrade", text), path
+    assert "rm -rf /var/lib/apt/lists/*" in text
+
+
 def test_dockerignore_is_an_allowlist() -> None:
     lines = (ROOT / ".dockerignore").read_text(encoding="utf-8").splitlines()
     active = [line.strip() for line in lines if line.strip() and not line.startswith("#")]

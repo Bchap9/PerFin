@@ -37,7 +37,9 @@ What remains (details in docs/ROADMAP.md):
 
 ## [Unreleased]
 
-Nothing yet.
+### Fixed
+
+- The `perfin-egress` and `perfin-ml` images now apply pending Debian security updates at build time, as the application image already did. The `v1.0.0-rc.5` release stopped at the image scan because the `python:3.12-slim` base still carried a `zlib1g` with fixed HIGH findings (CVE-2026-76844, CVE-2026-85091).
 
 ## [1.0.0-rc.6] - 2026-11-10
 
