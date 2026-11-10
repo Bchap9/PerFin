@@ -21,6 +21,7 @@ import { routes as importsRoutes } from "../features/imports/routes";
 import { routes as investmentsRoutes } from "../features/investments/routes";
 import { routes as loansRoutes } from "../features/loans/routes";
 import { routes as netWorthRoutes } from "../features/networth/routes";
+import { routes as reportsRoutes } from "../features/reports/routes";
 import { routes as reviewRoutes } from "../features/review/routes";
 import { routes as settingsRoutes } from "../features/settings/routes";
 import { routes as setupRoutes } from "../features/setup/routes";
@@ -70,6 +71,7 @@ const features: FeatureRoutes[] = [
   assetsRoutes,
   calendarRoutes,
   taxRoutes,
+  reportsRoutes,
 ];
 
 /**
