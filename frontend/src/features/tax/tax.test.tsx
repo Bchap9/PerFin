@@ -2,7 +2,7 @@
 import { screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 
-import { authedSession, json, mockApi, problem, renderApp } from "../auth/testing";
+import { authedSession, currentHref, json, mockApi, noContent, problem, renderApp } from "../auth/testing";
 import { CAT_FOOD, money, ownerSession, referenceHandlers } from "../planning/testing";
 import type { ChecklistItem, TaxYear } from "./api";
 import { openMissing, reminderText } from "./api";
@@ -182,6 +182,57 @@ describe("tax year page checklist", () => {
     expect(await screen.findByText("Acme Corp")).toBeInTheDocument();
     expect(screen.queryByRole("combobox", { name: /Status of/ })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Add document" })).not.toBeInTheDocument();
+  });
+});
+
+describe("deleting a tax year", () => {
+  it("confirms, deletes the year and returns to the list", async () => {
+    const state = { deleted: false };
+    const api = mockApi(
+      taxHandlers({
+        "GET /api/v1/tax-years": () => json({ items: state.deleted ? [] : [year()] }),
+        "DELETE /api/v1/tax-years/:year": () => {
+          state.deleted = true;
+          return noContent();
+        },
+      }),
+    );
+    const { router } = renderApp("/tax/2025");
+    const user = userEvent.setup();
+    await user.click(await screen.findByRole("button", { name: "Delete tax year" }));
+    const dialog = await screen.findByRole("dialog", { name: "Delete tax year 2025?" });
+    expect(dialog).toHaveTextContent("its checklist of 2 documents");
+    expect(dialog).toHaveTextContent("Uploaded documents, the amounts read from them and your transactions are kept.");
+    expect(api.callsTo("DELETE", "/api/v1/tax-years/:year")).toHaveLength(0);
+    await user.click(within(dialog).getByRole("button", { name: "Delete tax year" }));
+    await vi.waitFor(() => {
+      expect(currentHref(router)).toBe("/tax");
+    });
+    const calls = api.callsTo("DELETE", "/api/v1/tax-years/2025");
+    expect(calls).toHaveLength(1);
+    expect(calls[0]?.headers.get("X-CSRF-Token")).toBe("session-token");
+    expect(await screen.findByText("Tax year 2025 deleted")).toBeInTheDocument();
+    expect(await screen.findByText("No tax years yet")).toBeInTheDocument();
+    // The deleted year is not asked for again on the way out.
+    expect(api.callsTo("GET", "/api/v1/tax-years/2025")).toHaveLength(1);
+  });
+
+  it("shows the server's refusal and stays on the year", async () => {
+    mockApi(taxHandlers({ "DELETE /api/v1/tax-years/:year": () => problem(403, "forbidden") }));
+    const { router } = renderApp("/tax/2025");
+    const user = userEvent.setup();
+    await user.click(await screen.findByRole("button", { name: "Delete tax year" }));
+    const dialog = await screen.findByRole("dialog", { name: "Delete tax year 2025?" });
+    await user.click(within(dialog).getByRole("button", { name: "Delete tax year" }));
+    expect(await within(dialog).findByText("detail of forbidden")).toBeInTheDocument();
+    expect(currentHref(router)).toBe("/tax/2025");
+  });
+
+  it("is offered to owners and admins only", async () => {
+    mockApi(taxHandlers({ "GET /api/v1/auth/session": authedSession({ role: "member" }) }));
+    renderApp("/tax/2025");
+    expect(await screen.findByRole("button", { name: "Mark as filed" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Delete tax year" })).not.toBeInTheDocument();
   });
 });
 

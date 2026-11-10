@@ -120,7 +120,7 @@ from app.domain.tax.ingest import import_tax_forms
 from app.ingestion.children import document_depth, receive_children
 from app.ingestion.classify.fingerprints import builtin_fingerprints
 from app.ingestion.classify.service import classify_document
-from app.ingestion.intake.sniff import FileType
+from app.ingestion.intake.sniff import SNIFF_BYTES, FileType, sniff
 from app.ingestion.match.accounts import importable_account_ids, match_account
 from app.ingestion.match.receipts import apply_receipt
 from app.ingestion.parsers.confidence import DEFAULT_THRESHOLD
@@ -678,6 +678,20 @@ def structured_import(db: Session, document: Document, result: ExtractResult) ->
     return ImportOutcome(outcome.status, outcome.summary)
 
 
+def _sniff_again(deps: PipelineDeps, blob: Blob) -> FileType | None:
+    """CSV or TSV when the first :data:`SNIFF_BYTES` of a stored text file are a table now."""
+    head = bytearray()
+    try:
+        for chunk in open_plaintext(deps.store, deps.keyring, blob):
+            head.extend(chunk)
+            if len(head) >= SNIFF_BYTES:
+                break
+    except (DecryptionError, BlobStoreError):
+        return None
+    found = sniff(bytes(head))
+    return found if found in (FileType.CSV, FileType.TSV) else None
+
+
 def ingest_document(
     db: Session,
     household_id: uuid.UUID,
@@ -715,6 +729,14 @@ def ingest_document(
     except ValueError:
         file_type = None
     kind = file_type.extract_kind if file_type is not None else None
+    if kind is None and file_type is FileType.TEXT:
+        # Text no reader took when it arrived may be a table a later release
+        # recognises (rows under a preamble): look at its first bytes again,
+        # as the upload did, so "Process again" can read it.
+        again = _sniff_again(deps, blob)
+        if again is not None:
+            document.mime_detected = again.value
+            kind = again.extract_kind
     if kind is None:
         _review(
             db,

@@ -553,6 +553,40 @@ def test_pipeline_parks_unsupported_types_for_review(
     assert len(_files(tmp_path / "documents")) == 1
 
 
+def test_text_kept_as_unsupported_is_read_once_it_is_a_table(
+    factories: Factories, store: LocalFSBlobStore, keyring: Keyring
+) -> None:
+    """A bank export under a preamble, received before the sniffer knew such tables."""
+    owner = factories.user(role="owner")
+    data = (
+        b"Account Name : Everyday Checking\n"
+        b"Account Number : ****3377\n"
+        b"Date Range : 01/01/2026-01/31/2026\n"
+        b"\n"
+        b"Posting Date,Effective Date,Transaction Type,Description,Check Number,"
+        b"Withdrawals,Deposits,Running Balance\n"
+        b'1/5/2026,1/5/2026,Debit,"BLUE OWL GROCERS, SPRINGFIELD",,74.19,,738.25\n'
+        b"1/10/2026,1/10/2026,Debit,Transfer To Share 0000,,300.00,,438.25\n"
+        b'1/15/2026,1/15/2026,Credit,INITECH PAYROLL,,,"1,610.00","2,048.25"\n'
+    )
+    document_id = _receive_committed(factories, owner, store, keyring, data)
+    # As an earlier release stored it: plain text, no reader.
+    with factories.transaction() as db:
+        set_context(db, owner.household_id)
+        row = db.get(Document, document_id)
+        assert row is not None
+        assert row.mime_detected == "text/csv"
+        row.mime_detected = "text/plain"
+    status = _ingest(factories, owner, document_id, _deps(store, keyring))
+    assert status is DocumentStatus.NEEDS_REVIEW
+    document = _load(factories, owner, document_id)
+    assert document.mime_detected == "text/csv"
+    reasons = [i.payload.get("reason") for i in _review_items(factories, owner, document_id)]
+    assert "format_not_supported" not in reasons
+    assert document.extraction is not None
+    assert document.extraction["tables"][0]["column_count"] == 8
+
+
 def test_ingest_handler_is_registered_and_runs(
     factories: Factories,
     store: LocalFSBlobStore,

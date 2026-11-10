@@ -59,6 +59,8 @@ from app.domain.imports.schemas import (
     MappingSpec,
     Sign,
 )
+from app.ingestion.parsers.accounts import summary_last4
+from app.ingestion.parsers.text import MAX_LINE
 from app.ingestion.sandbox.protocol import Reconciliation, Statement, Table
 
 FINGERPRINT_VERSION: Final = "perfin-header-v1"
@@ -514,7 +516,30 @@ def from_table(table: Table, spec: MappingSpec) -> ParsedStatement:
         }
         if len(found) == 1:
             parsed.last4 = next(iter(found))
+    elif spec.account_column is None and parsed.transactions:
+        parsed.last4 = preamble_last4(table, spec)
     return parsed
+
+
+#: Preamble rows read for the account's number (the rest is not looked at).
+PREAMBLE_ROWS: Final = 20
+
+
+def preamble_last4(table: Table, spec: MappingSpec) -> str | None:
+    """The last four digits the lines above the header name, when they name one account.
+
+    An export without an account column may still say whose rows these are
+    in the lines before its header (``Account Number : ****3377``,
+    ``Account: 4410 0092 6654``). Each preamble row is read as one line
+    (:func:`app.ingestion.parsers.accounts.summary_last4`); two different
+    numbers are no answer. Nothing but the four digits is kept.
+    """
+    found = {
+        last4
+        for row in table.rows[: min(spec.skip_rows, PREAMBLE_ROWS)]
+        if (last4 := summary_last4(" ".join(cell for cell in row if cell.strip())[:MAX_LINE]))
+    }
+    return next(iter(found)) if len(found) == 1 else None
 
 
 def from_table_grouped(table: Table, spec: MappingSpec) -> list[ParsedStatement]:
@@ -612,6 +637,12 @@ SUBSTRING: Final = 1
 MATCH_NAMES: Final[dict[int, str]] = {EXACT: "exact", WORD: "word", SUBSTRING: "substring"}
 
 #: Roles in tie-break order, with the header words that name them.
+#: Header words per role. English first; then the words German, French,
+#: Spanish, Dutch, Italian and Portuguese exports use, so a bank's own
+#: export maps without a person naming its columns. A word alone never
+#: assigns a role: the column's values must fit it (:func:`_role_fit`), which
+#: also settles words two languages use differently (``Valuta``: a value
+#: date in German, the currency in Dutch and Italian).
 ROLE_WORDS: Final[dict[str, tuple[str, ...]]] = {
     "date": (
         "date",
@@ -628,6 +659,12 @@ ROLE_WORDS: Final[dict[str, tuple[str, ...]]] = {
         "settlement date",
         "settle date",
         "posted",
+        *("datum", "buchungstag", "buchungsdatum", "valuta", "wertstellung", "valutadatum"),
+        *("date opération", "date operation", "date de valeur", "date comptable"),
+        *("fecha", "fecha valor", "fecha operación", "fecha operacion", "fecha contable"),
+        *("boekdatum", "transactiedatum", "rentedatum"),
+        *("data", "data operazione", "data valuta", "data contabile", "data movimento"),
+        *("data lançamento", "data lancamento", "data valor"),
     ),
     "amount": (
         "amount",
@@ -638,9 +675,20 @@ ROLE_WORDS: Final[dict[str, tuple[str, ...]]] = {
         "amount ($)",
         "debit/credit",
         "credit/debit",
+        *("betrag", "umsatz", "montant", "importe", "monto", "bedrag", "importo", "valor"),
+        *("quantia", "montante"),
     ),
-    "debit": ("debit", "debits", "withdrawal", "withdrawals", "money out", "paid out", "outflow"),
-    "credit": ("credit", "credits", "deposit", "deposits", "money in", "paid in", "inflow"),
+    "debit": (
+        *("debit", "debits", "withdrawal", "withdrawals", "money out", "paid out", "outflow"),
+        *("soll", "lastschrift", "ausgang", "ausgaben", "débit", "debe", "cargo", "cargos"),
+        *("retiro", "retiros", "af", "uscite", "addebito", "addebiti", "débito", "debito"),
+    ),
+    "credit": (
+        *("credit", "credits", "deposit", "deposits", "money in", "paid in", "inflow"),
+        *("haben", "gutschrift", "eingang", "einnahmen", "crédit", "haber", "abono", "abonos"),
+        *("depósito", "deposito", "bij", "entrate", "accredito", "accrediti", "crédito"),
+        "credito",
+    ),
     "indicator": (
         "dr/cr",
         "cr/dr",
@@ -649,9 +697,16 @@ ROLE_WORDS: Final[dict[str, tuple[str, ...]]] = {
         "type",
         "direction",
         "transaction type",
+        *("soll/haben", "s/h", "af bij", "af/bij", "débit/crédit", "debe/haber", "dare/avere"),
     ),
-    "balance": ("balance", "running balance", "available balance", "cash balance"),
-    "currency": ("currency", "ccy", "curr"),
+    "balance": (
+        *("balance", "running balance", "available balance", "cash balance"),
+        *("saldo", "kontostand", "solde", "saldo contabile"),
+    ),
+    "currency": (
+        *("currency", "ccy", "curr"),
+        *("währung", "waehrung", "devise", "moneda", "divisa", "valuta", "munt", "moeda"),
+    ),
     "account": (
         "account number",
         "account no",
@@ -662,8 +717,17 @@ ROLE_WORDS: Final[dict[str, tuple[str, ...]]] = {
         "acct no",
         "acct #",
         "account",
+        *("kontonummer", "konto", "iban", "numéro de compte", "numero de compte", "compte"),
+        *("número de cuenta", "numero de cuenta", "cuenta", "rekeningnummer", "rekening"),
+        *("numero conto", "conto", "número da conta", "numero da conta", "conta"),
     ),
-    "payee": ("payee", "description", "merchant", "name", "counterparty", "beneficiary"),
+    "payee": (
+        *("payee", "description", "merchant", "name", "counterparty", "beneficiary"),
+        *("empfänger", "empfaenger", "auftraggeber", "begünstigter", "beguenstigter"),
+        *("zahlungsempfänger", "bezeichnung", "bénéficiaire", "beneficiaire", "libellé"),
+        *("libelle", "tiers", "beneficiario", "concepto", "descripción", "descripcion"),
+        *("naam", "omschrijving", "tegenpartij", "descrizione", "descrição", "descricao"),
+    ),
     "memo": (
         "memo",
         "details",
@@ -674,17 +738,37 @@ ROLE_WORDS: Final[dict[str, tuple[str, ...]]] = {
         "category",
         "remarks",
         "action",
+        *("verwendungszweck", "buchungstext", "notiz", "kategorie", "référence", "détails"),
+        *("catégorie", "categorie", "referencia", "detalle", "observaciones", "categoría"),
+        *("categoria", "mededelingen", "mededeling", "causale", "dettagli", "observações"),
     ),
 }
 _ROLE_ORDER: Final = {role: position for position, role in enumerate(ROLE_WORDS)}
 _MONEY_ROLES: Final = frozenset({"amount", "debit", "credit", "balance"})
 #: Indicator cells that mean money out / money in (case-insensitive).
-OUTFLOW_WORDS: Final = frozenset({"dr", "d", "debit", "out", "withdrawal", "outflow", "db"})
-INFLOW_WORDS: Final = frozenset({"cr", "c", "credit", "in", "deposit", "inflow"})
+OUTFLOW_WORDS: Final = frozenset(
+    {
+        *("dr", "d", "debit", "out", "withdrawal", "outflow", "db"),
+        *("s", "soll", "af", "débit", "debe", "cargo", "dare", "débito", "debito"),
+    }
+)
+INFLOW_WORDS: Final = frozenset(
+    {
+        *("cr", "c", "credit", "in", "deposit", "inflow"),
+        *("h", "haben", "bij", "crédit", "haber", "abono", "avere", "crédito", "credito"),
+    }
+)
 _ACCOUNT_CELL: Final = re.compile(r"[A-Za-z0-9*#.\- ]{4,34}")
-_SETTLEMENT_DATE: Final = re.compile(r"settle|value|effective|due")
-_POSTING_DATE: Final = re.compile(r"post|book")
-_TRANSACTION_DATE: Final = re.compile(r"trans|trade|run")
+_SETTLEMENT_DATE: Final = re.compile(
+    r"settle|value|effective|due|valut|wertstell|valeur|valor|rente"
+)
+_POSTING_DATE: Final = re.compile(r"post|book|buchung|boek|compta|contab")
+_TRANSACTION_DATE: Final = re.compile(r"trans|trade|run|op[eé]ra|moviment|lan[cç]amento")
+
+
+#: A unit after a money header (``Bedrag (EUR)``, ``Amount (USD)``, ``Betrag in EUR``):
+#: the header still names its role exactly.
+_UNIT_SUFFIX: Final = re.compile(r"\s*(?:\((?:[a-z]{3}|[$\u20ac\u00a3\u00a5])\)|\bin [a-z]{3})$")
 
 
 @dataclass(frozen=True)
@@ -843,7 +927,7 @@ class _Pick:
 
 def _assign(header: Sequence[str], body: Sequence[Sequence[str]]) -> dict[str, _Pick]:
     """Roles for the columns of ``header``, best (column, role) pair first."""
-    names = [_header_cell(c) for c in header]
+    names = [_UNIT_SUFFIX.sub("", _header_cell(c)) for c in header]
 
     def column_values(column: int) -> list[str]:
         return [row[column] for row in body if column < len(row)]

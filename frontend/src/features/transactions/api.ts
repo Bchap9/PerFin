@@ -1,16 +1,20 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 /** Typed calls for transactions and the category/payee/tag lookups. */
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, type QueryClient } from "@tanstack/react-query";
 
 import { api, unwrap } from "../../lib/api/client";
 import type { components } from "../../lib/api/schema";
 import { queryRoots } from "../../lib/queryKeys";
 
+export { newIdempotencyKey } from "../../lib/idempotency";
+
 type Schemas = components["schemas"];
 
 export type Transaction = Schemas["TransactionOut"];
 export type TransactionPage = Schemas["TransactionPage"];
+export type TransactionCreate = Schemas["TransactionCreate"];
 export type TransactionUpdate = Schemas["TransactionUpdate"];
+export type AutoPairResult = Schemas["AutoPairResult"];
 export type SplitIn = Schemas["SplitIn"];
 export type BulkAction = Schemas["BulkAction"];
 export type BulkResult = Schemas["BulkResult"];
@@ -84,8 +88,43 @@ export function getTransaction(id: string): Promise<Transaction> {
   return unwrap(api.GET("/api/v1/transactions/{transaction_id}", { params: { path: { transaction_id: id } } }));
 }
 
+/** Create a manual transaction. Retrying with the same `idempotencyKey` and body never creates it twice. */
+export function createTransaction(body: TransactionCreate, idempotencyKey: string): Promise<Transaction> {
+  return unwrap(api.POST("/api/v1/transactions", { params: { header: { "Idempotency-Key": idempotencyKey } }, body }));
+}
+
 export function updateTransaction(id: string, body: TransactionUpdate): Promise<Transaction> {
   return unwrap(api.PATCH("/api/v1/transactions/{transaction_id}", { params: { path: { transaction_id: id } }, body }));
+}
+
+export async function deleteTransaction(id: string): Promise<void> {
+  await unwrap(api.DELETE("/api/v1/transactions/{transaction_id}", { params: { path: { transaction_id: id } } }));
+}
+
+/** How far apart (in days) the two legs of a transfer may be posted: the server's default. */
+export const TRANSFER_WINDOW_DAYS = 3;
+
+/** Run the transfer matcher over every account the caller may edit. */
+export function autoPairTransfers(): Promise<AutoPairResult> {
+  return unwrap(api.POST("/api/v1/transactions/transfers/auto-pair", { body: { window_days: TRANSFER_WINDOW_DAYS } }));
+}
+
+/**
+ * Refetch what a change to the ledger can move: the lists, account balances,
+ * budgets, goals, reports and the dashboard (the same families the
+ * `transaction.*` events refresh, lib/sse.ts).
+ */
+export function invalidateLedger(queryClient: QueryClient): void {
+  for (const queryKey of [
+    queryRoots.transactions,
+    queryRoots.accounts,
+    queryRoots.budgets,
+    queryRoots.goals,
+    queryRoots.reports,
+    queryRoots.dashboard,
+  ]) {
+    void queryClient.invalidateQueries({ queryKey });
+  }
 }
 
 export function setSplits(id: string, splits: SplitIn[], categoryId?: string | null): Promise<Transaction> {

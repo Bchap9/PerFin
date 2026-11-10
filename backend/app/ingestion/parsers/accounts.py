@@ -313,6 +313,90 @@ def number_last4(text: str) -> str | None:
     return digits[-4:]
 
 
+#: A masked number in a statement's summary (``****1234``, ``XXXX XXXX 1234``).
+_SUMMARY_MASKED: Final = re.compile(
+    r"(?<![A-Za-z0-9])[*xX\u2022]{2}[*xX\u2022\d\s-]{0,30}?(\d{4})\b"
+)
+_SUMMARY_MASKED_STRICT: Final = re.compile(
+    r"(?<![A-Za-z0-9])[*xX\u2022]{2}[*xX\u2022\s-]{0,30}?(\d{4})\b"
+)
+#: ``ending in 1234``, ``Account Ending 4-71009``.
+_SUMMARY_ENDING: Final = re.compile(
+    r"\bending(?:\s+in)?\s*:?\s*(?P<num>\d[\d-]{2,24}\d)(?![\w-])", re.IGNORECASE
+)
+#: ``Account number: 4410 0092 6654``, ``Account 12345678``, ``Account No. 111-111111``.
+_SUMMARY_LABELLED: Final = re.compile(
+    r"\baccount(?:\s+(?:number|no\.?|#))?\s*:?\s*(?P<num>\d(?:[\d-]| (?=\d)){2,30}\d)",
+    re.IGNORECASE,
+)
+#: What "ending" is said of when it is no account (``Period ending 2026``).
+_ENDING_OF_TIME: Final = frozenset(
+    {"period", "statement", "cycle", "month", "quarter", "year", "week", "date", "days"}
+)
+#: Digits per group of a number printed in groups (``4410 0092 6654``).
+_GROUP_DIGITS: Final = range(2, 7)
+_MIN_GROUPS: Final = 3
+_LAST4_DIGITS: Final = 4
+
+
+def _grouped_number(run: str, after: str) -> str | None:
+    """The account number at the start of ``run``, digits and hyphens only.
+
+    ``run`` is digits, hyphens and single spaces; ``after`` is what the line
+    prints next. A number printed in three or more short groups (``4410 0092
+    6654``, ``4111 1111 1111 1111``) is read whole, so its last four digits
+    are those of its last group and not of its first; two numbers side by
+    side (``12345678 2026``) stay apart. A last group that starts a date or
+    an amount (``... 6654 03/01/2026``, ``... 1,204.33``) is not part of it.
+    """
+    groups = run.split(" ")
+    if len(groups) > 1 and after[:1] in "/.,:" and after[1:2].isdigit():
+        groups.pop()
+    if not groups:
+        return None
+    plain = all(g.isdigit() and len(g) in _GROUP_DIGITS for g in groups)
+    return "".join(groups) if plain and len(groups) >= _MIN_GROUPS else groups[0]
+
+
+def summary_last4(text: str, *, masked_digits: bool = True) -> str | None:
+    """The last four digits of the account a summary line names, else None.
+
+    Read from the first of: a masked number (``****1234``; with
+    ``masked_digits`` the mask may show other digits, ``XXXX 12XX 1234``),
+    ``ending in 1234`` / ``Account Ending 4-71009`` (not ``Period ending
+    2026``), or a labelled number, whole (``Account number: 4410 0092 6654``
+    is ``6654``). A number shaped like a date or a telephone number is none.
+    Only four digits are returned; the number itself is not kept.
+    """
+    found: list[tuple[int, str]] = []
+    masked = (_SUMMARY_MASKED if masked_digits else _SUMMARY_MASKED_STRICT).search(text)
+    if masked is not None:
+        found.append((masked.start(), masked[1]))
+    for match in _SUMMARY_ENDING.finditer(text):
+        before = normalise(text[: match.start()]).split()
+        if before and before[-1] in _ENDING_OF_TIME:
+            continue
+        if not _DATE_SHAPED.fullmatch(match["num"]):
+            found.append((match.start(), _tail(match["num"])))
+        break
+    labelled = _SUMMARY_LABELLED.search(text)
+    if labelled is not None:
+        number = _grouped_number(labelled["num"], text[labelled.end() :])
+        if (
+            number is not None
+            and not _DATE_SHAPED.fullmatch(number)
+            and not _PHONE_SHAPED.fullmatch(number)
+        ):
+            found.append((labelled.start(), _tail(number)))
+    usable = [(start, digits) for start, digits in found if len(digits) == _LAST4_DIGITS]
+    return min(usable)[1] if usable else None
+
+
+def _tail(number: str) -> str:
+    """The last four digits of ``number`` (fewer when it has fewer)."""
+    return "".join(c for c in number if c.isdigit())[-4:]
+
+
 def _index_columns(line: ViewLine) -> tuple[float, float] | None:
     """The account number column's span when ``line`` is an index header."""
     number: tuple[float, float] | None = None

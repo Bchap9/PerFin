@@ -202,6 +202,8 @@ POST            /documents/{id}/link            attach to transaction etc.
 
 GET/POST        /imports/mappings               saved CSV/TSV column mappings
 GET/PATCH/DELETE /imports/mappings/{id}
+GET             /imports/layouts                layouts the household taught PerFin
+DELETE          /imports/layouts/{id}           forget one, every version of it
 GET             /imports/{document_id}/preview  extracted rows/statements (stored, never re-parsed)
 POST            /imports/{document_id}/apply-mapping  re-run the import (job; 202 + job id)
 
@@ -325,7 +327,19 @@ import-mapping-mismatch` when the spec names a column the table lacks) or
 import-mapping-name-taken`. `PATCH` changes the named fields (`null` clears
 `account_id`/`institution_id`; `document_id` or `header_fingerprint` resets
 the fingerprint) and `DELETE` removes it; both need `edit` on the mapping's
-account when it has one. `GET /imports/{document_id}/preview?offset=&limit=`
+account when it has one. `GET /imports/layouts` (any role) returns
+`{"items": [{"id", "institution_id", "institution_name", "kind", "parser",
+"version", "learned_at", "learned_from_document_id", "recognised_by",
+"taught", "fields", "tables": [{"kind", "columns"}], "ignored_lines",
+"notes"}]}`: the household's learned layouts as the classifier uses them
+(the newest version of each institution, kind and parser, newest first).
+`recognised_by` are the header phrases a document must print, `fields` the
+facts read by a taught label, `columns` the roles of a taught table in
+print order; nothing in it holds a digit of any document. `DELETE
+/imports/layouts/{id}` (member or above) removes every version of that
+layout (`204`; `404 layout-not-found` for an unknown id or another
+household's; audit `parser_fingerprint.delete`, event
+`document.layout_deleted`). `GET /imports/{document_id}/preview?offset=&limit=`
 (any role that can see the document, `limit` 1-500, default 50) returns
 `{"document_id", "status", "kind", "account_id", "tables": [{"index",
 "encoding", "delimiter", "has_header", "column_count", "row_count",
@@ -974,7 +988,10 @@ normalised form) and no alias or name may belong to another payee (`409
 payee-alias-taken`). `PATCH` replaces `aliases` as a whole. `POST
 /payees/{id}/merge` moves transactions and schedules to `into`, adds the
 source's name and aliases to its aliases, keeps `into`'s default category
-(the source's when it has none) and deletes the source. Tags: names unique
+(the source's when it has none) and deletes the source. An imported row
+whose description is or contains a payee's name or alias gets that payee
+and, when neither the file nor a rule categorised it, the payee's default
+category (INGESTION.md "Commit"). Tags: names unique
 ignoring case (`409 tag-exists`); deleting one untags its transactions.
 Events `category.changed`, `payee.changed`, `tag.changed` (ids only).
 

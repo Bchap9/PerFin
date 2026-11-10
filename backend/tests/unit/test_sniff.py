@@ -144,3 +144,36 @@ def test_markup_scanner_ignores_plain_text() -> None:
     scanner = MarkupScanner()
     for _ in range(100):
         assert not scanner.feed(b"2026-01-02,Synthetic Grocer <grocer>,-12.34\n" * 20)
+
+
+def test_a_table_under_lines_about_the_account_is_csv() -> None:
+    """A bank export that opens with the account's name, number and date range."""
+    data = (
+        b"Account Name : Everyday Checking\n"
+        b"Account Number : ****3377\n"
+        b"Date Range : 01/01/2026-01/31/2026\n"
+        b"\n"
+        b"Posting Date,Effective Date,Transaction Type,Description,Check Number,"
+        b"Withdrawals,Deposits,Running Balance\n"
+        b'1/5/2026,1/5/2026,Debit,"BLUE OWL GROCERS, SPRINGFIELD",,74.19,,738.25\n'
+        b"1/10/2026,1/10/2026,Debit,Transfer To Share 0000,,300.00,,438.25\n"
+        b'1/15/2026,1/15/2026,Credit,INITECH PAYROLL,,,"1,610.00","2,048.25"\n'
+    )
+    assert sniff(data) == FileType.CSV
+    assert sniff(data.replace(b",", b";")) == FileType.CSV
+
+
+@pytest.mark.parametrize(
+    "data",
+    [
+        # Prose with commas, then two lines that happen to share a count.
+        b"Dear customer, thank you, as always, for banking with us.\n"
+        b"Your statement is ready.\nRegards, the team, your branch, and us\n",
+        # A preamble as wide as the table is not a preamble.
+        b"a,b,c,d\nnote\n1,2,3,4\n5,6,7,8\n9,10,11,12\n",
+        # Too few rows under the header to call it a table.
+        b"Account : x\nDate,Description,Debit,Credit\n1/5/2026,Shop,1.00,\n",
+    ],
+)
+def test_lines_that_only_look_like_a_table_stay_text(data: bytes) -> None:
+    assert sniff(data) == FileType.TEXT

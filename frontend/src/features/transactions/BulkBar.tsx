@@ -8,8 +8,7 @@ import { Dialog } from "../../components/Dialog";
 import { Select } from "../../components/Select";
 import { useToast } from "../../components/Toast";
 import { errorMessage } from "../../lib/api/client";
-import { queryRoots } from "../../lib/queryKeys";
-import { bulkAction, useCategories, useTags, type BulkAction } from "./api";
+import { bulkAction, invalidateLedger, useCategories, useTags, type BulkAction } from "./api";
 
 export function BulkBar({ ids, onDone }: { ids: readonly string[]; onDone: () => void }) {
   const queryClient = useQueryClient();
@@ -23,8 +22,7 @@ export function BulkBar({ ids, onDone }: { ids: readonly string[]; onDone: () =>
   const run = useMutation({
     mutationFn: (body: BulkAction) => bulkAction(body),
     onSuccess: (result) => {
-      void queryClient.invalidateQueries({ queryKey: queryRoots.transactions });
-      void queryClient.invalidateQueries({ queryKey: queryRoots.reports });
+      invalidateLedger(queryClient);
       const skipped = result.results.filter((item) => item.result === "skipped" || item.result === "not_found").length;
       toast.notify({
         title: `${String(result.changed)} transaction${result.changed === 1 ? "" : "s"} changed`,
@@ -108,7 +106,7 @@ export function BulkBar({ ids, onDone }: { ids: readonly string[]; onDone: () =>
         onClose={() => {
           setConfirmDelete(false);
         }}
-        title={`Delete ${String(ids.length)} transactions?`}
+        title={`Delete ${String(ids.length)} transaction${ids.length === 1 ? "" : "s"}?`}
         description="Deleted transactions are removed from balances and reports."
         footer={
           <>
@@ -127,7 +125,7 @@ export function BulkBar({ ids, onDone }: { ids: readonly string[]; onDone: () =>
                 send("delete");
               }}
             >
-              Delete transactions
+              {ids.length === 1 ? "Delete transaction" : "Delete transactions"}
             </Button>
           </>
         }

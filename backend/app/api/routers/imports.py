@@ -6,6 +6,10 @@
 * ``POST /imports/mappings`` (``Idempotency-Key`` honoured), ``PATCH`` and
   ``DELETE /imports/mappings/{id}``: member or above; a mapping's account
   must be editable by the caller.
+* ``GET /imports/layouts``: any role; the layouts the household taught
+  PerFin ("Remember this layout", "Teach PerFin"), as the classifier uses
+  them. ``DELETE /imports/layouts/{id}``: member or above; forgets every
+  version of that layout (``app.domain.imports.layouts``).
 * ``GET /imports/{document_id}/preview``: any role that can see the
   document; the extracted tables/statements stored by the sandbox, never
   re-parsed, with the matching saved mapping and a suggested one.
@@ -33,7 +37,7 @@ from app.auth.models import HouseholdRole
 from app.auth.principal import Principal
 from app.core.idempotency import IdempotencyKeyHeader, idempotent, payload_of
 from app.domain.documents.service import get_visible_document
-from app.domain.imports import proposals, service
+from app.domain.imports import layouts, proposals, service
 from app.domain.imports.schemas import (
     DEFAULT_PAGE,
     MAX_PAGE,
@@ -45,6 +49,7 @@ from app.domain.imports.schemas import (
     DocumentAccountsApply,
     ImportAccepted,
     ImportPreview,
+    LearnedLayoutList,
     MappingCreate,
     MappingOut,
     MappingPage,
@@ -145,6 +150,28 @@ def delete_mapping(
     mapping_id: uuid.UUID, request: Request, db: DbSession, principal: Writer
 ) -> Response:
     service.delete_mapping(db, principal, mapping_id, request=request)
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
+@router.get(
+    "/imports/layouts",
+    response_model=LearnedLayoutList,
+    summary="Layouts PerFin was taught (remembered and labelled statements)",
+)
+def get_layouts(db: DbSession, principal: Reader) -> LearnedLayoutList:
+    return layouts.list_layouts(db, principal)
+
+
+@router.delete(
+    "/imports/layouts/{layout_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+    responses=PROBLEMS,
+    summary="Forget a learned layout, every version of it (member or above)",
+)
+def delete_layout(
+    layout_id: uuid.UUID, request: Request, db: DbSession, principal: Writer
+) -> Response:
+    layouts.delete_layout(db, principal, layout_id, request=request)
     return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 

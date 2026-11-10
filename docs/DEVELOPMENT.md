@@ -604,6 +604,8 @@ src/
     csrf.ts          reads the CSRF token from /auth/session and adds X-CSRF-Token
     sse.ts           EventSource -> queryClient.invalidateQueries mapping
     money.ts, dates.ts
+    idempotency.ts   Idempotency-Key for creating POSTs (useIdempotencyKey: one key
+                     per thing asked for, reused on retry, dropped after success)
   components/        design system (Button, Input, Table, Dialog, Card, ...)
   features/<name>/   routes.tsx, queries.ts, components, tests
     auth/            sign-in pages, guard.ts (root beforeLoad: session required

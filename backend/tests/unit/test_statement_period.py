@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import io
 from collections.abc import Callable
+from dataclasses import replace
 from datetime import date
 from decimal import Decimal
 from typing import cast
@@ -214,6 +215,10 @@ def test_an_inferred_period_is_a_hint_only() -> None:
     assert found.kind == "statement"
     assert found.period.inferred
     assert found.period.source == "line_dates"
+    # The header names its sender; resolving it needs the household's
+    # institutions (a database), which this test of the period does not have.
+    assert found.institution == "Riverbend Test Bank"
+    found = replace(found, institution=None)
     document = Document()
     apply_classification(cast("object", None), document, found)  # type: ignore[arg-type]
     assert (document.period_start, document.period_end) == (None, None)

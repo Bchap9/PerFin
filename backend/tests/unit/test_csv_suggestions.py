@@ -561,3 +561,122 @@ def test_an_indicator_with_other_words_is_not_trusted() -> None:
     assert trusted is not None
     assert trusted.confident is True
     assert trusted.sign_evidence == "indicator"
+
+
+# ---------------------------------------------------------------------------
+# Exports with lines about the account before the header, and other languages
+# ---------------------------------------------------------------------------
+
+PREAMBLE_CSV = (
+    b"Account Name : Everyday Checking\n"
+    b"Account Number : ****3377\n"
+    b"Date Range : 01/01/2026-01/31/2026\n"
+    b"\n"
+    b"Posting Date,Effective Date,Transaction Type,Description,Check Number,"
+    b"Withdrawals,Deposits,Running Balance\n"
+    b'1/5/2026,1/5/2026,Debit,"BLUE OWL GROCERS, SPRINGFIELD",,74.19,,738.25\n'
+    b"1/10/2026,1/10/2026,Debit,Transfer To Share 0000,,300.00,,438.25\n"
+    b'1/15/2026,1/15/2026,Credit,INITECH PAYROLL,,,"1,610.00","2,048.25"\n'
+    b'1/22/2026,1/22/2026,Check,Draft,2051,125.00,,"1,923.25"\n'
+)
+
+
+def _extracted(data: bytes) -> Table:
+    result = EXTRACTORS["csv"](data, ExtractOptions(), "csv")
+    assert result.ok, result.error
+    return result.tables[0]
+
+
+def test_an_export_with_a_preamble_is_mapped_and_names_its_account() -> None:
+    table = _extracted(PREAMBLE_CSV)
+    suggestion = suggest_mapping(table)
+    assert suggestion is not None
+    assert suggestion.confident
+    spec = suggestion.spec
+    assert (spec.skip_rows, spec.has_header) == (3, True)
+    assert (spec.debit_column, spec.credit_column, spec.balance_column) == (5, 6, 7)
+    parsed = from_table(table, spec)
+    assert [(t.posted_date, t.amount) for t in parsed.transactions] == [
+        (date(2026, 1, 5), Decimal("-74.19")),
+        (date(2026, 1, 10), Decimal("-300.00")),
+        (date(2026, 1, 15), Decimal("1610.00")),
+        (date(2026, 1, 22), Decimal("-125.00")),
+    ]
+    # The account is named above the header, not in a column.
+    assert parsed.last4 == "3377"
+    assert not parsed.balance_mismatches
+
+
+def test_a_preamble_naming_two_accounts_names_none() -> None:
+    table = _extracted(
+        PREAMBLE_CSV.replace(b"Date Range : 01/01/2026-01/31/2026", b"Linked account : ****9001")
+    )
+    spec = suggest_spec(table)
+    assert spec is not None
+    assert from_table(table, spec).last4 is None
+
+
+@pytest.mark.parametrize(
+    ("data", "expected"),
+    [
+        (
+            "Buchungstag;Valuta;Auftraggeber/Empfänger;Verwendungszweck;Betrag;Währung;Saldo\n"
+            "02.01.2026;02.01.2026;Stadtwerke Musterstadt;Abschlag Strom;-82,50;EUR;1.417,50\n"
+            "05.01.2026;05.01.2026;Musterfirma GmbH;Gehalt Januar;2.350,00;EUR;3.767,50\n"
+            "12.01.2026;12.01.2026;Vermietung Beispiel;Miete;-890,00;EUR;2.877,50\n",
+            [("Stadtwerke Musterstadt", "-82.50"), ("Musterfirma GmbH", "2350.00")],
+        ),
+        (
+            "Date opération;Libellé;Débit;Crédit;Solde\n"
+            "02/01/2026;PRLV EAU DE VILLE;45,10;;954,90\n"
+            "05/01/2026;VIR SALAIRE EXEMPLE SA;;2100,00;3054,90\n"
+            "13/01/2026;CB BOULANGERIE;8,40;;3046,50\n",
+            [("PRLV EAU DE VILLE", "-45.10"), ("VIR SALAIRE EXEMPLE SA", "2100.00")],
+        ),
+        (
+            "Fecha,Concepto,Importe,Saldo\n"
+            "2026-01-02,RECIBO LUZ EJEMPLO,-61.20,938.80\n"
+            "2026-01-05,NOMINA EMPRESA EJEMPLO,1800.00,2738.80\n"
+            "2026-01-14,COMPRA MERCADO,-40.00,2698.80\n",
+            [("RECIBO LUZ EJEMPLO", "-61.20"), ("NOMINA EMPRESA EJEMPLO", "1800.00")],
+        ),
+        (
+            "Datum;Naam / Omschrijving;Af Bij;Bedrag (EUR);Mededelingen\n"
+            "20260102;Energie Voorbeeld;Af;82,50;Termijn januari\n"
+            "20260105;Werkgever Voorbeeld BV;Bij;2350,00;Salaris\n"
+            "20260113;Supermarkt Voorbeeld;Af;31,75;Pinbetaling\n",
+            [("Energie Voorbeeld", "-82.50"), ("Werkgever Voorbeeld BV", "2350.00")],
+        ),
+    ],
+    ids=["german", "french", "spanish", "dutch"],
+)
+def test_exports_in_other_languages_map_without_a_person(
+    data: str, expected: list[tuple[str, str]]
+) -> None:
+    table = _extracted(data.encode("utf-8"))
+    suggestion = suggest_mapping(table)
+    assert suggestion is not None
+    assert suggestion.confident, suggestion.doubts
+    parsed = from_table(table, suggestion.spec)
+    assert len(parsed.transactions) == 3
+    assert [(t.raw_payee, str(t.amount)) for t in parsed.transactions[:2]] == expected
+    assert not parsed.balance_mismatches
+
+
+def test_valuta_is_a_date_or_a_currency_by_its_values() -> None:
+    german = _extracted(
+        b"Buchungstag;Valuta;Empf\xc3\xa4nger;Betrag\n"
+        b"02.01.2026;03.01.2026;Beispiel AG;-10,00\n"
+        b"05.01.2026;06.01.2026;Muster GmbH;20,00\n"
+    )
+    spec = suggest_spec(german)
+    assert spec is not None
+    assert (spec.date_column, spec.currency_column) == (0, None)  # the booking date wins
+    italian = _extracted(
+        b"Data;Descrizione;Importo;Valuta\n"
+        b"02/01/2026;Bolletta esempio;-10,00;EUR\n"
+        b"05/01/2026;Stipendio esempio;20,00;EUR\n"
+    )
+    spec = suggest_spec(italian)
+    assert spec is not None
+    assert (spec.date_column, spec.currency_column) == (0, 3)

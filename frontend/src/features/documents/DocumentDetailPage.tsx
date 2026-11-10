@@ -22,6 +22,7 @@ import {
   KIND_LABELS,
   SOURCE_LABELS,
 } from "./api";
+import { DocumentLinksCard } from "./AttachDialog";
 import { DeleteDocumentDialog } from "./DeleteDocumentDialog";
 import { PageViewer } from "./PageViewer";
 import { TeachDialog, currentReadings } from "../review/TeachDialog";
@@ -173,6 +174,7 @@ export function DocumentDetailPage() {
               />
             ) : null}
           </Card>
+          <DocumentLinksCard document={doc} />
           {doc.quarantined ? null : (
             <Card title="Pages">
               <PageViewer documentId={doc.id} />

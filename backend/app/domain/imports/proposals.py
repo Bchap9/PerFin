@@ -375,6 +375,13 @@ def _institution_name(db: Session, document: Document) -> str | None:
     ).scalar_one_or_none()
 
 
+def _printed_institution(document: Document) -> str | None:
+    """The institution the classifier read from the file (fingerprint or header)."""
+    confidence = document.confidence if isinstance(document.confidence, dict) else {}
+    name = confidence.get("institution_name")
+    return name.strip()[:200] or None if isinstance(name, str) else None
+
+
 def _base_currency(db: Session, household_id: uuid.UUID) -> str | None:
     household = households_repo.get_household(db, household_id)
     return household.base_currency if household is not None else None
@@ -388,7 +395,7 @@ def _detect(
         return []
     items = _open_items(db, document)
     allowed = importable_account_ids(db, document.household_id, principal.user_id)
-    fallback_institution = _institution_name(db, document)
+    fallback_institution = _institution_name(db, document) or _printed_institution(document)
     currency = _base_currency(db, document.household_id)
     out: list[tuple[_Found, DetectedAccount]] = []
     for found in _found(db, document, result, items):

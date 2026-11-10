@@ -40,11 +40,11 @@ export function CashflowCard({ from, to }: { from: string; to: string }) {
         {report === undefined ? null : (
           <dl className="dashboard-figures">
             <div>
-              <dt>Income</dt>
+              <dt>Money in</dt>
               <dd><MoneyText amount={report.inflow.amount} currency={report.currency} tone="signed" /></dd>
             </div>
             <div>
-              <dt>Spending</dt>
+              <dt>Money out</dt>
               <dd><MoneyText amount={report.outflow.amount} currency={report.currency} tone="none" /></dd>
             </div>
             <div>

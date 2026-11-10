@@ -284,7 +284,7 @@ def test_brokerage_statement_is_parsed_reconciled_and_committed(env: Env, fmt: s
     stored = ExtractResult.model_validate(document.extraction)
     assert len(stored.investments) == 1
     if fmt == "pdf":
-        assert document.parser_version == "placeholder_brokerage/4"
+        assert document.parser_version == "placeholder_brokerage/5"
         assert document.confidence is not None
         assert document.confidence["parse"]["investment_reconciliation"] == ["ok"]
 
@@ -593,7 +593,7 @@ def test_each_account_of_a_multi_account_pdf_lands_on_its_own_account(env: Env) 
     document = env.document(document_id)
     assert document.status is DocumentStatus.PROCESSED, env.open_reviews(document_id)
     assert document.kind is DocumentKind.STATEMENT
-    assert document.parser_version == "fidelity_investments_statement/5"
+    assert document.parser_version == "fidelity_investments_statement/6"
     # The document spans three accounts: it is linked to none of them.
     assert document.account_id is None
     assert (document.period_start, document.period_end) == (stmt.start, stmt.end)

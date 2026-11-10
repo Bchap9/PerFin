@@ -1,0 +1,314 @@
+/* SPDX-License-Identifier: AGPL-3.0-or-later */
+
+/*
+ * Reports. Chart colours are roles defined here once per theme: two series
+ * colours that stay apart for colour-blind readers and keep 3:1 against the
+ * card surface in both themes, and a grey for the months a trend chart only
+ * shows for context. Dark values are their own steps, not a flip.
+ */
+.report-page {
+  --report-series-1: #2a78d6;
+  --report-series-2: #eb6834;
+  --report-muted: var(--color-border-strong);
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) .report-page {
+    --report-series-1: #3987e5;
+    --report-series-2: #d95926;
+  }
+}
+
+:root[data-theme="dark"] .report-page {
+  --report-series-1: #3987e5;
+  --report-series-2: #d95926;
+}
+
+/* ---- Control bar ----------------------------------------------------------- */
+.report-controls {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  gap: var(--space-3) var(--space-4);
+  padding: var(--space-4);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-lg);
+  background: var(--color-surface);
+}
+
+.report-controls .field,
+.report-options .field {
+  flex: 1 1 11rem;
+  max-width: 18rem;
+  margin-bottom: 0;
+}
+
+.report-controls__toggle {
+  flex: 1 1 100%;
+}
+
+.report-controls__toggle .checkbox {
+  margin-bottom: 0;
+}
+
+.report-summary {
+  margin: 0;
+  color: var(--color-text-muted);
+}
+
+.report-options {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  gap: var(--space-3) var(--space-4);
+}
+
+/* Card headers: the title may wrap on a phone, the button stays whole. */
+.report-page .card__header {
+  flex-wrap: wrap;
+}
+
+.report-page .card__actions .btn {
+  white-space: nowrap;
+}
+
+/* All four tabs fit a phone without sideways scrolling. */
+@media (max-width: 40rem) {
+  .report-page .tabs__tab {
+    padding-inline: var(--space-3);
+  }
+}
+
+/* ---- A view: figures, chart, table ---------------------------------------- */
+.report-view {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+  transition: opacity var(--transition-fast);
+}
+
+/* While new figures load, the last ones stay in place, dimmed. */
+.report-view--stale {
+  opacity: 0.55;
+}
+
+.report-figures {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-4) var(--space-6);
+  margin: 0;
+}
+
+.report-figures dt {
+  color: var(--color-text-muted);
+  font-size: var(--font-size-sm);
+}
+
+.report-figures dd {
+  margin: 0;
+  font-size: var(--font-size-xl);
+  font-weight: 600;
+}
+
+.report-figures__detail {
+  display: block;
+  color: var(--color-text-muted);
+  font-size: var(--font-size-sm);
+  font-weight: 400;
+}
+
+.report-section {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+}
+
+.report-note {
+  margin: 0;
+  padding: var(--space-3);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: var(--color-warning-soft);
+}
+
+.report-hint {
+  margin: 0;
+  color: var(--color-text-muted);
+  font-size: var(--font-size-sm);
+}
+
+/* One box per change, so a table cell (or its card on a phone) holds a single item. */
+.report-change {
+  display: inline-block;
+}
+
+.report-change__percent {
+  display: block;
+  color: var(--color-text-muted);
+  font-size: var(--font-size-sm);
+  font-weight: 400;
+}
+
+.report-details > summary {
+  cursor: pointer;
+  font-weight: 600;
+}
+
+.report-details[open] > summary {
+  margin-bottom: var(--space-3);
+}
+
+.report-details ul {
+  margin: 0;
+  padding-inline-start: var(--space-5);
+  color: var(--color-text-muted);
+}
+
+.report-details li + li {
+  margin-top: var(--space-2);
+}
+
+/* Table footers when rows turn into cards on narrow screens (components.css
+   lays out body cells only). */
+@media (max-width: 40rem) {
+  .report-table tfoot th,
+  .report-table tfoot td {
+    display: grid;
+    grid-template-columns: minmax(5rem, 40%) minmax(0, 1fr);
+    gap: var(--space-3);
+    width: 100%;
+    padding: var(--space-2) var(--space-3);
+    text-align: start;
+  }
+
+  .report-table tfoot th {
+    display: block;
+    border-bottom: 1px solid var(--color-border);
+  }
+
+  .report-table tfoot td[data-label]::before {
+    content: attr(data-label);
+    color: var(--color-text-muted);
+    font-size: var(--font-size-sm);
+    font-weight: 600;
+  }
+}
+
+/* ---- Charts ----------------------------------------------------------------- */
+.report-chart {
+  width: 100%;
+  font-size: var(--font-size-xs);
+  font-variant-numeric: tabular-nums;
+}
+
+.report-chart--columns {
+  height: 18rem;
+}
+
+/* Grid and axes step back: solid hairlines one shade off the surface. */
+.report-chart .recharts-cartesian-grid line {
+  stroke: var(--color-border);
+  stroke-dasharray: none;
+}
+
+.report-chart .recharts-cartesian-axis-line,
+.report-chart .recharts-reference-line-line {
+  stroke: var(--color-border-strong);
+}
+
+.report-chart .recharts-cartesian-axis-tick-value {
+  fill: var(--color-text-muted);
+}
+
+/* What the pointer is on: a band behind a bar, a hairline through a month. */
+.report-chart .recharts-tooltip-cursor {
+  fill: var(--color-surface-sunken);
+  stroke: none;
+}
+
+.report-chart .recharts-curve.recharts-tooltip-cursor {
+  fill: none;
+  stroke: var(--color-border-strong);
+}
+
+.report-chart .recharts-surface:focus-visible {
+  outline: var(--focus-ring-width) solid var(--color-focus);
+  outline-offset: 2px;
+}
+
+.report-tip {
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: var(--color-surface-raised);
+  box-shadow: var(--shadow-md);
+  color: var(--color-text);
+  font-size: var(--font-size-sm);
+}
+
+.report-tip p {
+  margin: 0;
+}
+
+.report-tip__title {
+  color: var(--color-text-muted);
+}
+
+.report-tip__line {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.report-tip__label {
+  color: var(--color-text-muted);
+}
+
+.report-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2) var(--space-4);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  color: var(--color-text-muted);
+  font-size: var(--font-size-sm);
+}
+
+.report-legend li {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.report-key {
+  flex: none;
+  width: 0.75rem;
+  height: 0.75rem;
+  border-radius: 2px;
+}
+
+.report-key--series-1 {
+  background: var(--report-series-1);
+}
+
+.report-key--series-2 {
+  background: var(--report-series-2);
+}
+
+.report-key--muted {
+  background: var(--report-muted);
+}
+
+/* A line series is keyed by a short stroke, not a box. */
+.report-key--net {
+  height: 2px;
+  border-radius: 1px;
+  background: var(--color-text);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .report-view {
+    transition: none;
+  }
+}

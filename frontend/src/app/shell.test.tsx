@@ -38,6 +38,7 @@ describe("app shell", () => {
       "Accounts",
       "Transactions",
       "Budgets",
+      "Reports",
       "Goals",
       "Rules",
       "Investments",

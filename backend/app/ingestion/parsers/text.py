@@ -118,6 +118,34 @@ def read_amount(text: str) -> Amount | None:
     )
 
 
+#: Symbols that name one currency. ``$`` is shared by too many to say which.
+_SURE_SYMBOLS: Final = {"\u00a3": "GBP", "\u20ac": "EUR"}
+#: Amounts that must carry the symbol before it is believed.
+MIN_SYMBOL_AMOUNTS: Final = 2
+
+
+def symbol_currency(texts: Iterable[str]) -> str | None:
+    """The currency the amounts of ``texts`` are printed in, when their symbol says so.
+
+    Every amount printed with a symbol must carry the same one, at least
+    :data:`MIN_SYMBOL_AMOUNTS` do, and it names a single currency (``\u00a3``,
+    ``\u20ac``). A dollar sign is no evidence (US, Canadian, Australian...),
+    nor is a document mixing symbols (a card statement listing a purchase
+    abroad).
+    """
+    seen: dict[str, int] = {}
+    for text in texts:
+        if not any(symbol in text for symbol in _CURRENCY_SYMBOLS):
+            continue
+        for amount in find_amounts(text):
+            if amount.symbol is not None:
+                seen[amount.symbol] = seen.get(amount.symbol, 0) + 1
+    if len(seen) != 1:
+        return None
+    symbol, count = next(iter(seen.items()))
+    return _SURE_SYMBOLS.get(symbol) if count >= MIN_SYMBOL_AMOUNTS else None
+
+
 def find_amounts(text: str) -> list[Amount]:
     """Every amount in a line, left to right (whitespace-separated tokens)."""
     out: list[Amount] = []

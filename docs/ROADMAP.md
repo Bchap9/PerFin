@@ -102,7 +102,7 @@ rules, budgets, basic dashboard. Import of **structured** formats only.
       transaction created over the API appearing in the open grid through
       SSE without a reload. Known gaps, not part of this box: a reconnecting
       stream refetches instead of resuming with `Last-Event-ID`; no UI for
-      rule import/export or for the household settings
+      the household settings
       `reports.include_pending_review` / `documents.viewer_download`, which
       have no API yet either; transaction filters take one value per field)
 - [x] Full export/import (JSON + CSV + documents zip; docs/PORTABILITY.md)
@@ -279,9 +279,10 @@ Deferred from Phases 5-6 (not needed for the boxes above):
 - The Phase 5/6 tables are not in the portability export (format v1;
   PORTABILITY.md): investments, loans, manual assets and the tax vault do
   not leave in `/export` yet, and `lot_links` ids need remapping on import.
-- No screen for `/fx-rates`, the cost-method switch, specific-lot sales,
-  editing loan terms, or resolving held brokerage and loan statements
-  (the backend has no resolve action for those either: dismiss or reprocess).
+- No screen for specific-lot sales or for resolving held loan statements
+  (dismiss or reprocess). `/fx-rates`, the cost-method switch, editing loan
+  terms and rule import/export got screens in the usability pass
+  (CHANGELOG, Unreleased).
 - Corporate actions are splits/ratios and cash only (no mergers, spin-offs
   or return of capital); performance covers the securities portfolio only.
 - The external price and FX feeds have not been run against a real service,

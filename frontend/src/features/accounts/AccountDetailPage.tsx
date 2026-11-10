@@ -18,6 +18,7 @@ import { errorMessage } from "../../lib/api/client";
 import { addDays, formatDate, isIsoDate, todayIsoDate } from "../../lib/dates";
 import { isDecimalString } from "../../lib/money";
 import { queryRoots } from "../../lib/queryKeys";
+import { TransactionDialog } from "../transactions/TransactionDialog";
 import { AccountFormDialog, CloseAccountDialog } from "./AccountForms";
 import {
   accountKeys,
@@ -30,6 +31,7 @@ import {
   type Account,
 } from "./api";
 import { BalanceChart } from "./BalanceChart";
+import { DeleteAccountButton } from "./DeleteAccount";
 
 function ManualBalanceForm({ account }: { account: Account }) {
   const queryClient = useQueryClient();
@@ -106,6 +108,7 @@ export function AccountDetailPage() {
   const toast = useToast();
   const [editing, setEditing] = useState(false);
   const [closing, setClosing] = useState(false);
+  const [addingTransaction, setAddingTransaction] = useState(false);
   const account = useQuery({
     queryKey: accountKeys.one(accountId),
     queryFn: () => getAccount(accountId),
@@ -180,6 +183,13 @@ export function AccountDetailPage() {
             <>
               <Button
                 onClick={() => {
+                  setAddingTransaction(true);
+                }}
+              >
+                Add transaction
+              </Button>
+              <Button
+                onClick={() => {
                   setEditing(true);
                 }}
               >
@@ -206,6 +216,7 @@ export function AccountDetailPage() {
               )}
             </>
           ) : null}
+          <DeleteAccountButton account={data} />
         </div>
       </div>
       <Card title="Balance history">
@@ -260,6 +271,14 @@ export function AccountDetailPage() {
           account={data}
           onClose={() => {
             setEditing(false);
+          }}
+        />
+      ) : null}
+      {addingTransaction ? (
+        <TransactionDialog
+          defaultAccountId={data.id}
+          onClose={() => {
+            setAddingTransaction(false);
           }}
         />
       ) : null}

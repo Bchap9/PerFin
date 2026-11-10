@@ -30,6 +30,7 @@ import {
   type LayoutEntry,
   type WidgetSize,
 } from "./layout";
+import { GettingStarted } from "./GettingStarted";
 import { useDashboardLayout } from "./useDashboardLayout";
 import { DashboardWidget } from "./widgets";
 
@@ -166,6 +167,7 @@ export function DashboardPage() {
       }
     >
       {!settled ? <Spinner label="Loading dashboard" /> : null}
+      {settled && !isEditing ? <GettingStarted /> : null}
       {settled && layout.length === 0 && !isEditing ? (
         <p className="muted">The dashboard is empty. Choose Customize to add widgets.</p>
       ) : null}

@@ -1709,6 +1709,40 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/imports/layouts": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Layouts PerFin was taught (remembered and labelled statements) */
+        get: operations["get_layouts_api_v1_imports_layouts_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/imports/layouts/{layout_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /** Forget a learned layout, every version of it (member or above) */
+        delete: operations["delete_layout_api_v1_imports_layouts__layout_id__delete"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/imports/mappings": {
         parameters: {
             query?: never;
@@ -6779,6 +6813,63 @@ export interface components {
         LearnOut: {
             /** Added */
             added: number;
+        };
+        /** LearnedLayoutList */
+        LearnedLayoutList: {
+            /** Items */
+            items: components["schemas"]["LearnedLayoutOut"][];
+        };
+        /**
+         * LearnedLayoutOut
+         * @description One layout the household taught PerFin (``app.domain.imports.layouts``).
+         */
+        LearnedLayoutOut: {
+            /** Fields */
+            fields: string[];
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /** Ignored Lines */
+            ignored_lines: number;
+            /**
+             * Institution Id
+             * Format: uuid
+             */
+            institution_id: string;
+            /** Institution Name */
+            institution_name: string;
+            kind: components["schemas"]["DocumentKind"];
+            /**
+             * Learned At
+             * Format: date-time
+             */
+            learned_at: string;
+            /** Learned From Document Id */
+            learned_from_document_id: string | null;
+            /** Notes */
+            notes: string[];
+            /** Parser */
+            parser: string;
+            /** Recognised By */
+            recognised_by: string[];
+            /** Tables */
+            tables: components["schemas"]["LearnedTable"][];
+            /** Taught */
+            taught: boolean;
+            /** Version */
+            version: number;
+        };
+        /**
+         * LearnedTable
+         * @description A table a taught layout reads: its kind and the roles of its columns, in print order.
+         */
+        LearnedTable: {
+            /** Columns */
+            columns: string[];
+            /** Kind */
+            kind: string;
         };
         /** LinkOfferOut */
         LinkOfferOut: {
@@ -17973,6 +18064,82 @@ export interface operations {
                 content: {
                     "application/json": components["schemas"]["ImportOut"];
                 };
+            };
+            /** @description Problem details */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Problem details */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Problem details */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Problem details */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+        };
+    };
+    get_layouts_api_v1_imports_layouts_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LearnedLayoutList"];
+                };
+            };
+        };
+    };
+    delete_layout_api_v1_imports_layouts__layout_id__delete: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                layout_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
             /** @description Problem details */
             403: {

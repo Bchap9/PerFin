@@ -29,6 +29,8 @@ export const docKeys = {
   one: (id: string) => [...queryRoots.documents, "detail", id] as const,
   regions: (id: string, page: number) => [...queryRoots.documents, "regions", id, page] as const,
   imported: (id: string) => [...queryRoots.documents, "imported", id] as const,
+  linkedTransaction: (id: string) => [...queryRoots.documents, "linked-transaction", id] as const,
+  findTransactions: (search: TransactionSearch) => [...queryRoots.documents, "find-transactions", search] as const,
 } as const;
 
 export const KIND_LABELS: Readonly<Record<DocumentKind, string>> = {
@@ -116,6 +118,60 @@ export async function deleteDocument(id: string, withData: boolean): Promise<voi
   await unwrap(
     api.DELETE("/api/v1/documents/{document_id}", {
       params: { path: { document_id: id }, query: { with_data: withData } },
+    }),
+  );
+}
+
+// ---- attaching a document to a transaction or an account ---------------------------
+
+export type DocumentLink = Schemas["DocumentLinkOut"];
+export type LinkTarget = Schemas["LinkTarget"];
+/** The targets the server links by hand today; the others are `422 link-target-unsupported`. */
+export type AttachTarget = Extract<LinkTarget, "transaction" | "account">;
+export type LedgerTransaction = Schemas["TransactionOut"];
+
+/** What to look for when choosing the transaction a file belongs to. */
+export interface TransactionSearch {
+  /** Part of the payee text, payee name, memo or notes (any case). */
+  q: string;
+  dateFrom: string;
+  dateTo: string;
+}
+
+export const TRANSACTION_SEARCH_PAGE = 25;
+
+/** Transactions the caller can see, newest first, narrowed by text and posted date. */
+export function findTransactions(search: TransactionSearch, cursor: string | null): Promise<Schemas["TransactionPage"]> {
+  const q = search.q.trim();
+  return unwrap(
+    api.GET("/api/v1/transactions", {
+      params: {
+        query: {
+          limit: TRANSACTION_SEARCH_PAGE,
+          ...(q === "" ? {} : { q }),
+          ...(search.dateFrom === "" ? {} : { date_from: search.dateFrom }),
+          ...(search.dateTo === "" ? {} : { date_to: search.dateTo }),
+          ...(cursor === null ? {} : { cursor }),
+        },
+      },
+    }),
+  );
+}
+
+/** A transaction a document is attached to; `404` when the caller cannot see it or it is gone. */
+export function getLinkedTransaction(id: string): Promise<LedgerTransaction> {
+  return unwrap(api.GET("/api/v1/transactions/{transaction_id}", { params: { path: { transaction_id: id } } }));
+}
+
+/**
+ * Attach a document to a transaction or an account. The caller must be able
+ * to change both. Attaching the same pair again answers the existing link.
+ */
+export function linkDocument(documentId: string, targetType: AttachTarget, targetId: string, idempotencyKey: string): Promise<DocumentLink> {
+  return unwrap(
+    api.POST("/api/v1/documents/{document_id}/link", {
+      params: { path: { document_id: documentId }, header: { "Idempotency-Key": idempotencyKey } },
+      body: { target_type: targetType, target_id: targetId },
     }),
   );
 }

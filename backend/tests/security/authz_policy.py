@@ -141,6 +141,9 @@ PARAM_KINDS: Final[Mapping[str, ParamKind]] = MappingProxyType(
         # A CSV column mapping tied to an account granted to the matrix
         # member (edit) and viewer (view).
         "import_mapping": ParamKind("import_mapping", "import-mapping-not-found"),
+        # A layout the matrix household taught PerFin (a parser fingerprint
+        # of one of its institutions; household-wide).
+        "learned_layout": ParamKind("learned_layout", "layout-not-found"),
         # A processed document whose encrypted file really is in the matrix
         # blob store (downloadable), on an account granted to the matrix
         # member (edit) and viewer (view); a review item of such a document.
@@ -194,7 +197,7 @@ OWN_KINDS: Final = frozenset(k for k in PARAM_KINDS if k.startswith("own_"))
 HOUSEHOLD_OBJECT_KINDS: Final = frozenset(
     {"transaction", "account", "category", "payee", "tag", "rule", "job"}
     | {"budget", "goal", "goal_contribution"}
-    | {"document", "import_mapping"}
+    | {"document", "import_mapping", "learned_layout"}
     | {"stored_document", "review_item"}
     | {"export_archive", "import_archive"}
     | {"security", "investment_txn", "price"}
@@ -321,6 +324,7 @@ GOAL = {"goal_id": "goal"}
 RULE = {"rule_id": "rule"}
 DOC = {"document_id": "document"}
 IMAP = {"mapping_id": "import_mapping"}
+LAYOUT = {"layout_id": "learned_layout"}
 SDOC = {"document_id": "stored_document"}
 ITEM = {"item_id": "review_item"}
 SEC = {"security_id": "security"}
@@ -739,6 +743,11 @@ POLICIES: Final[Mapping[str, Policy]] = MappingProxyType(
         ),
         f"DELETE {API}/imports/mappings/{{mapping_id}}": scoped(
             "documents:write", role=M, params=IMAP
+        ),
+        # What the household taught PerFin: any role may look, a member forgets.
+        f"GET {API}/imports/layouts": scoped("documents:read", role=V),
+        f"DELETE {API}/imports/layouts/{{layout_id}}": scoped(
+            "documents:write", role=M, params=LAYOUT
         ),
         f"GET {API}/imports/{{document_id}}/preview": scoped("documents:read", role=V, params=DOC),
         f"POST {API}/imports/{{document_id}}/apply-mapping": scoped(

@@ -12,6 +12,7 @@ import { Field } from "../../components/Field";
 import { Input } from "../../components/Input";
 import { Table, type TableColumn } from "../../components/Table";
 import { queryRoots } from "../../lib/queryKeys";
+import { canManageMembers, useAuthSession } from "../auth/session";
 import { ErrorLine, PlanningPage, QueryState } from "../planning/PlanningPage";
 import { nameLookup, useAccounts, useCategories, usePayees, useTags } from "../planning/queries";
 import { useAction } from "../planning/useAction";
@@ -19,6 +20,7 @@ import { applyRules, deleteRule, listRules, movedOrder, reorderRules, ruleKeys, 
 import { parseRule } from "./builder";
 import { describeGroup, type Names } from "./describe";
 import { JobProgress } from "./JobProgress";
+import { ExportRulesButton, ImportRulesDialog } from "./RuleTransfer";
 
 function ApplyDialog({ rules, onClose }: { rules: readonly Rule[]; onClose: () => void }) {
   const [from, setFrom] = useState("");
@@ -100,7 +102,11 @@ export function RulesPage() {
   const payees = usePayees();
   const tags = useTags();
   const accounts = useAccounts();
+  const { session } = useAuthSession();
+  // The server lets any role export; only an owner or admin may import.
+  const canImport = canManageMembers(session?.household?.role);
   const [applying, setApplying] = useState(false);
+  const [importing, setImporting] = useState(false);
   const [deleting, setDeleting] = useState<Rule | null>(null);
   const rules = useMemo(() => [...(query.data ?? [])].sort((a, b) => a.sort_order - b.sort_order), [query.data]);
   const names: Names = useMemo(() => {
@@ -183,6 +189,12 @@ export function RulesPage() {
       title="Rules"
       actions={
         <>
+          <ExportRulesButton rules={rules} />
+          {canImport ? (
+            <Button onClick={() => { setImporting(true); }}>
+              Import rules
+            </Button>
+          ) : null}
           <Button disabled={rules.length === 0} onClick={() => { setApplying(true); }}>
             Apply to existing transactions
           </Button>
@@ -206,6 +218,7 @@ export function RulesPage() {
         />
       </QueryState>
       {applying ? <ApplyDialog rules={rules.filter((rule) => !rule.redacted)} onClose={() => { setApplying(false); }} /> : null}
+      {importing ? <ImportRulesDialog existing={rules.length} onClose={() => { setImporting(false); }} /> : null}
       {deleting === null ? null : (
         <Dialog
           open

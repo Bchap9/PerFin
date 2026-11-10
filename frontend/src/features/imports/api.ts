@@ -205,3 +205,40 @@ export function applyDocumentAccounts(
     }),
   );
 }
+
+export type LearnedLayout = Schemas["LearnedLayoutOut"];
+
+export const learnedKeys = {
+  layouts: [...queryRoots.documents, "layouts"],
+} as const;
+
+/** The layouts the household taught PerFin ("Remember this layout", "Teach PerFin"). */
+export function listLayouts(): Promise<LearnedLayout[]> {
+  return unwrap(api.GET("/api/v1/imports/layouts")).then((list) => list.items);
+}
+
+/** Forget a layout, every version of it. */
+export async function deleteLayout(id: string): Promise<void> {
+  await unwrap(
+    api.DELETE("/api/v1/imports/layouts/{layout_id}", {
+      params: { path: { layout_id: id } },
+    }),
+  );
+}
+
+export function renameMapping(id: string, name: string): Promise<Mapping> {
+  return unwrap(
+    api.PATCH("/api/v1/imports/mappings/{mapping_id}", {
+      params: { path: { mapping_id: id } },
+      body: { name },
+    }),
+  );
+}
+
+export async function deleteMapping(id: string): Promise<void> {
+  await unwrap(
+    api.DELETE("/api/v1/imports/mappings/{mapping_id}", {
+      params: { path: { mapping_id: id } },
+    }),
+  );
+}

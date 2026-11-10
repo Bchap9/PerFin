@@ -13,6 +13,7 @@ import { formatDate } from "../../lib/dates";
 import { nameLookup, useAccounts } from "../planning/queries";
 import { QueryState } from "../planning/PlanningPage";
 import { getHoldings, investmentKeys, type Holding, type Holdings, type Lot } from "./api";
+import { CostMethodCard } from "./CostMethodCard";
 import { formatFraction, formatQuantity, securityLabel } from "./format";
 import { AllocationBars, GainText, titleCase } from "./parts";
 
@@ -181,6 +182,7 @@ export function HoldingsTab({ account }: { account: string }) {
               </div>
             </>
           )}
+          <CostMethodCard account={account} />
           {lotsOf === null ? null : <LotsDialog holding={lotsOf} onClose={() => { setLotsOf(null); }} />}
         </div>
       )}
