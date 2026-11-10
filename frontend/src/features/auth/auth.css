@@ -117,16 +117,37 @@
   display: flex;
   align-items: center;
   gap: var(--space-2);
+  /* Names give way before the header pushes the page sideways on a phone. */
+  min-width: 0;
 }
 
 .account-menu__household {
   color: var(--color-text-muted);
 }
 
+.account-menu__household,
+.account-menu__user {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .account-menu__user {
   color: var(--color-text);
   text-decoration: none;
   font-weight: 600;
+}
+
+.account-menu > .btn {
+  flex-shrink: 0;
+}
+
+@media (max-width: 30rem) {
+  /* The household's name is on every settings page; the person's is the link to their profile. */
+  .account-menu__household:not(:has(select)) {
+    display: none;
+  }
 }
 
 .select__control--compact {
