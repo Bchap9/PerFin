@@ -92,6 +92,20 @@ export function closeAccount(
   );
 }
 
+/** Owner or admin: removes the account and everything recorded on it. */
+export async function deleteAccount(id: string): Promise<void> {
+  await unwrap(
+    api.DELETE("/api/v1/accounts/{account_id}", {
+      params: { path: { account_id: id } },
+    }),
+  );
+}
+
+/** Roles that may delete an account (the server enforces it again). */
+export function canDeleteAccount(role: Role | null | undefined): boolean {
+  return role === "owner" || role === "admin";
+}
+
 export function reopenAccount(id: string): Promise<Account> {
   return unwrap(
     api.POST("/api/v1/accounts/{account_id}/reopen", {

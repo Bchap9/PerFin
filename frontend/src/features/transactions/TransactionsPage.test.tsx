@@ -107,7 +107,9 @@ describe("transactions grid", () => {
     const grid = await screen.findByRole("table", { name: "Transactions" });
     await within(grid).findByText("Groceries");
     expect(screen.queryByLabelText("Category of Corner Market")).not.toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: /Split/ })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /^Actions for/ })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Add transaction" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Find transfers" })).not.toBeInTheDocument();
     expect(screen.queryByRole("checkbox")).not.toBeInTheDocument();
     expect(screen.getByText("You have read-only access.")).toBeInTheDocument();
   });
@@ -121,6 +123,8 @@ describe("transactions grid", () => {
     renderApp("/transactions");
     await within(await screen.findByRole("table", { name: "Transactions" })).findByText("Groceries");
     expect(screen.queryByLabelText("Category of Corner Market")).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /^Actions for/ })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Add transaction" })).not.toBeInTheDocument();
   });
 
   it("sends a bulk categorise for the selected rows", async () => {
@@ -144,7 +148,8 @@ describe("split editor", () => {
     api.on("POST /api/v1/transactions/:id/split", () => json(tx("x-1")));
     renderApp("/transactions");
     const user = userEvent.setup();
-    await user.click(await screen.findByRole("button", { name: "Split Corner Market" }));
+    await user.click(await screen.findByRole("button", { name: "Actions for Corner Market" }));
+    await user.click(within(screen.getByRole("menu", { name: "Actions for Corner Market" })).getByRole("menuitem", { name: "Split" }));
     const dialog = await screen.findByRole("dialog", { name: "Split transaction" });
     const first = within(within(dialog).getByRole("group", { name: "Split line 1" })).getByLabelText("Amount");
     const second = within(within(dialog).getByRole("group", { name: "Split line 2" })).getByLabelText("Amount");

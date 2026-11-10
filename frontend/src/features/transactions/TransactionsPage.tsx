@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import "../accounts/ledger.css";
 
-import { useInfiniteQuery } from "@tanstack/react-query";
+import { useInfiniteQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useSearch } from "@tanstack/react-router";
 import { useMemo, useState, type FormEvent } from "react";
 
@@ -15,11 +15,15 @@ import { MoneyText } from "../../components/MoneyText";
 import { Select } from "../../components/Select";
 import { Spinner } from "../../components/Spinner";
 import { Table, type TableColumn } from "../../components/Table";
+import { useToast } from "../../components/Toast";
 import { errorMessage } from "../../lib/api/client";
-import { formatDate } from "../../lib/dates";
+import { formatDate, isIsoDate } from "../../lib/dates";
 import { accountLabel, useAccounts, useCanWrite } from "../accounts/api";
+import { canManageMembers, useAuthSession } from "../auth/session";
 import {
+  autoPairTransfers,
   EMPTY_FILTERS,
+  invalidateLedger,
   listTransactions,
   txKeys,
   useCategories,
@@ -29,9 +33,15 @@ import {
   type Transaction,
   type TransactionFilters,
 } from "./api";
+import { autoPairSummary } from "./autoPair";
 import { BulkBar } from "./BulkBar";
 import { CategoryCell, NotesCell, PayeeCell, rowLabel, TagsCell } from "./cells";
+import { DeleteTransactionDialog } from "./DeleteTransactionDialog";
+import { useEditTransaction } from "./optimistic";
+import { RememberCategoryDialog } from "./RememberCategoryDialog";
+import { RowActions, type RowAction } from "./RowActions";
 import { SplitEditor } from "./SplitEditor";
+import { TransactionDialog } from "./TransactionDialog";
 import { TransferDialog } from "./TransferDialog";
 
 const REVIEW_STATES: readonly { value: ReviewState; label: string }[] = [
@@ -45,12 +55,22 @@ function isReviewState(value: string): value is ReviewState | "" {
 }
 
 function initialFilters(search: Record<string, unknown>): TransactionFilters {
-  const account = search["account"];
-  return { ...EMPTY_FILTERS, account: typeof account === "string" ? account : "" };
+  // A link from a report or an account page narrows the list: `account`,
+  // `category` (an id, or "none"), `date_from` and `date_to`, named like the
+  // filters of GET /transactions.
+  const given = new Map(Object.entries(search));
+  const text = (key: string): string => {
+    const value = given.get(key);
+    return typeof value === "string" ? value : "";
+  };
+  const day = (key: string): string => (isIsoDate(text(key)) ? text(key) : "");
+  return { ...EMPTY_FILTERS, account: text("account"), category: text("category"), dateFrom: day("date_from"), dateTo: day("date_to") };
 }
 
 export function TransactionsPage() {
   const search: Record<string, unknown> = useSearch({ strict: false });
+  const queryClient = useQueryClient();
+  const toast = useToast();
   const canWrite = useCanWrite();
   const accounts = useAccounts();
   const categories = useCategories();
@@ -61,6 +81,25 @@ export function TransactionsPage() {
   const [selected, setSelected] = useState<ReadonlySet<string>>(new Set());
   const [splitting, setSplitting] = useState<Transaction | null>(null);
   const [transferring, setTransferring] = useState<Transaction | null>(null);
+  const [adding, setAdding] = useState(false);
+  const [editing, setEditing] = useState<Transaction | null>(null);
+  const [deleting, setDeleting] = useState<Transaction | null>(null);
+  const [remembering, setRemembering] = useState<Transaction | null>(null);
+  // Rules belong to owners and admins (POST /rules).
+  const { session } = useAuthSession();
+  const canMakeRules = canManageMembers(session?.household?.role);
+  const edit = useEditTransaction();
+  const findTransfers = useMutation({
+    mutationFn: autoPairTransfers,
+    onSuccess: (result) => {
+      invalidateLedger(queryClient);
+      // A result with something left to do by hand stays up longer.
+      toast.notify({ ...autoPairSummary(result), ...(result.ambiguous > 0 ? { durationMs: 15_000 } : {}) });
+    },
+    onError: (error) => {
+      toast.notify({ title: "Could not look for transfers", description: errorMessage(error), tone: "error" });
+    },
+  });
 
   const query = useInfiniteQuery({
     queryKey: txKeys.list(filters),
@@ -70,6 +109,10 @@ export function TransactionsPage() {
   });
   const rows = useMemo(() => query.data?.pages.flatMap((page) => page.items) ?? [], [query.data]);
   const accountsById = useMemo(() => new Map((accounts.data ?? []).map((account) => [account.id, account])), [accounts.data]);
+  const accountLabelOf = (id: string): string | undefined => {
+    const account = accountsById.get(id);
+    return account === undefined ? undefined : accountLabel(account);
+  };
   const categoryList = categories.data ?? [];
   const payeeList = payees.data ?? [];
   const tagList = tags.data ?? [];
@@ -91,6 +134,73 @@ export function TransactionsPage() {
   const editable = (row: Transaction): boolean => canWrite && accountsById.get(row.account_id)?.can_edit === true;
   const selectableRows = rows.filter(editable);
   const allSelected = selectableRows.length > 0 && selectableRows.every((row) => selected.has(row.id));
+  const canAdd = canWrite && (accounts.data ?? []).some((account) => account.can_edit);
+
+  const confirmRow = (row: Transaction): void => {
+    edit.mutate(
+      { id: row.id, patch: { review_state: "confirmed" } },
+      {
+        onSuccess: () => {
+          // Confirmed rows count in reports and budgets.
+          invalidateLedger(queryClient);
+          toast.notify({ title: "Marked as confirmed", tone: "success" });
+        },
+      },
+    );
+  };
+  const actionsFor = (row: Transaction): RowAction[] => [
+    {
+      id: "edit",
+      label: "Edit",
+      onSelect: () => {
+        setEditing(row);
+      },
+    },
+    {
+      id: "split",
+      label: row.splits.length > 0 ? "Edit split" : "Split",
+      onSelect: () => {
+        setSplitting(row);
+      },
+    },
+    {
+      id: "transfer",
+      label: row.transfer === null ? "Link transfer" : "Unlink transfer",
+      onSelect: () => {
+        setTransferring(row);
+      },
+    },
+    ...(canMakeRules && row.splits.length === 0 && (row.raw_payee ?? "").trim() !== ""
+      ? [
+          {
+            id: "remember",
+            label: "Always categorise like this…",
+            onSelect: () => {
+              setRemembering(row);
+            },
+          },
+        ]
+      : []),
+    ...(row.review_state === "pending"
+      ? [
+          {
+            id: "confirm",
+            label: "Mark confirmed",
+            onSelect: () => {
+              confirmRow(row);
+            },
+          },
+        ]
+      : []),
+    {
+      id: "delete",
+      label: "Delete",
+      danger: true,
+      onSelect: () => {
+        setDeleting(row);
+      },
+    },
+  ];
 
   const columns: TableColumn<Transaction>[] = [
     ...(canWrite
@@ -127,14 +237,12 @@ export function TransactionsPage() {
           },
         ]
       : []),
-    { id: "date", header: "Date", rowHeader: true, cell: (row) => formatDate(row.posted_date) ?? row.posted_date },
+    { id: "date", header: "Date", rowHeader: true, className: "tx-nowrap", cell: (row) => formatDate(row.posted_date) ?? row.posted_date },
     {
       id: "account",
       header: "Account",
-      cell: (row) => {
-        const account = accountsById.get(row.account_id);
-        return account === undefined ? "" : accountLabel(account);
-      },
+      className: "tx-col-account",
+      cell: (row) => accountLabelOf(row.account_id) ?? "",
     },
     {
       id: "payee",
@@ -149,11 +257,13 @@ export function TransactionsPage() {
     {
       id: "tags",
       header: "Tags",
+      className: "tx-col-tags",
       cell: (row) => <TagsCell row={row} editable={editable(row)} label={rowLabel(row, payeeList)} tags={tagList} />,
     },
     {
       id: "notes",
       header: "Notes",
+      className: "tx-col-notes",
       cell: (row) => <NotesCell row={row} editable={editable(row)} label={rowLabel(row, payeeList)} />,
     },
     {
@@ -171,6 +281,7 @@ export function TransactionsPage() {
       id: "amount",
       header: "Amount",
       align: "end",
+      className: "tx-nowrap",
       cell: (row) => <MoneyText amount={row.amount.amount} currency={row.amount.currency} tone="signed" />,
     },
     ...(canWrite
@@ -178,29 +289,9 @@ export function TransactionsPage() {
           {
             id: "actions",
             header: <span className="visually-hidden">Actions</span>,
-            cell: (row: Transaction) =>
-              editable(row) ? (
-                <span className="ledger-actions">
-                  <Button
-                    size="sm"
-                    aria-label={`Split ${rowLabel(row, payeeList)}`}
-                    onClick={() => {
-                      setSplitting(row);
-                    }}
-                  >
-                    Split
-                  </Button>
-                  <Button
-                    size="sm"
-                    aria-label={`${row.transfer === null ? "Link transfer for" : "Unlink transfer of"} ${rowLabel(row, payeeList)}`}
-                    onClick={() => {
-                      setTransferring(row);
-                    }}
-                  >
-                    {row.transfer === null ? "Transfer" : "Unlink"}
-                  </Button>
-                </span>
-              ) : null,
+            align: "end" as const,
+            className: "tx-col-actions",
+            cell: (row: Transaction) => (editable(row) ? <RowActions label={rowLabel(row, payeeList)} actions={actionsFor(row)} /> : null),
           },
         ]
       : []),
@@ -210,6 +301,27 @@ export function TransactionsPage() {
     <section aria-labelledby="page-title" className="ledger-stack">
       <div className="page-header">
         <h1 id="page-title">Transactions</h1>
+        {canAdd ? (
+          <div className="ledger-actions">
+            <Button
+              loading={findTransfers.isPending}
+              title="Link matching money out and money in between your accounts as transfers"
+              onClick={() => {
+                findTransfers.mutate();
+              }}
+            >
+              Find transfers
+            </Button>
+            <Button
+              variant="primary"
+              onClick={() => {
+                setAdding(true);
+              }}
+            >
+              Add transaction
+            </Button>
+          </div>
+        ) : null}
       </div>
       {canWrite ? null : <p className="ledger-muted">You have read-only access.</p>}
       <Card title="Filters">
@@ -322,6 +434,7 @@ export function TransactionsPage() {
           captionHidden
           maxHeight="none"
           density="compact"
+          className="tx-grid"
           columns={columns}
           rows={rows}
           rowKey={(row) => row.id}
@@ -345,6 +458,48 @@ export function TransactionsPage() {
           transaction={splitting}
           onClose={() => {
             setSplitting(null);
+          }}
+        />
+      )}
+      {adding ? (
+        <TransactionDialog
+          {...(accountsById.get(filters.account)?.can_edit === true ? { defaultAccountId: filters.account } : {})}
+          onClose={() => {
+            setAdding(false);
+          }}
+        />
+      ) : null}
+      {editing === null ? null : (
+        <TransactionDialog
+          transaction={editing}
+          onClose={() => {
+            setEditing(null);
+          }}
+        />
+      )}
+      {deleting === null ? null : (
+        <DeleteTransactionDialog
+          transaction={deleting}
+          label={rowLabel(deleting, payeeList)}
+          accountName={accountLabelOf(deleting.account_id)}
+          onDeleted={(id) => {
+            setSelected((current) => {
+              const next = new Set(current);
+              next.delete(id);
+              return next;
+            });
+          }}
+          onClose={() => {
+            setDeleting(null);
+          }}
+        />
+      )}
+      {remembering === null ? null : (
+        <RememberCategoryDialog
+          transaction={remembering}
+          categories={categoryList}
+          onClose={() => {
+            setRemembering(null);
           }}
         />
       )}
