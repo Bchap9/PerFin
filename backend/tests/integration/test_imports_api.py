@@ -24,7 +24,14 @@ from app.core.settings import Settings
 from app.db.models import AuditLog, Event, Job
 from app.db.rls import set_context
 from app.domain.accounts.models import Account
-from app.domain.documents.models import DocumentStatus, ReviewItem, ReviewItemState, ReviewKind
+from app.domain.documents.models import (
+    DocumentKind,
+    DocumentStatus,
+    ParserFingerprint,
+    ReviewItem,
+    ReviewItemState,
+    ReviewKind,
+)
 from app.domain.imports.schemas import APPLY_MAPPING_JOB_TYPE
 from app.domain.transactions.models import Transaction
 from app.ingestion.parsers.structured import header_fingerprint
@@ -532,3 +539,128 @@ def test_rerun_does_not_repeat_open_review_items(
     ]
     assert count == 3
     assert owner.get(f"{API}/imports/{document_id}/preview").json()["status"] == "needs_review"
+
+
+# ---------------------------------------------------------------------------
+# Learned layouts: what the household taught, to look at and to forget
+# ---------------------------------------------------------------------------
+
+LAYOUTS = f"{API}/imports/layouts"
+_TEMPLATE: dict[str, Any] = {
+    "version": 1,
+    "fields": [
+        {"field": "closing_balance", "direction": "right", "label": "Balance carried down"},
+        {"field": "period_start", "direction": "band"},
+        {"field": "period_end", "direction": "band"},
+    ],
+    "tables": [
+        {
+            "kind": "transactions",
+            "columns": [
+                {"header": "Booked", "role": "date"},
+                {"header": "Particulars", "role": "payee"},
+                {"header": "Folio", "role": "ignore"},
+                {"header": "Sum", "role": "amount"},
+            ],
+            "end": "Subtotal so far",
+        }
+    ],
+    "ignore": ["Subtotal so far"],
+    "notes": ["QF is the branch code"],
+}
+
+
+def _layout(
+    factories: Factories, household_id: uuid.UUID, institution_id: uuid.UUID, **kwargs: Any
+) -> uuid.UUID:
+    values: dict[str, Any] = {
+        "kind": DocumentKind.STATEMENT,
+        "parser_name": "statement_generic",
+        "version": 1,
+        "match_rules": {"all": [{"header": "quillfeather mutual"}]},
+        "template": None,
+    }
+    values.update(kwargs)
+    with factories.transaction() as db:
+        set_context(db, household_id)
+        row = ParserFingerprint(household_id=household_id, institution_id=institution_id, **values)
+        db.add(row)
+        db.flush()
+        return row.id
+
+
+def test_learned_layouts_are_listed_and_forgotten_whole(
+    actors: Actors, factories: Factories, ledger: LedgerFactories
+) -> None:
+    owner = actors.new(role="owner")
+    household_id = _hh(owner.record)
+    assert owner.get(LAYOUTS).json() == {"items": []}
+    mutual = ledger.institution(household_id, name="Quillfeather Mutual")
+    other = ledger.institution(household_id, name="Sample Card Company")
+    _layout(factories, household_id, mutual.id)
+    taught = _layout(factories, household_id, mutual.id, version=2, template=_TEMPLATE)
+    named = _layout(
+        factories,
+        household_id,
+        other.id,
+        parser_name="card_statement_generic",
+        match_rules={"all": [{"header": "sample card company"}], "any": [{"text": "rewards"}]},
+    )
+
+    items = owner.get(LAYOUTS).json()["items"]
+    # One entry per layout: the version the classifier uses, newest first.
+    assert [(i["id"], i["version"]) for i in items] == [(str(named), 1), (str(taught), 2)]
+    by_id = {i["id"]: i for i in items}
+    assert by_id[str(named)] == {
+        **by_id[str(named)],
+        "institution_name": "Sample Card Company",
+        "kind": "statement",
+        "parser": "card_statement_generic",
+        "recognised_by": ["sample card company"],
+        "taught": False,
+        "fields": [],
+        "tables": [],
+        "ignored_lines": 0,
+        "notes": [],
+    }
+    assert by_id[str(taught)] == {
+        **by_id[str(taught)],
+        "institution_name": "Quillfeather Mutual",
+        "recognised_by": ["quillfeather mutual"],
+        "taught": True,
+        "fields": ["closing_balance", "period_end", "period_start"],
+        "tables": [{"kind": "transactions", "columns": ["date", "payee", "amount"]}],
+        "ignored_lines": 1,
+        "notes": ["QF is the branch code"],
+    }
+
+    # A viewer may look, not forget; another household sees and reaches nothing.
+    viewer = _member_of(actors, owner.record, role="viewer")
+    assert len(viewer.get(LAYOUTS).json()["items"]) == 2
+    assert viewer.request("DELETE", f"{LAYOUTS}/{taught}").status_code == 403
+    intruder = actors.new(role="owner")
+    assert intruder.get(LAYOUTS).json() == {"items": []}
+    refused = intruder.request("DELETE", f"{LAYOUTS}/{taught}")
+    assert refused.status_code == 404
+    assert problem_type(refused) == "layout-not-found"
+
+    # Forgetting removes every version, so the older one is not used instead.
+    assert owner.request("DELETE", f"{LAYOUTS}/{taught}").status_code == 204
+    assert [i["id"] for i in owner.get(LAYOUTS).json()["items"]] == [str(named)]
+    with factories.transaction() as db:
+        set_context(db, household_id)
+        left = db.execute(select(ParserFingerprint.id)).scalars().all()
+        audits = db.execute(
+            select(AuditLog).where(AuditLog.action == "parser_fingerprint.delete")
+        ).scalars()
+        assert left == [named]
+        (audit_row,) = list(audits)
+        assert audit_row.target_id == str(taught)
+        assert audit_row.before == {
+            "institution_id": str(mutual.id),
+            "kind": "statement",
+            "parser": "statement_generic",
+            "version": 2,
+            "taught": True,
+        }
+    assert owner.request("DELETE", f"{LAYOUTS}/{taught}").status_code == 404

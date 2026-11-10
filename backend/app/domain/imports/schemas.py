@@ -64,7 +64,7 @@ from pydantic import AfterValidator, BaseModel, ConfigDict, Field, model_validat
 from app.core.money import CurrencyCode
 from app.domain.accounts.models import AccountType
 from app.domain.accounts.schemas import AccountCreate, clean_text
-from app.domain.documents.models import DocumentStatus
+from app.domain.documents.models import DocumentKind, DocumentStatus
 from app.domain.imports.models import NAME_MAX
 
 #: Job type of ``POST /imports/{document_id}/apply-mapping``.
@@ -632,3 +632,38 @@ class DocumentAccountsApplied(_Output):
     created: list[uuid.UUID]
     #: The ``imports.apply_mapping`` job that imports the document with the choices.
     job_id: uuid.UUID
+
+
+class LearnedTable(_Output):
+    """A table a taught layout reads: its kind and the roles of its columns, in print order."""
+
+    kind: str
+    columns: list[str]
+
+
+class LearnedLayoutOut(_Output):
+    """One layout the household taught PerFin (``app.domain.imports.layouts``)."""
+
+    id: uuid.UUID
+    institution_id: uuid.UUID
+    institution_name: str
+    kind: DocumentKind
+    #: The parser that reads documents of this layout.
+    parser: str
+    version: int
+    learned_at: datetime
+    learned_from_document_id: uuid.UUID | None
+    #: Phrases a document must print to be recognised as this layout (no digits).
+    recognised_by: list[str]
+    #: Whether a person labelled the page ("Teach PerFin") rather than only naming it.
+    taught: bool
+    #: The facts read by a taught label (``period_start``, ``closing_balance``...).
+    fields: list[str]
+    tables: list[LearnedTable]
+    ignored_lines: int
+    #: The household's own notes on the layout (never interpreted).
+    notes: list[str]
+
+
+class LearnedLayoutList(_Output):
+    items: list[LearnedLayoutOut]

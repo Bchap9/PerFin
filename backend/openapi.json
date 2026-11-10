@@ -10939,6 +10939,145 @@
         "title": "LearnOut",
         "type": "object"
       },
+      "LearnedLayoutList": {
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/LearnedLayoutOut"
+            },
+            "title": "Items",
+            "type": "array"
+          }
+        },
+        "required": [
+          "items"
+        ],
+        "title": "LearnedLayoutList",
+        "type": "object"
+      },
+      "LearnedLayoutOut": {
+        "description": "One layout the household taught PerFin (``app.domain.imports.layouts``).",
+        "properties": {
+          "fields": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Fields",
+            "type": "array"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "ignored_lines": {
+            "title": "Ignored Lines",
+            "type": "integer"
+          },
+          "institution_id": {
+            "format": "uuid",
+            "title": "Institution Id",
+            "type": "string"
+          },
+          "institution_name": {
+            "title": "Institution Name",
+            "type": "string"
+          },
+          "kind": {
+            "$ref": "#/components/schemas/DocumentKind"
+          },
+          "learned_at": {
+            "format": "date-time",
+            "title": "Learned At",
+            "type": "string"
+          },
+          "learned_from_document_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Learned From Document Id"
+          },
+          "notes": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Notes",
+            "type": "array"
+          },
+          "parser": {
+            "title": "Parser",
+            "type": "string"
+          },
+          "recognised_by": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Recognised By",
+            "type": "array"
+          },
+          "tables": {
+            "items": {
+              "$ref": "#/components/schemas/LearnedTable"
+            },
+            "title": "Tables",
+            "type": "array"
+          },
+          "taught": {
+            "title": "Taught",
+            "type": "boolean"
+          },
+          "version": {
+            "title": "Version",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "id",
+          "institution_id",
+          "institution_name",
+          "kind",
+          "parser",
+          "version",
+          "learned_at",
+          "learned_from_document_id",
+          "recognised_by",
+          "taught",
+          "fields",
+          "tables",
+          "ignored_lines",
+          "notes"
+        ],
+        "title": "LearnedLayoutOut",
+        "type": "object"
+      },
+      "LearnedTable": {
+        "description": "A table a taught layout reads: its kind and the roles of its columns, in print order.",
+        "properties": {
+          "columns": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Columns",
+            "type": "array"
+          },
+          "kind": {
+            "title": "Kind",
+            "type": "string"
+          }
+        },
+        "required": [
+          "kind",
+          "columns"
+        ],
+        "title": "LearnedTable",
+        "type": "object"
+      },
       "LinkOfferOut": {
         "properties": {
           "email": {
@@ -31959,6 +32098,77 @@
         "summary": "State and outcome of one of my imports",
         "tags": [
           "portability"
+        ]
+      }
+    },
+    "/api/v1/imports/layouts": {
+      "get": {
+        "operationId": "get_layouts_api_v1_imports_layouts_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LearnedLayoutList"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Layouts PerFin was taught (remembered and labelled statements)",
+        "tags": [
+          "imports"
+        ]
+      }
+    },
+    "/api/v1/imports/layouts/{layout_id}": {
+      "delete": {
+        "operationId": "delete_layout_api_v1_imports_layouts__layout_id__delete",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "layout_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Layout Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {}
+            },
+            "description": "Problem details"
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {}
+            },
+            "description": "Problem details"
+          },
+          "409": {
+            "content": {
+              "application/problem+json": {}
+            },
+            "description": "Problem details"
+          },
+          "422": {
+            "content": {
+              "application/problem+json": {}
+            },
+            "description": "Problem details"
+          }
+        },
+        "summary": "Forget a learned layout, every version of it (member or above)",
+        "tags": [
+          "imports"
         ]
       }
     },

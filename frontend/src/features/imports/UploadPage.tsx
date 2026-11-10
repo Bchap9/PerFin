@@ -135,7 +135,10 @@ export function UploadPage() {
     <section aria-labelledby="page-title" className="ledger-stack">
       <div className="page-header">
         <h1 id="page-title">Documents</h1>
-        <Link to="/documents/library">Document library and search</Link>
+        <span className="ledger-actions">
+          <Link to="/documents/library">Document library and search</Link>
+          <Link to="/documents/learned">What PerFin has learned</Link>
+        </span>
       </div>
       {canWrite ? (
         <Card title="Upload statements">
@@ -167,7 +170,8 @@ export function UploadPage() {
               }}
               onDrop={onDrop}
             >
-              <p>Drop CSV, OFX, QIF or PDF files here</p>
+              <p>Drop statements, exports, receipts or tax forms here</p>
+              <p className="ledger-muted">PDF, CSV, TSV, XLSX, OFX, QFX, QIF, photos and scans, email files and ZIP archives.</p>
               <label htmlFor={inputId} className="btn btn--secondary btn--md">
                 Choose files
               </label>

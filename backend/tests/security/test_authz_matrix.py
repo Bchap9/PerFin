@@ -69,6 +69,7 @@ from app.db.session import make_sessionmaker
 from app.domain.accounts.models import Account
 from app.domain.assets.models import ManualAsset
 from app.domain.documents.blobstore import LocalFSBlobStore
+from app.domain.documents.models import DocumentKind, ParserFingerprint
 from app.domain.goals.models import Goal
 from app.domain.investments.models import Security
 from app.domain.investments.service import replay_position
@@ -97,6 +98,7 @@ from tests.fixtures.ledger import (
     make_fx_rate,
     make_goal,
     make_goal_contribution,
+    make_institution,
     make_payee,
     make_rule,
     make_scheduled_transaction,
@@ -431,7 +433,7 @@ def build_object(
             return str(make_rule(db, world.household.id).id)
     if kind in ("budget", "goal", "goal_contribution"):
         return str(make_budget_object(factories, world, kind, built or {}).id)
-    if kind in ("document", "import_mapping"):
+    if kind in ("document", "import_mapping", "learned_layout"):
         return str(make_import_object(factories, world, kind).id)
     if kind in ("stored_document", "review_item"):
         return str(make_stored_document_object(factories, world, kind).id)
@@ -593,7 +595,8 @@ def make_budget_object(
 
 def make_import_object(factories: Factories, world: World, kind: str) -> Any:
     """A document with an extracted table, or a column mapping, on a fresh
-    account (member ``edit``, viewer ``view``)."""
+    account (member ``edit``, viewer ``view``); or a learned layout of the
+    household."""
     household_id = world.household.id
     with factories.transaction() as db:
         account = make_account(db, household_id)
@@ -603,6 +606,20 @@ def make_import_object(factories: Factories, world: World, kind: str) -> Any:
             return make_extracted_document(db, household_id, account=account)
         if kind == "import_mapping":
             return make_import_mapping(db, household_id, account=account)
+        if kind == "learned_layout":
+            institution = make_institution(db, household_id)
+            layout = ParserFingerprint(
+                household_id=household_id,
+                institution_id=institution.id,
+                kind=DocumentKind.STATEMENT,
+                parser_name="statement_generic",
+                version=1,
+                match_rules={"all": [{"header": "matrix synthetic bank"}]},
+            )
+            with household_context(db, household_id):
+                db.add(layout)
+                db.flush()
+            return layout
     raise AssertionError(f"no import generator for {kind!r}")
 
 
