@@ -181,3 +181,17 @@ def test_the_result_model_holds_amounts_only() -> None:
         TaxFormRead.model_validate(
             {"jurisdiction": "US", "form_type": "W-2", "boxes": {"recipient name": "1.00"}}
         )
+
+
+def test_identity_scan_ignores_tokens_inside_random_strings() -> None:
+    # The CI collision: an argon2 salt that happened to spell "quill".
+    hash_row = "$argon2id$v=19$m=1024,t=1,p=1$nsuwz9h0zyquillmwsalg1tgy"
+    assert synth.identity_tokens_in(hash_row) == []
+    # A name or address token printed as a word is still found...
+    assert synth.identity_tokens_in('{"recipient": "Jordan Quill Testperson"}') == [
+        "testperson",
+        "quill",
+    ]
+    assert synth.identity_tokens_in("'quuxwood':4 'lane':5") == ["quuxwood"]
+    # ...and a number token is found even glued to a prefix.
+    assert synth.identity_tokens_in("acct0000111122") == ["0000111122"]

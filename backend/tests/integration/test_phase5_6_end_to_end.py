@@ -441,9 +441,7 @@ def _tax(home: Home, admin_engine: Engine) -> None:
         assert {b["box"]: D(b["amount"]) for b in row["boxes"]} == tax_forms.expected_boxes(form)
 
     # No identity value of the forms anywhere in the database.
-    everything = _database_text(admin_engine)
-    for token in tax_forms.IDENTITY_TOKENS:
-        assert token not in everything, token
+    assert tax_forms.identity_tokens_in(_database_text(admin_engine)) == []
 
     # The accountant export: both originals and the summary, downloadable once.
     queued = home.post(f"/tax-years/{year}/export", status=202)
@@ -466,8 +464,7 @@ def _tax(home: Home, admin_engine: Engine) -> None:
         r["box"]: r["amount"] for r in rows if r["section"] == "form" and r["form_type"] == "W-2"
     }
     assert w2_boxes["1"] == f"{forms['W-2'].amounts['1']:.2f}"
-    for token in tax_forms.IDENTITY_TOKENS:
-        assert token not in summary.lower(), token
+    assert tax_forms.identity_tokens_in(summary) == []
     again = home.owner.get(f"{API}/tax-years/{year}/export/{job_id}/download")
     assert again.status_code == 410
 

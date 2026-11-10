@@ -16,6 +16,13 @@ LABEL org.opencontainers.image.title="PerFin ML adapter" \
       org.opencontainers.image.licenses="AGPL-3.0-or-later" \
       org.opencontainers.image.source="https://github.com/Bchap9/PerFin"
 
+# Pending Debian security updates for the base are applied at build time, as
+# in the application image; weekly rebuilds (security.yml) pick up new ones.
+RUN apt-get update --error-on=any \
+    && apt-get -y upgrade \
+    && apt-get clean \
+    && rm -rf /var/lib/apt/lists/* /var/cache/apt/* /var/log/apt /var/log/dpkg.log
+
 RUN groupadd --system --gid 10001 perfinml \
     && useradd --system --uid 10001 --gid 10001 --no-create-home \
          --home-dir /nonexistent --shell /usr/sbin/nologin perfinml \
