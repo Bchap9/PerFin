@@ -20,8 +20,18 @@ Two halves (INGESTION.md "Brokerage statements", SECURITY.md C12):
   quantity x price / 100.
 
   Status ``mismatch`` when any check fails, ``unavailable`` when none could
-  run, else ``ok``. The importer (``app.domain.investments.statement_import``)
-  writes nothing of a statement that does not reconcile.
+  run, else ``ok``.
+
+* :func:`section_checks` and :func:`localise` say **where** a failed check
+  comes from, from what the statement prints about itself: the ``Total
+  ...`` line under each activity section (:func:`_total_scope` says which
+  rows it sums) and the cash-flow summary restating every section. Only
+  the rows no such figure vouches for carry the ``reconciliation`` doubt
+  (``InvestmentReconciliation.doubtful_activity`` / ``doubtful_positions``);
+  the importer (``app.domain.investments.statement_import``) writes the
+  rest of the statement and never a row in doubt. A statement from a
+  source that says nothing of the kind (OFX, an activity export) is held
+  whole, as before.
 
 * :class:`BrokerageStatementParser` reads the stored pages of a PDF or
   scan (the words and boxes the sandbox extracted; never file bytes,
@@ -111,10 +121,14 @@ Two halves (INGESTION.md "Brokerage statements", SECURITY.md C12):
     Report``), as is any other line, and ends the section as on one
     page):
     trades pending settlement, cash-flow summaries and daily balances are
-    no activity; securities transferred in/out move
+    no activity; margin interest is a fee dated by the last day of its
+    period (``7/1-7/31``); a second card's table under a heading worded
+    like the first card's stays in the card section; securities
+    transferred in/out move
     units (the amount printed is their value) or, without units, cash;
     deposits, withdrawals, checking, debit card and bill payments are cash
-    by their sign; income is a dividend or interest; fees and taxes
+    by their sign; income is a dividend or interest (a ``Return of
+    capital`` there too, the words kept in its memo); fees and taxes
     withheld are fees. The action text types a row first
     (:func:`activity_type`, :data:`ACTIVITY_TYPES`), the section the rest
     (text naming no action is then the row's description; a description
@@ -130,6 +144,19 @@ Two halves (INGESTION.md "Brokerage statements", SECURITY.md C12):
     by its figures or, when they cannot tell, as its position is priced. A
     header line of known column names that is no usable table ends the
     table above it;
+  - **blocks side by side** (a summary box left of a table, two summary
+    tables, a table beside a chart's legend) are read one after the other
+    (:mod:`app.ingestion.parsers.blocks`), so a table header sharing its
+    line with the other block's figure is still a header and a label keeps
+    its amounts;
+  - the statement's own **summary tables**, line by line
+    (``InvestmentStatement.figures``,
+    :class:`~app.ingestion.sandbox.protocol.StatementFigure`): the
+    account-value bridge from ``Beginning Account Value`` to ``Ending
+    Account Value``, the core account's cash flow, the income summary and
+    the realized gains (:data:`FIGURE_SECTIONS`). They are never activity;
+    the cash-flow lines are a second account of every section
+    (:func:`localise`);
   - outside the tables: the period, the account's last four digits, the
     currency, opening/closing cash (also ``Beginning/Ending Core Account
     Balance``, a cash balance line with a column for this period and the
@@ -143,9 +170,10 @@ Two halves (INGESTION.md "Brokerage statements", SECURITY.md C12):
   (:mod:`app.ingestion.parsers.confidence`): the declared format of an
   institution parser 1.0, the generic parser :data:`~confidence.GENERIC`,
   OCR scaled by the cell's word confidence, a position whose market value
-  disagrees :data:`~confidence.CONTRADICTED`, and every row of a statement
-  that does not reconcile capped at :data:`~confidence.UNRECONCILED`
-  (:data:`~confidence.UNCHECKED` when nothing can be checked).
+  disagrees :data:`~confidence.CONTRADICTED`, and the rows a statement that
+  does not reconcile leaves in doubt (:func:`localise`) capped at
+  :data:`~confidence.UNRECONCILED` (every row at
+  :data:`~confidence.UNCHECKED` when nothing can be checked).
 
 Institution parsers pin a layout: :class:`PlaceholderBrokerageParser` the
 fictional Placeholder Brokerage (fingerprint ``placeholder-brokerage-account``;
@@ -194,6 +222,7 @@ from app.ingestion.parsers.base import (
     ViewLine,
     join_cells,
 )
+from app.ingestion.parsers.blocks import unfold_blocks
 from app.ingestion.parsers.table_statement import (
     PeriodCandidates,
     PeriodRead,
@@ -219,18 +248,24 @@ from app.ingestion.parsers.text import (
 )
 from app.ingestion.reconcile import TOLERANCE
 from app.ingestion.sandbox.protocol import (
+    MAX_FIGURES,
+    MAX_SECTION_CHECKS,
     MAX_STATEMENTS,
+    SECTION_LABEL_MAX,
     AssetClassCode,
     Balance,
+    FigureGroup,
     InvestmentActivity,
     InvestmentActivityType,
     InvestmentPosition,
     InvestmentReconciliation,
     InvestmentStatement,
     ParserRef,
+    SectionCheck,
     SecurityRef,
     Statement,
     StatementAccount,
+    StatementFigure,
     has_word,
 )
 
@@ -695,6 +730,7 @@ ACTIVITY_HEADERS: Final[Mapping[str, ActivityRole]] = {
     "transaction description": "description",
     "activity description": "description",
     "location description": "description",
+    "location reference description": "description",
     "payee": "description",
     "security": "description",
     "details": "description",
@@ -738,6 +774,12 @@ ACTIVITY_HEADERS: Final[Mapping[str, ActivityRole]] = {
     "payee account": "other",
     "ytd payments": "other",
     "accrued interest": "other",
+    # A margin interest table: one row per period, the interest it charged.
+    "period": "date",
+    "interest paid": "amount",
+    "period balance": "other",
+    "interest rate": "other",
+    "average daily balance": "other",
 }
 #: Asset-class group headings of a holdings table (normalised) -> the class
 #: of the rows under them. ``Total <group>`` lines are subtotals.
@@ -786,7 +828,9 @@ GRAND_TOTALS: Final = ("holdings", "market value", "securities", "investments", 
 #: * ``deposit``/``withdrawal``/``card``/``cash``: cash by the amount's sign
 #:   (an unsigned amount of a table printing no signs: a deposit, a
 #:   withdrawal, a withdrawal, a deposit);
-#: * ``fee``: a fee or tax withheld.
+#: * ``fee``: a fee or tax withheld;
+#: * ``margin``: margin interest, one row per period (``7/1-7/31``) dated
+#:   by the period's last day: a fee.
 #:
 #: Action words the row prints come first; the section types the rest.
 SectionKind = Literal[
@@ -800,6 +844,7 @@ SectionKind = Literal[
     "card",
     "cash",
     "fee",
+    "margin",
 ]
 #: Activity section headings (normalised prefixes, the longest wins).
 ACTIVITY_SECTIONS: Final[Mapping[str, SectionKind]] = {
@@ -829,8 +874,11 @@ ACTIVITY_SECTIONS: Final[Mapping[str, SectionKind]] = {
     "daily ending balance": "skip",
     "income summary": "skip",
     "realized gains": "skip",
-    "margin activity": "skip",
+    "margin activity": "margin",
+    "margin interest": "margin",
     "top holdings": "skip",
+    "account holdings": "skip",
+    "debit card summary": "skip",
     "securities transferred in": "transfer_in",
     "securities received": "transfer_in",
     "transfers in": "transfer_in",
@@ -881,6 +929,49 @@ def section_rule(norm: str) -> SectionKind | None:
     for phrase, kind in ACTIVITY_SECTIONS.items():
         if len(phrase) > best_len and (norm == phrase or norm.startswith(f"{phrase} ")):
             best, best_len = kind, len(phrase)
+    return best
+
+
+#: Headings of a statement's own summary tables (normalised prefixes) -> the
+#: figures under them (:class:`~app.ingestion.sandbox.protocol.StatementFigure`).
+FIGURE_SECTIONS: Final[Mapping[str, FigureGroup]] = {
+    "core account cash flow": "cash_flow",
+    "cash flow summary": "cash_flow",
+    "cash flow": "cash_flow",
+    "income summary": "income",
+    "realized gains": "realized",
+    "realized gain": "realized",
+}
+#: Labels opening and closing the account-value bridge, wherever it is printed.
+VALUE_OPENING: Final = (
+    "beginning account value",
+    "beginning net value",
+    "beginning portfolio value",
+)
+VALUE_CLOSING: Final = ("ending account value", "ending net value", "ending portfolio value")
+#: The label that ends a group of figures (a prefix; ``cash_flow`` and
+#: ``account_value`` end at their closing figure).
+_FIGURE_END: Final[Mapping[FigureGroup, str]] = {"income": "total", "realized": "net gain loss"}
+#: First words of a line that sums the rows above it.
+_TOTAL_WORDS: Final = frozenset({"total", "subtotal", "net"})
+#: A total's words that say it covers every row of its section.
+_WHOLE_SECTION: Final = frozenset({"", "this period", "activity", "transactions"})
+_BUY_WORDS: Final = frozenset({"bought", "purchased", "purchases", "buys"})
+_SELL_WORDS: Final = frozenset({"sold", "sales", "sells"})
+_TRANSFER_WORDS: Final = frozenset({"transfers", "transfer", "transferred"})
+#: Headings inside a cash-flow summary (its two halves), never a section's.
+_FLOW_HEADINGS: Final = frozenset({"investment activity", "cash management activity"})
+#: Cash-flow summary lines that restate what other lines already count.
+_FLOW_RESTATED: Final = ("transaction costs",)
+
+
+def figure_group(norm: str) -> FigureGroup | None:
+    """The group of figures a (normalised) heading opens, if any."""
+    best: FigureGroup | None = None
+    best_len = 0
+    for phrase, group in FIGURE_SECTIONS.items():
+        if len(phrase) > best_len and (norm == phrase or norm.startswith(f"{phrase} ")):
+            best, best_len = group, len(phrase)
     return best
 
 
@@ -1216,6 +1307,27 @@ class _ActivityRow:
     by_sign: bool = False
     #: The text of a security-name column (``Security Name``), when the table has one.
     security_name: str | None = None
+    #: The heading the row is under, as printed, and its section's number.
+    section_label: str | None = None
+    section_id: int = 0
+    #: The amount as printed (a transfer of units keeps its value here).
+    printed: Decimal | None = None
+    #: The table has a symbol column (so a name's first word is no ticker).
+    symbol_column: bool = False
+    #: Words of the row that say what it is beyond its type (``Return of capital``).
+    note: str | None = None
+
+
+@dataclass(frozen=True)
+class _SectionTotal:
+    """A ``Total ...`` line of an activity table (:func:`_total_scope`)."""
+
+    label: str
+    norm: str
+    amount: Decimal
+    section_id: int
+    table: int
+    page: int
 
 
 @dataclass
@@ -1276,6 +1388,19 @@ class _Collected:
     ignoring: bool = False
     #: Where the holdings total came from: an unlabelled or a ``Total Holdings`` line.
     table_total: Literal["plain", "grand"] | None = None
+    #: The heading of the section the lines are in (as printed) and its number.
+    section_label: str | None = None
+    section_id: int = 0
+    #: Heading-like lines between the section's heading and its first table
+    #: (a card's name): a later heading like one of them continues the section.
+    sub_headings: list[str] = field(default_factory=list)
+    #: ``Total ...`` lines of the activity tables.
+    totals: list[_SectionTotal] = field(default_factory=list)
+    #: The statement's own summary tables, line by line, and the group being read.
+    figures: list[StatementFigure] = field(default_factory=list)
+    figure_group: FigureGroup | None = None
+    figure_x: float | None = None
+    figure_page: int | None = None
 
     @property
     def found_table(self) -> bool:
@@ -1425,6 +1550,296 @@ def _page_bands(lines: Sequence[ViewLine]) -> dict[int, frozenset[str]]:
 # ---------------------------------------------------------------------------
 
 
+# ---------------------------------------------------------------------------
+# Where a failed check comes from: sections, summary lines, a trade's own figures
+# ---------------------------------------------------------------------------
+
+
+def _total_scope(total: str, heading: str) -> Literal["all", "table", "buy", "sell"] | None:
+    """The rows of its section a (normalised) ``Total ...`` line sums, if it says.
+
+    ``all``: the label is the section's heading (``Total Deposits & EFT In``
+    under *Deposits*, ``Net Securities Bought & Sold``); ``table``: it names
+    nothing (``Total``, ``Total this period``), so it sums the table it
+    ends; ``buy``/``sell``: it names the purchases or the sales of the
+    section (``Total Securities Bought``). Any other label sums rows the
+    words alone do not pick out (``Total Federal Taxes Withheld``): None.
+    """
+    words = total.split()
+    while words and words[0] in _TOTAL_WORDS:
+        words.pop(0)
+    rest = " ".join(words)
+    if rest in _WHOLE_SECTION:
+        return "table"
+    if heading and (rest == heading or rest.startswith(f"{heading} ")):
+        return "all"
+    named = set(words)
+    known = set(heading.split())
+    if named & _BUY_WORDS and not named & _SELL_WORDS and named - _BUY_WORDS <= known:
+        return "buy"
+    if named & _SELL_WORDS and not named & _BUY_WORDS and named - _SELL_WORDS <= known:
+        return "sell"
+    return None
+
+
+def _agree(computed: Decimal, printed: Decimal) -> bool:
+    """The rows add up to the printed total (a table printing no signs: in size)."""
+    return abs(computed - printed) <= TOLERANCE or abs(abs(computed) - abs(printed)) <= TOLERANCE
+
+
+def _checked(
+    label: str, rows: Sequence[int], computed: Decimal, printed: Decimal, page: int | None
+) -> SectionCheck:
+    return SectionCheck(
+        label=label[:SECTION_LABEL_MAX],
+        rows=list(rows),
+        status="ok" if _agree(computed, printed) else "mismatch",
+        printed=printed,
+        computed=computed,
+        difference=computed - printed,
+        page=page,
+    )
+
+
+def section_checks(
+    activity: Sequence[InvestmentActivity],
+    rows: Sequence[_ActivityRow],
+    totals: Sequence[_SectionTotal],
+) -> list[SectionCheck]:
+    """Each section's rows against the totals the statement prints under them.
+
+    ``rows[i]`` is the collected row ``activity[i]`` was read from. A
+    section's rows are summed as the statement prints them (a transfer of
+    units by its value, although it moves no cash); the last total of each
+    scope (:func:`_total_scope`) is the one checked. A section printing no
+    usable total is listed ``unchecked``.
+    """
+
+    def value(index: int) -> Decimal:
+        row = rows[index]
+        if activity[index].type in ("transfer_in", "transfer_out") and row.printed is not None:
+            return row.printed
+        return activity[index].amount
+
+    by_section: dict[int, list[int]] = {}
+    for index, row in enumerate(rows):
+        by_section.setdefault(row.section_id, []).append(index)
+    out: list[SectionCheck] = []
+    for section_id, indices in by_section.items():
+        first = rows[indices[0]]
+        heading = normalise(first.section_label or "")
+        last: dict[tuple[str, int], tuple[_SectionTotal, list[int]]] = {}
+        for total in totals:
+            if total.section_id != section_id:
+                continue
+            scope = _total_scope(total.norm, heading)
+            if scope == "all":
+                last[("all", 0)] = (total, indices)
+            elif scope == "table":
+                covered = [i for i in indices if rows[i].table == total.table]
+                last[("table", total.table)] = (total, covered)
+            elif scope == "buy":
+                covered = [i for i in indices if activity[i].type in ("buy", "reinvest")]
+                last[("buy", 0)] = (total, covered)
+            elif scope == "sell":
+                last[("sell", 0)] = (total, [i for i in indices if activity[i].type == "sell"])
+        found = [
+            _checked(
+                total.label,
+                covered,
+                sum_amounts(value(i) for i in covered),
+                total.amount,
+                total.page,
+            )
+            for total, covered in last.values()
+            if covered
+        ]
+        if not found:
+            found.append(
+                SectionCheck(
+                    label=(first.section_label or "Activity")[:SECTION_LABEL_MAX],
+                    rows=indices,
+                    status="unchecked",
+                    computed=sum_amounts(value(i) for i in indices),
+                    page=first.page,
+                )
+            )
+        out.extend(found)
+    return [c.model_copy(update={"source": "total"}) if c.printed is not None else c for c in out][
+        :MAX_SECTION_CHECKS
+    ]
+
+
+def _flow_key(label: str) -> str:
+    """A cash-flow line or a section heading as compared: no ``and``, no footnote letter."""
+    words = [w for w in normalise(label).split() if w != "and"]
+    if len(words) > 1 and len(words[-1]) == 1 and words[-1].isalpha():
+        words.pop()
+    return " ".join(words)
+
+
+def _flow_rows(key: str, activity: Sequence[InvestmentActivity]) -> list[int]:
+    """The activity rows a cash-flow summary line (its :func:`_flow_key`) restates."""
+    words = set(key.split())
+    if words & _BUY_WORDS and not words & _SELL_WORDS:
+        return [i for i, a in enumerate(activity) if a.type in ("buy", "reinvest")]
+    if words & _SELL_WORDS and not words & _BUY_WORDS:
+        return [i for i, a in enumerate(activity) if a.type == "sell"]
+    lead = key.split(" ", 1)[0]
+    moved = words & _TRANSFER_WORDS
+    way = words & {"in", "out"}
+    out: list[int] = []
+    for index, row in enumerate(activity):
+        section = _flow_key(row.section or "")
+        if not section:
+            continue
+        if lead == "margin":
+            same = section.split(" ", 1)[0] == "margin"
+        elif moved and way:
+            # "Transfers In": the cash rows of "Securities Transferred In".
+            named = set(section.split())
+            same = bool(named & _TRANSFER_WORDS) and way <= named and bool(row.amount)
+        else:
+            same = section == key or section.startswith(f"{key} ") or key.startswith(f"{section} ")
+        if same:
+            out.append(index)
+    return out
+
+
+def localise(
+    statement: InvestmentStatement,
+    check: InvestmentReconciliation,
+    sections: Sequence[SectionCheck] = (),
+) -> InvestmentReconciliation:
+    """``check`` with what the statement itself says about each row (SECURITY.md C12).
+
+    A statement prints more than its balances: a total under each activity
+    section and a cash-flow summary restating every section. When a check
+    fails, these say where:
+
+    * **activity** (the ``cash`` check failed): a row is vouched for when
+      its section's rows add up to the section's printed total or to the
+      cash-flow summary's line for it (``source = summary``, compared where
+      the section's own total does not already vouch for them). Where they
+      do not add up and exactly one row is the whole difference (a row too
+      many), that row alone is in doubt and the others are vouched for. A
+      row moving cash that the cash-flow summary does not list at all, when
+      that summary itself bridges opening to closing cash, is not vouched
+      for whatever its section's total says (value moved between accounts,
+      not core cash). A row moving no cash cannot be what broke the check.
+      Everything else is doubtful; when no section of the doubtful rows
+      prints a total and one of them is the whole cash difference, only
+      that row. When every section adds up and the cash still does not, the
+      rows are trusted only if the statement itself names cash flow that was
+      not read (a bridging cash-flow summary with a line no row was read
+      for); otherwise the one row that is the whole difference is in doubt,
+      else every row moving cash.
+    * **positions**: those whose quantity x price is not their market value;
+      all of them when they do not add up to the printed holdings total, or
+      when holdings + cash is not the account value and no holdings total is
+      printed to vouch for their sum.
+
+    ``doubtful_activity``/``doubtful_positions`` list the rows left in doubt
+    (empty: the difference is the statement's own, no row is to blame);
+    ``unread_summary_lines`` the cash-flow lines no row was read for. A
+    statement that reconciles, or that nothing can be checked against, is
+    returned with the sections only.
+    """
+    activity = statement.activity
+    found = list(sections)
+    flow = [f for f in statement.figures if f.group == "cash_flow"]
+    opening = next((f.amount for f in flow if f.role == "opening"), None)
+    closing = next((f.amount for f in flow if f.role == "closing"), None)
+    lines = [f for f in flow if f.role == "item" and not f.detail and f.amount is not None]
+    summary_difference: Decimal | None = None
+    if opening is not None and closing is not None and lines:
+        summary_difference = opening + sum_amounts(f.amount or Decimal(0) for f in lines) - closing
+    listed: set[int] = set()
+    unread: list[str] = []
+    for figure in lines:
+        key = _flow_key(figure.label)
+        if any(_starts(key, restated) for restated in _FLOW_RESTATED):
+            continue
+        rows = _flow_rows(key, activity)
+        if not rows:
+            if figure.amount:
+                unread.append(figure.label)
+            continue
+        listed.update(rows)
+        if figure.amount is None or set(rows) <= {
+            i for c in found if c.status == "ok" for i in c.rows
+        }:
+            continue  # their own totals already vouch for them
+        if any(c.printed == figure.amount and c.rows == rows for c in found):
+            continue  # the same figure as the section's own total
+        computed = sum_amounts(activity[i].amount for i in rows)
+        found.append(
+            _checked(figure.label, rows, computed, figure.amount, figure.page).model_copy(
+                update={"source": "summary"}
+            )
+        )
+    update: dict[str, Any] = {
+        "sections": found[:MAX_SECTION_CHECKS],
+        "summary_cash_difference": summary_difference,
+        "unread_summary_lines": unread[:MAX_SECTION_CHECKS],
+    }
+    if check.status != "mismatch":
+        return check.model_copy(update=update)
+    doubtful_activity: list[int] = []
+    if "cash" in check.failed:
+        vouched = {i for c in found if c.status == "ok" for i in c.rows}
+        for section in found:
+            surplus = _surplus(activity, section.rows, section.difference)
+            if section.status == "mismatch" and surplus is not None:
+                vouched |= set(section.rows) - {surplus}
+        bridges = summary_difference is not None and abs(summary_difference) <= TOLERANCE
+        unlisted = {i for i in range(len(activity)) if bridges and i not in listed}
+        doubtful_activity = [
+            i
+            for i, row in enumerate(activity)
+            if row.amount and (i in unlisted or i not in vouched)
+        ]
+        moving = [i for i, row in enumerate(activity) if row.amount]
+        totalled = {i for c in found if c.status != "unchecked" for i in c.rows}
+        if not doubtful_activity and not (bridges and unread):
+            # Every section adds up and yet the cash does not, and the
+            # statement names no cash flow left unread: a row too many whose
+            # section's total counts it (one row that is the whole
+            # difference), else nothing says which rows to trust.
+            surplus = _surplus(activity, moving, check.cash_difference)
+            doubtful_activity = [surplus] if surplus is not None else moving
+        elif not (set(doubtful_activity) & (totalled | unlisted)):
+            # No printed total says where: one row that is the whole difference.
+            surplus = _surplus(activity, doubtful_activity, check.cash_difference)
+            if surplus is not None:
+                doubtful_activity = [surplus]
+    doubtful_positions: Sequence[int] = check.position_mismatches
+    if "holdings_total" in check.failed or (
+        "total_value" in check.failed and "holdings_total" not in check.checks
+    ):
+        doubtful_positions = range(len(statement.positions))
+    update["doubtful_activity"] = doubtful_activity
+    update["doubtful_positions"] = list(doubtful_positions)
+    return check.model_copy(update=update)
+
+
+def _surplus(
+    activity: Sequence[InvestmentActivity], rows: Sequence[int], difference: Decimal | None
+) -> int | None:
+    """The one row of ``rows`` whose cash is the whole ``difference`` (a row too many)."""
+    if not difference:
+        return None
+    same = [i for i in rows if abs(activity[i].amount - difference) <= TOLERANCE]
+    return same[0] if len(same) == 1 else None
+
+
+def _memo(row: _ActivityRow) -> str | None:
+    """The row's description, with what its own words add (``... (Return of capital)``)."""
+    if row.note and row.description:
+        return f"{row.description} ({row.note})"
+    return row.description or row.note or None
+
+
 class BrokerageStatementParser(DocumentParser):
     """Generic brokerage statement: holdings and activity tables, one or more accounts.
 
@@ -1459,7 +1874,7 @@ class BrokerageStatementParser(DocumentParser):
     """
 
     name: ClassVar[str] = "brokerage_statement_generic"
-    version: ClassVar[str] = "7"
+    version: ClassVar[str] = "8"
     kind: ClassVar[Literal["statement", "payslip", "receipt"]] = "statement"
     display_name: ClassVar[str | None] = None
     #: Phrases on the first page that identify the institution (its name first).
@@ -1561,10 +1976,13 @@ class BrokerageStatementParser(DocumentParser):
 
     @classmethod
     def _activity_from(
-        cls, cells: Sequence[_HeaderCell], *, cash_tables: bool = False
+        cls, cells: Sequence[_HeaderCell], *, cash_tables: bool = False, typeless: bool = False
     ) -> list[_Column[ActivityRole]] | None:
         found, _ = _columns(cells, ACTIVITY_HEADERS, "other")
         roles = {c.role for c in found}
+        if typeless and {"date", "amount"} <= roles and not roles & {"type", "description"}:
+            # A margin interest table: a period and what it charged, nothing else.
+            return found
         if "date" not in roles and "settle" in roles:
             # Only a settlement (posting) date: it dates the row.
             found = [_Column("date", c.x0, c.x1) if c.role == "settle" else c for c in found]
@@ -1583,7 +2001,7 @@ class BrokerageStatementParser(DocumentParser):
 
     @classmethod
     def _parts(
-        cls, cells: Sequence[_HeaderCell], *, cash_tables: bool = False
+        cls, cells: Sequence[_HeaderCell], *, cash_tables: bool = False, typeless: bool = False
     ) -> list[_Part] | None:
         """The activity tables a header names: one, or several side by side.
 
@@ -1600,7 +2018,7 @@ class BrokerageStatementParser(DocumentParser):
             groups = [list(cells[i : i + size]) for i in range(0, count, size)]
             parts: list[_Part] = []
             for number, group in enumerate(groups):
-                columns = cls._activity_from(group, cash_tables=cash_tables)
+                columns = cls._activity_from(group, cash_tables=cash_tables, typeless=typeless)
                 if columns is None:
                     return None
                 last = number == len(groups) - 1
@@ -1608,7 +2026,7 @@ class BrokerageStatementParser(DocumentParser):
                 hi = _FAR if last else (group[-1].x1 + groups[number + 1][0].x0) / 2
                 parts.append(_Part(columns, lo, hi))
             return parts
-        columns = cls._activity_from(cells, cash_tables=cash_tables)
+        columns = cls._activity_from(cells, cash_tables=cash_tables, typeless=typeless)
         return [_Part(columns, -_FAR, _FAR)] if columns is not None else None
 
     def _title(self, line: ViewLine) -> bool:
@@ -1623,7 +2041,12 @@ class BrokerageStatementParser(DocumentParser):
         )
 
     def _header_at(
-        self, lines: Sequence[ViewLine], index: int, *, cash_tables: bool = False
+        self,
+        lines: Sequence[ViewLine],
+        index: int,
+        *,
+        cash_tables: bool = False,
+        typeless: bool = False,
     ) -> _Header | None:
         """A table header starting at ``lines[index]`` over up to three lines.
 
@@ -1653,14 +2076,16 @@ class BrokerageStatementParser(DocumentParser):
                     break
                 if self._title(group[-2]):
                     break  # a heading starts what follows, it heads no column
-            found = self._header_of(group, cash_tables=cash_tables)
+            found = self._header_of(group, cash_tables=cash_tables, typeless=typeless)
             if found is not None and (best is None or found[0] > best[0]):
                 best = found
         if best is None:
             return None
         used = best[1].used
         if used > 1 and len(first.cells) <= 2:
-            below = self._header_of(lines[index + 1 : index + used], cash_tables=cash_tables)
+            below = self._header_of(
+                lines[index + 1 : index + used], cash_tables=cash_tables, typeless=typeless
+            )
             if below is not None and below[1].known_roles == best[1].known_roles:
                 # The top line names no column ("Electronic Funds Transfers",
                 # a running page header "Jane Example - Account XXXX-1234"
@@ -1669,7 +2094,7 @@ class BrokerageStatementParser(DocumentParser):
         return best[1]
 
     def _header_of(
-        self, group: Sequence[ViewLine], *, cash_tables: bool
+        self, group: Sequence[ViewLine], *, cash_tables: bool, typeless: bool = False
     ) -> tuple[int, _Header] | None:
         """``(known columns named, header)`` that exactly ``group``'s lines make, if any."""
         cells = _header_cells(group)
@@ -1677,7 +2102,7 @@ class BrokerageStatementParser(DocumentParser):
         if holdings is not None:
             known = sum(1 for c in cells if header_key(c.parts, HOLDING_HEADERS) is not None)
             return known, _Header(holdings, None, len(group))
-        parts = self._parts(cells, cash_tables=cash_tables)
+        parts = self._parts(cells, cash_tables=cash_tables, typeless=typeless)
         if parts is None:
             return None
         known = sum(1 for c in cells if header_key(c.parts, ACTIVITY_HEADERS) is not None)
@@ -1835,12 +2260,16 @@ class BrokerageStatementParser(DocumentParser):
         return last[1], " ".join(rest.split()) or None
 
     def _holding(
-        self, line: ViewLine, cells: dict[HoldingRole, list[Cell]], group: str | None
+        self,
+        line: ViewLine,
+        cells: dict[HoldingRole, list[Cell]],
+        group: str | None,
+        name_x0: float | None = None,
     ) -> _HoldingRow | None:
         quantity = read_number(_unmarked(_text(cells.get("quantity"))))
         if quantity is None:
             return None
-        raw_name = _text(cells.get("name")) or None
+        raw_name = _text(_without_mark(cells.get("name"), name_x0)) or None
         name = raw_name
         symbol, cusip = _identifier(_text(cells.get("symbol")))
         symbol_column = symbol is not None or cusip is not None
@@ -1984,9 +2413,16 @@ class BrokerageStatementParser(DocumentParser):
             collected.table_total = "plain"
 
     def _activity(
-        self, line: ViewLine, cells: dict[ActivityRole, list[Cell]], collected: _Collected
+        self,
+        line: ViewLine,
+        cells: dict[ActivityRole, list[Cell]],
+        collected: _Collected,
+        *,
+        symbol_column: bool = False,
     ) -> None:
         date_text = _text(cells.get("date"))
+        if collected.section == "margin":
+            date_text = _range_end(date_text)
         if not date_text or not _date_shaped(date_text):
             return
         type_text = _text(cells.get("type"))
@@ -2010,6 +2446,12 @@ class BrokerageStatementParser(DocumentParser):
         described = kind is None and bool(type_text) and not named
         section = collected.section
         by_sign = False
+        note: str | None = None
+        printed = amount.value if amount is not None else None
+        if section == "income" and kind == "deposit":
+            # "Return of capital", "Cash in lieu" under the income heading: money
+            # a holding paid, not money the holder put in.
+            kind, note = "dividend", type_text
         if section in ("transfer_in", "transfer_out"):
             # A securities transfer moves units, its amount is their value; a
             # row without units moves cash.
@@ -2021,7 +2463,7 @@ class BrokerageStatementParser(DocumentParser):
                 kind = "deposit" if inward else "withdrawal"
         elif kind is None and section == "income":
             kind = "interest" if "interest" in normalise(type_text).split() else "dividend"
-        elif kind is None and section == "fee":
+        elif kind is None and section in ("fee", "margin"):
             kind = "fee"
         elif kind is None and section is not None and section in _CASH_SECTIONS:
             kind, by_sign = _CASH_SECTIONS[section], True
@@ -2040,7 +2482,9 @@ class BrokerageStatementParser(DocumentParser):
             collected.skipped += 1
             return
         description = name or _text(cells.get("description"))
-        if not description and described:
+        if not description and section == "margin":
+            description = "Margin interest"
+        elif not description and described:
             description = type_text  # typed by its section, the text is its description
         elif not description and kind in CASH_MEMO_TYPES:
             # A deposit table's action ("Electronic Funds Transfer Received") is its memo.
@@ -2065,8 +2509,92 @@ class BrokerageStatementParser(DocumentParser):
                 table=collected.tables,
                 by_sign=by_sign,
                 security_name=name or None,
+                section_label=collected.section_label,
+                section_id=collected.section_id,
+                printed=printed,
+                symbol_column=symbol_column,
+                note=note,
             )
         )
+
+    @staticmethod
+    def _section_total(piece: ViewLine, part: _Part, collected: _Collected) -> None:
+        """Keep a ``Total ...`` line of an activity table (:func:`_total_scope`)."""
+        amount = read_amount(_unmarked(_text(_assign(piece, part.columns).get("amount"))))
+        if amount is None:
+            amounts = find_amounts(piece.text)
+            amount = amounts[-1] if amounts else None
+        words: list[str] = []
+        for cell in piece.cells:
+            if not any(ch.isalpha() for ch in cell.text):
+                break  # the figures start here
+            words.append(cell.text)
+        label = " ".join(words).strip()
+        if amount is None or not label or len(collected.totals) >= MAX_SECTION_CHECKS:
+            return
+        collected.totals.append(
+            _SectionTotal(
+                label=label[:SECTION_LABEL_MAX],
+                norm=normalise(label),
+                amount=amount.value,
+                section_id=collected.section_id,
+                table=collected.tables,
+                page=piece.page,
+            )
+        )
+
+    def _figure(self, line: ViewLine, collected: _Collected) -> None:
+        """Keep a line of the statement's own summary tables (``StatementFigure``).
+
+        ``Beginning Account Value`` opens the account-value bridge wherever
+        it is printed; a summary heading (:data:`FIGURE_SECTIONS`) opens the
+        other groups. A group ends at its closing figure
+        (:data:`_FIGURE_END`), at the next heading or table, or with its page.
+        """
+        norm = line.norm
+        if collected.figure_page is not None and line.page != collected.figure_page:
+            collected.figure_group = None
+        if any(_starts(norm, label) for label in VALUE_OPENING):
+            collected.figure_group, collected.figure_x = "account_value", None
+        group = collected.figure_group
+        if group is None or len(collected.figures) >= MAX_FIGURES:
+            return
+        read = _labelled(line)
+        if read is None:
+            return
+        label, values = read
+        key = normalise(label)
+        first = key.split(" ", 1)[0]
+        role: Literal["opening", "closing", "total", "item"] = "item"
+        if first in ("beginning", "opening", "starting"):
+            role = "opening"
+        elif first in ("ending", "closing"):
+            role = "closing"
+        elif first in _TOTAL_WORDS:
+            role = "total"
+        x0 = line.cells[0].x0
+        if collected.figure_x is None or x0 < collected.figure_x:
+            collected.figure_x = x0
+        collected.figure_page = line.page
+        collected.figures.append(
+            StatementFigure(
+                group=group,
+                label=label[:SECTION_LABEL_MAX],
+                role=role,
+                detail=x0 - collected.figure_x > _INDENT,
+                amount=values[0].value if values[0] is not None else None,
+                year_to_date=(
+                    values[1].value if len(values) > 1 and values[1] is not None else None
+                ),
+                page=line.page,
+                bbox=line.bbox,
+            )
+        )
+        ends = _FIGURE_END.get(group)
+        if (role == "closing" and group in ("account_value", "cash_flow")) or (
+            ends is not None and _starts(key, ends)
+        ):
+            collected.figure_group = None
 
     def _is_heading(self, line: ViewLine, phrases: tuple[str, ...]) -> bool:
         if not phrases or len(line.cells) > 2 or find_amounts(line.text):
@@ -2198,10 +2726,22 @@ class BrokerageStatementParser(DocumentParser):
         amount: deposits, card activity, fees) is activity too, typed by its
         description and its section.
         """
+        # Blocks printed side by side (a summary box beside a table) are read
+        # one after the other (:mod:`app.ingestion.parsers.blocks`).
+        lines = unfold_blocks(lines, lambda norm: section_rule(norm) is not None)
         cash_tables = any(self._tables(lines))
         index = 0
         while index < len(lines):
             line = lines[index]
+            if (
+                collected.figure_group == "cash_flow"
+                and line.page == collected.figure_page
+                and line.norm in _FLOW_HEADINGS
+            ):
+                # "CASH MANAGEMENT ACTIVITY" inside the cash-flow summary heads
+                # its lines, it starts no section of activity.
+                index += 1
+                continue
             section = self._section_heading(line)
             if section is not None and self._wraps_name(line, collected):
                 # "INCOME FUND (ZZSIX)" under "EXAMPLE STRATEGIC": a name, no heading.
@@ -2210,20 +2750,31 @@ class BrokerageStatementParser(DocumentParser):
             if section is not None and not self._is_heading(line, self.ignored_tables):
                 index += 1
                 collected.section = section
+                collected.section_label = _heading_label(line.text)
+                collected.section_id += 1
+                collected.sub_headings = []
+                collected.figure_group = figure_group(line.norm)
+                collected.figure_x = None
+                collected.figure_page = line.page
                 collected.section_tables = 0
                 collected.section_header = None
                 collected.ignoring = False
                 collected.holdings_columns = collected.activity_parts = None
                 continue
-            found = self._header_at(lines, index, cash_tables=cash_tables)
+            found = self._header_at(
+                lines, index, cash_tables=cash_tables, typeless=collected.section == "margin"
+            )
             if found is not None:
                 index += found.used
+                collected.figure_group = None
                 if collected.ignoring:
                     collected.holdings_columns = collected.activity_parts = None
                 elif found.holdings is not None:
                     collected.holdings_columns, collected.activity_parts = found.holdings, None
                     collected.holdings_header = True
                     collected.section = None
+                    collected.section_label = None
+                    collected.section_id += 1
                     # A group heading right above its table's header ("Core Account").
                     above = lines[index - found.used - 1] if index - found.used > 0 else None
                     collected.group = (
@@ -2245,15 +2796,25 @@ class BrokerageStatementParser(DocumentParser):
                         collected.headings.setdefault(_band_key(lines[start - 1]), set()).add(
                             lines[start].page
                         )
-                        if collected.section_tables:
+                        above = lines[start - 1]
+                        again = (
+                            collected.section_header is not None
+                            and collected.section_header[0] == found.roles
+                            and _alike(above.norm, collected.sub_headings)
+                        )
+                        if collected.section_tables and not again:
                             # After the section's own table, a heading no
                             # section names starts a table of its own: the
                             # section above does not type (or skip) its rows.
                             # (Right under the section's heading it is a
-                            # sub-heading: a card's name. The section's header
+                            # sub-heading: a card's name, and so is a later
+                            # heading worded like it over the same columns,
+                            # the next card's. The section's header
                             # repeated on a later page under the page's running
                             # header continues its table.)
                             collected.section = None
+                            collected.section_label = _heading_label(above.text)
+                            collected.section_id += 1
                     collected.section_header = (found.roles, lines[start].page)
                     collected.holdings_columns, collected.activity_parts = None, found.parts
                     collected.activity_header = True
@@ -2269,6 +2830,14 @@ class BrokerageStatementParser(DocumentParser):
                 if not self._is_heading(line, self.section_headings):
                     continue
                 collected.ignoring = False
+            if (
+                collected.section is not None
+                and not collected.section_tables
+                and len(line.cells) <= 2
+                and len(collected.sub_headings) < _MAX_SUB_HEADINGS
+                and not find_amounts(line.text)
+            ):
+                collected.sub_headings.append(line.norm)
             self._line(line, collected)
 
     def _line(self, line: ViewLine, collected: _Collected) -> None:
@@ -2291,7 +2860,8 @@ class BrokerageStatementParser(DocumentParser):
                 collected.last_holding = None
                 return
             cells = _assign(line, holdings)
-            row = self._holding(line, cells, collected.group)
+            name_x0 = next((c.x0 for c in holdings if c.role == "name"), None)
+            row = self._holding(line, cells, collected.group, name_x0)
             if row is not None:
                 if collected.group is not None and collected.group in self.cash_groups:
                     collected.cash.append(row)
@@ -2315,13 +2885,25 @@ class BrokerageStatementParser(DocumentParser):
             before = len(collected.activity) + collected.skipped
             for part in parts:
                 piece = _piece(line, part) if len(parts) > 1 else line
-                if piece is None or piece.norm.startswith(("total", "subtotal")):
+                if piece is None:
                     continue
-                self._activity(piece, _assign(piece, part.columns), collected)
+                if (
+                    piece.norm.startswith(("total", "subtotal"))
+                    or piece.norm.split(" ", 1)[0] in _TOTAL_WORDS
+                ):
+                    self._section_total(piece, part, collected)
+                    continue
+                self._activity(
+                    piece,
+                    _assign(piece, part.columns),
+                    collected,
+                    symbol_column=any(c.role == "symbol" for c in part.columns),
+                )
             if len(collected.activity) + collected.skipped != before:
                 return
             if norm.startswith("total"):
                 return
+        self._figure(line, collected)
         self._scan_summary(line, collected.summary)
 
     # -- dates ----------------------------------------------------------------------
@@ -2450,11 +3032,13 @@ class BrokerageStatementParser(DocumentParser):
         known: Mapping[str, str | None],
         held: Mapping[str, SecurityRef] | None = None,
         per_100: Sequence[InvestmentPosition] = (),
-    ) -> tuple[list[InvestmentActivity], list[dict[str, float]]]:
+    ) -> tuple[list[InvestmentActivity], list[dict[str, float]], list[_ActivityRow]]:
+        """The activity rows, their scores and the collected row each was read from."""
         held = held or {}
         bonds = {k for p in per_100 for k in _keys(p.security)}
         rows: list[InvestmentActivity] = []
         scores: list[dict[str, float]] = []
+        kept: list[_ActivityRow] = []
         # A table that prints a minus sign prints every sign: its unsigned amounts are inflows.
         signed = {r.table for r in collected.activity if r.amount.negative_marked}
         for row in collected.activity:
@@ -2466,7 +3050,11 @@ class BrokerageStatementParser(DocumentParser):
             symbol, name = row.symbol, row.description or None
             if symbol is None and row.cusip is None and name is not None:
                 lead, rest = _split_symbol(name)
-                if lead is not None and (lead in known or row.type in SECURITY_TYPES):
+                # Beside a symbol column the name's first word is the issuer's
+                # ("EXAMPLE RESORTS INTERNATIONAL", a bond with no ticker), never a
+                # ticker, unless the account holds that symbol.
+                guess = row.type in SECURITY_TYPES and not (row.symbol_column and row.security_name)
+                if lead is not None and (lead in known or guess):
                     symbol, name = lead, rest
             security = (
                 self._security(symbol, name, known, cusip=row.cusip)
@@ -2532,13 +3120,15 @@ class BrokerageStatementParser(DocumentParser):
                     split_ratio=ratio,
                     amount=amount,
                     fees=fees,
-                    memo=(row.description or None),
+                    memo=_memo(row),
                     page=row.page,
                     bbox=row.bbox,
+                    section=row.section_label,
                 )
             )
             scores.append(score)
-        return rows, scores
+            kept.append(row)
+        return rows, scores, kept
 
     @staticmethod
     def _sweep_as_cash(collected: _Collected) -> None:
@@ -2622,7 +3212,7 @@ class BrokerageStatementParser(DocumentParser):
             as_of = period[1]
         positions, position_scores = self._positions(collected, as_of)
         known = {p.security.symbol: p.security.name for p in positions if p.security.symbol}
-        activity, activity_scores = self._activities(
+        activity, activity_scores, activity_rows = self._activities(
             collected,
             styles,
             certain,
@@ -2679,16 +3269,36 @@ class BrokerageStatementParser(DocumentParser):
             positions_value=balance(positions_value, as_of),
             total_value=balance(summary.total_value, as_of),
             truncated=view.truncated,
+            figures=collected.figures,
             first_page=collected.account.first_page if collected.account else None,
             last_page=collected.account.last_page if collected.account else None,
         )
-        check = reconcile_investment(statement)
+        check = localise(
+            statement,
+            reconcile_investment(statement),
+            section_checks(activity, activity_rows, collected.totals),
+        )
         for index in check.position_mismatches:
             position_scores[index]["market_value"] = conf.CONTRADICTED
         cap = {"mismatch": conf.UNRECONCILED, "unavailable": conf.UNCHECKED}.get(check.status)
         if cap is not None:
-            for score in (*position_scores, *activity_scores):
-                score["reconciliation"] = cap
+            # Only the rows no figure of the statement vouches for carry the
+            # doubt (:func:`localise`); a statement nothing can be checked
+            # against doubts them all.
+            doubted_positions = (
+                range(len(position_scores))
+                if check.doubtful_positions is None
+                else check.doubtful_positions
+            )
+            doubted_activity = (
+                range(len(activity_scores))
+                if check.doubtful_activity is None
+                else check.doubtful_activity
+            )
+            for index in doubted_positions:
+                position_scores[index]["reconciliation"] = cap
+            for index in doubted_activity:
+                activity_scores[index]["reconciliation"] = cap
         statement_conf["reconciliation"] = cap if cap is not None else 1.0
         statement = statement.model_copy(
             update={
@@ -2860,6 +3470,94 @@ def _sign(value: Decimal | None) -> int:
     if value is None or value == 0:
         return 0
     return 1 if value > 0 else -1
+
+
+#: A margin marker ends within this of the description column's left edge.
+_MARK_SLACK: Final = 1.0
+#: A label this far right of its group's first label is a breakdown of the line above.
+_INDENT: Final = 4.0
+_MAX_SUB_HEADINGS: Final = 6
+_DASHES: Final = frozenset({"-", "\u2013", "\u2014", "\u2212"})
+_DATE_RANGE: Final = re.compile(
+    r"\s*(\d{1,2}/\d{1,2}(?:/\d{2,4})?)\s*[-\u2013\u2014]\s*(\d{1,2}/\d{1,2}(?:/\d{2,4})?)\s*"
+)
+_CONTINUED_TAIL: Final = re.compile(r"\s*\((?:continued|cont'?d)\)\s*$", re.IGNORECASE)
+_LABEL_MARK: Final = re.compile(r"(?:\s*\*+|\s+[A-Z])$")
+
+
+def _range_end(text: str) -> str:
+    """The last day of ``7/1-7/31`` (a period standing where a row's date does)."""
+    match = _DATE_RANGE.fullmatch(text[:MAX_TOKEN])
+    return match[2] if match is not None else text
+
+
+def _heading_label(text: str) -> str:
+    """A heading as printed, without ``(continued)``."""
+    return _CONTINUED_TAIL.sub("", " ".join(text.split()))[:SECTION_LABEL_MAX]
+
+
+def _alike(norm: str, others: Sequence[str]) -> bool:
+    """``norm`` is worded like one of ``others`` (half their words, digits aside)."""
+
+    def words(text: str) -> set[str]:
+        return {w for w in text.split() if not w.isdigit()}
+
+    mine = words(norm)
+    for other in others:
+        theirs = words(other)
+        union = mine | theirs
+        if union and 2 * len(mine & theirs) >= len(union):
+            return True
+    return False
+
+
+def _without_mark(cells: list[Cell] | None, column_x0: float | None) -> list[Cell] | None:
+    """The name cells without a lone marker letter printed in the margin before them.
+
+    ``M EXAMPLE CORP ...``: a position held in margin is marked by one
+    capital letter left of the description column (it ends where the
+    column's header starts, ``column_x0``), the name starting in the column.
+    """
+    if not cells or column_x0 is None:
+        return cells
+    words = cells[0].word_cells()
+    if len(words) < 2 or len(words[0].text) != 1 or not words[0].text.isupper():
+        return cells
+    if words[0].x1 > column_x0 + _MARK_SLACK or words[1].x0 < column_x0 - 2 * _MARK_SLACK:
+        return cells
+    return [join_cells(words[1:]), *cells[1:]]
+
+
+def _labelled(line: ViewLine) -> tuple[str, list[Amount | None]] | None:
+    """``(label, values)`` of a summary line: its words, then its figures.
+
+    A dash stands for no figure (None); the line needs a label with a letter
+    and at least one value cell. Whatever follows the figures (another
+    block's label and figure printed beside them) is not read.
+    """
+    label: list[str] = []
+    values: list[Amount | None] = []
+    done = False
+    for cell in line.cells:
+        if done:
+            break
+        for word in (cell,) if read_amount(_unmarked(cell.text)) else cell.word_cells():
+            text = _unmarked(word.text).strip()
+            if text in _DASHES:
+                values.append(None)
+                continue
+            amount = read_amount(text) if not any(ch.isalpha() for ch in text) else None
+            if amount is not None and (label or values):
+                values.append(amount)
+            elif values:
+                done = True
+                break
+            else:
+                label.append(word.text)
+    text = _LABEL_MARK.sub("", " ".join(label)).strip()
+    if not values or not any(ch.isalpha() for ch in text):
+        return None
+    return text, values
 
 
 def _index_of(norm: str, phrases: Sequence[str]) -> int | None:
@@ -3078,7 +3776,7 @@ class PlaceholderBrokerageParser(BrokerageStatementParser):
     """Placeholder Brokerage (fictional): ``MM/DD/YYYY``, USD, signed amounts."""
 
     name: ClassVar[str] = "placeholder_brokerage"
-    version: ClassVar[str] = "5"
+    version: ClassVar[str] = "6"
     institution: ClassVar[str | None] = "placeholder-brokerage-account"
     display_name: ClassVar[str | None] = "Placeholder Brokerage"
     fingerprints: ClassVar[tuple[str, ...]] = (
@@ -3119,10 +3817,22 @@ class FidelityStatementParser(BrokerageStatementParser):
     income and transfer is checked against the change in cash; the *Core
     Fund Activity* table (the core's own buys and sells settling those
     trades) is not read, it would count each of them twice.
+
+    The pages printing two blocks side by side (*Account Summary* beside
+    *Account Holdings*, *Core Account Cash Flow* beside *Income Summary*,
+    *Debit Card Summary* beside *Debit Card Activity* with one table per
+    card) are read block by block; the summary tables are the statement's
+    figures, each activity section is checked against its ``Total ...``
+    line and against the cash-flow summary's line for it, *Margin
+    Activity* gives the period's margin interest, and the lone ``M``
+    printed before a holding held in margin is no part of its name (the
+    same layout drawn with invented figures:
+    ``tests/fixtures/synth_fidelity_report.py``,
+    ``tests/unit/test_statement_evidence.py``).
     """
 
     name: ClassVar[str] = "fidelity_investments_statement"
-    version: ClassVar[str] = "6"
+    version: ClassVar[str] = "7"
     institution: ClassVar[str | None] = "fidelity-investments-statement"
     display_name: ClassVar[str | None] = "Fidelity Investments"
     fingerprints: ClassVar[tuple[str, ...]] = ("fidelity investments", "investment report")

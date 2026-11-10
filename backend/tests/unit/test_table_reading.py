@@ -319,7 +319,7 @@ def test_side_by_side_tables_are_two_tables() -> None:
     collected = _Collected()
     parser._read([rows[0], rows[1], joined, total], collected)
     period = (date(2026, 6, 1), date(2026, 6, 30))
-    activity, _ = parser._activities(collected, ("md",), True, period, {})
+    activity, _, _ = parser._activities(collected, ("md",), True, period, {})
     # Each half's own date; the right half's total is no row; a row the
     # section types takes its direction from its sign.
     assert [(a.trade_date, a.type, a.amount) for a in activity] == [

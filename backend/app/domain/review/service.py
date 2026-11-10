@@ -51,9 +51,9 @@ editable by the caller as well. A closed item is ``409 review-item-closed``.
   their account, audited) and, with ``confirm``, the item's pending rows
   become ``confirmed`` (a ``reconciliation_*`` item: every pending row of
   the document on the item's account). ``import_as_read`` answers a
-  brokerage statement held back by its figures
+  brokerage statement, or the lines of one, held back by its figures
   (``investment_reconciliation_failed``, or ``investment_low_confidence``
-  whose only doubt is ``reconciliation``:
+  / ``investment_lines_held`` whose only doubt is ``reconciliation``:
   :func:`app.domain.investments.statement_import.acceptable_as_read`; any
   other item is ``422``): the item's statement is imported into the item's
   account as printed, without a balance snapshot. Needs edit on the

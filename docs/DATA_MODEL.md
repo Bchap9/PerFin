@@ -769,8 +769,13 @@ Notes on structured imports (`app/domain/imports/`, Phase 2):
   totals, `parser`, `confidence`, `reconciliation`, the pages and account
   facts as above; INGESTION.md
   "Brokerage statements"); their items are `investment_reconciliation_failed`
-  (`checks`, `failed`, `positions`, cash and totals as decimal strings),
-  `investment_low_confidence` (`fields`, `positions`, `activity`),
+  (`checks`, `failed`, `positions`, cash and totals as decimal strings,
+  `differences`, `sections`, `lines`, `unread_summary_lines`),
+  `investment_low_confidence` (`fields`, `positions`, `activity`, `lines`),
+  `investment_lines_held` (the cash lines of an imported statement held
+  back: `fields`, `lines`, `sections`, `held`, `imported`),
+  `investment_figures_differ` (a statement imported whole whose own totals
+  disagree: `failed`, `differences`, `sections`),
   `position_mismatch` (`securities`: `history`/`reported` units),
   `investment_lot_conflict` (`code`), `investment_out_of_order`
   (`rows`), `investment_same_name_securities` (`names`) and

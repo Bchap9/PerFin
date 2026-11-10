@@ -37,7 +37,55 @@ What remains (details in docs/ROADMAP.md):
 
 ## [Unreleased]
 
-Nothing yet.
+### Changed
+
+- **Brokerage statements: one doubtful line is one question, not a held
+  file.** A statement prints more than its balances: a total under each
+  activity section and a cash-flow summary restating every section. They
+  are now read and used to say *where* a statement does not add up
+  (INGESTION.md "What a statement says about its own rows"):
+  - Each activity row carries its section's heading; each section's rows
+    are checked against the `Total ...` line printed under them and
+    against the cash-flow summary's line for it
+    (`InvestmentReconciliation.sections`). Only the rows no figure vouches
+    for carry the `reconciliation` doubt (`doubtful_activity`,
+    `doubtful_positions`); before, one failed check doubted every row of
+    the account.
+  - The importer writes what is vouched for and holds only what is not:
+    lines moving cash that are in doubt wait in an `investment_lines_held`
+    item (each line with its page, date, section, amount and reason, the
+    sections that do not add up, "Import as read" for them) while the
+    holdings and every other line are imported; a statement with no row in
+    doubt whose own totals disagree (a printed account value that is not
+    holdings + cash) is imported with an `investment_figures_differ`
+    notice. A position or a line moving units in doubt still holds its
+    statement whole (the positions are reconciled against every such
+    line), now naming the lines and sections. OFX and activity exports,
+    which print no such figures, are held as before.
+  - The account's value is recorded when only the cash activity check
+    failed and holdings + closing cash is the printed account value, and
+    for an account that prints no cash and whose value is its holdings (a
+    529 plan).
+- **Brokerage layouts read more of the page** (`brokerage_statement_generic`
+  8, `fidelity_investments_statement` 7, `placeholder_brokerage` 6):
+  - Blocks printed side by side are read one after the other
+    (`app/ingestion/parsers/blocks.py`): a summary box beside a table no
+    longer hides the table's header (debit card activity beside its
+    summary was not read), and a label keeps its amounts.
+  - The statement's own summary tables are kept as figures, not rows
+    (`InvestmentStatement.figures`): the account-value bridge, the core
+    account's cash flow, the income summary and the realized gains;
+    `perfin ingest --dry-run` prints them with every section's check and
+    the rows in doubt.
+  - Margin interest (*Margin Activity*) is a fee dated by its period; the
+    tables of several cards stay in the card section; *Location
+    Reference/ Description* is a description column; a *Return of capital*
+    under the income heading is income, not a deposit; the marker letter
+    printed before a holding held in margin is not part of its name; a
+    bond bought with nothing in the symbol column is named by its name,
+    its issuer's first word is no ticker.
+- The review queue shows the lines in doubt as a table and says which
+  section's total they miss and by how much.
 
 ## [1.0.0-rc.6] - 2026-11-10
 

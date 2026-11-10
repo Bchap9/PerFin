@@ -47,6 +47,7 @@ import { TeachDialog, currentReadings } from "./TeachDialog";
 import {
   BalanceTools,
   CostBasisTools,
+  HeldLines,
   LowConfidenceTools,
   NewInstitutionTools,
   ReceiptPreview,
@@ -427,7 +428,9 @@ export function ReviewItemCard({ item }: { item: ReviewItem }) {
   const heldStatement =
     item.kind === "low_confidence_field" &&
     (reason === "investment_reconciliation_failed" ||
-      reason === "investment_low_confidence");
+      reason === "investment_low_confidence" ||
+      reason === "investment_lines_held" ||
+      reason === "investment_figures_differ");
   const asRead = canImportAsRead(item);
   const editableAccounts = (accounts.data ?? []).filter(
     (account) => account.can_edit && !account.is_closed,
@@ -484,11 +487,14 @@ export function ReviewItemCard({ item }: { item: ReviewItem }) {
       {item.kind === "low_confidence_field" && !heldStatement ? (
         <LowConfidenceTools item={item} actionable={actionable} />
       ) : null}
+      {heldStatement ? <HeldLines item={item} /> : null}
       {asRead && actionable ? (
         <p className="ledger-muted">
-          {reason === "investment_reconciliation_failed"
-            ? "“Import as read” imports this statement as printed. PerFin records no account value from it, because its totals do not add up."
-            : "“Import as read” imports this statement as printed. PerFin records no account value from it, because its totals could not be checked."}
+          {reason === "investment_lines_held"
+            ? "“Import as read” imports the lines listed above as printed; the rest of the statement is already imported."
+            : reason === "investment_reconciliation_failed"
+              ? "“Import as read” imports this statement as printed. PerFin records no account value from it, because its totals do not add up."
+              : "“Import as read” imports this statement as printed. PerFin records no account value from it, because its totals could not be checked."}
         </p>
       ) : null}
       {item.kind === "new_institution" ? (

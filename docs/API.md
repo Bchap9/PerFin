@@ -587,10 +587,17 @@ of the document on the item's account; audited as `transaction.update`);
 read", without `transactions`, else `422`) answers a brokerage statement
 held back because its figures do not add up: an
 `investment_reconciliation_failed` item (`differences`: per failed check
-`printed`, `computed`, `difference`; `currency`, `statement`,
-`statement_key`) or an
+`printed`, `computed`, `difference`; `sections`: each activity section
+whose rows are not its printed total, with `label`, `printed`, `computed`,
+`difference`, `rows`, `source`, `page`; `lines`: the activity lines in
+doubt, when the statement says which; `unread_summary_lines`; `currency`,
+`statement`, `statement_key`) or an
 `investment_low_confidence` item whose `fields` are only
-`["reconciliation"]`; any other item is `422 invalid-resolution`. It needs
+`["reconciliation"]`, or the lines of an imported statement held back in
+an `investment_lines_held` item (`lines`, `sections`, `held`, `imported`)
+whose `fields` are only `["reconciliation"]`; any other item is
+`422 invalid-resolution` (an `investment_figures_differ` item, raised for
+a statement imported whole whose own totals disagree, is only dismissed). It needs
 edit on the item's account (`404 account-not-found`) and queues
 `imports.apply_mapping`: the statement is imported as printed into that
 account, without a balance snapshot. The resolution records

@@ -661,7 +661,8 @@ OFX `INVSTMTRS` in the sandbox or from a PDF/scan's pages in the worker.
   no cash. An unsigned amount takes the type's direction; a symbol is read
   from its column (a valid CUSIP there is the CUSIP), from the
   description's first word when the row needs a security or the symbol is
-  held, or from `(SYMBOL)`. `brokerage_statement_generic` (version 4)
+  held, or from `(SYMBOL)` (beside a symbol column a name's first word is
+  never taken for a ticker: a bond's issuer). `brokerage_statement_generic` (version 8)
   scores 0.5-0.7 when it sees these tables (above the bank parsers'
   0.4-0.45 for the same activity table); `placeholder_brokerage` pins the
   fictional Placeholder Brokerage (`MM/DD/YYYY`, USD) and needs the
@@ -682,11 +683,77 @@ OFX `INVSTMTRS` in the sandbox or from a PDF/scan's pages in the worker.
   printed holdings total, so the cash check covers every trade, income and
   transfer; the *Core Fund Activity* table (the core's own trades settling
   them) is not read.
+- **What a statement says about its own rows** (`brokerage.section_checks`,
+  `brokerage.localise`; `InvestmentReconciliation.sections`,
+  `doubtful_activity`, `doubtful_positions`, `summary_cash_difference`,
+  `unread_summary_lines`). The four checks say *whether* a statement adds
+  up; what the statement prints about itself says *where* it does not, so
+  one line that makes no sense is one question, not a held file:
+  - **Blocks side by side** (`app/ingestion/parsers/blocks.py`): a page
+    printing two things next to each other (*Account Summary* beside
+    *Account Holdings*, *Core Account Cash Flow* beside *Income Summary*,
+    a *Debit Card Summary* box beside the card tables) is read block by
+    block. Two section headings on one line, or the right block's heading
+    of two or more words alone on its line, open the region; each line is
+    cut at the right heading's left edge, the pieces of each side are
+    joined again by their own height (a label keeps its amounts whatever
+    the other block printed a few points higher) and the left block is
+    read first. The region ends with the page, at a line with a cell
+    across the cut, or at a heading of the left block standing clear of
+    the lines above (the next full-width section). A table's header cell
+    that is also a heading word (`Description | Contributions`) opens
+    nothing.
+  - **Summary tables are figures, not rows** (`InvestmentStatement.figures`,
+    `StatementFigure`: `group`, `label`, `role` opening/closing/total/item,
+    `detail` for an indented breakdown, the period's `amount` and the
+    `year_to_date`): the account-value bridge from *Beginning Account
+    Value* to *Ending Account Value* (additions, subtractions, change in
+    investment value), the core account's cash flow line by line, the
+    income summary by tax treatment and the realized gains. A dash is no
+    figure. `perfin ingest --dry-run` prints them.
+  - **Section totals**: every activity row carries the heading it was
+    printed under (`InvestmentActivity.section`) and each `Total ...`
+    line of an activity table is kept. A total sums the rows its words
+    say: the section's heading (`Total Deposits & EFT In` under
+    *Deposits*, `Net Securities Bought & Sold`) all of its rows; nothing
+    (`Total`, `Total this period`) the table it ends; the purchases or the
+    sales of the section (`Total Securities Bought`); any other label
+    (`Total Federal Taxes Withheld`, a card's `Subtotal`) is not used. A
+    transfer of units counts by the value printed. The last total of each
+    scope is checked: `ok`, `mismatch` (with the difference) or, for a
+    section printing none, `unchecked`.
+  - **The cash-flow summary is a second account** of every section: a
+    line is matched to the rows of the section it names (*Securities
+    Bought*/*Sold* to the buys/sells, *Margin Interest* to the margin
+    table, *Transfers In/Out* to the cash rows of the transfer sections),
+    compared where the section's own total does not already vouch for
+    them (`source: summary`), and a line no row was read for is listed
+    (`unread_summary_lines`: the statement itself names cash flow that was
+    not read).
+  - **Rows in doubt** (only when a check failed). Activity, when the
+    `cash` check failed: a row is vouched for when a total covering it
+    agrees; in a section that does not add up, one row that is the whole
+    difference (a row too many) is alone in doubt; a row moving cash that
+    a bridging cash-flow summary does not list at all is in doubt whatever
+    its section's total says (value moved between accounts under
+    *Securities Transferred In*, not core cash); a row moving no cash is
+    never in doubt. When every section adds up and the cash still does
+    not, the rows stand only if the summary bridges and names a line that
+    was not read; otherwise the one row that is the whole difference is in
+    doubt, else every row moving cash (a forged row whose section total
+    was adjusted to match is still caught by the cash). Positions: those
+    whose quantity x price is not their market value; all of them when
+    they do not add up to the printed holdings total, or when holdings +
+    cash is not the account value and no holdings total is printed. Only
+    these rows are capped below the threshold with the `reconciliation`
+    doubt. A source that prints none of this (OFX, an activity export)
+    has no rows singled out and is held whole.
 - **Table reading** (any institution; the synthetic Fidelity-layout report
   `tests/fixtures/synth_fidelity_report.py` and the provider-neutral
   combined statement `synth_neutral_report.py` are read to the last row
   by the generic parser as well as by the layout's):
-  - **Header vocabulary**: *Transaction Description* (the action),
+  - **Header vocabulary**: *Transaction Description* and *Location
+    Reference/ Description* (the action),
     *Transaction Total* / *Transaction Amount* (the amount), *Settlement
     Date*, *Post Date*, *Trans. Date*, *Symbol/CUSIP*, *Transaction Cost*
     (fees), *Cost Basis of Close*, *Check Num.*, *Code*, *Payee*,
@@ -712,11 +779,16 @@ OFX `INVSTMTRS` in the sandbox or from a PDF/scan's pages in the worker.
   - **Sections**: the heading above an activity table says how its rows
     are read when their own words do not: *Trades Pending Settlement*,
     *Core Account Cash Flow*, *Daily Additions and Subtractions*,
-    *Estimated Cash Flow*, *Income Summary*, *Margin Activity* are no
-    activity; *Securities Transferred In/Out* move units (the printed
+    *Estimated Cash Flow*, *Income Summary*, *Account Holdings*, *Debit
+    Card Summary* are no activity (the summary tables among them are read
+    as figures); *Margin Activity* (`Period | Period Balance | Interest
+    Rate | Average Daily Balance | Interest Paid`, a header naming no
+    action) gives one fee per period, dated by the period's last day
+    (`7/1-7/31`) and described as margin interest; *Securities Transferred In/Out* move units (the printed
     amount is their value, no cash) or, without units, cash (a deposit or
     withdrawal); *Dividends, Interest & Other Income* rows are dividends,
-    or interest when they say so; *Deposits*/*Contributions* and
+    or interest when they say so (a *Return of capital* or *Cash in lieu*
+    there is income too, not a deposit, the words kept in the memo); *Deposits*/*Contributions* and
     *Withdrawals*/*Distributions*, *Checking Activity*, *Debit Card
     Activity*, *Bill Payments* and *Cash Activity* are cash by their sign;
     *Electronic Funds Transfers* are cash by their sign;
@@ -727,7 +799,8 @@ OFX `INVSTMTRS` in the sandbox or from a PDF/scan's pages in the worker.
     held, never booked as the section above's type) and the table after a
     skipped section is read; right under the section's heading such a line
     is a sub-heading (`SAMPLE CHECK CARD (ACCOUNT ...0000)`) and the section
-    stays. A table running onto the next page continues its section: the
+    stays, also for a later heading worded like it over the same columns
+    (the next card's table). A table running onto the next page continues its section: the
     section's own header repeated on a later page keeps it at the page's
     top or under the page's running header: every line above it on the
     page (at most eight) must be a line of that header. Such a
@@ -961,20 +1034,51 @@ OFX `INVSTMTRS` in the sandbox or from a PDF/scan's pages in the worker.
   statements with its own last four digits or, when it records none, the
   single statement nothing matched, never several accounts at once. No account, or one that does not
   fit, raises `unknown_account` (`account_not_found`, `account_ambiguous`,
-  `account_type_mismatch`, `currency_mismatch`). A
-  statement that does not reconcile, or has any row or position below the
-  threshold, writes **nothing** (investment rows have no pending state) and
-  raises `low_confidence_field` `investment_reconciliation_failed` (checks,
-  failed checks, mismatched positions, cash and totals, the statement's
-  index and key (`statement_key`), the account's currency and
-  `differences`: per failed check
-  `printed`, `computed` and `difference` = computed - printed, `count` for
-  `positions`) or `investment_low_confidence`. Real statements do not
+  `account_type_mismatch`, `currency_mismatch`). **No
+  row a statement's own figures do not vouch for is written** (investment
+  rows have no pending state, so what is in doubt waits in a
+  `low_confidence_field` item); what is held depends on what the
+  statement says about itself ("What a statement says about its own rows"
+  below):
+  - *nothing in doubt, figures disagree* (the printed account value is not
+    holdings + cash; a section's total is off by an amount no row
+    explains): the statement is imported whole and
+    `investment_figures_differ` (`failed`, `differences`, `sections`,
+    `unread_summary_lines`) tells the person what does not add up;
+  - *only lines moving cash are in doubt* (dividends, interest, fees,
+    deposits, withdrawals; for the `reconciliation` doubt or any other: a
+    date outside the period, an amount hard to read): the positions and
+    every other line are written, and `investment_lines_held` lists the
+    lines held back (`lines`: `index`, `page`, `date`, `type`,
+    `description`, `amount`, `section`, `fields`; `held`, `imported`) with
+    the `sections` that do not add up (`label`, `printed`, `computed`,
+    `difference`, `rows`, `source`, `page`);
+  - *anything else* (a line moving units or a position in doubt: the
+    positions are reconciled against every such line; OFX and activity
+    exports, which do not say where a failed check comes from; a document
+    with nothing to check against): the statement writes **nothing** and
+    raises `investment_reconciliation_failed` (checks,
+    failed checks, mismatched positions, cash and totals, the statement's
+    index and key (`statement_key`), the account's currency,
+    `differences`: per failed check
+    `printed`, `computed` and `difference` = computed - printed, `count` for
+    `positions`; and, as above, `sections`, `unread_summary_lines` and the
+    `lines` in doubt when the statement says which) or
+    `investment_low_confidence`.
+
+  The account's value (the balance snapshot) is taken from a statement
+  whose every check held, and also from one where only the `cash` activity
+  check failed while holdings + closing cash is the printed account value
+  (the lines in doubt do not change what the account is worth); an account
+  that prints no cash at all and whose account value is its holdings (a
+  529 plan) holds none. Real statements do not
   always add up on their own (rounding, items the issuer leaves out), so
   the review queue offers **Import as read** for an
   `investment_reconciliation_failed` item, and for an
-  `investment_low_confidence` item whose only doubt is `reconciliation` (a
-  document statement with nothing to check against). The answer is for
+  `investment_low_confidence` or `investment_lines_held` item whose only
+  doubt is `reconciliation` (a document statement with nothing to check
+  against; the held lines of an imported one, whose rows already written
+  are skipped by their hashes). The answer is for
   that statement only: its key is a digest of the statement exactly as
   read (`app/domain/imports/statement_answers.py`), the resolution records
   it with the item's account, and every import of the document from then

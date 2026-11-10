@@ -312,6 +312,10 @@ class Statement(_Strict):
 #: Largest quantity or unit price accepted (``NUMERIC(28, 10)``: 18 integer digits).
 MAX_ABS_QUANTITY: Final = Decimal(10) ** 18
 MAX_POSITIONS: Final = 10_000
+#: Longest section heading or summary label carried.
+SECTION_LABEL_MAX: Final = 120
+MAX_SECTION_CHECKS: Final = 200
+MAX_FIGURES: Final = 400
 
 
 def _bounded_quantity(value: Decimal) -> Decimal:
@@ -452,6 +456,9 @@ class InvestmentActivity(_Strict):
     low_confidence: list[Code] = Field(default_factory=list, max_length=20)
     page: int | None = Field(default=None, ge=1, le=MAX_PAGES_CEILING)
     bbox: BBox | None = None
+    #: The heading of the statement section the row was printed under
+    #: (``Deposits``, ``Securities Bought & Sold``), as printed.
+    section: Annotated[str, Field(max_length=SECTION_LABEL_MAX)] | None = None
 
     @property
     def price_per_unit(self) -> Decimal | None:
@@ -459,6 +466,58 @@ class InvestmentActivity(_Strict):
         if self.unit_price is None:
             return None
         return self.unit_price / 100 if self.price_per_100 else self.unit_price
+
+
+FigureGroup = Literal["account_value", "cash_flow", "income", "realized"]
+
+
+class StatementFigure(_Strict):
+    """One labelled line of a statement's own summary tables (not a row of activity).
+
+    A brokerage statement prints, beside its holdings and activity, tables
+    that only restate them: the change in the account's value (``Beginning
+    Account Value``, ``Additions``, ``Subtractions``, ``Ending Account
+    Value``), the cash flow of its core position, its income by tax
+    treatment and its realized gains. They are never positions or activity;
+    read as what they are they give the opening and closing figures and a
+    second account of every section the activity is checked against
+    (``app.ingestion.parsers.brokerage``).
+    """
+
+    group: FigureGroup
+    label: Annotated[str, Field(max_length=SECTION_LABEL_MAX)]
+    #: ``opening``/``closing``: the period's first and last figure; ``total``:
+    #: a subtotal of the lines above it; ``item``: one line of the bridge.
+    role: Literal["opening", "closing", "total", "item"]
+    #: Indented under the line above it (a breakdown of that line, not added again).
+    detail: bool = False
+    #: The period's figure (None: printed as a dash).
+    amount: Amount | None = None
+    year_to_date: Amount | None = None
+    page: int | None = Field(default=None, ge=1, le=MAX_PAGES_CEILING)
+    bbox: BBox | None = None
+
+
+class SectionCheck(_Strict):
+    """The activity rows of one section against the total the statement prints for them.
+
+    ``rows`` index :attr:`InvestmentStatement.activity` and ``computed`` is
+    what they add up to (a transfer of units by the value printed).
+    ``printed`` is the section's own ``Total ...`` line (``source``
+    ``summary``: the cash-flow summary's line for it, when the section
+    prints none). ``ok``: they agree within the tolerance; ``mismatch``:
+    they do not; ``unchecked``: the statement prints no total for them.
+    """
+
+    label: Annotated[str, Field(max_length=SECTION_LABEL_MAX)]
+    rows: list[int] = Field(default_factory=list, max_length=MAX_ROWS_CEILING)
+    status: Literal["ok", "mismatch", "unchecked"]
+    printed: Amount | None = None
+    computed: Amount
+    difference: Amount | None = None
+    #: Where ``printed`` came from: the section's total line or the summary table.
+    source: Literal["total", "summary"] | None = None
+    page: int | None = Field(default=None, ge=1, le=MAX_PAGES_CEILING)
 
 
 class InvestmentReconciliation(_Strict):
@@ -485,6 +544,21 @@ class InvestmentReconciliation(_Strict):
     total_value: Amount | None = None
     reported_total_value: Amount | None = None
     tolerance: Amount
+    # -- where a failed check comes from (document parsers) ----------------------
+    #: Each section's rows against its printed total (:class:`SectionCheck`).
+    sections: list[SectionCheck] = Field(default_factory=list, max_length=MAX_SECTION_CHECKS)
+    #: Indices of the activity rows and positions no figure of the statement
+    #: vouches for once a check failed: the only rows that carry the
+    #: ``reconciliation`` doubt (None: not worked out, every row carries it).
+    doubtful_activity: list[int] | None = Field(default=None, max_length=MAX_ROWS_CEILING)
+    doubtful_positions: list[int] | None = Field(default=None, max_length=MAX_POSITIONS)
+    #: The statement's own cash-flow summary: opening + its lines - closing
+    #: (None: no such table, or a figure of it unread).
+    summary_cash_difference: Amount | None = None
+    #: Cash-flow summary lines no activity row was read for (their labels).
+    unread_summary_lines: list[Annotated[str, Field(max_length=SECTION_LABEL_MAX)]] = Field(
+        default_factory=list, max_length=MAX_SECTION_CHECKS
+    )
 
 
 class InvestmentStatement(_Strict):
@@ -510,6 +584,8 @@ class InvestmentStatement(_Strict):
     total_value: Balance | None = None
     truncated: bool = False
     # -- set by the worker's document parsers -----------------------------------
+    #: The statement's own summary tables, line by line (:class:`StatementFigure`).
+    figures: list[StatementFigure] = Field(default_factory=list, max_length=MAX_FIGURES)
     #: The pages the statement was read from (one account of a document of several).
     first_page: PageNumber | None = None
     last_page: PageNumber | None = None
@@ -946,6 +1022,8 @@ class ExtractResult(_Strict):
                 or i.reconciliation is not None
                 or i.first_page is not None
                 or bool(i.confidence)
+                or bool(i.figures)
+                or any(a.section is not None for a in i.activity)
                 or any(p.confidence is not None or p.low_confidence for p in i.positions)
                 or any(a.confidence is not None or a.low_confidence for a in i.activity)
                 for i in self.investments

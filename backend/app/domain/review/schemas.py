@@ -47,9 +47,10 @@ A resolution is a typed body whose ``kind`` must equal the item's kind
   edits) and, with ``confirm`` (default), moves the item's pending rows to
   ``confirmed`` (for ``reconciliation_*`` items: every pending row of the
   document on the item's account). ``{"kind", "import_as_read": true}``
-  answers a brokerage statement held back because its figures do not add
-  up (``investment_reconciliation_failed``, or ``investment_low_confidence``
-  with ``reconciliation`` its only doubt; ``422`` for any other item, or
+  answers a brokerage statement, or the lines of one, held back because
+  its figures do not add up (``investment_reconciliation_failed``, or
+  ``investment_low_confidence`` / ``investment_lines_held`` with
+  ``reconciliation`` its only doubt; ``422`` for any other item, or
   with ``transactions``): the statement is imported again as printed into
   the item's account (an account the caller edits), without a balance
   snapshot.

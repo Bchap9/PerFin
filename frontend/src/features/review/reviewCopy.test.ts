@@ -49,6 +49,8 @@ const REASONS: readonly [ReviewItem["kind"], string][] = [
   ["low_confidence_field", "investment_possible_duplicate"],
   ["low_confidence_field", "investment_low_confidence"],
   ["low_confidence_field", "investment_reconciliation_failed"],
+  ["low_confidence_field", "investment_lines_held"],
+  ["low_confidence_field", "investment_figures_differ"],
   ["low_confidence_field", "position_mismatch"],
   ["possible_duplicate", "statement_overlap"],
   ["possible_duplicate", "same_content"],
@@ -131,6 +133,87 @@ describe("review explanations", () => {
     );
     expect(found.steps.some((step) => step.startsWith("“Import as read”"))).toBe(
       true,
+    );
+  });
+
+  it("names the section that does not add up and the lines held for it", () => {
+    const found = explain(
+      item("low_confidence_field", {
+        reason: "investment_lines_held",
+        statement_key: "k".repeat(64),
+        currency: "USD",
+        fields: ["reconciliation"],
+        held: 4,
+        imported: 31,
+        sections: [
+          {
+            label: "Total Checking Activity",
+            printed: "-2443.210000",
+            computed: "-2042.640000",
+            difference: "400.570000",
+            rows: 4,
+            source: "total",
+            page: 9,
+          },
+        ],
+        unread_summary_lines: ["Margin Interest"],
+        lines: [],
+      }),
+    );
+    expect(found.title).toBe("A few lines need a look");
+    expect(found.what).toContain(
+      "The holdings and the other 31 activity lines were imported; 4 lines of this statement were held back",
+    );
+    expect(found.what).toContain(
+      "Total Checking Activity: the statement prints -$2,443.21; the 4 lines read add up to -$2,042.64 (a difference of $400.57).",
+    );
+    expect(found.what).toContain(
+      "cash-flow summary also lists Margin Interest, for which no lines were read.",
+    );
+    expect(found.steps.some((step) => step.startsWith("“Import as read”"))).toBe(
+      true,
+    );
+  });
+
+  it("does not offer to import a line with another doubt as read", () => {
+    const found = explain(
+      item("low_confidence_field", {
+        reason: "investment_lines_held",
+        statement_key: "k".repeat(64),
+        fields: ["reconciliation", "trade_date"],
+        held: 1,
+        imported: 0,
+      }),
+    );
+    expect(found.what).toContain(
+      "The holdings were imported; 1 line of this statement was held back because the statement's own totals do not vouch for it.",
+    );
+    expect(found.steps.some((step) => step.startsWith("“Import as read”"))).toBe(
+      false,
+    );
+  });
+
+  it("says a statement was imported although its totals disagree", () => {
+    const found = explain(
+      item("low_confidence_field", {
+        reason: "investment_figures_differ",
+        statement_key: "k".repeat(64),
+        currency: "USD",
+        differences: [
+          {
+            check: "total_value",
+            printed: "103351.180000",
+            computed: "108051.180000",
+            difference: "4700.000000",
+          },
+        ],
+      }),
+    );
+    expect(found.title).toBe("Statement imported; its totals disagree");
+    expect(found.what).toContain("so it was imported.");
+    expect(found.what).toContain("a difference of $4,700.00");
+    expect(found.steps.some((step) => step.startsWith("“Import as read”"))).toBe(
+      false,
     );
   });
 

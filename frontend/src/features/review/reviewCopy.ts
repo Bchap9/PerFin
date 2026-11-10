@@ -10,10 +10,13 @@ import {
   canImportAsRead,
   payloadDifferences,
   payloadIds,
+  payloadLines,
   payloadNumber,
+  payloadSections,
   payloadString,
   type Difference,
   type ReviewItem,
+  type SectionDifference,
 } from "./api";
 
 export interface Explanation {
@@ -105,6 +108,40 @@ export function differenceText(
 export function differenceTexts(item: ReviewItem): string[] {
   const currency = payloadString(item, "currency");
   return payloadDifferences(item).map((d) => differenceText(d, currency));
+}
+
+/** One section whose rows are not its printed total, in plain words. */
+export function sectionText(
+  section: SectionDifference,
+  currency: string | null,
+): string {
+  const lines = section.rows === 1 ? "1 line" : `${String(section.rows)} lines`;
+  const where =
+    section.source === "summary" ? " in its cash-flow summary" : "";
+  return `${section.label}: the statement prints ${money(section.printed, currency)}${where}; the ${lines} read add up to ${money(section.computed, currency)} (a difference of ${money(unsigned(section.difference), currency)}).`;
+}
+
+/** The sections that do not add up on a brokerage statement, one sentence each. */
+export function sectionTexts(item: ReviewItem): string[] {
+  const currency = payloadString(item, "currency");
+  return payloadSections(item).map((s) => sectionText(s, currency));
+}
+
+/** Cash-flow lines of the statement's summary no line was read for. */
+function unreadText(item: ReviewItem): string {
+  const labels = payloadIds(item, "unread_summary_lines");
+  return labels.length === 0
+    ? ""
+    : ` The statement's cash-flow summary also lists ${labels.join(", ")}, for which no lines were read.`;
+}
+
+/** "3 lines" / "1 line" of the item's lines in doubt, or null when it lists none. */
+function doubtedLines(item: ReviewItem): string | null {
+  const count = payloadNumber(item, "held") ?? payloadLines(item).length;
+  if (count === 0) {
+    return null;
+  }
+  return count === 1 ? "1 line" : `${String(count)} lines`;
 }
 
 const AS_READ_STEP =
@@ -523,14 +560,55 @@ const COPY: Readonly<Record<string, Copy>> = {
       ],
     };
   },
+  "low_confidence_field:investment_lines_held": (item) => {
+    const lines = doubtedLines(item) ?? "Some lines";
+    const imported = payloadNumber(item, "imported");
+    const rest =
+      imported === null || imported === 0
+        ? "The holdings were imported"
+        : `The holdings and the other ${String(imported)} activity lines were imported`;
+    const sections = sectionTexts(item);
+    return {
+      title: "A few lines need a look",
+      what: `${rest}; ${lines} of this statement ${lines === "1 line" ? "was" : "were"} held back because the statement's own totals do not vouch for ${lines === "1 line" ? "it" : "them"}.${sections.length === 0 ? "" : ` ${sections.join(" ")}`}${unreadText(item)}`,
+      why: "PerFin checks each section's lines against the total the statement prints for it, and only holds the lines of a section that does not add up.",
+      steps: [
+        "Compare the lines listed below with the statement (“Show document”).",
+        ...asReadSteps(
+          item,
+          "“Import as read” imports these lines as printed.",
+        ),
+        "“Teach PerFin” if a table or a figure was read wrong.",
+        "“Dismiss” to leave these lines out; add any that are right by hand.",
+      ],
+    };
+  },
+  "low_confidence_field:investment_figures_differ": (item) => {
+    const texts = [...differenceTexts(item), ...sectionTexts(item)];
+    return {
+      title: "Statement imported; its totals disagree",
+      what: `Every line of this statement is vouched for by its own totals, so it was imported.${texts.length === 0 ? " Some of its printed totals disagree with each other." : ` ${texts.join(" ")}`}${unreadText(item)}`,
+      why: "Nothing read from the statement is in doubt, but PerFin does not record an account value from totals that disagree.",
+      steps: [
+        "Compare the figures with the statement (“Show document”).",
+        "“Dismiss” once you have seen it; enter the account's value by hand if you want it recorded.",
+        "“Teach PerFin” if a figure was read wrong.",
+      ],
+    };
+  },
   "low_confidence_field:investment_reconciliation_failed": (item) => {
-    const texts = differenceTexts(item);
+    const texts = [...differenceTexts(item), ...sectionTexts(item)];
+    const lines = doubtedLines(item);
+    const where =
+      lines === null
+        ? ""
+        : ` ${lines === "1 line" ? "The 1 line" : `The ${lines}`} in doubt ${lines === "1 line" ? "is" : "are"} listed below.`;
     return {
       title: "Statement does not add up",
       what:
         texts.length === 0
-          ? "The figures read from this statement do not add up to its totals, so nothing of it was imported."
-          : `The figures read from this statement do not add up, so nothing of it was imported. ${texts.join(" ")}`,
+          ? `The figures read from this statement do not add up to its totals, so nothing of it was imported.${where}`
+          : `The figures read from this statement do not add up, so nothing of it was imported. ${texts.join(" ")}${unreadText(item)}${where}`,
       why: "A statement can round or leave items out, but a misread table looks the same, so PerFin asks before importing it.",
       steps: [
         "Compare the figures with the statement (“Show document”).",

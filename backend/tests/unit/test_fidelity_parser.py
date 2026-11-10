@@ -279,14 +279,26 @@ def test_a_tampered_account_alone_does_not_reconcile(
             continue
         assert check.status == "mismatch"
         assert check.failed == failed
+        # The rows in doubt, and only they, carry it (``localise``): the row
+        # that is the whole cash difference, the position whose value is not
+        # quantity x price, none when the account value alone is wrong.
+        doubted_activity = [
+            i for i, a in enumerate(statement.activity) if "reconciliation" in a.low_confidence
+        ]
+        doubted_positions = [
+            i for i, p in enumerate(statement.positions) if "reconciliation" in p.low_confidence
+        ]
+        assert check.doubtful_activity == doubted_activity
+        assert check.doubtful_positions == doubted_positions
         if tamper == "extra_row":
             assert check.cash_difference == Decimal("-777.77")
-        rows: list[InvestmentActivity | InvestmentPosition] = [
-            *statement.activity,
-            *statement.positions,
-        ]
-        for row in rows:
-            assert "reconciliation" in row.low_confidence
+            (forged,) = doubted_activity
+            assert statement.activity[forged].amount == Decimal("-777.77")
+            assert doubted_positions == []
+        elif tamper == "market_value":
+            assert (doubted_activity, doubted_positions) == ([], [0])
+        else:
+            assert (doubted_activity, doubted_positions) == ([], [])
 
 
 @pytest.mark.parametrize("ruled", [False, True], ids=["plain", "ruled"])

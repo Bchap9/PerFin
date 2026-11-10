@@ -69,7 +69,7 @@ from app.domain.investments.models import (
     Price,
     Security,
 )
-from app.domain.investments.statement_import import OPENING_MEMO
+from app.domain.investments.statement_import import LINES_HELD, OPENING_MEMO
 from app.domain.investments.statement_import import RECONCILIATION_FAILED as RECONCILIATION
 from app.domain.review import service as review_service
 from app.domain.review.schemas import (
@@ -284,7 +284,7 @@ def test_brokerage_statement_is_parsed_reconciled_and_committed(env: Env, fmt: s
     stored = ExtractResult.model_validate(document.extraction)
     assert len(stored.investments) == 1
     if fmt == "pdf":
-        assert document.parser_version == "placeholder_brokerage/5"
+        assert document.parser_version == "placeholder_brokerage/6"
         assert document.confidence is not None
         assert document.confidence["parse"]["investment_reconciliation"] == ["ok"]
 
@@ -417,7 +417,7 @@ def test_document_period_comes_from_the_header_band_of_its_statements(env: Env) 
     }
 
 
-@pytest.mark.parametrize("tamper", ["extra_row", "market_value", "total"])
+@pytest.mark.parametrize("tamper", ["extra_row", "market_value"])
 def test_statement_that_does_not_reconcile_writes_nothing(env: Env, tamper: synth.Tamper) -> None:
     january, _ = synth.brokerage_series(seed=64)
     account = env.brokerage(january)
@@ -435,11 +435,45 @@ def test_statement_that_does_not_reconcile_writes_nothing(env: Env, tamper: synt
     assert item.payload["failed"]
     if tamper == "extra_row":
         assert item.payload["cash_difference"] == "-777.77"
+        # The one row that is the whole difference is the line in doubt: a
+        # buy, and a line moving units holds its statement.
+        (line,) = item.payload["lines"]
+        assert (line["type"], line["amount"], line["fields"]) == (
+            "buy",
+            "-777.770000",
+            ["reconciliation"],
+        )
     assert env.txns(account) == []
     assert env.holdings(account) == []
     assert env.cash_rows(account) == []
     assert env.snapshots(account) == []
     assert env.securities() == {}
+
+
+def test_a_wrong_account_value_alone_holds_no_row(env: Env) -> None:
+    """Holdings and cash add up, the printed account value is not their sum.
+
+    Every row is vouched for (the cash reconciles, the positions are the
+    printed holdings total), so the statement is imported; the account's
+    value is not taken from figures that disagree, and a person is told.
+    """
+    january, _ = synth.brokerage_series(seed=64)
+    account = env.brokerage(january)
+    document_id = env.ingest(synth.placeholder_pdf(january, tamper="total"), "statement.pdf")
+
+    assert env.document(document_id).status is DocumentStatus.NEEDS_REVIEW
+    (item,) = env.open_reviews(document_id)
+    assert item.payload["reason"] == "investment_figures_differ"
+    assert item.payload["failed"] == ["total_value"]
+    (difference,) = item.payload["differences"]
+    assert difference["check"] == "total_value"
+    assert Decimal(difference["difference"]) == Decimal("-250.00")
+    assert env.activity(account) == _expected(january)
+    assert env.holdings(account) == _positions(january)
+    assert sorted((t.posted_date, t.amount) for t in env.cash_rows(account)) == _cash(january)
+    assert env.snapshots(account) == []
+    (record,) = env.query(select(StatementRecord).where(StatementRecord.account_id == account.id))
+    assert (record.document_id, record.outcome) == (document_id, "imported")
 
 
 def test_tampered_ofx_positions_are_held(env: Env) -> None:
@@ -593,7 +627,7 @@ def test_each_account_of_a_multi_account_pdf_lands_on_its_own_account(env: Env) 
     document = env.document(document_id)
     assert document.status is DocumentStatus.PROCESSED, env.open_reviews(document_id)
     assert document.kind is DocumentKind.STATEMENT
-    assert document.parser_version == "fidelity_investments_statement/6"
+    assert document.parser_version == "fidelity_investments_statement/7"
     # The document spans three accounts: it is linked to none of them.
     assert document.account_id is None
     assert (document.period_start, document.period_end) == (stmt.start, stmt.end)
@@ -635,7 +669,7 @@ def test_each_account_of_a_multi_account_pdf_lands_on_its_own_account(env: Env) 
 def test_a_tampered_account_is_held_and_the_others_are_written(env: Env) -> None:
     stmt = fid.fidelity_statement(seed=92)
     accounts = _fid_accounts(env, stmt)
-    data = fid.fidelity_pdf(stmt, tamper="total", tamper_account=1)
+    data = fid.fidelity_pdf(stmt, tamper="market_value", tamper_account=1)
     document_id = env.ingest(data, "investment-report.pdf")
 
     assert env.document(document_id).status is DocumentStatus.NEEDS_REVIEW
@@ -647,7 +681,7 @@ def test_a_tampered_account_is_held_and_the_others_are_written(env: Env) -> None
     roth = accounts[1]
     assert roth is not None
     assert item.payload["account_id"] == str(roth.id)
-    assert item.payload["failed"] == ["total_value"]
+    assert item.payload["failed"] == ["positions", "total_value"]
     assert env.txns(roth) == []
     assert env.snapshots(roth) == []
     assert env.cash_rows(roth) == []
@@ -656,6 +690,72 @@ def test_a_tampered_account_is_held_and_the_others_are_written(env: Env) -> None
         assert account is not None
         assert env.activity(account) == _fid_expected(stmt.accounts[index])
         assert _fid_holdings(env, account) == _fid_positions(stmt.accounts[index])
+
+
+def test_only_the_line_in_doubt_is_held_and_the_rest_is_imported(env: Env) -> None:
+    """One deposit is printed 30.00 above what its section's total and the cash say.
+
+    Every other section adds up to its printed total, so only that line
+    waits for a person: the holdings, the trades, the other cash rows and the
+    account's value (holdings + closing cash is the printed account value)
+    are imported. "Import as read" then imports the line as printed, once.
+    """
+    stmt = fid.fidelity_statement(seed=95)
+    accounts = _fid_accounts(env, stmt)
+    data = fid.fidelity_pdf(stmt, tamper="misprinted_row", tamper_account=0)
+    document_id = env.ingest(data, "investment-report.pdf")
+
+    assert env.document(document_id).status is DocumentStatus.NEEDS_REVIEW
+    (item,) = env.open_reviews(document_id)
+    individual = accounts[0]
+    assert individual is not None
+    assert item.kind is ReviewKind.LOW_CONFIDENCE_FIELD
+    assert item.payload["reason"] == LINES_HELD
+    assert item.payload["account_id"] == str(individual.id)
+    assert item.payload["failed"] == ["cash"]
+    assert item.payload["fields"] == ["reconciliation"]
+    printed = next(a for a in stmt.accounts[0].activity if a.table == "deposits")
+    (line,) = item.payload["lines"]
+    assert line["section"] == "Deposits"
+    assert line["type"] == "deposit"
+    assert Decimal(line["amount"]) == printed.amount + fid.MISPRINT
+    assert line["date"] == printed.day.isoformat()
+    (section,) = item.payload["sections"]
+    assert section["label"] == "Total Deposits"
+    assert Decimal(section["printed"]) == printed.amount
+    assert Decimal(section["difference"]) == fid.MISPRINT
+    assert (item.payload["held"], item.payload["imported"]) == (
+        1,
+        len(stmt.accounts[0].activity) - 1,
+    )
+
+    # Everything but the line is in the ledger, the account's value too.
+    assert env.activity(individual) == _fid_expected(stmt.accounts[0])
+    assert _fid_holdings(env, individual) == _fid_positions(stmt.accounts[0])
+    cash = [a for a in stmt.accounts[0].activity if a.type in ("deposit", "withdrawal")]
+    others = sorted((a.day, a.amount) for a in cash if a is not printed)
+    assert sorted((t.posted_date, t.amount) for t in env.cash_rows(individual)) == others
+    assert len(env.snapshots(individual)) == 1
+    before = [t.id for t in env.txns(individual)]
+    for index in (1, 2):
+        account = accounts[index]
+        assert account is not None
+        assert env.activity(account) == _fid_expected(stmt.accounts[index])
+    (imported,) = [
+        a for a in _audits(env, "investment.import") if a["account_id"] == str(individual.id)
+    ]
+    assert imported["lines_held"] == 1
+
+    resolution = _import_as_read(env, item)
+    assert resolution["import_as_read"] is True
+    assert env.document(document_id).status is DocumentStatus.PROCESSED
+    assert env.open_reviews(document_id) == []
+    # The held line as printed, and nothing else twice.
+    assert sorted((t.posted_date, t.amount) for t in env.cash_rows(individual)) == sorted(
+        [*others, (printed.day, printed.amount + fid.MISPRINT)]
+    )
+    assert [t.id for t in env.txns(individual)] == before
+    assert len(env.snapshots(individual)) == 1
 
 
 def test_a_chosen_account_takes_only_the_unmatched_statement(env: Env) -> None:
@@ -738,7 +838,7 @@ def _held_item(env: Env, document_id: uuid.UUID) -> ReviewItem:
 
 @pytest.mark.parametrize(
     ("tamper", "check"),
-    [("extra_row", "cash"), ("market_value", "positions"), ("total", "total_value")],
+    [("extra_row", "cash"), ("market_value", "positions")],
 )
 def test_held_statement_imported_as_read(env: Env, tamper: synth.Tamper, check: str) -> None:
     january, _ = synth.brokerage_series(seed=71)
@@ -758,8 +858,6 @@ def test_held_statement_imported_as_read(env: Env, tamper: synth.Tamper, check: 
         assert Decimal(found["difference"]) != 0
     if tamper == "extra_row":
         assert Decimal(differences["cash"]["difference"]) == Decimal("-777.77")
-    if tamper == "total":
-        assert Decimal(differences["total_value"]["difference"]) == Decimal("-250.00")
     if tamper == "market_value":
         assert differences["positions"]["count"] == 1
     assert env.txns(account) == []
@@ -799,13 +897,13 @@ def test_one_account_of_a_report_imported_as_read(env: Env) -> None:
     stmt = fid.fidelity_statement(seed=94)
     accounts = _fid_accounts(env, stmt)
     document_id = env.ingest(
-        fid.fidelity_pdf(stmt, tamper="total", tamper_account=1), "investment-report.pdf"
+        fid.fidelity_pdf(stmt, tamper="market_value", tamper_account=1), "investment-report.pdf"
     )
     item = _held_item(env, document_id)
     roth = accounts[1]
     assert roth is not None
     assert item.payload["statement"] == 1
-    assert [d["check"] for d in item.payload["differences"]] == ["total_value"]
+    assert [d["check"] for d in item.payload["differences"]] == ["positions", "total_value"]
     others = [a for a in accounts if a is not None and a.id != roth.id]
     written = {a.id: [t.id for t in env.txns(a)] for a in others}
     assert all(written.values())
@@ -831,7 +929,7 @@ def test_accepted_and_overlapping_answers_carry_into_each_other(env: Env) -> Non
     before = env.activity(account)
     snapshots = [(s.as_of_date, s.balance) for s in env.snapshots(account)]
     # The same month again as a PDF that does not add up: the overlap holds it first.
-    document_id = env.ingest(synth.placeholder_pdf(january, tamper="total"), "statement.pdf")
+    document_id = env.ingest(synth.placeholder_pdf(january, tamper="market_value"), "statement.pdf")
     (overlap,) = env.open_reviews(document_id)
     assert overlap.payload["reason"] == "statement_overlap"
     _resolve_overlap(env, overlap, "reject")
@@ -884,7 +982,7 @@ def test_an_accepted_statement_stays_imported_on_any_rerun(env: Env) -> None:
     roth = accounts[1]
     assert roth is not None
     document_id = env.ingest(
-        fid.fidelity_pdf(stmt, tamper="total", tamper_account=1), "investment-report.pdf"
+        fid.fidelity_pdf(stmt, tamper="market_value", tamper_account=1), "investment-report.pdf"
     )
     _import_as_read(env, _held_item(env, document_id))
     assert env.reasons(document_id) == {"account_not_found"}
@@ -924,7 +1022,7 @@ def test_an_answer_follows_its_statement_not_its_place(env: Env) -> None:
     roth = accounts[1]
     assert roth is not None
     document_id = env.ingest(
-        fid.fidelity_pdf(stmt, tamper="total", tamper_account=1), "investment-report.pdf"
+        fid.fidelity_pdf(stmt, tamper="market_value", tamper_account=1), "investment-report.pdf"
     )
     _import_as_read(env, _held_item(env, document_id))
     written = [t.id for t in env.txns(roth)]
@@ -980,7 +1078,7 @@ def test_an_answer_covers_only_its_statement(env: Env) -> None:
     roth = accounts[1]
     assert roth is not None
     document_id = env.ingest(
-        fid.fidelity_pdf(stmt, tamper="total", tamper_account=1), "investment-report.pdf"
+        fid.fidelity_pdf(stmt, tamper="market_value", tamper_account=1), "investment-report.pdf"
     )
 
     # The third statement made a second, failing statement of the Roth account.
@@ -1031,7 +1129,7 @@ def test_an_item_without_a_statement_key_is_stale(env: Env) -> None:
     """An item raised before statements had keys names no statement to import."""
     january, _ = synth.brokerage_series(seed=75)
     account = env.brokerage(january)
-    document_id = env.ingest(synth.placeholder_pdf(january, tamper="total"), "statement.pdf")
+    document_id = env.ingest(synth.placeholder_pdf(january, tamper="market_value"), "statement.pdf")
     item = _held_item(env, document_id)
     with env.factories.transaction() as db:
         set_context(db, env.household_id)
@@ -1055,7 +1153,7 @@ def test_an_item_without_a_statement_key_is_stale(env: Env) -> None:
 def test_import_as_read_is_only_for_statements_held_by_their_figures(env: Env) -> None:
     january, _ = synth.brokerage_series(seed=73)
     account = env.brokerage(january)
-    document_id = env.ingest(synth.placeholder_pdf(january, tamper="total"), "statement.pdf")
+    document_id = env.ingest(synth.placeholder_pdf(january, tamper="market_value"), "statement.pdf")
     with env.factories.transaction() as db:
         apply_rls_context(db, env.principal())
         guessed = documents_repo.add_review_item(
@@ -1088,7 +1186,7 @@ def test_import_as_read_is_only_for_statements_held_by_their_figures(env: Env) -
 def test_import_as_read_needs_edit_on_the_account(env: Env) -> None:
     january, _ = synth.brokerage_series(seed=74)
     account = env.brokerage(january)
-    document_id = env.ingest(synth.placeholder_pdf(january, tamper="total"), "statement.pdf")
+    document_id = env.ingest(synth.placeholder_pdf(january, tamper="market_value"), "statement.pdf")
     item = _held_item(env, document_id)
     member = env.factories.user(
         role=HouseholdRole.MEMBER, household=env.owner.household, with_totp=True

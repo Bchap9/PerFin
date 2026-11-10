@@ -185,15 +185,29 @@ def test_tampered_pdf_does_not_reconcile(tamper: synth.Tamper, failed: list[str]
         assert "market_value" in statement.positions[0].low_confidence
     if tamper == "extra_row":
         assert check.cash_difference == Decimal("-777.77")
-    # Every row is capped below the threshold (SECURITY.md C12).
-    rows: list[InvestmentActivity | InvestmentPosition] = [
-        *statement.activity,
-        *statement.positions,
-    ]
-    for row in rows:
-        assert row.confidence is not None
-        assert row.confidence <= confidence.UNRECONCILED
-        assert "reconciliation" in row.low_confidence
+    # Only the rows the statement's figures leave in doubt are capped below
+    # the threshold (SECURITY.md C12; ``localise``).
+    doubted: dict[str, tuple[list[int], list[int]]] = {
+        "extra_row": ([7], []),  # the one row that is the whole difference
+        "market_value": ([], [0]),  # the position whose value is not qty x price
+        "total": ([], []),  # holdings and cash add up; the account value alone differs
+    }
+    doubtful_activity, doubtful_positions = doubted[str(tamper)]
+    assert check.doubtful_activity == doubtful_activity
+    assert check.doubtful_positions == doubtful_positions
+    for index, activity in enumerate(statement.activity):
+        assert activity.confidence is not None
+        assert ("reconciliation" in activity.low_confidence) == (index in doubtful_activity)
+        if index in doubtful_activity:
+            assert activity.confidence <= confidence.UNRECONCILED
+    for index, position in enumerate(statement.positions):
+        assert position.confidence is not None
+        assert ("reconciliation" in position.low_confidence) == (index in doubtful_positions)
+        if index in doubtful_positions:
+            assert position.confidence <= confidence.UNRECONCILED
+    if tamper == "extra_row":
+        forged = statement.activity[7]
+        assert (forged.type, forged.amount) == ("buy", Decimal("-777.77"))
 
 
 def test_reparse_keeps_the_brokerage_parser_and_replaces_its_output() -> None:

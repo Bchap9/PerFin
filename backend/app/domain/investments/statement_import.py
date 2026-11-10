@@ -30,25 +30,52 @@ statements"). Per statement:
    statement into this account anyway (``statement_answers``) or the run
    names the account in ``allow_overlap`` (``apply-mapping``); every
    committed statement leaves a record.
-3. **Hold** (SECURITY.md C12): a statement whose figures do not reconcile
-   (:func:`app.ingestion.parsers.brokerage.reconcile_investment`: positions
-   x prices vs market values, holdings total, cash, account value), or with
-   any row or position read below the confidence threshold, writes
-   **nothing**: investment rows have no pending state, so they are held
-   back with a ``low_confidence_field`` item
-   (``investment_reconciliation_failed`` / ``investment_low_confidence``)
-   naming the discrepancy: its ``differences`` (per failed check, what the
-   statement prints, what its rows add up to and the difference; see
-   :func:`differences`), the statement's index and key
-   (``statement_answers.statement_key``) and the account's currency.
-   **Import as read** (the review queue's answer to such an item, see
-   ``app.domain.review.service``; recorded per statement key and account
-   by ``app.domain.imports.statement_answers``): every later import of the
-   document imports that statement, on that account only, as printed
+3. **Hold** (SECURITY.md C12): no row a statement's own figures do not
+   vouch for is written. Investment rows have no pending state, so what is
+   in doubt is held back and a ``low_confidence_field`` item says what and
+   why. What is held depends on what the reconciliation says
+   (:func:`app.ingestion.parsers.brokerage.reconcile_investment`:
+   positions x prices vs market values, holdings total, cash, account
+   value; for a document statement
+   :func:`~app.ingestion.parsers.brokerage.localise` adds where a failed
+   check comes from: each activity section against its printed total and
+   against the statement's cash-flow summary, and the rows left in doubt):
+
+   * **nothing in doubt, figures disagree** (the printed account value is
+     not holdings + cash, a section's total is off by an amount no row
+     explains): the statement is imported whole and an
+     ``investment_figures_differ`` item tells the person what does not add
+     up (nothing to answer);
+   * **only lines moving cash are in doubt** (:data:`CASH_ONLY_TYPES`:
+     dividends, interest, fees, deposits, withdrawals; whether for the
+     ``reconciliation`` doubt or any other, a date outside the period, an
+     amount hard to read): the positions and every other line are written
+     and an ``investment_lines_held`` item lists the lines held back
+     (``lines``: page, date, type, description, amount, section and the
+     doubts of each) with the sections that do not add up (``sections``);
+   * **anything else** (a line moving units or a position in doubt: the
+     positions are reconciled against every such line; a source that does
+     not say where a failed check comes from: OFX, an activity table; a
+     document with nothing to check against): the statement writes
+     **nothing** and an ``investment_reconciliation_failed`` /
+     ``investment_low_confidence`` item names the discrepancy: its
+     ``differences`` (per failed check, what the statement prints, what its
+     rows add up to and the difference; see :func:`differences`), the
+     ``sections`` that do not add up (:func:`section_differences`), the
+     ``lines`` in doubt when the statement says which, the cash-flow lines
+     no row was read for (``unread_summary_lines``), the statement's index
+     and key (``statement_answers.statement_key``) and the account's
+     currency.
+
+   **Import as read** (the review queue's answer to the last two kinds of
+   item, see ``app.domain.review.service``; recorded per statement key and
+   account by ``app.domain.imports.statement_answers``): every later import
+   of the document imports that statement, on that account only, as printed
    although it does not add up or a document gives it nothing to check
-   against. Another statement, even of the same account, is not covered by
-   it. For the answered statement the
-   ``reconciliation`` doubt every row carries (and the contradicted market
+   against (the held lines of an imported statement: the rows already
+   written are skipped by their hashes). Another statement, even of the
+   same account, is not covered by it. For the answered statement the
+   ``reconciliation`` doubt its rows carry (and the contradicted market
    value of a position that failed the ``positions`` check) no longer holds
    it, while any other doubt still does (a guessed date, an unread figure),
    as do the date range and every later step. An accepted statement writes
@@ -131,8 +158,13 @@ statements"). Per statement:
    out) is costed at the price its own rows print (one unit's).
 9. **Balance snapshot**: holdings + closing cash on ``as_of``
    (``source = statement``) when every check that could run held and both
-   are known (a statement printing no cash gives none); never for a
-   statement accepted as read (step 3).
+   are known; also when only the ``cash`` activity check failed on a
+   statement that says where (step 3) and holdings + closing cash is the
+   printed account value (:func:`_value_holds`: the lines in doubt do not
+   change what the account is worth). An account that prints no cash at
+   all and whose printed account value is its holdings holds none (a 529
+   plan); any other statement printing no cash gives no snapshot. Never
+   for a statement accepted as read (step 3).
 """
 
 from __future__ import annotations
@@ -231,6 +263,8 @@ class InvestmentImport:
     overlaps: int = 0
     #: Imported as read although they did not add up (an answer, step 3).
     accepted_as_read: int = 0
+    #: Activity lines of imported statements held back for a person (step 3).
+    lines_held: int = 0
     accounts: list[uuid.UUID] = field(default_factory=list)
 
     def summary(self) -> dict[str, Any]:
@@ -248,6 +282,7 @@ class InvestmentImport:
             "snapshots": self.snapshots,
             "statement_overlaps": self.overlaps,
             "accepted_as_read": self.accepted_as_read,
+            "lines_held": self.lines_held,
         }
 
 
@@ -416,24 +451,41 @@ def _statement_dates(statement: InvestmentStatement) -> Iterable[date | None]:
 #: can be answered "import as read" (module doc, step 3).
 RECONCILIATION_FAILED: Final = "investment_reconciliation_failed"
 LOW_CONFIDENCE: Final = "investment_low_confidence"
-#: The doubt every row of a statement that did not add up (or could not be
-#: checked) carries; an accepted statement no longer holds for it.
+#: The statement was imported but for the cash lines its own figures do not
+#: vouch for (module doc, step 3); answered "import as read" like the two above.
+LINES_HELD: Final = "investment_lines_held"
+#: The statement was imported whole; figures of its own disagree and no line
+#: is to blame (nothing to answer but "seen").
+FIGURES_DIFFER: Final = "investment_figures_differ"
+#: The doubt a row no figure of a statement that did not add up vouches for
+#: carries (every row, when nothing says where: an OFX statement, one that
+#: could not be checked); an accepted statement no longer holds for it.
 RECONCILIATION_DOUBT: Final = "reconciliation"
+#: Activity that moves cash only: such a line can wait for a person while the
+#: rest of its statement is imported (a line moving units cannot: the
+#: positions are reconciled against every one of them).
+CASH_ONLY_TYPES: Final = frozenset({"dividend", "interest", "fee", "deposit", "withdrawal"})
+#: Lines and sections listed in an item's payload at most.
+LINES_MAX: Final = 200
+_TEXT_MAX: Final = 120
 
 
 def acceptable_as_read(payload: Mapping[str, Any]) -> bool:
-    """The held statement of a review item ``payload`` may be imported as read.
+    """The held statement (or lines) of a review item ``payload`` may be imported as read.
 
     A statement that did not add up, or a document statement with nothing to
-    check against whose rows carry no other doubt (only ``reconciliation``):
-    a guessed date or an unread figure is never imported on a click.
+    check against, or the held lines of an imported one, whose rows carry no
+    other doubt (only ``reconciliation``): a guessed date or an unread
+    figure is never imported on a click.
     """
     reason = payload.get("reason")
     if reason == RECONCILIATION_FAILED:
         return True
     fields = payload.get("fields")
     return (
-        reason == LOW_CONFIDENCE and isinstance(fields, list) and fields == [RECONCILIATION_DOUBT]
+        reason in (LOW_CONFIDENCE, LINES_HELD)
+        and isinstance(fields, list)
+        and fields == [RECONCILIATION_DOUBT]
     )
 
 
@@ -498,6 +550,57 @@ def differences(
     return out
 
 
+def section_differences(check: InvestmentReconciliation) -> list[dict[str, Any]]:
+    """The activity sections whose rows are not their printed total, as text.
+
+    One entry per :class:`~app.ingestion.sandbox.protocol.SectionCheck` that
+    did not hold: the total's ``label`` as printed, ``printed``, what its
+    ``rows`` (their count) add up to (``computed``), the ``difference``
+    (computed - printed), where the total is printed (``source``: the
+    section's own ``total`` line or the cash-flow ``summary``) and the page.
+    """
+    return [
+        {
+            "label": section.label[:_TEXT_MAX],
+            "printed": _money_text(section.printed),
+            "computed": _money_text(section.computed),
+            "difference": _money_text(section.computed - section.printed),
+            "rows": len(section.rows),
+            "source": section.source,
+            "page": section.page,
+        }
+        for section in check.sections
+        if section.status == "mismatch" and section.printed is not None
+    ][:LINES_MAX]
+
+
+def _line(statement: InvestmentStatement, index: int, doubts: Sequence[str]) -> dict[str, Any]:
+    """One activity row as an item's payload shows it (what a person needs to find it)."""
+    row = statement.activity[index]
+    security = row.security
+    described = row.memo or (security.name or security.symbol if security is not None else None)
+    return {
+        "index": index,
+        "fields": list(doubts),
+        "page": row.page,
+        "date": row.trade_date.isoformat(),
+        "type": row.type,
+        "description": described[:_TEXT_MAX] if described else None,
+        "amount": _money_text(row.amount),
+        "section": row.section[:_TEXT_MAX] if row.section else None,
+    }
+
+
+def _evidence(check: InvestmentReconciliation) -> dict[str, Any]:
+    """What the statement's own figures say beyond the four checks (payload keys)."""
+    return {
+        "sections": section_differences(check),
+        "unread_summary_lines": [label[:_TEXT_MAX] for label in check.unread_summary_lines][
+            :IDS_MAX
+        ],
+    }
+
+
 def _doubts(fields: Sequence[str], ignored: frozenset[str]) -> list[str]:
     return [f for f in fields if f not in ignored]
 
@@ -511,12 +614,16 @@ def _held(
     index: int,
     key: str,
     accepted: bool = False,
-) -> bool:
-    """Hold the statement back with a review item (module doc, step 3); True: held.
+) -> InvestmentStatement | None:
+    """What of the statement may be written now (module doc, step 3); None: nothing.
+
+    The statement itself when nothing holds it; the statement without the
+    cash lines in doubt when only such lines are (an item lists them); None
+    when it is held back whole (an item says why).
 
     ``accepted``: the person said to import it as read, so its figures not
-    adding up (or not being checkable) no longer hold it; nothing else
-    changes.
+    adding up (or not being checkable) no longer hold it or any line; nothing
+    else changes.
     """
     if any(d is not None and not in_business_range(d) for d in _statement_dates(statement)):
         # SECURITY.md F8: a date before MIN_BUSINESS_DATE is a misread (or a
@@ -531,8 +638,31 @@ def _held(
                 "earliest_allowed": MIN_BUSINESS_DATE.isoformat(),
             },
         )
-        return True
-    if check.status == "mismatch" and not accepted:
+        return None
+    ignored = frozenset({RECONCILIATION_DOUBT}) if accepted else frozenset()
+    contradicted = frozenset({"market_value"}) | ignored
+    mismatched = set(check.position_mismatches) if accepted else set()
+    low_positions = [
+        (i, doubts)
+        for i, p in enumerate(statement.positions)
+        if (doubts := _doubts(p.low_confidence, contradicted if i in mismatched else ignored))
+    ]
+    low_activity = [
+        (i, doubts)
+        for i, a in enumerate(statement.activity)
+        if (doubts := _doubts(a.low_confidence, ignored))
+    ]
+    #: The parser said which rows the failed checks leave in doubt (``localise``).
+    localised = check.doubtful_activity is not None and check.doubtful_positions is not None
+    failing = check.status == "mismatch" and not accepted
+    lines = [_line(statement, i, doubts) for i, doubts in low_activity[:LINES_MAX]]
+    cash_lines_only = (
+        bool(low_activity)
+        and not low_positions
+        and all(statement.activity[i].type in CASH_ONLY_TYPES for i, _ in low_activity)
+        and len(low_activity) < len(statement.activity) + len(statement.positions)
+    )
+    if failing and not (localised and (cash_lines_only or not (low_positions or low_activity))):
         ctx.review(
             ReviewKind.LOW_CONFIDENCE_FIELD,
             {
@@ -546,6 +676,9 @@ def _held(
                 "failed": list(check.failed),
                 "checks": list(check.checks),
                 "differences": differences(statement, check),
+                **_evidence(check),
+                # The rows in doubt, when the statement's figures say which.
+                "lines": lines if localised else [],
                 "positions": [
                     {
                         "index": i,
@@ -568,32 +701,67 @@ def _held(
                 "reported_total_value": _text(check.reported_total_value),
             },
         )
-        return True
-    ignored = frozenset({RECONCILIATION_DOUBT}) if accepted else frozenset()
-    contradicted = frozenset({"market_value"}) | ignored
-    mismatched = set(check.position_mismatches) if accepted else set()
-    low_positions = [
-        (i, doubts)
-        for i, p in enumerate(statement.positions)
-        if (doubts := _doubts(p.low_confidence, contradicted if i in mismatched else ignored))
-    ]
-    low_activity = [
-        (i, doubts)
-        for i, a in enumerate(statement.activity)
-        if (doubts := _doubts(a.low_confidence, ignored))
-    ]
+        return None
     unchecked_document = (
         check.status == "unavailable"
         and statement.source_format in DOCUMENT_STATEMENT_FORMATS
         and not accepted
     )
     if not (low_positions or low_activity or unchecked_document):
-        return False
+        if failing:
+            # Every row is vouched for; figures of the statement itself
+            # disagree (its account value, a section's total). Imported, and
+            # a person is told what does not add up.
+            ctx.review(
+                ReviewKind.LOW_CONFIDENCE_FIELD,
+                {
+                    "reason": FIGURES_DIFFER,
+                    "field": "reconciliation",
+                    "account_id": str(account.id),
+                    "statement": index,
+                    "statement_key": key,
+                    "currency": account.currency,
+                    "parser": _parser(statement),
+                    "failed": list(check.failed),
+                    "checks": list(check.checks),
+                    "differences": differences(statement, check),
+                    **_evidence(check),
+                },
+            )
+        return statement
     fields = sorted(
         {f for _, doubts in low_positions for f in doubts}
         | {f for _, doubts in low_activity for f in doubts}
         | ({RECONCILIATION_DOUBT} if unchecked_document else set())
     )
+    if cash_lines_only and not unchecked_document:
+        # Only lines moving cash are in doubt: the positions and every other
+        # line are written, these wait for a person.
+        held = {i for i, _ in low_activity}
+        ctx.review(
+            ReviewKind.LOW_CONFIDENCE_FIELD,
+            {
+                "reason": LINES_HELD,
+                "fields": fields,
+                "account_id": str(account.id),
+                "statement": index,
+                "statement_key": key,
+                "currency": account.currency,
+                "parser": _parser(statement),
+                "reconciliation": check.status,
+                "failed": list(check.failed),
+                "checks": list(check.checks),
+                "differences": differences(statement, check),
+                **_evidence(check),
+                "lines": lines,
+                "held": len(held),
+                "imported": len(statement.activity) - len(held),
+            },
+        )
+        ctx.result.lines_held += len(held)
+        return statement.model_copy(
+            update={"activity": [a for i, a in enumerate(statement.activity) if i not in held]}
+        )
     ctx.review(
         ReviewKind.LOW_CONFIDENCE_FIELD,
         {
@@ -612,9 +780,10 @@ def _held(
                 {"index": i, "fields": doubts, "page": statement.activity[i].page}
                 for i, doubts in low_activity[:IDS_MAX]
             ],
+            "lines": lines,
         },
     )
-    return True
+    return None
 
 
 # ---------------------------------------------------------------------------
@@ -1327,8 +1496,9 @@ def _commit(
     check: InvestmentReconciliation,
     *,
     accepted: bool = False,
+    lines_held: int = 0,
 ) -> bool:
-    """Write one reconciled statement; False when it had to be held back."""
+    """Write one statement (``lines_held`` of its cash lines left out); False: held back."""
     db = ctx.db
     result = ctx.result
     on = statement.as_of or statement.period_end
@@ -1394,10 +1564,22 @@ def _commit(
 
     values = [position_value(p) for p in statement.positions]
     cash = statement.cash_closing.amount if statement.cash_closing is not None else None
-    # Never from figures that did not add up, even accepted as read (module
-    # doc, step 9): the account's value is not taken from them.
     if (
-        check.status == "ok"
+        cash is None
+        and statement.cash_opening is None
+        and check.reported_total_value is not None
+        and check.positions_total is not None
+        and abs(check.reported_total_value - check.positions_total) <= check.tolerance
+    ):
+        # An account that prints no cash at all and whose account value is
+        # its holdings (a 529 plan, a fund account): it holds none.
+        cash = Decimal(0)
+    # Never from figures that did not add up, even accepted as read (module
+    # doc, step 9): the account's value is not taken from them. Cash activity
+    # that does not add up leaves the value alone when the statement's own
+    # holdings and closing cash are its printed account value.
+    if (
+        _value_holds(check, accepted=accepted)
         and on is not None
         and cash is not None
         and all(v is not None for v in values)
@@ -1435,6 +1617,7 @@ def _commit(
                 if accepted and check.status != "ok"
                 else {}
             ),
+            **({"lines_held": lines_held} if lines_held else {}),
         },
         household_id=ctx.household_id,
         user_id=ctx.user_id,
@@ -1450,6 +1633,23 @@ def _commit(
         },
     )
     return True
+
+
+def _value_holds(check: InvestmentReconciliation, *, accepted: bool) -> bool:
+    """The statement's holdings and closing cash may be the account's balance.
+
+    Every check held; or (not for a statement accepted as read) the parser
+    said where the failure lies (``localise``), only the ``cash`` activity
+    check failed and holdings + closing cash is the printed account value.
+    """
+    if check.status == "ok":
+        return True
+    return (
+        not accepted
+        and check.doubtful_activity is not None
+        and check.failed == ["cash"]
+        and "total_value" in check.checks
+    )
 
 
 def _several_accounts(statements: Sequence[InvestmentStatement]) -> bool:
@@ -1576,10 +1776,12 @@ def import_investment_statements(
             continue
         check = statement.reconciliation or reconcile_investment(statement)
         accepted = answered.as_read("investment", key, account.id)
-        if _held(ctx, statement, check, account, index=index, key=key, accepted=accepted):
+        kept = _held(ctx, statement, check, account, index=index, key=key, accepted=accepted)
+        if kept is None:
             ctx.result.held += 1
             continue
-        if _commit(ctx, statement, account, check, accepted=accepted):
+        left_out = len(statement.activity) - len(kept.activity)
+        if _commit(ctx, kept, account, check, accepted=accepted, lines_held=left_out):
             ctx.result.statements += 1
             if accepted and check.status != "ok":
                 ctx.result.accepted_as_read += 1

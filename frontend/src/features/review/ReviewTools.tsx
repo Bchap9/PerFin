@@ -33,6 +33,7 @@ import {
   lowConfidenceResolution,
   mergeFix,
   ownerResolution,
+  payloadLines,
   payloadString,
   rememberLayout,
   resolveItem,
@@ -738,6 +739,77 @@ export function BalanceTools({ item, actionable }: { item: ReviewItem; actionabl
           {error}
         </p>
       )}
+    </div>
+  );
+}
+
+const DOUBT_WORDS: ReadonlyMap<string, string> = new Map(
+  Object.entries({
+    reconciliation: "its section does not add up",
+    trade_date: "date outside the statement's period",
+    amount: "amount hard to read",
+    security: "security not identified",
+    quantity: "quantity not read",
+    type: "kind of activity unclear",
+  }),
+);
+
+function doubtWords(fields: string[]): string {
+  return fields.map((f) => DOUBT_WORDS.get(f) ?? f).join("; ");
+}
+
+/**
+ * The activity lines of a brokerage statement that are in doubt (payload
+ * ``lines``): the date, section, description and amount printed, the page
+ * to find each on, and why PerFin doubts it. Nothing here is in the ledger
+ * yet; the item's actions decide about all of them.
+ */
+export function HeldLines({ item }: { item: ReviewItem }) {
+  const lines = payloadLines(item);
+  if (lines.length === 0) {
+    return null;
+  }
+  const currency = payloadString(item, "currency");
+  return (
+    <div
+      className="mapping-grid"
+      role="region"
+      aria-label="Lines in doubt"
+      tabIndex={0}
+    >
+      <table className="table table--compact">
+        <caption className="visually-hidden">Lines in doubt</caption>
+        <thead>
+          <tr>
+            <th scope="col">Date</th>
+            <th scope="col">Section</th>
+            <th scope="col">Description</th>
+            <th scope="col">Amount</th>
+            <th scope="col">Page</th>
+            <th scope="col">Why</th>
+          </tr>
+        </thead>
+        <tbody>
+          {lines.map((line) => (
+            <tr key={line.index}>
+              <td>{line.date === null ? "" : (formatDate(line.date) ?? line.date)}</td>
+              <td>{line.section ?? ""}</td>
+              <td>{line.description ?? line.type ?? ""}</td>
+              <td>
+                {line.amount === null ? (
+                  ""
+                ) : currency === null ? (
+                  line.amount
+                ) : (
+                  <MoneyText amount={line.amount} currency={currency} />
+                )}
+              </td>
+              <td>{line.page === null ? "" : String(line.page)}</td>
+              <td>{doubtWords(line.fields)}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
     </div>
   );
 }
