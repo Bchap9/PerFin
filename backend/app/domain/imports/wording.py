@@ -49,7 +49,7 @@ import uuid
 from collections.abc import Iterable
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Any, Final, Literal
+from typing import Any, Final, Literal, cast
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -69,7 +69,9 @@ from app.domain.households.repo import list_members
 from app.domain.imports.schemas import LearnedWordingList, LearnedWordingOut
 from app.ingestion.parsers.vocabulary import (
     ACTION_PREFIX,
+    COLUMN_PREFIX,
     SECTION_PREFIX,
+    SUGGESTED_COLUMNS,
     SUGGESTED_DOUBT,
     SUGGESTED_SECTIONS,
     SUGGESTED_TYPES,
@@ -85,10 +87,12 @@ SUGGESTIONS_KEY: Final = "ml_vocabulary"
 MAX_ENTRIES: Final = 500
 _LAYOUT_MAX: Final = 64
 
-WordingKind = Literal["action", "section"]
+WordingKind = Literal["action", "section", "column"]
 _ALLOWED: Final[dict[str, frozenset[str]]] = {
     "action": SUGGESTED_TYPES,
     "section": SUGGESTED_SECTIONS,
+    # The heading of a table's column and what the column holds.
+    "column": SUGGESTED_COLUMNS,
 }
 
 
@@ -151,7 +155,7 @@ def _entry(data: Any) -> Entry | None:
         return None
     return Entry(
         layout,
-        "action" if kind == "action" else "section",
+        cast(WordingKind, kind),
         phrase,
         meaning,
         learned_at,
@@ -204,6 +208,7 @@ def household_vocabulary(db: Session, household_id: uuid.UUID, layout: str | Non
     return Vocabulary(
         learned_actions={e.phrase: e.meaning for e in entries if e.kind == "action"},
         learned_sections={e.phrase: e.meaning for e in entries if e.kind == "section"},
+        learned_columns={e.phrase: e.meaning for e in entries if e.kind == "column"},
     )
 
 
@@ -249,6 +254,11 @@ def confirmed(
             meaning = suggestions.sections.get(phrase)
             if meaning is not None:
                 found.setdefault(("section", phrase), meaning)
+        elif marker.startswith(COLUMN_PREFIX):
+            # A table read through suggested column headings: all of them
+            # are confirmed with its rows.
+            for phrase, meaning in suggestions.columns.items():
+                found.setdefault(("column", phrase), meaning)
     return [(kind, phrase, meaning) for (kind, phrase), meaning in found.items()]
 
 

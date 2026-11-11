@@ -147,6 +147,11 @@ def test_phrases_are_numbered_for_the_model_and_answered_from_the_lists_only(
             {"index": 1, "type": "sell"},  # one answer per phrase
         ],
         "headings": [{"index": 1, "kind": "cash"}, {"index": 2, "kind": "skip"}],
+        "columns": [
+            {"index": 1, "role": "date"},
+            {"index": 2, "role": "balance"},  # not a listed role
+            {"index": 3, "role": "unknown"},  # not sure: left out
+        ],
         "note": "dropped",
     }
     status, answer = _post(
@@ -154,6 +159,7 @@ def test_phrases_are_numbered_for_the_model_and_answered_from_the_lists_only(
         {
             "actions": ["periodic investment plan", "bank sweep credit ref 0", "   x   y  "],
             "headings": ["sweep program activity", "estimated cash flow"],
+            "columns": ["posted", "running total", "ref"],
         },
         path=VOCABULARY,
     )
@@ -161,6 +167,7 @@ def test_phrases_are_numbered_for_the_model_and_answered_from_the_lists_only(
     assert answer == {
         "actions": [{"index": 1, "type": "buy"}],
         "headings": [{"index": 1, "kind": "cash"}],
+        "columns": [{"index": 1, "role": "date"}],
         "model": "qwen2.5:7b-instruct",
     }
     (body,) = runtime.bodies
@@ -169,7 +176,8 @@ def test_phrases_are_numbered_for_the_model_and_answered_from_the_lists_only(
     assert body["messages"][0] == {"role": "system", "content": ml.VOCABULARY_PROMPT}
     assert body["messages"][1]["content"] == (
         "ACTIONS:\n1. periodic investment plan\n2. bank sweep credit ref 0\n3. x y\n\n"
-        "HEADINGS:\n1. sweep program activity\n2. estimated cash flow"
+        "HEADINGS:\n1. sweep program activity\n2. estimated cash flow\n\n"
+        "COLUMNS:\n1. posted\n2. running total\n3. ref"
     )
 
 
@@ -184,10 +192,12 @@ def test_the_statement_is_given_as_context_before_the_lists(
     )
     # Whatever the model read, a kind per numbered phrase is all that comes back.
     assert (status, answer["actions"]) == (200, [{"index": 1, "type": "buy"}])
-    assert set(answer) == {"actions", "headings", "model"}
+    assert set(answer) == {"actions", "headings", "columns", "model"}
+    assert answer["columns"] == []
     content = runtime.bodies[0]["messages"][1]["content"]
     assert content == (
-        f"STATEMENT:\n{statement}\n\nACTIONS:\n1. periodic investment plan\n\nHEADINGS:\n(none)"
+        f"STATEMENT:\n{statement}\n\nACTIONS:\n1. periodic investment plan\n\n"
+        "HEADINGS:\n(none)\n\nCOLUMNS:\n(none)"
     )
     # One request, one answer: no earlier turn is carried into a call.
     assert [m["role"] for m in runtime.bodies[0]["messages"]] == ["system", "user"]

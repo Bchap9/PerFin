@@ -256,6 +256,9 @@ class ParseOutcome:
     #: (:func:`app.ingestion.parsers.vocabulary.phrase_key` of each).
     unknown_actions: list[str] = field(default_factory=list)
     unknown_headings: list[str] = field(default_factory=list)
+    #: Column headings of activity tables whose header no parser could use
+    #: (:func:`app.ingestion.parsers.vocabulary.column_key` of each).
+    unknown_columns: list[str] = field(default_factory=list)
     #: Accounts the document's index lists that no statement was read for.
     unread_accounts: list[str] = field(default_factory=list)
     #: Pages and boxes of skipped lines where the parser knows them (review highlight).

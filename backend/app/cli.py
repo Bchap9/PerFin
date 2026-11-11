@@ -674,6 +674,61 @@ def cmd_review_report(args: argparse.Namespace) -> int:
     return EXIT_OK
 
 
+def cmd_ml_eval(args: argparse.Namespace) -> int:
+    """``perfin ml eval``: how well the configured local model types statement wording.
+
+    Asks the adapter (``PERFIN_ML_URL``) about PerFin's own vocabulary and
+    prints how often it agrees (:mod:`app.ml.evaluate`). Nothing personal is
+    sent and nothing is stored. Exit 1: the model is not configured, did not
+    answer, or agrees less often than ``--min-agreement``.
+    """
+    import json
+
+    from app.core.settings import get_settings
+    from app.ml.evaluate import evaluate
+
+    try:
+        settings = get_settings()
+    except ValidationError as exc:
+        _print_validation_error(exc)
+        return EXIT_FAIL
+    if not settings.ml_enabled:
+        print(
+            "perfin ml eval: no local model is configured (PERFIN_ML_URL, PERFIN_ML_TOKEN)",
+            file=sys.stderr,
+        )
+        return EXIT_FAIL
+    report = evaluate(settings)
+    if args.json:
+        print(json.dumps(report.as_dict(), indent=2))
+    else:
+        total = report.total
+        print(f"model: {report.model or 'unknown'}")
+        for name, score in (
+            ("activity words", report.actions),
+            ("section headings", report.headings),
+            ("all", total),
+        ):
+            share = score.agreement
+            shown = f"{share:.1%}" if share is not None else "n/a"
+            print(
+                f"{name:17} asked {score.asked:4}  agreed {score.agreed:4}  "
+                f"differed {score.differed:4}  unanswered {score.unanswered:4}  agreement {shown}"
+            )
+        for entry in report.differences[: args.show]:
+            print(
+                f"  {entry['list']}: {entry['phrase']!r} is {entry['expected']}, "
+                f"the model said {entry['answered']}"
+            )
+    if not report.reachable:
+        print("perfin ml eval: the model adapter did not answer", file=sys.stderr)
+        return EXIT_FAIL
+    share = report.total.agreement
+    if args.min_agreement is not None and (share is None or share < args.min_agreement):
+        return EXIT_FAIL
+    return EXIT_OK
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="perfin", description="PerFin personal finance")
     sub = parser.add_subparsers(dest="command", required=True, metavar="COMMAND")
@@ -726,6 +781,19 @@ def build_parser() -> argparse.ArgumentParser:
     )
     ingest.add_argument("--pretty", action="store_true", help="indent each stage's JSON")
     ingest.set_defaults(func=cmd_ingest)
+    ml = sub.add_parser("ml", help="local model tools (optional, ADR-0010)")
+    ml_sub = ml.add_subparsers(dest="ml_command", required=True, metavar="ACTION")
+    ml_eval = ml_sub.add_parser(
+        "eval", help="measure how well the configured local model types statement wording"
+    )
+    ml_eval.add_argument("--json", action="store_true", help="print the report as JSON")
+    ml_eval.add_argument("--show", type=int, default=20, help="disagreements to list (default 20)")
+    ml_eval.add_argument(
+        "--min-agreement",
+        type=float,
+        help="exit 1 when the model agrees with less than this share (0..1) of the phrases",
+    )
+    ml_eval.set_defaults(func=cmd_ml_eval)
     report = sub.add_parser(
         "review-report", help="count a household's review items by kind and reason (read-only)"
     )

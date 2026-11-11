@@ -55,6 +55,7 @@ def default_deps() -> pipeline.PipelineDeps:
         confidence_threshold=settings.ingest_confidence_threshold,
         ml=partial(document_hints, settings) if settings.ml_enabled else None,
         ml_vocabulary=partial(activity_hints, settings) if settings.ml_enabled else None,
+        ml_max_chars=settings.ml_max_chars,
     )
 
 

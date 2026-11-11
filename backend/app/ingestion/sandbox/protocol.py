@@ -985,6 +985,11 @@ class ParseInfo(_Strict):
     unknown_headings: list[Annotated[str, Field(max_length=SECTION_LABEL_MAX)]] = Field(
         default_factory=list, max_length=MAX_SECTION_CHECKS
     )
+    #: Column headings of activity tables whose header the parser could not
+    #: use (``app.ingestion.parsers.vocabulary.column_key``: words, no digits).
+    unknown_columns: list[Annotated[str, Field(max_length=SECTION_LABEL_MAX)]] = Field(
+        default_factory=list, max_length=MAX_SECTION_CHECKS
+    )
     #: Last four digits of the accounts the document's own index lists and
     #: no statement was read for (their pages were not found or not read).
     unread_accounts: list[Annotated[str, Field(pattern=r"^[0-9A-Za-z]{1,4}$")]] = Field(

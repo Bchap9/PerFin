@@ -61,9 +61,11 @@ from app.core.local_url import resolves_locally
 from app.core.settings import Settings
 from app.ingestion.parsers.vocabulary import (
     MAX_PHRASES,
+    SUGGESTED_COLUMNS,
     SUGGESTED_SECTIONS,
     SUGGESTED_TYPES,
     Vocabulary,
+    column_key,
     phrase_key,
 )
 
@@ -304,7 +306,10 @@ def _choices(answer: Any, key: str, sent: Sequence[str], allowed: frozenset[str]
 
 
 def validated_vocabulary(
-    answer: Any, actions: Sequence[str], headings: Sequence[str]
+    answer: Any,
+    actions: Sequence[str],
+    headings: Sequence[str],
+    columns: Sequence[str] = (),
 ) -> Vocabulary | None:
     """The answer reduced to listed kinds for the phrases that were sent (module doc)."""
     if not isinstance(answer, dict):
@@ -312,6 +317,7 @@ def validated_vocabulary(
     found = Vocabulary(
         actions=_choices(answer.get("actions"), "type", actions, SUGGESTED_TYPES),
         sections=_choices(answer.get("headings"), "kind", headings, SUGGESTED_SECTIONS),
+        columns=_choices(answer.get("columns"), "role", columns, SUGGESTED_COLUMNS),
         model=_text(answer.get("model"), 80),
     )
     return None if found.empty else found
@@ -322,17 +328,21 @@ def activity_hints(
     actions: Sequence[str],
     headings: Sequence[str],
     text: str = "",
+    columns: Sequence[str] = (),
     *,
     transport: httpx.BaseTransport | None = None,
 ) -> Vocabulary | None:
     """Ask what kind of activity ``actions`` and ``headings`` are (module doc).
 
     ``text``: the statement they are from, for the model to read them in
-    (cut to ``PERFIN_ML_MAX_CHARS``). None: off, failed, or no phrase got a
-    listed kind.
+    (cut to ``PERFIN_ML_MAX_CHARS``). ``columns``: the column headings of an
+    activity table whose header no parser could use; the model says what
+    each names. None: off, failed, or no phrase got a listed kind.
     """
     sent_actions, sent_headings = _keys(actions), _keys(headings)
-    if not sent_actions and not sent_headings:
+    sent_columns = [key for c in columns if (key := column_key(c)) is not None]
+    sent_columns = list(dict.fromkeys(sent_columns))[:MAX_PHRASES]
+    if not sent_actions and not sent_headings and not sent_columns:
         return None
     answer = _ask(
         settings,
@@ -340,13 +350,14 @@ def activity_hints(
         {
             "actions": sent_actions,
             "headings": sent_headings,
+            **({"columns": sent_columns} if sent_columns else {}),
             "text": text[: settings.ml_max_chars],
         },
         transport,
     )
     if answer is None:
         return None
-    return validated_vocabulary(answer, sent_actions, sent_headings)
+    return validated_vocabulary(answer, sent_actions, sent_headings, sent_columns)
 
 
 def reset_breaker() -> None:

@@ -739,10 +739,11 @@ class LearnedWordingOut(_Output):
     id: str
     #: The layout it was learned on (the parser's institution key or name).
     layout: str
-    #: ``action``: the action words of a row; ``section``: a section's heading.
+    #: ``action``: the action words of a row; ``section``: a section's
+    #: heading; ``column``: the heading of a table's column.
     kind: str
     phrase: str
-    #: What it means: an activity type or a section kind.
+    #: What it means: an activity type, a section kind or a column's role.
     meaning: str
     learned_at: datetime
     learned_from_document_id: uuid.UUID | None

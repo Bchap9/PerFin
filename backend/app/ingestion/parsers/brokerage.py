@@ -260,12 +260,15 @@ from app.ingestion.parsers.text import (
 )
 from app.ingestion.parsers.vocabulary import (
     ACTION_PREFIX,
+    COLUMN_PREFIX,
     MAX_PHRASES,
     SECTION_PREFIX,
+    SUGGESTED_COLUMNS,
     SUGGESTED_DOUBT,
     SUGGESTED_SECTIONS,
     SUGGESTED_TYPES,
     Vocabulary,
+    column_key,
     phrase_key,
 )
 from app.ingestion.reconcile import TOLERANCE
@@ -1033,6 +1036,8 @@ class _HeaderCell:
 
 #: Beyond any page: the outer edges of the first and last side-by-side table.
 _FAR: Final = 1e9
+#: A line of more cells than this is not taken for an unknown table's header.
+_MAX_UNKNOWN_HEADER: Final = 12
 
 
 @dataclass(frozen=True)
@@ -1043,6 +1048,10 @@ class _Part:
     #: The span of the line this table reads (``-_FAR``/``_FAR``: open).
     lo: float
     hi: float
+    #: ``column:<heading>`` when a column of this table is only the local
+    #: model's suggestion (``app.ingestion.parsers.vocabulary``): its rows
+    #: carry it and wait for a person.
+    suggested: str | None = None
 
 
 @dataclass(frozen=True)
@@ -1214,6 +1223,25 @@ def _columns[R](
         roles.add(role)
         found.append(_Column(role, cell.x0, cell.x1))
     return found, known
+
+
+def _activity_headers(
+    vocabulary: Vocabulary | None, *, suggestions: bool
+) -> Mapping[str, ActivityRole]:
+    """:data:`ACTIVITY_HEADERS` with the column headings the household learned
+    and, with ``suggestions``, those the local model suggested (ADR-0010).
+
+    The parser's own words always win; a learned heading wins over a suggested one.
+    """
+    if vocabulary is None:
+        return ACTIVITY_HEADERS
+    extra = {**(vocabulary.columns if suggestions else {}), **vocabulary.learned_columns}
+    if not extra:
+        return ACTIVITY_HEADERS
+    return {
+        **{k: cast(ActivityRole, v) for k, v in extra.items() if v in SUGGESTED_COLUMNS},
+        **ACTIVITY_HEADERS,
+    }
 
 
 def _known_header(text: str) -> bool:
@@ -1458,6 +1486,8 @@ class _Collected:
     #: Action phrases and headings of the rows nothing could type (their keys).
     unknown_actions: list[str] = field(default_factory=list)
     unknown_headings: list[str] = field(default_factory=list)
+    #: Column headings of activity tables whose header could not be used.
+    unknown_columns: list[str] = field(default_factory=list)
     #: Where the lines left out are (a row nothing typed, an unread amount),
     #: for the review queue's highlight.
     skipped_regions: list[tuple[int, tuple[float, float, float, float]]] = field(
@@ -2089,9 +2119,14 @@ class BrokerageStatementParser(DocumentParser):
 
     @classmethod
     def _activity_from(
-        cls, cells: Sequence[_HeaderCell], *, cash_tables: bool = False, typeless: bool = False
+        cls,
+        cells: Sequence[_HeaderCell],
+        *,
+        cash_tables: bool = False,
+        typeless: bool = False,
+        headers: Mapping[str, ActivityRole] = ACTIVITY_HEADERS,
     ) -> list[_Column[ActivityRole]] | None:
-        found, _ = _columns(cells, ACTIVITY_HEADERS, "other")
+        found, _ = _columns(cells, headers, "other")
         roles = {c.role for c in found}
         if typeless and {"date", "amount"} <= roles and not roles & {"type", "description"}:
             # A margin interest table: a period and what it charged, nothing else.
@@ -2114,7 +2149,12 @@ class BrokerageStatementParser(DocumentParser):
 
     @classmethod
     def _parts(
-        cls, cells: Sequence[_HeaderCell], *, cash_tables: bool = False, typeless: bool = False
+        cls,
+        cells: Sequence[_HeaderCell],
+        *,
+        cash_tables: bool = False,
+        typeless: bool = False,
+        headers: Mapping[str, ActivityRole] = ACTIVITY_HEADERS,
     ) -> list[_Part] | None:
         """The activity tables a header names: one, or several side by side.
 
@@ -2131,7 +2171,9 @@ class BrokerageStatementParser(DocumentParser):
             groups = [list(cells[i : i + size]) for i in range(0, count, size)]
             parts: list[_Part] = []
             for number, group in enumerate(groups):
-                columns = cls._activity_from(group, cash_tables=cash_tables, typeless=typeless)
+                columns = cls._activity_from(
+                    group, cash_tables=cash_tables, typeless=typeless, headers=headers
+                )
                 if columns is None:
                     return None
                 last = number == len(groups) - 1
@@ -2139,7 +2181,9 @@ class BrokerageStatementParser(DocumentParser):
                 hi = _FAR if last else (group[-1].x1 + groups[number + 1][0].x0) / 2
                 parts.append(_Part(columns, lo, hi))
             return parts
-        columns = cls._activity_from(cells, cash_tables=cash_tables, typeless=typeless)
+        columns = cls._activity_from(
+            cells, cash_tables=cash_tables, typeless=typeless, headers=headers
+        )
         return [_Part(columns, -_FAR, _FAR)] if columns is not None else None
 
     def _title(self, line: ViewLine) -> bool:
@@ -2160,6 +2204,7 @@ class BrokerageStatementParser(DocumentParser):
         *,
         cash_tables: bool = False,
         typeless: bool = False,
+        vocabulary: Vocabulary | None = None,
     ) -> _Header | None:
         """A table header starting at ``lines[index]`` over up to three lines.
 
@@ -2189,7 +2234,9 @@ class BrokerageStatementParser(DocumentParser):
                     break
                 if self._title(group[-2]):
                     break  # a heading starts what follows, it heads no column
-            found = self._header_of(group, cash_tables=cash_tables, typeless=typeless)
+            found = self._header_of(
+                group, cash_tables=cash_tables, typeless=typeless, vocabulary=vocabulary
+            )
             if found is not None and (best is None or found[0] > best[0]):
                 best = found
         if best is None:
@@ -2197,7 +2244,10 @@ class BrokerageStatementParser(DocumentParser):
         used = best[1].used
         if used > 1 and len(first.cells) <= 2:
             below = self._header_of(
-                lines[index + 1 : index + used], cash_tables=cash_tables, typeless=typeless
+                lines[index + 1 : index + used],
+                cash_tables=cash_tables,
+                typeless=typeless,
+                vocabulary=vocabulary,
             )
             if below is not None and below[1].known_roles == best[1].known_roles:
                 # The top line names no column ("Electronic Funds Transfers",
@@ -2207,19 +2257,80 @@ class BrokerageStatementParser(DocumentParser):
         return best[1]
 
     def _header_of(
-        self, group: Sequence[ViewLine], *, cash_tables: bool, typeless: bool = False
+        self,
+        group: Sequence[ViewLine],
+        *,
+        cash_tables: bool,
+        typeless: bool = False,
+        vocabulary: Vocabulary | None = None,
     ) -> tuple[int, _Header] | None:
-        """``(known columns named, header)`` that exactly ``group``'s lines make, if any."""
+        """``(known columns named, header)`` that exactly ``group``'s lines make, if any.
+
+        An activity header is read with the parser's own column words and
+        those the household learned; one that names no table that way is
+        read once more with the local model's suggested column headings
+        (``vocabulary.columns``), and its table is then marked as read
+        through a suggestion (:attr:`_Part.suggested`).
+        """
         cells = _header_cells(group)
         holdings = self._holdings_from(cells)
         if holdings is not None:
             known = sum(1 for c in cells if header_key(c.parts, HOLDING_HEADERS) is not None)
             return known, _Header(holdings, None, len(group))
-        parts = self._parts(cells, cash_tables=cash_tables, typeless=typeless)
+        headers = _activity_headers(vocabulary, suggestions=False)
+        parts = self._parts(cells, cash_tables=cash_tables, typeless=typeless, headers=headers)
+        if parts is None and vocabulary is not None and vocabulary.columns:
+            headers = _activity_headers(vocabulary, suggestions=True)
+            parts = self._parts(cells, cash_tables=cash_tables, typeless=typeless, headers=headers)
+            if parts is not None:
+                own = _activity_headers(vocabulary, suggestions=False)
+                named = {k: k for k in vocabulary.columns if k not in own}
+                key = next((k for c in cells if (k := header_key(c.parts, named))), "")
+                parts = [replace(p, suggested=f"{COLUMN_PREFIX}{key}") for p in parts]
         if parts is None:
             return None
-        known = sum(1 for c in cells if header_key(c.parts, ACTIVITY_HEADERS) is not None)
+        known = sum(1 for c in cells if header_key(c.parts, headers) is not None)
         return known, _Header(None, parts, len(group))
+
+    def _note_unknown_columns(
+        self, lines: Sequence[ViewLine], index: int, collected: _Collected
+    ) -> bool:
+        """Remember the column headings of a header the parser cannot use; True: it is one.
+
+        ``lines[index]`` is no header of a table the parser reads; it is
+        taken for the header of one it does not when it holds three or more
+        cells without an amount, at least one of them a column word the
+        parser knows, and the line under it is an entry (a date, then an
+        amount). The cells it does not know are what the optional local
+        model may be asked about (``ParseInfo.unknown_columns``).
+        """
+        line = lines[index]
+        if find_amounts(line.text) or self._title(line) or index + 1 >= len(lines):
+            return False
+        cells = [piece for c in line.cells for piece in split_header_cell(c)]
+        if not 3 <= len(cells) <= _MAX_UNKNOWN_HEADER or _date_shaped(cells[0].text):
+            return False
+        below = lines[index + 1]
+        if (
+            below.page != line.page
+            or len(below.cells) < 2
+            or not _date_shaped(below.cells[0].text)
+            or not find_amounts(below.text)
+        ):
+            return False
+        headers = _activity_headers(collected.vocabulary, suggestions=True)
+        roles = [header_key((c.text,), headers) for c in cells]
+        if all(role is None for role in roles) or all(role is not None for role in roles):
+            return False
+        for cell, role in zip(cells, roles, strict=True):
+            key = column_key(cell.text) if role is None else None
+            if (
+                key is not None
+                and key not in collected.unknown_columns
+                and len(collected.unknown_columns) < MAX_PHRASES
+            ):
+                collected.unknown_columns.append(key)
+        return True
 
     def fingerprint_score(self, view: DocumentView) -> float:
         """Share of :attr:`fingerprints` on page 1 (the name also counts from :meth:`named`)."""
@@ -2547,6 +2658,7 @@ class BrokerageStatementParser(DocumentParser):
         *,
         symbol_column: bool = False,
         part: int = 0,
+        column_suggestion: str | None = None,
     ) -> None:
         date_text = _text(cells.get("date"))
         if collected.section == "margin":
@@ -2623,6 +2735,10 @@ class BrokerageStatementParser(DocumentParser):
             if not collected.section_worded and section is None and collected.section_label:
                 _remember(collected.unknown_headings, collected.section_label)
             return
+        if column_suggestion is not None and not suggested:
+            # The table is read through a column heading the model suggested:
+            # every row of it is a suggestion (the figures are the page's own).
+            suggested, suggestion = True, column_suggestion
         if (
             amount is None
             and kind in ("transfer_in", "transfer_out")
@@ -2923,7 +3039,7 @@ class BrokerageStatementParser(DocumentParser):
         lines = unfold_blocks(
             lines,
             lambda norm: section_rule(norm) is not None,
-            lambda line: self._header_at([line], 0) is not None,
+            lambda line: self._header_at([line], 0, vocabulary=collected.vocabulary) is not None,
         )
         cash_tables = any(self._tables(lines))
         index = 0
@@ -2960,8 +3076,24 @@ class BrokerageStatementParser(DocumentParser):
                 collected.holdings_columns = collected.activity_parts = None
                 continue
             found = self._header_at(
-                lines, index, cash_tables=cash_tables, typeless=collected.section == "margin"
+                lines,
+                index,
+                cash_tables=cash_tables,
+                typeless=collected.section == "margin",
+                vocabulary=collected.vocabulary,
             )
+            if (
+                found is None
+                and not collected.ignoring
+                and collected.section != "skip"
+                and self._note_unknown_columns(lines, index, collected)
+            ):
+                # The header of a table the parser cannot read: the table
+                # above ends here, and the entries under it are reported as
+                # unread rather than read through the wrong columns.
+                collected.holdings_columns = collected.activity_parts = None
+                index += 1
+                continue
             if found is not None:
                 index += found.used
                 collected.figure_group = None
@@ -3114,6 +3246,7 @@ class BrokerageStatementParser(DocumentParser):
                     collected,
                     symbol_column=any(c.role == "symbol" for c in part.columns),
                     part=number,
+                    column_suggestion=part.suggested,
                 )
             if len(collected.activity) + collected.skipped != before:
                 return
@@ -3700,6 +3833,12 @@ class BrokerageStatementParser(DocumentParser):
                 _remember(outcome.unknown_actions, key)
             for key in collected.unknown_headings:
                 _remember(outcome.unknown_headings, key)
+            for key in collected.unknown_columns:
+                if (
+                    key not in outcome.unknown_columns
+                    and len(outcome.unknown_columns) < MAX_PHRASES
+                ):
+                    outcome.unknown_columns.append(key)
             outcome.skipped_regions.extend(collected.skipped_regions)
             outcome.skipped_regions.extend(collected.unread)
             unread += len(collected.unread)

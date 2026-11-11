@@ -10,6 +10,12 @@ statement's lines the optional local model may be asked
 (``app.ml.client.activity_hints``): *what kind of activity is this phrase,
 what kind of section is this heading*, each answered from a closed list.
 
+A third kind of word is asked the same way: the **column headings** of an
+activity table whose header the parser cannot use (``Posted | Details |
+Money In/Out``: no column it knows as the date or the amount). The model
+says what each heading names from :data:`SUGGESTED_COLUMNS`; the table is
+then read by the parser, every row of it marked as a suggestion.
+
 A :class:`Vocabulary` is the checked answer, and nothing more than a
 suggestion:
 
@@ -86,6 +92,12 @@ SUGGESTED_SECTIONS: Final = frozenset(
         "transfer_out",
     }
 )
+#: What a column heading of an activity table may be said to name
+#: (``app.ingestion.parsers.brokerage.ActivityRole`` without ``other`` and
+#: ``name``: a model may not hide a column, it can only leave it unnamed).
+SUGGESTED_COLUMNS: Final = frozenset(
+    {"date", "settle", "type", "description", "symbol", "quantity", "price", "amount", "fees"}
+)
 #: Phrases and headings asked about, and kept, at most; and their length.
 MAX_PHRASES: Final = 40
 PHRASE_MAX: Final = 80
@@ -111,6 +123,21 @@ def phrase_key(text: str) -> str:
 #: (``InvestmentActivity.suggestion``): ``action:<key>`` / ``section:<key>``.
 ACTION_PREFIX: Final = "action:"
 SECTION_PREFIX: Final = "section:"
+#: A row of a table read through a suggested column heading: ``column:<key>``.
+COLUMN_PREFIX: Final = "column:"
+
+
+def column_key(text: str) -> str | None:
+    """``text`` as the key of a column heading, or None when it is not words.
+
+    A column heading is a few words without digits (``money in out``): its
+    key is looked up as a table header is, by its normalised text.
+    """
+    key = normalise(text)[:PHRASE_MAX].strip()
+    words = key.split()
+    if not 1 <= len(words) <= 5 or any(ch.isdigit() for ch in key):
+        return None
+    return key if any(ch.isalpha() for ch in key) else None
 
 
 @dataclass(frozen=True)
@@ -125,10 +152,21 @@ class Vocabulary:
     #: The same, confirmed by a person on an earlier statement of this layout.
     learned_actions: Mapping[str, str] = field(default_factory=dict)
     learned_sections: Mapping[str, str] = field(default_factory=dict)
+    #: Column heading (:func:`column_key`) -> role (:data:`SUGGESTED_COLUMNS`):
+    #: suggestions, and the same confirmed by a person.
+    columns: Mapping[str, str] = field(default_factory=dict)
+    learned_columns: Mapping[str, str] = field(default_factory=dict)
 
     @property
     def empty(self) -> bool:
-        return not (self.actions or self.sections or self.learned_actions or self.learned_sections)
+        return not (
+            self.actions
+            or self.sections
+            or self.learned_actions
+            or self.learned_sections
+            or self.columns
+            or self.learned_columns
+        )
 
     def action(self, text: str) -> tuple[str, bool] | None:
         """``(type, it is only a suggestion)`` for an action text, if any (learned first)."""
@@ -156,7 +194,14 @@ class Vocabulary:
             model=self.model or other.model,
             learned_actions={**other.learned_actions, **self.learned_actions},
             learned_sections={**other.learned_sections, **self.learned_sections},
+            columns={**other.columns, **self.columns},
+            learned_columns={**other.learned_columns, **self.learned_columns},
         )
+
+    def untyped_columns(self, columns: Sequence[str]) -> list[str]:
+        """The keys of ``columns`` nothing here names yet."""
+        known = {*self.columns, *self.learned_columns}
+        return [c for c in columns if c not in known]
 
     def untyped(
         self, actions: Sequence[str], headings: Sequence[str]
@@ -177,6 +222,7 @@ class Vocabulary:
         return {
             "actions": dict(self.actions),
             "sections": dict(self.sections),
+            "columns": dict(self.columns),
             "model": self.model,
         }
 
@@ -189,6 +235,11 @@ class Vocabulary:
         return cls(
             actions=_checked(data.get("actions"), SUGGESTED_TYPES),
             sections=_checked(data.get("sections"), SUGGESTED_SECTIONS),
+            columns={
+                key: role
+                for key, role in _checked(data.get("columns"), SUGGESTED_COLUMNS).items()
+                if column_key(key) == key
+            },
             model=model[:PHRASE_MAX] if isinstance(model, str) and model.isprintable() else None,
         )
 

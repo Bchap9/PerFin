@@ -449,6 +449,8 @@ class _Writer:
         self.y = 0.0
         self.account: FidAccount | None = None
         self.header: Callable[[], None] | None = None
+        #: The date and amount headings of the cash tables.
+        self.cash_columns: tuple[str, str] = ("Date", "Amount")
 
     # -- pages --------------------------------------------------------------
 
@@ -715,10 +717,11 @@ def _security_rows(w: _Writer, rows: list[FidActivity], *, cost: bool) -> None:
 
 
 def _cash_header(w: _Writer, *, reference: bool) -> None:
-    left = {D_DATE: "Date", D_DESC: "Description"}
+    date_word, amount_word = w.cash_columns
+    left = {D_DATE: date_word, D_DESC: "Description"}
     if reference:
         left[D_REF] = "Reference"
-    w.cells(left, {D_AMOUNT: "Amount"}, font=BOLD)
+    w.cells(left, {D_AMOUNT: amount_word}, font=BOLD)
 
 
 def _cash_rows(w: _Writer, rows: list[FidActivity], *, reference: bool) -> None:
@@ -827,14 +830,19 @@ def fidelity_pdf(
     ruled: bool = False,
     without_pages: int | None = None,
     without_summary: int | None = None,
+    cash_columns: tuple[str, str] | None = None,
 ) -> bytes:
     """The statement as a PDF (module doc).
 
     ``without_pages``: this account is listed by the overview's index and its
     own pages are missing; ``without_summary``: this account's pages print
-    no account summary (its value is printed by the index alone).
+    no account summary (its value is printed by the index alone);
+    ``cash_columns``: the headings of the cash tables' date and amount
+    columns (words no parser knows: ``("Posted", "Money In/Out")``).
     """
     w = _Writer(stmt, generic=generic, bottom=page_bottom, ruled=ruled)
+    if cash_columns is not None:
+        w.cash_columns = cash_columns
     _overview(w, stmt.accounts)
     for index, account in enumerate(stmt.accounts):
         if index == without_pages:

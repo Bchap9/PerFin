@@ -898,14 +898,18 @@ class _Model:
     words: Vocabulary | None
     asked: list[tuple[list[str], list[str]]] = field(default_factory=list)
     texts: list[str] = field(default_factory=list)
+    columns: list[list[str]] = field(default_factory=list)
 
 
 def _with_model(monkeypatch: pytest.MonkeyPatch, words: Vocabulary | None) -> _Model:
     """The worker with a local model that answers ``words``."""
     model = _Model(words)
 
-    def ask(actions: Sequence[str], headings: Sequence[str], text: str) -> Vocabulary | None:
+    def ask(
+        actions: Sequence[str], headings: Sequence[str], text: str, columns: Sequence[str] = ()
+    ) -> Vocabulary | None:
         model.asked.append((list(actions), list(headings)))
+        model.columns.append(list(columns))
         model.texts.append(text)
         return model.words
 
@@ -1077,6 +1081,96 @@ def test_confirmed_wording_is_remembered_and_nothing_else_of_the_statement(
         "kind": "action",
         "meaning": "buy",
     }
+
+
+UNKNOWN_COLUMNS = ("Posted", "Money In/Out")
+
+
+def test_a_table_under_unknown_column_headings_is_read_on_a_confirmed_suggestion(
+    env: Env, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A cash table whose header names no date or amount column the parser knows.
+
+    Without a model its entries are reported as unread. With one, the model
+    says what the headings name, the parser reads the table, and every row
+    of it waits for a person; the confirmation is remembered as wording.
+    """
+    stmt = fid.fidelity_statement(seed=101)
+    accounts = _fid_accounts(env, stmt)
+    individual = accounts[0]
+    assert individual is not None
+    cash = [a for a in stmt.accounts[0].activity if a.table in ("deposits", "withdrawals", "fees")]
+    assert cash
+
+    model = _with_model(monkeypatch, None)
+    alone = env.ingest(fid.fidelity_pdf(stmt, cash_columns=UNKNOWN_COLUMNS), "alone.pdf")
+    stored = ExtractResult.model_validate(env.document(alone).extraction)
+    assert stored.parse is not None
+    # The headings are what the model is asked about; the entries are unread, and said.
+    assert {"posted", "money in out"} <= set(stored.parse.unknown_columns)
+    assert {"posted", "money in out"} <= set(model.columns[0])
+    assert "lines_unread" in stored.parse.warnings
+    assert "lines_skipped" in env.reasons(alone)
+    written = {(t.posted_date, t.amount) for t in env.cash_rows(individual)}
+    assert not any((a.day, a.amount) in written for a in cash)
+
+
+def test_confirmed_column_headings_are_remembered(
+    env: Env, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    stmt = fid.fidelity_statement(seed=102)
+    accounts = _fid_accounts(env, stmt)
+    individual = accounts[0]
+    assert individual is not None
+    cash = sorted(
+        (a.day, a.amount)
+        for a in stmt.accounts[0].activity
+        if a.table in ("deposits", "withdrawals", "fees")
+    )
+    words = Vocabulary(columns={"posted": "date", "money in out": "amount"}, model="example-model")
+    model = _with_model(monkeypatch, words)
+    first = env.ingest(fid.fidelity_pdf(stmt, cash_columns=UNKNOWN_COLUMNS), "october.pdf")
+    stored = ExtractResult.model_validate(env.document(first).extraction)
+    assert stored.parse is not None
+    assert stored.parse.unknown_columns == [
+        c for c in stored.parse.unknown_columns if c not in ("posted", "money in out")
+    ]
+    assert "lines_unread" not in stored.parse.warnings
+    # Every row of the tables read through the suggestion waits for a person.
+    items = [i for i in env.open_reviews(first) if i.payload["reason"] == LINES_HELD]
+    assert items
+    held = sorted(
+        (date.fromisoformat(line["date"]), Decimal(line["amount"]))
+        for item in items
+        for line in item.payload["lines"]
+        if "suggested_type" in line["fields"]
+    )
+    mine = [i for i in items if i.payload["account_id"] == str(individual.id)]
+    assert mine
+    assert set(cash) <= set(held)
+    written = {(t.posted_date, t.amount) for t in env.cash_rows(individual)}
+    assert not any(row in written for row in cash)
+
+    for item in items:
+        _import_as_read(env, item)
+    written = {(t.posted_date, t.amount) for t in env.cash_rows(individual)}
+    assert set(cash) <= written
+    learned = {(e["kind"], e["phrase"], e["meaning"]) for e in _learned(env)}
+    assert learned == {("column", "posted", "date"), ("column", "money in out", "amount")}
+
+    # The next statement with the same headings is read without the model and without a question.
+    model.words = None
+    asked = len(model.asked)
+    november = fid.fidelity_statement(seed=103, start=date(2026, 11, 1))
+    second = env.ingest(fid.fidelity_pdf(november, cash_columns=UNKNOWN_COLUMNS), "november.pdf")
+    read = ExtractResult.model_validate(env.document(second).extraction)
+    assert read.parse is not None
+    assert not {"posted", "money in out"} & set(read.parse.unknown_columns)
+    assert "lines_unread" not in read.parse.warnings
+    assert not any(
+        "suggested_type" in (r.payload.get("fields") or []) for r in env.open_reviews(second)
+    )
+    assert all(not {"posted", "money in out"} & set(columns) for columns in model.columns[asked:])
 
 
 def test_a_chosen_account_takes_only_the_unmatched_statement(env: Env) -> None:

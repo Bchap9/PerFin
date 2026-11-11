@@ -33,6 +33,7 @@ from app.ingestion.parsers.vocabulary import (
     MAX_PHRASES,
     SUGGESTED_DOUBT,
     Vocabulary,
+    column_key,
     phrase_key,
     rememberable,
 )
@@ -403,3 +404,119 @@ def test_a_suggested_kind_is_confirmed_by_importing_as_read(
     reason: str, fields: list[str] | None, allowed: bool
 ) -> None:
     assert acceptable_as_read({"reason": reason, "fields": fields}) is allowed
+
+
+# ---------------------------------------------------------------------------
+# Column headings of a table whose header the parser cannot use
+# ---------------------------------------------------------------------------
+
+_UNKNOWN_TABLE: list[ViewLine] = [
+    _line(300, [(32, "Sweep Program Activity")]),
+    # No column the parser knows as the date or the amount.
+    _line(313, [(32, "Posted"), (72, "Description"), (640, "Money In/Out")]),
+    _line(326, [(32, "6/3"), (72, "Example sweep credit"), (645, "$40.00")]),
+    _line(339, [(32, "6/8"), (72, "Example sweep debit"), (645, "-15.00")]),
+]
+_COLUMNS = {"posted": "date", "money in out": "amount"}
+
+
+def test_column_keys_are_words_without_digits() -> None:
+    assert column_key("Money In/Out") == "money in out"
+    assert column_key("  POSTED ") == "posted"
+    assert column_key("2026 Total") is None  # a figure, not a heading
+    assert column_key("a b c d e f g") is None  # a sentence, not a heading
+    assert column_key("$$$") is None
+
+
+def test_an_unknown_header_is_reported_and_its_table_left_unread() -> None:
+    collected, rows, _ = _read([*_TRADES, *_UNKNOWN_TABLE], Vocabulary())
+    # The table above is read as ever; the unknown one is not, and its
+    # headings are what the model may be asked about.
+    assert [r.type for r in rows] == ["buy"]
+    assert collected.unknown_columns == ["posted", "money in out"]
+    assert len(collected.unread) == 2
+    # A header the parser reads on its own reports nothing.
+    known, _, _ = _read(_TRADES)
+    assert known.unknown_columns == []
+
+
+def test_a_suggested_column_reads_the_table_and_marks_every_row() -> None:
+    words = Vocabulary(sections={"sweep program activity": "cash"}, columns=_COLUMNS)
+    collected, rows, scores = _read([*_TRADES, *_UNKNOWN_TABLE], words)
+    assert collected.unknown_columns == []
+    assert collected.unread == []
+    sweep = [(r.type, r.amount, r.suggestion) for r in rows if r.type != "buy"]
+    # The amounts and dates are the page's own; the reading is the model's
+    # suggestion, so each row carries the doubt and waits for a person.
+    assert [(kind, amount) for kind, amount, _ in sweep] == [
+        ("deposit", Decimal("40.00")),
+        ("withdrawal", Decimal("-15.00")),
+    ]
+    assert all(marker is not None for _, _, marker in sweep)
+    doubted = [
+        SUGGESTED_DOUBT in score
+        for row, score in zip(rows, scores, strict=True)
+        if row.type != "buy"
+    ]
+    assert doubted == [True, True]
+    # The parser's own table is untouched by the suggestion.
+    assert [
+        SUGGESTED_DOUBT in score
+        for row, score in zip(rows, scores, strict=True)
+        if row.type == "buy"
+    ] == [False]
+
+
+def test_a_learned_column_reads_the_table_without_doubt() -> None:
+    words = Vocabulary(
+        learned_sections={"sweep program activity": "cash"}, learned_columns=_COLUMNS
+    )
+    _, rows, scores = _read(_UNKNOWN_TABLE, words)
+    assert [(r.type, r.amount) for r in rows] == [
+        ("deposit", Decimal("40.00")),
+        ("withdrawal", Decimal("-15.00")),
+    ]
+    assert not any(SUGGESTED_DOUBT in score for score in scores)
+    assert all(r.suggestion is None for r in rows)
+
+
+def test_a_suggestion_never_renames_a_column_the_parser_knows() -> None:
+    # "date" is the parser's own word: a model saying it is the amount is ignored.
+    words = Vocabulary(columns={"date": "amount", "transaction total": "date"})
+    _, rows, scores = _read(_TRADES, words)
+    assert [(r.type, r.amount) for r in rows] == [("buy", Decimal("-100.00"))]
+    assert not any(SUGGESTED_DOUBT in score for score in scores)
+
+
+def test_only_listed_column_roles_are_kept_and_asked() -> None:
+    stored = Vocabulary.from_stored(
+        {"columns": {"posted": "date", "running total": "balance", "Money In": "amount"}}
+    )
+    assert stored.columns == {"posted": "date"}  # no "balance" role, no key PerFin would not make
+    seen: list[dict[str, object]] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(json.loads(request.content))
+        return httpx.Response(
+            200,
+            json={
+                "actions": [],
+                "headings": [],
+                "columns": [
+                    {"index": 1, "role": "date"},
+                    {"index": 2, "role": "other"},  # a model may not hide a column
+                    {"index": 7, "role": "amount"},  # no such heading
+                ],
+            },
+        )
+
+    found = activity_hints(
+        _settings(),
+        [],
+        [],
+        "Posted Description Money In/Out",
+        ["Posted", "Money In/Out", "Ref 2026"],
+        transport=httpx.MockTransport(handler),
+    )
+    assert found == Vocabulary(columns={"posted": "date"})
+    assert seen[0]["columns"] == ["posted", "money in out"]

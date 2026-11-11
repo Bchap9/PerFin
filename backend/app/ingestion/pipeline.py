@@ -210,10 +210,12 @@ class PipelineDeps:
     #: parser could not type are: (action phrases, headings, the statement's
     #: text) -> checked suggestions (``app.ml.client.activity_hints``).
     ml_vocabulary: AskVocabulary | None = None
+    #: The text one call to the model carries at most (``PERFIN_ML_MAX_CHARS``).
+    ml_max_chars: int = 16_000  # ML_MAX_CHARS (defined below)
 
 
-#: ``(action phrases, headings, statement text) -> checked suggestions``.
-AskVocabulary = Callable[[Sequence[str], Sequence[str], str], Vocabulary | None]
+#: ``(action phrases, headings, statement text, column headings) -> checked suggestions``.
+AskVocabulary = Callable[[Sequence[str], Sequence[str], str, Sequence[str]], Vocabulary | None]
 
 
 class ScanUnavailableError(RuntimeError):
@@ -419,28 +421,68 @@ def _unlink_classified_account(document: Document) -> None:
 
 #: Where the local model's suggested words are kept on a document.
 ML_VOCABULARY_KEY: Final = wording.SUGGESTIONS_KEY
+#: The text one call to the model carries, unless the deployment says otherwise.
+ML_MAX_CHARS: Final = 16_000
+#: Calls to the local model about one document's unknown wording, at most.
+ML_VOCABULARY_CALLS: Final = 6
 
 
-def _statement_context(result: ExtractResult, keys: Sequence[str]) -> str:
-    """The statement's text for the model to read ``keys`` in (ADR-0010).
+def _vocabulary_batches(
+    result: ExtractResult,
+    actions: Sequence[str],
+    headings: Sequence[str],
+    max_chars: int,
+    columns: Sequence[str] = (),
+) -> list[tuple[list[str], list[str], str, list[str]]]:
+    """``(actions, headings, text, columns)`` per call to the model (ADR-0010).
 
-    The pages that print one of the phrases first, then the others in
-    order: a long statement is cut by ``PERFIN_ML_MAX_CHARS``
-    (``app.ml.client.activity_hints``), and what is cut should be the pages
-    that say nothing about them.
+    The model reads a phrase in the statement it is from, and one call
+    carries ``max_chars`` of text at most (``PERFIN_ML_MAX_CHARS``): a long
+    statement does not fit in one. Each phrase is asked about together with
+    the page that prints it: the pages printing a phrase still to ask about
+    are taken in order and a new call starts when the next page would not
+    fit, up to :data:`ML_VOCABULARY_CALLS` calls (what is left over is asked
+    in the last one, without its pages). A statement that fits in one call
+    is sent whole, the pages that print a phrase first. A phrase found on no
+    page (a heading over two lines) is asked in the first call.
     """
-    if not result.pages:
-        return _document_text(result)
-    wanted = [key for key in keys if key]
-    first: list[str] = []
-    rest: list[str] = []
-    for page in result.pages:
-        text = page.text.strip()
-        if not text:
+    wanted_actions = [key for key in actions if key]
+    wanted_headings = [key for key in headings if key]
+    wanted_columns = [key for key in columns if key]
+    wanted = [*wanted_actions, *wanted_headings, *wanted_columns]
+    pages = [(text, masked(text)) for page in result.pages if (text := page.text.strip())]
+    if not pages:
+        return [(wanted_actions, wanted_headings, _document_text(result), wanted_columns)]
+    asked: set[str] = set()
+    parts: list[tuple[set[str], list[str]]] = []  # (phrases, page texts)
+    size = 0
+    for text, flat in pages:
+        new = {key for key in wanted if key not in asked and key in flat}
+        if not new:
             continue
-        flat = masked(text)
-        (first if any(key in flat for key in wanted) else rest).append(text)
-    return "\n\n".join([*first, *rest])
+        if not parts or (size + len(text) > max_chars and len(parts) < ML_VOCABULARY_CALLS):
+            parts.append((set(), []))
+            size = 0
+        parts[-1][0].update(new)
+        parts[-1][1].append(text)
+        size += len(text) + 2
+        asked |= new
+    if not parts:
+        parts.append((set(), []))
+    parts[0][0].update(key for key in wanted if key not in asked)
+    if len(parts) == 1:
+        # Room left: the rest of the statement, for the model to read it whole.
+        printed = set(parts[0][1])
+        parts[0][1].extend(text for text, _ in pages if text not in printed)
+    return [
+        (
+            [key for key in wanted_actions if key in phrases],
+            [key for key in wanted_headings if key in phrases],
+            "\n\n".join(texts),
+            [key for key in wanted_columns if key in phrases],
+        )
+        for phrases, texts in parts
+    ]
 
 
 def _parse_document(
@@ -449,6 +491,7 @@ def _parse_document(
     result: ExtractResult,
     threshold: float,
     ask: AskVocabulary | None = None,
+    max_chars: int = ML_MAX_CHARS,
 ) -> tuple[ExtractResult, dict[str, Any]]:
     """Run the document parsers (``app.ingestion.parsers``) on a PDF's or image's pages.
 
@@ -458,16 +501,20 @@ def _parse_document(
 
     **Words no parser types.** When a brokerage parser left activity rows
     unread because their words are in no vocabulary of its own
-    (``ParseInfo.unknown_actions`` / ``unknown_headings``), the pages are
-    read once more with what is known about those words:
+    (``ParseInfo.unknown_actions`` / ``unknown_headings``), or a table
+    unread because its header names no column it knows as the date or the
+    amount (``unknown_columns``), the pages are read once more with what is
+    known about those words:
 
     1. the wording the household confirmed on an earlier statement of this
        layout (``app.domain.imports.wording``): typed like the parser's own
        words, nobody is asked;
     2. for what is still untyped, the optional local model's suggestions
        (``ask``, ADR-0010): it is sent those phrases with the statement's
-       text to read them in, answers a kind for each from a closed list,
-       and the checked answer is kept on the document
+       text to read them in (a long statement in several calls, each
+       phrase with the page that prints it: :func:`_vocabulary_batches`),
+       answers a kind for each from a closed list, and the checked answer
+       is kept on the document
        (``confidence["ml_vocabulary"]``; used again without asking). A row
        typed by a suggestion is marked ``suggested_type`` and is never
        written without a person's confirmation.
@@ -492,15 +539,24 @@ def _parse_document(
 
     result = parse_with(None)
     untyped = result.parse
-    if untyped is not None and (untyped.unknown_actions or untyped.unknown_headings):
+    if untyped is not None and (
+        untyped.unknown_actions or untyped.unknown_headings or untyped.unknown_columns
+    ):
         known = wording.household_vocabulary(
             db, document.household_id, wording.layout_key(untyped.parser)
         ).merged(Vocabulary.from_stored((document.confidence or {}).get(ML_VOCABULARY_KEY)))
         actions, headings = known.untyped(untyped.unknown_actions, untyped.unknown_headings)
-        if ask is not None and (actions or headings):
-            suggested = ask(actions, headings, _statement_context(pages, [*actions, *headings]))
-            if suggested is not None and not suggested.empty:
-                known = known.merged(suggested)
+        columns = known.untyped_columns(untyped.unknown_columns)
+        if ask is not None and (actions or headings or columns):
+            answered = False
+            for some_actions, some_headings, text, some_columns in _vocabulary_batches(
+                pages, actions, headings, max_chars, columns
+            ):
+                suggested = ask(some_actions, some_headings, text, some_columns)
+                if suggested is not None and not suggested.empty:
+                    known = known.merged(suggested)
+                    answered = True
+            if answered:
                 document.confidence = {
                     **(document.confidence or {}),
                     ML_VOCABULARY_KEY: known.stored(),
@@ -950,7 +1006,12 @@ def ingest_document(
         # PDF and image pages -> statements or a payslip (worker side, on the
         # stored pages; INGESTION.md "Parse").
         result, parse_facts = _parse_document(
-            db, document, result, deps.confidence_threshold, deps.ml_vocabulary
+            db,
+            document,
+            result,
+            deps.confidence_threshold,
+            deps.ml_vocabulary,
+            deps.ml_max_chars,
         )
     if kind in CONTAINER_KINDS:
         # An archive or mail is done once its contents are documents of
