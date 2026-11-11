@@ -10,6 +10,10 @@
   PerFin ("Remember this layout", "Teach PerFin"), as the classifier uses
   them. ``DELETE /imports/layouts/{id}``: member or above; forgets every
   version of that layout (``app.domain.imports.layouts``).
+* ``GET /imports/wording``: any role; the statement wording the household
+  confirmed after the local model suggested what it means (phrases without
+  digits or names, ``app.domain.imports.wording``). ``DELETE
+  /imports/wording/{id}``: member or above; forgets one phrase.
 * ``GET /imports/{document_id}/preview``: any role that can see the
   document; the extracted tables/statements stored by the sandbox, never
   re-parsed, with the matching saved mapping and a suggested one.
@@ -29,7 +33,7 @@ from __future__ import annotations
 import uuid
 from typing import Annotated, Any
 
-from fastapi import APIRouter, Depends, Query, Request, Response, status
+from fastapi import APIRouter, Depends, Path, Query, Request, Response, status
 
 from app.api.routers.accounts import PROBLEMS, scoped_role
 from app.auth.deps import DbSession
@@ -37,7 +41,7 @@ from app.auth.models import HouseholdRole
 from app.auth.principal import Principal
 from app.core.idempotency import IdempotencyKeyHeader, idempotent, payload_of
 from app.domain.documents.service import get_visible_document
-from app.domain.imports import layouts, proposals, service
+from app.domain.imports import layouts, proposals, service, wording
 from app.domain.imports.schemas import (
     DEFAULT_PAGE,
     MAX_PAGE,
@@ -50,6 +54,7 @@ from app.domain.imports.schemas import (
     ImportAccepted,
     ImportPreview,
     LearnedLayoutList,
+    LearnedWordingList,
     MappingCreate,
     MappingOut,
     MappingPage,
@@ -172,6 +177,31 @@ def delete_layout(
     layout_id: uuid.UUID, request: Request, db: DbSession, principal: Writer
 ) -> Response:
     layouts.delete_layout(db, principal, layout_id, request=request)
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
+@router.get(
+    "/imports/wording",
+    response_model=LearnedWordingList,
+    summary="Statement wording PerFin learned from suggestions a person confirmed",
+)
+def get_wording(db: DbSession, principal: Reader) -> LearnedWordingList:
+    return wording.list_wording(db, principal)
+
+
+@router.delete(
+    "/imports/wording/{wording_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+    responses=PROBLEMS,
+    summary="Forget a learned phrase (member or above)",
+)
+def delete_wording(
+    wording_id: Annotated[str, Path(pattern="^[0-9a-f]{32}$")],
+    request: Request,
+    db: DbSession,
+    principal: Writer,
+) -> Response:
+    wording.forget_wording(db, principal, wording_id, request=request)
     return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 

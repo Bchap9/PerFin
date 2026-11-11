@@ -99,10 +99,13 @@ master key present in memory.
 PerFin never calls a hosted model. The optional local model (ADR-0010,
 [ML.md](ML.md)) runs on the host's own network only (`PERFIN_ML_URL` must be
 local, checked at start-up and before every call), receives only a document's
-extracted text or, for a brokerage statement, the digit-masked wording of the
-lines its parser could not type, and its answers are untrusted suggestions
-from closed lists that a person confirms: it names a kind of document or of
-activity, never a figure, and cannot make a line disappear.
+extracted text (for a brokerage statement, with the wording of the lines its
+parser could not type), and its answers are untrusted suggestions from closed
+lists that a person confirms: it names a kind of document or of activity,
+never a figure, and cannot make a line disappear. The model is never trained
+on what it is sent and keeps nothing between calls; what a confirmation
+teaches PerFin is wording only (a heading, a broker's action words: no digit,
+no name, no value of the statement), listed and removable in the app.
 The MCP server is the only AI-facing surface for assistants; its threat table lives in [AI_ACCESS.md](AI_ACCESS.md)
 (rows M1 to M8). Summary of the controls:
 

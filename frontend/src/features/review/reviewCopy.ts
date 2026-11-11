@@ -547,7 +547,7 @@ const COPY: Readonly<Record<string, Copy>> = {
         why: SUGGESTED_WHY,
         steps: [
           "Compare the suggested kind of each line below with the statement (“Show document”).",
-          "“Import as read” if the suggestions are right: the statement is imported with them.",
+          "“Import as read” if the suggestions are right: the statement is imported with them, and PerFin remembers the wording (never the figures) for the next statement.",
           "“Dismiss” to import nothing from it; add its activity by hand.",
         ],
       };
@@ -596,7 +596,7 @@ const COPY: Readonly<Record<string, Copy>> = {
           "Compare the suggested kind of each line below with the statement (“Show document”).",
           ...asReadSteps(
             item,
-            "“Import as read” if the suggestions are right: these lines are imported with them.",
+            "“Import as read” if the suggestions are right: these lines are imported with them, and PerFin remembers the wording (never the figures) for the next statement.",
           ),
           "“Dismiss” to leave these lines out; add any that are right by hand.",
         ],

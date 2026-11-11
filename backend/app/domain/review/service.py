@@ -57,7 +57,9 @@ editable by the caller as well. A closed item is ``409 review-item-closed``.
   :func:`app.domain.investments.statement_import.acceptable_as_read`; any
   other item is ``422``): the item's statement is imported into the item's
   account as printed, without a balance snapshot. Needs edit on the
-  account.
+  account. It is also the confirmation of any kind the local model
+  suggested for the statement's rows, whose wording is then kept for the
+  household (:func:`_remember_wording`).
 
 **Importing a held statement again** ("import anyway", "import as read")
 goes through one path (:func:`_import_statement_again`). The answer is
@@ -87,7 +89,7 @@ and emits ``review.resolved`` / ``review.dismissed``.
 from __future__ import annotations
 
 import uuid
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from datetime import date
 from typing import Any, Final
 
@@ -122,7 +124,7 @@ from app.domain.documents.models import (
 from app.domain.documents.service import visible_document_filter
 from app.domain.dropfolder import service as dropfolder_service
 from app.domain.imports import service as imports_service
-from app.domain.imports import statement_answers, statement_records
+from app.domain.imports import statement_answers, statement_records, wording
 from app.domain.imports.schemas import ApplyMapping, AssignmentTarget, MappingUpdate
 from app.domain.investments import statement_import
 from app.domain.review import assist, repo
@@ -905,7 +907,38 @@ def _import_as_read(
         "reason": payload.get("reason"),
         "failed": [f for f in failed if isinstance(f, str)] if isinstance(failed, list) else [],
         "snapshot": False,
+        **_remember_wording(db, principal, document, rerun, request),
     }
+
+
+def _remember_wording(
+    db: Session,
+    principal: Principal,
+    document: Document,
+    answered: Mapping[str, Any],
+    request: HTTPConnection | None,
+) -> dict[str, Any]:
+    """Keep the wording whose suggested kinds this answer confirmed (ADR-0010).
+
+    "Import as read" on a statement with rows the local model typed is the
+    person's confirmation of those kinds; the wording (a heading, a
+    broker's action words: never a detail of the statement) is kept for the
+    household's later statements of that layout
+    (``app.domain.imports.wording``). ``{"wording_learned": n}`` when any was.
+    """
+    key = answered.get(statement_answers.KEY_FIELD)
+    statement = next(
+        (
+            s
+            for s in imports_service.stored_investments(document, db)
+            if statement_answers.statement_key(s) == key
+        ),
+        None,
+    )
+    if statement is None:
+        return {}
+    learned = wording.remember_confirmed(db, principal, document, statement, request=request)
+    return {"wording_learned": learned} if learned else {}
 
 
 def _resolve_low_confidence(

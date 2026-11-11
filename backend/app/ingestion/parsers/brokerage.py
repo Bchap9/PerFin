@@ -255,7 +255,9 @@ from app.ingestion.parsers.text import (
     read_date,
 )
 from app.ingestion.parsers.vocabulary import (
+    ACTION_PREFIX,
     MAX_PHRASES,
+    SECTION_PREFIX,
     SUGGESTED_DOUBT,
     SUGGESTED_SECTIONS,
     SUGGESTED_TYPES,
@@ -1335,6 +1337,9 @@ class _ActivityRow:
     #: The row's type is the local model's suggestion (its words or its
     #: section's heading are in no vocabulary of the parser's own).
     suggested: bool = False
+    #: The wording that suggestion is for, when it may be remembered
+    #: (``InvestmentActivity.suggestion``).
+    suggestion: str | None = None
 
 
 @dataclass(frozen=True)
@@ -1424,6 +1429,8 @@ class _Collected:
     #: and whether the section the lines are in was typed by one.
     vocabulary: Vocabulary | None = None
     section_suggested: bool = False
+    #: The section was typed through the vocabulary (suggested or learned).
+    section_worded: bool = False
     #: Action phrases and headings of the rows nothing could type (their keys).
     unknown_actions: list[str] = field(default_factory=list)
     unknown_headings: list[str] = field(default_factory=list)
@@ -2506,17 +2513,27 @@ class BrokerageStatementParser(DocumentParser):
         elif kind is None and section is not None and section in _CASH_SECTIONS:
             kind, by_sign = _CASH_SECTIONS[section], True
         suggested = collected.section_suggested and kind != own
+        suggestion = (
+            f"{SECTION_PREFIX}{phrase_key(collected.section_label or '')}" if suggested else None
+        )
         if kind is None and collected.vocabulary is not None:
-            # Words in no vocabulary of the parser's own: the local model's
-            # suggestion for them, if it gave one (ADR-0010).
+            # Words in no vocabulary of the parser's own: what the household
+            # learned they are, else the local model's suggestion (ADR-0010).
             hinted = collected.vocabulary.action(type_text)
-            if hinted in SUGGESTED_TYPES:
-                kind, suggested = cast(InvestmentActivityType, hinted), True
+            if hinted is not None and hinted[0] in SUGGESTED_TYPES:
+                kind, suggested = cast(InvestmentActivityType, hinted[0]), hinted[1]
+                # A broker's action words (the row names its security or has a
+                # description of its own) may be remembered; the free text of
+                # a cash table (a payee, a memo) is this document's only.
+                wording = bool(named) and "@" not in type_text
+                suggestion = (
+                    f"{ACTION_PREFIX}{phrase_key(type_text)}" if suggested and wording else None
+                )
         if kind is None:
             collected.unknown_activity += 1
             collected.skipped += 1
             _remember(collected.unknown_actions, type_text)
-            if section is None and collected.section_label:
+            if not collected.section_worded and section is None and collected.section_label:
                 _remember(collected.unknown_headings, collected.section_label)
             return
         if (
@@ -2563,6 +2580,7 @@ class BrokerageStatementParser(DocumentParser):
                 symbol_column=symbol_column,
                 note=note,
                 suggested=suggested,
+                suggestion=suggestion,
             )
         )
 
@@ -2799,7 +2817,7 @@ class BrokerageStatementParser(DocumentParser):
             if section is not None and not self._is_heading(line, self.ignored_tables):
                 index += 1
                 collected.section = section
-                collected.section_suggested = False
+                collected.section_suggested = collected.section_worded = False
                 collected.section_label = _heading_label(line.text)
                 collected.section_id += 1
                 collected.sub_headings = []
@@ -2823,7 +2841,7 @@ class BrokerageStatementParser(DocumentParser):
                     collected.holdings_columns, collected.activity_parts = found.holdings, None
                     collected.holdings_header = True
                     collected.section = None
-                    collected.section_suggested = False
+                    collected.section_suggested = collected.section_worded = False
                     collected.section_label = None
                     collected.section_id += 1
                     # A group heading right above its table's header ("Core Account").
@@ -2862,20 +2880,23 @@ class BrokerageStatementParser(DocumentParser):
                             # heading worded like it over the same columns,
                             # the next card's. The section's header
                             # repeated on a later page under the page's running
-                            # header continues its table.) The local model may
-                            # have suggested what kind of section it is
-                            # (ADR-0010): its rows are then typed by it, each
-                            # marked as a suggestion.
+                            # header continues its table.) The household may
+                            # have learned what kind of section it is, or the
+                            # local model have suggested it (ADR-0010): its
+                            # rows are then typed by it, a suggestion's each
+                            # marked as one.
                             label = _heading_label(above.text)
                             hinted = (
                                 collected.vocabulary.section(label)
                                 if collected.vocabulary is not None
                                 else None
                             )
+                            worded = hinted is not None and hinted[0] in SUGGESTED_SECTIONS
                             collected.section = (
-                                cast(SectionKind, hinted) if hinted in SUGGESTED_SECTIONS else None
+                                cast(SectionKind, hinted[0]) if hinted and worded else None
                             )
-                            collected.section_suggested = collected.section is not None
+                            collected.section_worded = worded
+                            collected.section_suggested = bool(hinted and worded and hinted[1])
                             collected.section_label = label
                             collected.section_id += 1
                     collected.section_header = (found.roles, lines[start].page)
@@ -3190,6 +3211,7 @@ class BrokerageStatementParser(DocumentParser):
                     page=row.page,
                     bbox=row.bbox,
                     section=row.section_label,
+                    suggestion=row.suggestion if row.suggested else None,
                 )
             )
             scores.append(score)

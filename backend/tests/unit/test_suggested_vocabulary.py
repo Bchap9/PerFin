@@ -18,6 +18,7 @@ import httpx
 import pytest
 from pydantic import SecretStr
 
+from app.core.scrubber import Scrubber, member_terms
 from app.core.settings import Settings
 from app.domain.investments.statement_import import (
     LINES_HELD,
@@ -33,6 +34,7 @@ from app.ingestion.parsers.vocabulary import (
     SUGGESTED_DOUBT,
     Vocabulary,
     phrase_key,
+    rememberable,
 )
 from app.ingestion.sandbox.protocol import InvestmentActivity
 from app.ml import client
@@ -201,6 +203,73 @@ def test_a_suggested_section_types_its_rows_by_their_sign() -> None:
     assert known.unknown_headings == []
 
 
+def test_wording_a_person_confirmed_types_rows_like_the_parsers_own() -> None:
+    learned = Vocabulary(
+        learned_actions={"periodic investment plan": "buy"},
+        learned_sections={"sweep program activity": "cash"},
+        # A suggestion for the same words never overrides what was confirmed.
+        actions={"periodic investment plan": "sell"},
+    )
+    collected, rows, scores = _read([*_TRADES, *_SWEEP], learned)
+    assert [(r.type, r.amount) for r in rows] == [
+        ("buy", Decimal("-300.00")),
+        ("buy", Decimal("-100.00")),
+        ("deposit", Decimal("40.00")),
+        ("withdrawal", Decimal("-15.00")),
+    ]
+    assert not any(SUGGESTED_DOUBT in score for score in scores)
+    assert all(r.suggestion is None for r in rows)
+    assert (collected.unknown_activity, collected.unknown_actions) == (0, [])
+    assert collected.unknown_headings == []
+    # What is still to ask about is what neither names.
+    assert learned.untyped(
+        ["periodic investment plan", "margin call"], ["sweep program activity", "odd lots"]
+    ) == (["margin call"], ["odd lots"])
+
+
+def test_only_wording_is_marked_for_remembering() -> None:
+    """A heading, or a broker's action words beside a security: never a cash row's text."""
+    _, trades, _ = _read(_TRADES, Vocabulary(actions={"periodic investment plan": "buy"}))
+    assert [r.suggestion for r in trades] == ["action:periodic investment plan", None]
+    _, sweep, _ = _read(_SWEEP, Vocabulary(sections={"sweep program activity": "cash"}))
+    assert {r.suggestion for r in sweep} == {"section:sweep program activity"}
+    # A cash table's description is free text (a payee, a reference): it may
+    # be typed for this document, it is not wording to keep.
+    words = Vocabulary(
+        actions={"bank sweep credit ref 0": "deposit", "bank sweep debit ref 0": "withdrawal"}
+    )
+    _, typed, scores = _read(_SWEEP, words)
+    assert [(r.type, r.suggestion) for r in typed] == [("deposit", None), ("withdrawal", None)]
+    assert all(SUGGESTED_DOUBT in score for score in scores)
+
+
+@pytest.mark.parametrize(
+    ("phrase", "kept"),
+    [
+        ("Periodic Investment Plan", True),
+        ("Sweep Program Activity", True),
+        ("Check 1076 paid", True),  # kept as "check 0 paid": no digit survives
+        ("Zelle payment to Jordan Sample", False),  # a member's name
+        ("Dividend for the Sample household", False),  # the household's name
+        ("Wire to 12 Main St Springfield", False),  # an address
+        ("7", False),
+        ("", False),
+    ],
+)
+def test_nothing_personal_is_rememberable(phrase: str, kept: bool) -> None:
+    scrubber = Scrubber(
+        member_terms=member_terms(
+            names=["Jordan Q. Sample"], household_names=["The Sample Family"]
+        ),
+        account_numbers=["4321"],
+    )
+    key = phrase_key(phrase)
+    assert not any(ch.isdigit() and ch != "0" for ch in key)
+    assert rememberable(key, scrubber.scrub_text) is kept
+    # A phrase that is not a key PerFin made (case, punctuation, digits) is refused.
+    assert not rememberable("Periodic Investment Plan #4471")
+
+
 def test_a_suggestion_outside_the_lists_changes_nothing() -> None:
     # Built by hand, past every check: the parser still takes listed kinds only.
     words = Vocabulary(
@@ -217,7 +286,7 @@ def test_a_suggestion_outside_the_lists_changes_nothing() -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_only_the_phrases_are_sent_and_answers_are_matched_by_position() -> None:
+def test_answers_are_matched_by_position_to_the_phrases_sent() -> None:
     seen: list[httpx.Request] = []
 
     def handler(request: httpx.Request) -> httpx.Response:
@@ -246,6 +315,7 @@ def test_only_the_phrases_are_sent_and_answers_are_matched_by_position() -> None
         _settings(),
         ["Periodic Investment Plan", "Bank sweep credit ref 4471", "periodic investment plan"],
         ["Sweep Program Activity", "Estimated Cash Flow"],
+        "EXAMPLE BROKERAGE\n06/05 EXAMPLE INDEX ETF Periodic Investment Plan 3 -300.00",
         transport=httpx.MockTransport(handler),
     )
     assert found == Vocabulary(
@@ -256,11 +326,32 @@ def test_only_the_phrases_are_sent_and_answers_are_matched_by_position() -> None
     (request,) = seen
     assert str(request.url) == "http://ml:3003/v1/vocabulary"
     assert request.headers["Authorization"] == "Bearer " + "t" * 40
-    # Keys only (normalised, digits masked, each once): no page text, no ledger.
+    # The phrases as keys (normalised, digits masked, each once) and the
+    # statement to read them in; never ledger data.
     assert json.loads(request.content) == {
         "actions": ["periodic investment plan", "bank sweep credit ref 0"],
         "headings": ["sweep program activity", "estimated cash flow"],
+        "text": "EXAMPLE BROKERAGE\n06/05 EXAMPLE INDEX ETF Periodic Investment Plan 3 -300.00",
     }
+
+
+def test_the_statement_sent_as_context_is_capped() -> None:
+    bodies: list[dict[str, Any]] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        bodies.append(json.loads(request.content))
+        return httpx.Response(200, json={"actions": [{"index": 1, "type": "buy"}], "headings": []})
+
+    settings = Settings(ml_url="http://ml:3003", ml_token=SecretStr("t" * 40), ml_max_chars=1000)
+    found = activity_hints(
+        settings,
+        ["periodic investment plan"],
+        [],
+        "x" * 5000,
+        transport=httpx.MockTransport(handler),
+    )
+    assert found is not None
+    assert len(bodies[0]["text"]) == 1000
 
 
 def test_no_listed_kind_or_no_phrase_is_no_vocabulary() -> None:

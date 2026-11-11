@@ -27,6 +27,7 @@ from ``tests/fixtures/synth_brokerage.py`` (invented broker and instruments).
 from __future__ import annotations
 
 import copy
+import json
 import uuid
 from collections.abc import Callable, Iterator, Sequence
 from dataclasses import dataclass, field, replace
@@ -44,7 +45,7 @@ from app.core import clock
 from app.core.crypto import Keyring
 from app.core.errors import ProblemError
 from app.core.settings import Settings
-from app.db.models import AuditLog
+from app.db.models import AuditLog, Setting
 from app.db.rls import set_context
 from app.domain.accounts.models import Account, AccountType, BalanceSnapshot, BalanceSource
 from app.domain.documents import repo as documents_repo
@@ -58,6 +59,7 @@ from app.domain.documents.models import (
     ReviewKind,
 )
 from app.domain.documents.schemas import INGEST_JOB_TYPE
+from app.domain.imports import wording
 from app.domain.imports.models import StatementRecord
 from app.domain.imports.schemas import APPLY_MAPPING_JOB_TYPE, ApplyMapping
 from app.domain.imports.service import request_apply
@@ -759,15 +761,23 @@ def test_only_the_line_in_doubt_is_held_and_the_rest_is_imported(env: Env) -> No
     assert len(env.snapshots(individual)) == 1
 
 
-def _with_model(
-    monkeypatch: pytest.MonkeyPatch, words: Vocabulary | None
-) -> list[tuple[list[str], list[str]]]:
-    """The worker with a local model that answers ``words``; the questions it was asked."""
-    asked: list[tuple[list[str], list[str]]] = []
+@dataclass
+class _Model:
+    """A stand-in for the local model: what it answers and what it was sent."""
 
-    def ask(actions: Sequence[str], headings: Sequence[str]) -> Vocabulary | None:
-        asked.append((list(actions), list(headings)))
-        return words
+    words: Vocabulary | None
+    asked: list[tuple[list[str], list[str]]] = field(default_factory=list)
+    texts: list[str] = field(default_factory=list)
+
+
+def _with_model(monkeypatch: pytest.MonkeyPatch, words: Vocabulary | None) -> _Model:
+    """The worker with a local model that answers ``words``."""
+    model = _Model(words)
+
+    def ask(actions: Sequence[str], headings: Sequence[str], text: str) -> Vocabulary | None:
+        model.asked.append((list(actions), list(headings)))
+        model.texts.append(text)
+        return model.words
 
     deps = replace(ingest.default_deps(), ml_vocabulary=ask)
 
@@ -776,7 +786,7 @@ def _with_model(
 
     patched.cache_clear = lambda: None  # type: ignore[attr-defined]  # the fixture's teardown
     monkeypatch.setattr(ingest, "default_deps", patched)
-    return asked
+    return model
 
 
 def _reworded(stmt: fid.FidStatement, action: str) -> tuple[fid.FidStatement, fid.FidActivity]:
@@ -787,24 +797,32 @@ def _reworded(stmt: fid.FidStatement, action: str) -> tuple[fid.FidStatement, fi
     return replace(stmt, accounts=(replace(account, activity=activity), *stmt.accounts[1:])), row
 
 
+def _learned(env: Env) -> list[dict[str, Any]]:
+    with env.factories.transaction() as db:
+        apply_rls_context(db, env.principal())
+        return [e.model_dump(mode="json") for e in wording.list_wording(db, env.principal()).items]
+
+
 @pytest.mark.parametrize("answered", [True, False])
 def test_a_kind_the_local_model_suggests_waits_for_a_person(
     env: Env, monkeypatch: pytest.MonkeyPatch, answered: bool
 ) -> None:
     """A buy worded "Periodic Investment Plan": words in no vocabulary of the parser's.
 
-    The model is asked about that phrase alone and suggests ``buy``; the
-    statement then adds up, and nothing of it is written until a person
-    confirms the suggestion ("Import as read"). With no usable answer the
-    document is read exactly as without a model.
+    The model is asked about that phrase, with the statement to read it in,
+    and suggests ``buy``; the statement then adds up, and nothing of it is
+    written until a person confirms the suggestion ("Import as read"). With
+    no usable answer the document is read exactly as without a model.
     """
     stmt, row = _reworded(fid.fidelity_statement(seed=96), "Periodic Investment Plan")
     accounts = _fid_accounts(env, stmt)
     words = Vocabulary(actions={"periodic investment plan": "buy"}, model="example-model")
-    asked = _with_model(monkeypatch, words if answered else None)
+    model = _with_model(monkeypatch, words if answered else None)
     document_id = env.ingest(fid.fidelity_pdf(stmt), "investment-report.pdf")
 
-    assert asked == [(["periodic investment plan"], [])]
+    assert model.asked == [(["periodic investment plan"], [])]
+    # The statement goes with the question: the pages wording it come first.
+    assert "Periodic Investment Plan" in model.texts[0].split("\n\n")[0]
     individual = accounts[0]
     assert individual is not None
     document = env.document(document_id)
@@ -817,6 +835,7 @@ def test_a_kind_the_local_model_suggests_waits_for_a_person(
         assert "ml_vocabulary" not in (document.confidence or {})
         assert stored.parse.unknown_actions == ["periodic investment plan"]
         assert "investment_reconciliation_failed" in env.reasons(document_id)
+        assert _learned(env) == []
         return
     assert (document.confidence or {})["ml_vocabulary"] == words.stored()
     assert stored.parse.unknown_actions == []
@@ -828,15 +847,97 @@ def test_a_kind_the_local_model_suggests_waits_for_a_person(
     assert (line["type"], line["fields"]) == ("buy", ["suggested_type"])
     assert line["date"] == row.day.isoformat()
     assert Decimal(line["amount"]) == row.amount
+    # A suggestion alone teaches nothing: nothing is remembered before a person confirms.
+    assert _learned(env) == []
 
-    _import_as_read(env, item)
+    resolution = _import_as_read(env, item)
+    assert resolution["wording_learned"] == 1
     assert env.document(document_id).status is DocumentStatus.PROCESSED
     assert env.open_reviews(document_id) == []
     assert env.activity(individual) == _fid_expected(stmt.accounts[0])
     assert _fid_holdings(env, individual) == _fid_positions(stmt.accounts[0])
     assert len(env.snapshots(individual)) == 1
     # The answer is kept: the confirmation's re-run did not ask again.
-    assert len(asked) == 1
+    assert len(model.asked) == 1
+
+
+def test_confirmed_wording_is_remembered_and_nothing_else_of_the_statement(
+    env: Env, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """What a confirmation teaches: the phrase and its kind, for that layout.
+
+    The next statement wording a row the same way is read without the model
+    and without a question; forgetting the phrase asks again.
+    """
+    stmt, row = _reworded(fid.fidelity_statement(seed=97), "Periodic Investment Plan")
+    _fid_accounts(env, stmt)
+    words = Vocabulary(actions={"periodic investment plan": "buy"}, model="example-model")
+    model = _with_model(monkeypatch, words)
+    first = env.ingest(fid.fidelity_pdf(stmt), "october.pdf")
+    (item,) = env.open_reviews(first)
+    _import_as_read(env, item)
+
+    (entry,) = _learned(env)
+    assert entry == {
+        **entry,
+        "layout": "fidelity-investments-statement",
+        "kind": "action",
+        "phrase": "periodic investment plan",
+        "meaning": "buy",
+        "learned_from_document_id": str(first),
+    }
+    # The whole memory: no amount, date, security, account or name of the statement.
+    with env.factories.transaction() as db:
+        set_context(db, env.household_id)
+        (kept,) = db.execute(
+            select(Setting.value).where(Setting.key == wording.SETTING_KEY)
+        ).scalars()
+    (stored,) = kept["entries"]
+    assert set(stored) == {"layout", "kind", "phrase", "meaning", "learned_at", "document_id"}
+    account = stmt.accounts[0]
+    private = [account.number, account.number[-4:], str(abs(row.amount)), row.symbol or ""]
+    assert not any(value and value in json.dumps(kept) for value in private)
+    (added,) = _audits(env, "learned_wording.add")
+    assert (added["layout"], added["count"]) == ("fidelity-investments-statement", 1)
+    assert "periodic" not in json.dumps(added)
+
+    # The next month's statement, worded the same way: the model has nothing to say now.
+    model.words = None
+    november, later = _reworded(
+        fid.fidelity_statement(seed=98, start=date(2026, 11, 1)), "Periodic Investment Plan"
+    )
+    second = env.ingest(fid.fidelity_pdf(november), "november.pdf")
+    assert len(model.asked) == 1  # not asked: the household knows these words
+    read = ExtractResult.model_validate(env.document(second).extraction)
+    assert read.parse is not None
+    assert read.parse.unknown_actions == []
+    typed = [a for a in read.investments[0].activity if a.trade_date == later.day]
+    assert [(a.type, a.amount, a.low_confidence, a.suggestion) for a in typed if a.type == "buy"][
+        :1
+    ] == [("buy", later.amount, [], None)]
+    # No question about it: nothing of this statement waits for its kind or its cash.
+    open_items = env.open_reviews(second)
+    assert "investment_reconciliation_failed" not in env.reasons(second)
+    assert not any("suggested_type" in (r.payload.get("fields") or []) for r in open_items)
+
+    # Forgotten: the same wording is unread again and the model is asked again.
+    with env.factories.transaction() as db:
+        apply_rls_context(db, env.principal())
+        wording.forget_wording(db, env.principal(), entry["id"], request=None)
+    assert _learned(env) == []
+    december, _ = _reworded(
+        fid.fidelity_statement(seed=99, start=date(2026, 12, 1)), "Periodic Investment Plan"
+    )
+    env.ingest(fid.fidelity_pdf(december), "december.pdf")
+    assert model.asked[-1] == (["periodic investment plan"], [])
+    assert len(model.asked) == 2
+    (forgotten,) = env.query(select(AuditLog).where(AuditLog.action == "learned_wording.delete"))
+    assert forgotten.before == {
+        "id": entry["id"],
+        "layout": "fidelity-investments-statement",
+        "kind": "action",
+        "meaning": "buy",
+    }
 
 
 def test_a_chosen_account_takes_only_the_unmatched_statement(env: Env) -> None:

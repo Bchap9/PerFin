@@ -4,7 +4,7 @@ import userEvent from "@testing-library/user-event";
 
 import { authedSession, json, mockApi, renderApp } from "../auth/testing";
 import { lookupHandlers, NOW } from "../transactions/fixtures";
-import type { LearnedLayout, Mapping } from "./api";
+import type { LearnedLayout, LearnedWording, Mapping } from "./api";
 import { layoutReads, mappingReads } from "./learned";
 
 const TAUGHT: LearnedLayout = {
@@ -68,9 +68,29 @@ function handlers(role: "owner" | "viewer" = "owner") {
     "GET /api/v1/auth/session": authedSession({ role }),
     ...lookupHandlers(),
     "GET /api/v1/imports/layouts": () => json({ items: [TAUGHT, NAMED] }),
+    "GET /api/v1/imports/wording": () => json({ items: [WORDING, HEADING] }),
     "GET /api/v1/imports/mappings": () => json({ items: [MAPPING], next_cursor: null }),
   };
 }
+
+const WORDING: LearnedWording = {
+  id: "a".repeat(32),
+  layout: "fidelity-investments-statement",
+  kind: "action",
+  phrase: "periodic investment plan",
+  meaning: "buy",
+  learned_at: "2026-11-11T09:00:00Z",
+  learned_from_document_id: "d-9",
+};
+const HEADING: LearnedWording = {
+  id: "b".repeat(32),
+  layout: "brokerage_statement_generic",
+  kind: "section",
+  phrase: "sweep program activity",
+  meaning: "cash",
+  learned_at: "2026-11-10T09:00:00Z",
+  learned_from_document_id: null,
+};
 
 describe("what a learned layout and a mapping say they read", () => {
   it("names labelled facts, table columns and ignored lines in plain words", () => {
@@ -102,6 +122,27 @@ describe("LearnedPage", () => {
     const mappings = await screen.findByRole("table", { name: "Saved column mappings" });
     expect(within(mappings).getByText("Everyday export")).toBeInTheDocument();
     expect(within(mappings).getByText(/3 times, last/)).toBeInTheDocument();
+  });
+
+  it("lists the wording it learned in plain words and forgets a phrase", async () => {
+    const user = userEvent.setup();
+    const api = mockApi({
+      ...handlers(),
+      "DELETE /api/v1/imports/wording/:id": () => new Response(null, { status: 204 }),
+    });
+    renderApp("/documents/learned");
+    const table = await screen.findByRole("table", { name: "Learned statement wording" });
+    expect(within(table).getByText('"periodic investment plan"')).toBeInTheDocument();
+    expect(within(table).getByText("A line that is a purchase")).toBeInTheDocument();
+    expect(within(table).getByText("fidelity investments statement")).toBeInTheDocument();
+    expect(
+      within(table).getByText("A section of cash in or out, by the sign of the amount"),
+    ).toBeInTheDocument();
+    expect(screen.getByText(/No amount, date, security,\s+account or name from the statement is stored/)).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: 'Forget "periodic investment plan"' }));
+    await waitFor(() => {
+      expect(api.callsTo("DELETE", `/api/v1/imports/wording/${"a".repeat(32)}`)).toHaveLength(1);
+    });
   });
 
   it("forgets a layout after a confirmation", async () => {

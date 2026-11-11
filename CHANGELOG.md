@@ -93,10 +93,10 @@ What remains (details in docs/ROADMAP.md):
   wording is** (ADR-0010, amended; docs/ML.md). A brokerage parser types a
   row by its action words and its section's heading from fixed lists; a row
   neither names used to be left unread, and its statement then did not add
-  up. With the `ml` profile on, the worker now sends just those phrases
+  up. With the `ml` profile on, the worker now sends those phrases
   (normalised, digits masked; `POST /v1/vocabulary` on the adapter,
-  `app.ml.client.activity_hints`) and asks what kind of activity each is,
-  from a closed list. The checked answer (`confidence.ml_vocabulary`) is
+  `app.ml.client.activity_hints`) with the statement's text to read them
+  in, and asks what kind of activity each is, from a closed list. The checked answer (`confidence.ml_vocabulary`) is
   used to read the pages once more: the figures are the page's own and the
   statement is reconciled as always. Such a row carries the
   `suggested_type` doubt and is never written on the model's word: it
@@ -106,6 +106,16 @@ What remains (details in docs/ROADMAP.md):
   own lists know is never its to type. Without the model, or without a
   usable answer, a document is read exactly as before. Tested against a
   fake runtime only, like the rest of the adapter.
+- **Confirmed wording is remembered; nothing else of a statement is**
+  (`app/domain/imports/wording.py`, `GET` / `DELETE /imports/wording`, the
+  "Statement wording" card on "What PerFin has learned"). Confirming
+  suggested kinds keeps the wording for the household, so the next
+  statement of that layout is read without the model and without a
+  question. An entry is a layout, a phrase and its kind: a section's
+  heading or the action words of a securities table. Never a cash row's
+  free text, never a digit, never a phrase the household's scrubber would
+  mask, and no amount, date, security or account. The model itself keeps
+  nothing between calls. A suggestion nobody confirmed teaches nothing.
 
 ## [1.0.0-rc.6] - 2026-11-10
 

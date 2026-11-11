@@ -3,7 +3,9 @@
  * What PerFin has learned about this household's documents, to look at and to
  * take back: the layouts taught in the review queue ("Remember this layout",
  * "Teach PerFin"; `GET/DELETE /imports/layouts`) and the saved column
- * mappings (`/imports/mappings`). A layout or mapping learned from a wrong
+ * mappings (`/imports/mappings`), and the statement wording confirmed after
+ * the local model suggested what it means (`GET/DELETE /imports/wording`:
+ * phrases only, nothing of the statement). A layout or mapping learned from a wrong
  * answer would misread every later file of its kind, so each can be removed
  * here; the next file is then read the ordinary way and can be taught again.
  */
@@ -29,15 +31,18 @@ import { useAction } from "../planning/useAction";
 import {
   deleteLayout,
   deleteMapping,
+  deleteWording,
   importKeys,
   learnedKeys,
   listLayouts,
   listMappings,
+  listWording,
   renameMapping,
   type LearnedLayout,
+  type LearnedWording,
   type Mapping,
 } from "./api";
-import { kindLabel, layoutReads, mappingReads } from "./learned";
+import { kindLabel, layoutReads, mappingReads, wordingMeans } from "./learned";
 
 const NAME_MAX = 200;
 
@@ -281,6 +286,86 @@ function LayoutsCard({ canWrite }: { canWrite: boolean }) {
   );
 }
 
+function ForgetWordingButton({ wording }: { wording: LearnedWording }) {
+  const forget = useAction(() => deleteWording(wording.id), {
+    invalidate: [queryRoots.documents],
+    success: "Wording forgotten",
+  });
+  return (
+    <>
+      <Button
+        size="sm"
+        loading={forget.busy}
+        aria-label={`Forget "${wording.phrase}"`}
+        onClick={() => {
+          void forget.run();
+        }}
+      >
+        Forget
+      </Button>
+      {forget.error === null ? null : (
+        <p role="alert" className="ledger-error">
+          {forget.error}
+        </p>
+      )}
+    </>
+  );
+}
+
+function WordingCard({ canWrite }: { canWrite: boolean }) {
+  const wording = useQuery({ queryKey: learnedKeys.wording, queryFn: listWording });
+  return (
+    <Card title="Statement wording">
+      <p className="ledger-muted">
+        Learned when you confirmed a kind of activity the local model suggested for wording PerFin did not know. Only the wording is
+        kept: a section&rsquo;s heading or a broker&rsquo;s action words, with every digit masked. No amount, date, security,
+        account or name from the statement is stored, and the model itself keeps nothing.
+      </p>
+      {wording.isPending ? <Spinner label="Loading wording" /> : null}
+      {wording.isError ? (
+        <p role="alert" className="ledger-error">
+          {errorMessage(wording.error)}
+        </p>
+      ) : null}
+      {wording.isSuccess ? (
+        <Table<LearnedWording>
+          caption="Learned statement wording"
+          captionHidden
+          rows={wording.data}
+          rowKey={(row) => row.id}
+          empty="Nothing learned yet. With the local model on, wording PerFin does not know is suggested a kind; confirming it teaches it."
+          columns={[
+            { id: "phrase", header: "Wording", rowHeader: true, cell: (row) => `"${row.phrase}"` },
+            { id: "means", header: "Read as", cell: (row) => wordingMeans(row) },
+            { id: "layout", header: "On statements of", cell: (row) => row.layout.replaceAll("-", " ").replaceAll("_", " ") },
+            {
+              id: "learned",
+              header: "Learned",
+              cell: (row) =>
+                row.learned_from_document_id === null ? (
+                  day(row.learned_at)
+                ) : (
+                  <Link to="/documents/$documentId" params={{ documentId: row.learned_from_document_id }}>
+                    {day(row.learned_at)}
+                  </Link>
+                ),
+            },
+            ...(canWrite
+              ? [
+                  {
+                    id: "actions",
+                    header: <span className="visually-hidden">Actions</span>,
+                    cell: (row: LearnedWording) => <ForgetWordingButton wording={row} />,
+                  },
+                ]
+              : []),
+          ]}
+        />
+      ) : null}
+    </Card>
+  );
+}
+
 function MappingsCard({ canWrite }: { canWrite: boolean }) {
   const mappings = useQuery({ queryKey: importKeys.mappings, queryFn: listMappings });
   const accounts = useAccounts();
@@ -402,12 +487,17 @@ export function LearnedPage() {
             <strong>Statement layouts</strong> the ordinary readers get wrong, through what you taught on a page.
           </li>
           <li>
+            <strong>Statement wording</strong> the ordinary readers have no word for, through a kind the optional local model
+            suggested and you confirmed.
+          </li>
+          <li>
             <strong>Categories</strong> through <Link to="/rules">rules</Link>.
           </li>
         </ul>
         <p className="ledger-muted">Everything here is yours to remove. Nothing below is shared outside this household.</p>
       </Card>
       <LayoutsCard canWrite={canWrite} />
+      <WordingCard canWrite={canWrite} />
       <MappingsCard canWrite={canWrite} />
     </section>
   );

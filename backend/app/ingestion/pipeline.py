@@ -114,6 +114,7 @@ from app.domain.documents.models import (
 from app.domain.documents.previews import discard_previews, store_previews
 from app.domain.documents.search import clear_search_index, update_search_index
 from app.domain.documents.service import open_plaintext, promote_blob
+from app.domain.imports import wording
 from app.domain.imports.service import import_extraction
 from app.domain.loans.statement_import import import_loan_statement
 from app.domain.tax.ingest import import_tax_forms
@@ -130,7 +131,7 @@ from app.ingestion.parsers.receipt import parse_email_receipt
 from app.ingestion.parsers.registry import DOCUMENT_KINDS, parse_extraction
 from app.ingestion.parsers.tax_forms import carries_tax_identity, redact_identity
 from app.ingestion.parsers.template import LayoutTemplate, parse_template
-from app.ingestion.parsers.vocabulary import Vocabulary
+from app.ingestion.parsers.vocabulary import Vocabulary, masked
 from app.ingestion.sandbox.protocol import (
     CONTAINER_KINDS,
     REVIEW_ERROR_CODES,
@@ -206,9 +207,13 @@ class PipelineDeps:
     #: The optional local-model adapter (ADR-0010): text -> checked hints.
     ml: Callable[[str], MLHints | None] | None = None
     #: The same adapter asked what kind of activity the words a brokerage
-    #: parser could not type are: (action phrases, headings) -> checked
-    #: suggestions (``app.ml.client.activity_hints``).
-    ml_vocabulary: Callable[[Sequence[str], Sequence[str]], Vocabulary | None] | None = None
+    #: parser could not type are: (action phrases, headings, the statement's
+    #: text) -> checked suggestions (``app.ml.client.activity_hints``).
+    ml_vocabulary: AskVocabulary | None = None
+
+
+#: ``(action phrases, headings, statement text) -> checked suggestions``.
+AskVocabulary = Callable[[Sequence[str], Sequence[str], str], Vocabulary | None]
 
 
 class ScanUnavailableError(RuntimeError):
@@ -413,7 +418,29 @@ def _unlink_classified_account(document: Document) -> None:
 
 
 #: Where the local model's suggested words are kept on a document.
-ML_VOCABULARY_KEY: Final = "ml_vocabulary"
+ML_VOCABULARY_KEY: Final = wording.SUGGESTIONS_KEY
+
+
+def _statement_context(result: ExtractResult, keys: Sequence[str]) -> str:
+    """The statement's text for the model to read ``keys`` in (ADR-0010).
+
+    The pages that print one of the phrases first, then the others in
+    order: a long statement is cut by ``PERFIN_ML_MAX_CHARS``
+    (``app.ml.client.activity_hints``), and what is cut should be the pages
+    that say nothing about them.
+    """
+    if not result.pages:
+        return _document_text(result)
+    wanted = [key for key in keys if key]
+    first: list[str] = []
+    rest: list[str] = []
+    for page in result.pages:
+        text = page.text.strip()
+        if not text:
+            continue
+        flat = masked(text)
+        (first if any(key in flat for key in wanted) else rest).append(text)
+    return "\n\n".join([*first, *rest])
 
 
 def _parse_document(
@@ -421,7 +448,7 @@ def _parse_document(
     document: Document,
     result: ExtractResult,
     threshold: float,
-    ask: Callable[[Sequence[str], Sequence[str]], Vocabulary | None] | None = None,
+    ask: AskVocabulary | None = None,
 ) -> tuple[ExtractResult, dict[str, Any]]:
     """Run the document parsers (``app.ingestion.parsers``) on a PDF's or image's pages.
 
@@ -429,22 +456,29 @@ def _parse_document(
     ``document.extraction`` next to the pages they were read from, so a
     re-import or a newer parser needs no new upload or extraction.
 
-    ``ask`` (the optional local model, ADR-0010): when a brokerage parser
-    left activity rows unread because their words are in no vocabulary of
-    its own (``ParseInfo.unknown_actions`` / ``unknown_headings``), the
-    model is asked what kind of activity those phrases are, its checked
-    suggestions are kept on the document (``confidence["ml_vocabulary"]``)
-    and the pages are read once more with them. A row typed this way is
-    marked ``suggested_type`` and is never written without a person's
-    confirmation; with no answer the document is read as without a model.
-    Suggestions kept from an earlier run are used again without asking.
+    **Words no parser types.** When a brokerage parser left activity rows
+    unread because their words are in no vocabulary of its own
+    (``ParseInfo.unknown_actions`` / ``unknown_headings``), the pages are
+    read once more with what is known about those words:
+
+    1. the wording the household confirmed on an earlier statement of this
+       layout (``app.domain.imports.wording``): typed like the parser's own
+       words, nobody is asked;
+    2. for what is still untyped, the optional local model's suggestions
+       (``ask``, ADR-0010): it is sent those phrases with the statement's
+       text to read them in, answers a kind for each from a closed list,
+       and the checked answer is kept on the document
+       (``confidence["ml_vocabulary"]``; used again without asking). A row
+       typed by a suggestion is marked ``suggested_type`` and is never
+       written without a person's confirmation.
+
+    With nothing learned and no answer the document is read as without a model.
     """
     hints = _parse_hints(document)
     template = _learned_template(db, document)
-    vocabulary = Vocabulary.from_stored((document.confidence or {}).get(ML_VOCABULARY_KEY))
     pages = result
 
-    def parse_with(words: Vocabulary) -> ExtractResult:
+    def parse_with(words: Vocabulary | None) -> ExtractResult:
         return parse_extraction(
             pages,
             threshold=threshold,
@@ -453,25 +487,27 @@ def _parse_document(
             kind=hints.get("kind"),
             date_order=hints.get("date_order"),
             template=template,
-            vocabulary=None if words.empty else words,
+            vocabulary=words,
         )
 
-    result = parse_with(vocabulary)
+    result = parse_with(None)
     untyped = result.parse
-    if (
-        ask is not None
-        and untyped is not None
-        and (untyped.unknown_actions or untyped.unknown_headings)
-    ):
-        suggested = ask(untyped.unknown_actions, untyped.unknown_headings)
-        if suggested is not None and not suggested.empty:
-            vocabulary = vocabulary.merged(suggested)
-            document.confidence = {
-                **(document.confidence or {}),
-                ML_VOCABULARY_KEY: vocabulary.stored(),
-            }
-            db.flush()
-            result = parse_with(vocabulary)
+    if untyped is not None and (untyped.unknown_actions or untyped.unknown_headings):
+        known = wording.household_vocabulary(
+            db, document.household_id, wording.layout_key(untyped.parser)
+        ).merged(Vocabulary.from_stored((document.confidence or {}).get(ML_VOCABULARY_KEY)))
+        actions, headings = known.untyped(untyped.unknown_actions, untyped.unknown_headings)
+        if ask is not None and (actions or headings):
+            suggested = ask(actions, headings, _statement_context(pages, [*actions, *headings]))
+            if suggested is not None and not suggested.empty:
+                known = known.merged(suggested)
+                document.confidence = {
+                    **(document.confidence or {}),
+                    ML_VOCABULARY_KEY: known.stored(),
+                }
+                db.flush()
+        if not known.empty:
+            result = parse_with(known)
     info = result.parse
     if info is None:  # pragma: no cover - parse_extraction always records it
         return result, {}

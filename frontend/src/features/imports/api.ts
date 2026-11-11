@@ -207,10 +207,29 @@ export function applyDocumentAccounts(
 }
 
 export type LearnedLayout = Schemas["LearnedLayoutOut"];
+export type LearnedWording = Schemas["LearnedWordingOut"];
 
 export const learnedKeys = {
   layouts: [...queryRoots.documents, "layouts"],
+  wording: [...queryRoots.documents, "wording"],
 } as const;
+
+/**
+ * The statement wording the household confirmed after the local model
+ * suggested what it means (phrases only: no digit, no name, no amount).
+ */
+export function listWording(): Promise<LearnedWording[]> {
+  return unwrap(api.GET("/api/v1/imports/wording")).then((list) => list.items);
+}
+
+/** Forget one learned phrase; the next statement wording it is asked about again. */
+export async function deleteWording(id: string): Promise<void> {
+  await unwrap(
+    api.DELETE("/api/v1/imports/wording/{wording_id}", {
+      params: { path: { wording_id: id } },
+    }),
+  );
+}
 
 /** The layouts the household taught PerFin ("Remember this layout", "Teach PerFin"). */
 export function listLayouts(): Promise<LearnedLayout[]> {

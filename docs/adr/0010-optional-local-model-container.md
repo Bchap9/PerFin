@@ -59,13 +59,23 @@ then did not add up. Naming such words is what a language model does well
 and a rule table does not, so the owner asked for the model to help there.
 The rules above hold unchanged; this adds one question under them.
 
-- **A second, narrower question.** When a brokerage parser could not type
-  some activity rows, the worker sends just the action phrases of those rows
-  and the headings above them (`POST /v1/vocabulary`): normalised, every
-  digit masked, at most 40 of each, 80 characters each. Not the document's
-  text, no amounts, no account numbers, never ledger data. It is asked only
-  when the parser's own vocabulary failed, and an answer kept on the
-  document (`confidence.ml_vocabulary`) is used again without asking.
+- **A second question, about wording.** When a brokerage parser could not
+  type some activity rows, the worker asks about the action phrases of those
+  rows and the headings above them (`POST /v1/vocabulary`): each normalised,
+  every digit masked, at most 40 of each, 80 characters each. With them it
+  sends the statement's text for the model to read them in (the owner's
+  decision: the model is local, and a phrase is far easier to name beside
+  the rows it stands on), capped like the first question's
+  (`PERFIN_ML_MAX_CHARS`), the pages that print the phrases first. Never
+  ledger data, never another document. It is asked only when the parser's
+  own vocabulary and the household's learned wording both failed, and an
+  answer kept on the document (`confidence.ml_vocabulary`) is used again
+  without asking.
+- **The model remembers nothing.** PerFin never trains or tunes the model
+  on what it sends. Every call stands alone (the adapter's prompt and that
+  one request: no earlier request, no conversation), and the adapter stores
+  nothing and logs no content. Whatever the model read in a statement, all
+  that returns is a kind per numbered phrase.
 - **Closed lists, matched by position.** For each numbered phrase the model
   picks an activity type, for each heading a section kind, or `unknown`. The
   adapter and then the worker (`app.ml.client.validated_vocabulary`) keep
@@ -85,11 +95,26 @@ The rules above hold unchanged; this adds one question under them.
   line with the kind suggested, marked as the model's, and "Import as read"
   is the person's confirmation.
 
-Rejected for this step: sending the whole statement and letting the model
-extract rows (its figures could not be told from the page's), free-text
-explanations shown in the review queue (a crafted statement could put
-advice there), and letting an arithmetic match alone stand in for a
-person's confirmation.
+- **Only layout is remembered, and only once a person confirmed it.**
+  "Import as read" on rows the model typed keeps the *wording* for the
+  household (`app.domain.imports.wording`, one household setting), so the
+  next statement of that layout is read without the model and without a
+  question. What is kept is a phrase and its kind, for that layout: a
+  section's heading, or the action words of a table that names its
+  securities in a column of their own. Never the free text of a cash table
+  (a payee, a merchant, a memo), never a digit (masked in the key), never a
+  phrase the household's scrubber would mask (a member's or the household's
+  name, an address, a stored account number), and no amount, date,
+  security or account of the statement it was learned from. A suggestion
+  nobody confirmed teaches nothing. Everything kept is listed under "What
+  PerFin has learned" and can be forgotten there (`GET` / `DELETE
+  /imports/wording`), both audited without the phrases.
+
+Rejected for this step: letting the model extract rows or figures (they
+could not be told from the page's), free-text explanations shown in the
+review queue (a crafted statement could put advice there), letting an
+arithmetic match alone stand in for a person's confirmation, and
+remembering anything a statement says beyond its wording.
 
 ## Alternatives considered
 - **Keep no model at all (ADR-0007).** The owner's hardware and the review

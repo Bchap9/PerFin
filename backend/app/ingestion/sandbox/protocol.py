@@ -459,6 +459,11 @@ class InvestmentActivity(_Strict):
     #: The heading of the statement section the row was printed under
     #: (``Deposits``, ``Securities Bought & Sold``), as printed.
     section: Annotated[str, Field(max_length=SECTION_LABEL_MAX)] | None = None
+    #: The wording whose suggested kind typed the row, when that wording may
+    #: be remembered once a person confirms it (``action:<key>`` /
+    #: ``section:<key>``, ``app.ingestion.parsers.vocabulary``): a heading or
+    #: a broker's action words, never a payee or a memo.
+    suggestion: Annotated[str, Field(max_length=SECTION_LABEL_MAX + 8)] | None = None
 
     @property
     def price_per_unit(self) -> Decimal | None:
@@ -1032,7 +1037,7 @@ class ExtractResult(_Strict):
                 or i.first_page is not None
                 or bool(i.confidence)
                 or bool(i.figures)
-                or any(a.section is not None for a in i.activity)
+                or any(a.section is not None or a.suggestion is not None for a in i.activity)
                 or any(p.confidence is not None or p.low_confidence for p in i.positions)
                 or any(a.confidence is not None or a.low_confidence for a in i.activity)
                 for i in self.investments

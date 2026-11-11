@@ -204,6 +204,8 @@ GET/POST        /imports/mappings               saved CSV/TSV column mappings
 GET/PATCH/DELETE /imports/mappings/{id}
 GET             /imports/layouts                layouts the household taught PerFin
 DELETE          /imports/layouts/{id}           forget one, every version of it
+GET             /imports/wording                statement wording learned from confirmed suggestions
+DELETE          /imports/wording/{id}           forget one phrase
 GET             /imports/{document_id}/preview  extracted rows/statements (stored, never re-parsed)
 POST            /imports/{document_id}/apply-mapping  re-run the import (job; 202 + job id)
 
@@ -339,7 +341,16 @@ print order; nothing in it holds a digit of any document. `DELETE
 /imports/layouts/{id}` (member or above) removes every version of that
 layout (`204`; `404 layout-not-found` for an unknown id or another
 household's; audit `parser_fingerprint.delete`, event
-`document.layout_deleted`). `GET /imports/{document_id}/preview?offset=&limit=`
+`document.layout_deleted`). `GET /imports/wording` (any role) returns
+`{"items": [{"id", "layout", "kind", "phrase", "meaning", "learned_at",
+"learned_from_document_id"}]}`: the statement wording the household
+confirmed after the optional local model suggested what it means (`kind`
+`action` or `section`; `phrase` lower case with every digit masked;
+`meaning` an activity type or a section kind; nothing else of any
+statement is kept, INGESTION.md "Models in the pipeline"). `DELETE
+/imports/wording/{id}` (member or above; `id` is 32 hex characters, else
+`422`) forgets one phrase (`204`; `404 wording-not-found`; audit
+`learned_wording.delete`). `GET /imports/{document_id}/preview?offset=&limit=`
 (any role that can see the document, `limit` 1-500, default 50) returns
 `{"document_id", "status", "kind", "account_id", "tables": [{"index",
 "encoding", "delimiter", "has_header", "column_count", "row_count",

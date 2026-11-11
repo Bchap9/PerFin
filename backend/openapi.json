@@ -11078,6 +11078,75 @@
         "title": "LearnedTable",
         "type": "object"
       },
+      "LearnedWordingList": {
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/LearnedWordingOut"
+            },
+            "title": "Items",
+            "type": "array"
+          }
+        },
+        "required": [
+          "items"
+        ],
+        "title": "LearnedWordingList",
+        "type": "object"
+      },
+      "LearnedWordingOut": {
+        "description": "One phrase of a statement layout the household confirmed\n(``app.domain.imports.wording``): wording only, no digit, no name.",
+        "properties": {
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "kind": {
+            "title": "Kind",
+            "type": "string"
+          },
+          "layout": {
+            "title": "Layout",
+            "type": "string"
+          },
+          "learned_at": {
+            "format": "date-time",
+            "title": "Learned At",
+            "type": "string"
+          },
+          "learned_from_document_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Learned From Document Id"
+          },
+          "meaning": {
+            "title": "Meaning",
+            "type": "string"
+          },
+          "phrase": {
+            "title": "Phrase",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "layout",
+          "kind",
+          "phrase",
+          "meaning",
+          "learned_at",
+          "learned_from_document_id"
+        ],
+        "title": "LearnedWordingOut",
+        "type": "object"
+      },
       "LinkOfferOut": {
         "properties": {
           "email": {
@@ -32472,6 +32541,77 @@
           }
         },
         "summary": "Change a column mapping (member or above)",
+        "tags": [
+          "imports"
+        ]
+      }
+    },
+    "/api/v1/imports/wording": {
+      "get": {
+        "operationId": "get_wording_api_v1_imports_wording_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LearnedWordingList"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Statement wording PerFin learned from suggestions a person confirmed",
+        "tags": [
+          "imports"
+        ]
+      }
+    },
+    "/api/v1/imports/wording/{wording_id}": {
+      "delete": {
+        "operationId": "delete_wording_api_v1_imports_wording__wording_id__delete",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "wording_id",
+            "required": true,
+            "schema": {
+              "pattern": "^[0-9a-f]{32}$",
+              "title": "Wording Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {}
+            },
+            "description": "Problem details"
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {}
+            },
+            "description": "Problem details"
+          },
+          "409": {
+            "content": {
+              "application/problem+json": {}
+            },
+            "description": "Problem details"
+          },
+          "422": {
+            "content": {
+              "application/problem+json": {}
+            },
+            "description": "Problem details"
+          }
+        },
+        "summary": "Forget a learned phrase (member or above)",
         "tags": [
           "imports"
         ]

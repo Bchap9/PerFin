@@ -492,7 +492,7 @@ export function ReviewItemCard({ item }: { item: ReviewItem }) {
       {asRead && actionable ? (
         <p className="ledger-muted">
           {hasSuggestedKinds(item)
-            ? "“Import as read” confirms the kinds the local model suggested for the lines listed above and imports them as printed."
+            ? "“Import as read” confirms the kinds the local model suggested for the lines listed above and imports them as printed. Headings and broker wording you confirm are remembered under “What PerFin has learned”; nothing else of the statement is."
             : reason === "investment_lines_held"
             ? "“Import as read” imports the lines listed above as printed; the rest of the statement is already imported."
             : reason === "investment_reconciliation_failed"

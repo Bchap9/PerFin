@@ -1807,7 +1807,9 @@ the document page.
   (`app/domain/imports/layouts.py`; audit `parser_fingerprint.delete`). The
   next statement of that layout is read by the ordinary parsers again and
   can be taught afresh. The SPA shows both, with the saved column mappings
-  (rename, delete), on "What PerFin has learned" (`/documents/learned`).
+  (rename, delete) and the statement wording learned from confirmed
+  suggestions ("Models in the pipeline"), on "What PerFin has learned"
+  (`/documents/learned`).
 - **Notes.** Free text from "Other" is kept on the template, in the review
   item's resolution and in the `document.teach` audit row for the
   household to read, without any word that holds a digit (an account or
@@ -2011,10 +2013,19 @@ A second question, for brokerage statements only (`app.ml.client.activity_hints`
 an activity row by its action words and its section's heading from fixed
 lists; a row neither names is left unread and its words are reported
 (`ParseInfo.unknown_actions` / `unknown_headings`: normalised, every digit
-masked, so no reference or account number is kept). When there are any and
-the model is on, the worker sends just those phrases (`POST /v1/vocabulary`,
-at most 40 of each) and asks what kind of activity each is, from a closed
-list: an activity type for a phrase (not `split`, which needs a ratio no
+masked, so no reference or account number is kept). The pages are then read
+once more with what is known about those words, in this order:
+
+1. **Learned wording** (`app/domain/imports/wording.py`): what the household
+   confirmed on an earlier statement of this layout. It types a row like
+   the parser's own lists do: no doubt, nobody asked.
+2. **The model's suggestions**, for what is still untyped and when the model
+   is on.
+
+For the second, the worker sends those phrases (`POST /v1/vocabulary`, at
+most 40 of each) with the statement's text to read them in (the pages that
+print them first, cut to `PERFIN_ML_MAX_CHARS`) and asks what kind of
+activity each is, from a closed list: an activity type for a phrase (not `split`, which needs a ratio no
 phrase gives), a row-typing section kind for a heading (never `skip`: a
 model may not hide a table), or `unknown`. Answers are matched to the phrases
 PerFin sent by their number and only listed kinds are kept
@@ -2029,6 +2040,24 @@ when it moves cash, with its statement when it moves units) and the review
 queue's **Import as read** is the person's confirmation of the suggested
 kinds (`CONFIRMABLE_DOUBTS`: `reconciliation`, `suggested_type`). A heading
 or phrase the parser's own lists know is never the model's to type.
+
+That confirmation is also what teaches: the wording of the confirmed rows
+is kept for the household (`wording.remember_confirmed`, the household
+setting `ingestion.learned_wording`; the resolution says `wording_learned`).
+Only layout is kept. An entry is a layout (the parser's institution key or
+name), a phrase and its kind: a section's heading, or the action words of a
+table that names its securities in a column of their own (the parser marks
+those rows, `InvestmentActivity.suggestion`). The free text of a cash table
+(a payee, a merchant, a memo) is typed for its own document and never
+kept; a key holds no digit; a phrase the household's scrubber would mask (a
+member's or the household's name, an address, a stored account number) is
+refused; and no amount, date, security or account of the statement is
+stored. The model itself keeps nothing: it is never trained on what it is
+sent and every call stands alone. `GET /imports/wording` (any role) lists
+what was learned and `DELETE /imports/wording/{id}` (member or above)
+forgets a phrase (audit `learned_wording.add` / `learned_wording.delete`,
+ids and counts only); the SPA shows it on "What PerFin has learned". It is
+a household setting, so it is not part of a full export.
 
 The heuristic classifier is a small local model trained offline on synthetic
 and contributed samples; it never makes network calls and ships as a versioned

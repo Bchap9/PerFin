@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 /** Plain words for what a learned layout or a saved column mapping does. */
-import type { LearnedLayout, Mapping } from "./api";
+import type { LearnedLayout, LearnedWording, Mapping } from "./api";
 
 const FIELD_LABELS: ReadonlyMap<string, string> = new Map(Object.entries({
   account_number: "account number",
@@ -38,6 +38,39 @@ const KIND_LABELS: ReadonlyMap<string, string> = new Map(Object.entries({
   insurance: "Insurance document",
   other: "Other document",
 }));
+
+const MEANING_LABELS: ReadonlyMap<string, string> = new Map(Object.entries({
+  buy: "a purchase",
+  sell: "a sale",
+  dividend: "a dividend",
+  interest: "interest",
+  fee: "a fee",
+  reinvest: "a reinvestment",
+  transfer_in: "shares moved in",
+  transfer_out: "shares moved out",
+  deposit: "a deposit",
+  withdrawal: "a withdrawal",
+  corporate_action: "a corporate action",
+}));
+
+const SECTION_LABELS: ReadonlyMap<string, string> = new Map(Object.entries({
+  income: "dividends and interest",
+  deposit: "deposits",
+  withdrawal: "withdrawals",
+  card: "card purchases and checks",
+  cash: "cash in or out, by the sign of the amount",
+  fee: "fees and taxes",
+  transfer_in: "shares moved in",
+  transfer_out: "shares moved out",
+}));
+
+/** What a learned phrase means, in plain words. */
+export function wordingMeans(wording: LearnedWording): string {
+  if (wording.kind === "section") {
+    return `A section of ${SECTION_LABELS.get(wording.meaning) ?? words(wording.meaning)}`;
+  }
+  return `A line that is ${MEANING_LABELS.get(wording.meaning) ?? words(wording.meaning)}`;
+}
 
 function words(code: string): string {
   return code.replaceAll("_", " ");

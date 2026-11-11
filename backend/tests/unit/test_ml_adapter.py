@@ -173,6 +173,31 @@ def test_phrases_are_numbered_for_the_model_and_answered_from_the_lists_only(
     )
 
 
+def test_the_statement_is_given_as_context_before_the_lists(
+    served: tuple[str, FakeRuntime],
+) -> None:
+    url, runtime = served
+    runtime.answer = {"actions": [{"index": 1, "type": "buy"}], "headings": []}
+    statement = "EXAMPLE BROKERAGE\n06/05 EXAMPLE INDEX ETF Periodic Investment Plan 3 -300.00"
+    status, answer = _post(
+        url, {"actions": ["periodic investment plan"], "text": statement}, path=VOCABULARY
+    )
+    # Whatever the model read, a kind per numbered phrase is all that comes back.
+    assert (status, answer["actions"]) == (200, [{"index": 1, "type": "buy"}])
+    assert set(answer) == {"actions", "headings", "model"}
+    content = runtime.bodies[0]["messages"][1]["content"]
+    assert content == (
+        f"STATEMENT:\n{statement}\n\nACTIONS:\n1. periodic investment plan\n\nHEADINGS:\n(none)"
+    )
+    # One request, one answer: no earlier turn is carried into a call.
+    assert [m["role"] for m in runtime.bodies[0]["messages"]] == ["system", "user"]
+    assert (
+        _post(url, {"actions": ["x"], "text": "y" * (ml.MAX_TEXT + 900)}, path=VOCABULARY)[0] == 200
+    )
+    capped = runtime.bodies[1]["messages"][1]["content"]
+    assert capped.count("y") == ml.MAX_TEXT
+
+
 def test_the_model_cannot_be_asked_to_hide_a_table() -> None:
     # The lists the adapter offers the model type rows; none says "not activity".
     assert "skip" not in ml.SECTION_KINDS

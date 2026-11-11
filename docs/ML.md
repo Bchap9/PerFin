@@ -77,9 +77,12 @@ nvidia-smi` should list the card).
   ("Periodic Investment Plan", a heading like "Sweep Program Activity"), the
   worker asks the model what kind of activity that phrase is, from a fixed
   list (purchase, sale, dividend, interest, fee, deposit, withdrawal, ...).
-  It sends only those phrases with every digit masked, not the statement.
-  The model cannot supply a figure or say a table is not activity; it can
-  only pick a kind or decline. The statement is then read again with the
+  It sends those phrases together with the statement's text, so the model
+  can read each phrase on the rows it stands on (up to
+  `PERFIN_ML_MAX_CHARS`; raise it, with `ML_CONTEXT` on the adapter, if
+  your statements are long and your GPU has room). The model cannot supply
+  a figure or say a table is not activity; it can only pick a kind or
+  decline, and a kind per phrase is all that comes back. The statement is then read again with the
   suggested kinds: the dates and amounts are the page's own, and the
   statement's totals are checked as always. A line typed this way is never
   imported on its own. It shows up in the review queue as "kind suggested
@@ -88,6 +91,17 @@ nvidia-smi` should list the card).
   statement is imported; a line that moves shares holds its statement until
   you confirm. The answer is kept with the document, so confirming does not
   ask the model again.
+- **What is remembered, and what is not.** The model itself remembers
+  nothing: PerFin never trains or tunes it, every request stands alone with
+  no history, and the adapter stores nothing and logs no content. When you
+  confirm suggested kinds, PerFin keeps the *wording* for your household so
+  the next statement of that layout is read with no model and no question:
+  a section's heading or a broker's action words, and what kind it is. It
+  never keeps a payee, merchant or memo, any digit, a phrase containing a
+  household member's name, an address or one of your account numbers, or
+  any amount, date, security or account from the statement. You can see
+  every phrase and remove it under **Documents, What PerFin has learned,
+  Statement wording**.
 - If the model is slow, down or wrong, documents are processed as if it were
   not there; after three failures in a row it is not asked for five minutes.
 

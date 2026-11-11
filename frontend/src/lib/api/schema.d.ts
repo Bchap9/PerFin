@@ -1780,6 +1780,40 @@ export interface paths {
         patch: operations["patch_mapping_api_v1_imports_mappings__mapping_id__patch"];
         trace?: never;
     };
+    "/api/v1/imports/wording": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Statement wording PerFin learned from suggestions a person confirmed */
+        get: operations["get_wording_api_v1_imports_wording_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/imports/wording/{wording_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /** Forget a learned phrase (member or above) */
+        delete: operations["delete_wording_api_v1_imports_wording__wording_id__delete"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/imports/{document_id}/apply-mapping": {
         parameters: {
             query?: never;
@@ -6870,6 +6904,35 @@ export interface components {
             columns: string[];
             /** Kind */
             kind: string;
+        };
+        /** LearnedWordingList */
+        LearnedWordingList: {
+            /** Items */
+            items: components["schemas"]["LearnedWordingOut"][];
+        };
+        /**
+         * LearnedWordingOut
+         * @description One phrase of a statement layout the household confirmed
+         *     (``app.domain.imports.wording``): wording only, no digit, no name.
+         */
+        LearnedWordingOut: {
+            /** Id */
+            id: string;
+            /** Kind */
+            kind: string;
+            /** Layout */
+            layout: string;
+            /**
+             * Learned At
+             * Format: date-time
+             */
+            learned_at: string;
+            /** Learned From Document Id */
+            learned_from_document_id: string | null;
+            /** Meaning */
+            meaning: string;
+            /** Phrase */
+            phrase: string;
         };
         /** LinkOfferOut */
         LinkOfferOut: {
@@ -18411,6 +18474,82 @@ export interface operations {
                 content: {
                     "application/json": components["schemas"]["MappingOut"];
                 };
+            };
+            /** @description Problem details */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Problem details */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Problem details */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Problem details */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+        };
+    };
+    get_wording_api_v1_imports_wording_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LearnedWordingList"];
+                };
+            };
+        };
+    };
+    delete_wording_api_v1_imports_wording__wording_id__delete: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                wording_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
             /** @description Problem details */
             403: {

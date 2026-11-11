@@ -28,14 +28,27 @@ suggestion:
   names a kind, it supplies no figure.
 
 Keys hold no digits (:func:`phrase_key` masks them), so a phrase such as
-``Transferred from account 123-456789`` is neither stored nor sent with its
-number, and one answer covers every row worded the same way.
+``Transferred from account 123-456789`` is never stored with its number,
+and one answer covers every row worded the same way.
+
+**What is remembered.** Once a person has confirmed a suggestion, the
+household keeps it as *learned wording* (``app.domain.imports.wording``):
+``learned_actions`` / ``learned_sections`` here. Learned wording types a row
+like the parser's own lists do, with no doubt and without asking the model
+or the person again. Only wording is ever learned, never a detail of the
+statement it was learned from: a section's heading, or the action words of a
+table that names its securities in a column of their own (a broker's words:
+``Periodic Investment Plan``). The free text of a cash table (a payee, a
+merchant, a memo) is typed for its own document only and is not
+:func:`rememberable`; nor is any phrase holding a household member's name,
+an address or an account number (the household's
+:class:`~app.core.scrubber.Scrubber` decides).
 """
 
 from __future__ import annotations
 
 import re
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import Any, Final
 
@@ -80,36 +93,60 @@ PHRASE_MAX: Final = 80
 _DIGITS: Final = re.compile(r"\d+")
 
 
+def masked(text: str) -> str:
+    """``text`` normalised with every run of digits masked (a :func:`phrase_key`, unbounded)."""
+    return _DIGITS.sub("0", normalise(text))
+
+
 def phrase_key(text: str) -> str:
     """``text`` as a vocabulary key: normalised, every run of digits masked, bounded.
 
     ``Transferred from account 123-456789`` -> ``transferred from account 0 0``
     (the mask is a digit so that a key is its own key).
     """
-    return _DIGITS.sub("0", normalise(text))[:PHRASE_MAX].strip()
+    return masked(text)[:PHRASE_MAX].strip()
+
+
+#: How a row typed through a vocabulary names the entry that typed it
+#: (``InvestmentActivity.suggestion``): ``action:<key>`` / ``section:<key>``.
+ACTION_PREFIX: Final = "action:"
+SECTION_PREFIX: Final = "section:"
 
 
 @dataclass(frozen=True)
 class Vocabulary:
-    """Suggested kinds by :func:`phrase_key` (module doc)."""
+    """Kinds by :func:`phrase_key`: the model's suggestions and learned wording (module doc)."""
 
-    #: Action phrase -> activity type (:data:`SUGGESTED_TYPES`).
+    #: Action phrase -> activity type (:data:`SUGGESTED_TYPES`): suggestions.
     actions: Mapping[str, str] = field(default_factory=dict)
-    #: Section heading -> section kind (:data:`SUGGESTED_SECTIONS`).
+    #: Section heading -> section kind (:data:`SUGGESTED_SECTIONS`): suggestions.
     sections: Mapping[str, str] = field(default_factory=dict)
     model: str | None = None
+    #: The same, confirmed by a person on an earlier statement of this layout.
+    learned_actions: Mapping[str, str] = field(default_factory=dict)
+    learned_sections: Mapping[str, str] = field(default_factory=dict)
 
     @property
     def empty(self) -> bool:
-        return not self.actions and not self.sections
+        return not (self.actions or self.sections or self.learned_actions or self.learned_sections)
 
-    def action(self, text: str) -> str | None:
-        """The type suggested for an action text, if any."""
-        return self.actions.get(phrase_key(text)) if text.strip() else None
+    def action(self, text: str) -> tuple[str, bool] | None:
+        """``(type, it is only a suggestion)`` for an action text, if any (learned first)."""
+        key = phrase_key(text)
+        if not key:
+            return None
+        if key in self.learned_actions:
+            return self.learned_actions[key], False
+        return (self.actions[key], True) if key in self.actions else None
 
-    def section(self, heading: str) -> str | None:
-        """The kind suggested for a section heading, if any."""
-        return self.sections.get(phrase_key(heading)) if heading.strip() else None
+    def section(self, heading: str) -> tuple[str, bool] | None:
+        """``(kind, it is only a suggestion)`` for a section heading, if any (learned first)."""
+        key = phrase_key(heading)
+        if not key:
+            return None
+        if key in self.learned_sections:
+            return self.learned_sections[key], False
+        return (self.sections[key], True) if key in self.sections else None
 
     def merged(self, other: Vocabulary) -> Vocabulary:
         """Both vocabularies; ``other`` only adds (an answer already kept stays)."""
@@ -117,10 +154,26 @@ class Vocabulary:
             actions={**other.actions, **self.actions},
             sections={**other.sections, **self.sections},
             model=self.model or other.model,
+            learned_actions={**other.learned_actions, **self.learned_actions},
+            learned_sections={**other.learned_sections, **self.learned_sections},
+        )
+
+    def untyped(
+        self, actions: Sequence[str], headings: Sequence[str]
+    ) -> tuple[list[str], list[str]]:
+        """The keys of ``actions`` and ``headings`` nothing here names yet."""
+        known_actions = {*self.actions, *self.learned_actions}
+        known_sections = {*self.sections, *self.learned_sections}
+        return (
+            [a for a in actions if a not in known_actions],
+            [h for h in headings if h not in known_sections],
         )
 
     def stored(self) -> dict[str, Any]:
-        """The JSON kept on the document (``document.confidence["ml_vocabulary"]``)."""
+        """The suggestions as kept on the document (``confidence["ml_vocabulary"]``).
+
+        Learned wording is the household's, read from its own store each run.
+        """
         return {
             "actions": dict(self.actions),
             "sections": dict(self.sections),
@@ -138,6 +191,19 @@ class Vocabulary:
             sections=_checked(data.get("sections"), SUGGESTED_SECTIONS),
             model=model[:PHRASE_MAX] if isinstance(model, str) and model.isprintable() else None,
         )
+
+
+def rememberable(key: str, clean: Callable[[str], str] | None = None) -> bool:
+    """``key`` may be kept as learned wording: words only, nothing personal.
+
+    A :func:`phrase_key` of two characters or more with a letter; ``clean``
+    (the household scrubber's ``scrub_text``) must leave it as it is: a
+    phrase it would mask holds a member's name, an address, an e-mail
+    address or an account number.
+    """
+    if key != phrase_key(key) or len(key) < 2 or not any(ch.isalpha() for ch in key):
+        return False
+    return clean is None or normalise(clean(key)) == key
 
 
 def _checked(data: Any, allowed: frozenset[str]) -> dict[str, str]:

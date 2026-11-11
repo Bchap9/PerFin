@@ -18,16 +18,25 @@ What survives is stored on the document (``document.confidence["ml"]``) and
 offered to a person (account proposals, account suggestions in the review
 queue); it is never written to the ledger on its own.
 
-A second, narrower question (:func:`activity_hints`): when a brokerage parser
-could not type some activity rows because their action words or their
-section's heading are in no vocabulary of its own, the worker sends just
-those phrases (normalised, digits masked, at most
-:data:`~app.ingestion.parsers.vocabulary.MAX_PHRASES` of each) and asks what
-kind of activity each is, from a closed list. The answer is matched back by
-position to the phrases PerFin sent (never by text the model returns) and
-only listed kinds are kept (:func:`validated_vocabulary`). A row typed this
-way is marked as a suggestion and waits for a person
+A second question (:func:`activity_hints`): when a brokerage parser could not
+type some activity rows because their action words or their section's
+heading are in no vocabulary of its own, the worker sends those phrases
+(normalised, digits masked, at most
+:data:`~app.ingestion.parsers.vocabulary.MAX_PHRASES` of each) with the
+statement's text to read them in (``PERFIN_ML_MAX_CHARS`` characters, as for
+the first question) and asks what kind of activity each is, from a closed
+list. The answer is matched back by position to the phrases PerFin sent
+(never by text the model returns) and only listed kinds are kept
+(:func:`validated_vocabulary`): whatever the model read in the statement,
+all that comes back is a kind per numbered phrase. A row typed this way is
+marked as a suggestion and waits for a person
 (:mod:`app.ingestion.parsers.vocabulary`).
+
+Nothing of a document is remembered by the model: it is not trained or
+tuned on what it is sent, every call stands alone (no conversation is
+carried from one to the next) and the adapter stores nothing and logs no
+content. What PerFin keeps of an answer is the checked kinds above, on the
+document they are about.
 
 Failures never fail ingestion: a timeout, an error, a refused address or a
 malformed answer is logged and the document goes on without hints. After
@@ -312,12 +321,15 @@ def activity_hints(
     settings: Settings,
     actions: Sequence[str],
     headings: Sequence[str],
+    text: str = "",
     *,
     transport: httpx.BaseTransport | None = None,
 ) -> Vocabulary | None:
     """Ask what kind of activity ``actions`` and ``headings`` are (module doc).
 
-    None: off, failed, or no phrase got a listed kind.
+    ``text``: the statement they are from, for the model to read them in
+    (cut to ``PERFIN_ML_MAX_CHARS``). None: off, failed, or no phrase got a
+    listed kind.
     """
     sent_actions, sent_headings = _keys(actions), _keys(headings)
     if not sent_actions and not sent_headings:
@@ -325,7 +337,11 @@ def activity_hints(
     answer = _ask(
         settings,
         "/v1/vocabulary",
-        {"actions": sent_actions, "headings": sent_headings},
+        {
+            "actions": sent_actions,
+            "headings": sent_headings,
+            "text": text[: settings.ml_max_chars],
+        },
         transport,
     )
     if answer is None:

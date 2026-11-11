@@ -116,6 +116,14 @@ downgrade drops the Phase 1 enum types):
   setting `ai.enabled` is the instance kill switch and the **household**
   setting `ai.enabled` the household's flag, each `{"enabled": bool}`; a
   missing row means enabled. No new table.
+- Learned statement wording (`app/domain/imports/wording.py`): the
+  **household** setting `ingestion.learned_wording`, `{"version": 1,
+  "entries": [{"layout", "kind", "phrase", "meaning", "learned_at",
+  "document_id"}]}` (at most 500 entries, each checked again on every
+  read): phrases of a statement layout a person confirmed after the local
+  model suggested their kind. A phrase holds no digit and nothing the
+  household's scrubber would mask; no value of any statement is stored. No
+  new table.
 - `household.base_currency` is an active ISO 4217 code (fund, metal, test and
   withdrawn codes refused; `app.domain.households.schemas.ISO_4217_CURRENCIES`).
 

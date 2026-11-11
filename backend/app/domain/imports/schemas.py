@@ -667,3 +667,23 @@ class LearnedLayoutOut(_Output):
 
 class LearnedLayoutList(_Output):
     items: list[LearnedLayoutOut]
+
+
+class LearnedWordingOut(_Output):
+    """One phrase of a statement layout the household confirmed
+    (``app.domain.imports.wording``): wording only, no digit, no name."""
+
+    id: str
+    #: The layout it was learned on (the parser's institution key or name).
+    layout: str
+    #: ``action``: the action words of a row; ``section``: a section's heading.
+    kind: str
+    phrase: str
+    #: What it means: an activity type or a section kind.
+    meaning: str
+    learned_at: datetime
+    learned_from_document_id: uuid.UUID | None
+
+
+class LearnedWordingList(_Output):
+    items: list[LearnedWordingOut]
