@@ -7,6 +7,7 @@ import uuid
 from collections.abc import Sequence
 from datetime import date
 from decimal import Decimal
+from typing import Final
 
 from sqlalchemy import ColumnElement, func, select
 from sqlalchemy.dialects.postgresql import insert
@@ -56,7 +57,16 @@ def list_items(
     return list(db.execute(query.order_by(ReviewItem.id).limit(limit)).scalars())
 
 
+#: Reasons of items that only tell a person something: the document they
+#: are about was imported whole and nothing waits on an answer
+#: (``investment_figures_differ``: two figures the statement itself prints
+#: disagree, no row is to blame). Such an item stays in the review queue
+#: until it is seen and never keeps its document in ``needs_review``.
+NOTICE_REASONS: Final = frozenset({"investment_figures_differ"})
+
+
 def open_items_of(db: Session, household_id: uuid.UUID, document_id: uuid.UUID) -> int:
+    """The document's open items that wait on a person (notices are not counted)."""
     return int(
         db.execute(
             select(func.count())
@@ -65,6 +75,7 @@ def open_items_of(db: Session, household_id: uuid.UUID, document_id: uuid.UUID) 
                 ReviewItem.household_id == household_id,
                 ReviewItem.document_id == document_id,
                 ReviewItem.state == ReviewItemState.OPEN,
+                func.coalesce(ReviewItem.payload["reason"].astext, "").notin_(NOTICE_REASONS),
             )
         ).scalar_one()
     )

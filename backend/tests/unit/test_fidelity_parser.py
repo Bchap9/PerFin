@@ -52,6 +52,8 @@ from tests.fixtures import synth_fidelity as fid
 OPTIONS = ExtractOptions(previews=False, ocr=False)
 Row = tuple[date, str, str | None, Decimal | None, Decimal]
 CHECKS = ["positions", "holdings_total", "cash", "total_value"]
+#: A document of several accounts also checks each against its account index.
+INDEXED = [*CHECKS, "index_value"]
 PdfCell = tuple[float, str]
 
 
@@ -142,7 +144,7 @@ def test_three_accounts_are_three_reconciled_statements() -> None:
         check = statement.reconciliation
         assert check is not None
         assert check.status == "ok", check
-        assert check.checks == CHECKS
+        assert check.checks == INDEXED
         assert check.cash_difference == 0
         assert statement.confidence["reconciliation"] == 1.0
         rows: list[InvestmentActivity | InvestmentPosition] = [
@@ -254,10 +256,48 @@ def test_a_single_account_report_names_its_account() -> None:
     assert (statement.first_page, statement.last_page) == (None, None)
 
 
+def test_an_account_the_index_lists_and_no_page_prints_is_reported() -> None:
+    stmt = fid.fidelity_statement()
+    result = _parse(fid.fidelity_pdf(stmt, without_pages=1))
+    assert result.parse is not None
+    # The two accounts with pages are read as before; the third is named.
+    assert [s.account.last4 for s in result.investments] == [
+        stmt.accounts[0].last4,
+        stmt.accounts[2].last4,
+    ]
+    assert all(s.reconciliation and s.reconciliation.status == "ok" for s in result.investments)
+    assert result.parse.unread_accounts == [stmt.accounts[1].last4]
+    assert "accounts_not_read" in result.parse.warnings
+    # Every account read: nothing is reported.
+    whole = _parse(fid.fidelity_pdf(stmt))
+    assert whole.parse is not None
+    assert whole.parse.unread_accounts == []
+
+
+def test_the_index_value_stands_in_for_an_account_that_prints_none() -> None:
+    stmt = fid.fidelity_statement()
+    result = _parse(fid.fidelity_pdf(stmt, without_summary=1))
+    statement = result.investments[1]
+    account = stmt.accounts[1]
+    assert statement.total_value is not None
+    assert statement.total_value.amount == account.total_value
+    # Read from the index, not the account's own pages: derived, and there is
+    # nothing of the account's own to compare the index with.
+    assert statement.confidence["total_value"] < 1.0
+    check = statement.reconciliation
+    assert check is not None
+    assert "index_value" not in check.checks
+    assert check.index_value is None
+    assert check.status == "ok", check
+    assert "total_value" in check.checks
+
+
 @pytest.mark.parametrize(
     ("tamper", "failed"),
     [
-        ("total", ["total_value"]),
+        # The account value changed on the account's own pages no longer is
+        # the one the document's index prints for it.
+        ("total", ["total_value", "index_value"]),
         ("market_value", ["positions", "total_value"]),
         ("extra_row", ["cash"]),
     ],
@@ -355,7 +395,7 @@ def test_generic_parser_splits_an_unknown_brokers_accounts() -> None:
         check = statement.reconciliation
         assert check is not None
         assert check.status == "ok"
-        assert check.checks == ["positions", "holdings_total"]
+        assert check.checks == ["positions", "holdings_total", "index_value"]
 
 
 def test_rows_before_any_account_and_accounts_without_tables_are_reported() -> None:

@@ -119,6 +119,51 @@ def test_a_right_blocks_title_alone_on_its_line_opens_the_region() -> None:
     ]
 
 
+def test_a_table_across_the_page_ends_the_region() -> None:
+    def header(line: ViewLine) -> bool:
+        return {"Date", "Description", "Amount"} <= {c.text for c in line.cells}
+
+    lines = [
+        _line(1, 100, [(32, "Core Account Cash Flow"), (392, "Income Summary")]),
+        _line(1, 113, [(32, "Beginning Core Account Balance"), (234, "$900.00"), (392, "Taxable")]),
+        _line(1, 140, [(32, "Date"), (120, "Description"), (585, "Amount")]),
+        _line(1, 153, [(32, "10/05"), (120, "Example Deposit"), (585, "$25.00")]),
+    ]
+    # The header's columns lie on both sides of the cut: the table is no
+    # part of either block, and its lines stay whole.
+    assert _texts(unfold_blocks(lines, _titled, header)) == [
+        "Core Account Cash Flow",
+        "Beginning Core Account Balance $900.00",
+        "Income Summary",
+        "Taxable",
+        "Date Description Amount",
+        "10/05 Example Deposit $25.00",
+    ]
+    # A table of the right block alone (its whole header right of the cut)
+    # belongs to that block.
+    beside = [
+        lines[0],
+        _line(
+            1,
+            113,
+            [(32, "Beginning Balance"), (392, "Date"), (450, "Description"), (585, "Amount")],
+        ),
+        _line(
+            1,
+            126,
+            [(32, "Ending Balance"), (392, "10/05"), (450, "Example Deposit"), (585, "$25.00")],
+        ),
+    ]
+    assert _texts(unfold_blocks(beside, _titled, header)) == [
+        "Core Account Cash Flow",
+        "Beginning Balance",
+        "Ending Balance",
+        "Income Summary",
+        "Date Description Amount",
+        "10/05 Example Deposit $25.00",
+    ]
+
+
 @pytest.mark.parametrize(
     "header",
     [

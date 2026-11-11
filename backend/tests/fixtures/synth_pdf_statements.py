@@ -459,6 +459,79 @@ def mock_savings_pdf(stmt: SynthStatement, *, tamper: Tamper = None) -> bytes:
     return buf.getvalue()
 
 
+#: How far the right box's rows sit above the left box's (points).
+RAISED: Final = 3.0
+
+
+def side_by_side_pdf(stmt: SynthStatement, *, table: Literal["below", "beside"]) -> bytes:
+    """The savings statement with boxes printed side by side.
+
+    ``below``: an account summary beside an interest summary, the
+    transaction table across the page under them. ``beside``: the account
+    summary in a narrow box left of the transaction table, row for row.
+    """
+    rows = list(stmt.transactions)
+    balances = _running(stmt, rows)
+    summary = [
+        ("Balance brought forward", stmt.opening_balance),
+        ("Balance carried forward", balances[-1]),
+    ]
+    buf = io.BytesIO()
+    c = canvas.Canvas(buf, pagesize=letter)
+    c.setFont(BOLD, 15)
+    c.drawString(40, 750, "Mock Savings and Loan")
+    c.setFont(FONT, 10)
+    c.drawString(40, 732, "Current Account Statement")
+    c.drawString(40, 716, f"Account no. ****{stmt.last4}")
+    c.drawString(300, 716, f"Statement from {_uk(stmt.start)} to {_uk(stmt.end)}")
+    c.drawString(40, 700, f"Currency: {stmt.currency}")
+    beside = table == "beside"
+    left = 40 if beside else 72
+    edge = 250 if beside else 72  # the table's left edge
+    c.setFont(BOLD, 10)
+    c.drawString(left, 676, "Account Summary")
+    c.drawString(
+        edge if beside else 330, 676, "Transaction Detail" if beside else "Interest Summary"
+    )
+    c.setFont(FONT, 8 if beside else 9)
+    y = 660
+    interest = [
+        ("Interest paid this period", Decimal("0.42")),
+        ("Interest paid this year", Decimal("3.10")),
+    ]
+    for index, (label, value) in enumerate(summary):
+        c.drawString(left, y, label)
+        if beside:
+            c.drawRightString(left + 180, y, money(value))
+        else:
+            # The other box's row sits a little higher and the amount between
+            # the two: a line-by-line reading tears it from its label.
+            c.drawRightString(left + 180, y + RAISED, money(value))
+            c.drawString(330, y + 2 * RAISED, interest[index][0])
+            c.drawRightString(545, y + 2 * RAISED, money(interest[index][1]))
+        y -= 14
+    cols = {"date": edge, "desc": edge + 60, "out": 440, "in": 500, "balance": 570}
+    top = 660 if beside else 610
+    c.setFont(BOLD, 9)
+    c.drawString(cols["date"], top, "Date")
+    c.drawString(cols["desc"], top, "Details")
+    c.drawRightString(cols["out"], top, "Paid out")
+    c.drawRightString(cols["in"], top, "Paid in")
+    c.drawRightString(cols["balance"], top, "Balance")
+    c.setFont(FONT, 9)
+    y = top - 14
+    for txn, balance in zip(rows, balances, strict=True):
+        c.drawString(cols["date"], y, _uk(txn.posted))
+        c.drawString(cols["desc"], y, txn.payee)
+        column = "out" if txn.amount < 0 else "in"
+        c.drawRightString(cols[column], y, money(abs(txn.amount)))
+        c.drawRightString(cols["balance"], y, money(balance))
+        y -= 14
+    c.showPage()
+    c.save()
+    return buf.getvalue()
+
+
 # ---------------------------------------------------------------------------
 # A bank no fingerprint knows
 # ---------------------------------------------------------------------------

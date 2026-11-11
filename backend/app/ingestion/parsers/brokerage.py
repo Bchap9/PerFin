@@ -14,7 +14,11 @@ Two halves (INGESTION.md "Brokerage statements", SECURITY.md C12):
   - **cash**: opening cash + the activity's cash effects = closing cash
     (a statement printing no closing cash: the account value less the
     holdings is the closing cash, and the next check is not run);
-  - **total_value**: holdings + closing cash = the account value printed.
+  - **total_value**: holdings + closing cash = the account value printed;
+  - **index_value** (a document of several accounts): the account value
+    printed on the account's own pages = the ending value the document's
+    account index prints for it. An account that prints no value of its own
+    takes the index's.
 
   A position quoted per 100 of face value (``price_per_100``) is checked as
   quantity x price / 100.
@@ -317,8 +321,15 @@ def _position_agrees(quantity: Decimal, price: Decimal, value: Decimal, scale: i
     return abs(expected - value) <= allowed
 
 
-def reconcile_investment(statement: InvestmentStatement) -> InvestmentReconciliation:
-    """The four brokerage checks (module doc)."""
+def reconcile_investment(
+    statement: InvestmentStatement, index_value: Decimal | None = None
+) -> InvestmentReconciliation:
+    """The brokerage checks (module doc).
+
+    ``index_value``: the account's ending value as the document's account
+    index prints it (a document of several accounts); compared with the
+    account value printed on the account's own pages.
+    """
     checks: list[str] = []
     failed: list[str] = []
     mismatches: list[int] = []
@@ -374,6 +385,11 @@ def reconcile_investment(statement: InvestmentStatement) -> InvestmentReconcilia
         if abs(total_value - reported_total) > TOLERANCE:
             failed.append("total_value")
 
+    if index_value is not None and reported_total is not None:
+        checks.append("index_value")
+        if abs(index_value - reported_total) > TOLERANCE:
+            failed.append("index_value")
+
     status: Literal["ok", "mismatch", "unavailable"] = (
         "mismatch" if failed else ("ok" if checks else "unavailable")
     )
@@ -390,6 +406,7 @@ def reconcile_investment(statement: InvestmentStatement) -> InvestmentReconcilia
         cash_difference=cash_difference,
         total_value=total_value,
         reported_total_value=reported_total,
+        index_value=index_value,
         tolerance=TOLERANCE,
     )
 
@@ -2263,8 +2280,9 @@ class BrokerageStatementParser(DocumentParser):
 
     def _sections(
         self, view: DocumentView, vocabulary: Vocabulary | None = None
-    ) -> tuple[list[_Collected], _Collected | None, int]:
-        """``(accounts, preamble, accounts dropped)`` (class doc); one account: no preamble."""
+    ) -> tuple[list[_Collected], _Collected | None, int, list[str]]:
+        """``(accounts, preamble, accounts dropped, accounts the index lists that
+        have no pages)`` (class doc); one account: no preamble."""
         split = segment(view.lines)
         bands = _page_bands(view.lines)
         if len(split.accounts) < 2:
@@ -2273,7 +2291,14 @@ class BrokerageStatementParser(DocumentParser):
             if single.summary.last4 is None and split.accounts:
                 single.summary.last4 = split.accounts[0].last4
             single.info = split.info(single.summary.last4)
-            return [single], None, 0
+            # An index naming several accounts where the pages name one: the
+            # others were not found.
+            absent = [
+                last4
+                for last4 in split.index
+                if len(split.index) > 1 and last4 != single.summary.last4
+            ]
+            return [single], None, 0, absent
         preamble = _Collected(bands=bands, vocabulary=vocabulary)
         self._read(split.preamble, preamble)
         accounts: list[_Collected] = []
@@ -2285,7 +2310,9 @@ class BrokerageStatementParser(DocumentParser):
             collected.summary.last4 = account.last4
             accounts.append(collected)
         kept = accounts[:MAX_STATEMENTS]
-        return kept, preamble, len(accounts) - len(kept)
+        found = {account.last4 for account in split.accounts}
+        absent = [last4 for last4 in split.index if last4 not in found]
+        return kept, preamble, len(accounts) - len(kept), absent
 
     # -- collecting -----------------------------------------------------------------
 
@@ -2893,7 +2920,11 @@ class BrokerageStatementParser(DocumentParser):
         """
         # Blocks printed side by side (a summary box beside a table) are read
         # one after the other (:mod:`app.ingestion.parsers.blocks`).
-        lines = unfold_blocks(lines, lambda norm: section_rule(norm) is not None)
+        lines = unfold_blocks(
+            lines,
+            lambda norm: section_rule(norm) is not None,
+            lambda line: self._header_at([line], 0) is not None,
+        )
         cash_tables = any(self._tables(lines))
         index = 0
         while index < len(lines):
@@ -3451,6 +3482,13 @@ class BrokerageStatementParser(DocumentParser):
                 )
         statement_conf["account_number"] = self.base if summary.last4 else conf.MISSING
         statement_conf["currency"] = self.base if currency else conf.MISSING
+        # The document's account index prints each account's ending value: it
+        # is checked against the account's own, and stands in for it when
+        # the account's pages print none.
+        indexed = collected.info.ending_value if collected.info is not None else None
+        from_index = summary.total_value is None and indexed is not None
+        if from_index and indexed is not None:
+            summary.total_value = Amount(value=indexed)
         values = {
             "cash_opening": cash_opening,
             "cash_closing": cash_closing,
@@ -3459,6 +3497,9 @@ class BrokerageStatementParser(DocumentParser):
         }
         for slot, value in values.items():
             statement_conf[slot] = self.base if value is not None else conf.MISSING
+        if from_index:
+            statement_conf["total_value"] = min(self.base, conf.DERIVED)
+            indexed = None  # nothing of the account's own to compare it with
 
         def balance(value: Amount | None, on: date | None) -> Balance | None:
             return Balance(amount=value.value, as_of=on) if value is not None else None
@@ -3482,7 +3523,7 @@ class BrokerageStatementParser(DocumentParser):
         )
         check = localise(
             statement,
-            reconcile_investment(statement),
+            reconcile_investment(statement, indexed),
             section_checks(activity, activity_rows, collected.totals),
         )
         for index in check.position_mismatches:
@@ -3611,7 +3652,7 @@ class BrokerageStatementParser(DocumentParser):
     ) -> ParseOutcome:
         """Read the pages; ``vocabulary``: the local model's suggested words
         (:mod:`app.ingestion.parsers.vocabulary`), for rows nothing else types."""
-        accounts, preamble, dropped = self._sections(view, vocabulary)
+        accounts, preamble, dropped, absent = self._sections(view, vocabulary)
         outcome = ParseOutcome()
         if not any(c.found_table for c in accounts):
             outcome.warnings.append("no_table_header")
@@ -3662,6 +3703,20 @@ class BrokerageStatementParser(DocumentParser):
             outcome.skipped_regions.extend(collected.skipped_regions)
             outcome.skipped_regions.extend(collected.unread)
             unread += len(collected.unread)
+        # An account the index lists and no statement was read for: its pages
+        # were not found, or held no table (``account_without_tables``).
+        read = {s.account.last4 for s in outcome.investments} | {
+            s.account.last4 for s in outcome.statements
+        }
+        outcome.unread_accounts = [
+            last4
+            for last4 in dict.fromkeys(
+                [*absent, *(c.summary.last4 for c in accounts if c.summary.last4)]
+            )
+            if last4 not in read and (last4 in absent or len(accounts) > 1)
+        ][:MAX_STATEMENTS]
+        if outcome.unread_accounts:
+            warnings.append("accounts_not_read")
         if unread:
             # Entries of a table no header named: left out, counted, shown.
             outcome.skipped_lines += unread

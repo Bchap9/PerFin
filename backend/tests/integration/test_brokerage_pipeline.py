@@ -479,7 +479,9 @@ def test_a_wrong_account_value_alone_holds_no_row(env: Env) -> None:
     account = env.brokerage(january)
     document_id = env.ingest(synth.placeholder_pdf(january, tamper="total"), "statement.pdf")
 
-    assert env.document(document_id).status is DocumentStatus.NEEDS_REVIEW
+    # Nothing waits on an answer: the document is done, the notice stays in
+    # the queue until it is seen.
+    assert env.document(document_id).status is DocumentStatus.PROCESSED
     (item,) = env.open_reviews(document_id)
     assert item.payload["reason"] == "investment_figures_differ"
     assert item.payload["failed"] == ["total_value"]
@@ -682,6 +684,51 @@ def test_each_account_of_a_multi_account_pdf_lands_on_its_own_account(env: Env) 
         _resolve_overlap(env, item, "confirm")
     assert env.document(again).status is DocumentStatus.PROCESSED
     assert {a.id: len(env.txns(a)) for a in accounts if a is not None} == before
+
+
+def test_an_account_the_report_lists_and_does_not_print_is_said(env: Env) -> None:
+    stmt = fid.fidelity_statement(seed=93)
+    accounts = _fid_accounts(env, stmt)
+    document_id = env.ingest(fid.fidelity_pdf(stmt, without_pages=1), "investment-report.pdf")
+
+    # The two accounts with pages are imported; the one the index lists and
+    # no page prints is named, so it is never taken for imported.
+    assert env.document(document_id).status is DocumentStatus.NEEDS_REVIEW
+    (item,) = env.open_reviews(document_id)
+    assert item.payload["reason"] == "accounts_not_read"
+    assert item.payload["accounts"] == [stmt.accounts[1].last4]
+    missing = accounts[1]
+    assert missing is not None
+    assert env.txns(missing) == []
+    assert env.snapshots(missing) == []
+    for index in (0, 2):
+        account = accounts[index]
+        assert account is not None
+        assert env.activity(account) == _fid_expected(stmt.accounts[index])
+        assert _fid_holdings(env, account) == _fid_positions(stmt.accounts[index])
+
+
+def test_an_account_value_the_index_prints_differently_is_a_notice(env: Env) -> None:
+    stmt = fid.fidelity_statement(seed=94)
+    accounts = _fid_accounts(env, stmt)
+    data = fid.fidelity_pdf(stmt, tamper="total", tamper_account=0)
+    document_id = env.ingest(data, "investment-report.pdf")
+
+    # Every row is vouched for; the account value printed on the account's
+    # pages is neither its holdings plus cash nor the index's figure.
+    assert env.document(document_id).status is DocumentStatus.PROCESSED
+    (item,) = env.open_reviews(document_id)
+    assert item.payload["reason"] == "investment_figures_differ"
+    assert item.payload["failed"] == ["total_value", "index_value"]
+    by_check = {d["check"]: d for d in item.payload["differences"]}
+    assert set(by_check) == {"total_value", "index_value"}
+    # The index prints the true value; the account's own pages 250.00 more.
+    assert Decimal(by_check["index_value"]["printed"]) == stmt.accounts[0].total_value
+    assert Decimal(by_check["index_value"]["difference"]) == Decimal("250.00")
+    account = accounts[0]
+    assert account is not None
+    assert env.activity(account) == _fid_expected(stmt.accounts[0])
+    assert env.snapshots(account) == []
 
 
 def test_a_tampered_account_is_held_and_the_others_are_written(env: Env) -> None:

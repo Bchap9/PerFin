@@ -227,6 +227,11 @@ class Reconciliation(_Strict):
     #: Indices of transactions whose running balance disagrees with the
     #: previous balance plus the row's amount.
     running_mismatches: list[int] = Field(default_factory=list, max_length=MAX_ROWS_CEILING)
+    #: Indices of the transactions a failed check leaves in doubt, when the
+    #: statement says which (``app.ingestion.reconcile.doubtful_rows``: rows
+    #: no printed running balance vouches for, or the one row that is the
+    #: whole difference). None: not worked out, every row is in doubt.
+    doubtful: list[int] | None = Field(default=None, max_length=MAX_ROWS_CEILING)
 
 
 class SplitLine(_Strict):
@@ -531,8 +536,11 @@ class InvestmentReconciliation(_Strict):
     ``positions``: quantity x price = market value for each position;
     ``holdings_total``: the positions add up to the reported holdings value;
     ``cash``: opening cash + activity = closing cash; ``total_value``:
-    holdings + closing cash = the reported account value. ``checks`` lists
-    those that could run, ``failed`` those that did not hold.
+    holdings + closing cash = the reported account value; ``index_value``
+    (a document of several accounts): the account value printed on the
+    account's own pages = the one the document's account index prints for
+    it. ``checks`` lists those that could run, ``failed`` those that did not
+    hold.
     """
 
     status: Literal["ok", "mismatch", "unavailable"]
@@ -548,6 +556,8 @@ class InvestmentReconciliation(_Strict):
     cash_difference: Amount | None = None
     total_value: Amount | None = None
     reported_total_value: Amount | None = None
+    #: The account's ending value as the document's account index prints it.
+    index_value: Amount | None = None
     tolerance: Amount
     # -- where a failed check comes from (document parsers) ----------------------
     #: Each section's rows against its printed total (:class:`SectionCheck`).
@@ -974,6 +984,11 @@ class ParseInfo(_Strict):
     )
     unknown_headings: list[Annotated[str, Field(max_length=SECTION_LABEL_MAX)]] = Field(
         default_factory=list, max_length=MAX_SECTION_CHECKS
+    )
+    #: Last four digits of the accounts the document's own index lists and
+    #: no statement was read for (their pages were not found or not read).
+    unread_accounts: list[Annotated[str, Field(pattern=r"^[0-9A-Za-z]{1,4}$")]] = Field(
+        default_factory=list, max_length=MAX_STATEMENTS
     )
 
 

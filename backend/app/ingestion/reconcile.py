@@ -12,13 +12,22 @@ its own figures agree:
   that disagree are listed (:attr:`Reconciliation.running_mismatches`).
 
 The outcome is a :class:`app.ingestion.sandbox.protocol.Reconciliation`
-stored with the statement. The document parsers lower the confidence of
-every row of a statement that does not reconcile (so each is imported with
-``review_state = pending``) and the importer raises a
-``low_confidence_field`` review item describing the discrepancy and writes
-no balance snapshot from it (``app.domain.imports.service``). A statement
-that states neither balance and has no running balance cannot be checked
-(``unavailable``) and is treated the same way.
+stored with the statement. The document parsers lower the confidence of the
+rows a statement that does not reconcile leaves in doubt
+(:func:`doubtful_rows`; each is imported with ``review_state = pending``)
+and the importer raises a ``low_confidence_field`` review item describing
+the discrepancy and writes no balance snapshot from it
+(``app.domain.imports.service``). A statement that states neither balance
+and has no running balance cannot be checked (``unavailable``): every row of
+it is in doubt.
+
+**Which rows are in doubt** (:func:`doubtful_rows`). A printed running
+balance vouches for its row: the balance is the one before plus the row's
+amount (rows printed without a balance between two balances are vouched for
+together, when the balances agree over all of them). On a statement that
+prints running balances, only the rows no balance vouches for are in
+doubt. On one that prints none, the one row whose amount is the whole
+difference (a row too many) is in doubt alone; otherwise every row is.
 
 Pure functions on :class:`~decimal.Decimal`; no I/O.
 """
@@ -61,6 +70,32 @@ def running_mismatches(opening: Decimal | None, rows: Sequence[Row]) -> list[int
             out.append(index)
         previous = row.balance
     return out
+
+
+def doubtful_rows(
+    opening: Decimal | None, rows: Sequence[Row], difference: Decimal | None
+) -> list[int]:
+    """Indices of the rows a statement that does not reconcile leaves in doubt (module doc)."""
+    if any(row.balance is not None for row in rows):
+        vouched: set[int] = set()
+        waiting: list[int] = []
+        previous = opening
+        for index, row in enumerate(rows):
+            expected = previous + row.amount if previous is not None else None
+            if row.balance is None:
+                waiting.append(index)
+                previous = expected
+                continue
+            if expected is not None and abs(expected - row.balance) <= TOLERANCE:
+                vouched.update((*waiting, index))
+            waiting = []
+            previous = row.balance
+        return [index for index in range(len(rows)) if index not in vouched]
+    if difference:
+        surplus = [i for i, row in enumerate(rows) if abs(row.amount - difference) <= TOLERANCE]
+        if len(surplus) == 1:
+            return surplus
+    return list(range(len(rows)))
 
 
 def reconcile(

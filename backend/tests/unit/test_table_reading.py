@@ -125,7 +125,13 @@ def _assert_exact(statements: list[InvestmentStatement]) -> None:
         assert check is not None
         assert check.status == "ok", check
         if expected.cash_opening is not None:
-            assert check.checks == ["positions", "holdings_total", "cash", "total_value"]
+            assert check.checks == [
+                "positions",
+                "holdings_total",
+                "cash",
+                "total_value",
+                "index_value",
+            ]
 
 
 # ---------------------------------------------------------------------------

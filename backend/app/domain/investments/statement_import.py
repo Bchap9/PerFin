@@ -535,7 +535,9 @@ def differences(
     value (``count`` of them); ``holdings_total`` compares the positions'
     sum with the printed holdings total; ``cash`` the opening cash plus the
     period's activity with the closing cash; ``total_value`` the holdings
-    plus closing cash with the printed account value.
+    plus closing cash with the printed account value; ``index_value`` the
+    account value printed on the account's own pages (``computed``) with
+    the one the document's account index prints for it (``printed``).
     """
     out: list[dict[str, Any]] = []
 
@@ -578,6 +580,10 @@ def differences(
             add("cash", check.cash_closing, computed_cash)
         if "total_value" in check.failed:
             add("total_value", check.reported_total_value, check.total_value)
+        if "index_value" in check.failed:
+            # Printed twice: by the document's account index and on the
+            # account's own pages ("computed" is the account's own figure).
+            add("index_value", check.index_value, check.reported_total_value)
     return out
 
 

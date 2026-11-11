@@ -233,6 +233,7 @@ def parse_extraction(
         warnings=outcome.warnings[:100],
         unknown_actions=outcome.unknown_actions,
         unknown_headings=outcome.unknown_headings,
+        unread_accounts=outcome.unread_accounts,
     )
     return result.model_copy(
         update={

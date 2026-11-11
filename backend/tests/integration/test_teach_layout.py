@@ -404,7 +404,11 @@ def test_balances_entered_for_a_held_statement_reconcile_it(env: Env) -> None:
         select(Transaction).where(Transaction.source_document_id == document_id)
     )
     assert rows
-    assert all(r.review_state is ReviewState.PENDING for r in rows)
+    # The printed closing balance is wrong; the running balance vouches for
+    # every row, so none is held (only the statement's balance waits).
+    assert held.payload["rows_in_doubt"] == 0
+    assert held.payload["rows_total"] == len(rows)
+    assert not any(r.review_state is ReviewState.PENDING for r in rows)
 
     def correct(closing: Decimal, *, resolve: bool) -> Any:
         with env.factories.transaction() as db:
@@ -432,10 +436,10 @@ def test_balances_entered_for_a_held_statement_reconcile_it(env: Env) -> None:
     assert out.state is ReviewItemState.RESOLVED
     assert out.resolution is not None
     assert out.resolution["reconciled"] is True
-    assert out.resolution["confirmed"] == len(rows)
+    assert out.resolution["confirmed"] == 0  # no row was waiting
     assert out.resolution["snapshot"] is True
     rows = env.query(select(Transaction).where(Transaction.source_document_id == document_id))
-    assert all(r.review_state is ReviewState.CONFIRMED for r in rows)
+    assert not any(r.review_state is ReviewState.PENDING for r in rows)
     snapshots: list[BalanceSnapshot] = env.query(
         select(BalanceSnapshot).where(BalanceSnapshot.account_id == account.id)
     )
@@ -481,7 +485,9 @@ def test_a_note_alone_answers_no_review_item(env: Env) -> None:
         select(Transaction).where(Transaction.source_document_id == held_id)
     )
     assert rows
-    assert all(r.review_state is ReviewState.PENDING for r in rows)
+    # Nothing was confirmed by the note: the rows are as the import left them.
+    assert held.payload["rows_in_doubt"] == 0
+    assert not any(r.review_state is ReviewState.PENDING for r in rows)
     assert held.id in {i.id for i in env.open_items(held_id)}
 
 

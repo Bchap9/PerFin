@@ -825,11 +825,20 @@ def fidelity_pdf(
     generic: bool = False,
     page_bottom: float = BOTTOM,
     ruled: bool = False,
+    without_pages: int | None = None,
+    without_summary: int | None = None,
 ) -> bytes:
-    """The statement as a PDF (module doc)."""
+    """The statement as a PDF (module doc).
+
+    ``without_pages``: this account is listed by the overview's index and its
+    own pages are missing; ``without_summary``: this account's pages print
+    no account summary (its value is printed by the index alone).
+    """
     w = _Writer(stmt, generic=generic, bottom=page_bottom, ruled=ruled)
     _overview(w, stmt.accounts)
     for index, account in enumerate(stmt.accounts):
+        if index == without_pages:
+            continue
         mark = tamper if index == tamper_account else None
         values = [p.market_value for p in account.positions]
         if mark == "market_value":
@@ -838,7 +847,8 @@ def fidelity_pdf(
         if mark == "total":
             total += Decimal("250.00")
         w.new_page(account)
-        _summary(w, account, total)
+        if index != without_summary:
+            _summary(w, account, total)
         _holdings(w, account, values)
         _activity(
             w, account, _printed_activity(account, mark), true_totals=mark == "misprinted_row"

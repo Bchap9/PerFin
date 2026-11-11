@@ -156,6 +156,7 @@ from app.ingestion.parsers.base import (
     ViewLine,
     join_cells,
 )
+from app.ingestion.parsers.blocks import unfold_blocks
 from app.ingestion.parsers.text import (
     FULL_STYLES,
     MAX_LINE,
@@ -172,7 +173,7 @@ from app.ingestion.parsers.text import (
     read_date,
     symbol_currency,
 )
-from app.ingestion.reconcile import TOLERANCE, Row, reconcile
+from app.ingestion.reconcile import TOLERANCE, Row, doubtful_rows, reconcile
 from app.ingestion.sandbox.protocol import (
     Balance,
     ExtractedTransaction,
@@ -244,6 +245,45 @@ HEADERS: Final[Mapping[str, Role]] = {
 }
 #: Roles whose cells hold the transaction's money (a table needs one).
 MONEY_ROLES: Final = frozenset({"amount", "debit", "credit"})
+#: Titles of the blocks a bank or card statement prints side by side
+#: (normalised; :func:`block_title`). Deliberately few and plain: a line of
+#: two such titles, or one of two words or more alone at the right, splits
+#: the page there, and a table's own column headings must never do that.
+BLOCK_TITLES: Final = frozenset(
+    {
+        "account summary",
+        "summary of account",
+        "summary of your account",
+        "statement summary",
+        "balance summary",
+        "daily balance summary",
+        "daily ending balance",
+        "daily ledger balance",
+        "interest summary",
+        "fee summary",
+        "rewards summary",
+        "payment information",
+        "account information",
+        "important information",
+        "account activity",
+        "transaction detail",
+        "transaction history",
+        "transactions",
+        "deposits and other credits",
+        "withdrawals and other debits",
+        "checks paid",
+        "electronic withdrawals",
+        "atm and debit card withdrawals",
+    }
+)
+
+
+def block_title(norm: str) -> bool:
+    """``norm`` (a normalised cell) is the title of a block printed beside another."""
+    text = norm[: -len(" continued")] if norm.endswith(" continued") else norm
+    return text in BLOCK_TITLES
+
+
 #: Words of a heading that names a transaction table without date or
 #: description headings (``New Transactions for JORDAN SAMPLE``).
 TABLE_HEADING_WORDS: Final = frozenset({"transactions", "activity"})
@@ -1480,6 +1520,10 @@ class TableStatementParser(DocumentParser):
         account the lines belong to (:mod:`app.ingestion.parsers.accounts`).
         ``statement`` is None when no transaction table header is found.
         """
+        # A summary box printed beside the transaction table (or two boxes
+        # side by side) is read block by block, so the table's header and
+        # rows are whole lines again (:mod:`app.ingestion.parsers.blocks`).
+        lines = unfold_blocks(lines, block_title, lambda line: self.columns(line) is not None)
         rows, summary, pending_items, skipped, found_header = self._collect(
             self.without_stubs(lines)
         )
@@ -1577,8 +1621,14 @@ class TableStatementParser(DocumentParser):
                     fields[index]["amount"] = 1.0
         cap = {"mismatch": conf.UNRECONCILED, "unavailable": conf.UNCHECKED}.get(result.status)
         if cap is not None:
-            for score in fields:
-                score["reconciliation"] = cap
+            # Only the rows the statement leaves in doubt (a printed running
+            # balance vouches for its row); all of them when nothing says which.
+            doubted = list(range(len(fields)))
+            if result.status == "mismatch":
+                doubted = doubtful_rows(opening, ledger_rows, result.difference)
+                result = result.model_copy(update={"doubtful": doubted})
+            for index in doubted:
+                fields[index]["reconciliation"] = cap
         if read is not None:
             statement_conf["period"] = read.confidence(self.base)
         elif anchor is not None and period is not None:

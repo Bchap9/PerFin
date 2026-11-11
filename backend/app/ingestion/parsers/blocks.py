@@ -21,9 +21,12 @@ cut at the title's left edge, the pieces of each side are joined again by
 their own height on the page (so a label and its amounts are one line
 whatever the other block printed beside them), and the left block's lines
 come first, then the right block's. The region ends at the page's end, at a
-line with a cell across the cut (text over the full width) or at a titled
+line with a cell across the cut (text over the full width), at a titled
 line of the left block alone that stands clear of the lines above it (the
-next full-width section: ``Bill Payments`` under the two card blocks).
+next full-width section: ``Bill Payments`` under the two card blocks), or at
+the header of a table printed across the page: a line the caller reads as a
+table header (``ends``) as a whole and on neither side of the cut alone (a
+table of one block has its header on that block's side).
 
 Pure geometry on :class:`~app.ingestion.parsers.base.ViewLine`: a page
 without such a title is returned as it is.
@@ -49,6 +52,8 @@ _CLEAR: Final = 1.5
 _MAX_TITLE_WORDS: Final = 8
 
 Titled = Callable[[str], bool]
+#: A line the caller reads as the header of one of its tables.
+Ends = Callable[[ViewLine], bool]
 
 
 def _has_letter(text: str) -> bool:
@@ -80,6 +85,28 @@ def _centre(cells: Sequence[Cell]) -> float:
     return sum((c.y0 + c.y1) / 2 for c in cells) / len(cells)
 
 
+def _part(source: ViewLine, cells: Sequence[Cell]) -> ViewLine:
+    ordered = tuple(sorted(cells, key=lambda c: c.x0))
+    return ViewLine(
+        page=source.page,
+        index=source.index,
+        cells=ordered,
+        text=" ".join(c.text for c in ordered),
+        height=source.height,
+    )
+
+
+def _across(line: ViewLine, cut: float, ends: Ends | None) -> bool:
+    """``line`` is the header of a table printed across the cut (module doc)."""
+    if ends is None:
+        return False
+    near = [c for c in line.cells if c.x0 < cut]
+    far = [c for c in line.cells if c.x0 >= cut]
+    if not near or not far or not ends(line):
+        return False
+    return not ends(_part(line, near)) and not ends(_part(line, far))
+
+
 def _join(pieces: list[tuple[ViewLine, list[Cell]]]) -> list[ViewLine]:
     """The pieces of one block as lines: pieces at one height are one line."""
     rows: list[tuple[float, ViewLine, list[Cell]]] = []
@@ -89,22 +116,10 @@ def _join(pieces: list[tuple[ViewLine, list[Cell]]]) -> list[ViewLine]:
             rows[-1][2].extend(cells)
             continue
         rows.append((centre, source, list(cells)))
-    out: list[ViewLine] = []
-    for _, source, cells in rows:
-        ordered = tuple(sorted(cells, key=lambda c: c.x0))
-        out.append(
-            ViewLine(
-                page=source.page,
-                index=source.index,
-                cells=ordered,
-                text=" ".join(c.text for c in ordered),
-                height=source.height,
-            )
-        )
-    return out
+    return [_part(source, cells) for _, source, cells in rows]
 
 
-def _unfold_page(lines: Sequence[ViewLine], titled: Titled) -> list[ViewLine]:
+def _unfold_page(lines: Sequence[ViewLine], titled: Titled, ends: Ends | None) -> list[ViewLine]:
     cells = [c for line in lines for c in line.cells]
     if not cells:
         return list(lines)
@@ -125,7 +140,7 @@ def _unfold_page(lines: Sequence[ViewLine], titled: Titled) -> list[ViewLine]:
         while end < len(lines):
             line = lines[end]
             if end > index:
-                if _crosses(line, cut):
+                if _crosses(line, cut) or _across(line, cut, ends):
                     break
                 alone = len(line.cells) == 1 and line.cells[0].x1 <= cut
                 clear = min(c.y0 for c in line.cells) - bottom >= _CLEAR * max(line.height, 1.0)
@@ -148,12 +163,14 @@ def _unfold_page(lines: Sequence[ViewLine], titled: Titled) -> list[ViewLine]:
     return out
 
 
-def unfold_blocks(lines: Sequence[ViewLine], titled: Titled) -> list[ViewLine]:
+def unfold_blocks(
+    lines: Sequence[ViewLine], titled: Titled, ends: Ends | None = None
+) -> list[ViewLine]:
     """``lines`` with side-by-side blocks read one after the other (module doc)."""
     out: list[ViewLine] = []
     start = 0
     for stop in range(1, len(lines) + 1):
         if stop == len(lines) or lines[stop].page != lines[start].page:
-            out.extend(_unfold_page(lines[start:stop], titled))
+            out.extend(_unfold_page(lines[start:stop], titled, ends))
             start = stop
     return out

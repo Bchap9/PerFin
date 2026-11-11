@@ -619,6 +619,20 @@ def _parse_document(
                 ],
             },
         )
+    if info.unread_accounts:
+        # The document lists accounts no statement was read for: said, so a
+        # missing account is never mistaken for an imported one.
+        _review(
+            db,
+            document,
+            ReviewKind.LOW_CONFIDENCE_FIELD,
+            {
+                "reason": "accounts_not_read",
+                "accounts": list(info.unread_accounts),
+                "count": len(info.unread_accounts),
+                "parser": info.parser.name,
+            },
+        )
     return result, facts
 
 

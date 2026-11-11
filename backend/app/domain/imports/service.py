@@ -151,7 +151,6 @@ from app.domain.documents.models import (
     DocumentStatus,
     IngestJob,
     IngestStage,
-    ReviewItem,
     ReviewItemState,
     ReviewKind,
 )
@@ -193,6 +192,7 @@ from app.domain.imports.statement_records import (
     table_facts,
 )
 from app.domain.investments.statement_import import import_investment_statements
+from app.domain.review import repo as review_repo
 from app.domain.review.layout import with_layout_tables
 from app.domain.rules.service import apply_rules_to
 from app.domain.transactions import repo as transactions_repo
@@ -843,6 +843,13 @@ def _row_problems(run: _Run, parsed: ParsedStatement, account: Account) -> None:
                 "difference": _decimal_text(check.difference),
                 "running_mismatches": len(check.running_mismatches),
                 "rows": check.running_mismatches[:IDS_MAX],
+                # How many of the statement's rows the failed check leaves
+                # in doubt (imported pending); the others are vouched for by
+                # the statement's own running balance and imported as usual.
+                "rows_in_doubt": (
+                    len(check.doubtful) if check.doubtful is not None else len(parsed.transactions)
+                ),
+                "rows_total": len(parsed.transactions),
             },
         )
 
@@ -1739,17 +1746,8 @@ def _import_activity(
 
 
 def _open_items(db: Session, document: Document) -> int:
-    return len(
-        list(
-            db.execute(
-                select(ReviewItem.id).where(
-                    ReviewItem.household_id == document.household_id,
-                    ReviewItem.document_id == document.id,
-                    ReviewItem.state == ReviewItemState.OPEN,
-                )
-            ).scalars()
-        )
-    )
+    """The document's open items that wait on a person (a notice does not)."""
+    return review_repo.open_items_of(db, document.household_id, document.id)
 
 
 def import_extraction(
