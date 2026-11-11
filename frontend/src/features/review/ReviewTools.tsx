@@ -33,6 +33,8 @@ import {
   lowConfidenceResolution,
   mergeFix,
   ownerResolution,
+  payloadLines,
+  payloadPositions,
   payloadString,
   rememberLayout,
   resolveItem,
@@ -739,5 +741,170 @@ export function BalanceTools({ item, actionable }: { item: ReviewItem; actionabl
         </p>
       )}
     </div>
+  );
+}
+
+const DOUBT_WORDS: ReadonlyMap<string, string> = new Map(
+  Object.entries({
+    reconciliation: "its section does not add up",
+    suggested_type: "reading suggested by the local model",
+    held_with_security: "waits with its holding",
+    market_value: "quantity × price is not the value printed",
+    trade_date: "date outside the statement's period",
+    amount: "amount hard to read",
+    security: "security not identified",
+    quantity: "quantity not read",
+    type: "kind of activity unclear",
+  }),
+);
+
+const KIND_WORDS: ReadonlyMap<string, string> = new Map(
+  Object.entries({
+    buy: "Purchase",
+    sell: "Sale",
+    dividend: "Dividend",
+    interest: "Interest",
+    fee: "Fee",
+    reinvest: "Reinvestment",
+    transfer_in: "Shares in",
+    transfer_out: "Shares out",
+    deposit: "Deposit",
+    withdrawal: "Withdrawal",
+    corporate_action: "Corporate action",
+    split: "Split",
+  }),
+);
+
+function doubtWords(fields: string[]): string {
+  return fields.map((f) => DOUBT_WORDS.get(f) ?? f).join("; ");
+}
+
+/**
+ * The activity lines of a brokerage statement that are in doubt (payload
+ * ``lines``): the date, section, description and amount printed, the page
+ * to find each on, and why PerFin doubts it. Nothing here is in the ledger
+ * yet; the item's actions decide about all of them, or, where the lines
+ * stand alone (``selected`` and ``onSelect`` given), about the ticked ones.
+ * The holdings that wait with them (payload ``positions``) are listed under
+ * the lines.
+ */
+export function HeldLines({
+  item,
+  selected,
+  onSelect,
+}: {
+  item: ReviewItem;
+  selected?: ReadonlySet<number>;
+  onSelect?: (index: number, chosen: boolean) => void;
+}) {
+  const lines = payloadLines(item);
+  const positions = payloadPositions(item);
+  if (lines.length === 0 && positions.length === 0) {
+    return null;
+  }
+  const currency = payloadString(item, "currency");
+  const choosing = selected !== undefined && onSelect !== undefined;
+  return (
+    <>
+      {lines.length === 0 ? null : (
+        <div
+          className="mapping-grid"
+          role="region"
+          aria-label="Lines in doubt"
+          tabIndex={0}
+        >
+          <table className="table table--compact">
+            <caption className="visually-hidden">Lines in doubt</caption>
+            <thead>
+              <tr>
+                {choosing ? <th scope="col">Import</th> : null}
+                <th scope="col">Date</th>
+                <th scope="col">Section</th>
+                <th scope="col">Description</th>
+                <th scope="col">Read as</th>
+                <th scope="col">Amount</th>
+                <th scope="col">Page</th>
+                <th scope="col">Why</th>
+              </tr>
+            </thead>
+            <tbody>
+              {lines.map((line) => (
+                <tr key={line.index}>
+                  {choosing ? (
+                    <td>
+                      <input
+                        type="checkbox"
+                        aria-label={`Import the line of ${line.date === null ? "this row" : (formatDate(line.date) ?? line.date)}${line.description === null ? "" : `, ${line.description}`}`}
+                        checked={selected.has(line.index)}
+                        onChange={(event) => {
+                          onSelect(line.index, event.target.checked);
+                        }}
+                      />
+                    </td>
+                  ) : null}
+                  <td>
+                    {line.date === null
+                      ? ""
+                      : (formatDate(line.date) ?? line.date)}
+                  </td>
+                  <td>{line.section ?? ""}</td>
+                  <td>{line.description ?? ""}</td>
+                  <td>
+                    {line.type === null
+                      ? ""
+                      : (KIND_WORDS.get(line.type) ?? line.type)}
+                  </td>
+                  <td>
+                    {line.amount === null ? (
+                      ""
+                    ) : currency === null ? (
+                      line.amount
+                    ) : (
+                      <MoneyText amount={line.amount} currency={currency} />
+                    )}
+                  </td>
+                  <td>{line.page === null ? "" : String(line.page)}</td>
+                  <td>{doubtWords(line.fields)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+      {positions.length === 0 ? null : (
+        <div
+          className="mapping-grid"
+          role="region"
+          aria-label="Holdings waiting"
+          tabIndex={0}
+        >
+          <table className="table table--compact">
+            <caption className="visually-hidden">Holdings waiting</caption>
+            <thead>
+              <tr>
+                <th scope="col">Holding</th>
+                <th scope="col">Symbol</th>
+                <th scope="col">Page</th>
+                <th scope="col">Why</th>
+              </tr>
+            </thead>
+            <tbody>
+              {positions.map((position) => (
+                <tr key={position.index}>
+                  <td>{position.name ?? ""}</td>
+                  <td>{position.symbol ?? ""}</td>
+                  <td>{position.page === null ? "" : String(position.page)}</td>
+                  <td>
+                    {position.fields.length === 0
+                      ? "waits with its lines"
+                      : doubtWords(position.fields)}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </>
   );
 }

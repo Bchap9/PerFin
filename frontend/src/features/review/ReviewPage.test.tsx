@@ -199,6 +199,314 @@ describe("review queue", () => {
     });
   });
 
+  it("lists the lines held back and imports them as read", async () => {
+    const held = {
+      reason: "investment_lines_held",
+      account_id: "a-1",
+      statement: 0,
+      statement_key: STATEMENT_KEY,
+      currency: "USD",
+      fields: ["reconciliation"],
+      failed: ["cash"],
+      held: 2,
+      imported: 9,
+      differences: [],
+      sections: [
+        {
+          label: "Total Checking Activity",
+          printed: "-150.000000",
+          computed: "-120.000000",
+          difference: "30.000000",
+          rows: 2,
+          source: "total",
+          page: 6,
+        },
+      ],
+      lines: [
+        {
+          index: 4,
+          fields: ["reconciliation"],
+          page: 6,
+          date: "2026-06-05",
+          type: "withdrawal",
+          description: "Check paid",
+          amount: "-80.000000",
+          section: "Checking Activity",
+        },
+        {
+          index: 5,
+          fields: ["reconciliation"],
+          page: 6,
+          date: "2026-06-12",
+          type: "withdrawal",
+          description: "Check paid",
+          amount: "-40.000000",
+          section: "Checking Activity",
+        },
+      ],
+    };
+    const api = reviewApi(
+      [
+        item("r-1", "low_confidence_field", held, {
+          reason: "investment_lines_held",
+          next_step: "correct_fields",
+        }),
+      ],
+      "member",
+      {
+        "POST /api/v1/review/:id/resolve": () =>
+          json(
+            item("r-1", "low_confidence_field", held, { state: "resolved" }),
+          ),
+      },
+    );
+    renderApp("/review");
+    const user = userEvent.setup();
+    expect(
+      await screen.findByText(/the other 9 activity lines were imported/),
+    ).toBeInTheDocument();
+    const table = screen.getByRole("table", { name: "Lines in doubt" });
+    expect(within(table).getAllByRole("row")).toHaveLength(3);
+    expect(within(table).getAllByText("Checking Activity")).toHaveLength(2);
+    expect(within(table).getByText("-$80.00")).toBeInTheDocument();
+    expect(
+      within(table).getAllByText("its section does not add up"),
+    ).toHaveLength(2);
+    expect(within(table).getAllByText("Withdrawal")).toHaveLength(2);
+    // The lines are not in the ledger: nothing to confirm row by row.
+    expect(
+      screen.queryByRole("button", { name: "Confirm as read" }),
+    ).not.toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Import as read" }));
+    await waitFor(() => {
+      expect(
+        api.callsTo("POST", "/api/v1/review/:id/resolve")[0]?.body,
+      ).toEqual({
+        kind: "low_confidence_field",
+        transactions: [],
+        confirm: false,
+        import_as_read: true,
+      });
+    });
+  });
+
+  it("imports only the ticked lines when they stand alone", async () => {
+    const held = {
+      reason: "investment_lines_held",
+      account_id: "a-1",
+      statement: 0,
+      statement_key: STATEMENT_KEY,
+      currency: "USD",
+      fields: ["reconciliation"],
+      failed: ["cash"],
+      held: 2,
+      imported: 9,
+      selectable: true,
+      differences: [],
+      sections: [],
+      lines: [
+        {
+          index: 4,
+          fields: ["reconciliation"],
+          page: 6,
+          date: "2026-06-05",
+          type: "withdrawal",
+          description: "Check paid",
+          amount: "-80.000000",
+          section: "Checking Activity",
+        },
+        {
+          index: 5,
+          fields: ["reconciliation"],
+          page: 6,
+          date: "2026-06-12",
+          type: "withdrawal",
+          description: "Check paid twice",
+          amount: "-40.000000",
+          section: "Checking Activity",
+        },
+      ],
+    };
+    const api = reviewApi(
+      [
+        item("r-1", "low_confidence_field", held, {
+          reason: "investment_lines_held",
+          next_step: "correct_fields",
+        }),
+      ],
+      "member",
+      {
+        "POST /api/v1/review/:id/resolve": () =>
+          json(
+            item("r-1", "low_confidence_field", held, { state: "resolved" }),
+          ),
+      },
+    );
+    renderApp("/review");
+    const user = userEvent.setup();
+    const table = await screen.findByRole("table", { name: "Lines in doubt" });
+    const boxes = within(table).getAllByRole("checkbox");
+    expect(boxes).toHaveLength(2);
+    // Every line is ticked to begin with: the button imports them all.
+    expect(boxes.every((box) => (box as HTMLInputElement).checked)).toBe(true);
+    expect(
+      screen.getByRole("button", { name: "Import as read" }),
+    ).toBeInTheDocument();
+    await user.click(
+      within(table).getByRole("checkbox", { name: /Check paid twice/ }),
+    );
+    await user.click(
+      screen.getByRole("button", { name: "Import 1 of 2 lines" }),
+    );
+    await waitFor(() => {
+      expect(
+        api.callsTo("POST", "/api/v1/review/:id/resolve")[0]?.body,
+      ).toEqual({
+        kind: "low_confidence_field",
+        transactions: [],
+        confirm: false,
+        import_as_read: true,
+        lines: [4],
+      });
+    });
+  });
+
+  it("lists the holding that waits with its lines, without ticks", async () => {
+    const held = {
+      reason: "investment_lines_held",
+      account_id: "a-1",
+      statement: 0,
+      statement_key: STATEMENT_KEY,
+      currency: "USD",
+      fields: ["market_value", "reconciliation"],
+      failed: ["positions", "total_value"],
+      held: 2,
+      imported: 7,
+      selectable: false,
+      differences: [],
+      sections: [],
+      lines: [
+        {
+          index: 2,
+          fields: ["held_with_security"],
+          page: 4,
+          date: "2026-06-05",
+          type: "buy",
+          description: "EXAMPLE INDEX ETF",
+          amount: "-300.000000",
+          section: "Securities Bought & Sold",
+        },
+        {
+          index: 3,
+          fields: ["held_with_security"],
+          page: 4,
+          date: "2026-06-19",
+          type: "sell",
+          description: "EXAMPLE INDEX ETF",
+          amount: "150.000000",
+          section: "Securities Bought & Sold",
+        },
+      ],
+      positions: [
+        {
+          index: 1,
+          symbol: "ZZETF",
+          name: "EXAMPLE INDEX ETF",
+          fields: ["market_value"],
+          page: 3,
+        },
+      ],
+    };
+    reviewApi([
+      item("r-1", "low_confidence_field", held, {
+        reason: "investment_lines_held",
+        next_step: "correct_fields",
+      }),
+    ]);
+    renderApp("/review");
+    const lines = await screen.findByRole("table", { name: "Lines in doubt" });
+    // A security waits whole: its lines cannot be chosen one by one.
+    expect(within(lines).queryByRole("checkbox")).not.toBeInTheDocument();
+    expect(within(lines).getAllByText("waits with its holding")).toHaveLength(2);
+    const holdings = screen.getByRole("table", { name: "Holdings waiting" });
+    expect(within(holdings).getByText("ZZETF")).toBeInTheDocument();
+    expect(
+      within(holdings).getByText("quantity × price is not the value printed"),
+    ).toBeInTheDocument();
+    // The value doubt is settled by the same answer when that check failed.
+    expect(
+      screen.getByRole("button", { name: "Import as read" }),
+    ).toBeInTheDocument();
+  });
+
+  it("shows the kind the local model suggested and confirms it", async () => {
+    const held = {
+      reason: "investment_low_confidence",
+      account_id: "a-1",
+      statement: 0,
+      statement_key: STATEMENT_KEY,
+      fields: ["suggested_type"],
+      reconciliation: "ok",
+      positions: [],
+      activity: [{ index: 2, fields: ["suggested_type"], page: 4 }],
+      lines: [
+        {
+          index: 2,
+          fields: ["suggested_type"],
+          page: 4,
+          date: "2026-06-05",
+          type: "buy",
+          description: "EXAMPLE INDEX ETF",
+          amount: "-300.000000",
+          section: "Securities Bought & Sold",
+        },
+      ],
+    };
+    const api = reviewApi(
+      [
+        item("r-1", "low_confidence_field", held, {
+          reason: "investment_low_confidence",
+          next_step: "correct_fields",
+        }),
+      ],
+      "member",
+      {
+        "POST /api/v1/review/:id/resolve": () =>
+          json(
+            item("r-1", "low_confidence_field", held, { state: "resolved" }),
+          ),
+      },
+    );
+    renderApp("/review");
+    const user = userEvent.setup();
+    expect(
+      await screen.findByText("Check what the local model suggested"),
+    ).toBeInTheDocument();
+    const table = screen.getByRole("table", { name: "Lines in doubt" });
+    expect(within(table).getByText("Purchase")).toBeInTheDocument();
+    expect(
+      within(table).getByText("reading suggested by the local model"),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText(/confirms the kinds the local model suggested/),
+    ).toBeInTheDocument();
+    // Not a date problem: no column mapping is offered for it.
+    expect(
+      screen.queryByRole("link", { name: "Map columns" }),
+    ).not.toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Import as read" }));
+    await waitFor(() => {
+      expect(
+        api.callsTo("POST", "/api/v1/review/:id/resolve")[0]?.body,
+      ).toEqual({
+        kind: "low_confidence_field",
+        transactions: [],
+        confirm: false,
+        import_as_read: true,
+      });
+    });
+  });
+
   it("imports a brokerage statement that does not add up as read", async () => {
     const held = {
       reason: "investment_reconciliation_failed",

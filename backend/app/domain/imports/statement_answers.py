@@ -59,6 +59,10 @@ IMPORT_ANYWAY: Final = "import_anyway"
 IMPORT_AS_READ: Final = "import_as_read"
 #: Payload and resolution key naming the statement an item is about.
 KEY_FIELD: Final = "statement_key"
+#: Resolution key: the lines of the item an "import as read" answer imports
+#: (indices in the statement; the others it listed are left out).
+LINES_FIELD: Final = "lines"
+LINES_MAX: Final = 2000
 #: A bank statement (``statements``) or a brokerage one (``investments``).
 Target = Literal["statement", "investment"]
 _KEY_LENGTH: Final = 64
@@ -90,6 +94,15 @@ def payload_key(payload: Mapping[str, Any]) -> str | None:
     return None
 
 
+def _lines(value: Any) -> frozenset[int] | None:
+    """The line indices a resolution names (None: it names none, so all)."""
+    if not isinstance(value, list):
+        return None
+    return frozenset(
+        v for v in value[:LINES_MAX] if isinstance(v, int) and not isinstance(v, bool) and v >= 0
+    )
+
+
 def _uuid(value: Any) -> uuid.UUID | None:
     try:
         return uuid.UUID(str(value))
@@ -105,10 +118,30 @@ class StatementAnswers:
     placed: dict[tuple[Target, str], uuid.UUID] = field(default_factory=dict)
     #: ``(target, key, account, answer)`` of every answer given.
     given: set[tuple[Target, str, uuid.UUID, str]] = field(default_factory=set)
+    #: The lines an "import as read" answer named (their indices in the
+    #: statement); absent: every line it was asked about.
+    chosen: dict[tuple[Target, str, uuid.UUID], frozenset[int]] = field(default_factory=dict)
 
-    def add(self, target: Target, key: str, account_id: uuid.UUID, answer: str) -> None:
+    def add(
+        self,
+        target: Target,
+        key: str,
+        account_id: uuid.UUID,
+        answer: str,
+        lines: frozenset[int] | None = None,
+    ) -> None:
         self.placed[(target, key)] = account_id
         self.given.add((target, key, account_id, answer))
+        if answer == IMPORT_AS_READ:
+            if lines is None:
+                # A later answer for every line takes the choice back.
+                self.chosen.pop((target, key, account_id), None)
+            else:
+                self.chosen[(target, key, account_id)] = lines
+
+    def lines(self, target: Target, key: str, account_id: uuid.UUID) -> frozenset[int] | None:
+        """The lines the "import as read" answer named (None: all of them)."""
+        return self.chosen.get((target, key, account_id))
 
     def account(self, target: Target, key: str) -> uuid.UUID | None:
         """The account the statement was answered on (None: no answer)."""
@@ -153,5 +186,11 @@ def document_answers(db: Session, document: Document) -> StatementAnswers:
         target = resolution.get("target")
         if account_id is None or key is None or target not in ("statement", "investment"):
             continue
-        found.add("investment" if target == "investment" else "statement", key, account_id, answer)
+        found.add(
+            "investment" if target == "investment" else "statement",
+            key,
+            account_id,
+            answer,
+            _lines(resolution.get(LINES_FIELD)),
+        )
     return found

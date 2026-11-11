@@ -6,14 +6,14 @@ All notable changes to PerFin are recorded here. The format follows
 
 ## Status
 
-The current release candidate is `v1.0.0-rc.6`; the final `v1.0.0` follows the
+The current release candidate is `v1.0.0-rc.7`; the final `v1.0.0` follows the
 external security review. Every phase (0-7) is implemented. Alembic head is
-`0012`. On 2026-11-10: SPDX;
-backend ruff, ruff format, mypy --strict (689 source files), bandit, OpenAPI
-drift and 8267 pytest tests with `-n 8`, of which the Helm tests (48) need
-`helm` and could not run in that environment (the OCR tests ran, with
-Tesseract 5.3); frontend
-eslint, tsc, 656 vitest tests in 74 files and the production build. As of rc.2: `pip-audit` finds no known vulnerabilities and
+`0012`. On 2026-11-11: SPDX;
+backend ruff, ruff format, mypy --strict (699 source files), bandit, OpenAPI
+drift and 8344 pytest tests with `-n 8` (the Helm chart tests aside, which
+need `helm`), of which the OCR tests (20) need Tesseract and could not run
+in that environment (both sets run in CI); frontend
+eslint, tsc, 678 vitest tests in 74 files and the production build. As of rc.2: `pip-audit` finds no known vulnerabilities and
 `npm audit --audit-level=high` passes with 10 moderate advisories in dev
 tooling (eslint, typescript-eslint, minimatch), none high.
 CI is green end to end on GitHub Actions for commit `21d2b38`: `ci` run
@@ -38,6 +38,161 @@ What remains (details in docs/ROADMAP.md):
 ## [Unreleased]
 
 Nothing yet.
+
+## [1.0.0-rc.7] - 2026-11-11
+
+Seventh release candidate of 1.0.0. Statement import asks about the one
+line that does not make sense instead of holding the whole file: a
+statement's own section totals, cash-flow summary and account list say
+where it does not add up, what is vouched for is imported, and only the
+lines (or the one security) in doubt wait for a person. The optional local
+model helps with wording and column headings the readers do not know, and
+only wording a person confirmed is remembered. No migration.
+
+### Changed
+
+- **Brokerage statements: one doubtful line is one question, not a held
+  file.** A statement prints more than its balances: a total under each
+  activity section and a cash-flow summary restating every section. They
+  are now read and used to say *where* a statement does not add up
+  (INGESTION.md "What a statement says about its own rows"):
+  - Each activity row carries its section's heading; each section's rows
+    are checked against the `Total ...` line printed under them and
+    against the cash-flow summary's line for it
+    (`InvestmentReconciliation.sections`). Only the rows no figure vouches
+    for carry the `reconciliation` doubt (`doubtful_activity`,
+    `doubtful_positions`); before, one failed check doubted every row of
+    the account.
+  - The importer writes what is vouched for and holds only what is not:
+    lines moving cash that are in doubt wait in an `investment_lines_held`
+    item (each line with its page, date, section, amount and reason, the
+    sections that do not add up, "Import as read" for them) while the
+    holdings and every other line are imported; a statement with no row in
+    doubt whose own totals disagree (a printed account value that is not
+    holdings + cash) is imported with an `investment_figures_differ`
+    notice, which no longer keeps its document in "needs review". A
+    position or a line moving units in doubt holds **its security**, not
+    the statement: that holding and every line moving it wait together
+    (the units are reconciled against each other) and the rest is
+    imported; only when nothing would be left is the statement held
+    whole. Held lines that stand alone can be imported or left out one by
+    one (`ResolveLowConfidence.lines`). OFX and activity exports, which
+    print no such figures, are held as before.
+  - The account's value is recorded when only the cash activity check
+    failed and holdings + closing cash is the printed account value, and
+    for an account that prints no cash and whose value is its holdings (a
+    529 plan).
+- **Bank and card PDF statements: only the rows in doubt wait**
+  (`statement_generic` and `card_statement_generic` 6, the institution
+  layouts 4). A failed balance check used to mark every row pending. The
+  statement's own running balance now vouches for the rows it agrees
+  with; only the rows it does not vouch for (or the one row that is the
+  whole difference) are pending, none when a printed balance alone is
+  off (`Reconciliation.doubtful`; the review item says how many of how
+  many rows wait). Blocks printed side by side are read one after the
+  other here too.
+- **Brokerage layouts read more of the page** (`brokerage_statement_generic`
+  8, `fidelity_investments_statement` 7, `placeholder_brokerage` 6):
+  - Blocks printed side by side are read one after the other
+    (`app/ingestion/parsers/blocks.py`): a summary box beside a table no
+    longer hides the table's header (debit card activity beside its
+    summary was not read), and a label keeps its amounts. The region
+    ends at the header of a table printed across the page.
+  - Lines under a trade are kept with it: a security's name over two
+    lines, and the notes printed below (accrued interest, a wash sale, a
+    bond's coupon and maturity) go to the row's memo instead of being
+    dropped.
+  - A row whose date prints no year and falls outside the period (a card
+    purchase posted the month before) is placed in the nearest year and
+    marked as a guess, not dropped.
+  - Entries under a table whose header the parser cannot use are counted
+    and shown (`lines_unread`, with their place on the page) instead of
+    being passed over silently, and that header ends the table above it.
+  - A document of several accounts is checked against its own account
+    list: each account's value against the ending value the list prints
+    for it (`index_value`), the list's value stands in for an account
+    whose pages print none, and an account the list names that no
+    statement was read for raises an `accounts_not_read` item.
+  - The statement's own summary tables are kept as figures, not rows
+    (`InvestmentStatement.figures`): the account-value bridge, the core
+    account's cash flow, the income summary and the realized gains;
+    `perfin ingest --dry-run` prints them with every section's check and
+    the rows in doubt.
+  - Margin interest (*Margin Activity*) is a fee dated by its period; the
+    tables of several cards stay in the card section; *Location
+    Reference/ Description* is a description column; a *Return of capital*
+    under the income heading is income, not a deposit; the marker letter
+    printed before a holding held in margin is not part of its name; a
+    bond bought with nothing in the symbol column is named by its name,
+    its issuer's first word is no ticker.
+- The review queue shows the lines in doubt as a table and says which
+  section's total they miss and by how much; lines that stand alone have
+  a tick each, and a holding that waits is listed with its reason.
+- **Cost basis and short positions are said, not guessed.** A holding the
+  account already had whose statement prints a cost basis for its other
+  holdings but not for this one is opened at the statement's price and
+  raises an `investment_opening_basis_unknown` item (it showed no gain
+  and no question before). A short position (a negative quantity) raises
+  an `investment_short_position` notice: it is in the account value
+  recorded from the statement and not among the holdings shown, because
+  the lot engine does not track short positions yet; its trades on the
+  statement are left out with it rather than read as ordinary purchases
+  and sales.
+
+### Added
+
+- **The optional local model suggests what kind of activity an unfamiliar
+  wording is** (ADR-0010, amended; docs/ML.md). A brokerage parser types a
+  row by its action words and its section's heading from fixed lists; a row
+  neither names used to be left unread, and its statement then did not add
+  up. With the `ml` profile on, the worker now sends those phrases
+  (normalised, digits masked; `POST /v1/vocabulary` on the adapter,
+  `app.ml.client.activity_hints`) with the statement's text to read them
+  in, and asks what kind of activity each is, from a closed list. The checked answer (`confidence.ml_vocabulary`) is
+  used to read the pages once more: the figures are the page's own and the
+  statement is reconciled as always. Such a row carries the
+  `suggested_type` doubt and is never written on the model's word: it
+  waits in the review queue, shown with the kind read and marked as the
+  model's suggestion, and "Import as read" confirms it. The model cannot
+  supply a figure or mark a table as not activity, and a phrase PerFin's
+  own lists know is never its to type. Without the model, or without a
+  usable answer, a document is read exactly as before. Tested against a
+  fake runtime only, like the rest of the adapter.
+- **Confirmed wording is remembered; nothing else of a statement is**
+  (`app/domain/imports/wording.py`, `GET` / `DELETE /imports/wording`, the
+  "Statement wording" card on "What PerFin has learned"). Confirming
+  suggested kinds keeps the wording for the household, so the next
+  statement of that layout is read without the model and without a
+  question. An entry is a layout, a phrase and its kind: a section's
+  heading or the action words of a securities table. Never a cash row's
+  free text, never a digit, never a phrase the household's scrubber would
+  mask, and no amount, date, security or account. The model itself keeps
+  nothing between calls. A suggestion nobody confirmed teaches nothing.
+- **The model is asked about the whole statement, and about column
+  headings.** A long statement is put to the model in several calls, each
+  unknown phrase with the page that prints it (at most six calls a
+  document), so wording past the first `PERFIN_ML_MAX_CHARS` is no longer
+  left unasked. When a table's header names no column the parser knows as
+  the date or the amount, the model may say what each heading names, from
+  a closed list of column roles; the parser then reads the table itself
+  and every row of it waits for a person, like any suggestion. A model
+  cannot hide a column or rename one the parser knows. A confirmed
+  heading is remembered as wording (kind `column`).
+- **`perfin ml eval`** asks the configured adapter about PerFin's own
+  vocabulary (its activity words and section headings) and reports how
+  often the model agrees, with the phrases it got wrong; `--min-agreement`
+  fails the command below a floor. No personal data is sent and nothing is
+  stored. It needs a running model; the test suite uses a fake adapter.
+- **The value a statement opens with starts an account's history.** The
+  first brokerage statement of an account records its *Beginning Account
+  Value* as the balance of the day before the period, when the statement's
+  own account-value summary adds up to the closing value recorded and
+  nothing else is known of those days.
+- **Statement summary** (`GET /documents/{id}/summary`, the card on the
+  document page): per account of a document, the summary tables the
+  statement prints (change in account value, cash flow, income, realized
+  gains), the checks that held, and each activity section against its
+  printed total.
 
 ## [1.0.0-rc.6] - 2026-11-10
 

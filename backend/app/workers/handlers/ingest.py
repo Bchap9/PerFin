@@ -31,7 +31,7 @@ from app.ingestion import pipeline
 from app.ingestion.match.receipts import rematch_receipts
 from app.ingestion.sandbox.runner import SandboxConfig
 from app.integrations.antivirus import scanner_from_settings
-from app.ml.client import document_hints
+from app.ml.client import activity_hints, document_hints
 from app.workers.registry import JobContext, PermanentJobError, job_handler
 
 log = get_logger(__name__)
@@ -54,6 +54,8 @@ def default_deps() -> pipeline.PipelineDeps:
         child_max_bytes=settings.upload_max_bytes,
         confidence_threshold=settings.ingest_confidence_threshold,
         ml=partial(document_hints, settings) if settings.ml_enabled else None,
+        ml_vocabulary=partial(activity_hints, settings) if settings.ml_enabled else None,
+        ml_max_chars=settings.ml_max_chars,
     )
 
 

@@ -68,13 +68,15 @@ def served() -> Iterator[tuple[str, FakeRuntime]]:
         server.shutdown()
 
 
-def _post(url: str, body: Any, token: str | None = TOKEN) -> tuple[int, dict[str, Any]]:
+def _post(
+    url: str, body: Any, token: str | None = TOKEN, path: str = "/v1/document"
+) -> tuple[int, dict[str, Any]]:
     data = json.dumps(body).encode()
     headers = {"Content-Type": "application/json"}
     if token is not None:
         headers["Authorization"] = f"Bearer {token}"
     request = urllib.request.Request(  # noqa: S310 - the test server
-        f"{url}/v1/document", data=data, headers=headers
+        f"{url}{path}", data=data, headers=headers
     )
     try:
         with urllib.request.urlopen(request, timeout=5) as response:  # noqa: S310
@@ -123,3 +125,110 @@ def test_the_adapter_refuses_to_start_without_a_strong_token() -> None:
         ml.Config({"PERFIN_ML_TOKEN": "short"})
     with pytest.raises(SystemExit):
         ml.Config({"PERFIN_ML_TOKEN": TOKEN, "PERFIN_ML_RUNTIME": "file:///etc/passwd"})
+
+
+# ---------------------------------------------------------------------------
+# /v1/vocabulary: what kind of activity a phrase or a heading is
+# ---------------------------------------------------------------------------
+
+VOCABULARY = "/v1/vocabulary"
+
+
+def test_phrases_are_numbered_for_the_model_and_answered_from_the_lists_only(
+    served: tuple[str, FakeRuntime],
+) -> None:
+    url, runtime = served
+    runtime.answer = {
+        "actions": [
+            {"index": 1, "type": "buy"},
+            {"index": 2, "type": "unknown"},  # not sure: left out
+            {"index": 3, "type": "teleport"},  # not a listed kind
+            {"index": 7, "type": "sell"},  # no such phrase
+            {"index": 1, "type": "sell"},  # one answer per phrase
+        ],
+        "headings": [{"index": 1, "kind": "cash"}, {"index": 2, "kind": "skip"}],
+        "columns": [
+            {"index": 1, "role": "date"},
+            {"index": 2, "role": "balance"},  # not a listed role
+            {"index": 3, "role": "unknown"},  # not sure: left out
+        ],
+        "note": "dropped",
+    }
+    status, answer = _post(
+        url,
+        {
+            "actions": ["periodic investment plan", "bank sweep credit ref 0", "   x   y  "],
+            "headings": ["sweep program activity", "estimated cash flow"],
+            "columns": ["posted", "running total", "ref"],
+        },
+        path=VOCABULARY,
+    )
+    assert status == 200
+    assert answer == {
+        "actions": [{"index": 1, "type": "buy"}],
+        "headings": [{"index": 1, "kind": "cash"}],
+        "columns": [{"index": 1, "role": "date"}],
+        "model": "qwen2.5:7b-instruct",
+    }
+    (body,) = runtime.bodies
+    assert body["format"] == ml.VOCABULARY_SCHEMA
+    assert body["options"]["temperature"] == 0
+    assert body["messages"][0] == {"role": "system", "content": ml.VOCABULARY_PROMPT}
+    assert body["messages"][1]["content"] == (
+        "ACTIONS:\n1. periodic investment plan\n2. bank sweep credit ref 0\n3. x y\n\n"
+        "HEADINGS:\n1. sweep program activity\n2. estimated cash flow\n\n"
+        "COLUMNS:\n1. posted\n2. running total\n3. ref"
+    )
+
+
+def test_the_statement_is_given_as_context_before_the_lists(
+    served: tuple[str, FakeRuntime],
+) -> None:
+    url, runtime = served
+    runtime.answer = {"actions": [{"index": 1, "type": "buy"}], "headings": []}
+    statement = "EXAMPLE BROKERAGE\n06/05 EXAMPLE INDEX ETF Periodic Investment Plan 3 -300.00"
+    status, answer = _post(
+        url, {"actions": ["periodic investment plan"], "text": statement}, path=VOCABULARY
+    )
+    # Whatever the model read, a kind per numbered phrase is all that comes back.
+    assert (status, answer["actions"]) == (200, [{"index": 1, "type": "buy"}])
+    assert set(answer) == {"actions", "headings", "columns", "model"}
+    assert answer["columns"] == []
+    content = runtime.bodies[0]["messages"][1]["content"]
+    assert content == (
+        f"STATEMENT:\n{statement}\n\nACTIONS:\n1. periodic investment plan\n\n"
+        "HEADINGS:\n(none)\n\nCOLUMNS:\n(none)"
+    )
+    # One request, one answer: no earlier turn is carried into a call.
+    assert [m["role"] for m in runtime.bodies[0]["messages"]] == ["system", "user"]
+    assert (
+        _post(url, {"actions": ["x"], "text": "y" * (ml.MAX_TEXT + 900)}, path=VOCABULARY)[0] == 200
+    )
+    capped = runtime.bodies[1]["messages"][1]["content"]
+    assert capped.count("y") == ml.MAX_TEXT
+
+
+def test_the_model_cannot_be_asked_to_hide_a_table() -> None:
+    # The lists the adapter offers the model type rows; none says "not activity".
+    assert "skip" not in ml.SECTION_KINDS
+    assert "split" not in ml.ACTIVITY_TYPES
+    assert ml.SECTION_KINDS[-1] == ml.ACTIVITY_TYPES[-1] == "unknown"
+
+
+def test_vocabulary_requests_need_the_token_and_phrases_and_are_capped(
+    served: tuple[str, FakeRuntime],
+) -> None:
+    url, runtime = served
+    runtime.answer = {"actions": [], "headings": []}
+    assert _post(url, {"actions": ["x"]}, token=None, path=VOCABULARY)[0] == 401
+    assert _post(url, {"actions": [], "headings": ["  "]}, path=VOCABULARY)[0] == 422
+    assert _post(url, {"text": "a whole document"}, path=VOCABULARY)[0] == 422
+    assert runtime.bodies == []
+    many = [f"phrase {number} " + "x" * 300 for number in range(ml.MAX_PHRASES + 30)]
+    status, answer = _post(url, {"actions": many, "headings": []}, path=VOCABULARY)
+    assert (status, answer["actions"]) == (200, [])
+    sent = runtime.bodies[0]["messages"][1]["content"].splitlines()
+    numbered = [line for line in sent if line[:1].isdigit()]
+    assert len(numbered) == ml.MAX_PHRASES
+    assert max(len(line) for line in numbered) <= ml.PHRASE_MAX + len("40. ")
+    assert sent[-1] == "(none)"

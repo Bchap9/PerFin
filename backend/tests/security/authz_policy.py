@@ -144,6 +144,9 @@ PARAM_KINDS: Final[Mapping[str, ParamKind]] = MappingProxyType(
         # A layout the matrix household taught PerFin (a parser fingerprint
         # of one of its institutions; household-wide).
         "learned_layout": ParamKind("learned_layout", "layout-not-found"),
+        # A phrase of statement wording the matrix household confirmed (kept
+        # in its ``ingestion.learned_wording`` setting; household-wide).
+        "learned_wording": ParamKind("learned_wording", "wording-not-found"),
         # A processed document whose encrypted file really is in the matrix
         # blob store (downloadable), on an account granted to the matrix
         # member (edit) and viewer (view); a review item of such a document.
@@ -197,7 +200,7 @@ OWN_KINDS: Final = frozenset(k for k in PARAM_KINDS if k.startswith("own_"))
 HOUSEHOLD_OBJECT_KINDS: Final = frozenset(
     {"transaction", "account", "category", "payee", "tag", "rule", "job"}
     | {"budget", "goal", "goal_contribution"}
-    | {"document", "import_mapping", "learned_layout"}
+    | {"document", "import_mapping", "learned_layout", "learned_wording"}
     | {"stored_document", "review_item"}
     | {"export_archive", "import_archive"}
     | {"security", "investment_txn", "price"}
@@ -325,6 +328,7 @@ RULE = {"rule_id": "rule"}
 DOC = {"document_id": "document"}
 IMAP = {"mapping_id": "import_mapping"}
 LAYOUT = {"layout_id": "learned_layout"}
+WORDING = {"wording_id": "learned_wording"}
 SDOC = {"document_id": "stored_document"}
 ITEM = {"item_id": "review_item"}
 SEC = {"security_id": "security"}
@@ -749,6 +753,11 @@ POLICIES: Final[Mapping[str, Policy]] = MappingProxyType(
         f"DELETE {API}/imports/layouts/{{layout_id}}": scoped(
             "documents:write", role=M, params=LAYOUT
         ),
+        # The statement wording it confirmed: any role may look, a member forgets.
+        f"GET {API}/imports/wording": scoped("documents:read", role=V),
+        f"DELETE {API}/imports/wording/{{wording_id}}": scoped(
+            "documents:write", role=M, params=WORDING
+        ),
         f"GET {API}/imports/{{document_id}}/preview": scoped("documents:read", role=V, params=DOC),
         f"POST {API}/imports/{{document_id}}/apply-mapping": scoped(
             "documents:write", role=M, params=DOC
@@ -757,6 +766,11 @@ POLICIES: Final[Mapping[str, Policy]] = MappingProxyType(
             "documents:write", role=M, params=DOC
         ),
         f"POST {API}/documents/{{document_id}}/accounts/apply": scoped(
+            "documents:write", role=M, params=DOC
+        ),
+        # The summary tables a statement prints: an account's balances, so the
+        # same people who may assign the document's accounts.
+        f"GET {API}/documents/{{document_id}}/summary": scoped(
             "documents:write", role=M, params=DOC
         ),
         # --- user settings --------------------------------------------------

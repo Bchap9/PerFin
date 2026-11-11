@@ -190,7 +190,9 @@ is not suggested well:
 - [ ] Unit tests pass with and without the hint; tampered variants fail
       reconciliation.
 - [ ] Figures are returned as printed, never adjusted to make a statement
-      add up: a statement that does not reconcile waits in review, where
+      add up: the rows a statement's own figures do not vouch for wait in
+      review (a brokerage parser says which through its section totals,
+      `brokerage.localise`; without that, the whole statement), where
       the person can "Import as read" (rows as printed, no balance
       snapshot) once they have seen what is off. That answer is bound to
       the statement exactly as your parser returned it (every figure, the

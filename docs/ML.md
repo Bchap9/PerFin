@@ -3,9 +3,10 @@
 PerFin reads statements with deterministic parsers first. The optional `ml`
 containers add a model running **on your own machine** that suggests what a
 document is when those parsers are unsure: its kind, its institution, the
-accounts it is about. Suggestions show up as proposed accounts ("Accounts in
-this file") and account choices in the review queue, marked as coming from the
-model. Nothing is imported on the model's word alone (ADR-0010).
+accounts it is about, and what kind of activity an unfamiliar wording on a
+brokerage statement is. Suggestions show up as proposed accounts ("Accounts in
+this file"), account choices and suggested kinds of activity in the review
+queue, marked as coming from the model. Nothing is imported on the model's word alone (ADR-0010).
 
 It works like Immich's machine-learning container: start it or not, PerFin
 works the same either way.
@@ -71,6 +72,57 @@ nvidia-smi` should list the card).
   names, currencies and dates shape-checked. It is stored on the document and
   used to fill in proposed accounts and account suggestions. You confirm
   everything.
+- **Words PerFin's vocabulary does not know** (brokerage statements). When a
+  statement words a line or a section in a way the parser has no rule for
+  ("Periodic Investment Plan", a heading like "Sweep Program Activity"), the
+  worker asks the model what kind of activity that phrase is, from a fixed
+  list (purchase, sale, dividend, interest, fee, deposit, withdrawal, ...).
+  It sends those phrases together with the statement's text, so the model
+  can read each phrase on the rows it stands on. One request carries up to
+  `PERFIN_ML_MAX_CHARS` of text; a longer statement is asked about in
+  several requests (at most six), each phrase with the page that prints
+  it, so nothing is left unasked because it is printed late in the
+  document. Raise `PERFIN_ML_MAX_CHARS`, with `ML_CONTEXT` on the adapter,
+  if your GPU has room and you would rather send more per request. The model cannot supply
+  a figure or say a table is not activity; it can only pick a kind or
+  decline, and a kind per phrase is all that comes back. The statement is then read again with the
+  suggested kinds: the dates and amounts are the page's own, and the
+  statement's totals are checked as always. A line typed this way is never
+  imported on its own. It shows up in the review queue as "kind suggested
+  by the local model" with the kind read ("Read as"), and **Import as
+  read** confirms it. Lines that only move cash wait on their own, and you
+  can tick which of them to import; a line that moves shares waits together
+  with its holding and that holding's other lines. The rest of the
+  statement is imported either way. The answer is kept with the document,
+  so confirming does not ask the model again.
+- **Column headings PerFin does not know.** When a table's header names no
+  column PerFin knows as the date or the amount ("Posted", "Money In/Out"),
+  the table is not read and its entries are reported. With the model on,
+  the worker asks what each unknown heading names, from a fixed list (date,
+  settlement date, kind of transaction, description, symbol, quantity,
+  price, amount, fees). PerFin then reads the table itself; every line of
+  it waits in the review queue as a suggestion, and confirming it teaches
+  the heading for that layout. The model cannot hide a column or change
+  the meaning of one PerFin already knows.
+- **Check a model before you trust its suggestions.** Run
+  `perfin ml eval` on the worker (or `docker compose exec worker perfin ml
+  eval`). It asks your model about the few hundred activity words and
+  section headings PerFin already knows the kind of, and prints how often
+  it agrees and which ones it got wrong. Nothing of yours is sent. A model
+  that mistypes "dividend received" will not type your broker's unusual
+  wording either; try a larger model or keep the profile off.
+- **What is remembered, and what is not.** The model itself remembers
+  nothing: PerFin never trains or tunes it, every request stands alone with
+  no history, and the adapter stores nothing and logs no content. When you
+  confirm suggested kinds, PerFin keeps the *wording* for your household so
+  the next statement of that layout is read with no model and no question:
+  a section's heading, a broker's action words or a table's column
+  heading, and what it means. It
+  never keeps a payee, merchant or memo, any digit, a phrase containing a
+  household member's name, an address or one of your account numbers, or
+  any amount, date, security or account from the statement. You can see
+  every phrase and remove it under **Documents, What PerFin has learned,
+  Statement wording**.
 - If the model is slow, down or wrong, documents are processed as if it were
   not there; after three failures in a row it is not asked for five minutes.
 

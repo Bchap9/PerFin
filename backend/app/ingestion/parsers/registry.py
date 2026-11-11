@@ -54,6 +54,7 @@ from app.ingestion.parsers.template import (
     fill_statement,
     read_template,
 )
+from app.ingestion.parsers.vocabulary import Vocabulary
 from app.ingestion.sandbox.protocol import (
     DOCUMENT_STATEMENT_FORMATS,
     IMAGE_KINDS,
@@ -120,6 +121,7 @@ def _fallback(
     outcome: ParseOutcome,
     threshold: float,
     date_order: str | None,
+    vocabulary: Vocabulary | None = None,
 ) -> tuple[DocumentParser, ParseOutcome]:
     """The next-best parser's outcome when ``chosen`` read nothing usable.
 
@@ -134,7 +136,9 @@ def _fallback(
         key=lambda p: -scores[p.name],
     )
     for parser in ranked:
-        found = parser.parse(view, threshold=threshold, date_order=date_order)
+        found = parser.parse_with(
+            view, threshold=threshold, date_order=date_order, vocabulary=vocabulary
+        )
         if not found.empty:
             found.warnings = [f"parser_fallback:{chosen.name}"[:64], *found.warnings]
             return parser, found
@@ -175,8 +179,15 @@ def parse_extraction(
     kind: str | None = None,
     date_order: str | None = None,
     template: LayoutTemplate | None = None,
+    vocabulary: Vocabulary | None = None,
 ) -> ExtractResult:
-    """``result`` with the document parsers' statements and :class:`ParseInfo`."""
+    """``result`` with the document parsers' statements and :class:`ParseInfo`.
+
+    ``vocabulary``: the local model's suggested kinds for words a brokerage
+    parser could not type on an earlier run (:mod:`app.ingestion.parsers.vocabulary`,
+    ADR-0010); the words still untyped are in ``ParseInfo.unknown_actions``
+    / ``unknown_headings``.
+    """
     view = DocumentView.from_result(result)
     scores = {p.name: p.detect(view) for p in PARSERS}
     chosen = _hinted(scores, parser_name=parser_name, institution=institution, kind=kind)
@@ -185,9 +196,13 @@ def parse_extraction(
         chosen = best if scores[best.name] >= MIN_SCORE else None
     outcome = ParseOutcome()
     if chosen is not None:
-        outcome = chosen.parse(view, threshold=threshold, date_order=date_order)
+        outcome = chosen.parse_with(
+            view, threshold=threshold, date_order=date_order, vocabulary=vocabulary
+        )
         if outcome.empty:
-            chosen, outcome = _fallback(view, scores, chosen, outcome, threshold, date_order)
+            chosen, outcome = _fallback(
+                view, scores, chosen, outcome, threshold, date_order, vocabulary
+            )
     else:
         outcome.warnings.append("no_parser")
     taught = False
@@ -216,6 +231,10 @@ def parse_extraction(
         loan=outcome.loan,
         tax_forms=outcome.tax_forms,
         warnings=outcome.warnings[:100],
+        unknown_actions=outcome.unknown_actions,
+        unknown_headings=outcome.unknown_headings,
+        unknown_columns=outcome.unknown_columns,
+        unread_accounts=outcome.unread_accounts,
     )
     return result.model_copy(
         update={

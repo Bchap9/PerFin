@@ -34,6 +34,7 @@ from __future__ import annotations
 
 import re
 import secrets
+import string
 import uuid
 from collections.abc import Callable, Iterator, Mapping
 from dataclasses import dataclass, field
@@ -71,6 +72,7 @@ from app.domain.assets.models import ManualAsset
 from app.domain.documents.blobstore import LocalFSBlobStore
 from app.domain.documents.models import DocumentKind, ParserFingerprint
 from app.domain.goals.models import Goal
+from app.domain.imports import wording
 from app.domain.investments.models import Security
 from app.domain.investments.service import replay_position
 from app.domain.loans.models import Loan
@@ -433,7 +435,7 @@ def build_object(
             return str(make_rule(db, world.household.id).id)
     if kind in ("budget", "goal", "goal_contribution"):
         return str(make_budget_object(factories, world, kind, built or {}).id)
-    if kind in ("document", "import_mapping", "learned_layout"):
+    if kind in ("document", "import_mapping", "learned_layout", "learned_wording"):
         return str(make_import_object(factories, world, kind).id)
     if kind in ("stored_document", "review_item"):
         return str(make_stored_document_object(factories, world, kind).id)
@@ -595,9 +597,19 @@ def make_budget_object(
 
 def make_import_object(factories: Factories, world: World, kind: str) -> Any:
     """A document with an extracted table, or a column mapping, on a fresh
-    account (member ``edit``, viewer ``view``); or a learned layout of the
-    household."""
+    account (member ``edit``, viewer ``view``); or a learned layout or a
+    learned phrase of the household."""
     household_id = world.household.id
+    if kind == "learned_wording":
+        # A fresh phrase each time, so every caller forgets its own.
+        letters = "".join(secrets.choice(string.ascii_lowercase) for _ in range(12))
+        entry = wording.Entry(
+            "matrix_layout", "action", f"matrix wording {letters}", "buy", clock.utcnow()
+        )
+        with factories.transaction() as db, household_context(db, household_id):
+            row = wording._row(db, household_id)
+            wording._save(db, household_id, row, [*wording._entries(row), entry])
+        return entry
     with factories.transaction() as db:
         account = make_account(db, household_id)
         grant_account(db, household_id, world.users["member"].id, account.id, GrantLevel.EDIT)

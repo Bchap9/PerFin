@@ -27,11 +27,14 @@ import { getTransaction, txKeys, type Transaction } from "../transactions/api";
 import {
   accountResolution,
   canImportAsRead,
+  hasSuggestedKinds,
   dismissItem,
   duplicateResolution,
   importAsReadResolution,
+  linesSelectable,
   listReviewItems,
   payloadIds,
+  payloadLines,
   payloadString,
   payloadSuggestions,
   receiptResolution,
@@ -47,6 +50,7 @@ import { TeachDialog, currentReadings } from "./TeachDialog";
 import {
   BalanceTools,
   CostBasisTools,
+  HeldLines,
   LowConfidenceTools,
   NewInstitutionTools,
   ReceiptPreview,
@@ -417,6 +421,13 @@ export function ReviewItemCard({ item }: { item: ReviewItem }) {
     },
   });
   const busy = resolve.isPending || dismiss.isPending;
+  // Lines that stand alone (none moves shares) are imported or left out one
+  // by one: all ticked to begin with; null until the person unticks one.
+  const selectable = linesSelectable(item);
+  const [unticked, setUnticked] = useState<ReadonlySet<number>>(new Set());
+  const listed = payloadLines(item).map((line) => line.index);
+  const ticked = new Set(listed.filter((index) => !unticked.has(index)));
+  const someLines = selectable && ticked.size < listed.length;
   // Any item about a page the caller may see can be taught from.
   const teachable =
     item.document_id !== null && item.document?.previewable === true;
@@ -427,7 +438,9 @@ export function ReviewItemCard({ item }: { item: ReviewItem }) {
   const heldStatement =
     item.kind === "low_confidence_field" &&
     (reason === "investment_reconciliation_failed" ||
-      reason === "investment_low_confidence");
+      reason === "investment_low_confidence" ||
+      reason === "investment_lines_held" ||
+      reason === "investment_figures_differ");
   const asRead = canImportAsRead(item);
   const editableAccounts = (accounts.data ?? []).filter(
     (account) => account.can_edit && !account.is_closed,
@@ -484,11 +497,42 @@ export function ReviewItemCard({ item }: { item: ReviewItem }) {
       {item.kind === "low_confidence_field" && !heldStatement ? (
         <LowConfidenceTools item={item} actionable={actionable} />
       ) : null}
+      {heldStatement ? (
+        selectable && actionable ? (
+          <HeldLines
+            item={item}
+            selected={ticked}
+            onSelect={(index, chosen) => {
+              setUnticked((before) => {
+                const next = new Set(before);
+                if (chosen) {
+                  next.delete(index);
+                } else {
+                  next.add(index);
+                }
+                return next;
+              });
+            }}
+          />
+        ) : (
+          <HeldLines item={item} />
+        )
+      ) : null}
+      {heldStatement && selectable && actionable ? (
+        <p className="ledger-muted">
+          Untick a line to leave it out: only the ticked lines are imported,
+          and PerFin does not ask about the others again.
+        </p>
+      ) : null}
       {asRead && actionable ? (
         <p className="ledger-muted">
-          {reason === "investment_reconciliation_failed"
-            ? "“Import as read” imports this statement as printed. PerFin records no account value from it, because its totals do not add up."
-            : "“Import as read” imports this statement as printed. PerFin records no account value from it, because its totals could not be checked."}
+          {hasSuggestedKinds(item)
+            ? "“Import as read” confirms the kinds the local model suggested for the lines listed above and imports them as printed. Headings and broker wording you confirm are remembered under “What PerFin has learned”; nothing else of the statement is."
+            : reason === "investment_lines_held"
+            ? "“Import as read” imports the lines listed above as printed; the rest of the statement is already imported."
+            : reason === "investment_reconciliation_failed"
+              ? "“Import as read” imports this statement as printed. PerFin records no account value from it, because its totals do not add up."
+              : "“Import as read” imports this statement as printed. PerFin records no account value from it, because its totals could not be checked."}
         </p>
       ) : null}
       {item.kind === "new_institution" ? (
@@ -578,12 +622,18 @@ export function ReviewItemCard({ item }: { item: ReviewItem }) {
             <Button
               variant="primary"
               loading={resolve.isPending}
-              disabled={dismiss.isPending}
+              disabled={dismiss.isPending || (selectable && ticked.size === 0)}
               onClick={() => {
-                resolve.mutate(importAsReadResolution());
+                resolve.mutate(
+                  someLines
+                    ? importAsReadResolution([...ticked].sort((a, b) => a - b))
+                    : importAsReadResolution(),
+                );
               }}
             >
-              Import as read
+              {someLines
+                ? `Import ${String(ticked.size)} of ${String(listed.length)} lines`
+                : "Import as read"}
             </Button>
           ) : null}
           {teachable ? (

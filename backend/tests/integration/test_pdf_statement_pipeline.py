@@ -214,7 +214,7 @@ def test_pdf_statement_is_classified_parsed_reconciled_and_committed(env: Env, l
     assert document.institution_id == account.institution_id
     assert (document.period_start, document.period_end) == (stmt.start, stmt.end)
     assert document.parser_version is not None
-    assert document.parser_version.endswith("/3")
+    assert document.parser_version.endswith("/4")
     assert document.confidence is not None
     assert document.confidence["parse"]["reconciliation"] == ["ok"]
 
@@ -297,7 +297,7 @@ def test_card_statement_of_account_imports_into_its_card_account(env: Env) -> No
         stmt.period_start,
         stmt.statement_date,
     )
-    assert document.parser_version == "card_statement_generic/5"
+    assert document.parser_version == "card_statement_generic/6"
     assert document.confidence is not None
     assert document.confidence["parse"]["reconciliation"] == ["ok"]
 
@@ -322,8 +322,10 @@ def test_statement_that_does_not_reconcile_is_held_for_review(env: Env) -> None:
     assert document.status is DocumentStatus.NEEDS_REVIEW
     rows = env.transactions(account)
     assert _rows(rows) == _expected(stmt, tamper="extra_row")
-    # Nothing of a statement that does not add up counts until a person looks.
-    assert all(r.review_state is ReviewState.PENDING for r in rows)
+    # The row no running balance vouches for does not count until a person
+    # looks; the others are the statement's own and are in the ledger.
+    forged = next(r for r in rows if r.raw_payee == "Forged Payee")
+    assert [r.id for r in rows if r.review_state is ReviewState.PENDING] == [forged.id]
     assert all(r.source_document_id == document_id for r in rows)
     assert env.snapshots(account) == []
 
@@ -336,12 +338,13 @@ def test_statement_that_does_not_reconcile_is_held_for_review(env: Env) -> None:
     assert failed.payload["opening"] == f"{stmt.opening_balance:f}"
     assert failed.payload["closing"] == f"{stmt.closing_balance:f}"
     assert failed.payload["running_mismatches"] == 1
+    assert (failed.payload["rows_in_doubt"], failed.payload["rows_total"]) == (1, len(rows))
     assert failed.payload["account_id"] == str(account.id)
     low = next(i for i in items if i.payload.get("reason") == "low_confidence")
-    assert low.payload["count"] == len(rows)
+    assert low.payload["count"] == 1
     assert "reconciliation" in low.payload["fields"]
-    forged = next(r for r in rows if r.raw_payee == "Forged Payee")
-    entry = next(t for t in low.payload["transactions"] if t["transaction_id"] == str(forged.id))
+    (entry,) = low.payload["transactions"]
+    assert entry["transaction_id"] == str(forged.id)
     assert "amount" in entry["fields"]
     assert entry["page"] == 1
 
@@ -362,7 +365,7 @@ def test_low_confidence_fields_are_imported_pending(env: Env) -> None:
     low = [i for i in items if i.kind is ReviewKind.LOW_CONFIDENCE_FIELD]
     assert [i.payload["reason"] for i in low] == ["low_confidence"]
     assert low[0].payload["fields"] == ["posted_date"]
-    assert low[0].payload["parser"] == "statement_generic/5"
+    assert low[0].payload["parser"] == "statement_generic/6"
     assert {t["transaction_id"] for t in low[0].payload["transactions"]} == {
         str(r.id) for r in rows
     }

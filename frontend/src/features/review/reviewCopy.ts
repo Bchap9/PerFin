@@ -8,12 +8,16 @@ import { formatDate } from "../../lib/dates";
 import { formatDecimal, formatMoney } from "../../lib/money";
 import {
   canImportAsRead,
+  hasSuggestedKinds,
   payloadDifferences,
   payloadIds,
+  payloadLines,
   payloadNumber,
+  payloadSections,
   payloadString,
   type Difference,
   type ReviewItem,
+  type SectionDifference,
 } from "./api";
 
 export interface Explanation {
@@ -96,6 +100,8 @@ export function differenceText(
       return `Cash: the opening cash plus this period's activity comes to ${computed}, but the statement prints a closing cash of ${printed} (${apart}).`;
     case "total_value":
       return `Account value: the holdings plus the cash come to ${computed}, but the statement prints an account value of ${printed} (${apart}).`;
+    case "index_value":
+      return `Account list: the document's list of accounts prints ${printed} for this account, but the account's own pages print an account value of ${computed} (${apart}).`;
     default:
       return `${difference.check}: ${computed} read against ${printed} printed (${apart}).`;
   }
@@ -106,6 +112,43 @@ export function differenceTexts(item: ReviewItem): string[] {
   const currency = payloadString(item, "currency");
   return payloadDifferences(item).map((d) => differenceText(d, currency));
 }
+
+/** One section whose rows are not its printed total, in plain words. */
+export function sectionText(
+  section: SectionDifference,
+  currency: string | null,
+): string {
+  const lines = section.rows === 1 ? "1 line" : `${String(section.rows)} lines`;
+  const where =
+    section.source === "summary" ? " in its cash-flow summary" : "";
+  return `${section.label}: the statement prints ${money(section.printed, currency)}${where}; the ${lines} read add up to ${money(section.computed, currency)} (a difference of ${money(unsigned(section.difference), currency)}).`;
+}
+
+/** The sections that do not add up on a brokerage statement, one sentence each. */
+export function sectionTexts(item: ReviewItem): string[] {
+  const currency = payloadString(item, "currency");
+  return payloadSections(item).map((s) => sectionText(s, currency));
+}
+
+/** Cash-flow lines of the statement's summary no line was read for. */
+function unreadText(item: ReviewItem): string {
+  const labels = payloadIds(item, "unread_summary_lines");
+  return labels.length === 0
+    ? ""
+    : ` The statement's cash-flow summary also lists ${labels.join(", ")}, for which no lines were read.`;
+}
+
+/** "3 lines" / "1 line" of the item's lines in doubt, or null when it lists none. */
+function doubtedLines(item: ReviewItem): string | null {
+  const count = payloadNumber(item, "held") ?? payloadLines(item).length;
+  if (count === 0) {
+    return null;
+  }
+  return count === 1 ? "1 line" : `${String(count)} lines`;
+}
+
+const SUGGESTED_WHY =
+  "The local model only suggests; PerFin never records a kind of activity on a model's word, so it asks you to confirm.";
 
 const AS_READ_STEP =
   "“Import as read” if the statement itself is off (rounding, items it leaves out): its trades, holdings and prices are imported as printed, but no account value is recorded from this statement.";
@@ -438,16 +481,70 @@ const COPY: Readonly<Record<string, Copy>> = {
       "Correct anything wrong, then confirm.",
     ],
   }),
-  "low_confidence_field:reconciliation_failed": () => ({
-    title: "The statement does not add up",
-    what: "The rows read from this statement do not add up to its opening and closing balance.",
-    why: "A row may have been misread or missed, so every row is pending and no balance was recorded.",
-    steps: [
-      "If PerFin misread a balance, enter the balances the statement prints and “Check and accept”.",
-      "Otherwise compare the rows with the document and correct the wrong ones.",
-      "Confirm when the totals match.",
-    ],
-  }),
+  "low_confidence_field:reconciliation_failed": (item) => {
+    const doubted = payloadNumber(item, "rows_in_doubt");
+    const total = payloadNumber(item, "rows_total");
+    // The statement's running balance vouches for the other rows: only the
+    // rows it does not vouch for wait (none: a printed balance is off).
+    const some = doubted !== null && total !== null && doubted < total;
+    const why = !some
+      ? "A row may have been misread or missed, so every row is pending and no balance was recorded."
+      : doubted === 0
+        ? "The statement's running balance vouches for every row, so they were imported as usual; a printed balance is off, so no balance was recorded."
+        : `The statement's running balance vouches for the other ${String(total - doubted)} rows, so only ${doubted === 1 ? "1 row is" : `${String(doubted)} rows are`} pending; no balance was recorded.`;
+    return {
+      title: "The statement does not add up",
+      what: "The rows read from this statement do not add up to its opening and closing balance.",
+      why,
+      steps: [
+        "If PerFin misread a balance, enter the balances the statement prints and “Check and accept”.",
+        some && doubted !== 0
+          ? "Otherwise compare the pending rows with the document and correct the wrong ones."
+          : "Otherwise compare the rows with the document and correct the wrong ones.",
+        "Confirm when the totals match.",
+      ],
+    };
+  },
+  "low_confidence_field:accounts_not_read": (item) => {
+    const accounts = payloadIds(item, "accounts");
+    const several = accounts.length > 1;
+    const named =
+      accounts.length === 0
+        ? "an account"
+        : several
+          ? `the accounts ending in ${accounts.join(", ")}`
+          : `the account ending in ${accounts[0] ?? ""}`;
+    return {
+      title: "An account was not read",
+      what: `This document lists ${named}, but PerFin found no pages for ${several ? "them" : "it"}, so nothing was imported for ${several ? "those accounts" : "that account"}.`,
+      why: "The pages may be missing from the file, or laid out in a way PerFin did not recognise as that account's.",
+      steps: [
+        "Check the document (“Show document”) for that account's pages.",
+        "If they are there, use “Teach PerFin” to show the account's tables; if the file is incomplete, download the full statement and upload it.",
+        "Dismiss this item once the account is taken care of.",
+      ],
+    };
+  },
+  "low_confidence_field:investment_short_position": (item) => {
+    const count = Array.isArray(item.payload["positions"])
+      ? (item.payload["positions"] as unknown[]).length
+      : 0;
+    const one = count <= 1;
+    const left = payloadNumber(item, "lines_left_out") ?? 0;
+    const trades =
+      left === 0
+        ? ""
+        : ` ${left === 1 ? "The 1 trade" : `The ${String(left)} trades`} in ${one ? "that security" : "those securities"} on this statement ${left === 1 ? "was" : "were"} left out with ${one ? "it" : "them"}.`;
+    return {
+      title: "Short position not shown",
+      what: `This statement lists ${one ? "a short position" : `${String(count)} short positions`} (a negative quantity). PerFin does not track short positions yet, so ${one ? "it is" : "they are"} not among the holdings shown for the account.${trades}`,
+      why: "The account value recorded from the statement includes the short position; the list of holdings does not.",
+      steps: [
+        "The statement's other holdings and activity were imported.",
+        "Dismiss this item once you have seen it.",
+      ],
+    };
+  },
   "low_confidence_field:reconciliation_unavailable": () => ({
     title: "Could not check the totals",
     what: "PerFin found no balances on this statement to check its rows against, so they are pending.",
@@ -456,16 +553,25 @@ const COPY: Readonly<Record<string, Copy>> = {
       "Or glance over the rows and confirm them.",
     ],
   }),
-  "low_confidence_field:investment_opening_basis_unknown": () => ({
-    title: "Cost basis needed",
-    what: "This export sells shares that were bought before its first row. PerFin added them as an opening position with an unknown cost basis (zero for now).",
-    why: "Gains on these sales are overstated until the real cost is entered.",
-    steps: [
-      "Enter the cost per unit of each opening position below (or on the opening transaction in Investments).",
-      "Or import an older export or statement for this account first.",
-      "Dismiss this item once the basis is right.",
-    ],
-  }),
+  "low_confidence_field:investment_opening_basis_unknown": (item) => {
+    // A statement's holding without a printed cost is opened at its price;
+    // an activity export's shortfall is opened at zero.
+    const atPrice = payloadString(item, "costed_at") === "price";
+    return {
+      title: "Cost basis needed",
+      what: atPrice
+        ? "This statement prints no cost basis for some holdings the account already had. PerFin opened them at the statement's price, so they show no gain or loss yet."
+        : "This export sells shares that were bought before its first row. PerFin added them as an opening position with an unknown cost basis (zero for now).",
+      why: atPrice
+        ? "Gains on these holdings are wrong until the real cost is entered."
+        : "Gains on these sales are overstated until the real cost is entered.",
+      steps: [
+        "Enter the cost per unit of each opening position below (or on the opening transaction in Investments).",
+        "Or import an older export or statement for this account first.",
+        "Dismiss this item once the basis is right.",
+      ],
+    };
+  },
   "low_confidence_field:investment_lot_conflict": () => ({
     title: "Holdings do not line up",
     what: "This statement sells more shares than the account held, so nothing of it was imported.",
@@ -498,6 +604,19 @@ const COPY: Readonly<Record<string, Copy>> = {
   }),
   "low_confidence_field:investment_low_confidence": (item) => {
     const fields = payloadIds(item, "fields");
+    if (hasSuggestedKinds(item) && canImportAsRead(item)) {
+      const lines = doubtedLines(item) ?? "some lines";
+      return {
+        title: "Check what the local model suggested",
+        what: `PerFin did not know the wording of ${lines} of this statement, so the local model suggested what kind of activity ${lines === "1 line" ? "it is" : "they are"} (listed below). ${lines === "1 line" ? "It moves" : "They move"} shares, which the holdings are checked against, so nothing of the statement was imported yet.`,
+        why: SUGGESTED_WHY,
+        steps: [
+          "Compare the suggested kind of each line below with the statement (“Show document”).",
+          "“Import as read” if the suggestions are right: the statement is imported with them, and PerFin remembers the wording (never the figures) for the next statement.",
+          "“Dismiss” to import nothing from it; add its activity by hand.",
+        ],
+      };
+    }
     if (fields.length === 1 && fields[0] === "reconciliation") {
       return {
         title: "Nothing to check against",
@@ -523,14 +642,72 @@ const COPY: Readonly<Record<string, Copy>> = {
       ],
     };
   },
+  "low_confidence_field:investment_lines_held": (item) => {
+    const lines = doubtedLines(item) ?? "Some lines";
+    const imported = payloadNumber(item, "imported");
+    const rest =
+      imported === null || imported === 0
+        ? "The holdings were imported"
+        : `The holdings and the other ${String(imported)} activity lines were imported`;
+    const sections = sectionTexts(item);
+    const one = lines === "1 line";
+    const fields = payloadIds(item, "fields");
+    if (hasSuggestedKinds(item) && !fields.includes("reconciliation")) {
+      return {
+        title: "Check what the local model suggested",
+        what: `${rest}; PerFin did not know the wording of ${lines.toLowerCase()} of this statement, so the local model suggested what kind of activity ${one ? "it is" : "they are"} (listed below) and ${one ? "it waits" : "they wait"} for you.`,
+        why: SUGGESTED_WHY,
+        steps: [
+          "Compare the suggested kind of each line below with the statement (“Show document”).",
+          ...asReadSteps(
+            item,
+            "“Import as read” if the suggestions are right: these lines are imported with them, and PerFin remembers the wording (never the figures) for the next statement.",
+          ),
+          "“Dismiss” to leave these lines out; add any that are right by hand.",
+        ],
+      };
+    }
+    return {
+      title: "A few lines need a look",
+      what: `${rest}; ${lines} of this statement ${one ? "was" : "were"} held back because the statement's own totals do not vouch for ${one ? "it" : "them"}.${sections.length === 0 ? "" : ` ${sections.join(" ")}`}${unreadText(item)}`,
+      why: "PerFin checks each section's lines against the total the statement prints for it, and only holds the lines of a section that does not add up.",
+      steps: [
+        "Compare the lines listed below with the statement (“Show document”).",
+        ...asReadSteps(
+          item,
+          "“Import as read” imports these lines as printed.",
+        ),
+        "“Teach PerFin” if a table or a figure was read wrong.",
+        "“Dismiss” to leave these lines out; add any that are right by hand.",
+      ],
+    };
+  },
+  "low_confidence_field:investment_figures_differ": (item) => {
+    const texts = [...differenceTexts(item), ...sectionTexts(item)];
+    return {
+      title: "Statement imported; its totals disagree",
+      what: `Every line of this statement is vouched for by its own totals, so it was imported and nothing waits on you.${texts.length === 0 ? " Some of its printed totals disagree with each other." : ` ${texts.join(" ")}`}${unreadText(item)}`,
+      why: "Nothing read from the statement is in doubt, but PerFin does not record an account value from totals that disagree.",
+      steps: [
+        "Compare the figures with the statement (“Show document”).",
+        "“Dismiss” once you have seen it; enter the account's value by hand if you want it recorded.",
+        "“Teach PerFin” if a figure was read wrong.",
+      ],
+    };
+  },
   "low_confidence_field:investment_reconciliation_failed": (item) => {
-    const texts = differenceTexts(item);
+    const texts = [...differenceTexts(item), ...sectionTexts(item)];
+    const lines = doubtedLines(item);
+    const where =
+      lines === null
+        ? ""
+        : ` ${lines === "1 line" ? "The 1 line" : `The ${lines}`} in doubt ${lines === "1 line" ? "is" : "are"} listed below.`;
     return {
       title: "Statement does not add up",
       what:
         texts.length === 0
-          ? "The figures read from this statement do not add up to its totals, so nothing of it was imported."
-          : `The figures read from this statement do not add up, so nothing of it was imported. ${texts.join(" ")}`,
+          ? `The figures read from this statement do not add up to its totals, so nothing of it was imported.${where}`
+          : `The figures read from this statement do not add up, so nothing of it was imported. ${texts.join(" ")}${unreadText(item)}${where}`,
       why: "A statement can round or leave items out, but a misread table looks the same, so PerFin asks before importing it.",
       steps: [
         "Compare the figures with the statement (“Show document”).",

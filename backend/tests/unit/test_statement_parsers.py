@@ -29,7 +29,7 @@ from app.ingestion.parsers.text import (
     read_amount,
     read_date,
 )
-from app.ingestion.reconcile import TOLERANCE, Row, reconcile, running_mismatches
+from app.ingestion.reconcile import TOLERANCE, Row, doubtful_rows, reconcile, running_mismatches
 from app.ingestion.sandbox.protocol import ExtractOptions, ExtractResult, Statement
 from tests.fixtures import synth_pdf_statements as synth
 from tests.fixtures.synth_statements import SynthStatement
@@ -196,9 +196,13 @@ def test_an_inserted_row_does_not_reconcile(layout: str) -> None:
     if layout != "demo_card":  # card statements print no running balance
         assert check.running_mismatches == [forged]
         assert "amount" in statement.transactions[forged].low_confidence
-    # Every row is held for review, not only the forged one.
-    assert all("reconciliation" in t.low_confidence for t in statement.transactions)
-    assert all((t.confidence or 1) <= confidence.UNRECONCILED for t in statement.transactions)
+    # The forged row alone is in doubt: every other row is vouched for by the
+    # running balance printed beside it (a card statement prints none: there
+    # the forged row is the one whose amount is the whole difference).
+    assert check.doubtful == [forged]
+    for index, row in enumerate(statement.transactions):
+        assert ("reconciliation" in row.low_confidence) == (index == forged)
+    assert (statement.transactions[forged].confidence or 1) <= confidence.UNRECONCILED
     assert statement.confidence["reconciliation"] == confidence.UNRECONCILED
 
 
@@ -210,7 +214,53 @@ def test_a_wrong_closing_balance_does_not_reconcile() -> None:
     assert check.status == "mismatch"
     assert check.difference == Decimal("-100.00")
     assert check.running_mismatches == []
-    assert all("reconciliation" in t.low_confidence for t in statement.transactions)
+    # Each row's running balance agrees: no row is in doubt, the closing
+    # balance is what does not add up (and no balance is taken from it).
+    assert check.doubtful == []
+    assert not any("reconciliation" in t.low_confidence for t in statement.transactions)
+    assert statement.confidence["reconciliation"] == confidence.UNRECONCILED
+
+
+def test_the_rows_a_failed_check_leaves_in_doubt() -> None:
+    def rows(*pairs: tuple[str, str | None]) -> list[Row]:
+        return [Row(Decimal(a), Decimal(b) if b is not None else None) for a, b in pairs]
+
+    opening = Decimal("100.00")
+    # A printed balance that is not the one before plus the amount: that row.
+    printed = rows(("-10.00", "90.00"), ("-7.00", "80.00"), ("5.00", "85.00"))
+    assert doubtful_rows(opening, printed, Decimal("-3.00")) == [1]
+    # Rows without a balance between two balances are vouched for together ...
+    gap = rows(("-10.00", "90.00"), ("-4.00", None), ("-6.00", "80.00"), ("5.00", "85.00"))
+    assert doubtful_rows(opening, gap, None) == []
+    # ... or doubted together, when the balances do not agree over them.
+    off = rows(("-10.00", "90.00"), ("-4.00", None), ("-6.00", "81.00"), ("5.00", "86.00"))
+    assert doubtful_rows(opening, off, Decimal("-1.00")) == [1, 2]
+    # No opening balance: the first balance vouches for nothing.
+    assert doubtful_rows(None, printed, None) == [0, 1]
+    # No running balance at all: the row that is the whole difference, else every row.
+    plain = rows(("-10.00", None), ("-7.77", None), ("5.00", None))
+    assert doubtful_rows(opening, plain, Decimal("-7.77")) == [1]
+    assert doubtful_rows(opening, plain, Decimal("-2.00")) == [0, 1, 2]
+    twice = rows(("-7.77", None), ("-7.77", None))
+    assert doubtful_rows(opening, twice, Decimal("-7.77")) == [0, 1]
+
+
+@pytest.mark.parametrize("table", ["below", "beside"])
+def test_boxes_printed_side_by_side_do_not_break_the_table(table: str) -> None:
+    # Two summary boxes over a table printed across the page, and a summary
+    # box left of the table: the table is read whole either way.
+    stmt = synth.mock_savings_statement()
+    result = _parse(synth.side_by_side_pdf(stmt, table=table))  # type: ignore[arg-type]
+    assert result.parse is not None
+    assert result.parse.warnings == []
+    assert result.parse.skipped_lines == 0
+    statement = _only(result)
+    assert _rows(statement) == synth.expected(stmt)
+    assert statement.opening_balance is not None
+    assert statement.opening_balance.amount == stmt.opening_balance
+    check = statement.reconciliation
+    assert check is not None
+    assert check.status == "ok"
 
 
 def test_reconcile_function() -> None:

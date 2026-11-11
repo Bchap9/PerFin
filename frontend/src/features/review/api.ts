@@ -175,9 +175,188 @@ export function payloadDifferences(item: ReviewItem): Difference[] {
 }
 
 /**
+ * One activity section of a brokerage statement whose rows are not the
+ * total printed for them (payload ``sections``): the total's ``label``,
+ * what it prints, what the ``rows`` read add up to and the difference
+ * (computed - printed). ``source``: the section's own total line, or the
+ * statement's cash-flow summary.
+ */
+export interface SectionDifference {
+  label: string;
+  printed: string;
+  computed: string;
+  difference: string;
+  rows: number;
+  source: string | null;
+  page: number | null;
+}
+
+export function payloadSections(item: ReviewItem): SectionDifference[] {
+  const value: unknown = new Map(Object.entries(item.payload)).get("sections");
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  const out: SectionDifference[] = [];
+  for (const entry of value as unknown[]) {
+    if (typeof entry !== "object" || entry === null) {
+      continue;
+    }
+    const label = field(entry, "label");
+    const printed = field(entry, "printed");
+    const computed = field(entry, "computed");
+    const difference = field(entry, "difference");
+    const rows = field(entry, "rows");
+    const source = field(entry, "source");
+    const page = field(entry, "page");
+    if (
+      typeof label !== "string" ||
+      typeof printed !== "string" ||
+      typeof computed !== "string" ||
+      typeof difference !== "string"
+    ) {
+      continue;
+    }
+    out.push({
+      label,
+      printed,
+      computed,
+      difference,
+      rows: typeof rows === "number" ? rows : 0,
+      source: typeof source === "string" ? source : null,
+      page: typeof page === "number" ? page : null,
+    });
+  }
+  return out;
+}
+
+/**
+ * One activity line of a brokerage statement that is in doubt (payload
+ * ``lines``): where it is printed, what it says and why it is doubted
+ * (``fields``: ``reconciliation`` when no figure of the statement vouches
+ * for it, ``trade_date`` for a date outside the period, ...).
+ */
+export interface HeldLine {
+  index: number;
+  page: number | null;
+  date: string | null;
+  type: string | null;
+  description: string | null;
+  amount: string | null;
+  section: string | null;
+  fields: string[];
+}
+
+export function payloadLines(item: ReviewItem): HeldLine[] {
+  const value: unknown = new Map(Object.entries(item.payload)).get("lines");
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  const text = (entry: object, key: string): string | null => {
+    const found = field(entry, key);
+    return typeof found === "string" ? found : null;
+  };
+  const out: HeldLine[] = [];
+  for (const entry of value as unknown[]) {
+    if (typeof entry !== "object" || entry === null) {
+      continue;
+    }
+    const index = field(entry, "index");
+    const page = field(entry, "page");
+    const fields = field(entry, "fields");
+    if (typeof index !== "number") {
+      continue;
+    }
+    out.push({
+      index,
+      page: typeof page === "number" ? page : null,
+      date: text(entry, "date"),
+      type: text(entry, "type"),
+      description: text(entry, "description"),
+      amount: text(entry, "amount"),
+      section: text(entry, "section"),
+      fields: Array.isArray(fields)
+        ? fields.filter((f): f is string => typeof f === "string")
+        : [],
+    });
+  }
+  return out;
+}
+
+/**
+ * A holding of a brokerage statement that waits with its lines (payload
+ * ``positions``): its security is in doubt, so nothing of it was written.
+ */
+export interface HeldPosition {
+  index: number;
+  symbol: string | null;
+  name: string | null;
+  page: number | null;
+  fields: string[];
+}
+
+export function payloadPositions(item: ReviewItem): HeldPosition[] {
+  const value: unknown = new Map(Object.entries(item.payload)).get("positions");
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  const out: HeldPosition[] = [];
+  for (const entry of value as unknown[]) {
+    if (typeof entry !== "object" || entry === null) {
+      continue;
+    }
+    const index = field(entry, "index");
+    const symbol = field(entry, "symbol");
+    const name = field(entry, "name");
+    const page = field(entry, "page");
+    const fields = field(entry, "fields");
+    if (typeof index !== "number") {
+      continue;
+    }
+    out.push({
+      index,
+      symbol: typeof symbol === "string" ? symbol : null,
+      name: typeof name === "string" ? name : null,
+      page: typeof page === "number" ? page : null,
+      fields: Array.isArray(fields)
+        ? fields.filter((f): f is string => typeof f === "string")
+        : [],
+    });
+  }
+  return out;
+}
+
+/**
+ * The item's lines stand alone (none moves shares), so each can be
+ * imported or left out on its own (payload ``selectable``).
+ */
+export function linesSelectable(item: ReviewItem): boolean {
+  return (
+    new Map(Object.entries(item.payload)).get("selectable") === true &&
+    payloadLines(item).length > 1
+  );
+}
+
+/**
+ * The doubts a person settles by saying "import as read" (the server's
+ * ``CONFIRMABLE_DOUBTS``): whether the rows add up, and a kind of activity
+ * the optional local model suggested for words PerFin did not know.
+ */
+const CONFIRMABLE_DOUBTS: ReadonlySet<string> = new Set([
+  "reconciliation",
+  "suggested_type",
+]);
+
+/** The item's rows carry a kind the local model suggested (``suggested_type``). */
+export function hasSuggestedKinds(item: ReviewItem): boolean {
+  return payloadIds(item, "fields").includes("suggested_type");
+}
+
+/**
  * A brokerage statement held back by its figures that may be imported as
  * printed: one that did not add up, or one with nothing to check against
- * whose rows carry no other doubt (the server's ``acceptable_as_read``).
+ * (or the held lines of an imported one)
+ * whose rows carry no other doubt than those above (the server's
+ * ``acceptable_as_read``).
  * The item must name its statement (``statement_key``): the answer is for
  * that statement only, and an item raised before statements carried a key
  * is out of date (reprocess the document).
@@ -194,10 +373,19 @@ export function canImportAsRead(item: ReviewItem): boolean {
     return true;
   }
   const fields = payloadIds(item, "fields");
+  // A holding whose quantity x price is not its printed value carries the
+  // ``market_value`` doubt: settled the same way when that is the check
+  // that failed.
+  const valueDoubt = payloadIds(item, "failed").includes("positions");
   return (
-    reason === "investment_low_confidence" &&
-    fields.length === 1 &&
-    fields[0] === "reconciliation"
+    (reason === "investment_low_confidence" ||
+      reason === "investment_lines_held") &&
+    fields.length > 0 &&
+    fields.every(
+      (field) =>
+        CONFIRMABLE_DOUBTS.has(field) ||
+        (valueDoubt && field === "market_value"),
+    )
   );
 }
 
@@ -377,13 +565,19 @@ export function lowConfidenceResolution(
   };
 }
 
-/** "Import as read": the item's held brokerage statement, imported as printed. */
-export function importAsReadResolution(): Schemas["ResolveLowConfidence"] {
+/**
+ * "Import as read": the item's held brokerage statement, imported as printed.
+ * ``lines``: only these of the lines it lists (the others are left out).
+ */
+export function importAsReadResolution(
+  lines?: readonly number[],
+): Schemas["ResolveLowConfidence"] {
   return {
     kind: "low_confidence_field",
     transactions: [],
     confirm: false,
     import_as_read: true,
+    ...(lines === undefined ? {} : { lines: [...lines] }),
   };
 }
 

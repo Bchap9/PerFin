@@ -19,7 +19,9 @@ JSON document:
 5. ``parse``: document parsers on PDF/image pages (bank statements as
    read, and the investment statements per account: last four digits,
    period, positions and activity counts by type, reconciliation with the
-   failed checks); for tables the suggested
+   failed checks, each section's rows against its printed total, the rows
+   a failed check leaves in doubt and the statement's own summary
+   figures); for tables the suggested
    column mapping and the rows it reads, and for a brokerage activity export
    (``app.ingestion.parsers.brokerage_table``) the investment statements the
    importer would commit instead (per account: last four digits, rows by
@@ -364,6 +366,55 @@ def _investment_summary(statement: InvestmentStatement) -> dict[str, Any]:
             if check is not None
             else None
         ),
+        # Each section's rows against its printed total (or the cash-flow
+        # summary's line for it), and the rows a failed check leaves in doubt.
+        "sections": [
+            {
+                "label": section.label,
+                "status": section.status,
+                "source": section.source,
+                "rows": len(section.rows),
+                "printed": section.printed,
+                "computed": section.computed,
+                "difference": section.difference,
+                "page": section.page,
+            }
+            for section in (check.sections if check is not None else [])
+        ],
+        "doubtful": (
+            {
+                "activity": [
+                    {
+                        "index": index,
+                        "page": statement.activity[index].page,
+                        "section": statement.activity[index].section,
+                        "type": statement.activity[index].type,
+                        "date": statement.activity[index].trade_date,
+                        "amount": statement.activity[index].amount,
+                    }
+                    for index in check.doubtful_activity or []
+                ],
+                "positions": list(check.doubtful_positions or []),
+                "summary_cash_difference": check.summary_cash_difference,
+                "unread_summary_lines": list(check.unread_summary_lines),
+            }
+            if check is not None
+            else None
+        ),
+        # The statement's own summary tables (account value, cash flow, income,
+        # realized gains), line by line.
+        "figures": [
+            {
+                "group": figure.group,
+                "label": figure.label,
+                "role": figure.role,
+                "detail": figure.detail,
+                "amount": figure.amount,
+                "year_to_date": figure.year_to_date,
+                "page": figure.page,
+            }
+            for figure in statement.figures
+        ],
         "low_confidence_rows": sum(1 for a in statement.activity if a.low_confidence)
         + sum(1 for p in statement.positions if p.low_confidence),
         "confidence": statement.confidence,

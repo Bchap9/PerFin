@@ -8455,6 +8455,28 @@
         "title": "DocumentStatus",
         "type": "string"
       },
+      "DocumentSummary": {
+        "properties": {
+          "document_id": {
+            "format": "uuid",
+            "title": "Document Id",
+            "type": "string"
+          },
+          "statements": {
+            "items": {
+              "$ref": "#/components/schemas/StatementSummary"
+            },
+            "title": "Statements",
+            "type": "array"
+          }
+        },
+        "required": [
+          "document_id",
+          "statements"
+        ],
+        "title": "DocumentSummary",
+        "type": "object"
+      },
       "ExportOut": {
         "description": "An export job of the caller; ``counts`` per entity once ``ready``.",
         "properties": {
@@ -11076,6 +11098,75 @@
           "columns"
         ],
         "title": "LearnedTable",
+        "type": "object"
+      },
+      "LearnedWordingList": {
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/LearnedWordingOut"
+            },
+            "title": "Items",
+            "type": "array"
+          }
+        },
+        "required": [
+          "items"
+        ],
+        "title": "LearnedWordingList",
+        "type": "object"
+      },
+      "LearnedWordingOut": {
+        "description": "One phrase of a statement layout the household confirmed\n(``app.domain.imports.wording``): wording only, no digit, no name.",
+        "properties": {
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "kind": {
+            "title": "Kind",
+            "type": "string"
+          },
+          "layout": {
+            "title": "Layout",
+            "type": "string"
+          },
+          "learned_at": {
+            "format": "date-time",
+            "title": "Learned At",
+            "type": "string"
+          },
+          "learned_from_document_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Learned From Document Id"
+          },
+          "meaning": {
+            "title": "Meaning",
+            "type": "string"
+          },
+          "phrase": {
+            "title": "Phrase",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "layout",
+          "kind",
+          "phrase",
+          "meaning",
+          "learned_at",
+          "learned_from_document_id"
+        ],
+        "title": "LearnedWordingOut",
         "type": "object"
       },
       "LinkOfferOut": {
@@ -15971,6 +16062,22 @@
             "title": "Kind",
             "type": "string"
           },
+          "lines": {
+            "anyOf": [
+              {
+                "items": {
+                  "minimum": 0.0,
+                  "type": "integer"
+                },
+                "maxItems": 2000,
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Lines"
+          },
           "transactions": {
             "items": {
               "$ref": "#/components/schemas/TransactionFix"
@@ -20247,6 +20354,202 @@
         "title": "SplitSet",
         "type": "object"
       },
+      "StatementSummary": {
+        "description": "What one brokerage statement of a document says about itself.",
+        "properties": {
+          "activity": {
+            "title": "Activity",
+            "type": "integer"
+          },
+          "as_of": {
+            "anyOf": [
+              {
+                "format": "date",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "As Of"
+          },
+          "cash_closing": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cash Closing"
+          },
+          "cash_opening": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cash Opening"
+          },
+          "checks": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Checks",
+            "type": "array"
+          },
+          "currency": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Currency"
+          },
+          "failed": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Failed",
+            "type": "array"
+          },
+          "groups": {
+            "items": {
+              "$ref": "#/components/schemas/SummaryGroup"
+            },
+            "title": "Groups",
+            "type": "array"
+          },
+          "index": {
+            "title": "Index",
+            "type": "integer"
+          },
+          "last4": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last4"
+          },
+          "name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Name"
+          },
+          "period_end": {
+            "anyOf": [
+              {
+                "format": "date",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Period End"
+          },
+          "period_start": {
+            "anyOf": [
+              {
+                "format": "date",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Period Start"
+          },
+          "positions": {
+            "title": "Positions",
+            "type": "integer"
+          },
+          "positions_value": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Positions Value"
+          },
+          "reconciliation": {
+            "anyOf": [
+              {
+                "enum": [
+                  "ok",
+                  "mismatch",
+                  "unavailable"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reconciliation"
+          },
+          "sections": {
+            "items": {
+              "$ref": "#/components/schemas/SummarySection"
+            },
+            "title": "Sections",
+            "type": "array"
+          },
+          "total_value": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Total Value"
+          }
+        },
+        "required": [
+          "index",
+          "last4",
+          "name",
+          "currency",
+          "period_start",
+          "period_end",
+          "as_of",
+          "positions",
+          "activity",
+          "positions_value",
+          "cash_opening",
+          "cash_closing",
+          "total_value",
+          "reconciliation",
+          "checks",
+          "failed",
+          "groups",
+          "sections"
+        ],
+        "title": "StatementSummary",
+        "type": "object"
+      },
       "SubtypeOut": {
         "properties": {
           "code": {
@@ -20430,6 +20733,34 @@
         "title": "SummaryForm",
         "type": "object"
       },
+      "SummaryGroup": {
+        "description": "One summary table: the change in account value, the cash flow, income, realized gains.",
+        "properties": {
+          "group": {
+            "enum": [
+              "account_value",
+              "cash_flow",
+              "income",
+              "realized"
+            ],
+            "title": "Group",
+            "type": "string"
+          },
+          "lines": {
+            "items": {
+              "$ref": "#/components/schemas/SummaryLine"
+            },
+            "title": "Lines",
+            "type": "array"
+          }
+        },
+        "required": [
+          "group",
+          "lines"
+        ],
+        "title": "SummaryGroup",
+        "type": "object"
+      },
       "SummaryHint": {
         "properties": {
           "line": {
@@ -20464,6 +20795,158 @@
           "total"
         ],
         "title": "SummaryHint",
+        "type": "object"
+      },
+      "SummaryLine": {
+        "description": "One line of a summary table a statement prints (``StatementFigure``).",
+        "properties": {
+          "amount": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Amount"
+          },
+          "detail": {
+            "title": "Detail",
+            "type": "boolean"
+          },
+          "label": {
+            "title": "Label",
+            "type": "string"
+          },
+          "page": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Page"
+          },
+          "role": {
+            "enum": [
+              "opening",
+              "closing",
+              "total",
+              "item"
+            ],
+            "title": "Role",
+            "type": "string"
+          },
+          "year_to_date": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Year To Date"
+          }
+        },
+        "required": [
+          "label",
+          "role",
+          "detail",
+          "amount",
+          "year_to_date",
+          "page"
+        ],
+        "title": "SummaryLine",
+        "type": "object"
+      },
+      "SummarySection": {
+        "description": "An activity section's rows against the total the statement prints for them.",
+        "properties": {
+          "computed": {
+            "title": "Computed",
+            "type": "string"
+          },
+          "difference": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Difference"
+          },
+          "label": {
+            "title": "Label",
+            "type": "string"
+          },
+          "page": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Page"
+          },
+          "printed": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Printed"
+          },
+          "rows": {
+            "title": "Rows",
+            "type": "integer"
+          },
+          "source": {
+            "anyOf": [
+              {
+                "enum": [
+                  "total",
+                  "summary"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source"
+          },
+          "status": {
+            "enum": [
+              "ok",
+              "mismatch",
+              "unchecked"
+            ],
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "label",
+          "rows",
+          "status",
+          "printed",
+          "computed",
+          "difference",
+          "source",
+          "page"
+        ],
+        "title": "SummarySection",
         "type": "object"
       },
       "SystemAiOut": {
@@ -23616,7 +24099,7 @@
   },
   "info": {
     "title": "PerFin",
-    "version": "1.0.0-rc.6"
+    "version": "1.0.0-rc.7"
   },
   "openapi": "3.1.0",
   "paths": {
@@ -30064,6 +30547,63 @@
         ]
       }
     },
+    "/api/v1/documents/{document_id}/summary": {
+      "get": {
+        "operationId": "get_document_summary_api_v1_documents__document_id__summary_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "document_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Document Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DocumentSummary"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {}
+            },
+            "description": "Problem details"
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {}
+            },
+            "description": "Problem details"
+          },
+          "409": {
+            "content": {
+              "application/problem+json": {}
+            },
+            "description": "Problem details"
+          },
+          "422": {
+            "content": {
+              "application/problem+json": {}
+            },
+            "description": "Problem details"
+          }
+        },
+        "summary": "The summary tables a brokerage statement prints, per account (member or above)",
+        "tags": [
+          "imports"
+        ]
+      }
+    },
     "/api/v1/documents/{document_id}/teach": {
       "post": {
         "operationId": "post_teach_api_v1_documents__document_id__teach_post",
@@ -32472,6 +33012,77 @@
           }
         },
         "summary": "Change a column mapping (member or above)",
+        "tags": [
+          "imports"
+        ]
+      }
+    },
+    "/api/v1/imports/wording": {
+      "get": {
+        "operationId": "get_wording_api_v1_imports_wording_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LearnedWordingList"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Statement wording PerFin learned from suggestions a person confirmed",
+        "tags": [
+          "imports"
+        ]
+      }
+    },
+    "/api/v1/imports/wording/{wording_id}": {
+      "delete": {
+        "operationId": "delete_wording_api_v1_imports_wording__wording_id__delete",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "wording_id",
+            "required": true,
+            "schema": {
+              "pattern": "^[0-9a-f]{32}$",
+              "title": "Wording Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {}
+            },
+            "description": "Problem details"
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {}
+            },
+            "description": "Problem details"
+          },
+          "409": {
+            "content": {
+              "application/problem+json": {}
+            },
+            "description": "Problem details"
+          },
+          "422": {
+            "content": {
+              "application/problem+json": {}
+            },
+            "description": "Problem details"
+          }
+        },
+        "summary": "Forget a learned phrase (member or above)",
         "tags": [
           "imports"
         ]

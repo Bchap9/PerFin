@@ -30,6 +30,7 @@ from statistics import median
 from typing import ClassVar, Final, Literal
 
 from app.ingestion.parsers.text import MAX_LINE, normalise
+from app.ingestion.parsers.vocabulary import Vocabulary
 from app.ingestion.sandbox.protocol import (
     IMAGE_KINDS,
     ExtractResult,
@@ -251,6 +252,15 @@ class ParseOutcome:
     pending_items: int = 0
     skipped_lines: int = 0
     warnings: list[str] = field(default_factory=list)
+    #: Activity words a brokerage parser could not type
+    #: (:func:`app.ingestion.parsers.vocabulary.phrase_key` of each).
+    unknown_actions: list[str] = field(default_factory=list)
+    unknown_headings: list[str] = field(default_factory=list)
+    #: Column headings of activity tables whose header no parser could use
+    #: (:func:`app.ingestion.parsers.vocabulary.column_key` of each).
+    unknown_columns: list[str] = field(default_factory=list)
+    #: Accounts the document's index lists that no statement was read for.
+    unread_accounts: list[str] = field(default_factory=list)
     #: Pages and boxes of skipped lines where the parser knows them (review highlight).
     skipped_regions: list[tuple[int, tuple[float, float, float, float]]] = field(
         default_factory=list
@@ -290,3 +300,18 @@ class DocumentParser(ABC):
         ``date_order`` (``mdy``/``dmy``/``ymd``) is the classifier fingerprint's
         hint for a generic parser; a parser with a declared format ignores it.
         """
+
+    def parse_with(
+        self,
+        view: DocumentView,
+        *,
+        threshold: float,
+        date_order: str | None = None,
+        vocabulary: Vocabulary | None = None,
+    ) -> ParseOutcome:
+        """:meth:`parse` with the local model's suggested words (ADR-0010).
+
+        Only a parser that types rows by their words uses ``vocabulary``
+        (the brokerage parsers); any other reads the pages as it always does.
+        """
+        return self.parse(view, threshold=threshold, date_order=date_order)

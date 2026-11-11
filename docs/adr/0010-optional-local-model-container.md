@@ -50,6 +50,95 @@ keeps them as hard rules rather than as the absence of code.
   document as it would have been without the model; repeated failures stop
   calls for five minutes.
 
+## Amendment (2026-11-11): the model may be asked what kind of activity a phrase is
+
+Brokerage statements are read row by row by action words and section
+headings from fixed lists (INGESTION.md "Brokerage statements"). A row whose
+words are in none of them was left unread and reported, and the statement
+then did not add up. Naming such words is what a language model does well
+and a rule table does not, so the owner asked for the model to help there.
+The rules above hold unchanged; this adds one question under them.
+
+- **A second question, about wording.** When a brokerage parser could not
+  type some activity rows, the worker asks about the action phrases of those
+  rows and the headings above them (`POST /v1/vocabulary`): each normalised,
+  every digit masked, at most 40 of each, 80 characters each. With them it
+  sends the statement's text for the model to read them in (the owner's
+  decision: the model is local, and a phrase is far easier to name beside
+  the rows it stands on), capped like the first question's
+  (`PERFIN_ML_MAX_CHARS`), the pages that print the phrases first. Never
+  ledger data, never another document. It is asked only when the parser's
+  own vocabulary and the household's learned wording both failed, and an
+  answer kept on the document (`confidence.ml_vocabulary`) is used again
+  without asking.
+- **The model remembers nothing.** PerFin never trains or tunes the model
+  on what it sends. Every call stands alone (the adapter's prompt and that
+  one request: no earlier request, no conversation), and the adapter stores
+  nothing and logs no content. Whatever the model read in a statement, all
+  that returns is a kind per numbered phrase.
+- **Closed lists, matched by position.** For each numbered phrase the model
+  picks an activity type, for each heading a section kind, or `unknown`. The
+  adapter and then the worker (`app.ml.client.validated_vocabulary`) keep
+  only listed kinds and match them to the phrases PerFin sent by their
+  number, never by text the model returns. The lists hold no way to say "this
+  is not activity": a model cannot hide a table or a row, it can only
+  decline, and what it declines stays reported as unread, as without a model.
+- **A kind, never a figure.** The pages are read again by the same parser
+  with the suggested kinds. Dates, amounts, quantities, prices and
+  securities are the page's own, read exactly as for any other row, and the
+  statement's reconciliation runs over the result as always.
+- **Held until a person confirms.** A row typed this way carries the
+  `suggested_type` doubt, scored below any confidence threshold a deployment
+  may set. The importer never writes it: a line moving only cash waits in an
+  `investment_lines_held` item while the rest of its statement is imported,
+  a line moving units waits there with its security's position and other
+  lines. The review queue shows each such
+  line with the kind suggested, marked as the model's, and "Import as read"
+  is the person's confirmation.
+
+- **The whole statement, in bounded calls.** One call carries
+  `PERFIN_ML_MAX_CHARS` of text. A longer statement is asked about in
+  several calls, each phrase with the page that prints it and the pages
+  that print none left out, at most six calls a document
+  (`pipeline._vocabulary_batches`). Every call stands alone; no answer is
+  carried into the next.
+- **Column headings, the same way.** When a table's header names no column
+  the parser knows as the date or the amount, its unknown heading cells
+  (words, no digits) are a third numbered list. The model picks what each
+  names from a closed list of column roles or `unknown`. It cannot hide a
+  column (there is no such role), and a heading the parser's own
+  vocabulary knows keeps the parser's meaning whatever the answer. The
+  parser then reads the table through its ordinary header rules, and every
+  row of a table read through a suggested heading carries the
+  `suggested_type` doubt and waits for a person. The question is asked
+  only about a document a brokerage parser is already reading.
+- **Measured, not assumed.** `perfin ml eval` asks the configured adapter
+  about the parsers' own vocabulary (no statement text, nothing personal)
+  and reports how often the model agrees. It is a first measure of a
+  model, not a gate: a suggestion is held for a person whatever the score.
+
+- **Only layout is remembered, and only once a person confirmed it.**
+  "Import as read" on rows the model typed keeps the *wording* for the
+  household (`app.domain.imports.wording`, one household setting), so the
+  next statement of that layout is read without the model and without a
+  question. What is kept is a phrase and its kind, for that layout: a
+  section's heading, the action words of a table that names its
+  securities in a column of their own, or a table's column heading and the
+  role it names. Never the free text of a cash table
+  (a payee, a merchant, a memo), never a digit (masked in the key), never a
+  phrase the household's scrubber would mask (a member's or the household's
+  name, an address, a stored account number), and no amount, date,
+  security or account of the statement it was learned from. A suggestion
+  nobody confirmed teaches nothing. Everything kept is listed under "What
+  PerFin has learned" and can be forgotten there (`GET` / `DELETE
+  /imports/wording`), both audited without the phrases.
+
+Rejected for this step: letting the model extract rows or figures (they
+could not be told from the page's), free-text explanations shown in the
+review queue (a crafted statement could put advice there), letting an
+arithmetic match alone stand in for a person's confirmation, and
+remembering anything a statement says beyond its wording.
+
 ## Alternatives considered
 - **Keep no model at all (ADR-0007).** The owner's hardware and the review
   load argue for the option; the rules above keep its risks bounded.

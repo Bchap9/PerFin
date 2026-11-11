@@ -10,6 +10,10 @@
   PerFin ("Remember this layout", "Teach PerFin"), as the classifier uses
   them. ``DELETE /imports/layouts/{id}``: member or above; forgets every
   version of that layout (``app.domain.imports.layouts``).
+* ``GET /imports/wording``: any role; the statement wording the household
+  confirmed after the local model suggested what it means (phrases without
+  digits or names, ``app.domain.imports.wording``). ``DELETE
+  /imports/wording/{id}``: member or above; forgets one phrase.
 * ``GET /imports/{document_id}/preview``: any role that can see the
   document; the extracted tables/statements stored by the sandbox, never
   re-parsed, with the matching saved mapping and a suggested one.
@@ -20,6 +24,10 @@
   the document; the accounts the document names, matched or proposed, and
   the choice of an existing or new account for each
   (``app.domain.imports.proposals``).
+* ``GET /documents/{document_id}/summary``: the same people; the summary
+  tables a brokerage statement prints (change in account value, cash flow,
+  income, realized gains) and each activity section against its printed
+  total, per account of the document (``app.domain.imports.summary``).
 
 Tokens need ``documents:read`` / ``documents:write``.
 """
@@ -29,7 +37,7 @@ from __future__ import annotations
 import uuid
 from typing import Annotated, Any
 
-from fastapi import APIRouter, Depends, Query, Request, Response, status
+from fastapi import APIRouter, Depends, Path, Query, Request, Response, status
 
 from app.api.routers.accounts import PROBLEMS, scoped_role
 from app.auth.deps import DbSession
@@ -37,7 +45,7 @@ from app.auth.models import HouseholdRole
 from app.auth.principal import Principal
 from app.core.idempotency import IdempotencyKeyHeader, idempotent, payload_of
 from app.domain.documents.service import get_visible_document
-from app.domain.imports import layouts, proposals, service
+from app.domain.imports import layouts, proposals, service, summary, wording
 from app.domain.imports.schemas import (
     DEFAULT_PAGE,
     MAX_PAGE,
@@ -47,9 +55,11 @@ from app.domain.imports.schemas import (
     DocumentAccounts,
     DocumentAccountsApplied,
     DocumentAccountsApply,
+    DocumentSummary,
     ImportAccepted,
     ImportPreview,
     LearnedLayoutList,
+    LearnedWordingList,
     MappingCreate,
     MappingOut,
     MappingPage,
@@ -176,6 +186,31 @@ def delete_layout(
 
 
 @router.get(
+    "/imports/wording",
+    response_model=LearnedWordingList,
+    summary="Statement wording PerFin learned from suggestions a person confirmed",
+)
+def get_wording(db: DbSession, principal: Reader) -> LearnedWordingList:
+    return wording.list_wording(db, principal)
+
+
+@router.delete(
+    "/imports/wording/{wording_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+    responses=PROBLEMS,
+    summary="Forget a learned phrase (member or above)",
+)
+def delete_wording(
+    wording_id: Annotated[str, Path(pattern="^[0-9a-f]{32}$")],
+    request: Request,
+    db: DbSession,
+    principal: Writer,
+) -> Response:
+    wording.forget_wording(db, principal, wording_id, request=request)
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
+@router.get(
     "/imports/{document_id}/preview",
     response_model=ImportPreview,
     responses=PROBLEMS,
@@ -227,6 +262,18 @@ def get_document_accounts(
     document_id: uuid.UUID, db: DbSession, principal: DocumentWriter
 ) -> DocumentAccounts:
     return proposals.detect_accounts(db, principal, document_id)
+
+
+@router.get(
+    "/documents/{document_id}/summary",
+    response_model=DocumentSummary,
+    responses=PROBLEMS,
+    summary="The summary tables a brokerage statement prints, per account (member or above)",
+)
+def get_document_summary(
+    document_id: uuid.UUID, db: DbSession, principal: DocumentWriter
+) -> DocumentSummary:
+    return summary.document_summary(db, principal, document_id)
 
 
 @router.post(

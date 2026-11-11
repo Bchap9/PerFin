@@ -277,6 +277,36 @@ need it ([PORTABILITY.md](PORTABILITY.md)).
 
 ## Notes for specific releases
 
+### 1.0.0-rc.7
+
+- No migration and no new settings.
+- Statement parsers changed (`brokerage_statement_generic` 8,
+  `fidelity_investments_statement` 7, `placeholder_brokerage` 6,
+  `statement_generic` and `card_statement_generic` 6, the institution
+  layouts 4). Documents already imported are not touched. A document that is
+  processed again (a held statement in the review queue, "Process again")
+  is read by the new parsers and may be held differently: a brokerage
+  statement that was held whole is now imported except for the lines or the
+  security in doubt, and a bank statement that does not add up keeps only
+  the rows its running balance does not vouch for as pending.
+- Review items raised by an earlier release stay as they are. To get the
+  new per-line items for a statement that is still held, use "Process
+  again" on it.
+- A brokerage account's first statement now also records the value the
+  statement opens with, as a balance for the day before its period.
+  Accounts that already have statements imported are not changed.
+- A statement with a short position no longer imports that security's
+  trades as ordinary purchases and sales. If an earlier import left a
+  holding for a security you only hold short, remove it by hand.
+- The local model (`ml` profile): the worker and the `perfin-ml` adapter
+  must be the same release, since the adapter's `/v1/vocabulary` answer
+  gained a `columns` list. A long statement now makes up to six calls to
+  the model instead of one. `perfin ml eval` measures a model before you
+  rely on its suggestions.
+- New endpoint: `GET /documents/{id}/summary` (`documents:write`).
+  `POST /review/{id}/resolve` accepts `lines` with `import_as_read`; the
+  wording list may hold the kind `column`. No endpoint changed shape.
+
 ### 1.0.0-rc.6
 
 - No migration and no new settings.

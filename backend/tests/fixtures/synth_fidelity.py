@@ -35,7 +35,9 @@ only because the layout's fingerprint is that name.
 * Tampering (SECURITY.md C12) of one account (``tamper_account``):
   ``"total"`` misprints its ending account value, ``"market_value"`` one
   position's market value, ``"extra_row"`` adds a buy its cash does not
-  reflect.
+  reflect, ``"misprinted_row"`` prints its deposit :data:`MISPRINT` too
+  high while the *Deposits* total and the cash stay what they were (one
+  line of one section that does not add up).
 
 :func:`expected_activity` / :func:`expected_positions` give what the
 parser must return for an account.
@@ -46,7 +48,7 @@ from __future__ import annotations
 import io
 import random
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import date, timedelta
 from decimal import ROUND_HALF_EVEN, Decimal
 from typing import Final, Literal
@@ -62,7 +64,7 @@ FONT = "Helvetica"
 BOLD = "Helvetica-Bold"
 DISCLAIMER: Final = "Synthetic test document from the PerFin test suite. Not a real statement."
 
-Tamper = Literal["total", "market_value", "extra_row"] | None
+Tamper = Literal["total", "market_value", "extra_row", "misprinted_row"] | None
 Table = Literal["trades", "income", "deposits", "withdrawals", "fees", "other_in"]
 Type = Literal[
     "buy",
@@ -339,10 +341,17 @@ FORGED: Final = FidActivity(
 )
 
 
+#: What a ``tamper="misprinted_row"`` account's deposit prints too much.
+MISPRINT: Final = Decimal("30.00")
+
+
 def _printed_activity(account: FidAccount, tamper: Tamper) -> list[FidActivity]:
     rows = list(account.activity)
     if tamper == "extra_row":
         rows = sorted([*rows, FORGED], key=lambda a: a.day)
+    if tamper == "misprinted_row":
+        index = next(i for i, a in enumerate(rows) if a.table == "deposits")
+        rows[index] = replace(rows[index], amount=rows[index].amount + MISPRINT)
     return rows
 
 
@@ -440,6 +449,8 @@ class _Writer:
         self.y = 0.0
         self.account: FidAccount | None = None
         self.header: Callable[[], None] | None = None
+        #: The date and amount headings of the cash tables.
+        self.cash_columns: tuple[str, str] = ("Date", "Amount")
 
     # -- pages --------------------------------------------------------------
 
@@ -706,10 +717,11 @@ def _security_rows(w: _Writer, rows: list[FidActivity], *, cost: bool) -> None:
 
 
 def _cash_header(w: _Writer, *, reference: bool) -> None:
-    left = {D_DATE: "Date", D_DESC: "Description"}
+    date_word, amount_word = w.cash_columns
+    left = {D_DATE: date_word, D_DESC: "Description"}
     if reference:
         left[D_REF] = "Reference"
-    w.cells(left, {D_AMOUNT: "Amount"}, font=BOLD)
+    w.cells(left, {D_AMOUNT: amount_word}, font=BOLD)
 
 
 def _cash_rows(w: _Writer, rows: list[FidActivity], *, reference: bool) -> None:
@@ -721,7 +733,15 @@ def _cash_rows(w: _Writer, rows: list[FidActivity], *, reference: bool) -> None:
         w.cells(left, {D_AMOUNT: _money_text(a.amount)})
 
 
-def _activity(w: _Writer, account: FidAccount, rows: list[FidActivity]) -> None:
+def _activity(
+    w: _Writer,
+    account: FidAccount,
+    rows: list[FidActivity],
+    *,
+    true_totals: bool = False,
+) -> None:
+    """The activity tables; ``true_totals``: each total is the account's own
+    rows' (not the printed rows': a misprinted row is not in its total)."""
     w.bold("Activity")
     sections: list[tuple[str, Table]] = [
         ("Securities Bought & Sold", "trades"),
@@ -746,9 +766,10 @@ def _activity(w: _Writer, account: FidAccount, rows: list[FidActivity]) -> None:
             w.header = lambda reference=reference: _cash_header(w, reference=reference)
             _cash_header(w, reference=reference)
             _cash_rows(w, chosen, reference=reference)
+        summed = [a for a in account.activity if a.table == table] if true_totals else chosen
         w.cells(
             {A_DATE: f"Total {title}"},
-            {A_AMOUNT: _money_text(sum((a.amount for a in chosen), Decimal(0)))},
+            {A_AMOUNT: _money_text(sum((a.amount for a in summed), Decimal(0)))},
         )
         w.header = None
         w.y -= 4
@@ -807,11 +828,25 @@ def fidelity_pdf(
     generic: bool = False,
     page_bottom: float = BOTTOM,
     ruled: bool = False,
+    without_pages: int | None = None,
+    without_summary: int | None = None,
+    cash_columns: tuple[str, str] | None = None,
 ) -> bytes:
-    """The statement as a PDF (module doc)."""
+    """The statement as a PDF (module doc).
+
+    ``without_pages``: this account is listed by the overview's index and its
+    own pages are missing; ``without_summary``: this account's pages print
+    no account summary (its value is printed by the index alone);
+    ``cash_columns``: the headings of the cash tables' date and amount
+    columns (words no parser knows: ``("Posted", "Money In/Out")``).
+    """
     w = _Writer(stmt, generic=generic, bottom=page_bottom, ruled=ruled)
+    if cash_columns is not None:
+        w.cash_columns = cash_columns
     _overview(w, stmt.accounts)
     for index, account in enumerate(stmt.accounts):
+        if index == without_pages:
+            continue
         mark = tamper if index == tamper_account else None
         values = [p.market_value for p in account.positions]
         if mark == "market_value":
@@ -820,7 +855,10 @@ def fidelity_pdf(
         if mark == "total":
             total += Decimal("250.00")
         w.new_page(account)
-        _summary(w, account, total)
+        if index != without_summary:
+            _summary(w, account, total)
         _holdings(w, account, values)
-        _activity(w, account, _printed_activity(account, mark))
+        _activity(
+            w, account, _printed_activity(account, mark), true_totals=mark == "misprinted_row"
+        )
     return w.finish()

@@ -628,8 +628,13 @@ def test_the_account_index() -> None:
     )
     infos, used = read_index(lines)
     assert infos == {
-        "0001": AccountInfo("0001", "Individual - TOD", "brokerage", "individual"),
-        "0002": AccountInfo("0002", "Rollover IRA", "retirement", "rollover_ira"),
+        "0001": AccountInfo(
+            "0001", "Individual - TOD", "brokerage", "individual", ending_value=Decimal("5.00")
+        ),
+        "0002": AccountInfo(
+            "0002", "Rollover IRA", "retirement", "rollover_ira", ending_value=Decimal("6.00")
+        ),
+        # A row that prints no value has none (never the next row's).
         "0003": AccountInfo("0003", "Education Account", "brokerage", "education_529"),
     }
     assert {lines[i].text for i in used} >= {"GENERAL INVESTMENTS", "EDUCATION (529) ACCOUNTS"}

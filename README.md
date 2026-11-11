@@ -21,7 +21,7 @@ tax documents from one place, with ingestion that does most of the work for you:
 upload a statement, drop a file into a watched folder, or forward a receipt by
 email, and PerFin works out what it is looking at and files it away.
 
-> Status: **1.0.0 release candidate**, tagged `v1.0.0-rc.6`. Every roadmap phase
+> Status: **1.0.0 release candidate**, tagged `v1.0.0-rc.7`. Every roadmap phase
 > (0-7) is implemented: login with MFA, WebAuthn and OIDC, households and
 > account grants; the ledger (accounts, transactions, rules, budgets, goals,
 > reports); smart ingestion of CSV/OFX/QIF/XLSX, text-layer and scanned PDFs,
@@ -43,7 +43,8 @@ email, and PerFin works out what it is looking at and files it away.
   third-party sync, and no hosted model calls: files, account numbers and
   personal details have no code path off the premises. An optional local model
   container (`ml`/`ml-cuda` profiles, like Immich's machine learning) can
-  suggest what an unfamiliar document is; it must run on your own network,
+  suggest what an unfamiliar document is and what kind of activity an
+  unfamiliar wording on a statement is; it must run on your own network,
   and a person confirms everything it suggests ([docs/ML.md](docs/ML.md),
   ADR-0010).
 - **AI help without identity exposure.** An optional read-only MCP server

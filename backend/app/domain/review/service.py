@@ -51,13 +51,15 @@ editable by the caller as well. A closed item is ``409 review-item-closed``.
   their account, audited) and, with ``confirm``, the item's pending rows
   become ``confirmed`` (a ``reconciliation_*`` item: every pending row of
   the document on the item's account). ``import_as_read`` answers a
-  brokerage statement held back by its figures
+  brokerage statement, or the lines of one, held back by its figures
   (``investment_reconciliation_failed``, or ``investment_low_confidence``
-  whose only doubt is ``reconciliation``:
+  / ``investment_lines_held`` whose only doubt is ``reconciliation``:
   :func:`app.domain.investments.statement_import.acceptable_as_read`; any
   other item is ``422``): the item's statement is imported into the item's
   account as printed, without a balance snapshot. Needs edit on the
-  account.
+  account. It is also the confirmation of any kind the local model
+  suggested for the statement's rows, whose wording is then kept for the
+  household (:func:`_remember_wording`).
 
 **Importing a held statement again** ("import anyway", "import as read")
 goes through one path (:func:`_import_statement_again`). The answer is
@@ -87,7 +89,7 @@ and emits ``review.resolved`` / ``review.dismissed``.
 from __future__ import annotations
 
 import uuid
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from datetime import date
 from typing import Any, Final
 
@@ -122,7 +124,7 @@ from app.domain.documents.models import (
 from app.domain.documents.service import visible_document_filter
 from app.domain.dropfolder import service as dropfolder_service
 from app.domain.imports import service as imports_service
-from app.domain.imports import statement_answers, statement_records
+from app.domain.imports import statement_answers, statement_records, wording
 from app.domain.imports.schemas import ApplyMapping, AssignmentTarget, MappingUpdate
 from app.domain.investments import statement_import
 from app.domain.review import assist, repo
@@ -871,19 +873,46 @@ def confirm_pending(
     return count
 
 
+def _chosen_lines(payload: Mapping[str, Any], lines: Sequence[int] | None) -> list[int] | None:
+    """The lines of the item an answer names, checked against what it listed.
+
+    Only an item whose lines stand alone (``selectable``: none moves units)
+    can be answered line by line, and only with lines it lists.
+    """
+    if lines is None:
+        return None
+    listed = {
+        entry.get("index")
+        for entry in payload.get("lines") or []
+        if isinstance(entry, dict) and isinstance(entry.get("index"), int)
+    }
+    if payload.get("selectable") is not True:
+        raise _invalid("The lines of this item can only be imported together.")
+    if not lines or not set(lines) <= listed:
+        raise _invalid("Name at least one of the lines this item lists.")
+    return sorted(set(lines))
+
+
 def _import_as_read(
     db: Session,
     principal: Principal,
     item: ReviewItem,
     request: HTTPConnection | None,
+    *,
+    lines: Sequence[int] | None = None,
 ) -> dict[str, Any]:
-    """Import a held brokerage statement as printed (module doc)."""
+    """Import a held brokerage statement as printed (module doc).
+
+    ``lines``: only these lines of the item (:func:`_chosen_lines`); the
+    others it lists are left out, and no item is raised for them again.
+    """
     payload = item.payload or {}
     if not statement_import.acceptable_as_read(payload):
         raise _invalid(
             "Only a brokerage statement held back because its figures do not add up "
             "can be imported as read."
         )
+    chosen = _chosen_lines(payload, lines)
     document = _document(db, item)
     account_id = _uuid(payload.get("account_id"))
     if account_id is None:
@@ -905,7 +934,47 @@ def _import_as_read(
         "reason": payload.get("reason"),
         "failed": [f for f in failed if isinstance(f, str)] if isinstance(failed, list) else [],
         "snapshot": False,
+        **({statement_answers.LINES_FIELD: chosen} if chosen is not None else {}),
+        **_remember_wording(db, principal, document, rerun, request, lines=chosen),
     }
+
+
+def _remember_wording(
+    db: Session,
+    principal: Principal,
+    document: Document,
+    answered: Mapping[str, Any],
+    request: HTTPConnection | None,
+    *,
+    lines: Sequence[int] | None = None,
+) -> dict[str, Any]:
+    """Keep the wording whose suggested kinds this answer confirmed (ADR-0010).
+
+    "Import as read" on a statement with rows the local model typed is the
+    person's confirmation of those kinds; the wording (a heading, a
+    broker's action words: never a detail of the statement) is kept for the
+    household's later statements of that layout
+    (``app.domain.imports.wording``). ``{"wording_learned": n}`` when any was.
+    """
+    key = answered.get(statement_answers.KEY_FIELD)
+    statement = next(
+        (
+            s
+            for s in imports_service.stored_investments(document, db)
+            if statement_answers.statement_key(s) == key
+        ),
+        None,
+    )
+    if statement is None:
+        return {}
+    if lines is not None:
+        # Only the lines the person chose were confirmed.
+        chosen = set(lines)
+        statement = statement.model_copy(
+            update={"activity": [a for i, a in enumerate(statement.activity) if i in chosen]}
+        )
+    learned = wording.remember_confirmed(db, principal, document, statement, request=request)
+    return {"wording_learned": learned} if learned else {}
 
 
 def _resolve_low_confidence(
@@ -916,7 +985,7 @@ def _resolve_low_confidence(
     request: HTTPConnection | None,
 ) -> dict[str, Any]:
     if body.import_as_read:
-        return _import_as_read(db, principal, item, request)
+        return _import_as_read(db, principal, item, request, lines=body.lines)
     document = _document(db, item)
     corrected = apply_fixes(db, principal, document, body.transactions, request=request)
     confirmed: list[uuid.UUID] = []

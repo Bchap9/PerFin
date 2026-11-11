@@ -20,8 +20,9 @@ import pytest
 from sqlalchemy import select
 
 from app.auth.models import GrantLevel
+from app.core import clock
 from app.core.settings import Settings
-from app.db.models import AuditLog, Event, Job
+from app.db.models import AuditLog, Event, Job, Setting, SettingScope
 from app.db.rls import set_context
 from app.domain.accounts.models import Account
 from app.domain.documents.models import (
@@ -32,6 +33,7 @@ from app.domain.documents.models import (
     ReviewItemState,
     ReviewKind,
 )
+from app.domain.imports import wording
 from app.domain.imports.schemas import APPLY_MAPPING_JOB_TYPE
 from app.domain.transactions.models import Transaction
 from app.ingestion.parsers.structured import header_fingerprint
@@ -664,3 +666,115 @@ def test_learned_layouts_are_listed_and_forgotten_whole(
             "taught": True,
         }
     assert owner.request("DELETE", f"{LAYOUTS}/{taught}").status_code == 404
+
+
+# ---------------------------------------------------------------------------
+# Learned wording: what a confirmed suggestion taught, to look at and to forget
+# ---------------------------------------------------------------------------
+
+WORDING = f"{API}/imports/wording"
+
+
+def _teach(factories: Factories, household_id: uuid.UUID, *phrases: tuple[str, str, str]) -> None:
+    with factories.transaction() as db:
+        set_context(db, household_id)
+        row = wording._row(db, household_id)
+        entries = [
+            wording.Entry("example-brokerage", kind, phrase, meaning, clock.utcnow())  # type: ignore[arg-type]
+            for kind, phrase, meaning in phrases
+        ]
+        wording._save(db, household_id, row, [*wording._entries(row), *entries])
+
+
+def test_learned_wording_is_listed_and_forgotten(actors: Actors, factories: Factories) -> None:
+    owner = actors.new(role="owner")
+    household_id = _hh(owner.record)
+    assert owner.get(WORDING).json() == {"items": []}
+    _teach(
+        factories,
+        household_id,
+        ("action", "periodic investment plan", "buy"),
+        ("section", "sweep program activity", "cash"),
+    )
+    items = owner.get(WORDING).json()["items"]
+    assert {(i["kind"], i["phrase"], i["meaning"], i["layout"]) for i in items} == {
+        ("action", "periodic investment plan", "buy", "example-brokerage"),
+        ("section", "sweep program activity", "cash", "example-brokerage"),
+    }
+    by_phrase = {i["phrase"]: i["id"] for i in items}
+
+    # A viewer may look, not forget; another household sees and reaches nothing.
+    viewer = _member_of(actors, owner.record, role="viewer")
+    assert len(viewer.get(WORDING).json()["items"]) == 2
+    target = by_phrase["periodic investment plan"]
+    assert viewer.request("DELETE", f"{WORDING}/{target}").status_code == 403
+    intruder = actors.new(role="owner")
+    assert intruder.get(WORDING).json() == {"items": []}
+    refused = intruder.request("DELETE", f"{WORDING}/{target}")
+    assert refused.status_code == 404
+    assert problem_type(refused) == "wording-not-found"
+    assert owner.request("DELETE", f"{WORDING}/not-an-id").status_code == 422
+
+    assert owner.request("DELETE", f"{WORDING}/{target}").status_code == 204
+    assert [i["phrase"] for i in owner.get(WORDING).json()["items"]] == ["sweep program activity"]
+    assert owner.request("DELETE", f"{WORDING}/{target}").status_code == 404
+
+
+def test_stored_wording_that_is_not_wording_is_never_served(
+    actors: Actors, factories: Factories
+) -> None:
+    """The store is checked again on every read: only phrases PerFin would have kept."""
+    owner = actors.new(role="owner")
+    household_id = _hh(owner.record)
+    now = clock.utcnow().isoformat()
+    with factories.transaction() as db:
+        set_context(db, household_id)
+        db.add(
+            Setting(
+                scope=SettingScope.HOUSEHOLD,
+                scope_id=household_id,
+                key=wording.SETTING_KEY,
+                value={
+                    "version": 1,
+                    "entries": [
+                        {
+                            "layout": "x",
+                            "kind": "action",
+                            "phrase": "Account 123-456789",
+                            "meaning": "buy",
+                            "learned_at": now,
+                        },
+                        {
+                            "layout": "x",
+                            "kind": "section",
+                            "phrase": "estimated cash flow",
+                            "meaning": "skip",
+                            "learned_at": now,
+                        },
+                        {
+                            "layout": "x",
+                            "kind": "action",
+                            "phrase": "stock split",
+                            "meaning": "split",
+                            "learned_at": now,
+                        },
+                        {
+                            "layout": "x",
+                            "kind": "action",
+                            "phrase": "periodic investment plan",
+                            "meaning": "buy",
+                            "learned_at": "soon",
+                        },
+                        {
+                            "layout": "x",
+                            "kind": "action",
+                            "phrase": "dividend sweep",
+                            "meaning": "dividend",
+                            "learned_at": now,
+                        },
+                        "noise",
+                    ],
+                },
+            )
+        )
+    assert [i["phrase"] for i in owner.get(WORDING).json()["items"]] == ["dividend sweep"]

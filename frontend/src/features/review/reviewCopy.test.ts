@@ -49,6 +49,10 @@ const REASONS: readonly [ReviewItem["kind"], string][] = [
   ["low_confidence_field", "investment_possible_duplicate"],
   ["low_confidence_field", "investment_low_confidence"],
   ["low_confidence_field", "investment_reconciliation_failed"],
+  ["low_confidence_field", "investment_lines_held"],
+  ["low_confidence_field", "investment_figures_differ"],
+  ["low_confidence_field", "investment_short_position"],
+  ["low_confidence_field", "accounts_not_read"],
   ["low_confidence_field", "position_mismatch"],
   ["possible_duplicate", "statement_overlap"],
   ["possible_duplicate", "same_content"],
@@ -134,6 +138,131 @@ describe("review explanations", () => {
     );
   });
 
+  it("names the section that does not add up and the lines held for it", () => {
+    const found = explain(
+      item("low_confidence_field", {
+        reason: "investment_lines_held",
+        statement_key: "k".repeat(64),
+        currency: "USD",
+        fields: ["reconciliation"],
+        held: 4,
+        imported: 31,
+        sections: [
+          {
+            label: "Total Checking Activity",
+            printed: "-2443.210000",
+            computed: "-2042.640000",
+            difference: "400.570000",
+            rows: 4,
+            source: "total",
+            page: 9,
+          },
+        ],
+        unread_summary_lines: ["Margin Interest"],
+        lines: [],
+      }),
+    );
+    expect(found.title).toBe("A few lines need a look");
+    expect(found.what).toContain(
+      "The holdings and the other 31 activity lines were imported; 4 lines of this statement were held back",
+    );
+    expect(found.what).toContain(
+      "Total Checking Activity: the statement prints -$2,443.21; the 4 lines read add up to -$2,042.64 (a difference of $400.57).",
+    );
+    expect(found.what).toContain(
+      "cash-flow summary also lists Margin Interest, for which no lines were read.",
+    );
+    expect(found.steps.some((step) => step.startsWith("“Import as read”"))).toBe(
+      true,
+    );
+  });
+
+  it("does not offer to import a line with another doubt as read", () => {
+    const found = explain(
+      item("low_confidence_field", {
+        reason: "investment_lines_held",
+        statement_key: "k".repeat(64),
+        fields: ["reconciliation", "trade_date"],
+        held: 1,
+        imported: 0,
+      }),
+    );
+    expect(found.what).toContain(
+      "The holdings were imported; 1 line of this statement was held back because the statement's own totals do not vouch for it.",
+    );
+    expect(found.steps.some((step) => step.startsWith("“Import as read”"))).toBe(
+      false,
+    );
+  });
+
+  it("says which lines carry a kind the local model suggested", () => {
+    const held = explain(
+      item("low_confidence_field", {
+        reason: "investment_lines_held",
+        statement_key: "k".repeat(64),
+        fields: ["suggested_type"],
+        held: 2,
+        imported: 12,
+      }),
+    );
+    expect(held.title).toBe("Check what the local model suggested");
+    expect(held.what).toContain(
+      "The holdings and the other 12 activity lines were imported; PerFin did not know the wording of 2 lines of this statement, so the local model suggested what kind of activity they are",
+    );
+    expect(held.why).toContain("never records a kind of activity on a model's word");
+    expect(held.steps.some((step) => step.startsWith("“Import as read”"))).toBe(
+      true,
+    );
+    // A line moving shares holds its statement: nothing imported yet.
+    const whole = explain(
+      item("low_confidence_field", {
+        reason: "investment_low_confidence",
+        statement_key: "k".repeat(64),
+        fields: ["suggested_type"],
+        lines: [{ index: 3, fields: ["suggested_type"], type: "buy" }],
+      }),
+    );
+    expect(whole.title).toBe("Check what the local model suggested");
+    expect(whole.what).toContain("1 line of this statement");
+    expect(whole.what).toContain("nothing of the statement was imported yet");
+    expect(whole.steps.some((step) => step.startsWith("“Import as read”"))).toBe(
+      true,
+    );
+    // Beside another doubt the suggestion cannot be confirmed on a click.
+    const dated = explain(
+      item("low_confidence_field", {
+        reason: "investment_low_confidence",
+        statement_key: "k".repeat(64),
+        fields: ["suggested_type", "trade_date"],
+      }),
+    );
+    expect(dated.title).toBe("Dates may be wrong");
+  });
+
+  it("says a statement was imported although its totals disagree", () => {
+    const found = explain(
+      item("low_confidence_field", {
+        reason: "investment_figures_differ",
+        statement_key: "k".repeat(64),
+        currency: "USD",
+        differences: [
+          {
+            check: "total_value",
+            printed: "50000.000000",
+            computed: "50250.000000",
+            difference: "250.000000",
+          },
+        ],
+      }),
+    );
+    expect(found.title).toBe("Statement imported; its totals disagree");
+    expect(found.what).toContain("so it was imported and nothing waits on you.");
+    expect(found.what).toContain("a difference of $250.00");
+    expect(found.steps.some((step) => step.startsWith("“Import as read”"))).toBe(
+      false,
+    );
+  });
+
   it("offers the 'import as read' step only on an item naming its statement", () => {
     const steps = (payload: Record<string, unknown>) =>
       explain(item("low_confidence_field", payload)).steps;
@@ -211,5 +340,91 @@ describe("review explanations", () => {
     expect(
       explain(item("rejected_email", { reason: "daily_digest" })).what,
     ).toBe("This email was not accepted.");
+  });
+});
+
+describe("what the import says about rows and accounts", () => {
+  it("says how many rows of a bank statement wait", () => {
+    const some = explain(
+      item("low_confidence_field", {
+        reason: "reconciliation_failed",
+        rows_in_doubt: 1,
+        rows_total: 24,
+      }),
+    );
+    expect(some.why).toContain("the other 23 rows");
+    expect(some.why).toContain("only 1 row is pending");
+    const none = explain(
+      item("low_confidence_field", {
+        reason: "reconciliation_failed",
+        rows_in_doubt: 0,
+        rows_total: 24,
+      }),
+    );
+    expect(none.why).toContain("vouches for every row");
+    const all = explain(
+      item("low_confidence_field", { reason: "reconciliation_failed" }),
+    );
+    expect(all.why).toContain("every row is pending");
+  });
+
+  it("names the accounts a document lists and does not print", () => {
+    const one = explain(
+      item("low_confidence_field", {
+        reason: "accounts_not_read",
+        accounts: ["0002"],
+      }),
+    );
+    expect(one.what).toContain("the account ending in 0002");
+    const two = explain(
+      item("low_confidence_field", {
+        reason: "accounts_not_read",
+        accounts: ["0002", "0003"],
+      }),
+    );
+    expect(two.what).toContain("the accounts ending in 0002, 0003");
+  });
+
+  it("tells a statement's missing cost basis from an export's", () => {
+    const statement = explain(
+      item("low_confidence_field", {
+        reason: "investment_opening_basis_unknown",
+        costed_at: "price",
+      }),
+    );
+    expect(statement.what).toContain("at the statement's price");
+    const exported = explain(
+      item("low_confidence_field", {
+        reason: "investment_opening_basis_unknown",
+      }),
+    );
+    expect(exported.what).toContain("zero for now");
+  });
+
+  it("says a short position and its trades were left out", () => {
+    const found = explain(
+      item("low_confidence_field", {
+        reason: "investment_short_position",
+        positions: [{ symbol: "ZZSHT", quantity: "-100.00" }],
+        lines_left_out: 2,
+      }),
+    );
+    expect(found.what).toContain("a short position");
+    expect(found.what).toContain("The 2 trades in that security");
+  });
+
+  it("explains a value the account list prints differently", () => {
+    expect(
+      differenceText(
+        {
+          check: "index_value",
+          printed: "1000.00",
+          computed: "1250.00",
+          difference: "250.00",
+          count: null,
+        },
+        "USD",
+      ),
+    ).toContain("list of accounts prints $1,000.00");
   });
 });

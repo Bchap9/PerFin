@@ -75,12 +75,13 @@ from __future__ import annotations
 import re
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
+from decimal import Decimal
 from typing import Final
 
 from app.domain.accounts.models import AccountType
 from app.domain.accounts.subtypes import guess_subtype
 from app.ingestion.parsers.base import ViewLine
-from app.ingestion.parsers.text import find_amounts, normalise, numeric_parts
+from app.ingestion.parsers.text import find_amounts, normalise, numeric_parts, read_amount
 
 #: ``Account # Z12-345678``, ``Account Number: 123-456789``, ``Account XXXX-4821``.
 _ACCOUNT_LABELLED: Final = re.compile(
@@ -293,6 +294,10 @@ class AccountInfo:
     account_type: str | None = None
     #: A subtype code of ``account_type`` (``traditional_ira``, ``education_529``).
     subtype: str | None = None
+    #: The account's value at the period's start and end as the document's
+    #: account index prints them (None: no index, no such column, unread).
+    beginning_value: Decimal | None = None
+    ending_value: Decimal | None = None
 
 
 def number_last4(text: str) -> str | None:
@@ -436,9 +441,39 @@ def _common_owner(names: Sequence[str]) -> str | None:
     return head if account_kind(head) == (None, None) else None
 
 
+#: Index header cells naming an account's value at the period's start and end.
+_BEGINNING_HEADERS: Final = ("beginning value", "beginning balance", "opening value")
+_ENDING_HEADERS: Final = ("ending value", "ending balance", "closing value", "market value")
+
+
+def _value_columns(header: ViewLine) -> dict[str, tuple[float, float]]:
+    """The spans of the index's beginning and ending value columns, when it has them."""
+    found: dict[str, tuple[float, float]] = {}
+    for cell in header.cells:
+        norm = normalise(cell.text)
+        if norm in _BEGINNING_HEADERS:
+            found.setdefault("beginning", (cell.x0, cell.x1))
+        elif norm in _ENDING_HEADERS:
+            found.setdefault("ending", (cell.x0, cell.x1))
+    return found
+
+
+def _index_value(line: ViewLine, column: tuple[float, float] | None) -> Decimal | None:
+    """The amount an index row prints under a value column."""
+    if column is None:
+        return None
+    for cell in line.cells:
+        if cell.overlap(*column) > 0:
+            amount = read_amount(cell.text)
+            if amount is not None:
+                return amount.value
+    return None
+
+
 def read_index(lines: Sequence[ViewLine]) -> tuple[dict[str, AccountInfo], frozenset[int]]:
     """``(account info by last four digits, indexes of the index's lines)`` (module doc)."""
     rows: list[tuple[str, str, str]] = []  # (last4, name, group)
+    values: dict[str, tuple[Decimal | None, Decimal | None]] = {}
     used: set[int] = set()
     position = 0
     while position < len(lines):
@@ -448,6 +483,7 @@ def read_index(lines: Sequence[ViewLine]) -> tuple[dict[str, AccountInfo], froze
         if column is None:
             continue
         used.add(header.index)
+        value_columns = _value_columns(header)
         group = ""
         found = 0
         while position < len(lines) and found < INDEX_ROWS_MAX:
@@ -458,6 +494,13 @@ def read_index(lines: Sequence[ViewLine]) -> tuple[dict[str, AccountInfo], froze
             if row is not None:
                 last4, name = row
                 rows.append((last4, name, group))
+                values.setdefault(
+                    last4,
+                    (
+                        _index_value(line, value_columns.get("beginning")),
+                        _index_value(line, value_columns.get("ending")),
+                    ),
+                )
                 used.add(line.index)
                 found += 1
             elif _group_line(line):
@@ -474,7 +517,8 @@ def read_index(lines: Sequence[ViewLine]) -> tuple[dict[str, AccountInfo], froze
         if owner is not None and name.startswith(owner):
             name = name[len(owner) :].strip(" -\u2013")
         kind, subtype = account_kind(name, group)
-        infos[last4] = AccountInfo(last4, name[:200] or None, kind, subtype)
+        beginning, ending = values.get(last4, (None, None))
+        infos[last4] = AccountInfo(last4, name[:200] or None, kind, subtype, beginning, ending)
     return infos, frozenset(used)
 
 
