@@ -6,14 +6,14 @@ All notable changes to PerFin are recorded here. The format follows
 
 ## Status
 
-The current release candidate is `v1.0.0-rc.6`; the final `v1.0.0` follows the
+The current release candidate is `v1.0.0-rc.7`; the final `v1.0.0` follows the
 external security review. Every phase (0-7) is implemented. Alembic head is
-`0012`. On 2026-11-10: SPDX;
-backend ruff, ruff format, mypy --strict (689 source files), bandit, OpenAPI
-drift and 8267 pytest tests with `-n 8`, of which the Helm tests (48) need
-`helm` and could not run in that environment (the OCR tests ran, with
-Tesseract 5.3); frontend
-eslint, tsc, 656 vitest tests in 74 files and the production build. As of rc.2: `pip-audit` finds no known vulnerabilities and
+`0012`. On 2026-11-11: SPDX;
+backend ruff, ruff format, mypy --strict (699 source files), bandit, OpenAPI
+drift and 8344 pytest tests with `-n 8` (the Helm chart tests aside, which
+need `helm`), of which the OCR tests (20) need Tesseract and could not run
+in that environment (both sets run in CI); frontend
+eslint, tsc, 678 vitest tests in 74 files and the production build. As of rc.2: `pip-audit` finds no known vulnerabilities and
 `npm audit --audit-level=high` passes with 10 moderate advisories in dev
 tooling (eslint, typescript-eslint, minimatch), none high.
 CI is green end to end on GitHub Actions for commit `21d2b38`: `ci` run
@@ -36,6 +36,18 @@ What remains (details in docs/ROADMAP.md):
   hosts, and contributed classifier samples.
 
 ## [Unreleased]
+
+Nothing yet.
+
+## [1.0.0-rc.7] - 2026-11-11
+
+Seventh release candidate of 1.0.0. Statement import asks about the one
+line that does not make sense instead of holding the whole file: a
+statement's own section totals, cash-flow summary and account list say
+where it does not add up, what is vouched for is imported, and only the
+lines (or the one security) in doubt wait for a person. The optional local
+model helps with wording and column headings the readers do not know, and
+only wording a person confirmed is remembered. No migration.
 
 ### Changed
 
