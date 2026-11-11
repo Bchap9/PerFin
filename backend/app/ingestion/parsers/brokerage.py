@@ -143,7 +143,15 @@ Two halves (INGESTION.md "Brokerage statements", SECURITY.md C12):
     (:attr:`InvestmentActivity.price_per_100`, :func:`_activity_per_100`)
     by its figures or, when they cannot tell, as its position is priced. A
     header line of known column names that is no usable table ends the
-    table above it;
+    table above it. A row no words type is not read: it is counted, and
+    its action phrase and the heading above it are reported
+    (``ParseOutcome.unknown_actions`` / ``unknown_headings``). The optional
+    local model may suggest what kind of activity they are
+    (:mod:`app.ingestion.parsers.vocabulary`, ADR-0010); read again with
+    that :class:`~app.ingestion.parsers.vocabulary.Vocabulary`
+    (:meth:`BrokerageStatementParser.parse_with`), such a row is typed, its
+    figures still the page's own, and marked ``suggested_type`` so that a
+    person confirms it;
   - **blocks side by side** (a summary box left of a table, two summary
     tables, a table beside a chart's legend) are read one after the other
     (:mod:`app.ingestion.parsers.blocks`), so a table header sharing its
@@ -245,6 +253,14 @@ from app.ingestion.parsers.text import (
     numeric_parts,
     read_amount,
     read_date,
+)
+from app.ingestion.parsers.vocabulary import (
+    MAX_PHRASES,
+    SUGGESTED_DOUBT,
+    SUGGESTED_SECTIONS,
+    SUGGESTED_TYPES,
+    Vocabulary,
+    phrase_key,
 )
 from app.ingestion.reconcile import TOLERANCE
 from app.ingestion.sandbox.protocol import (
@@ -1316,6 +1332,9 @@ class _ActivityRow:
     symbol_column: bool = False
     #: Words of the row that say what it is beyond its type (``Return of capital``).
     note: str | None = None
+    #: The row's type is the local model's suggestion (its words or its
+    #: section's heading are in no vocabulary of the parser's own).
+    suggested: bool = False
 
 
 @dataclass(frozen=True)
@@ -1401,6 +1420,13 @@ class _Collected:
     figure_group: FigureGroup | None = None
     figure_x: float | None = None
     figure_page: int | None = None
+    #: The local model's suggested words (``app.ingestion.parsers.vocabulary``)
+    #: and whether the section the lines are in was typed by one.
+    vocabulary: Vocabulary | None = None
+    section_suggested: bool = False
+    #: Action phrases and headings of the rows nothing could type (their keys).
+    unknown_actions: list[str] = field(default_factory=list)
+    unknown_headings: list[str] = field(default_factory=list)
 
     @property
     def found_table(self) -> bool:
@@ -1833,6 +1859,13 @@ def _surplus(
     return same[0] if len(same) == 1 else None
 
 
+def _remember(keys: list[str], text: str) -> None:
+    """Keep the :func:`phrase_key` of ``text`` once (at most :data:`MAX_PHRASES`)."""
+    key = phrase_key(text)
+    if key and key not in keys and len(keys) < MAX_PHRASES:
+        keys.append(key)
+
+
 def _memo(row: _ActivityRow) -> str | None:
     """The row's description, with what its own words add (``... (Return of capital)``)."""
     if row.note and row.description:
@@ -2165,22 +2198,26 @@ class BrokerageStatementParser(DocumentParser):
 
     # -- accounts -----------------------------------------------------------------
 
-    def _sections(self, view: DocumentView) -> tuple[list[_Collected], _Collected | None, int]:
+    def _sections(
+        self, view: DocumentView, vocabulary: Vocabulary | None = None
+    ) -> tuple[list[_Collected], _Collected | None, int]:
         """``(accounts, preamble, accounts dropped)`` (class doc); one account: no preamble."""
         split = segment(view.lines)
         bands = _page_bands(view.lines)
         if len(split.accounts) < 2:
-            single = _Collected(bands=bands)
+            single = _Collected(bands=bands, vocabulary=vocabulary)
             self._read(view.lines, single)
             if single.summary.last4 is None and split.accounts:
                 single.summary.last4 = split.accounts[0].last4
             single.info = split.info(single.summary.last4)
             return [single], None, 0
-        preamble = _Collected(bands=bands)
+        preamble = _Collected(bands=bands, vocabulary=vocabulary)
         self._read(split.preamble, preamble)
         accounts: list[_Collected] = []
         for account in split.accounts:
-            collected = _Collected(account=account, info=account.info, bands=bands)
+            collected = _Collected(
+                account=account, info=account.info, bands=bands, vocabulary=vocabulary
+            )
             self._read(account.lines, collected)
             collected.summary.last4 = account.last4
             accounts.append(collected)
@@ -2446,6 +2483,7 @@ class BrokerageStatementParser(DocumentParser):
         described = kind is None and bool(type_text) and not named
         section = collected.section
         by_sign = False
+        own = kind  # what the row's own words say, before its section or a suggestion
         note: str | None = None
         printed = amount.value if amount is not None else None
         if section == "income" and kind == "deposit":
@@ -2467,9 +2505,19 @@ class BrokerageStatementParser(DocumentParser):
             kind = "fee"
         elif kind is None and section is not None and section in _CASH_SECTIONS:
             kind, by_sign = _CASH_SECTIONS[section], True
+        suggested = collected.section_suggested and kind != own
+        if kind is None and collected.vocabulary is not None:
+            # Words in no vocabulary of the parser's own: the local model's
+            # suggestion for them, if it gave one (ADR-0010).
+            hinted = collected.vocabulary.action(type_text)
+            if hinted in SUGGESTED_TYPES:
+                kind, suggested = cast(InvestmentActivityType, hinted), True
         if kind is None:
             collected.unknown_activity += 1
             collected.skipped += 1
+            _remember(collected.unknown_actions, type_text)
+            if section is None and collected.section_label:
+                _remember(collected.unknown_headings, collected.section_label)
             return
         if (
             amount is None
@@ -2514,6 +2562,7 @@ class BrokerageStatementParser(DocumentParser):
                 printed=printed,
                 symbol_column=symbol_column,
                 note=note,
+                suggested=suggested,
             )
         )
 
@@ -2750,6 +2799,7 @@ class BrokerageStatementParser(DocumentParser):
             if section is not None and not self._is_heading(line, self.ignored_tables):
                 index += 1
                 collected.section = section
+                collected.section_suggested = False
                 collected.section_label = _heading_label(line.text)
                 collected.section_id += 1
                 collected.sub_headings = []
@@ -2773,6 +2823,7 @@ class BrokerageStatementParser(DocumentParser):
                     collected.holdings_columns, collected.activity_parts = found.holdings, None
                     collected.holdings_header = True
                     collected.section = None
+                    collected.section_suggested = False
                     collected.section_label = None
                     collected.section_id += 1
                     # A group heading right above its table's header ("Core Account").
@@ -2802,7 +2853,7 @@ class BrokerageStatementParser(DocumentParser):
                             and collected.section_header[0] == found.roles
                             and _alike(above.norm, collected.sub_headings)
                         )
-                        if collected.section_tables and not again:
+                        if collected.section is None or (collected.section_tables and not again):
                             # After the section's own table, a heading no
                             # section names starts a table of its own: the
                             # section above does not type (or skip) its rows.
@@ -2811,9 +2862,21 @@ class BrokerageStatementParser(DocumentParser):
                             # heading worded like it over the same columns,
                             # the next card's. The section's header
                             # repeated on a later page under the page's running
-                            # header continues its table.)
-                            collected.section = None
-                            collected.section_label = _heading_label(above.text)
+                            # header continues its table.) The local model may
+                            # have suggested what kind of section it is
+                            # (ADR-0010): its rows are then typed by it, each
+                            # marked as a suggestion.
+                            label = _heading_label(above.text)
+                            hinted = (
+                                collected.vocabulary.section(label)
+                                if collected.vocabulary is not None
+                                else None
+                            )
+                            collected.section = (
+                                cast(SectionKind, hinted) if hinted in SUGGESTED_SECTIONS else None
+                            )
+                            collected.section_suggested = collected.section is not None
+                            collected.section_label = label
                             collected.section_id += 1
                     collected.section_header = (found.roles, lines[start].page)
                     collected.holdings_columns, collected.activity_parts = None, found.parts
@@ -3101,6 +3164,9 @@ class BrokerageStatementParser(DocumentParser):
                 score["ratio"] = conf.scaled(
                     self.base if ratio is not None else conf.MISSING, row.ocr
                 )
+            if row.suggested:
+                # Never written on the model's word: a person confirms it.
+                score[SUGGESTED_DOUBT] = conf.scaled(conf.SUGGESTED, row.ocr)
             if row.type in QUANTITY_TYPES:
                 score["quantity"] = conf.scaled(
                     self.base if quantity is not None and quantity > 0 else conf.MISSING, row.ocr
@@ -3392,7 +3458,19 @@ class BrokerageStatementParser(DocumentParser):
     def parse(
         self, view: DocumentView, *, threshold: float, date_order: str | None = None
     ) -> ParseOutcome:
-        accounts, preamble, dropped = self._sections(view)
+        return self.parse_with(view, threshold=threshold, date_order=date_order)
+
+    def parse_with(
+        self,
+        view: DocumentView,
+        *,
+        threshold: float,
+        date_order: str | None = None,
+        vocabulary: Vocabulary | None = None,
+    ) -> ParseOutcome:
+        """Read the pages; ``vocabulary``: the local model's suggested words
+        (:mod:`app.ingestion.parsers.vocabulary`), for rows nothing else types."""
+        accounts, preamble, dropped = self._sections(view, vocabulary)
         outcome = ParseOutcome()
         if not any(c.found_table for c in accounts):
             outcome.warnings.append("no_table_header")
@@ -3434,6 +3512,11 @@ class BrokerageStatementParser(DocumentParser):
             unknown += preamble.unknown_activity
             if outside:
                 warnings.append("rows_outside_account")
+        for collected in accounts:
+            for key in collected.unknown_actions:
+                _remember(outcome.unknown_actions, key)
+            for key in collected.unknown_headings:
+                _remember(outcome.unknown_headings, key)
         if dropped:
             warnings.append("too_many_accounts")
         outcome.skipped_lines += skipped

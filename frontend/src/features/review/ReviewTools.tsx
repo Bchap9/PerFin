@@ -746,11 +746,29 @@ export function BalanceTools({ item, actionable }: { item: ReviewItem; actionabl
 const DOUBT_WORDS: ReadonlyMap<string, string> = new Map(
   Object.entries({
     reconciliation: "its section does not add up",
+    suggested_type: "kind suggested by the local model",
     trade_date: "date outside the statement's period",
     amount: "amount hard to read",
     security: "security not identified",
     quantity: "quantity not read",
     type: "kind of activity unclear",
+  }),
+);
+
+const KIND_WORDS: ReadonlyMap<string, string> = new Map(
+  Object.entries({
+    buy: "Purchase",
+    sell: "Sale",
+    dividend: "Dividend",
+    interest: "Interest",
+    fee: "Fee",
+    reinvest: "Reinvestment",
+    transfer_in: "Shares in",
+    transfer_out: "Shares out",
+    deposit: "Deposit",
+    withdrawal: "Withdrawal",
+    corporate_action: "Corporate action",
+    split: "Split",
   }),
 );
 
@@ -784,6 +802,7 @@ export function HeldLines({ item }: { item: ReviewItem }) {
             <th scope="col">Date</th>
             <th scope="col">Section</th>
             <th scope="col">Description</th>
+            <th scope="col">Read as</th>
             <th scope="col">Amount</th>
             <th scope="col">Page</th>
             <th scope="col">Why</th>
@@ -794,7 +813,12 @@ export function HeldLines({ item }: { item: ReviewItem }) {
             <tr key={line.index}>
               <td>{line.date === null ? "" : (formatDate(line.date) ?? line.date)}</td>
               <td>{line.section ?? ""}</td>
-              <td>{line.description ?? line.type ?? ""}</td>
+              <td>{line.description ?? ""}</td>
+              <td>
+                {line.type === null
+                  ? ""
+                  : (KIND_WORDS.get(line.type) ?? line.type)}
+              </td>
               <td>
                 {line.amount === null ? (
                   ""

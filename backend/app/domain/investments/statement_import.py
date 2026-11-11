@@ -67,6 +67,13 @@ statements"). Per statement:
      and key (``statement_answers.statement_key``) and the account's
      currency.
 
+   A row whose kind is the optional local model's suggestion (its words
+   are in no vocabulary of the parser's own; ADR-0010,
+   ``app.ingestion.parsers.vocabulary``) carries the ``suggested_type``
+   doubt and is held like any row in doubt: alone when it moves cash, with
+   its statement when it moves units. It is never written until a person
+   says so.
+
    **Import as read** (the review queue's answer to the last two kinds of
    item, see ``app.domain.review.service``; recorded per statement key and
    account by ``app.domain.imports.statement_answers``): every later import
@@ -75,8 +82,9 @@ statements"). Per statement:
    against (the held lines of an imported statement: the rows already
    written are skipped by their hashes). Another statement, even of the
    same account, is not covered by it. For the answered statement the
-   ``reconciliation`` doubt its rows carry (and the contradicted market
-   value of a position that failed the ``positions`` check) no longer holds
+   ``reconciliation`` and ``suggested_type`` doubts its rows carry
+   (:data:`CONFIRMABLE_DOUBTS`; and the contradicted market
+   value of a position that failed the ``positions`` check) no longer hold
    it, while any other doubt still does (a guessed date, an unread figure),
    as do the date range and every later step. An accepted statement writes
    **no balance snapshot** (step 9): its totals are the figures that did not
@@ -209,6 +217,7 @@ from app.domain.investments.models import (
 from app.domain.investments.service import replay_position
 from app.ingestion.match.accounts import match_account
 from app.ingestion.parsers.brokerage import position_value, reconcile_investment
+from app.ingestion.parsers.vocabulary import SUGGESTED_DOUBT
 from app.ingestion.sandbox.protocol import (
     DOCUMENT_STATEMENT_FORMATS,
     ExtractedTransaction,
@@ -461,6 +470,12 @@ FIGURES_DIFFER: Final = "investment_figures_differ"
 #: carries (every row, when nothing says where: an OFX statement, one that
 #: could not be checked); an accepted statement no longer holds for it.
 RECONCILIATION_DOUBT: Final = "reconciliation"
+#: The doubts a person settles by saying "import as read": the row's figures
+#: are as printed, what was in question is whether they add up
+#: (``reconciliation``) or what kind of activity the row is, where that kind
+#: is the optional local model's suggestion (``suggested_type``, ADR-0010:
+#: the answer is the person's confirmation of it).
+CONFIRMABLE_DOUBTS: Final = frozenset({RECONCILIATION_DOUBT, SUGGESTED_DOUBT})
 #: Activity that moves cash only: such a line can wait for a person while the
 #: rest of its statement is imported (a line moving units cannot: the
 #: positions are reconciled against every one of them).
@@ -475,8 +490,9 @@ def acceptable_as_read(payload: Mapping[str, Any]) -> bool:
 
     A statement that did not add up, or a document statement with nothing to
     check against, or the held lines of an imported one, whose rows carry no
-    other doubt (only ``reconciliation``): a guessed date or an unread
-    figure is never imported on a click.
+    other doubt than :data:`CONFIRMABLE_DOUBTS` (``reconciliation``, a kind
+    the local model suggested): a guessed date or an unread figure is never
+    imported on a click.
     """
     reason = payload.get("reason")
     if reason == RECONCILIATION_FAILED:
@@ -485,7 +501,8 @@ def acceptable_as_read(payload: Mapping[str, Any]) -> bool:
     return (
         reason in (LOW_CONFIDENCE, LINES_HELD)
         and isinstance(fields, list)
-        and fields == [RECONCILIATION_DOUBT]
+        and bool(fields)
+        and all(isinstance(f, str) and f in CONFIRMABLE_DOUBTS for f in fields)
     )
 
 
@@ -639,7 +656,7 @@ def _held(
             },
         )
         return None
-    ignored = frozenset({RECONCILIATION_DOUBT}) if accepted else frozenset()
+    ignored = CONFIRMABLE_DOUBTS if accepted else frozenset()
     contradicted = frozenset({"market_value"}) | ignored
     mismatched = set(check.position_mismatches) if accepted else set()
     low_positions = [

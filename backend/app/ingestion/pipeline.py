@@ -130,6 +130,7 @@ from app.ingestion.parsers.receipt import parse_email_receipt
 from app.ingestion.parsers.registry import DOCUMENT_KINDS, parse_extraction
 from app.ingestion.parsers.tax_forms import carries_tax_identity, redact_identity
 from app.ingestion.parsers.template import LayoutTemplate, parse_template
+from app.ingestion.parsers.vocabulary import Vocabulary
 from app.ingestion.sandbox.protocol import (
     CONTAINER_KINDS,
     REVIEW_ERROR_CODES,
@@ -204,6 +205,10 @@ class PipelineDeps:
     confidence_threshold: float = DEFAULT_THRESHOLD
     #: The optional local-model adapter (ADR-0010): text -> checked hints.
     ml: Callable[[str], MLHints | None] | None = None
+    #: The same adapter asked what kind of activity the words a brokerage
+    #: parser could not type are: (action phrases, headings) -> checked
+    #: suggestions (``app.ml.client.activity_hints``).
+    ml_vocabulary: Callable[[Sequence[str], Sequence[str]], Vocabulary | None] | None = None
 
 
 class ScanUnavailableError(RuntimeError):
@@ -407,25 +412,66 @@ def _unlink_classified_account(document: Document) -> None:
     }
 
 
+#: Where the local model's suggested words are kept on a document.
+ML_VOCABULARY_KEY: Final = "ml_vocabulary"
+
+
 def _parse_document(
-    db: Session, document: Document, result: ExtractResult, threshold: float
+    db: Session,
+    document: Document,
+    result: ExtractResult,
+    threshold: float,
+    ask: Callable[[Sequence[str], Sequence[str]], Vocabulary | None] | None = None,
 ) -> tuple[ExtractResult, dict[str, Any]]:
     """Run the document parsers (``app.ingestion.parsers``) on a PDF's or image's pages.
 
     The parsed statements and :class:`ParseInfo` are kept in
     ``document.extraction`` next to the pages they were read from, so a
     re-import or a newer parser needs no new upload or extraction.
+
+    ``ask`` (the optional local model, ADR-0010): when a brokerage parser
+    left activity rows unread because their words are in no vocabulary of
+    its own (``ParseInfo.unknown_actions`` / ``unknown_headings``), the
+    model is asked what kind of activity those phrases are, its checked
+    suggestions are kept on the document (``confidence["ml_vocabulary"]``)
+    and the pages are read once more with them. A row typed this way is
+    marked ``suggested_type`` and is never written without a person's
+    confirmation; with no answer the document is read as without a model.
+    Suggestions kept from an earlier run are used again without asking.
     """
     hints = _parse_hints(document)
-    result = parse_extraction(
-        result,
-        threshold=threshold,
-        parser_name=hints.get("parser_name"),
-        institution=hints.get("institution"),
-        kind=hints.get("kind"),
-        date_order=hints.get("date_order"),
-        template=_learned_template(db, document),
-    )
+    template = _learned_template(db, document)
+    vocabulary = Vocabulary.from_stored((document.confidence or {}).get(ML_VOCABULARY_KEY))
+    pages = result
+
+    def parse_with(words: Vocabulary) -> ExtractResult:
+        return parse_extraction(
+            pages,
+            threshold=threshold,
+            parser_name=hints.get("parser_name"),
+            institution=hints.get("institution"),
+            kind=hints.get("kind"),
+            date_order=hints.get("date_order"),
+            template=template,
+            vocabulary=None if words.empty else words,
+        )
+
+    result = parse_with(vocabulary)
+    untyped = result.parse
+    if (
+        ask is not None
+        and untyped is not None
+        and (untyped.unknown_actions or untyped.unknown_headings)
+    ):
+        suggested = ask(untyped.unknown_actions, untyped.unknown_headings)
+        if suggested is not None and not suggested.empty:
+            vocabulary = vocabulary.merged(suggested)
+            document.confidence = {
+                **(document.confidence or {}),
+                ML_VOCABULARY_KEY: vocabulary.stored(),
+            }
+            db.flush()
+            result = parse_with(vocabulary)
     info = result.parse
     if info is None:  # pragma: no cover - parse_extraction always records it
         return result, {}
@@ -853,7 +899,9 @@ def ingest_document(
     if kind in DOCUMENT_KINDS:
         # PDF and image pages -> statements or a payslip (worker side, on the
         # stored pages; INGESTION.md "Parse").
-        result, parse_facts = _parse_document(db, document, result, deps.confidence_threshold)
+        result, parse_facts = _parse_document(
+            db, document, result, deps.confidence_threshold, deps.ml_vocabulary
+        )
     if kind in CONTAINER_KINDS:
         # An archive or mail is done once its contents are documents of
         # their own; refused or left-out contents need a look.

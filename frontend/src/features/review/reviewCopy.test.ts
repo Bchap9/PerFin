@@ -193,6 +193,50 @@ describe("review explanations", () => {
     );
   });
 
+  it("says which lines carry a kind the local model suggested", () => {
+    const held = explain(
+      item("low_confidence_field", {
+        reason: "investment_lines_held",
+        statement_key: "k".repeat(64),
+        fields: ["suggested_type"],
+        held: 2,
+        imported: 12,
+      }),
+    );
+    expect(held.title).toBe("Check what the local model suggested");
+    expect(held.what).toContain(
+      "The holdings and the other 12 activity lines were imported; PerFin did not know the wording of 2 lines of this statement, so the local model suggested what kind of activity they are",
+    );
+    expect(held.why).toContain("never records a kind of activity on a model's word");
+    expect(held.steps.some((step) => step.startsWith("“Import as read”"))).toBe(
+      true,
+    );
+    // A line moving shares holds its statement: nothing imported yet.
+    const whole = explain(
+      item("low_confidence_field", {
+        reason: "investment_low_confidence",
+        statement_key: "k".repeat(64),
+        fields: ["suggested_type"],
+        lines: [{ index: 3, fields: ["suggested_type"], type: "buy" }],
+      }),
+    );
+    expect(whole.title).toBe("Check what the local model suggested");
+    expect(whole.what).toContain("1 line of this statement");
+    expect(whole.what).toContain("nothing of the statement was imported yet");
+    expect(whole.steps.some((step) => step.startsWith("“Import as read”"))).toBe(
+      true,
+    );
+    // Beside another doubt the suggestion cannot be confirmed on a click.
+    const dated = explain(
+      item("low_confidence_field", {
+        reason: "investment_low_confidence",
+        statement_key: "k".repeat(64),
+        fields: ["suggested_type", "trade_date"],
+      }),
+    );
+    expect(dated.title).toBe("Dates may be wrong");
+  });
+
   it("says a statement was imported although its totals disagree", () => {
     const found = explain(
       item("low_confidence_field", {

@@ -272,9 +272,78 @@ describe("review queue", () => {
     expect(
       within(table).getAllByText("its section does not add up"),
     ).toHaveLength(2);
+    expect(within(table).getAllByText("Withdrawal")).toHaveLength(2);
     // The lines are not in the ledger: nothing to confirm row by row.
     expect(
       screen.queryByRole("button", { name: "Confirm as read" }),
+    ).not.toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Import as read" }));
+    await waitFor(() => {
+      expect(
+        api.callsTo("POST", "/api/v1/review/:id/resolve")[0]?.body,
+      ).toEqual({
+        kind: "low_confidence_field",
+        transactions: [],
+        confirm: false,
+        import_as_read: true,
+      });
+    });
+  });
+
+  it("shows the kind the local model suggested and confirms it", async () => {
+    const held = {
+      reason: "investment_low_confidence",
+      account_id: "a-1",
+      statement: 0,
+      statement_key: STATEMENT_KEY,
+      fields: ["suggested_type"],
+      reconciliation: "ok",
+      positions: [],
+      activity: [{ index: 2, fields: ["suggested_type"], page: 4 }],
+      lines: [
+        {
+          index: 2,
+          fields: ["suggested_type"],
+          page: 4,
+          date: "2026-06-05",
+          type: "buy",
+          description: "EXAMPLE INDEX ETF",
+          amount: "-300.000000",
+          section: "Securities Bought & Sold",
+        },
+      ],
+    };
+    const api = reviewApi(
+      [
+        item("r-1", "low_confidence_field", held, {
+          reason: "investment_low_confidence",
+          next_step: "correct_fields",
+        }),
+      ],
+      "member",
+      {
+        "POST /api/v1/review/:id/resolve": () =>
+          json(
+            item("r-1", "low_confidence_field", held, { state: "resolved" }),
+          ),
+      },
+    );
+    renderApp("/review");
+    const user = userEvent.setup();
+    expect(
+      await screen.findByText("Check what the local model suggested"),
+    ).toBeInTheDocument();
+    const table = screen.getByRole("table", { name: "Lines in doubt" });
+    expect(within(table).getByText("Purchase")).toBeInTheDocument();
+    expect(
+      within(table).getByText("kind suggested by the local model"),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText(/confirms the kinds the local model suggested/),
+    ).toBeInTheDocument();
+    // Not a date problem: no column mapping is offered for it.
+    expect(
+      screen.queryByRole("link", { name: "Map columns" }),
     ).not.toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: "Import as read" }));
     await waitFor(() => {

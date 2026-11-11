@@ -18,6 +18,17 @@ What survives is stored on the document (``document.confidence["ml"]``) and
 offered to a person (account proposals, account suggestions in the review
 queue); it is never written to the ledger on its own.
 
+A second, narrower question (:func:`activity_hints`): when a brokerage parser
+could not type some activity rows because their action words or their
+section's heading are in no vocabulary of its own, the worker sends just
+those phrases (normalised, digits masked, at most
+:data:`~app.ingestion.parsers.vocabulary.MAX_PHRASES` of each) and asks what
+kind of activity each is, from a closed list. The answer is matched back by
+position to the phrases PerFin sent (never by text the model returns) and
+only listed kinds are kept (:func:`validated_vocabulary`). A row typed this
+way is marked as a suggestion and waits for a person
+(:mod:`app.ingestion.parsers.vocabulary`).
+
 Failures never fail ingestion: a timeout, an error, a refused address or a
 malformed answer is logged and the document goes on without hints. After
 :data:`BREAKER_FAILURES` failures in a row the adapter is not asked again for
@@ -30,6 +41,7 @@ import logging
 import re
 import threading
 import time
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 from datetime import date
 from typing import Any, Final
@@ -38,6 +50,13 @@ import httpx
 
 from app.core.local_url import resolves_locally
 from app.core.settings import Settings
+from app.ingestion.parsers.vocabulary import (
+    MAX_PHRASES,
+    SUGGESTED_SECTIONS,
+    SUGGESTED_TYPES,
+    Vocabulary,
+    phrase_key,
+)
 
 log = logging.getLogger(__name__)
 
@@ -196,18 +215,20 @@ class _Breaker:
 _BREAKER = _Breaker()
 
 
-def document_hints(
-    settings: Settings, text: str, *, transport: httpx.BaseTransport | None = None
-) -> MLHints | None:
-    """Ask the adapter about ``text`` and check the answer (None: off, failed or nothing usable)."""
-    if not settings.ml_enabled or not text.strip() or _BREAKER.open():
+def _ask(
+    settings: Settings,
+    path: str,
+    body: dict[str, Any],
+    transport: httpx.BaseTransport | None,
+) -> Any:
+    """One call to the adapter (None: off, breaker open, not local, or failed)."""
+    if not settings.ml_enabled or _BREAKER.open():
         return None
     token = settings.ml_token.get_secret_value() if settings.ml_token is not None else ""
     if transport is None and not resolves_locally(settings.ml_url):
         log.warning("ml adapter address does not resolve to a local address; not asked")
         _BREAKER.record(False)
         return None
-    sent = text[: settings.ml_max_chars]
     try:
         with httpx.Client(
             timeout=settings.ml_timeout_seconds,
@@ -216,8 +237,8 @@ def document_hints(
             transport=transport,
         ) as client:
             response = client.post(
-                f"{settings.ml_url}/v1/document",
-                json={"text": sent},
+                f"{settings.ml_url}{path}",
+                json=body,
                 headers={"Authorization": f"Bearer {token}"},
             )
         response.raise_for_status()
@@ -227,7 +248,89 @@ def document_hints(
         _BREAKER.record(False)
         return None
     _BREAKER.record(True)
-    return validated(answer, sent)
+    return answer
+
+
+def document_hints(
+    settings: Settings, text: str, *, transport: httpx.BaseTransport | None = None
+) -> MLHints | None:
+    """Ask the adapter about ``text`` and check the answer (None: off, failed or nothing usable)."""
+    if not text.strip():
+        return None
+    sent = text[: settings.ml_max_chars]
+    answer = _ask(settings, "/v1/document", {"text": sent}, transport)
+    return validated(answer, sent) if answer is not None else None
+
+
+def _keys(phrases: Sequence[str]) -> list[str]:
+    """The distinct :func:`phrase_key` of ``phrases``, in order, bounded."""
+    out: list[str] = []
+    for phrase in phrases:
+        key = phrase_key(phrase)
+        if key and key not in out and len(out) < MAX_PHRASES:
+            out.append(key)
+    return out
+
+
+def _choices(answer: Any, key: str, sent: Sequence[str], allowed: frozenset[str]) -> dict[str, str]:
+    """``{phrase sent: kind}`` from the answer's ``{"index", key}`` entries.
+
+    ``index`` counts from 1 over ``sent``; a number out of range or given
+    twice, and a kind that is not listed, are dropped.
+    """
+    out: dict[str, str] = {}
+    for entry in answer if isinstance(answer, list) else []:
+        if not isinstance(entry, dict):
+            continue
+        index, value = entry.get("index"), entry.get(key)
+        if (
+            isinstance(index, int)
+            and not isinstance(index, bool)
+            and 1 <= index <= len(sent)
+            and sent[index - 1] not in out
+            and value in allowed
+        ):
+            out[sent[index - 1]] = value
+    return out
+
+
+def validated_vocabulary(
+    answer: Any, actions: Sequence[str], headings: Sequence[str]
+) -> Vocabulary | None:
+    """The answer reduced to listed kinds for the phrases that were sent (module doc)."""
+    if not isinstance(answer, dict):
+        return None
+    found = Vocabulary(
+        actions=_choices(answer.get("actions"), "type", actions, SUGGESTED_TYPES),
+        sections=_choices(answer.get("headings"), "kind", headings, SUGGESTED_SECTIONS),
+        model=_text(answer.get("model"), 80),
+    )
+    return None if found.empty else found
+
+
+def activity_hints(
+    settings: Settings,
+    actions: Sequence[str],
+    headings: Sequence[str],
+    *,
+    transport: httpx.BaseTransport | None = None,
+) -> Vocabulary | None:
+    """Ask what kind of activity ``actions`` and ``headings`` are (module doc).
+
+    None: off, failed, or no phrase got a listed kind.
+    """
+    sent_actions, sent_headings = _keys(actions), _keys(headings)
+    if not sent_actions and not sent_headings:
+        return None
+    answer = _ask(
+        settings,
+        "/v1/vocabulary",
+        {"actions": sent_actions, "headings": sent_headings},
+        transport,
+    )
+    if answer is None:
+        return None
+    return validated_vocabulary(answer, sent_actions, sent_headings)
 
 
 def reset_breaker() -> None:

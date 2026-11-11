@@ -283,10 +283,26 @@ export function payloadLines(item: ReviewItem): HeldLine[] {
 }
 
 /**
+ * The doubts a person settles by saying "import as read" (the server's
+ * ``CONFIRMABLE_DOUBTS``): whether the rows add up, and a kind of activity
+ * the optional local model suggested for words PerFin did not know.
+ */
+const CONFIRMABLE_DOUBTS: ReadonlySet<string> = new Set([
+  "reconciliation",
+  "suggested_type",
+]);
+
+/** The item's rows carry a kind the local model suggested (``suggested_type``). */
+export function hasSuggestedKinds(item: ReviewItem): boolean {
+  return payloadIds(item, "fields").includes("suggested_type");
+}
+
+/**
  * A brokerage statement held back by its figures that may be imported as
  * printed: one that did not add up, or one with nothing to check against
  * (or the held lines of an imported one)
- * whose rows carry no other doubt (the server's ``acceptable_as_read``).
+ * whose rows carry no other doubt than those above (the server's
+ * ``acceptable_as_read``).
  * The item must name its statement (``statement_key``): the answer is for
  * that statement only, and an item raised before statements carried a key
  * is out of date (reprocess the document).
@@ -306,8 +322,8 @@ export function canImportAsRead(item: ReviewItem): boolean {
   return (
     (reason === "investment_low_confidence" ||
       reason === "investment_lines_held") &&
-    fields.length === 1 &&
-    fields[0] === "reconciliation"
+    fields.length > 0 &&
+    fields.every((field) => CONFIRMABLE_DOUBTS.has(field))
   );
 }
 

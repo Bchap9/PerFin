@@ -50,6 +50,47 @@ keeps them as hard rules rather than as the absence of code.
   document as it would have been without the model; repeated failures stop
   calls for five minutes.
 
+## Amendment (2026-11-11): the model may be asked what kind of activity a phrase is
+
+Brokerage statements are read row by row by action words and section
+headings from fixed lists (INGESTION.md "Brokerage statements"). A row whose
+words are in none of them was left unread and reported, and the statement
+then did not add up. Naming such words is what a language model does well
+and a rule table does not, so the owner asked for the model to help there.
+The rules above hold unchanged; this adds one question under them.
+
+- **A second, narrower question.** When a brokerage parser could not type
+  some activity rows, the worker sends just the action phrases of those rows
+  and the headings above them (`POST /v1/vocabulary`): normalised, every
+  digit masked, at most 40 of each, 80 characters each. Not the document's
+  text, no amounts, no account numbers, never ledger data. It is asked only
+  when the parser's own vocabulary failed, and an answer kept on the
+  document (`confidence.ml_vocabulary`) is used again without asking.
+- **Closed lists, matched by position.** For each numbered phrase the model
+  picks an activity type, for each heading a section kind, or `unknown`. The
+  adapter and then the worker (`app.ml.client.validated_vocabulary`) keep
+  only listed kinds and match them to the phrases PerFin sent by their
+  number, never by text the model returns. The lists hold no way to say "this
+  is not activity": a model cannot hide a table or a row, it can only
+  decline, and what it declines stays reported as unread, as without a model.
+- **A kind, never a figure.** The pages are read again by the same parser
+  with the suggested kinds. Dates, amounts, quantities, prices and
+  securities are the page's own, read exactly as for any other row, and the
+  statement's reconciliation runs over the result as always.
+- **Held until a person confirms.** A row typed this way carries the
+  `suggested_type` doubt, scored below any confidence threshold a deployment
+  may set. The importer never writes it: a line moving only cash waits in an
+  `investment_lines_held` item while the rest of its statement is imported,
+  a line moving units holds its statement. The review queue shows each such
+  line with the kind suggested, marked as the model's, and "Import as read"
+  is the person's confirmation.
+
+Rejected for this step: sending the whole statement and letting the model
+extract rows (its figures could not be told from the page's), free-text
+explanations shown in the review queue (a crafted statement could put
+advice there), and letting an arithmetic match alone stand in for a
+person's confirmation.
+
 ## Alternatives considered
 - **Keep no model at all (ADR-0007).** The owner's hardware and the review
   load argue for the option; the rules above keep its risks bounded.

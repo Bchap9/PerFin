@@ -28,8 +28,8 @@ from __future__ import annotations
 
 import copy
 import uuid
-from collections.abc import Callable, Iterator
-from dataclasses import dataclass, field
+from collections.abc import Callable, Iterator, Sequence
+from dataclasses import dataclass, field, replace
 from datetime import date
 from decimal import Decimal
 from pathlib import Path
@@ -79,6 +79,7 @@ from app.domain.review.schemas import (
 )
 from app.domain.transactions.models import Transaction
 from app.ingestion.intake.upload import receive_upload
+from app.ingestion.parsers.vocabulary import Vocabulary
 from app.ingestion.sandbox.protocol import ExtractResult
 from app.workers.handlers import ingest
 from tests.fixtures import synth_brokerage as synth
@@ -756,6 +757,86 @@ def test_only_the_line_in_doubt_is_held_and_the_rest_is_imported(env: Env) -> No
     )
     assert [t.id for t in env.txns(individual)] == before
     assert len(env.snapshots(individual)) == 1
+
+
+def _with_model(
+    monkeypatch: pytest.MonkeyPatch, words: Vocabulary | None
+) -> list[tuple[list[str], list[str]]]:
+    """The worker with a local model that answers ``words``; the questions it was asked."""
+    asked: list[tuple[list[str], list[str]]] = []
+
+    def ask(actions: Sequence[str], headings: Sequence[str]) -> Vocabulary | None:
+        asked.append((list(actions), list(headings)))
+        return words
+
+    deps = replace(ingest.default_deps(), ml_vocabulary=ask)
+
+    def patched() -> Any:
+        return deps
+
+    patched.cache_clear = lambda: None  # type: ignore[attr-defined]  # the fixture's teardown
+    monkeypatch.setattr(ingest, "default_deps", patched)
+    return asked
+
+
+def _reworded(stmt: fid.FidStatement, action: str) -> tuple[fid.FidStatement, fid.FidActivity]:
+    """``stmt`` with the first account's first buy worded ``action`` (words no parser knows)."""
+    account = stmt.accounts[0]
+    row = next(a for a in account.activity if a.type == "buy")
+    activity = tuple(replace(a, action=action) if a is row else a for a in account.activity)
+    return replace(stmt, accounts=(replace(account, activity=activity), *stmt.accounts[1:])), row
+
+
+@pytest.mark.parametrize("answered", [True, False])
+def test_a_kind_the_local_model_suggests_waits_for_a_person(
+    env: Env, monkeypatch: pytest.MonkeyPatch, answered: bool
+) -> None:
+    """A buy worded "Periodic Investment Plan": words in no vocabulary of the parser's.
+
+    The model is asked about that phrase alone and suggests ``buy``; the
+    statement then adds up, and nothing of it is written until a person
+    confirms the suggestion ("Import as read"). With no usable answer the
+    document is read exactly as without a model.
+    """
+    stmt, row = _reworded(fid.fidelity_statement(seed=96), "Periodic Investment Plan")
+    accounts = _fid_accounts(env, stmt)
+    words = Vocabulary(actions={"periodic investment plan": "buy"}, model="example-model")
+    asked = _with_model(monkeypatch, words if answered else None)
+    document_id = env.ingest(fid.fidelity_pdf(stmt), "investment-report.pdf")
+
+    assert asked == [(["periodic investment plan"], [])]
+    individual = accounts[0]
+    assert individual is not None
+    document = env.document(document_id)
+    assert document.status is DocumentStatus.NEEDS_REVIEW
+    assert env.txns(individual) == []
+    stored = ExtractResult.model_validate(document.extraction)
+    assert stored.parse is not None
+    if not answered:
+        # As without a model: the row is unread and reported, the cash does not add up.
+        assert "ml_vocabulary" not in (document.confidence or {})
+        assert stored.parse.unknown_actions == ["periodic investment plan"]
+        assert "investment_reconciliation_failed" in env.reasons(document_id)
+        return
+    assert (document.confidence or {})["ml_vocabulary"] == words.stored()
+    assert stored.parse.unknown_actions == []
+    (item,) = env.open_reviews(document_id)
+    assert item.payload["reason"] == "investment_low_confidence"
+    assert item.payload["fields"] == ["suggested_type"]
+    assert item.payload["reconciliation"] == "ok"
+    (line,) = item.payload["lines"]
+    assert (line["type"], line["fields"]) == ("buy", ["suggested_type"])
+    assert line["date"] == row.day.isoformat()
+    assert Decimal(line["amount"]) == row.amount
+
+    _import_as_read(env, item)
+    assert env.document(document_id).status is DocumentStatus.PROCESSED
+    assert env.open_reviews(document_id) == []
+    assert env.activity(individual) == _fid_expected(stmt.accounts[0])
+    assert _fid_holdings(env, individual) == _fid_positions(stmt.accounts[0])
+    assert len(env.snapshots(individual)) == 1
+    # The answer is kept: the confirmation's re-run did not ask again.
+    assert len(asked) == 1
 
 
 def test_a_chosen_account_takes_only_the_unmatched_statement(env: Env) -> None:

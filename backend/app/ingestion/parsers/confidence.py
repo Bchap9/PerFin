@@ -22,6 +22,9 @@ knows about how it read the value:
   (0..100 scaled to 0..1);
 * a statement that does not reconcile: every row capped at
   :data:`UNRECONCILED`; one that cannot be checked: :data:`UNCHECKED`.
+* a row whose kind the optional local model suggested
+  (``app.ingestion.parsers.vocabulary``): :data:`SUGGESTED` on its
+  ``suggested_type`` field, whatever else was read well.
 """
 
 from __future__ import annotations
@@ -38,6 +41,9 @@ MISSING: Final = 0.5
 UNRECONCILED: Final = 0.5
 UNCHECKED: Final = 0.8
 CONTRADICTED: Final = 0.4
+#: A kind the optional local model suggested (ADR-0010): below any threshold
+#: (``PERFIN_INGEST_CONFIDENCE_THRESHOLD`` is never under 0.5), so a person confirms it.
+SUGGESTED: Final = 0.4
 
 
 def scaled(base: float, ocr: float | None) -> float:

@@ -2006,6 +2006,30 @@ proposed accounts and the review queue's account suggestions are filled in
 from it, marked as the model's. Nothing reaches the ledger on its say-so, and
 a failed or slow call leaves the document as it would have been.
 
+A second question, for brokerage statements only (`app.ml.client.activity_hints`,
+`app/ingestion/parsers/vocabulary.py`; ADR-0010's amendment). The parsers type
+an activity row by its action words and its section's heading from fixed
+lists; a row neither names is left unread and its words are reported
+(`ParseInfo.unknown_actions` / `unknown_headings`: normalised, every digit
+masked, so no reference or account number is kept). When there are any and
+the model is on, the worker sends just those phrases (`POST /v1/vocabulary`,
+at most 40 of each) and asks what kind of activity each is, from a closed
+list: an activity type for a phrase (not `split`, which needs a ratio no
+phrase gives), a row-typing section kind for a heading (never `skip`: a
+model may not hide a table), or `unknown`. Answers are matched to the phrases
+PerFin sent by their number and only listed kinds are kept
+(`validated_vocabulary`); they are stored on the document
+(`confidence.ml_vocabulary`, used again without asking) and the pages are
+read once more with them. A row typed this way has its date, amount,
+quantity and security read from the page as any other, is checked by the
+statement's reconciliation like any other, and carries the `suggested_type`
+doubt (confidence 0.4, below any threshold): the importer holds it as it
+holds any row in doubt ("What a statement says about its own rows": alone
+when it moves cash, with its statement when it moves units) and the review
+queue's **Import as read** is the person's confirmation of the suggested
+kinds (`CONFIRMABLE_DOUBTS`: `reconciliation`, `suggested_type`). A heading
+or phrase the parser's own lists know is never the model's to type.
+
 The heuristic classifier is a small local model trained offline on synthetic
 and contributed samples; it never makes network calls and ships as a versioned
 artefact in the image.

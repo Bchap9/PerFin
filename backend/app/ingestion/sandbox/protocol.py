@@ -961,6 +961,15 @@ class ParseInfo(_Strict):
     #: Tax forms (``app.ingestion.parsers.tax_forms``; amounts only).
     tax_forms: list[TaxFormRead] = Field(default_factory=list, max_length=50)
     warnings: list[Code] = Field(default_factory=list, max_length=WARNINGS_MAX)
+    #: Action phrases and section headings of activity rows a brokerage
+    #: parser could not type (``app.ingestion.parsers.vocabulary.phrase_key``:
+    #: normalised, digits masked): what the optional local model may be asked.
+    unknown_actions: list[Annotated[str, Field(max_length=SECTION_LABEL_MAX)]] = Field(
+        default_factory=list, max_length=MAX_SECTION_CHECKS
+    )
+    unknown_headings: list[Annotated[str, Field(max_length=SECTION_LABEL_MAX)]] = Field(
+        default_factory=list, max_length=MAX_SECTION_CHECKS
+    )
 
 
 class ExtractError(_Strict):

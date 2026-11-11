@@ -27,6 +27,7 @@ import { getTransaction, txKeys, type Transaction } from "../transactions/api";
 import {
   accountResolution,
   canImportAsRead,
+  hasSuggestedKinds,
   dismissItem,
   duplicateResolution,
   importAsReadResolution,
@@ -490,7 +491,9 @@ export function ReviewItemCard({ item }: { item: ReviewItem }) {
       {heldStatement ? <HeldLines item={item} /> : null}
       {asRead && actionable ? (
         <p className="ledger-muted">
-          {reason === "investment_lines_held"
+          {hasSuggestedKinds(item)
+            ? "“Import as read” confirms the kinds the local model suggested for the lines listed above and imports them as printed."
+            : reason === "investment_lines_held"
             ? "“Import as read” imports the lines listed above as printed; the rest of the statement is already imported."
             : reason === "investment_reconciliation_failed"
               ? "“Import as read” imports this statement as printed. PerFin records no account value from it, because its totals do not add up."

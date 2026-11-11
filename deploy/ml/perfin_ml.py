@@ -10,9 +10,15 @@ the only thing the worker talks to; the runtime is never exposed to PerFin.
 
 Policy, deliberately narrow:
 
-* ``POST /v1/document`` only, with ``Authorization: Bearer <PERFIN_ML_TOKEN>``
+* ``POST /v1/document`` ("what is this document?") and ``POST
+  /v1/vocabulary`` ("what kind of activity is each of these phrases, what
+  kind of section is each of these headings?": the words of a brokerage
+  statement PerFin's own vocabulary does not know, each answered from a
+  closed list), with ``Authorization: Bearer <PERFIN_ML_TOKEN>``
   (compared in constant time). Bodies are capped (:data:`MAX_BODY`); the
-  text sent to the model is cut to :data:`MAX_TEXT` characters.
+  text sent to the model is cut to :data:`MAX_TEXT` characters, a
+  vocabulary request to :data:`MAX_PHRASES` phrases of
+  :data:`PHRASE_MAX` characters each.
 * The model must answer with JSON that matches :data:`SCHEMA` (the runtime's
   structured-output mode). The answer is normalised here and checked again
   by the worker, which treats it as an untrusted suggestion: nothing it
@@ -94,6 +100,84 @@ SCHEMA: Final[dict[str, Any]] = {
     },
     "required": ["kind", "institution", "accounts", "period_start", "period_end", "confidence"],
 }
+#: Vocabulary requests: phrases and headings per request, and their length.
+MAX_PHRASES: Final = 40
+PHRASE_MAX: Final = 80
+#: What a phrase of a brokerage statement's activity can be said to be
+#: (``unknown``: none of them, or not sure; the worker then leaves the row unread).
+ACTIVITY_TYPES: Final = (
+    "buy",
+    "sell",
+    "dividend",
+    "interest",
+    "fee",
+    "reinvest",
+    "transfer_in",
+    "transfer_out",
+    "deposit",
+    "withdrawal",
+    "corporate_action",
+    "unknown",
+)
+#: What a section heading above an activity table can be said to list.
+SECTION_KINDS: Final = (
+    "income",
+    "deposit",
+    "withdrawal",
+    "card",
+    "cash",
+    "fee",
+    "transfer_in",
+    "transfer_out",
+    "unknown",
+)
+
+
+def _choices(key: str, values: tuple[str, ...]) -> dict[str, Any]:
+    return {
+        "type": "array",
+        "maxItems": MAX_PHRASES,
+        "items": {
+            "type": "object",
+            "properties": {
+                "index": {"type": "integer", "minimum": 1, "maximum": MAX_PHRASES},
+                key: {"type": "string", "enum": list(values)},
+            },
+            "required": ["index", key],
+        },
+    }
+
+
+#: The answer of a vocabulary call: one choice per numbered phrase and heading.
+VOCABULARY_SCHEMA: Final[dict[str, Any]] = {
+    "type": "object",
+    "properties": {
+        "actions": _choices("type", ACTIVITY_TYPES),
+        "headings": _choices("kind", SECTION_KINDS),
+    },
+    "required": ["actions", "headings"],
+}
+VOCABULARY_PROMPT: Final = """You label the wording of brokerage and retirement account
+statements for a personal finance app. Answer only with JSON matching the schema.
+You get two numbered lists taken from one statement (digits are masked as 0).
+ACTIONS are the words in the activity column of single rows. For each, say what the
+row is, by its number:
+- buy / sell: a security was bought or sold. reinvest: a dividend bought more units.
+- dividend: a dividend or capital gain distribution paid in cash. interest: interest.
+- fee: a fee, commission, tax withheld or margin interest charged.
+- transfer_in / transfer_out: units of a security moved into or out of the account.
+- deposit / withdrawal: cash moved into or out of the account (contributions,
+  distributions, checks, card purchases, bill payments are cash too).
+- corporate_action: a merger, spin-off, exchange or name change.
+HEADINGS are the titles printed above tables of activity. For each, say what every
+row under it is, by its number:
+- income: dividends and interest. fee: fees and taxes. card: card purchases and checks.
+- deposit: cash in. withdrawal: cash out. cash: cash in or out by the sign of the amount.
+- transfer_in / transfer_out: securities moved in or out.
+Answer unknown whenever the words do not say it plainly, or the heading is a summary,
+a balance, an estimate or anything that is not a list of transactions. Never guess."""
+
+
 PROMPT: Final = """You read financial documents for a personal finance app.
 Answer only with JSON matching the schema. Use only facts printed in the document:
 - kind: what the document is (statement = bank, card, loan or brokerage statement or
@@ -171,6 +255,47 @@ def normalise(answer: Any) -> dict[str, Any]:
     }
 
 
+def _phrases(value: Any) -> list[str]:
+    """The phrases of a vocabulary request: strings, single-spaced, bounded."""
+    out: list[str] = []
+    for entry in value[:MAX_PHRASES] if isinstance(value, list) else []:
+        out.append(_text(entry, PHRASE_MAX) or "")
+    return out
+
+
+def _chosen(answer: Any, key: str, allowed: tuple[str, ...], count: int) -> list[dict[str, Any]]:
+    """The choices for phrases ``1..count``: each number once, a listed value, not ``unknown``."""
+    out: dict[int, str] = {}
+    for entry in answer if isinstance(answer, list) else []:
+        if not isinstance(entry, dict):
+            continue
+        index, value = entry.get("index"), entry.get(key)
+        if (
+            isinstance(index, int)
+            and not isinstance(index, bool)
+            and 1 <= index <= count
+            and index not in out
+            and value in allowed
+            and value != "unknown"
+        ):
+            out[index] = value
+    return [{"index": index, key: value} for index, value in sorted(out.items())]
+
+
+def normalise_vocabulary(answer: Any, actions: int, headings: int) -> dict[str, Any]:
+    """The model's answer reduced to :data:`VOCABULARY_SCHEMA` (anything else dropped)."""
+    data = answer if isinstance(answer, dict) else {}
+    return {
+        "actions": _chosen(data.get("actions"), "type", ACTIVITY_TYPES, actions),
+        "headings": _chosen(data.get("headings"), "kind", SECTION_KINDS, headings),
+    }
+
+
+def _numbered(title: str, phrases: list[str]) -> str:
+    lines = [f"{number}. {phrase}" for number, phrase in enumerate(phrases, start=1)]
+    return f"{title}:\n" + ("\n".join(lines) if lines else "(none)")
+
+
 class Runtime:
     """The Ollama runtime: one request at a time (a GPU runs one model call well)."""
 
@@ -212,6 +337,30 @@ class Runtime:
         content = reply.get("message", {}).get("content", "")
         answer = normalise(json.loads(content) if isinstance(content, str) else {})
         return {**answer, "model": model}
+
+    def vocabulary(self, actions: list[str], headings: list[str]) -> dict[str, Any]:
+        """What each numbered phrase and heading is (the text model, closed lists)."""
+        body = {
+            "model": self.config.model,
+            "stream": False,
+            "format": VOCABULARY_SCHEMA,
+            "options": {"temperature": 0, "num_ctx": self.config.context},
+            "messages": [
+                {"role": "system", "content": VOCABULARY_PROMPT},
+                {
+                    "role": "user",
+                    "content": f"{_numbered('ACTIONS', actions)}\n\n"
+                    f"{_numbered('HEADINGS', headings)}",
+                },
+            ],
+        }
+        with self.lock:
+            reply = self._post("/api/chat", body)
+        content = reply.get("message", {}).get("content", "")
+        answer = normalise_vocabulary(
+            json.loads(content) if isinstance(content, str) else {}, len(actions), len(headings)
+        )
+        return {**answer, "model": self.config.model}
 
     def health(self) -> dict[str, Any]:
         try:
@@ -264,7 +413,7 @@ def make_handler(config: Config, runtime: Runtime) -> type[BaseHTTPRequestHandle
             )
 
         def _document(self) -> tuple[int, int]:
-            if self.path != "/v1/document":
+            if self.path not in ("/v1/document", "/v1/vocabulary"):
                 self._send(404, {"error": "not_found"})
                 return 404, 0
             supplied = self.headers.get("Authorization", "")
@@ -283,6 +432,8 @@ def make_handler(config: Config, runtime: Runtime) -> type[BaseHTTPRequestHandle
             except ValueError:
                 self._send(400, {"error": "bad_json"})
                 return 400, length
+            if self.path == "/v1/vocabulary":
+                return self._vocabulary(body, length)
             text = body.get("text") if isinstance(body, dict) else None
             page = body.get("page_png") if isinstance(body, dict) else None
             if not isinstance(text, str) or not text.strip():
@@ -290,6 +441,20 @@ def make_handler(config: Config, runtime: Runtime) -> type[BaseHTTPRequestHandle
                 return 422, length
             try:
                 answer = runtime.document(text, page if isinstance(page, str) else None)
+            except (OSError, ValueError, urllib.error.URLError):
+                self._send(502, {"error": "runtime_failed"})
+                return 502, length
+            self._send(200, answer)
+            return 200, length
+
+        def _vocabulary(self, body: Any, length: int) -> tuple[int, int]:
+            actions = _phrases(body.get("actions") if isinstance(body, dict) else None)
+            headings = _phrases(body.get("headings") if isinstance(body, dict) else None)
+            if not any(actions) and not any(headings):
+                self._send(422, {"error": "phrases_required"})
+                return 422, length
+            try:
+                answer = runtime.vocabulary(actions, headings)
             except (OSError, ValueError, urllib.error.URLError):
                 self._send(502, {"error": "runtime_failed"})
                 return 502, length

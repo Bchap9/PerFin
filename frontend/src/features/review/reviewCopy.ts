@@ -8,6 +8,7 @@ import { formatDate } from "../../lib/dates";
 import { formatDecimal, formatMoney } from "../../lib/money";
 import {
   canImportAsRead,
+  hasSuggestedKinds,
   payloadDifferences,
   payloadIds,
   payloadLines,
@@ -143,6 +144,9 @@ function doubtedLines(item: ReviewItem): string | null {
   }
   return count === 1 ? "1 line" : `${String(count)} lines`;
 }
+
+const SUGGESTED_WHY =
+  "The local model only suggests; PerFin never records a kind of activity on a model's word, so it asks you to confirm.";
 
 const AS_READ_STEP =
   "“Import as read” if the statement itself is off (rounding, items it leaves out): its trades, holdings and prices are imported as printed, but no account value is recorded from this statement.";
@@ -535,6 +539,19 @@ const COPY: Readonly<Record<string, Copy>> = {
   }),
   "low_confidence_field:investment_low_confidence": (item) => {
     const fields = payloadIds(item, "fields");
+    if (hasSuggestedKinds(item) && canImportAsRead(item)) {
+      const lines = doubtedLines(item) ?? "some lines";
+      return {
+        title: "Check what the local model suggested",
+        what: `PerFin did not know the wording of ${lines} of this statement, so the local model suggested what kind of activity ${lines === "1 line" ? "it is" : "they are"} (listed below). ${lines === "1 line" ? "It moves" : "They move"} shares, which the holdings are checked against, so nothing of the statement was imported yet.`,
+        why: SUGGESTED_WHY,
+        steps: [
+          "Compare the suggested kind of each line below with the statement (“Show document”).",
+          "“Import as read” if the suggestions are right: the statement is imported with them.",
+          "“Dismiss” to import nothing from it; add its activity by hand.",
+        ],
+      };
+    }
     if (fields.length === 1 && fields[0] === "reconciliation") {
       return {
         title: "Nothing to check against",
@@ -568,9 +585,26 @@ const COPY: Readonly<Record<string, Copy>> = {
         ? "The holdings were imported"
         : `The holdings and the other ${String(imported)} activity lines were imported`;
     const sections = sectionTexts(item);
+    const one = lines === "1 line";
+    const fields = payloadIds(item, "fields");
+    if (hasSuggestedKinds(item) && !fields.includes("reconciliation")) {
+      return {
+        title: "Check what the local model suggested",
+        what: `${rest}; PerFin did not know the wording of ${lines.toLowerCase()} of this statement, so the local model suggested what kind of activity ${one ? "it is" : "they are"} (listed below) and ${one ? "it waits" : "they wait"} for you.`,
+        why: SUGGESTED_WHY,
+        steps: [
+          "Compare the suggested kind of each line below with the statement (“Show document”).",
+          ...asReadSteps(
+            item,
+            "“Import as read” if the suggestions are right: these lines are imported with them.",
+          ),
+          "“Dismiss” to leave these lines out; add any that are right by hand.",
+        ],
+      };
+    }
     return {
       title: "A few lines need a look",
-      what: `${rest}; ${lines} of this statement ${lines === "1 line" ? "was" : "were"} held back because the statement's own totals do not vouch for ${lines === "1 line" ? "it" : "them"}.${sections.length === 0 ? "" : ` ${sections.join(" ")}`}${unreadText(item)}`,
+      what: `${rest}; ${lines} of this statement ${one ? "was" : "were"} held back because the statement's own totals do not vouch for ${one ? "it" : "them"}.${sections.length === 0 ? "" : ` ${sections.join(" ")}`}${unreadText(item)}`,
       why: "PerFin checks each section's lines against the total the statement prints for it, and only holds the lines of a section that does not add up.",
       steps: [
         "Compare the lines listed below with the statement (“Show document”).",

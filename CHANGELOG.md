@@ -87,6 +87,26 @@ What remains (details in docs/ROADMAP.md):
 - The review queue shows the lines in doubt as a table and says which
   section's total they miss and by how much.
 
+### Added
+
+- **The optional local model suggests what kind of activity an unfamiliar
+  wording is** (ADR-0010, amended; docs/ML.md). A brokerage parser types a
+  row by its action words and its section's heading from fixed lists; a row
+  neither names used to be left unread, and its statement then did not add
+  up. With the `ml` profile on, the worker now sends just those phrases
+  (normalised, digits masked; `POST /v1/vocabulary` on the adapter,
+  `app.ml.client.activity_hints`) and asks what kind of activity each is,
+  from a closed list. The checked answer (`confidence.ml_vocabulary`) is
+  used to read the pages once more: the figures are the page's own and the
+  statement is reconciled as always. Such a row carries the
+  `suggested_type` doubt and is never written on the model's word: it
+  waits in the review queue, shown with the kind read and marked as the
+  model's suggestion, and "Import as read" confirms it. The model cannot
+  supply a figure or mark a table as not activity, and a phrase PerFin's
+  own lists know is never its to type. Without the model, or without a
+  usable answer, a document is read exactly as before. Tested against a
+  fake runtime only, like the rest of the adapter.
+
 ## [1.0.0-rc.6] - 2026-11-10
 
 Sixth release candidate of 1.0.0. A usability pass over the whole product:
