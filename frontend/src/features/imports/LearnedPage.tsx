@@ -318,8 +318,8 @@ function WordingCard({ canWrite }: { canWrite: boolean }) {
     <Card title="Statement wording">
       <p className="ledger-muted">
         Learned when you confirmed a kind of activity the local model suggested for wording PerFin did not know. Only the wording is
-        kept: a section&rsquo;s heading or a broker&rsquo;s action words, with every digit masked. No amount, date, security,
-        account or name from the statement is stored, and the model itself keeps nothing.
+        kept: a section&rsquo;s heading, a broker&rsquo;s action words or a table&rsquo;s column heading, with every digit
+        masked. No amount, date, security, account or name from the statement is stored, and the model itself keeps nothing.
       </p>
       {wording.isPending ? <Spinner label="Loading wording" /> : null}
       {wording.isError ? (

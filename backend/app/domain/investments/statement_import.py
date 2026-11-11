@@ -1450,6 +1450,9 @@ def _openings(
             {
                 "reason": "investment_opening_basis_unknown",
                 "account_id": str(account.id),
+                # Opened at the statement's price (not at zero, as an
+                # activity export's shortfall is): no gain is shown yet.
+                "costed_at": "price",
                 "securities": [
                     {
                         "security_id": str(row.security_id),

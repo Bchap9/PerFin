@@ -100,6 +100,8 @@ export function differenceText(
       return `Cash: the opening cash plus this period's activity comes to ${computed}, but the statement prints a closing cash of ${printed} (${apart}).`;
     case "total_value":
       return `Account value: the holdings plus the cash come to ${computed}, but the statement prints an account value of ${printed} (${apart}).`;
+    case "index_value":
+      return `Account list: the document's list of accounts prints ${printed} for this account, but the account's own pages print an account value of ${computed} (${apart}).`;
     default:
       return `${difference.check}: ${computed} read against ${printed} printed (${apart}).`;
   }
@@ -479,16 +481,65 @@ const COPY: Readonly<Record<string, Copy>> = {
       "Correct anything wrong, then confirm.",
     ],
   }),
-  "low_confidence_field:reconciliation_failed": () => ({
-    title: "The statement does not add up",
-    what: "The rows read from this statement do not add up to its opening and closing balance.",
-    why: "A row may have been misread or missed, so every row is pending and no balance was recorded.",
-    steps: [
-      "If PerFin misread a balance, enter the balances the statement prints and “Check and accept”.",
-      "Otherwise compare the rows with the document and correct the wrong ones.",
-      "Confirm when the totals match.",
-    ],
-  }),
+  "low_confidence_field:reconciliation_failed": (item) => {
+    const doubted = payloadNumber(item, "rows_in_doubt");
+    const total = payloadNumber(item, "rows_total");
+    // The statement's running balance vouches for the other rows: only the
+    // rows it does not vouch for wait (none: a printed balance is off).
+    const some = doubted !== null && total !== null && doubted < total;
+    const why = !some
+      ? "A row may have been misread or missed, so every row is pending and no balance was recorded."
+      : doubted === 0
+        ? "The statement's running balance vouches for every row, so they were imported as usual; a printed balance is off, so no balance was recorded."
+        : `The statement's running balance vouches for the other ${String(total - doubted)} rows, so only ${doubted === 1 ? "1 row is" : `${String(doubted)} rows are`} pending; no balance was recorded.`;
+    return {
+      title: "The statement does not add up",
+      what: "The rows read from this statement do not add up to its opening and closing balance.",
+      why,
+      steps: [
+        "If PerFin misread a balance, enter the balances the statement prints and “Check and accept”.",
+        some && doubted !== 0
+          ? "Otherwise compare the pending rows with the document and correct the wrong ones."
+          : "Otherwise compare the rows with the document and correct the wrong ones.",
+        "Confirm when the totals match.",
+      ],
+    };
+  },
+  "low_confidence_field:accounts_not_read": (item) => {
+    const accounts = payloadIds(item, "accounts");
+    const several = accounts.length > 1;
+    const named =
+      accounts.length === 0
+        ? "an account"
+        : several
+          ? `the accounts ending in ${accounts.join(", ")}`
+          : `the account ending in ${accounts[0] ?? ""}`;
+    return {
+      title: "An account was not read",
+      what: `This document lists ${named}, but PerFin found no pages for ${several ? "them" : "it"}, so nothing was imported for ${several ? "those accounts" : "that account"}.`,
+      why: "The pages may be missing from the file, or laid out in a way PerFin did not recognise as that account's.",
+      steps: [
+        "Check the document (“Show document”) for that account's pages.",
+        "If they are there, use “Teach PerFin” to show the account's tables; if the file is incomplete, download the full statement and upload it.",
+        "Dismiss this item once the account is taken care of.",
+      ],
+    };
+  },
+  "low_confidence_field:investment_short_position": (item) => {
+    const count = Array.isArray(item.payload["positions"])
+      ? (item.payload["positions"] as unknown[]).length
+      : 0;
+    const one = count <= 1;
+    return {
+      title: "Short position not shown",
+      what: `This statement lists ${one ? "a short position" : `${String(count)} short positions`} (a negative quantity). PerFin does not track short positions yet, so ${one ? "it is" : "they are"} not among the holdings shown for the account.`,
+      why: "The account value recorded from the statement includes the short position; the list of holdings does not.",
+      steps: [
+        "Nothing was lost: the statement's other holdings and its activity were imported.",
+        "Dismiss this item once you have seen it.",
+      ],
+    };
+  },
   "low_confidence_field:reconciliation_unavailable": () => ({
     title: "Could not check the totals",
     what: "PerFin found no balances on this statement to check its rows against, so they are pending.",
@@ -497,16 +548,25 @@ const COPY: Readonly<Record<string, Copy>> = {
       "Or glance over the rows and confirm them.",
     ],
   }),
-  "low_confidence_field:investment_opening_basis_unknown": () => ({
-    title: "Cost basis needed",
-    what: "This export sells shares that were bought before its first row. PerFin added them as an opening position with an unknown cost basis (zero for now).",
-    why: "Gains on these sales are overstated until the real cost is entered.",
-    steps: [
-      "Enter the cost per unit of each opening position below (or on the opening transaction in Investments).",
-      "Or import an older export or statement for this account first.",
-      "Dismiss this item once the basis is right.",
-    ],
-  }),
+  "low_confidence_field:investment_opening_basis_unknown": (item) => {
+    // A statement's holding without a printed cost is opened at its price;
+    // an activity export's shortfall is opened at zero.
+    const atPrice = payloadString(item, "costed_at") === "price";
+    return {
+      title: "Cost basis needed",
+      what: atPrice
+        ? "This statement prints no cost basis for some holdings the account already had. PerFin opened them at the statement's price, so they show no gain or loss yet."
+        : "This export sells shares that were bought before its first row. PerFin added them as an opening position with an unknown cost basis (zero for now).",
+      why: atPrice
+        ? "Gains on these holdings are wrong until the real cost is entered."
+        : "Gains on these sales are overstated until the real cost is entered.",
+      steps: [
+        "Enter the cost per unit of each opening position below (or on the opening transaction in Investments).",
+        "Or import an older export or statement for this account first.",
+        "Dismiss this item once the basis is right.",
+      ],
+    };
+  },
   "low_confidence_field:investment_lot_conflict": () => ({
     title: "Holdings do not line up",
     what: "This statement sells more shares than the account held, so nothing of it was imported.",
@@ -621,7 +681,7 @@ const COPY: Readonly<Record<string, Copy>> = {
     const texts = [...differenceTexts(item), ...sectionTexts(item)];
     return {
       title: "Statement imported; its totals disagree",
-      what: `Every line of this statement is vouched for by its own totals, so it was imported.${texts.length === 0 ? " Some of its printed totals disagree with each other." : ` ${texts.join(" ")}`}${unreadText(item)}`,
+      what: `Every line of this statement is vouched for by its own totals, so it was imported and nothing waits on you.${texts.length === 0 ? " Some of its printed totals disagree with each other." : ` ${texts.join(" ")}`}${unreadText(item)}`,
       why: "Nothing read from the statement is in doubt, but PerFin does not record an account value from totals that disagree.",
       steps: [
         "Compare the figures with the statement (“Show document”).",

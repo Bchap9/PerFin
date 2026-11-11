@@ -31,8 +31,10 @@ import {
   dismissItem,
   duplicateResolution,
   importAsReadResolution,
+  linesSelectable,
   listReviewItems,
   payloadIds,
+  payloadLines,
   payloadString,
   payloadSuggestions,
   receiptResolution,
@@ -419,6 +421,13 @@ export function ReviewItemCard({ item }: { item: ReviewItem }) {
     },
   });
   const busy = resolve.isPending || dismiss.isPending;
+  // Lines that stand alone (none moves shares) are imported or left out one
+  // by one: all ticked to begin with; null until the person unticks one.
+  const selectable = linesSelectable(item);
+  const [unticked, setUnticked] = useState<ReadonlySet<number>>(new Set());
+  const listed = payloadLines(item).map((line) => line.index);
+  const ticked = new Set(listed.filter((index) => !unticked.has(index)));
+  const someLines = selectable && ticked.size < listed.length;
   // Any item about a page the caller may see can be taught from.
   const teachable =
     item.document_id !== null && item.document?.previewable === true;
@@ -488,7 +497,33 @@ export function ReviewItemCard({ item }: { item: ReviewItem }) {
       {item.kind === "low_confidence_field" && !heldStatement ? (
         <LowConfidenceTools item={item} actionable={actionable} />
       ) : null}
-      {heldStatement ? <HeldLines item={item} /> : null}
+      {heldStatement ? (
+        selectable && actionable ? (
+          <HeldLines
+            item={item}
+            selected={ticked}
+            onSelect={(index, chosen) => {
+              setUnticked((before) => {
+                const next = new Set(before);
+                if (chosen) {
+                  next.delete(index);
+                } else {
+                  next.add(index);
+                }
+                return next;
+              });
+            }}
+          />
+        ) : (
+          <HeldLines item={item} />
+        )
+      ) : null}
+      {heldStatement && selectable && actionable ? (
+        <p className="ledger-muted">
+          Untick a line to leave it out: only the ticked lines are imported,
+          and PerFin does not ask about the others again.
+        </p>
+      ) : null}
       {asRead && actionable ? (
         <p className="ledger-muted">
           {hasSuggestedKinds(item)
@@ -587,12 +622,18 @@ export function ReviewItemCard({ item }: { item: ReviewItem }) {
             <Button
               variant="primary"
               loading={resolve.isPending}
-              disabled={dismiss.isPending}
+              disabled={dismiss.isPending || (selectable && ticked.size === 0)}
               onClick={() => {
-                resolve.mutate(importAsReadResolution());
+                resolve.mutate(
+                  someLines
+                    ? importAsReadResolution([...ticked].sort((a, b) => a - b))
+                    : importAsReadResolution(),
+                );
               }}
             >
-              Import as read
+              {someLines
+                ? `Import ${String(ticked.size)} of ${String(listed.length)} lines`
+                : "Import as read"}
             </Button>
           ) : null}
           {teachable ? (

@@ -5,7 +5,7 @@ import userEvent from "@testing-library/user-event";
 import { authedSession, json, mockApi, renderApp } from "../auth/testing";
 import { lookupHandlers, NOW } from "../transactions/fixtures";
 import type { LearnedLayout, LearnedWording, Mapping } from "./api";
-import { layoutReads, mappingReads } from "./learned";
+import { layoutReads, mappingReads, wordingMeans } from "./learned";
 
 const TAUGHT: LearnedLayout = {
   id: "l-1",
@@ -217,5 +217,26 @@ describe("LearnedPage", () => {
     await screen.findByText("Everyday export");
     expect(screen.queryByRole("button", { name: /Forget/ })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /Rename|Delete/ })).not.toBeInTheDocument();
+  });
+});
+
+describe("what a learned phrase means", () => {
+  const base = {
+    id: "w",
+    layout: "example-brokerage-statement",
+    learned_at: "2026-11-05T00:00:00Z",
+    learned_from_document_id: null,
+  };
+
+  it("says what a column heading holds", () => {
+    expect(
+      wordingMeans({ ...base, kind: "column", phrase: "money in out", meaning: "amount" }),
+    ).toBe("A table column holding the amount");
+    expect(
+      wordingMeans({ ...base, kind: "section", phrase: "sweep program activity", meaning: "cash" }),
+    ).toContain("A section of cash in or out");
+    expect(
+      wordingMeans({ ...base, kind: "action", phrase: "periodic investment plan", meaning: "buy" }),
+    ).toBe("A line that is a purchase");
   });
 });

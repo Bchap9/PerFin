@@ -29,6 +29,7 @@ export const docKeys = {
   one: (id: string) => [...queryRoots.documents, "detail", id] as const,
   regions: (id: string, page: number) => [...queryRoots.documents, "regions", id, page] as const,
   imported: (id: string) => [...queryRoots.documents, "imported", id] as const,
+  summary: (id: string) => [...queryRoots.documents, "summary", id] as const,
   linkedTransaction: (id: string) => [...queryRoots.documents, "linked-transaction", id] as const,
   findTransactions: (search: TransactionSearch) => [...queryRoots.documents, "find-transactions", search] as const,
 } as const;
@@ -172,6 +173,23 @@ export function linkDocument(documentId: string, targetType: AttachTarget, targe
     api.POST("/api/v1/documents/{document_id}/link", {
       params: { path: { document_id: documentId }, header: { "Idempotency-Key": idempotencyKey } },
       body: { target_type: targetType, target_id: targetId },
+    }),
+  );
+}
+
+export type DocumentSummary = Schemas["DocumentSummary"];
+export type StatementSummary = Schemas["StatementSummary"];
+export type SummaryGroup = Schemas["SummaryGroup"];
+
+/**
+ * The summary tables a brokerage statement prints, per account of the
+ * document (change in account value, cash flow, income, realized gains) and
+ * each section of its activity against the total printed for it.
+ */
+export function getDocumentSummary(id: string): Promise<DocumentSummary> {
+  return unwrap(
+    api.GET("/api/v1/documents/{document_id}/summary", {
+      params: { path: { document_id: id } },
     }),
   );
 }

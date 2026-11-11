@@ -25,6 +25,7 @@ import {
 import { DocumentLinksCard } from "./AttachDialog";
 import { DeleteDocumentDialog } from "./DeleteDocumentDialog";
 import { PageViewer } from "./PageViewer";
+import { StatementSummaryCard } from "./StatementSummaryCard";
 import { TeachDialog, currentReadings } from "../review/TeachDialog";
 
 export function DocumentDetailPage() {
@@ -174,6 +175,9 @@ export function DocumentDetailPage() {
               />
             ) : null}
           </Card>
+          {doc.can_edit && doc.kind === "statement" && !doc.quarantined ? (
+            <StatementSummaryCard documentId={doc.id} />
+          ) : null}
           <DocumentLinksCard document={doc} />
           {doc.quarantined ? null : (
             <Card title="Pages">

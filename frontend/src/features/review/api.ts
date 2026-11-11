@@ -283,6 +283,60 @@ export function payloadLines(item: ReviewItem): HeldLine[] {
 }
 
 /**
+ * A holding of a brokerage statement that waits with its lines (payload
+ * ``positions``): its security is in doubt, so nothing of it was written.
+ */
+export interface HeldPosition {
+  index: number;
+  symbol: string | null;
+  name: string | null;
+  page: number | null;
+  fields: string[];
+}
+
+export function payloadPositions(item: ReviewItem): HeldPosition[] {
+  const value: unknown = new Map(Object.entries(item.payload)).get("positions");
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  const out: HeldPosition[] = [];
+  for (const entry of value as unknown[]) {
+    if (typeof entry !== "object" || entry === null) {
+      continue;
+    }
+    const index = field(entry, "index");
+    const symbol = field(entry, "symbol");
+    const name = field(entry, "name");
+    const page = field(entry, "page");
+    const fields = field(entry, "fields");
+    if (typeof index !== "number") {
+      continue;
+    }
+    out.push({
+      index,
+      symbol: typeof symbol === "string" ? symbol : null,
+      name: typeof name === "string" ? name : null,
+      page: typeof page === "number" ? page : null,
+      fields: Array.isArray(fields)
+        ? fields.filter((f): f is string => typeof f === "string")
+        : [],
+    });
+  }
+  return out;
+}
+
+/**
+ * The item's lines stand alone (none moves shares), so each can be
+ * imported or left out on its own (payload ``selectable``).
+ */
+export function linesSelectable(item: ReviewItem): boolean {
+  return (
+    new Map(Object.entries(item.payload)).get("selectable") === true &&
+    payloadLines(item).length > 1
+  );
+}
+
+/**
  * The doubts a person settles by saying "import as read" (the server's
  * ``CONFIRMABLE_DOUBTS``): whether the rows add up, and a kind of activity
  * the optional local model suggested for words PerFin did not know.
@@ -319,11 +373,19 @@ export function canImportAsRead(item: ReviewItem): boolean {
     return true;
   }
   const fields = payloadIds(item, "fields");
+  // A holding whose quantity x price is not its printed value carries the
+  // ``market_value`` doubt: settled the same way when that is the check
+  // that failed.
+  const valueDoubt = payloadIds(item, "failed").includes("positions");
   return (
     (reason === "investment_low_confidence" ||
       reason === "investment_lines_held") &&
     fields.length > 0 &&
-    fields.every((field) => CONFIRMABLE_DOUBTS.has(field))
+    fields.every(
+      (field) =>
+        CONFIRMABLE_DOUBTS.has(field) ||
+        (valueDoubt && field === "market_value"),
+    )
   );
 }
 
@@ -503,13 +565,19 @@ export function lowConfidenceResolution(
   };
 }
 
-/** "Import as read": the item's held brokerage statement, imported as printed. */
-export function importAsReadResolution(): Schemas["ResolveLowConfidence"] {
+/**
+ * "Import as read": the item's held brokerage statement, imported as printed.
+ * ``lines``: only these of the lines it lists (the others are left out).
+ */
+export function importAsReadResolution(
+  lines?: readonly number[],
+): Schemas["ResolveLowConfidence"] {
   return {
     kind: "low_confidence_field",
     transactions: [],
     confirm: false,
     import_as_read: true,
+    ...(lines === undefined ? {} : { lines: [...lines] }),
   };
 }
 

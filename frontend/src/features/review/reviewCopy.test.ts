@@ -51,6 +51,8 @@ const REASONS: readonly [ReviewItem["kind"], string][] = [
   ["low_confidence_field", "investment_reconciliation_failed"],
   ["low_confidence_field", "investment_lines_held"],
   ["low_confidence_field", "investment_figures_differ"],
+  ["low_confidence_field", "investment_short_position"],
+  ["low_confidence_field", "accounts_not_read"],
   ["low_confidence_field", "position_mismatch"],
   ["possible_duplicate", "statement_overlap"],
   ["possible_duplicate", "same_content"],
@@ -246,16 +248,16 @@ describe("review explanations", () => {
         differences: [
           {
             check: "total_value",
-            printed: "103351.180000",
-            computed: "108051.180000",
-            difference: "4700.000000",
+            printed: "50000.000000",
+            computed: "50250.000000",
+            difference: "250.000000",
           },
         ],
       }),
     );
     expect(found.title).toBe("Statement imported; its totals disagree");
-    expect(found.what).toContain("so it was imported.");
-    expect(found.what).toContain("a difference of $4,700.00");
+    expect(found.what).toContain("so it was imported and nothing waits on you.");
+    expect(found.what).toContain("a difference of $250.00");
     expect(found.steps.some((step) => step.startsWith("“Import as read”"))).toBe(
       false,
     );
@@ -338,5 +340,79 @@ describe("review explanations", () => {
     expect(
       explain(item("rejected_email", { reason: "daily_digest" })).what,
     ).toBe("This email was not accepted.");
+  });
+});
+
+describe("what the import says about rows and accounts", () => {
+  it("says how many rows of a bank statement wait", () => {
+    const some = explain(
+      item("low_confidence_field", {
+        reason: "reconciliation_failed",
+        rows_in_doubt: 1,
+        rows_total: 24,
+      }),
+    );
+    expect(some.why).toContain("the other 23 rows");
+    expect(some.why).toContain("only 1 row is pending");
+    const none = explain(
+      item("low_confidence_field", {
+        reason: "reconciliation_failed",
+        rows_in_doubt: 0,
+        rows_total: 24,
+      }),
+    );
+    expect(none.why).toContain("vouches for every row");
+    const all = explain(
+      item("low_confidence_field", { reason: "reconciliation_failed" }),
+    );
+    expect(all.why).toContain("every row is pending");
+  });
+
+  it("names the accounts a document lists and does not print", () => {
+    const one = explain(
+      item("low_confidence_field", {
+        reason: "accounts_not_read",
+        accounts: ["0002"],
+      }),
+    );
+    expect(one.what).toContain("the account ending in 0002");
+    const two = explain(
+      item("low_confidence_field", {
+        reason: "accounts_not_read",
+        accounts: ["0002", "0003"],
+      }),
+    );
+    expect(two.what).toContain("the accounts ending in 0002, 0003");
+  });
+
+  it("tells a statement's missing cost basis from an export's", () => {
+    const statement = explain(
+      item("low_confidence_field", {
+        reason: "investment_opening_basis_unknown",
+        costed_at: "price",
+      }),
+    );
+    expect(statement.what).toContain("at the statement's price");
+    const exported = explain(
+      item("low_confidence_field", {
+        reason: "investment_opening_basis_unknown",
+      }),
+    );
+    expect(exported.what).toContain("zero for now");
+  });
+
+  it("explains a value the account list prints differently", () => {
+    expect(
+      differenceText(
+        {
+          check: "index_value",
+          printed: "1000.00",
+          computed: "1250.00",
+          difference: "250.00",
+          count: null,
+        },
+        "USD",
+      ),
+    ).toContain("list of accounts prints $1,000.00");
   });
 });

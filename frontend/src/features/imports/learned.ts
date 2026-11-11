@@ -64,8 +64,23 @@ const SECTION_LABELS: ReadonlyMap<string, string> = new Map(Object.entries({
   transfer_out: "shares moved out",
 }));
 
+const COLUMN_LABELS: ReadonlyMap<string, string> = new Map(Object.entries({
+  date: "the date",
+  settle: "the settlement date",
+  type: "the kind of transaction",
+  description: "the description",
+  symbol: "the symbol",
+  quantity: "the quantity",
+  price: "the price",
+  amount: "the amount",
+  fees: "the fees",
+}));
+
 /** What a learned phrase means, in plain words. */
 export function wordingMeans(wording: LearnedWording): string {
+  if (wording.kind === "column") {
+    return `A table column holding ${COLUMN_LABELS.get(wording.meaning) ?? words(wording.meaning)}`;
+  }
   if (wording.kind === "section") {
     return `A section of ${SECTION_LABELS.get(wording.meaning) ?? words(wording.meaning)}`;
   }
