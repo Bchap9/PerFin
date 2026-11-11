@@ -199,6 +199,7 @@ POST            /documents/{id}/reprocess
 GET             /documents/{id}/imported        rows a delete with data would remove
 DELETE          /documents/{id}                 ?with_data=true also deletes the imported rows
 POST            /documents/{id}/link            attach to transaction etc.
+GET             /documents/{id}/summary         the summary tables a brokerage statement prints, per account
 
 GET/POST        /imports/mappings               saved CSV/TSV column mappings
 GET/PATCH/DELETE /imports/mappings/{id}
@@ -345,8 +346,9 @@ household's; audit `parser_fingerprint.delete`, event
 `{"items": [{"id", "layout", "kind", "phrase", "meaning", "learned_at",
 "learned_from_document_id"}]}`: the statement wording the household
 confirmed after the optional local model suggested what it means (`kind`
-`action` or `section`; `phrase` lower case with every digit masked;
-`meaning` an activity type or a section kind; nothing else of any
+`action`, `section` or `column`; `phrase` lower case with every digit
+masked; `meaning` an activity type, a section kind or a column's role;
+nothing else of any
 statement is kept, INGESTION.md "Models in the pipeline"). `DELETE
 /imports/wording/{id}` (member or above; `id` is 32 hex characters, else
 `422`) forgets one phrase (`204`; `404 wording-not-found`; audit
@@ -540,6 +542,20 @@ names and what PerFin knows of it. `POST /documents/{id}/accounts/apply`
 created by name, last four digits recorded), and answers `202` with
 `{"document_id", "created", "job_id"}`: one `imports.apply_mapping` job with
 every choice as an `assignment`.
+`GET /documents/{id}/summary` (the same people) returns `{"document_id",
+"statements": [{"index", "last4", "name", "currency", "period_start",
+"period_end", "as_of", "positions", "activity", "positions_value",
+"cash_opening", "cash_closing", "total_value", "reconciliation": "ok" |
+"mismatch" | "unavailable" | null, "checks", "failed", "groups":
+[{"group": "account_value" | "cash_flow" | "income" | "realized", "lines":
+[{"label", "role": "opening" | "closing" | "total" | "item", "detail",
+"amount", "year_to_date", "page"}]}], "sections": [{"label", "rows",
+"status": "ok" | "mismatch" | "unchecked", "printed", "computed",
+"difference", "source", "page"}]}]}`: what each brokerage statement of the
+document prints about itself (its summary tables, line by line, and each
+section of its activity against the total printed for it), read from the
+stored extraction; `statements` is empty for a document without one.
+Amounts are decimal strings; nothing is computed or written.
 `GET /review?state=&kind=&document=&cursor=&limit=` (any role; `state`
 defaults to `open`, `all` for every state; oldest first, `limit` 1-500)
 lists items of documents the caller can see whose payload `account_id`, if
@@ -604,9 +620,14 @@ whose rows are not its printed total, with `label`, `printed`, `computed`,
 doubt, when the statement says which; `unread_summary_lines`; `currency`,
 `statement`, `statement_key`) or an
 `investment_low_confidence` item whose `fields` are only
-`["reconciliation"]`, or the lines of an imported statement held back in
-an `investment_lines_held` item (`lines`, `sections`, `held`, `imported`)
-whose `fields` are only `["reconciliation"]`; any other item is
+`reconciliation` and `suggested_type`, or the lines and holdings of an
+imported statement held back in an `investment_lines_held` item (`lines`,
+`positions`, `sections`, `held`, `imported`, `selectable`) whose `fields`
+are only those (and `market_value` where `failed` names `positions`). On
+an item with `selectable: true` the body may add `"lines": [index, ...]`
+(a non-empty subset of the item's `lines`, else `422`): only those lines
+are imported and the others are left out without being asked about again.
+Any other item is
 `422 invalid-resolution` (an `investment_figures_differ` item, raised for
 a statement imported whole whose own totals disagree, is only dismissed). It needs
 edit on the item's account (`404 account-not-found`) and queues

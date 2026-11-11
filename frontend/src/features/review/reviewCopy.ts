@@ -530,12 +530,17 @@ const COPY: Readonly<Record<string, Copy>> = {
       ? (item.payload["positions"] as unknown[]).length
       : 0;
     const one = count <= 1;
+    const left = payloadNumber(item, "lines_left_out") ?? 0;
+    const trades =
+      left === 0
+        ? ""
+        : ` ${left === 1 ? "The 1 trade" : `The ${String(left)} trades`} in ${one ? "that security" : "those securities"} on this statement ${left === 1 ? "was" : "were"} left out with ${one ? "it" : "them"}.`;
     return {
       title: "Short position not shown",
-      what: `This statement lists ${one ? "a short position" : `${String(count)} short positions`} (a negative quantity). PerFin does not track short positions yet, so ${one ? "it is" : "they are"} not among the holdings shown for the account.`,
+      what: `This statement lists ${one ? "a short position" : `${String(count)} short positions`} (a negative quantity). PerFin does not track short positions yet, so ${one ? "it is" : "they are"} not among the holdings shown for the account.${trades}`,
       why: "The account value recorded from the statement includes the short position; the list of holdings does not.",
       steps: [
-        "Nothing was lost: the statement's other holdings and its activity were imported.",
+        "The statement's other holdings and activity were imported.",
         "Dismiss this item once you have seen it.",
       ],
     };

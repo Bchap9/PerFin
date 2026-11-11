@@ -401,6 +401,18 @@ describe("what the import says about rows and accounts", () => {
     expect(exported.what).toContain("zero for now");
   });
 
+  it("says a short position and its trades were left out", () => {
+    const found = explain(
+      item("low_confidence_field", {
+        reason: "investment_short_position",
+        positions: [{ symbol: "ZZSHT", quantity: "-100.00" }],
+        lines_left_out: 2,
+      }),
+    );
+    expect(found.what).toContain("a short position");
+    expect(found.what).toContain("The 2 trades in that security");
+  });
+
   it("explains a value the account list prints differently", () => {
     expect(
       differenceText(

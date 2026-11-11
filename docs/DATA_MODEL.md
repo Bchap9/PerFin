@@ -121,7 +121,8 @@ downgrade drops the Phase 1 enum types):
   "entries": [{"layout", "kind", "phrase", "meaning", "learned_at",
   "document_id"}]}` (at most 500 entries, each checked again on every
   read): phrases of a statement layout a person confirmed after the local
-  model suggested their kind. A phrase holds no digit and nothing the
+  model suggested their kind (`kind`: `action`, `section` or `column`, a
+  table's column heading and the role it names). A phrase holds no digit and nothing the
   household's scrubber would mask; no value of any statement is stored. No
   new table.
 - `household.base_currency` is an active ISO 4217 code (fund, metal, test and
@@ -741,7 +742,10 @@ Notes on structured imports (`app/domain/imports/`, Phase 2):
   `review_state = pending` next to a `possible_duplicate` review item. A
   statement's closing balance (OFX `LEDGERBAL`, the last running balance of a
   CSV) becomes a `balance_snapshot` with `source = statement` and
-  `source_document_id`.
+  `source_document_id`. A brokerage statement's first import for an account
+  also writes one for the day before its period, from the *Beginning
+  Account Value* its own summary prints, when that summary adds up to the
+  closing value and no snapshot exists from that day to the period's end.
 - Review item payloads of the importer (ids, counts and row numbers only):
   `unparsed` (`mapping_required`, `mapping_ambiguous`, `mapping_failed`,
   `no_records`), `unknown_account` (`account_not_found`,
@@ -770,7 +774,11 @@ Notes on structured imports (`app/domain/imports/`, Phase 2):
   (`fields`, `parser`, `count`, `transactions`: id, fields, confidence,
   page), `reconciliation_failed`/`reconciliation_unavailable` (`opening`,
   `closing`, `total`, `difference` as decimal strings, `running_mismatches`
-  count and row indices), `lines_skipped` (`count`) and, for payslips,
+  count and row indices, `rows_in_doubt` of `rows_total`: only the rows the
+  statement's running balance does not vouch for are pending),
+  `lines_skipped` (`count`, `lines`: page and box where known),
+  `accounts_not_read` (`accounts`: the last four digits of accounts the
+  document's own index lists and no statement was read for) and, for payslips,
   `payslip_does_not_add_up`/`low_confidence` (`fields`, `adds_up`). A
   statement that does not reconcile writes no balance snapshot. Brokerage
   statements are `extraction.investments` (positions, activity, cash and
@@ -780,10 +788,16 @@ Notes on structured imports (`app/domain/imports/`, Phase 2):
   (`checks`, `failed`, `positions`, cash and totals as decimal strings,
   `differences`, `sections`, `lines`, `unread_summary_lines`),
   `investment_low_confidence` (`fields`, `positions`, `activity`, `lines`),
-  `investment_lines_held` (the cash lines of an imported statement held
-  back: `fields`, `lines`, `sections`, `held`, `imported`),
+  `investment_lines_held` (the lines and holdings of an imported
+  statement held back: `fields`, `lines`, `positions`, `sections`, `held`,
+  `imported`, `selectable`),
   `investment_figures_differ` (a statement imported whole whose own totals
-  disagree: `failed`, `differences`, `sections`),
+  disagree: `failed`, `differences`, `sections`; a notice, it does not keep
+  the document in `needs_review`),
+  `investment_opening_basis_unknown` (`securities`; `costed_at: "price"`
+  for a statement's holding opened at its price),
+  `investment_short_position` (`positions`: symbol, name, quantity, value;
+  `lines_left_out`),
   `position_mismatch` (`securities`: `history`/`reported` units),
   `investment_lot_conflict` (`code`), `investment_out_of_order`
   (`rows`), `investment_same_name_securities` (`names`) and

@@ -58,20 +58,49 @@ What remains (details in docs/ROADMAP.md):
     holdings and every other line are imported; a statement with no row in
     doubt whose own totals disagree (a printed account value that is not
     holdings + cash) is imported with an `investment_figures_differ`
-    notice. A position or a line moving units in doubt still holds its
-    statement whole (the positions are reconciled against every such
-    line), now naming the lines and sections. OFX and activity exports,
-    which print no such figures, are held as before.
+    notice, which no longer keeps its document in "needs review". A
+    position or a line moving units in doubt holds **its security**, not
+    the statement: that holding and every line moving it wait together
+    (the units are reconciled against each other) and the rest is
+    imported; only when nothing would be left is the statement held
+    whole. Held lines that stand alone can be imported or left out one by
+    one (`ResolveLowConfidence.lines`). OFX and activity exports, which
+    print no such figures, are held as before.
   - The account's value is recorded when only the cash activity check
     failed and holdings + closing cash is the printed account value, and
     for an account that prints no cash and whose value is its holdings (a
     529 plan).
+- **Bank and card PDF statements: only the rows in doubt wait**
+  (`statement_generic` and `card_statement_generic` 6, the institution
+  layouts 4). A failed balance check used to mark every row pending. The
+  statement's own running balance now vouches for the rows it agrees
+  with; only the rows it does not vouch for (or the one row that is the
+  whole difference) are pending, none when a printed balance alone is
+  off (`Reconciliation.doubtful`; the review item says how many of how
+  many rows wait). Blocks printed side by side are read one after the
+  other here too.
 - **Brokerage layouts read more of the page** (`brokerage_statement_generic`
   8, `fidelity_investments_statement` 7, `placeholder_brokerage` 6):
   - Blocks printed side by side are read one after the other
     (`app/ingestion/parsers/blocks.py`): a summary box beside a table no
     longer hides the table's header (debit card activity beside its
-    summary was not read), and a label keeps its amounts.
+    summary was not read), and a label keeps its amounts. The region
+    ends at the header of a table printed across the page.
+  - Lines under a trade are kept with it: a security's name over two
+    lines, and the notes printed below (accrued interest, a wash sale, a
+    bond's coupon and maturity) go to the row's memo instead of being
+    dropped.
+  - A row whose date prints no year and falls outside the period (a card
+    purchase posted the month before) is placed in the nearest year and
+    marked as a guess, not dropped.
+  - Entries under a table whose header the parser cannot use are counted
+    and shown (`lines_unread`, with their place on the page) instead of
+    being passed over silently, and that header ends the table above it.
+  - A document of several accounts is checked against its own account
+    list: each account's value against the ending value the list prints
+    for it (`index_value`), the list's value stands in for an account
+    whose pages print none, and an account the list names that no
+    statement was read for raises an `accounts_not_read` item.
   - The statement's own summary tables are kept as figures, not rows
     (`InvestmentStatement.figures`): the account-value bridge, the core
     account's cash flow, the income summary and the realized gains;
@@ -85,7 +114,18 @@ What remains (details in docs/ROADMAP.md):
     bond bought with nothing in the symbol column is named by its name,
     its issuer's first word is no ticker.
 - The review queue shows the lines in doubt as a table and says which
-  section's total they miss and by how much.
+  section's total they miss and by how much; lines that stand alone have
+  a tick each, and a holding that waits is listed with its reason.
+- **Cost basis and short positions are said, not guessed.** A holding the
+  account already had whose statement prints a cost basis for its other
+  holdings but not for this one is opened at the statement's price and
+  raises an `investment_opening_basis_unknown` item (it showed no gain
+  and no question before). A short position (a negative quantity) raises
+  an `investment_short_position` notice: it is in the account value
+  recorded from the statement and not among the holdings shown, because
+  the lot engine does not track short positions yet; its trades on the
+  statement are left out with it rather than read as ordinary purchases
+  and sales.
 
 ### Added
 
@@ -116,6 +156,31 @@ What remains (details in docs/ROADMAP.md):
   free text, never a digit, never a phrase the household's scrubber would
   mask, and no amount, date, security or account. The model itself keeps
   nothing between calls. A suggestion nobody confirmed teaches nothing.
+- **The model is asked about the whole statement, and about column
+  headings.** A long statement is put to the model in several calls, each
+  unknown phrase with the page that prints it (at most six calls a
+  document), so wording past the first `PERFIN_ML_MAX_CHARS` is no longer
+  left unasked. When a table's header names no column the parser knows as
+  the date or the amount, the model may say what each heading names, from
+  a closed list of column roles; the parser then reads the table itself
+  and every row of it waits for a person, like any suggestion. A model
+  cannot hide a column or rename one the parser knows. A confirmed
+  heading is remembered as wording (kind `column`).
+- **`perfin ml eval`** asks the configured adapter about PerFin's own
+  vocabulary (its activity words and section headings) and reports how
+  often the model agrees, with the phrases it got wrong; `--min-agreement`
+  fails the command below a floor. No personal data is sent and nothing is
+  stored. It needs a running model; the test suite uses a fake adapter.
+- **The value a statement opens with starts an account's history.** The
+  first brokerage statement of an account records its *Beginning Account
+  Value* as the balance of the day before the period, when the statement's
+  own account-value summary adds up to the closing value recorded and
+  nothing else is known of those days.
+- **Statement summary** (`GET /documents/{id}/summary`, the card on the
+  document page): per account of a document, the summary tables the
+  statement prints (change in account value, cash flow, income, realized
+  gains), the checks that held, and each activity section against its
+  printed total.
 
 ## [1.0.0-rc.6] - 2026-11-10
 

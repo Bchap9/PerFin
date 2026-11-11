@@ -80,6 +80,7 @@ from app.domain.review.schemas import (
     ResolveLowConfidence,
     ResolveUnknownAccount,
 )
+from app.domain.transactions import transfers
 from app.domain.transactions.models import Transaction
 from app.ingestion.intake.upload import receive_upload
 from app.ingestion.parsers.vocabulary import Vocabulary
@@ -796,6 +797,51 @@ def test_the_summary_a_statement_prints_is_shown_per_account(env: Env) -> None:
         with pytest.raises(ProblemError) as refused:
             import_summary.document_summary(db, env.principal(member), document_id)
     assert refused.value.status in (403, 404)
+
+
+def test_cash_moved_between_two_accounts_of_one_report_is_paired_as_a_transfer(env: Env) -> None:
+    """A withdrawal from one account of the report that is a deposit into another.
+
+    Both legs come from the same document; the after-import matcher
+    (``app.domain.transactions.transfers.auto_pair``, seeded with the
+    document's rows) pairs them like any other transfer.
+    """
+    stmt = fid.fidelity_statement(seed=104)
+    first, second = stmt.accounts[0], stmt.accounts[1]
+    out = next(a for a in first.activity if a.table == "withdrawals")
+    moved = Decimal("1234.56")
+    sent = replace(out, amount=-moved)
+    received = fid.FidActivity(
+        day=out.day,
+        type="deposit",
+        action="Transferred From Another Account",
+        amount=moved,
+        table="deposits",
+        reference="ZZ0001",
+    )
+    stmt = replace(
+        stmt,
+        accounts=(
+            replace(first, activity=tuple(sent if a is out else a for a in first.activity)),
+            replace(second, activity=(*second.activity, received)),
+            *stmt.accounts[2:],
+        ),
+    )
+    accounts = _fid_accounts(env, stmt)
+    document_id = env.ingest(fid.fidelity_pdf(stmt), "investment-report.pdf")
+    assert env.document(document_id).status is DocumentStatus.PROCESSED, env.reasons(document_id)
+
+    with env.factories.transaction() as db:
+        set_context(db, env.household_id)
+        outcome = transfers.auto_pair(db, env.household_id, source_document_id=document_id)
+    assert len(outcome.pairs) >= 1
+    source, target = accounts[0], accounts[1]
+    assert source is not None
+    assert target is not None
+    (leg_out,) = [t for t in env.cash_rows(source) if t.amount == -moved]
+    (leg_in,) = [t for t in env.cash_rows(target) if t.amount == moved]
+    assert leg_out.transfer_group_id is not None
+    assert leg_out.transfer_group_id == leg_in.transfer_group_id
 
 
 def test_a_tampered_account_is_held_and_the_others_are_written(env: Env) -> None:
@@ -1785,8 +1831,22 @@ def test_an_unknown_cost_basis_and_a_short_position_are_said(env: Env) -> None:
     (short,) = by_reason["investment_short_position"].payload["positions"]
     assert short["symbol"] == symbols["short"]
     assert Decimal(short["quantity"]) < 0
-    # Not held short (the lot engine holds no short position) ...
+    # Not held short (the lot engine holds no short position), and not held
+    # long either: nothing of the shorted security is among the holdings,
+    # none of its trades is written, and no "holdings differ" item is raised.
     assert all(quantity > 0 for _, quantity in _fid_holdings(env, individual))
+    assert symbols["short"] not in {symbol for symbol, _ in _fid_holdings(env, individual)}
+    assert not any(
+        symbol == symbols["short"] and kind in UNIT_KINDS
+        for _, kind, symbol, _, _ in env.activity(individual)
+    )
+    assert "position_mismatch" not in by_reason
+    trades = [
+        a
+        for a in stmt.accounts[0].activity
+        if a.symbol == symbols["short"] and a.type in UNIT_KINDS
+    ]
+    assert by_reason["investment_short_position"].payload["lines_left_out"] == len(trades)
     # ... and in the account's value, which is the statement's.
     (snapshot,) = env.snapshots(individual)
     stored = ExtractResult.model_validate(env.document(document_id).extraction)

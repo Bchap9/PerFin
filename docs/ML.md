@@ -78,25 +78,46 @@ nvidia-smi` should list the card).
   worker asks the model what kind of activity that phrase is, from a fixed
   list (purchase, sale, dividend, interest, fee, deposit, withdrawal, ...).
   It sends those phrases together with the statement's text, so the model
-  can read each phrase on the rows it stands on (up to
-  `PERFIN_ML_MAX_CHARS`; raise it, with `ML_CONTEXT` on the adapter, if
-  your statements are long and your GPU has room). The model cannot supply
+  can read each phrase on the rows it stands on. One request carries up to
+  `PERFIN_ML_MAX_CHARS` of text; a longer statement is asked about in
+  several requests (at most six), each phrase with the page that prints
+  it, so nothing is left unasked because it is printed late in the
+  document. Raise `PERFIN_ML_MAX_CHARS`, with `ML_CONTEXT` on the adapter,
+  if your GPU has room and you would rather send more per request. The model cannot supply
   a figure or say a table is not activity; it can only pick a kind or
   decline, and a kind per phrase is all that comes back. The statement is then read again with the
   suggested kinds: the dates and amounts are the page's own, and the
   statement's totals are checked as always. A line typed this way is never
   imported on its own. It shows up in the review queue as "kind suggested
   by the local model" with the kind read ("Read as"), and **Import as
-  read** confirms it. Lines that only move cash wait while the rest of the
-  statement is imported; a line that moves shares holds its statement until
-  you confirm. The answer is kept with the document, so confirming does not
-  ask the model again.
+  read** confirms it. Lines that only move cash wait on their own, and you
+  can tick which of them to import; a line that moves shares waits together
+  with its holding and that holding's other lines. The rest of the
+  statement is imported either way. The answer is kept with the document,
+  so confirming does not ask the model again.
+- **Column headings PerFin does not know.** When a table's header names no
+  column PerFin knows as the date or the amount ("Posted", "Money In/Out"),
+  the table is not read and its entries are reported. With the model on,
+  the worker asks what each unknown heading names, from a fixed list (date,
+  settlement date, kind of transaction, description, symbol, quantity,
+  price, amount, fees). PerFin then reads the table itself; every line of
+  it waits in the review queue as a suggestion, and confirming it teaches
+  the heading for that layout. The model cannot hide a column or change
+  the meaning of one PerFin already knows.
+- **Check a model before you trust its suggestions.** Run
+  `perfin ml eval` on the worker (or `docker compose exec worker perfin ml
+  eval`). It asks your model about the few hundred activity words and
+  section headings PerFin already knows the kind of, and prints how often
+  it agrees and which ones it got wrong. Nothing of yours is sent. A model
+  that mistypes "dividend received" will not type your broker's unusual
+  wording either; try a larger model or keep the profile off.
 - **What is remembered, and what is not.** The model itself remembers
   nothing: PerFin never trains or tunes it, every request stands alone with
   no history, and the adapter stores nothing and logs no content. When you
   confirm suggested kinds, PerFin keeps the *wording* for your household so
   the next statement of that layout is read with no model and no question:
-  a section's heading or a broker's action words, and what kind it is. It
+  a section's heading, a broker's action words or a table's column
+  heading, and what it means. It
   never keeps a payee, merchant or memo, any digit, a phrase containing a
   household member's name, an address or one of your account numbers, or
   any amount, date, security or account from the statement. You can see

@@ -91,17 +91,40 @@ The rules above hold unchanged; this adds one question under them.
   `suggested_type` doubt, scored below any confidence threshold a deployment
   may set. The importer never writes it: a line moving only cash waits in an
   `investment_lines_held` item while the rest of its statement is imported,
-  a line moving units holds its statement. The review queue shows each such
+  a line moving units waits there with its security's position and other
+  lines. The review queue shows each such
   line with the kind suggested, marked as the model's, and "Import as read"
   is the person's confirmation.
+
+- **The whole statement, in bounded calls.** One call carries
+  `PERFIN_ML_MAX_CHARS` of text. A longer statement is asked about in
+  several calls, each phrase with the page that prints it and the pages
+  that print none left out, at most six calls a document
+  (`pipeline._vocabulary_batches`). Every call stands alone; no answer is
+  carried into the next.
+- **Column headings, the same way.** When a table's header names no column
+  the parser knows as the date or the amount, its unknown heading cells
+  (words, no digits) are a third numbered list. The model picks what each
+  names from a closed list of column roles or `unknown`. It cannot hide a
+  column (there is no such role), and a heading the parser's own
+  vocabulary knows keeps the parser's meaning whatever the answer. The
+  parser then reads the table through its ordinary header rules, and every
+  row of a table read through a suggested heading carries the
+  `suggested_type` doubt and waits for a person. The question is asked
+  only about a document a brokerage parser is already reading.
+- **Measured, not assumed.** `perfin ml eval` asks the configured adapter
+  about the parsers' own vocabulary (no statement text, nothing personal)
+  and reports how often the model agrees. It is a first measure of a
+  model, not a gate: a suggestion is held for a person whatever the score.
 
 - **Only layout is remembered, and only once a person confirmed it.**
   "Import as read" on rows the model typed keeps the *wording* for the
   household (`app.domain.imports.wording`, one household setting), so the
   next statement of that layout is read without the model and without a
   question. What is kept is a phrase and its kind, for that layout: a
-  section's heading, or the action words of a table that names its
-  securities in a column of their own. Never the free text of a cash table
+  section's heading, the action words of a table that names its
+  securities in a column of their own, or a table's column heading and the
+  role it names. Never the free text of a cash table
   (a payee, a merchant, a memo), never a digit (masked in the key), never a
   phrase the household's scrubber would mask (a member's or the household's
   name, an address, a stored account number), and no amount, date,

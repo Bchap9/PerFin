@@ -571,13 +571,21 @@ a child answering with parser output is `bad_output`.
   `extraction.parse.receipt` (`kind = receipt`, the date as the period).
 - **Reconciliation** (`reconcile.py`, SECURITY.md C12): opening + sum =
   closing within less than one cent, and each printed running balance =
-  previous + amount. A statement that does not reconcile (`mismatch`), or
-  has neither balances nor a running balance (`unavailable`), has every row
-  capped below the threshold (`reconciliation` field); the importer then
-  imports all its rows pending, raises a `low_confidence_field` item
-  (`reconciliation_failed`/`reconciliation_unavailable` with opening,
-  closing, total, difference and the rows whose running balance disagrees)
-  and writes **no** balance snapshot from it. An amount confirmed by the
+  previous + amount. A statement that has neither balances nor a running
+  balance (`unavailable`) has every row capped below the threshold
+  (`reconciliation` field). One that does not reconcile (`mismatch`) has
+  only the rows left in doubt capped (`reconcile.doubtful_rows`,
+  `Reconciliation.doubtful`): a row whose printed running balance is the
+  previous balance plus its amount is vouched for (rows without a balance
+  between two balances that agree are vouched for together); without
+  running balances, the one row whose amount is the whole difference;
+  otherwise every row. A printed opening or closing balance that is off
+  while the running balance holds leaves no row in doubt. The importer
+  imports the doubtful rows pending and the others as usual, raises a
+  `low_confidence_field` item (`reconciliation_failed`/
+  `reconciliation_unavailable` with opening, closing, total, difference,
+  the rows whose running balance disagrees, `rows_in_doubt` and
+  `rows_total`) and writes **no** balance snapshot from it. An amount confirmed by the
   running balance scores 1.0.
 - **Confidence** (`confidence.py`): per field (`posted_date`, `amount`,
   `payee`, `reconciliation`; statement: `period`, `opening_balance`,
@@ -699,8 +707,13 @@ OFX `INVSTMTRS` in the sandbox or from a PDF/scan's pages in the worker.
     joined again by their own height (a label keeps its amounts whatever
     the other block printed a few points higher) and the left block is
     read first. The region ends with the page, at a line with a cell
-    across the cut, or at a heading of the left block standing clear of
-    the lines above (the next full-width section). A table's header cell
+    across the cut, at a heading of the left block standing clear of
+    the lines above (the next full-width section), or at the header of a
+    table printed across the page (a line the parser reads as a table
+    header as a whole and on neither side of the cut alone). The bank and
+    card statement parser unfolds blocks the same way (its block titles:
+    *Account Summary*, *Interest Summary*, *Transaction Detail*, ...). A
+    table's header cell
     that is also a heading word (`Description | Contributions`) opens
     nothing.
   - **Summary tables are figures, not rows** (`InvestmentStatement.figures`,
@@ -748,6 +761,30 @@ OFX `INVSTMTRS` in the sandbox or from a PDF/scan's pages in the worker.
     these rows are capped below the threshold with the `reconciliation`
     doubt. A source that prints none of this (OFX, an activity export)
     has no rows singled out and is held whole.
+  - **The document's account list is a check too** (a document of several
+    accounts, `app/ingestion/parsers/accounts.py`): the index of accounts
+    on its first pages prints a beginning and an ending value for each.
+    The ending value is compared with the account value printed on the
+    account's own pages (the `index_value` check; it singles out no row),
+    stands in for an account whose pages print no value, and an account
+    the index lists that no statement was read for is reported
+    (`ParseInfo.unread_accounts`, warning `accounts_not_read`, an
+    `accounts_not_read` review item naming the last four digits).
+  - **Lines under a row belong to it**: the first line under a trade in
+    the name column continues the security's name; text under the action
+    or description (accrued interest, a wash sale note, a bond's coupon
+    and maturity) is kept as the row's notes and ends in its memo. A row
+    whose date prints no year and falls outside the statement's period (a
+    card purchase posted the month before) is placed in the nearest year
+    with a guessed-date confidence, not dropped.
+  - **Entries nothing read are said**: a line with a date and an amount
+    under no table the parser could read (the table's header names no
+    column it knows as the date or the amount) is counted and its place
+    kept (`lines_unread`, shown by the `lines_skipped` item's highlight).
+    The header of such a table ends the table above it, so its entries
+    are never read through another table's columns. Its unknown column
+    headings are what the optional local model may be asked about
+    (`ParseInfo.unknown_columns`; "Models in the pipeline").
 - **Table reading** (any institution; the synthetic Fidelity-layout report
   `tests/fixtures/synth_fidelity_report.py` and the provider-neutral
   combined statement `synth_neutral_report.py` are read to the last row
@@ -1045,18 +1082,29 @@ OFX `INVSTMTRS` in the sandbox or from a PDF/scan's pages in the worker.
     explains): the statement is imported whole and
     `investment_figures_differ` (`failed`, `differences`, `sections`,
     `unread_summary_lines`) tells the person what does not add up;
-  - *only lines moving cash are in doubt* (dividends, interest, fees,
-    deposits, withdrawals; for the `reconciliation` doubt or any other: a
-    date outside the period, an amount hard to read): the positions and
-    every other line are written, and `investment_lines_held` lists the
-    lines held back (`lines`: `index`, `page`, `date`, `type`,
-    `description`, `amount`, `section`, `fields`; `held`, `imported`) with
-    the `sections` that do not add up (`label`, `printed`, `computed`,
-    `difference`, `rows`, `source`, `page`);
-  - *anything else* (a line moving units or a position in doubt: the
-    positions are reconciled against every such line; OFX and activity
-    exports, which do not say where a failed check comes from; a document
-    with nothing to check against): the statement writes **nothing** and
+  - *some lines or holdings are in doubt and the statement says which*
+    (for the `reconciliation` doubt or any other: a date outside the
+    period, an amount hard to read): what is in doubt waits and the rest
+    is written. A line moving cash only (a dividend, interest, a fee, a
+    deposit, a withdrawal) waits on its own. A line moving units, or a
+    position, makes **its security** wait: the position and every line
+    moving that security are held together (the units are reconciled
+    against each other; `fields: ["held_with_security"]` for the lines no
+    figure doubts), nothing is opened or compared for it, and no balance
+    snapshot is written while a position waits. `investment_lines_held`
+    lists the lines held back (`lines`: `index`, `page`, `bbox`, `date`,
+    `type`, `description`, `amount`, `section`, `fields`; `held`,
+    `imported`), the holdings that wait (`positions`: `index`, `symbol`,
+    `name`, `fields`, `page`, `bbox`) and the `sections` that do not add
+    up (`label`, `printed`, `computed`, `difference`, `rows`, `source`,
+    `page`). `selectable: true` when no held line moves units: the answer
+    may then name the lines to import (`lines`), and the others are left
+    out without being asked about again;
+  - *anything else* (a line moving units that names no security, or
+    nothing that could be written without what is in doubt; OFX and
+    activity exports, which do not say where a failed check comes from; a
+    document with nothing to check against): the statement writes
+    **nothing** and
     raises `investment_reconciliation_failed` (checks,
     failed checks, mismatched positions, cash and totals, the statement's
     index and key (`statement_key`), the account's currency,
@@ -1071,14 +1119,33 @@ OFX `INVSTMTRS` in the sandbox or from a PDF/scan's pages in the worker.
   check failed while holdings + closing cash is the printed account value
   (the lines in doubt do not change what the account is worth); an account
   that prints no cash at all and whose account value is its holdings (a
-  529 plan) holds none. Real statements do not
+  529 plan) holds none. With that snapshot, the first statement of an
+  account also records the value it **opens** with (the *Beginning
+  Account Value* of its account-value summary) for the day before the
+  period, when that summary adds up to the closing value recorded and no
+  snapshot of any source exists from that day to the period's end: an
+  account's history then starts where its first statement does. A holding
+  the account already had whose statement prints a cost basis for its
+  other holdings but not for this one is opened at the statement's price
+  and raises `investment_opening_basis_unknown` (`costed_at: "price"`); a
+  position with a negative quantity (a short position) is in the
+  statement's value and not among the holdings: the lot engine tracks no
+  short position, so the position and the lines moving that security's
+  units are left out of it whole (a short sale would read as selling units
+  never held) and an `investment_short_position` notice says so
+  (`positions`, `lines_left_out`).
+  An `investment_figures_differ` item is a notice: the statement was
+  imported whole, so it stays in the queue until seen and does not keep
+  its document in `needs_review`. Real statements do not
   always add up on their own (rounding, items the issuer leaves out), so
   the review queue offers **Import as read** for an
   `investment_reconciliation_failed` item, and for an
   `investment_low_confidence` or `investment_lines_held` item whose only
-  doubt is `reconciliation` (a document statement with nothing to check
-  against; the held lines of an imported one, whose rows already written
-  are skipped by their hashes). The answer is for
+  doubts are `reconciliation`, a suggested reading (`suggested_type`) or,
+  where the `positions` check failed, a holding's `market_value` (a
+  document statement with nothing to check against; the held lines and
+  holdings of an imported one, whose rows already written are skipped by
+  their hashes). The answer is for
   that statement only: its key is a digest of the statement exactly as
   read (`app/domain/imports/statement_answers.py`), the resolution records
   it with the item's account, and every import of the document from then
@@ -2023,9 +2090,13 @@ once more with what is known about those words, in this order:
    is on.
 
 For the second, the worker sends those phrases (`POST /v1/vocabulary`, at
-most 40 of each) with the statement's text to read them in (the pages that
-print them first, cut to `PERFIN_ML_MAX_CHARS`) and asks what kind of
-activity each is, from a closed list: an activity type for a phrase (not `split`, which needs a ratio no
+most 40 of each) with the statement's text to read them in and asks what
+kind of activity each is. One call carries `PERFIN_ML_MAX_CHARS` of text; a
+statement that fits is sent whole (the pages that print a phrase first), a
+longer one in several calls, each phrase with the page that prints it and
+the pages that print none left out (`pipeline._vocabulary_batches`; at most
+six calls a document, what is left over is asked in the last one). The
+answers are from a closed list: an activity type for a phrase (not `split`, which needs a ratio no
 phrase gives), a row-typing section kind for a heading (never `skip`: a
 model may not hide a table), or `unknown`. Answers are matched to the phrases
 PerFin sent by their number and only listed kinds are kept
@@ -2041,13 +2112,31 @@ queue's **Import as read** is the person's confirmation of the suggested
 kinds (`CONFIRMABLE_DOUBTS`: `reconciliation`, `suggested_type`). A heading
 or phrase the parser's own lists know is never the model's to type.
 
+**Column headings** are asked the same way. A table whose header names no
+column the parser knows as the date or the amount (`Posted | Description |
+Money In/Out`) is not read; when the line looks like a header (three or
+more cells without an amount, at least one a column word the parser knows,
+an entry under it) its unknown cells are reported
+(`ParseInfo.unknown_columns`: words, no digits) and sent as `columns`. The
+model says what each names from a closed list of roles (date, settlement
+date, kind of transaction, description, symbol, quantity, price, amount,
+fees) or `unknown`; it cannot hide a column, and a heading the parser knows
+keeps the parser's meaning whatever the answer. The parser then reads the
+table itself, through its ordinary header rules; every row of a table read
+through a suggested heading carries the `suggested_type` doubt and waits
+for a person like any suggestion (`InvestmentActivity.suggestion`:
+`column:<heading>`). A statement no brokerage parser recognises at all is
+not helped by this: the question is only asked about a document a parser is
+already reading.
+
 That confirmation is also what teaches: the wording of the confirmed rows
 is kept for the household (`wording.remember_confirmed`, the household
 setting `ingestion.learned_wording`; the resolution says `wording_learned`).
 Only layout is kept. An entry is a layout (the parser's institution key or
-name), a phrase and its kind: a section's heading, or the action words of a
+name), a phrase and its kind: a section's heading, the action words of a
 table that names its securities in a column of their own (the parser marks
-those rows, `InvestmentActivity.suggestion`). The free text of a cash table
+those rows, `InvestmentActivity.suggestion`), or a table's column heading
+and the role it names (kind `column`). The free text of a cash table
 (a payee, a merchant, a memo) is typed for its own document and never
 kept; a key holds no digit; a phrase the household's scrubber would mask (a
 member's or the household's name, an address, a stored account number) is
@@ -2058,6 +2147,14 @@ what was learned and `DELETE /imports/wording/{id}` (member or above)
 forgets a phrase (audit `learned_wording.add` / `learned_wording.delete`,
 ids and counts only); the SPA shows it on "What PerFin has learned". It is
 a household setting, so it is not part of a full export.
+
+**Measuring a model.** `perfin ml eval` (`app/ml/evaluate.py`) asks the
+configured adapter about PerFin's own vocabulary, the activity words and
+section headings its parsers already know the kind of, without any
+statement text, and prints how often the model agrees, with the phrases it
+got wrong (`--json`; `--min-agreement 0.9` exits 1 below that share). The
+phrases are PerFin's word lists, so nothing personal is sent, and nothing is
+stored. A suggestion stays a suggestion whatever the score.
 
 The heuristic classifier is a small local model trained offline on synthetic
 and contributed samples; it never makes network calls and ships as a versioned

@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 from collections.abc import Callable
+from typing import Any
 
 import httpx
 import pytest
@@ -34,10 +35,10 @@ Change = Callable[[str, str], str | None]
 
 def _adapter(
     change: Change | None = None,
-) -> tuple[httpx.MockTransport, list[dict[str, list[str]]]]:
+) -> tuple[httpx.MockTransport, list[dict[str, Any]]]:
     """An adapter that knows PerFin's vocabulary; ``change`` alters an answer (None: no answer)."""
     actions, headings = ground_truth()
-    seen: list[dict[str, list[str]]] = []
+    seen: list[dict[str, Any]] = []
 
     def answer(phrases: list[str], known: dict[str, str], field: str) -> list[dict[str, object]]:
         out: list[dict[str, object]] = []

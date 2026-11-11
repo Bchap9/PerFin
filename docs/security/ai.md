@@ -11,7 +11,8 @@ outbound call to an AI provider and no setting for one. The optional local
 model container (ADR-0010, [`../ML.md`](../ML.md)) is refused unless it runs on
 your own network, and it only suggests (what a document is, which account
 it is about, what kind of activity an unfamiliar wording on a brokerage
-statement is; a person confirms each). A connected assistant host pulls data from PerFin; PerFin
+statement is, what an unfamiliar column heading of one of its tables
+names; a person confirms each). A connected assistant host pulls data from PerFin; PerFin
 never pushes.
 
 ## When an assistant is connected

@@ -1759,10 +1759,34 @@ def _commit(
     result = ctx.result
     on = statement.as_of or statement.period_end
     created_before = result.securities_created
+    # The lot engine holds no short position (a negative quantity). Such a
+    # security is kept out of it whole: its position and the lines moving
+    # its units are not written (a short sale would read as selling units
+    # never held, a cover as a purchase of new ones); the statement's value
+    # still counts it (the snapshot below is taken from every position).
+    shorts = [p for p in statement.positions if p.quantity < 0]
+    shorted = {key for p in shorts for key in _ref_keys(p.security)}
+    writable = statement
+    short_lines = 0
+    if shorts:
+        activity = [
+            a
+            for a in statement.activity
+            if not (
+                a.type in UNIT_TYPES and a.security is not None and shorted & _ref_keys(a.security)
+            )
+        ]
+        short_lines = len(statement.activity) - len(activity)
+        writable = statement.model_copy(
+            update={
+                "positions": [p for p in statement.positions if p.quantity >= 0],
+                "activity": activity,
+            }
+        )
     try:
         with db.begin_nested():
             written = _write(
-                ctx, statement, account, on, waiting=waiting, had_positions=bool(reported)
+                ctx, writable, account, on, waiting=waiting, had_positions=bool(reported)
             )
     except _NameClashError as exc:
         # Two holdings of one name at different prices: which is which next
@@ -1836,10 +1860,9 @@ def _commit(
     # doc, step 9): the account's value is not taken from them. Cash activity
     # that does not add up leaves the value alone when the statement's own
     # holdings and closing cash are its printed account value.
-    shorts = [p for p in statement.positions if p.quantity < 0]
     if shorts:
-        # The lot engine holds no short position: it is in the statement's
-        # value (and the snapshot below) but not among the holdings shown.
+        # In the statement's value (and the snapshot below), not among the
+        # holdings shown; its trades were left out with it.
         ctx.review(
             ReviewKind.LOW_CONFIDENCE_FIELD,
             {
@@ -1848,6 +1871,8 @@ def _commit(
                 "account_id": str(account.id),
                 "currency": account.currency,
                 "as_of": on.isoformat() if on is not None else None,
+                # Lines moving the shorted securities' units, left out with them.
+                "lines_left_out": short_lines,
                 "positions": [
                     {
                         "symbol": p.security.symbol,
