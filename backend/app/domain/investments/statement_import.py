@@ -172,7 +172,12 @@ statements"). Per statement:
    change what the account is worth). An account that prints no cash at
    all and whose printed account value is its holdings holds none (a 529
    plan); any other statement printing no cash gives no snapshot. Never
-   for a statement accepted as read (step 3).
+   for a statement accepted as read (step 3). With it, when the account has
+   no snapshot from the day before the period to its end, the value the
+   statement **opens** with is recorded for the day before the period
+   (:func:`opening_value`: only from an account-value summary that adds up
+   to the closing value recorded), so an account's history starts with its
+   first statement's opening value rather than its closing one.
 """
 
 from __future__ import annotations
@@ -182,7 +187,7 @@ import uuid
 from collections import defaultdict
 from collections.abc import Callable, Collection, Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
-from datetime import date
+from datetime import date, timedelta
 from decimal import Decimal, localcontext
 from typing import Any, Final
 
@@ -1869,6 +1874,27 @@ def _commit(
             source_document_id=ctx.document.id,
         )
         result.snapshots += 1
+        before = opening_value(statement, total, check.tolerance)
+        if before is not None and all(
+            # Nothing else is known of those days (its own, from an earlier
+            # run of this document, is written again).
+            s.as_of_date == before[0]
+            and s.source is BalanceSource.STATEMENT
+            and s.source_document_id == ctx.document.id
+            for s in accounts_repo.list_snapshots(db, account, before[0], on - timedelta(days=1))
+        ):
+            # The value the statement opens with, on the day before its
+            # period: where the account's history starts when nothing
+            # earlier is known (module doc, step 9).
+            accounts_repo.upsert_snapshot(
+                db,
+                account,
+                before[0],
+                to_storage(before[1]),
+                BalanceSource.STATEMENT,
+                source_document_id=ctx.document.id,
+            )
+            result.snapshots += 1
         emit(db, ctx.household_id, "balance.updated", {"account_id": str(account.id)})
 
     audit(
@@ -1914,6 +1940,38 @@ def _commit(
         },
     )
     return True
+
+
+def opening_value(
+    statement: InvestmentStatement, closing: Decimal, tolerance: Decimal
+) -> tuple[date, Decimal] | None:
+    """``(day before the period, the account value the statement opens with)``.
+
+    From the statement's own account-value summary (``Beginning Account
+    Value`` ... ``Ending Account Value``), and only when that summary is
+    this account's and adds up: its closing line is ``closing`` (the value
+    the import records for the period's end) and its opening line plus the
+    lines between is its closing line. None otherwise: a figure that cannot
+    be checked is not recorded as a balance.
+    """
+    if statement.period_start is None or statement.as_of is None:
+        return None
+    if statement.period_start > statement.as_of:
+        return None
+    lines = [f for f in statement.figures if f.group == "account_value"]
+    first = next((f.amount for f in lines if f.role == "opening"), None)
+    last = next((f.amount for f in lines if f.role == "closing"), None)
+    between = [
+        f.amount for f in lines if f.role == "item" and not f.detail and f.amount is not None
+    ]
+    if first is None or last is None or not between:
+        return None
+    with localcontext(calc_context()):
+        if abs(last - closing) > tolerance:
+            return None
+        if abs(first + sum(between, Decimal(0)) - last) > tolerance:
+            return None
+    return statement.period_start - timedelta(days=1), first
 
 
 def _value_holds(check: InvestmentReconciliation, *, accepted: bool) -> bool:

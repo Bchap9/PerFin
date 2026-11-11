@@ -603,6 +603,69 @@ class DocumentAccounts(_Output):
     accounts: list[DetectedAccount]
 
 
+class SummaryLine(_Output):
+    """One line of a summary table a statement prints (``StatementFigure``)."""
+
+    label: str
+    #: ``opening``/``closing``: the period's first and last figure; ``total``:
+    #: a subtotal; ``item``: one line between them.
+    role: Literal["opening", "closing", "total", "item"]
+    #: A breakdown of the line above it.
+    detail: bool
+    amount: str | None
+    year_to_date: str | None
+    page: int | None
+
+
+class SummaryGroup(_Output):
+    """One summary table: the change in account value, the cash flow, income, realized gains."""
+
+    group: Literal["account_value", "cash_flow", "income", "realized"]
+    lines: list[SummaryLine]
+
+
+class SummarySection(_Output):
+    """An activity section's rows against the total the statement prints for them."""
+
+    label: str
+    rows: int
+    status: Literal["ok", "mismatch", "unchecked"]
+    printed: str | None
+    computed: str
+    difference: str | None
+    source: Literal["total", "summary"] | None
+    page: int | None
+
+
+class StatementSummary(_Output):
+    """What one brokerage statement of a document says about itself."""
+
+    index: int
+    last4: str | None
+    name: str | None
+    currency: str | None
+    period_start: date | None
+    period_end: date | None
+    as_of: date | None
+    positions: int
+    activity: int
+    positions_value: str | None
+    cash_opening: str | None
+    cash_closing: str | None
+    total_value: str | None
+    #: ``ok``/``mismatch``/``unavailable`` and the checks behind it (INGESTION.md).
+    reconciliation: Literal["ok", "mismatch", "unavailable"] | None
+    checks: list[str]
+    failed: list[str]
+    groups: list[SummaryGroup]
+    sections: list[SummarySection]
+
+
+class DocumentSummary(_Output):
+    document_id: uuid.UUID
+    statements: list[StatementSummary]
+
+
 class AccountChoice(_Input):
     """Use an existing account (``account_id``) or create one (``create``), not both."""
 

@@ -31,7 +31,7 @@ import json
 import uuid
 from collections.abc import Callable, Iterator, Sequence
 from dataclasses import dataclass, field, replace
-from datetime import date
+from datetime import date, timedelta
 from decimal import Decimal
 from pathlib import Path
 from typing import Any, Literal
@@ -59,6 +59,7 @@ from app.domain.documents.models import (
     ReviewKind,
 )
 from app.domain.documents.schemas import INGEST_JOB_TYPE
+from app.domain.imports import summary as import_summary
 from app.domain.imports import wording
 from app.domain.imports.models import StatementRecord
 from app.domain.imports.schemas import APPLY_MAPPING_JOB_TYPE, ApplyMapping
@@ -613,6 +614,10 @@ def _fid_holdings(env: Env, account: Account) -> list[tuple[str, Decimal]]:
     return [(symbol, qty) for symbol, qty in env.holdings(account) if qty != 0]
 
 
+def _snapshot_days(env: Env, account: Account) -> list[date]:
+    return sorted(s.as_of_date for s in env.snapshots(account))
+
+
 def _fid_positions(account: fid.FidAccount) -> list[tuple[str, Decimal]]:
     return sorted((p.symbol, p.quantity) for p in account.positions)
 
@@ -663,9 +668,12 @@ def test_each_account_of_a_multi_account_pdf_lands_on_its_own_account(env: Env) 
         assert cash == _fid_cash(synthetic)
         assert _fid_holdings(env, account) == _fid_positions(synthetic)
         assert all(t.source_document_id == document_id for t in env.txns(account))
-        snapshots = env.snapshots(account)
+        # The value the statement closes with and, as nothing earlier is
+        # known of the account, the value it opens with (the day before).
+        snapshots = sorted(env.snapshots(account), key=lambda s: s.as_of_date)
         assert [(s.as_of_date, s.balance, s.source) for s in snapshots] == [
-            (stmt.end, synthetic.total_value, BalanceSource.STATEMENT)
+            (stmt.start - timedelta(days=1), synthetic.begin_value, BalanceSource.STATEMENT),
+            (stmt.end, synthetic.total_value, BalanceSource.STATEMENT),
         ]
 
     # The same report again is the same statement of every account: each
@@ -729,6 +737,65 @@ def test_an_account_value_the_index_prints_differently_is_a_notice(env: Env) -> 
     assert account is not None
     assert env.activity(account) == _fid_expected(stmt.accounts[0])
     assert env.snapshots(account) == []
+
+
+def test_the_opening_value_is_recorded_once_where_nothing_earlier_is_known(env: Env) -> None:
+    october = fid.fidelity_statement(seed=95)
+    accounts = _fid_accounts(env, october)
+    env.ingest(fid.fidelity_pdf(october), "october.pdf")
+    november = fid.fidelity_statement(seed=95, start=date(2026, 11, 1))
+    env.ingest(fid.fidelity_pdf(november), "november.pdf")
+    for account in accounts:
+        assert account is not None
+        # October opens the account's history with the value it begins with.
+        # November begins where October ended: that day is already known, and
+        # what November prints for it is not written over it.
+        days = {s.as_of_date: s.balance for s in env.snapshots(account)}
+        assert sorted(days) == [october.start - timedelta(days=1), october.end, november.end]
+    for account, synthetic in zip(accounts, october.accounts, strict=True):
+        assert account is not None
+        closing = {s.as_of_date: s.balance for s in env.snapshots(account)}[october.end]
+        assert closing == synthetic.total_value
+
+
+def test_the_summary_a_statement_prints_is_shown_per_account(env: Env) -> None:
+    stmt = fid.fidelity_statement(seed=96)
+    _fid_accounts(env, stmt)
+    document_id = env.ingest(fid.fidelity_pdf(stmt), "investment-report.pdf")
+    with env.factories.transaction() as db:
+        apply_rls_context(db, env.principal())
+        shown = import_summary.document_summary(db, env.principal(), document_id)
+    assert shown.document_id == document_id
+    assert [s.last4 for s in shown.statements] == [a.last4 for a in stmt.accounts]
+    for statement, synthetic in zip(shown.statements, stmt.accounts, strict=True):
+        assert (statement.period_start, statement.period_end) == (stmt.start, stmt.end)
+        assert statement.reconciliation == "ok"
+        assert statement.failed == []
+        assert statement.total_value is not None
+        assert Decimal(statement.total_value) == synthetic.total_value
+        assert statement.positions > 0
+        # The change in the account's value, as the statement prints it.
+        value = next(g for g in statement.groups if g.group == "account_value")
+        opening = next(line for line in value.lines if line.role == "opening")
+        closing = next(line for line in value.lines if line.role == "closing")
+        assert opening.label == "Beginning Account Value"
+        assert opening.amount is not None
+        assert Decimal(opening.amount) == synthetic.begin_value
+        assert closing.amount is not None
+        assert Decimal(closing.amount) == synthetic.total_value
+        # Each section of activity against its printed total.
+        assert statement.sections
+        assert all(section.status in ("ok", "unchecked") for section in statement.sections)
+
+    # A member who cannot change the document is refused its figures.
+    member = env.factories.user(
+        role=HouseholdRole.MEMBER, household=env.owner.household, with_totp=True
+    )
+    with env.factories.transaction() as db:
+        apply_rls_context(db, env.principal(member))
+        with pytest.raises(ProblemError) as refused:
+            import_summary.document_summary(db, env.principal(member), document_id)
+    assert refused.value.status in (403, 404)
 
 
 def test_a_tampered_account_is_held_and_the_others_are_written(env: Env) -> None:
@@ -801,7 +868,7 @@ def test_only_the_line_in_doubt_is_held_and_the_rest_is_imported(env: Env) -> No
     cash = [a for a in stmt.accounts[0].activity if a.type in ("deposit", "withdrawal")]
     others = sorted((a.day, a.amount) for a in cash if a is not printed)
     assert sorted((t.posted_date, t.amount) for t in env.cash_rows(individual)) == others
-    assert len(env.snapshots(individual)) == 1
+    assert _snapshot_days(env, individual) == [stmt.start - timedelta(days=1), stmt.end]
     before = [t.id for t in env.txns(individual)]
     for index in (1, 2):
         account = accounts[index]
@@ -821,7 +888,7 @@ def test_only_the_line_in_doubt_is_held_and_the_rest_is_imported(env: Env) -> No
         [*others, (printed.day, printed.amount + fid.MISPRINT)]
     )
     assert [t.id for t in env.txns(individual)] == before
-    assert len(env.snapshots(individual)) == 1
+    assert _snapshot_days(env, individual) == [stmt.start - timedelta(days=1), stmt.end]
 
 
 @dataclass
@@ -928,7 +995,7 @@ def test_a_kind_the_local_model_suggests_waits_for_a_person(
     assert env.open_reviews(document_id) == []
     assert env.activity(individual) == _fid_expected(stmt.accounts[0])
     assert _fid_holdings(env, individual) == _fid_positions(stmt.accounts[0])
-    assert len(env.snapshots(individual)) == 1
+    assert _snapshot_days(env, individual) == [stmt.start - timedelta(days=1), stmt.end]
     # The answer is kept: the confirmation's re-run did not ask again.
     assert len(model.asked) == 1
 
@@ -1178,7 +1245,7 @@ def test_one_account_of_a_report_imported_as_read(env: Env) -> None:
     written = {a.id: [t.id for t in env.txns(a)] for a in others}
     assert all(written.values())
     snapshots = {a.id: len(env.snapshots(a)) for a in others}
-    assert set(snapshots.values()) == {1}
+    assert set(snapshots.values()) == {2}  # opening and closing value
 
     _import_as_read(env, item)
     assert env.document(document_id).status is DocumentStatus.PROCESSED

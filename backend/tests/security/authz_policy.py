@@ -768,6 +768,11 @@ POLICIES: Final[Mapping[str, Policy]] = MappingProxyType(
         f"POST {API}/documents/{{document_id}}/accounts/apply": scoped(
             "documents:write", role=M, params=DOC
         ),
+        # The summary tables a statement prints: an account's balances, so the
+        # same people who may assign the document's accounts.
+        f"GET {API}/documents/{{document_id}}/summary": scoped(
+            "documents:write", role=M, params=DOC
+        ),
         # --- user settings --------------------------------------------------
         f"GET {API}/settings/user": scoped("settings:read"),
         f"PATCH {API}/settings/user": session(),

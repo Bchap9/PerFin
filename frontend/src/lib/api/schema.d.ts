@@ -1375,6 +1375,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/documents/{document_id}/summary": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** The summary tables a brokerage statement prints, per account (member or above) */
+        get: operations["get_document_summary_api_v1_documents__document_id__summary_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/documents/{document_id}/teach": {
         parameters: {
             query?: never;
@@ -6037,6 +6054,16 @@ export interface components {
          * @enum {string}
          */
         DocumentStatus: "received" | "scanning" | "extracting" | "classifying" | "parsing" | "needs_review" | "processed" | "rejected" | "failed";
+        /** DocumentSummary */
+        DocumentSummary: {
+            /**
+             * Document Id
+             * Format: uuid
+             */
+            document_id: string;
+            /** Statements */
+            statements: components["schemas"]["StatementSummary"][];
+        };
         /**
          * ExportOut
          * @description An export job of the caller; ``counts`` per entity once ``ready``.
@@ -8592,6 +8619,8 @@ export interface components {
              * @enum {string}
              */
             kind: "low_confidence_field";
+            /** Lines */
+            lines?: number[] | null;
             /** Transactions */
             transactions?: components["schemas"]["TransactionFix"][];
         };
@@ -9924,6 +9953,48 @@ export interface components {
             /** Splits */
             splits: components["schemas"]["SplitIn"][];
         };
+        /**
+         * StatementSummary
+         * @description What one brokerage statement of a document says about itself.
+         */
+        StatementSummary: {
+            /** Activity */
+            activity: number;
+            /** As Of */
+            as_of: string | null;
+            /** Cash Closing */
+            cash_closing: string | null;
+            /** Cash Opening */
+            cash_opening: string | null;
+            /** Checks */
+            checks: string[];
+            /** Currency */
+            currency: string | null;
+            /** Failed */
+            failed: string[];
+            /** Groups */
+            groups: components["schemas"]["SummaryGroup"][];
+            /** Index */
+            index: number;
+            /** Last4 */
+            last4: string | null;
+            /** Name */
+            name: string | null;
+            /** Period End */
+            period_end: string | null;
+            /** Period Start */
+            period_start: string | null;
+            /** Positions */
+            positions: number;
+            /** Positions Value */
+            positions_value: string | null;
+            /** Reconciliation */
+            reconciliation: ("ok" | "mismatch" | "unavailable") | null;
+            /** Sections */
+            sections: components["schemas"]["SummarySection"][];
+            /** Total Value */
+            total_value: string | null;
+        };
         /** SubtypeOut */
         SubtypeOut: {
             /** Code */
@@ -9976,6 +10047,19 @@ export interface components {
             /** Form Type */
             form_type: string;
         };
+        /**
+         * SummaryGroup
+         * @description One summary table: the change in account value, the cash flow, income, realized gains.
+         */
+        SummaryGroup: {
+            /**
+             * Group
+             * @enum {string}
+             */
+            group: "account_value" | "cash_flow" | "income" | "realized";
+            /** Lines */
+            lines: components["schemas"]["SummaryLine"][];
+        };
         /** SummaryHint */
         SummaryHint: {
             /** Line */
@@ -9983,6 +10067,52 @@ export interface components {
             /** Schedule */
             schedule: string | null;
             total: components["schemas"]["Money"];
+        };
+        /**
+         * SummaryLine
+         * @description One line of a summary table a statement prints (``StatementFigure``).
+         */
+        SummaryLine: {
+            /** Amount */
+            amount: string | null;
+            /** Detail */
+            detail: boolean;
+            /** Label */
+            label: string;
+            /** Page */
+            page: number | null;
+            /**
+             * Role
+             * @enum {string}
+             */
+            role: "opening" | "closing" | "total" | "item";
+            /** Year To Date */
+            year_to_date: string | null;
+        };
+        /**
+         * SummarySection
+         * @description An activity section's rows against the total the statement prints for them.
+         */
+        SummarySection: {
+            /** Computed */
+            computed: string;
+            /** Difference */
+            difference: string | null;
+            /** Label */
+            label: string;
+            /** Page */
+            page: number | null;
+            /** Printed */
+            printed: string | null;
+            /** Rows */
+            rows: number;
+            /** Source */
+            source: ("total" | "summary") | null;
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "ok" | "mismatch" | "unchecked";
         };
         /** SystemAiOut */
         SystemAiOut: {
@@ -16356,6 +16486,64 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["DocumentReprocessOut"];
+                };
+            };
+            /** @description Problem details */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Problem details */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Problem details */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Problem details */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+        };
+    };
+    get_document_summary_api_v1_documents__document_id__summary_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                document_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DocumentSummary"];
                 };
             };
             /** @description Problem details */

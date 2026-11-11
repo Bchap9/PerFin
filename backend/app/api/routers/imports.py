@@ -24,6 +24,10 @@
   the document; the accounts the document names, matched or proposed, and
   the choice of an existing or new account for each
   (``app.domain.imports.proposals``).
+* ``GET /documents/{document_id}/summary``: the same people; the summary
+  tables a brokerage statement prints (change in account value, cash flow,
+  income, realized gains) and each activity section against its printed
+  total, per account of the document (``app.domain.imports.summary``).
 
 Tokens need ``documents:read`` / ``documents:write``.
 """
@@ -41,7 +45,7 @@ from app.auth.models import HouseholdRole
 from app.auth.principal import Principal
 from app.core.idempotency import IdempotencyKeyHeader, idempotent, payload_of
 from app.domain.documents.service import get_visible_document
-from app.domain.imports import layouts, proposals, service, wording
+from app.domain.imports import layouts, proposals, service, summary, wording
 from app.domain.imports.schemas import (
     DEFAULT_PAGE,
     MAX_PAGE,
@@ -51,6 +55,7 @@ from app.domain.imports.schemas import (
     DocumentAccounts,
     DocumentAccountsApplied,
     DocumentAccountsApply,
+    DocumentSummary,
     ImportAccepted,
     ImportPreview,
     LearnedLayoutList,
@@ -257,6 +262,18 @@ def get_document_accounts(
     document_id: uuid.UUID, db: DbSession, principal: DocumentWriter
 ) -> DocumentAccounts:
     return proposals.detect_accounts(db, principal, document_id)
+
+
+@router.get(
+    "/documents/{document_id}/summary",
+    response_model=DocumentSummary,
+    responses=PROBLEMS,
+    summary="The summary tables a brokerage statement prints, per account (member or above)",
+)
+def get_document_summary(
+    document_id: uuid.UUID, db: DbSession, principal: DocumentWriter
+) -> DocumentSummary:
+    return summary.document_summary(db, principal, document_id)
 
 
 @router.post(

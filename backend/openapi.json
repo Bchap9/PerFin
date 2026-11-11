@@ -8455,6 +8455,28 @@
         "title": "DocumentStatus",
         "type": "string"
       },
+      "DocumentSummary": {
+        "properties": {
+          "document_id": {
+            "format": "uuid",
+            "title": "Document Id",
+            "type": "string"
+          },
+          "statements": {
+            "items": {
+              "$ref": "#/components/schemas/StatementSummary"
+            },
+            "title": "Statements",
+            "type": "array"
+          }
+        },
+        "required": [
+          "document_id",
+          "statements"
+        ],
+        "title": "DocumentSummary",
+        "type": "object"
+      },
       "ExportOut": {
         "description": "An export job of the caller; ``counts`` per entity once ``ready``.",
         "properties": {
@@ -16040,6 +16062,22 @@
             "title": "Kind",
             "type": "string"
           },
+          "lines": {
+            "anyOf": [
+              {
+                "items": {
+                  "minimum": 0.0,
+                  "type": "integer"
+                },
+                "maxItems": 2000,
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Lines"
+          },
           "transactions": {
             "items": {
               "$ref": "#/components/schemas/TransactionFix"
@@ -20316,6 +20354,202 @@
         "title": "SplitSet",
         "type": "object"
       },
+      "StatementSummary": {
+        "description": "What one brokerage statement of a document says about itself.",
+        "properties": {
+          "activity": {
+            "title": "Activity",
+            "type": "integer"
+          },
+          "as_of": {
+            "anyOf": [
+              {
+                "format": "date",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "As Of"
+          },
+          "cash_closing": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cash Closing"
+          },
+          "cash_opening": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cash Opening"
+          },
+          "checks": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Checks",
+            "type": "array"
+          },
+          "currency": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Currency"
+          },
+          "failed": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Failed",
+            "type": "array"
+          },
+          "groups": {
+            "items": {
+              "$ref": "#/components/schemas/SummaryGroup"
+            },
+            "title": "Groups",
+            "type": "array"
+          },
+          "index": {
+            "title": "Index",
+            "type": "integer"
+          },
+          "last4": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last4"
+          },
+          "name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Name"
+          },
+          "period_end": {
+            "anyOf": [
+              {
+                "format": "date",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Period End"
+          },
+          "period_start": {
+            "anyOf": [
+              {
+                "format": "date",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Period Start"
+          },
+          "positions": {
+            "title": "Positions",
+            "type": "integer"
+          },
+          "positions_value": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Positions Value"
+          },
+          "reconciliation": {
+            "anyOf": [
+              {
+                "enum": [
+                  "ok",
+                  "mismatch",
+                  "unavailable"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reconciliation"
+          },
+          "sections": {
+            "items": {
+              "$ref": "#/components/schemas/SummarySection"
+            },
+            "title": "Sections",
+            "type": "array"
+          },
+          "total_value": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Total Value"
+          }
+        },
+        "required": [
+          "index",
+          "last4",
+          "name",
+          "currency",
+          "period_start",
+          "period_end",
+          "as_of",
+          "positions",
+          "activity",
+          "positions_value",
+          "cash_opening",
+          "cash_closing",
+          "total_value",
+          "reconciliation",
+          "checks",
+          "failed",
+          "groups",
+          "sections"
+        ],
+        "title": "StatementSummary",
+        "type": "object"
+      },
       "SubtypeOut": {
         "properties": {
           "code": {
@@ -20499,6 +20733,34 @@
         "title": "SummaryForm",
         "type": "object"
       },
+      "SummaryGroup": {
+        "description": "One summary table: the change in account value, the cash flow, income, realized gains.",
+        "properties": {
+          "group": {
+            "enum": [
+              "account_value",
+              "cash_flow",
+              "income",
+              "realized"
+            ],
+            "title": "Group",
+            "type": "string"
+          },
+          "lines": {
+            "items": {
+              "$ref": "#/components/schemas/SummaryLine"
+            },
+            "title": "Lines",
+            "type": "array"
+          }
+        },
+        "required": [
+          "group",
+          "lines"
+        ],
+        "title": "SummaryGroup",
+        "type": "object"
+      },
       "SummaryHint": {
         "properties": {
           "line": {
@@ -20533,6 +20795,158 @@
           "total"
         ],
         "title": "SummaryHint",
+        "type": "object"
+      },
+      "SummaryLine": {
+        "description": "One line of a summary table a statement prints (``StatementFigure``).",
+        "properties": {
+          "amount": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Amount"
+          },
+          "detail": {
+            "title": "Detail",
+            "type": "boolean"
+          },
+          "label": {
+            "title": "Label",
+            "type": "string"
+          },
+          "page": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Page"
+          },
+          "role": {
+            "enum": [
+              "opening",
+              "closing",
+              "total",
+              "item"
+            ],
+            "title": "Role",
+            "type": "string"
+          },
+          "year_to_date": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Year To Date"
+          }
+        },
+        "required": [
+          "label",
+          "role",
+          "detail",
+          "amount",
+          "year_to_date",
+          "page"
+        ],
+        "title": "SummaryLine",
+        "type": "object"
+      },
+      "SummarySection": {
+        "description": "An activity section's rows against the total the statement prints for them.",
+        "properties": {
+          "computed": {
+            "title": "Computed",
+            "type": "string"
+          },
+          "difference": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Difference"
+          },
+          "label": {
+            "title": "Label",
+            "type": "string"
+          },
+          "page": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Page"
+          },
+          "printed": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Printed"
+          },
+          "rows": {
+            "title": "Rows",
+            "type": "integer"
+          },
+          "source": {
+            "anyOf": [
+              {
+                "enum": [
+                  "total",
+                  "summary"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source"
+          },
+          "status": {
+            "enum": [
+              "ok",
+              "mismatch",
+              "unchecked"
+            ],
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "label",
+          "rows",
+          "status",
+          "printed",
+          "computed",
+          "difference",
+          "source",
+          "page"
+        ],
+        "title": "SummarySection",
         "type": "object"
       },
       "SystemAiOut": {
@@ -30130,6 +30544,63 @@
         "summary": "Run the import pipeline again",
         "tags": [
           "documents"
+        ]
+      }
+    },
+    "/api/v1/documents/{document_id}/summary": {
+      "get": {
+        "operationId": "get_document_summary_api_v1_documents__document_id__summary_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "document_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Document Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DocumentSummary"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {}
+            },
+            "description": "Problem details"
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {}
+            },
+            "description": "Problem details"
+          },
+          "409": {
+            "content": {
+              "application/problem+json": {}
+            },
+            "description": "Problem details"
+          },
+          "422": {
+            "content": {
+              "application/problem+json": {}
+            },
+            "description": "Problem details"
+          }
+        },
+        "summary": "The summary tables a brokerage statement prints, per account (member or above)",
+        "tags": [
+          "imports"
         ]
       }
     },
