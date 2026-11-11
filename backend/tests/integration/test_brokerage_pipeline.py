@@ -421,36 +421,51 @@ def test_document_period_comes_from_the_header_band_of_its_statements(env: Env) 
 
 
 @pytest.mark.parametrize("tamper", ["extra_row", "market_value"])
-def test_statement_that_does_not_reconcile_writes_nothing(env: Env, tamper: synth.Tamper) -> None:
+def test_a_security_in_doubt_waits_whole_and_the_rest_is_written(
+    env: Env, tamper: synth.Tamper
+) -> None:
+    """A forged buy, or a holding whose value is not quantity x price.
+
+    Nothing of that security is written (its lines, its position: the
+    holding is what its lines add up to), no account value is recorded, and
+    everything else of the statement is in the ledger.
+    """
     january, _ = synth.brokerage_series(seed=64)
     account = env.brokerage(january)
     document_id = env.ingest(synth.placeholder_pdf(january, tamper=tamper), "statement.pdf")
 
     document = env.document(document_id)
     assert document.status is DocumentStatus.NEEDS_REVIEW
-    (item,) = [
-        r
-        for r in env.open_reviews(document_id)
-        if r.payload.get("reason") == "investment_reconciliation_failed"
-    ]
+    item = _held_item(env, document_id)
     assert item.kind is ReviewKind.LOW_CONFIDENCE_FIELD
+    assert item.payload["reason"] == LINES_HELD
     assert item.payload["account_id"] == str(account.id)
     assert item.payload["failed"]
+    assert item.payload["selectable"] is False
+    waiting = _waiting(item)
+    assert len(waiting) == 1
     if tamper == "extra_row":
-        assert item.payload["cash_difference"] == "-777.77"
-        # The one row that is the whole difference is the line in doubt: a
-        # buy, and a line moving units holds its statement.
-        (line,) = item.payload["lines"]
-        assert (line["type"], line["amount"], line["fields"]) == (
-            "buy",
-            "-777.770000",
-            ["reconciliation"],
-        )
-    assert env.txns(account) == []
-    assert env.holdings(account) == []
-    assert env.cash_rows(account) == []
+        # The one row that is the whole difference is the line in doubt; the
+        # other lines of its security wait with it, doubted by nothing.
+        doubted = [line for line in item.payload["lines"] if line["fields"] == ["reconciliation"]]
+        (line,) = doubted
+        assert (line["type"], line["amount"]) == ("buy", "-777.770000")
+        assert line["bbox"] is not None
+        others = [line for line in item.payload["lines"] if line is not doubted[0]]
+        assert all(line["fields"] == ["held_with_security"] for line in others)
+    else:
+        (position,) = item.payload["positions"]
+        assert "market_value" in position["fields"]
+    written = env.activity(account)
+    assert written
+    # Lines moving the security wait; a dividend it paid is cash and is written.
+    assert not any(symbol in waiting and kind in UNIT_KINDS for _, kind, symbol, _, _ in written)
+    assert written == [
+        row for row in _expected(january) if not (row[2] in waiting and row[1] in UNIT_KINDS)
+    ]
+    assert env.holdings(account) == [p for p in _positions(january) if p[0] not in waiting]
+    assert sorted((t.posted_date, t.amount) for t in env.cash_rows(account)) == _cash(january)
     assert env.snapshots(account) == []
-    assert env.securities() == {}
 
 
 def test_a_wrong_account_value_alone_holds_no_row(env: Env) -> None:
@@ -676,18 +691,19 @@ def test_a_tampered_account_is_held_and_the_others_are_written(env: Env) -> None
     document_id = env.ingest(data, "investment-report.pdf")
 
     assert env.document(document_id).status is DocumentStatus.NEEDS_REVIEW
-    (item,) = [
-        r
-        for r in env.open_reviews(document_id)
-        if r.payload.get("reason") == "investment_reconciliation_failed"
-    ]
+    item = _held_item(env, document_id)
     roth = accounts[1]
     assert roth is not None
     assert item.payload["account_id"] == str(roth.id)
     assert item.payload["failed"] == ["positions", "total_value"]
-    assert env.txns(roth) == []
+    # The holding that does not add up waits with its lines; no value is recorded.
+    waiting = _waiting(item)
+    assert len(waiting) == 1
+    assert not any(symbol in waiting for symbol, _ in _fid_holdings(env, roth))
+    assert not any(
+        symbol in waiting and kind in UNIT_KINDS for _, kind, symbol, _, _ in env.activity(roth)
+    )
     assert env.snapshots(roth) == []
-    assert env.cash_rows(roth) == []
     for index in (0, 2):
         account = accounts[index]
         assert account is not None
@@ -827,26 +843,35 @@ def test_a_kind_the_local_model_suggests_waits_for_a_person(
     assert individual is not None
     document = env.document(document_id)
     assert document.status is DocumentStatus.NEEDS_REVIEW
-    assert env.txns(individual) == []
     stored = ExtractResult.model_validate(document.extraction)
     assert stored.parse is not None
     if not answered:
-        # As without a model: the row is unread and reported, the cash does not add up.
+        # As without a model: the row is unread and reported, and its section
+        # does not add up, so that section's lines wait.
         assert "ml_vocabulary" not in (document.confidence or {})
         assert stored.parse.unknown_actions == ["periodic investment plan"]
-        assert "investment_reconciliation_failed" in env.reasons(document_id)
+        held = _held_item(env, document_id)
+        assert held.payload["fields"] == ["reconciliation"]
         assert _learned(env) == []
         return
     assert (document.confidence or {})["ml_vocabulary"] == words.stored()
     assert stored.parse.unknown_actions == []
     (item,) = env.open_reviews(document_id)
-    assert item.payload["reason"] == "investment_low_confidence"
+    assert item.payload["reason"] == LINES_HELD
     assert item.payload["fields"] == ["suggested_type"]
     assert item.payload["reconciliation"] == "ok"
-    (line,) = item.payload["lines"]
-    assert (line["type"], line["fields"]) == ("buy", ["suggested_type"])
+    (line,) = [entry for entry in item.payload["lines"] if entry["fields"] == ["suggested_type"]]
+    assert line["type"] == "buy"
     assert line["date"] == row.day.isoformat()
     assert Decimal(line["amount"]) == row.amount
+    # Nothing of the security it would buy is written before a person confirms;
+    # the rest of the statement is.
+    assert _waiting(item) == {row.symbol}
+    assert not any(
+        symbol == row.symbol and kind in UNIT_KINDS
+        for _, kind, symbol, _, _ in env.activity(individual)
+    )
+    assert env.snapshots(individual) == []
     # A suggestion alone teaches nothing: nothing is remembered before a person confirms.
     assert _learned(env) == []
 
@@ -983,15 +1008,18 @@ def test_a_chosen_account_never_takes_several_accounts(env: Env) -> None:
 # ---------------------------------------------------------------------------
 
 
-def _import_as_read(env: Env, item: ReviewItem) -> dict[str, Any]:
-    """Answer a held statement's item "Import as read" as the owner; run the job."""
+def _import_as_read(env: Env, item: ReviewItem, lines: list[int] | None = None) -> dict[str, Any]:
+    """Answer a held statement's item "Import as read" as the owner; run the job.
+
+    ``lines``: only these lines of the item (the others it lists are left out).
+    """
     with env.factories.transaction() as db:
         apply_rls_context(db, env.principal())
         out = review_service.resolve(
             db,
             env.principal(),
             item.id,
-            ResolveLowConfidence(kind="low_confidence_field", import_as_read=True),
+            ResolveLowConfidence(kind="low_confidence_field", import_as_read=True, lines=lines),
             request=None,
         )
         assert out.resolution is not None
@@ -1010,12 +1038,23 @@ def _audits(env: Env, action: str) -> list[dict[str, Any]]:
 
 
 def _held_item(env: Env, document_id: uuid.UUID) -> ReviewItem:
+    """The item holding a statement's rows back: the statement whole, or the
+    rows in doubt (a security waits whole, the rest is written)."""
     (item,) = [
         r
         for r in env.open_reviews(document_id)
-        if r.payload.get("reason") == "investment_reconciliation_failed"
+        if r.payload.get("reason") in (RECONCILIATION, LINES_HELD)
     ]
     return item
+
+
+#: Activity that moves units of a security (it waits with its security).
+UNIT_KINDS = ("buy", "sell", "reinvest", "transfer_in", "transfer_out")
+
+
+def _waiting(item: ReviewItem) -> set[str]:
+    """The symbols of the securities an item holds back whole."""
+    return {str(p["symbol"]) for p in item.payload.get("positions") or []}
 
 
 @pytest.mark.parametrize(
@@ -1042,7 +1081,7 @@ def test_held_statement_imported_as_read(env: Env, tamper: synth.Tamper, check: 
         assert Decimal(differences["cash"]["difference"]) == Decimal("-777.77")
     if tamper == "market_value":
         assert differences["positions"]["count"] == 1
-    assert env.txns(account) == []
+    assert env.snapshots(account) == []
 
     resolution = _import_as_read(env, item)
     assert resolution["import_as_read"] is True
@@ -1069,7 +1108,9 @@ def test_held_statement_imported_as_read(env: Env, tamper: synth.Tamper, check: 
     (requested,) = _audits(env, "document.import_requested")
     assert requested["assignments"] == []
     assert "accept_as_read" not in requested
-    (imported,) = _audits(env, "investment.import")
+    partly, imported = _audits(env, "investment.import")
+    assert partly["lines_held"] >= 1
+    assert partly["positions_held"] == 1
     assert imported["accepted_as_read"] is True
     assert imported["failed"] == item.payload["failed"]
     assert imported["snapshot"] is False
@@ -1273,7 +1314,11 @@ def test_an_answer_covers_only_its_statement(env: Env) -> None:
     _edit_extraction(env, document_id, second_roth)
     _rerun(env, document_id)
     held = sorted(
-        (r for r in env.open_reviews(document_id) if r.payload.get("reason") == RECONCILIATION),
+        (
+            r
+            for r in env.open_reviews(document_id)
+            if r.payload.get("reason") in (RECONCILIATION, LINES_HELD)
+        ),
         key=lambda r: r.payload["statement"],
     )
     assert [(r.payload["statement"], r.payload["account_id"]) for r in held] == [
@@ -1287,7 +1332,9 @@ def test_an_answer_covers_only_its_statement(env: Env) -> None:
     accepted = [entry for entry in _investment_imports(env)[imports:] if entry[1]]
     assert accepted == [(str(roth.id), True, len(stmt.accounts[1].positions))]
     (still,) = [
-        r for r in env.open_reviews(document_id) if r.payload.get("reason") == RECONCILIATION
+        r
+        for r in env.open_reviews(document_id)
+        if r.payload.get("reason") in (RECONCILIATION, LINES_HELD)
     ]
     assert still.payload["statement"] == 2
     assert env.document(document_id).status is DocumentStatus.NEEDS_REVIEW
@@ -1312,6 +1359,7 @@ def test_an_item_without_a_statement_key_is_stale(env: Env) -> None:
     january, _ = synth.brokerage_series(seed=75)
     account = env.brokerage(january)
     document_id = env.ingest(synth.placeholder_pdf(january, tamper="market_value"), "statement.pdf")
+    before = [t.id for t in env.txns(account)]
     item = _held_item(env, document_id)
     with env.factories.transaction() as db:
         set_context(db, env.household_id)
@@ -1329,13 +1377,14 @@ def test_an_item_without_a_statement_key_is_stale(env: Env) -> None:
                 request=None,
             )
     assert (refused.value.status, refused.value.slug) == (409, "review-item-stale")
-    assert env.txns(account) == []
+    assert [t.id for t in env.txns(account)] == before  # nothing more was written
 
 
 def test_import_as_read_is_only_for_statements_held_by_their_figures(env: Env) -> None:
     january, _ = synth.brokerage_series(seed=73)
     account = env.brokerage(january)
     document_id = env.ingest(synth.placeholder_pdf(january, tamper="market_value"), "statement.pdf")
+    before = [t.id for t in env.txns(account)]
     with env.factories.transaction() as db:
         apply_rls_context(db, env.principal())
         guessed = documents_repo.add_review_item(
@@ -1362,13 +1411,14 @@ def test_import_as_read_is_only_for_statements_held_by_their_figures(env: Env) -
                 request=None,
             )
     assert refused.value.status == 422
-    assert env.txns(account) == []
+    assert [t.id for t in env.txns(account)] == before  # nothing more was written
 
 
 def test_import_as_read_needs_edit_on_the_account(env: Env) -> None:
     january, _ = synth.brokerage_series(seed=74)
     account = env.brokerage(january)
     document_id = env.ingest(synth.placeholder_pdf(january, tamper="market_value"), "statement.pdf")
+    before = [t.id for t in env.txns(account)]
     item = _held_item(env, document_id)
     member = env.factories.user(
         role=HouseholdRole.MEMBER, household=env.owner.household, with_totp=True
@@ -1386,4 +1436,151 @@ def test_import_as_read_needs_edit_on_the_account(env: Env) -> None:
             )
     assert refused.value.status in (403, 404)
     assert [r.id for r in env.open_reviews(document_id)] == [item.id]
-    assert env.txns(account) == []
+    assert [t.id for t in env.txns(account)] == before  # nothing more was written
+
+
+# ---------------------------------------------------------------------------
+# Lines answered one by one; what a statement does not say about a holding
+# ---------------------------------------------------------------------------
+
+
+def _unimported(env: Env, stmt: fid.FidStatement, change: Callable[[Any], None]) -> uuid.UUID:
+    """The report ingested before its accounts exist, read as ``change`` says, then imported."""
+    document_id = env.ingest(fid.fidelity_pdf(stmt), "investment-report.pdf")
+    _edit_extraction(env, document_id, change)
+    _fid_accounts(env, stmt)
+    _rerun(env, document_id)
+    return document_id
+
+
+def test_cash_lines_in_doubt_are_answered_one_by_one(env: Env) -> None:
+    """Two cash lines wait; the person imports one and leaves the other out for good."""
+    stmt = fid.fidelity_statement(seed=101)
+    account = stmt.accounts[0]
+    chosen: list[int] = []
+
+    def doubt_two_cash_lines(investments: Any) -> None:
+        rows = investments[0]["activity"]
+        cash = [i for i, r in enumerate(rows) if r["type"] in ("dividend", "deposit", "withdrawal")]
+        chosen.extend(cash[:2])
+        for i in chosen:
+            rows[i]["low_confidence"] = ["reconciliation"]
+        investments[0]["reconciliation"].update(
+            status="mismatch", failed=["cash"], doubtful_activity=chosen, doubtful_positions=[]
+        )
+
+    document_id = _unimported(env, stmt, doubt_two_cash_lines)
+    individual = env.query(select(Account).where(Account.number_last4 == account.last4))[0]
+    (item,) = [r for r in env.open_reviews(document_id) if r.payload.get("reason") == LINES_HELD]
+    assert item.payload["selectable"] is True
+    assert [line["index"] for line in item.payload["lines"]] == chosen
+    assert all(line["bbox"] is not None and line["page"] for line in item.payload["lines"])
+    before = len(env.txns(individual)) + len(env.cash_rows(individual))
+
+    # A line the item does not list, or none at all, is refused.
+    for bad in ([], [chosen[0], 999]):
+        with env.factories.transaction() as db:
+            apply_rls_context(db, env.principal())
+            with pytest.raises(ProblemError) as refused:
+                review_service.resolve(
+                    db,
+                    env.principal(),
+                    item.id,
+                    ResolveLowConfidence(
+                        kind="low_confidence_field", import_as_read=True, lines=bad
+                    ),
+                    request=None,
+                )
+            assert refused.value.status == 422
+
+    resolution = _import_as_read(env, item, lines=[chosen[0]])
+    assert resolution["lines"] == [chosen[0]]
+    # One more row in the ledger; the other is left out and nobody is asked again.
+    assert len(env.txns(individual)) + len(env.cash_rows(individual)) == before + 1
+    assert LINES_HELD not in env.reasons(document_id)
+    imported = [a for a in _audits(env, "investment.import") if a.get("lines_left_out")]
+    assert [a["lines_left_out"] for a in imported] == [1]
+    # Any later import of the document keeps the answer: still one, still no question.
+    _rerun(env, document_id)
+    assert len(env.txns(individual)) + len(env.cash_rows(individual)) == before + 1
+    assert LINES_HELD not in env.reasons(document_id)
+
+
+def test_a_security_that_waits_cannot_be_answered_line_by_line(env: Env) -> None:
+    january, _ = synth.brokerage_series(seed=102)
+    env.brokerage(january)
+    document_id = env.ingest(synth.placeholder_pdf(january, tamper="extra_row"), "statement.pdf")
+    item = _held_item(env, document_id)
+    assert item.payload["selectable"] is False
+    with env.factories.transaction() as db:
+        apply_rls_context(db, env.principal())
+        with pytest.raises(ProblemError) as refused:
+            review_service.resolve(
+                db,
+                env.principal(),
+                item.id,
+                ResolveLowConfidence(
+                    kind="low_confidence_field",
+                    import_as_read=True,
+                    lines=[item.payload["lines"][0]["index"]],
+                ),
+                request=None,
+            )
+    assert refused.value.status == 422
+
+
+def test_an_unknown_cost_basis_and_a_short_position_are_said(env: Env) -> None:
+    """What a statement leaves open about a holding is asked, not assumed.
+
+    A holding printed ``unknown`` beside others that print their cost is
+    opened at its price (no gain shown) and a person is asked for its cost;
+    a short position is in the statement's value but not among the holdings.
+    """
+    stmt = fid.fidelity_statement(seed=103)
+    symbols: dict[str, str] = {}
+
+    def unknown_and_short(investments: Any) -> None:
+        positions = investments[0]["positions"]
+        assert len(positions) >= 3
+        assert all(p["cost_basis"] is not None for p in positions)
+        positions[0]["cost_basis"] = None
+        symbols["unknown"] = positions[0]["security"]["symbol"]
+        short = positions[1]
+        symbols["short"] = short["security"]["symbol"]
+        # A short position: as many units owed, their value owed too. The
+        # statement's totals are edited with it, so its figures still add up.
+        check = investments[0]["reconciliation"]
+        twice = 2 * Decimal(short["market_value"])
+        short["quantity"] = str(-Decimal(short["quantity"]))
+        short["market_value"] = str(-Decimal(short["market_value"]))
+        for holder, name in (
+            (investments[0]["positions_value"], "amount"),
+            (investments[0]["total_value"], "amount"),
+            (check, "positions_total"),
+            (check, "reported_positions_total"),
+            (check, "total_value"),
+            (check, "reported_total_value"),
+        ):
+            holder[name] = str(Decimal(holder[name]) - twice)
+
+    document_id = _unimported(env, stmt, unknown_and_short)
+    individual = env.query(select(Account).where(Account.number_last4 == stmt.accounts[0].last4))[0]
+    by_reason = {str(r.payload.get("reason")): r for r in env.open_reviews(document_id)}
+    assert {"investment_opening_basis_unknown", "investment_short_position"} <= set(by_reason)
+
+    names = {s.id: _key(s) for s in env.securities().values()}
+    (asked,) = by_reason["investment_opening_basis_unknown"].payload["securities"]
+    assert names[uuid.UUID(asked["security_id"])] == symbols["unknown"]
+    opening = next(t for t in env.txns(individual) if str(t.id) == asked["transaction_id"])
+    assert opening.memo == OPENING_MEMO
+
+    (short,) = by_reason["investment_short_position"].payload["positions"]
+    assert short["symbol"] == symbols["short"]
+    assert Decimal(short["quantity"]) < 0
+    # Not held short (the lot engine holds no short position) ...
+    assert all(quantity > 0 for _, quantity in _fid_holdings(env, individual))
+    # ... and in the account's value, which is the statement's.
+    (snapshot,) = env.snapshots(individual)
+    stored = ExtractResult.model_validate(env.document(document_id).extraction)
+    assert stored.investments[0].total_value is not None
+    assert snapshot.balance == stored.investments[0].total_value.amount

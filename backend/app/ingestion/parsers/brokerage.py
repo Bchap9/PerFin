@@ -270,6 +270,7 @@ from app.ingestion.sandbox.protocol import (
     MAX_SECTION_CHECKS,
     MAX_STATEMENTS,
     SECTION_LABEL_MAX,
+    SECURITY_NAME_MAX,
     AssetClassCode,
     Balance,
     FigureGroup,
@@ -1340,6 +1341,12 @@ class _ActivityRow:
     #: The wording that suggestion is for, when it may be remembered
     #: (``InvestmentActivity.suggestion``).
     suggestion: str | None = None
+    #: Lines printed under the row: how many wrapped its security's name, what
+    #: the others say (``Wash sale of ...``, ``Accrued Interest: ...``), and
+    #: where the row now ends on its page.
+    name_lines: int = 0
+    notes: list[str] = field(default_factory=list)
+    bottom: float = 0.0
 
 
 @dataclass(frozen=True)
@@ -1434,6 +1441,16 @@ class _Collected:
     #: Action phrases and headings of the rows nothing could type (their keys).
     unknown_actions: list[str] = field(default_factory=list)
     unknown_headings: list[str] = field(default_factory=list)
+    #: Where the lines left out are (a row nothing typed, an unread amount),
+    #: for the review queue's highlight.
+    skipped_regions: list[tuple[int, tuple[float, float, float, float]]] = field(
+        default_factory=list
+    )
+    #: Lines that look like entries (a date, an amount) under no table the
+    #: parser could read: a table whose header it does not know.
+    unread: list[tuple[int, tuple[float, float, float, float]]] = field(default_factory=list)
+    #: The latest row of each side-by-side table (lines under it continue it).
+    last_rows: dict[int, _ActivityRow] = field(default_factory=dict)
 
     @property
     def found_table(self) -> bool:
@@ -1866,6 +1883,43 @@ def _surplus(
     return same[0] if len(same) == 1 else None
 
 
+#: A line this many line heights under a row no longer continues it.
+_CONTINUATION_GAP: Final = 1.2
+_MAX_ROW_NOTES: Final = 4
+_MEMO_MAX: Final = 300
+
+
+def _region(regions: list[tuple[int, tuple[float, float, float, float]]], line: ViewLine) -> None:
+    """Keep where ``line`` is (bounded: the highlight shows the first ones)."""
+    if len(regions) < MAX_SECTION_CHECKS:
+        regions.append((line.page, line.bbox))
+
+
+def _nearest_date(text: str, styles: Sequence[DateStyle], period: tuple[date, date]) -> date | None:
+    """A yearless ``MM/DD`` (``DD/MM``) placed in the year nearest ``period``.
+
+    For a date :func:`~app.ingestion.parsers.text.infer_year` would not
+    place (more than a few days after the period, or long before it). None
+    for a date that prints its year, or no numeric date.
+    """
+    parts = numeric_parts(text)
+    if parts is None or parts[2] is not None:
+        return None
+    month, day = (parts[1], parts[0]) if "dm" in styles and "md" not in styles else parts[:2]
+    best: tuple[int, date] | None = None
+    for year in range(period[0].year - 1, period[1].year + 2):
+        try:
+            candidate = date(year, month, day)
+        except ValueError:
+            continue
+        if period[0] <= candidate <= period[1]:
+            return candidate
+        gap = min(abs((candidate - period[0]).days), abs((candidate - period[1]).days))
+        if best is None or gap < best[0]:
+            best = (gap, candidate)
+    return best[1] if best is not None else None
+
+
 def _remember(keys: list[str], text: str) -> None:
     """Keep the :func:`phrase_key` of ``text`` once (at most :data:`MAX_PHRASES`)."""
     key = phrase_key(text)
@@ -1874,10 +1928,12 @@ def _remember(keys: list[str], text: str) -> None:
 
 
 def _memo(row: _ActivityRow) -> str | None:
-    """The row's description, with what its own words add (``... (Return of capital)``)."""
+    """The row's description, with what its own words add (``... (Return of capital)``)
+    and the notes printed under it (``...; Wash sale of ...``)."""
+    head = row.description or row.note or ""
     if row.note and row.description:
-        return f"{row.description} ({row.note})"
-    return row.description or row.note or None
+        head = f"{row.description} ({row.note})"
+    return "; ".join(part for part in (head, *row.notes) if part)[:_MEMO_MAX] or None
 
 
 class BrokerageStatementParser(DocumentParser):
@@ -2463,12 +2519,15 @@ class BrokerageStatementParser(DocumentParser):
         collected: _Collected,
         *,
         symbol_column: bool = False,
+        part: int = 0,
     ) -> None:
         date_text = _text(cells.get("date"))
         if collected.section == "margin":
             date_text = _range_end(date_text)
         if not date_text or not _date_shaped(date_text):
+            self._continue_activity(line, cells, collected, part)
             return
+        collected.last_rows.pop(part, None)
         type_text = _text(cells.get("type"))
         name = _text(cells.get("name"))
         symbol, cusip = _identifier(_text(cells.get("symbol")))
@@ -2532,6 +2591,7 @@ class BrokerageStatementParser(DocumentParser):
         if kind is None:
             collected.unknown_activity += 1
             collected.skipped += 1
+            _region(collected.skipped_regions, line)
             _remember(collected.unknown_actions, type_text)
             if not collected.section_worded and section is None and collected.section_label:
                 _remember(collected.unknown_headings, collected.section_label)
@@ -2545,6 +2605,7 @@ class BrokerageStatementParser(DocumentParser):
             amount = Amount(value=Decimal(0))  # units moved, no cash ("-")
         if amount is None:
             collected.skipped += 1
+            _region(collected.skipped_regions, line)
             return
         description = name or _text(cells.get("description"))
         if not description and section == "margin":
@@ -2556,33 +2617,70 @@ class BrokerageStatementParser(DocumentParser):
             description = type_text
         price_text = _unmarked(_text(cells.get("price")))
         fees_text = _text(cells.get("fees"))
-        collected.activity.append(
-            _ActivityRow(
-                page=line.page,
-                bbox=line.bbox,
-                date_text=date_text,
-                settle_text=_text(cells.get("settle")),
-                type=kind,
-                description=description,
-                symbol=symbol,
-                quantity=quantity,
-                price=read_number(price_text) if price_text else None,
-                amount=amount,
-                fees=read_amount(fees_text) if fees_text else None,
-                ocr=_ocr(cells),
-                cusip=cusip,
-                table=collected.tables,
-                by_sign=by_sign,
-                security_name=name or None,
-                section_label=collected.section_label,
-                section_id=collected.section_id,
-                printed=printed,
-                symbol_column=symbol_column,
-                note=note,
-                suggested=suggested,
-                suggestion=suggestion,
-            )
+        row = collected.last_rows[part] = _ActivityRow(
+            page=line.page,
+            bbox=line.bbox,
+            date_text=date_text,
+            settle_text=_text(cells.get("settle")),
+            type=kind,
+            description=description,
+            symbol=symbol,
+            quantity=quantity,
+            price=read_number(price_text) if price_text else None,
+            amount=amount,
+            fees=read_amount(fees_text) if fees_text else None,
+            ocr=_ocr(cells),
+            cusip=cusip,
+            table=collected.tables,
+            by_sign=by_sign,
+            security_name=name or None,
+            section_label=collected.section_label,
+            section_id=collected.section_id,
+            printed=printed,
+            symbol_column=symbol_column,
+            note=note,
+            suggested=suggested,
+            suggestion=suggestion,
+            bottom=line.bbox[3],
         )
+        collected.activity.append(row)
+
+    @staticmethod
+    def _continue_activity(
+        line: ViewLine,
+        cells: dict[ActivityRole, list[Cell]],
+        collected: _Collected,
+        part: int,
+    ) -> None:
+        """A line printed right under an activity row, with no date of its own.
+
+        In the row's security-name column it is the rest of the name (the
+        first such line: ``ETF``, a bond's coupon and maturity) or a remark
+        on the trade; in its action or description column it is a note
+        (``Wash sale of ...``, ``LT loss: ...``, ``Accrued Interest: ...``).
+        Both are kept with the row; a line with a figure in the amount
+        column, or further down the page, is something else.
+        """
+        row = collected.last_rows.get(part)
+        if row is None or line.page != row.page or cells.get("date") or cells.get("amount"):
+            return
+        if line.bbox[1] - row.bottom > _CONTINUATION_GAP * max(line.height, 1.0):
+            collected.last_rows.pop(part, None)
+            return
+        name = _text(cells.get("name"))
+        note = _text(cells.get("type")) or _text(cells.get("description"))
+        if not name and not note:
+            return
+        row.bottom = max(row.bottom, line.bbox[3])
+        if name and row.security_name and not row.name_lines:
+            if row.description == row.security_name:
+                row.description = f"{row.description} {name}"[:SECURITY_NAME_MAX]
+            row.security_name = f"{row.security_name} {name}"[:SECURITY_NAME_MAX]
+            row.name_lines = 1
+        elif name:
+            note = f"{name} {note}".strip()
+        if note and len(row.notes) < _MAX_ROW_NOTES:
+            row.notes.append(note[:SECTION_LABEL_MAX])
 
     @staticmethod
     def _section_total(piece: ViewLine, part: _Part, collected: _Collected) -> None:
@@ -2817,6 +2915,7 @@ class BrokerageStatementParser(DocumentParser):
             if section is not None and not self._is_heading(line, self.ignored_tables):
                 index += 1
                 collected.section = section
+                collected.last_rows = {}
                 collected.section_suggested = collected.section_worded = False
                 collected.section_label = _heading_label(line.text)
                 collected.section_id += 1
@@ -2904,6 +3003,7 @@ class BrokerageStatementParser(DocumentParser):
                     collected.activity_header = True
                     collected.tables += 1
                     collected.section_tables += 1
+                    collected.last_rows = {}
                 continue
             index += 1
             if self._is_heading(line, self.ignored_tables):
@@ -2967,7 +3067,7 @@ class BrokerageStatementParser(DocumentParser):
             if collected.section == "skip":
                 return  # pending trades, daily balances: no activity
             before = len(collected.activity) + collected.skipped
-            for part in parts:
+            for number, part in enumerate(parts):
                 piece = _piece(line, part) if len(parts) > 1 else line
                 if piece is None:
                     continue
@@ -2982,11 +3082,21 @@ class BrokerageStatementParser(DocumentParser):
                     _assign(piece, part.columns),
                     collected,
                     symbol_column=any(c.role == "symbol" for c in part.columns),
+                    part=number,
                 )
             if len(collected.activity) + collected.skipped != before:
                 return
             if norm.startswith("total"):
                 return
+        elif (
+            collected.section != "skip"
+            and len(line.cells) >= 2
+            and _date_shaped(line.cells[0].text)
+            and find_amounts(line.text)
+        ):
+            # A date and an amount under no table that could be read: an entry
+            # of a table whose header the parser does not know.
+            _region(collected.unread, line)
         self._figure(line, collected)
         self._scan_summary(line, collected.summary)
 
@@ -3127,8 +3237,15 @@ class BrokerageStatementParser(DocumentParser):
         signed = {r.table for r in collected.activity if r.amount.negative_marked}
         for row in collected.activity:
             trade = self._read_date(row.date_text, styles, period)
+            placed = trade is not None
+            if trade is None and period is not None:
+                # A yearless date too far outside the period to be placed in
+                # it: the nearest year, kept as a guess a person looks at
+                # (the row is on the page; dropping it would lose it).
+                trade = _nearest_date(row.date_text, styles, period)
             if trade is None:
                 collected.skipped += 1
+                collected.skipped_regions.append((row.page, row.bbox))
                 continue
             settle = self._read_date(row.settle_text, styles, period) if row.settle_text else None
             symbol, name = row.symbol, row.description or None
@@ -3172,6 +3289,8 @@ class BrokerageStatementParser(DocumentParser):
             date_conf = self.base if certain else conf.GUESSED
             if period is not None and not (period[0] <= trade <= period[1]):
                 date_conf = min(date_conf, conf.INFERRED)
+            if not placed:
+                date_conf = min(date_conf, conf.GUESSED)
             score = {
                 "trade_date": conf.scaled(date_conf, row.ocr),
                 "type": conf.scaled(self.base, row.ocr),
@@ -3534,11 +3653,19 @@ class BrokerageStatementParser(DocumentParser):
             unknown += preamble.unknown_activity
             if outside:
                 warnings.append("rows_outside_account")
-        for collected in accounts:
+        unread = 0
+        for collected in (*accounts, *([preamble] if preamble is not None else [])):
             for key in collected.unknown_actions:
                 _remember(outcome.unknown_actions, key)
             for key in collected.unknown_headings:
                 _remember(outcome.unknown_headings, key)
+            outcome.skipped_regions.extend(collected.skipped_regions)
+            outcome.skipped_regions.extend(collected.unread)
+            unread += len(collected.unread)
+        if unread:
+            # Entries of a table no header named: left out, counted, shown.
+            outcome.skipped_lines += unread
+            outcome.warnings.append("lines_unread")
         if dropped:
             warnings.append("too_many_accounts")
         outcome.skipped_lines += skipped

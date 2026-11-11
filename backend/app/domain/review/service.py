@@ -873,19 +873,46 @@ def confirm_pending(
     return count
 
 
+def _chosen_lines(payload: Mapping[str, Any], lines: Sequence[int] | None) -> list[int] | None:
+    """The lines of the item an answer names, checked against what it listed.
+
+    Only an item whose lines stand alone (``selectable``: none moves units)
+    can be answered line by line, and only with lines it lists.
+    """
+    if lines is None:
+        return None
+    listed = {
+        entry.get("index")
+        for entry in payload.get("lines") or []
+        if isinstance(entry, dict) and isinstance(entry.get("index"), int)
+    }
+    if payload.get("selectable") is not True:
+        raise _invalid("The lines of this item can only be imported together.")
+    if not lines or not set(lines) <= listed:
+        raise _invalid("Name at least one of the lines this item lists.")
+    return sorted(set(lines))
+
+
 def _import_as_read(
     db: Session,
     principal: Principal,
     item: ReviewItem,
     request: HTTPConnection | None,
+    *,
+    lines: Sequence[int] | None = None,
 ) -> dict[str, Any]:
-    """Import a held brokerage statement as printed (module doc)."""
+    """Import a held brokerage statement as printed (module doc).
+
+    ``lines``: only these lines of the item (:func:`_chosen_lines`); the
+    others it lists are left out, and no item is raised for them again.
+    """
     payload = item.payload or {}
     if not statement_import.acceptable_as_read(payload):
         raise _invalid(
             "Only a brokerage statement held back because its figures do not add up "
             "can be imported as read."
         )
+    chosen = _chosen_lines(payload, lines)
     document = _document(db, item)
     account_id = _uuid(payload.get("account_id"))
     if account_id is None:
@@ -907,7 +934,8 @@ def _import_as_read(
         "reason": payload.get("reason"),
         "failed": [f for f in failed if isinstance(f, str)] if isinstance(failed, list) else [],
         "snapshot": False,
-        **_remember_wording(db, principal, document, rerun, request),
+        **({statement_answers.LINES_FIELD: chosen} if chosen is not None else {}),
+        **_remember_wording(db, principal, document, rerun, request, lines=chosen),
     }
 
 
@@ -917,6 +945,8 @@ def _remember_wording(
     document: Document,
     answered: Mapping[str, Any],
     request: HTTPConnection | None,
+    *,
+    lines: Sequence[int] | None = None,
 ) -> dict[str, Any]:
     """Keep the wording whose suggested kinds this answer confirmed (ADR-0010).
 
@@ -937,6 +967,12 @@ def _remember_wording(
     )
     if statement is None:
         return {}
+    if lines is not None:
+        # Only the lines the person chose were confirmed.
+        chosen = set(lines)
+        statement = statement.model_copy(
+            update={"activity": [a for i, a in enumerate(statement.activity) if i in chosen]}
+        )
     learned = wording.remember_confirmed(db, principal, document, statement, request=request)
     return {"wording_learned": learned} if learned else {}
 
@@ -949,7 +985,7 @@ def _resolve_low_confidence(
     request: HTTPConnection | None,
 ) -> dict[str, Any]:
     if body.import_as_read:
-        return _import_as_read(db, principal, item, request)
+        return _import_as_read(db, principal, item, request, lines=body.lines)
     document = _document(db, item)
     corrected = apply_fixes(db, principal, document, body.transactions, request=request)
     confirmed: list[uuid.UUID] = []

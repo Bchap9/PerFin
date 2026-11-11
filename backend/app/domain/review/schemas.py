@@ -180,11 +180,18 @@ class ResolveLowConfidence(_Input):
     confirm: bool = True
     #: Import the item's held brokerage statement as printed (module doc).
     import_as_read: bool = False
+    #: With ``import_as_read`` on an item whose lines may be answered one by
+    #: one (payload ``selectable``): the lines to import, by their ``index``
+    #: in the payload's ``lines``. The other lines it lists are left out for
+    #: good. Omitted: every line.
+    lines: list[Annotated[int, Field(ge=0)]] | None = Field(default=None, max_length=2000)
 
     @model_validator(mode="after")
     def _as_read_alone(self) -> Self:
         if self.import_as_read and self.transactions:
             raise ValueError("import_as_read takes no transactions")
+        if self.lines is not None and not self.import_as_read:
+            raise ValueError("lines goes with import_as_read")
         return self
 
 
