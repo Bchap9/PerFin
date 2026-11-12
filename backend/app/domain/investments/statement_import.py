@@ -977,6 +977,8 @@ def _held(
                         "index": i,
                         "symbol": statement.positions[i].security.symbol,
                         "name": statement.positions[i].security.name,
+                        # Why it is listed: its value is not quantity x price.
+                        "fields": ["market_value"],
                         "quantity": _text(statement.positions[i].quantity),
                         "unit_price": _text(statement.positions[i].unit_price),
                         "market_value": _text(statement.positions[i].market_value),
@@ -1577,8 +1579,12 @@ def _held_positions(ctx: _Context, account: Account) -> dict[uuid.UUID, _Held]:
             basis[security_id] += remaining * cost_per_unit
             if opening not in synthetic:
                 own.add(security_id)
+    # The basis as money (the ``holding`` cache's scale): the cost derived for
+    # new units is then free of the lots' per-unit rounding.
     return {
-        security_id: _Held(units[security_id], basis[security_id], security_id not in own)
+        security_id: _Held(
+            units[security_id], to_storage(basis[security_id]), security_id not in own
+        )
         for security_id in units
     }
 

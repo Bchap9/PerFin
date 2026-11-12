@@ -30,11 +30,23 @@ When an operator turns a feed on:
 | FX, ECB reference rates | `PERFIN_FX_PROVIDER=ecb` | `www.ecb.europa.eu:443` | one `GET` of the fixed URL `https://www.ecb.europa.eu/stats/eurofxref/eurofxref-daily.xml` per run | anything at all about the installation: no currency list, no amounts, no query |
 
 Both run only in the worker, in the instance-level `refresh_prices` job
-(every 6 hours, `backend/app/workers/handlers/market_data.py`). The API
-process never contacts a feed. `perfin config check` prints a warning
-naming the destination for each enabled feed (`prices.provider_enabled`,
-`fx.provider_enabled`) and refuses a misconfigured price provider
-(`prices.provider_invalid`, an error outside dev mode).
+(`backend/app/workers/handlers/market_data.py`): every
+`PERFIN_PRICE_REFRESH_MINUTES` (360, six hours, by default; 5 at the
+least), and once more when a member asks for it (`POST
+/investments/prices/refresh`, the "Refresh prices" button on the
+Investments page). A request only queues the job: requests within the same
+minute share one run for the whole instance, the job names no household,
+and it asks the provider exactly what the scheduled run asks, so a request
+tells the provider nothing about who made it and cannot be used to call
+it more often than once a minute. The API process never contacts a feed.
+`perfin config check` prints a warning naming the destination for each
+enabled feed (`prices.provider_enabled`, `fx.provider_enabled`) and refuses
+a misconfigured price provider (`prices.provider_invalid`, an error outside
+dev mode).
+
+What stays inside: when a run changes a household's prices, that household
+gets a `price.updated` event carrying a count (never a symbol) on its own
+event stream, and the open app refetches holdings and net worth.
 
 ## Prices: `http_json`
 
@@ -52,6 +64,7 @@ PERFIN_PRICE_PROVIDER_CURRENCY=USD                  # when no currency field
 PERFIN_PRICE_PROVIDER_AUTH_HEADER=X-Api-Key         # optional, with the key
 PERFIN_PRICE_PROVIDER_API_KEY=...                   # optional, secret
 PERFIN_PRICE_PROVIDER_MAX_SYMBOLS=500
+PERFIN_PRICE_REFRESH_MINUTES=360                    # how often the worker asks
 ```
 
 ### The request, byte by byte
@@ -99,6 +112,49 @@ window; SECURITY.md F8) and
 the currency an ISO 4217 code. A quote applies only to securities with the
 same symbol **and** currency; a non-200 answer or an unusable body skips
 that symbol (logged as a count, never with the symbol).
+
+### Choosing a provider and a pace
+
+Any quote service that answers one symbol with JSON over https fits the
+adapter. What to check with the provider you pick:
+
+- **One request per symbol**: the URL must take the symbol in its path or
+  query and answer with that symbol's latest price. A bulk endpoint (many
+  symbols per request) is not what the adapter calls.
+- **Where the price is**: the dotted path to the number
+  (`PERFIN_PRICE_PROVIDER_PRICE_FIELD`: `price`, `data.close`, `0.close`
+  for a one-element array). If the answer carries the price's day as an ISO
+  date, name it (`PERFIN_PRICE_PROVIDER_DATE_FIELD`); a Unix timestamp is
+  not read, and without a date field the price is dated today.
+- **The key in a header**: most services accept their key in a request
+  header (`PERFIN_PRICE_PROVIDER_AUTH_HEADER` and
+  `PERFIN_PRICE_PROVIDER_API_KEY`; a value such as `Token abc...` goes in
+  the key as a whole). Prefer that to a key in the URL, which ends up in
+  proxy logs.
+- **What it covers**: services differ on mutual funds (a fund's price is
+  its end-of-day NAV, published once a day), on symbols outside the US,
+  and on options and bonds, which most do not quote by the symbol a broker
+  prints. A symbol the provider does not know is skipped and its holding
+  keeps the last price PerFin has (a statement's, an export's, a manual
+  one).
+- **Its limits**: a run is one request per distinct symbol of the
+  instance. With 40 symbols, `PERFIN_PRICE_REFRESH_MINUTES=15` is about
+  3,800 requests a day; set the pace and
+  `PERFIN_PRICE_PROVIDER_MAX_SYMBOLS` within the plan you have.
+
+No provider has been called from this project's own test environment (the
+requests are tested against a mock transport), so check the three settings
+against the provider's current documentation, then `perfin config check`
+and the first `refresh_prices` run in the worker's log (it logs counts:
+symbols asked, quotes read, prices written).
+
+**What a refreshed price means.** A price feed moves prices, not
+holdings. Units and cost basis are those of the last import of each
+account (a statement or a positions export), so between imports a market
+value is an estimate: the latest price times units the account may no
+longer hold. `GET /investments/holdings` names the last import's day per
+account (`positions_as_of`) and each price's source and time, and the
+Investments page says so above the table.
 
 ### Manual prices win
 

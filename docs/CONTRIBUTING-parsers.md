@@ -167,6 +167,17 @@ is not suggested well:
   `tests/unit/test_brokerage_table_parser.py` and
   `tests/integration/test_activity_table_import.py`. Bump `PARSER_VERSION`
   when the reading of an existing layout changes.
+- A brokerage "Positions" export (a symbol, a quantity and a market value
+  column, no date or action) is read by
+  `backend/app/ingestion/parsers/positions_table.py` into one statement of
+  holdings per account (INGESTION.md "Brokerage positions exports"). For a
+  new broker's export add its header words to that module's `HEADERS`
+  (role `other` for a column that only restates the others), its words
+  for a cash row to `CASH_SYMBOLS` when it marks cash differently, and its
+  header prefix to `LAYOUT_INSTITUTIONS`; write the file from invented
+  holdings (`backend/tests/fixtures/synth_positions_csv.py`) and extend
+  `tests/unit/test_positions_table_parser.py` and
+  `tests/integration/test_positions_export_import.py`.
 - Table cells arrive formula-guarded (a leading `'` on a cell that would be
   a formula, SECURITY.md C7). Strip the guard only to match headers and
   action words and to parse dates and numbers; text you keep (a security

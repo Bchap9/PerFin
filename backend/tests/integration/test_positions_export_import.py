@@ -223,9 +223,7 @@ def test_a_later_export_brings_the_holdings_to_what_it_lists(env: Env) -> None:
             InvestmentTxn.quantity == Decimal("10"),
         )
     )
-    assert bought[0].price is not None
-    # 500.00 of new basis over ten units.
-    assert bought[0].price.quantize(Decimal("0.000001")) == Decimal("50")
+    assert bought[0].price == Decimal("50")  # 500.00 of new basis over ten units
     # The earlier lot of the growth fund keeps its day.
     lots: list[Lot] = env.query(
         select(Lot).where(Lot.account_id == account.id, Lot.remaining_quantity > 0)

@@ -1012,7 +1012,7 @@ def test_price_refresh_is_queued_once_a_minute_and_only_with_a_feed(
     from app.api.routers import investments as router_module
     from app.core import clock
     from app.db.models import AuditLog, Job
-    from app.db.queue import queue_scope
+    from app.db.rls import queue_scope
 
     refresh = f"{API}/investments/prices/refresh"
     # No feed (the default): nothing to fetch, nothing is queued.

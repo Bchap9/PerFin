@@ -31,7 +31,8 @@ const holdings = {
   market_value: money("1250.00"),
   cost_basis: money("1000.00"),
   unrealized: gains("250.00", "50.00", "200.00"),
-  accounts: [{ account_id: BROKERAGE, cost_method: "fifo", market_value_base: money("1250.00") }],
+  accounts: [{ account_id: BROKERAGE, cost_method: "fifo", market_value_base: money("1250.00"), positions_as_of: null as string | null }],
+  price_feed: { enabled: false, refresh_minutes: null as number | null },
   allocation: {
     asset_class: [{ key: "equity", value: money("1250.00"), weight: "1" }],
     sector: [{ key: "technology", value: money("1250.00"), weight: "0.4" }],
@@ -45,7 +46,9 @@ const holdings = {
       security: { id: SEC, symbol: "ACME", name: "Acme Corp", asset_class: "equity", currency: "USD", sector: "technology" },
       quantity: "10.5",
       cost_basis: money("1000.00"),
-      price: { basis: "price", close: "119.0476", currency: "USD", price_date: "2026-11-03" },
+      average_cost: "95.2381",
+      price: { basis: "price", close: "119.0476", currency: "USD", price_date: "2026-11-03", source: "manual", updated_at: STAMP },
+      price_change: null as Record<string, unknown> | null,
       market_value: money("1250.00"),
       market_value_base: money("1250.00"),
       unrealized: gains("250.00", "50.00", "200.00"),
@@ -87,6 +90,80 @@ describe("investments page", () => {
     await userEvent.setup().click(screen.getByRole("button", { name: /Show lots of ACME/ }));
     const lots = await screen.findByRole("table", { name: "Lots of Acme Corp" });
     expect(within(lots).getByText("Long term")).toBeInTheDocument();
+  });
+
+  it("says what the figures are as of, where each price came from and how it moved", async () => {
+    const [held] = holdings.holdings;
+    const fed = {
+      ...held,
+      price: { basis: "price", close: "119.0476", currency: "USD", price_date: "2026-11-12", source: "http_json", updated_at: "2026-11-12T15:30:00Z" },
+      price_change: { since: "2026-11-11", previous_close: "116.6667", value: money("25.00"), fraction: "0.0204080000" },
+    };
+    mockApi({
+      ...ownerSession(),
+      "GET /api/v1/accounts": accounts(),
+      "GET /api/v1/households/:id": referenceHandlers()["GET /api/v1/households/:id"] ?? (() => json({})),
+      "GET /api/v1/investments/holdings": () =>
+        json({
+          ...holdings,
+          holdings: [fed],
+          accounts: [{ ...holdings.accounts[0], positions_as_of: "2026-11-11" }],
+          price_feed: { enabled: true, refresh_minutes: 15 },
+        }),
+    });
+    renderApp("/investments");
+    const table = await screen.findByRole("table", { name: "Holdings" });
+    const row = within(table).getByRole("row", { name: /ACME/ });
+    // The account's holdings are those of its last import; the price is newer.
+    expect(within(row).getByText("as of Nov 11, 2026")).toBeInTheDocument();
+    expect(within(row).getByText("Nov 12, 2026")).toBeInTheDocument();
+    expect(within(row).getByText("price feed")).toBeInTheDocument();
+    expect(within(row).getByText("+$25.00")).toBeInTheDocument();
+    expect(within(row).getByText("(+2.04%)")).toBeInTheDocument();
+    expect(within(row).getByText("since Nov 11, 2026")).toBeInTheDocument();
+    expect(within(row).getByText("$95.2381")).toBeInTheDocument();
+    const note = screen.getByText(/What you hold is as of your last import \(Nov 11, 2026\)/);
+    expect(note).toHaveTextContent("Prices are fetched every 15 minutes.");
+    expect(note).toHaveTextContent("Market values and gains are estimates");
+  });
+
+  it("asks the worker for fresh prices when a feed is set up", async () => {
+    const api = mockApi({
+      ...ownerSession(),
+      "GET /api/v1/accounts": accounts(),
+      "GET /api/v1/households/:id": referenceHandlers()["GET /api/v1/households/:id"] ?? (() => json({})),
+      "GET /api/v1/investments/holdings": () => json({ ...holdings, price_feed: { enabled: true, refresh_minutes: 360 } }),
+      "POST /api/v1/investments/prices/refresh": () => json({ queued: true }, 202),
+    });
+    renderApp("/investments");
+    await userEvent.setup().click(await screen.findByRole("button", { name: "Refresh prices" }));
+    await vi.waitFor(() => { expect(api.callsTo("POST", "/api/v1/investments/prices/refresh")).toHaveLength(1); });
+    expect(await screen.findByText("Fetching prices; the figures update when they arrive")).toBeInTheDocument();
+  });
+
+  it("offers no refresh without a price feed, nor to a viewer", async () => {
+    mockApi({
+      ...ownerSession(),
+      "GET /api/v1/accounts": accounts(),
+      "GET /api/v1/households/:id": referenceHandlers()["GET /api/v1/households/:id"] ?? (() => json({})),
+      "GET /api/v1/investments/holdings": () => json(holdings),
+    });
+    const first = renderApp("/investments");
+    await screen.findByRole("table", { name: "Holdings" });
+    expect(screen.queryByRole("button", { name: "Refresh prices" })).not.toBeInTheDocument();
+    // Entered by hand, nothing imported: nothing to say about an import either.
+    expect(screen.queryByText(/What you hold is as of/)).not.toBeInTheDocument();
+    first.unmount();
+
+    mockApi({
+      "GET /api/v1/auth/session": authedSession({ role: "viewer" }),
+      "GET /api/v1/accounts": accounts(),
+      "GET /api/v1/households/:id": referenceHandlers()["GET /api/v1/households/:id"] ?? (() => json({})),
+      "GET /api/v1/investments/holdings": () => json({ ...holdings, price_feed: { enabled: true, refresh_minutes: 360 } }),
+    });
+    renderApp("/investments");
+    await screen.findByRole("table", { name: "Holdings" });
+    expect(screen.queryByRole("button", { name: "Refresh prices" })).not.toBeInTheDocument();
   });
 
   it("names a holding without a symbol by its name", async () => {

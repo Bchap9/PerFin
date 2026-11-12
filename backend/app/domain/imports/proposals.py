@@ -179,7 +179,8 @@ def _investment(index: int, statement: InvestmentStatement) -> _Found:
         period_end=statement.period_end,
         opening_balance=None,
         closing_balance=closing.amount if closing is not None else None,
-        transactions=len(statement.activity),
+        # A positions export has no activity: its rows are its holdings.
+        transactions=len(statement.activity) or len(statement.positions),
         subtype=account.subtype,
     )
 

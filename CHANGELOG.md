@@ -37,7 +37,77 @@ What remains (details in docs/ROADMAP.md):
 
 ## [Unreleased]
 
-Nothing yet.
+A broker's positions export is imported as what each account holds, with
+its cost basis; holdings show how current they are; prices can be fetched
+more often and on request. No migration.
+
+### Added
+
+- **Brokerage positions exports are imported** (INGESTION.md "Brokerage
+  positions exports"). A "Positions" export (Fidelity's *Portfolio
+  Positions* CSV and layouts like it: one row per holding of every
+  account, with units, price, value and cost basis) is read on its own;
+  before, nothing recognised the file and it waited as unparsed.
+  - New reader `backend/app/ingestion/parsers/positions_table.py` (in the
+    worker, on the stored table): one investment statement per account,
+    valued on the export's "Date downloaded" day (the day of receipt when
+    it prints none). The core money market row (`SPAXX**`) and pending
+    activity are the account's cash, not a holding. Bonds quoted per 100
+    and option contracts are read so that quantity x price is the value.
+    Accounts stay apart even in a file whose numbers are all masked alike.
+  - The importer commits it as a **snapshot** of the whole account: units
+    the account does not hold yet enter at the cost that makes the
+    position's basis the printed one; units no longer listed leave; a
+    position known only from statements and exports is reset to the
+    printed units and basis, while one with purchases on record keeps its
+    lots (only its units follow the export). Each position's price and the
+    account's value (holdings plus cash) are recorded for the day, so net
+    worth follows. The same holdings again add no row.
+  - The export's own figures are checked: quantity x price against each
+    value, and the percent-of-account column against the rows. A position
+    that does not add up waits for "import as read" while the rest is
+    imported; rows that are not the whole account import with a notice and
+    record no balance.
+  - Out of order is held, not applied: an export older than activity
+    already recorded, and activity from on or before an export already
+    imported (it would count the same units twice). Import activity first,
+    then positions.
+  - `perfin ingest --dry-run` shows the snapshot per account; the upload
+    list says "Read as investment holdings"; the review queue has copy for
+    a positions export none of whose rows reads.
+- **Holdings say how current they are** (`GET /investments/holdings`): per
+  holding the average cost, where its price came from and when
+  (`price.source`, `price.updated_at`) and how it moved from the stored
+  close before it (`price_change`); per account the last day an import
+  covers (`positions_as_of`); and whether prices are fetched
+  (`price_feed`). The Investments page shows them, with a note that market
+  values between imports are estimates: the latest price times the units
+  of the last import, which the account may no longer hold.
+- **Prices on request and more often.** `PERFIN_PRICE_REFRESH_MINUTES` sets
+  how often the worker's `refresh_prices` job runs (360, six hours, by
+  default; 5 at the least). `POST /investments/prices/refresh` (member or
+  above; "Refresh prices" on the Investments page) queues one run now:
+  `409 price-feed-disabled` without a feed, at most one extra run a minute
+  for the whole instance, and the job names no household. A household
+  whose prices changed gets a `price.updated` event, so an open app shows
+  the new values without a reload. The price feed itself is unchanged
+  (opt-in, the generic `http_json` adapter, symbols only);
+  docs/security/integrations.md has what to check when choosing a
+  provider and a pace.
+
+### Fixed
+
+- **A statement placed on an account is not asked about again.** A
+  statement that names its account by no digits (an export that masks its
+  account numbers) was asked about again on every re-run of its document
+  (an "import as read" answer, "process again"), because only the last
+  four digits remembered where it went. The resolution of the
+  `unknown_account` item now records the statement's key with the account
+  it was put on, and later imports of the document put it there again
+  (`backend/app/domain/imports/statement_answers.py`).
+- The review card of a brokerage statement that does not add up says why
+  each listed holding is there (its value is not quantity x price) instead
+  of "waits with its lines".
 
 ## [1.0.0-rc.7] - 2026-11-11
 

@@ -43,3 +43,16 @@
   display: grid;
   gap: var(--space-2);
 }
+
+/* A second line under a table cell's figure (a price's day and source, the
+   day a change is counted from): quieter, and never wrapped mid-phrase. */
+.cell-note {
+  display: block;
+  white-space: nowrap;
+  color: var(--color-text-muted);
+  font-size: var(--font-size-sm);
+}
+
+.cell-figure {
+  white-space: nowrap;
+}

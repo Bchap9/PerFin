@@ -276,6 +276,15 @@ const COPY: Readonly<Record<string, Copy>> = {
       "If the actions are unusual, dismiss this and report the action words.",
     ],
   }),
+  "unparsed:positions_unreadable": (item) => ({
+    title: "No holdings could be read",
+    what: `This looks like a brokerage positions export, but none of its rows could be read (${count(item, "skipped_rows")} unreadable).`,
+    why: "Each row needs a security, a quantity and a value.",
+    steps: [
+      "Download the positions export again from your broker (the CSV of all accounts) and upload that.",
+      "Or enter the holdings by hand under Investments, then dismiss this item.",
+    ],
+  }),
   "unparsed:extraction_failed": () => ({
     what: "PerFin could not read this file.",
     why: "It may be damaged, an unusual format, or too large for the safe reader.",
@@ -589,9 +598,11 @@ const COPY: Readonly<Record<string, Copy>> = {
   }),
   "low_confidence_field:investment_out_of_order": () => ({
     title: "Older than what is recorded",
-    what: "This statement is older than activity already recorded for the account, so its new rows were not added.",
+    what: "This statement or export is older than what is already recorded for the account (later activity, or a positions export that already counts these rows), so nothing of it was added.",
+    why: "Adding it now could count the same shares twice.",
     steps: [
-      "Add any missing rows by hand, or remove the newer imports and import oldest first.",
+      "Nothing to do if the account already shows what you hold; dismiss this item.",
+      "Otherwise add any missing rows by hand, or remove the newer imports and import oldest first.",
     ],
   }),
   "low_confidence_field:investment_possible_duplicate": (item) => ({

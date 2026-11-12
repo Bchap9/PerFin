@@ -5,7 +5,7 @@ import userEvent from "@testing-library/user-event";
 import { authedSession, json, mockApi, renderApp } from "../auth/testing";
 import { lookupHandlers, NOW } from "../transactions/fixtures";
 import { uploadDocument } from "./api";
-import { readAsActivity } from "./UploadPage";
+import { readAsActivity, readAsPositions } from "./UploadPage";
 
 class FakeXhr {
   static last: FakeXhr | null = null;
@@ -206,5 +206,17 @@ describe("readAsActivity", () => {
     ).toBe(true);
     expect(readAsActivity({ parser_version: "delimited/1" })).toBe(false);
     expect(readAsActivity({ parser_version: null })).toBe(false);
+  });
+});
+
+describe("readAsPositions", () => {
+  it("is true only for documents the brokerage positions reader imported", () => {
+    expect(
+      readAsPositions({ parser_version: "brokerage_positions_table/1" }),
+    ).toBe(true);
+    expect(
+      readAsPositions({ parser_version: "brokerage_activity_table/1" }),
+    ).toBe(false);
+    expect(readAsPositions({ parser_version: null })).toBe(false);
   });
 });

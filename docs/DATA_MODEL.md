@@ -412,7 +412,11 @@ forced RLS and household-consistent references, ADR-0008):
   so the same month as OFX and as PDF matches;
   `app/domain/investments/statement_import.py`). Units held before the
   first imported statement enter as an opening `transfer_in` (amount 0,
-  memo `Opening position from statement`).
+  memo `Opening position from statement`). A positions export (what an
+  account holds on a day) brings the holdings to what it lists with
+  `transfer_in` / `transfer_out` rows on that day (memos `Units held per
+  positions export` / `Units no longer held per positions export`;
+  INGESTION.md "Brokerage positions exports").
   The design's `date` is `trade_date` (`settle_date` optional, not before
   it).
 - **Business dates are bounded below** (SECURITY.md F8, security review
