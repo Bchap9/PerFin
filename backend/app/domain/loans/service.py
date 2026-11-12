@@ -39,12 +39,15 @@ negative balance on a liability account). The service owns the account's
 ``computed`` balance snapshots: one on the origination date (the original
 principal), and one on each day with payments (the balance at the end of
 the day before, from the account's best anchors, less the principal paid
-that day). They are rebuilt after every change to the loan or its payments;
-``statement`` snapshots from loan statements (previous and new principal
-balance) and ``manual`` ones beat them on the same day. A ledger
-transaction posted to the loan account moves the balance like on any other
-account; a payment's transfer posted on the payment day is replaced by the
-day's snapshot.
+that day). The day before origination has no balance of its own: payments
+made on the origination date come off the original principal, unless a
+``statement`` or ``manual`` snapshot dated earlier gives a balance (it is
+then read like on any other day). The snapshots are rebuilt after every
+change to the loan or its payments; ``statement`` snapshots from loan
+statements (previous and new principal balance) and ``manual`` ones beat
+them on the same day. A ledger transaction posted to the loan account moves
+the balance like on any other account; a payment's transfer posted on the
+payment day is replaced by the day's snapshot.
 
 Every write is audited (``loan.create|update|delete``,
 ``loan.payment_add|payment_delete``, ``loan.rate_change_add|rate_change_delete``)
@@ -229,6 +232,20 @@ class AccountLedger:
         ]
         return max(dates) if dates else None
 
+    def owed_before(self, loan: Loan, day: date) -> Decimal | None:
+        """Principal owed at the end of the day before ``day``, or ``None`` when unknown.
+
+        Unknown only on the origination date without a ``statement`` or
+        ``manual`` snapshot dated earlier: the loan did not exist the day
+        before, so the account has no balance to read (not a balance of
+        zero; transactions posted before origination do not make one
+        either, the origination snapshot replaces them).
+        """
+        eve = day - timedelta(days=1)
+        if eve < loan.origination_date and self.last_anchor_before(eve, recorded_only=True) is None:
+            return None
+        return self.owed(eve)
+
 
 def _account(db: Session, loan: Loan, *, lock: bool = False) -> Account:
     account = accounts_repo.get_account(db, loan.household_id, loan.account_id, lock=lock)
@@ -274,18 +291,28 @@ def sync_balance(db: Session, loan: Loan) -> None:
     db.flush()
     ledger = account_ledger(db, account)
     sign = ledger.sign
-    computed: dict[date, Decimal] = {loan.origination_date: sign * loan.principal_original}
-    ledger.anchors.append(
-        Anchor(loan.origination_date, computed[loan.origination_date], BalanceSource.COMPUTED)
-    )
+    computed: dict[date, Decimal] = {}
+
+    def put(day: date, balance: Decimal) -> None:
+        # One computed anchor a day: the origination day's payments replace
+        # the original principal there (of two equal sources the first wins).
+        computed[day] = balance
+        ledger.anchors[:] = [
+            a
+            for a in ledger.anchors
+            if a.as_of_date != day or a.source is not BalanceSource.COMPUTED
+        ]
+        ledger.anchors.append(Anchor(day, balance, BalanceSource.COMPUTED))
+
+    put(loan.origination_date, sign * loan.principal_original)
     per_day: dict[date, Decimal] = defaultdict(lambda: ZERO)
     for payment in payments_of(db, loan):
         per_day[payment.paid_on] += payment.principal
     for day in sorted(per_day):
-        before = ledger.owed(day - timedelta(days=1))
-        after = max(ZERO, before - per_day[day])
-        computed[day] = sign * after
-        ledger.anchors.append(Anchor(day, computed[day], BalanceSource.COMPUTED))
+        before = ledger.owed_before(loan, day)
+        if before is None:  # paid on the origination date
+            before = loan.principal_original
+        put(day, sign * max(ZERO, before - per_day[day]))
     for day, balance in sorted(computed.items()):
         accounts_repo.upsert_snapshot(db, account, day, balance, BalanceSource.COMPUTED)
 
@@ -825,12 +852,20 @@ def simulate(
 
 
 def _check(
-    terms: amort.Terms, ledger: AccountLedger, payment: LoanPayment
+    loan: Loan, terms: amort.Terms, ledger: AccountLedger, payment: LoanPayment
 ) -> tuple[ScheduleCheckOut, Decimal | None]:
+    """The payment's interest against a period's interest on the balance owed the day before.
+
+    ``unchecked`` when nothing was owed the day before, and on the
+    origination date when no earlier snapshot gives a balance: no interest
+    has run on day zero, so a period's interest on the original principal
+    is not what such a payment owes (``sync_balance`` does start that day
+    from the original principal, so ``balance_after`` is right).
+    """
     currency = payment.currency
-    before = ledger.owed(payment.paid_on - timedelta(days=1))
+    before = ledger.owed_before(loan, payment.paid_on)
     after = ledger.owed(payment.paid_on)
-    if before <= 0:
+    if before is None or before <= 0:
         return ScheduleCheckOut(status="unchecked", expected_interest=None, difference=None), after
     number = amort.nearest_due_number(terms, payment.paid_on)
     rate = amort.rate_in_force(terms, amort.due_date(terms, number - 1))
@@ -876,7 +911,7 @@ def payments_out(db: Session, loan: Loan, payments: Sequence[LoanPayment]) -> li
     ledger = account_ledger(db, _account(db, loan))
     result = []
     for payment in payments:
-        check, after = _check(terms, ledger, payment)
+        check, after = _check(loan, terms, ledger, payment)
         result.append(_payment_out(payment, check, after))
     return result
 

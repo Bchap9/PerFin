@@ -277,6 +277,83 @@ def test_payments_split_balance_sync_and_schedule_check(world: World) -> None:
     assert problem_type(world.member.post(url, json=linked)) == "transaction-not-found"
 
 
+def test_payment_on_the_origination_date_keeps_the_original_principal(world: World) -> None:
+    """Regression: the day before origination has no balance; it is not zero."""
+    loan = _post(world.member, LOANS, _mortgage_body(world.mortgage))
+    url = f"{LOANS}/{loan['id']}/payments"
+    first = _post(
+        world.member,
+        url,
+        {"paid_on": "2024-03-01", "principal": _usd("100.00"), "interest": _usd("0.00")},
+    )
+    assert first["balance_after"] == _usd("249900.00")
+    assert _balance(world.member, world.mortgage) == "-249900.00"
+    # No interest has run by day zero: there is nothing to compare with.
+    assert first["schedule_check"] == {
+        "status": "unchecked",
+        "expected_interest": None,
+        "difference": None,
+    }
+    # A second payment that day adds up; fees alone leave the principal alone.
+    second = _post(
+        world.member,
+        url,
+        {"paid_on": "2024-03-01", "principal": _usd("50.00"), "interest": _usd("0.00")},
+    )
+    fees = _post(
+        world.member,
+        url,
+        {
+            "paid_on": "2024-03-01",
+            "principal": _usd("0.00"),
+            "interest": _usd("0.00"),
+            "fees": _usd("25.00"),
+        },
+    )
+    assert second["balance_after"] == fees["balance_after"] == _usd("249850.00")
+    assert _balance(world.member, world.mortgage) == "-249850.00"
+    # Later payments chain from the origination-day balance.
+    rows = schedule(_terms()).rows
+    later = _post(
+        world.member,
+        url,
+        {
+            "paid_on": "2024-04-01",
+            "principal": _usd(f"{rows[0].principal}"),
+            "interest": _usd("1275.28"),
+        },
+    )
+    assert later["balance_after"] == _usd(f"{D('249850.00') - rows[0].principal}")
+    assert later["schedule_check"]["status"] == "ok"
+    # Without the origination-day payments the original principal is back.
+    for payment in (first, second, fees, later):
+        assert world.member.delete(f"{url}/{payment['id']}").status_code == 204
+    assert _balance(world.member, world.mortgage) == "-250000.00"
+
+
+def test_balance_recorded_before_origination_beats_the_original_principal(world: World) -> None:
+    """A manual balance dated before origination is where that day's payments start from."""
+    loan = _post(world.member, LOANS, _mortgage_body(world.mortgage))
+    snapshot = world.owner.post(
+        f"{API}/accounts/{world.mortgage.id}/balances",
+        json={"as_of_date": "2024-02-29", "balance": _usd("-240000.00")},
+    )
+    assert snapshot.status_code in (200, 201), snapshot.text
+    payment = _post(
+        world.member,
+        f"{LOANS}/{loan['id']}/payments",
+        {"paid_on": "2024-03-01", "principal": _usd("100.00"), "interest": _usd("1225.00")},
+    )
+    assert payment["balance_after"] == _usd("239900.00")
+    assert _balance(world.member, world.mortgage) == "-239900.00"
+    # A balance is known for the day before, so the interest is checked against it.
+    assert payment["schedule_check"] == {
+        "status": "ok",
+        "expected_interest": _usd("1225.00"),
+        "difference": _usd("0.00"),
+    }
+
+
 def test_simulate_extra_payments(world: World) -> None:
     loan = _post(world.member, LOANS, _mortgage_body(world.mortgage))
     url = f"{LOANS}/{loan['id']}/simulate"

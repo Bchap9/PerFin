@@ -1245,7 +1245,11 @@ loan-not-found`; on an account the caller may only view, writes are `403`.
   loan-payment-not-found`). `schedule_check` compares the interest with the
   interest due on the balance owed the day before at the period's rate:
   `{"status": "ok" (within one minor unit) | "differs" | "unchecked",
-  "expected_interest", "difference"}`. Loan statements add payments too
+  "expected_interest", "difference"}`. It is `unchecked` when nothing was
+  owed the day before, and for a payment on the origination date unless a
+  statement or manual balance dated earlier says what was owed (no
+  interest has run on day zero; `balance_after` is the original principal
+  less the principal paid that day). Loan statements add payments too
   (INGESTION.md "Loan statements"). Every change rebuilds the loan
   account's `computed` balances, so its balance is the principal owed.
 - **Rate changes** (`{"id", "loan_id", "effective_date", "new_rate",
