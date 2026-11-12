@@ -4,10 +4,20 @@
 * **XML (OFX 2.x)**: parsed with ``defusedxml`` with DTDs, entity
   declarations and external references all forbidden, so XXE and
   entity-expansion bombs ("billion laughs") are refused before any expansion.
+  A file that opens with ``<?xml`` or ``<?OFX`` takes this route. The bytes
+  are decoded here and the XML declaration is dropped before parsing, so the
+  encoding a file declares (often wrong, sometimes unknown to the parser) is
+  never used.
 * **SGML (OFX 1.x)**: a small tokenizer of our own (``<TAG>value`` with
   optional end tags for leaf elements). It never resolves entities beyond the
   five predefined ones and numeric references, and any markup declaration
-  (``<!DOCTYPE``, ``<!ENTITY``, ``<![CDATA[``...) refuses the file.
+  (``<!DOCTYPE``, ``<!ENTITY``, ``<![CDATA[``...) refuses the file. An OFX 2
+  opening over a body that is not well-formed XML (SGML leaves with no end
+  tag) is read by this tokenizer once its leading ``<?xml ...?>`` and
+  ``<?OFX ...?>`` instructions are removed; nothing else is removed, so every
+  other instruction or declaration still refuses the file, and a DTD refuses
+  it on the XML route before any fallback. A file cut short (no ``</OFX>``)
+  does not fall back.
 * Both are turned into the same small tree and walked for bank
   (``STMTRS``) and credit card (``CCSTMTRS``) statements: the institution
   (``FI/ORG``, used with the last four digits to match the account), account type, the
@@ -61,8 +71,19 @@ VERSION: Final = "ofx/2"
 MAX_DEPTH: Final = 64
 MAX_ELEMENTS: Final = 2_000_000
 
+#: Unescape passes after the first, for values an exporter escaped more than once.
+MAX_EXTRA_UNESCAPES: Final = 2
+
 _TOKEN: Final = re.compile(r"<(/?)([A-Za-z0-9_.]+)>([^<]*)")
 _DECLARATION: Final = re.compile(r"<[!?]")
+_STILL_ESCAPED: Final = re.compile(r"&(?:lt|gt|amp);")
+#: How an OFX 2 file opens: the XML declaration, or the OFX instruction alone.
+_XML_OPENING: Final = re.compile(r"<\?(?:xml|ofx)[\s?]", re.IGNORECASE)
+_XML_DECLARATION: Final = re.compile(r"<\?xml\s[^<>]*\?>", re.IGNORECASE)
+#: The ``<?xml ...?>`` and ``<?OFX ...?>`` instructions at the very start, and
+#: only those: ``<?xml-stylesheet`` does not match, nor anything further down.
+_LEADING_INSTRUCTIONS: Final = re.compile(r"(?:\s*<\?(?:xml|ofx)\s[^<>]*\?>)+", re.IGNORECASE)
+_OFX_END: Final = re.compile(r"</OFX>", re.IGNORECASE)
 _DATE: Final = re.compile(r"^\s*(\d{4})(\d{2})(\d{2})")
 _CURRENCY: Final = re.compile(r"^[A-Z]{3}$")
 
@@ -119,8 +140,15 @@ def _sgml_encoding(headers: dict[str, str]) -> tuple[str, ...]:
 
 def _unescape(value: str) -> str:
     # Predefined and numeric references only; html.unescape never expands
-    # anything into more than a character or two.
-    return html.unescape(value)
+    # anything into more than a character or two. Some exporters escape a
+    # value twice (``&amp;lt;``): while the result still holds ``&lt;``,
+    # ``&gt;`` or ``&amp;`` it is unescaped again, a bounded number of times.
+    value = html.unescape(value)
+    for _ in range(MAX_EXTRA_UNESCAPES):
+        if not _STILL_ESCAPED.search(value):
+            break
+        value = html.unescape(value)
+    return value
 
 
 def parse_sgml(body: str) -> Node:
@@ -177,14 +205,23 @@ def _convert(element: Element, depth: int, counter: list[int]) -> Node:
     return Node(_local(element.tag), None if children else value, children)
 
 
-def parse_xml(data: bytes) -> Node:
+def parse_xml(text: str) -> Node:
+    """Parse decoded OFX 2 text.
+
+    The XML declaration is dropped first: ``text`` is already decoded, so the
+    encoding the file names is never looked up or applied.
+    """
+    declaration = _XML_DECLARATION.match(text)
+    if declaration is not None:
+        text = text[declaration.end() :]
     try:
         element = defused_fromstring(
-            data, forbid_dtd=True, forbid_entities=True, forbid_external=True
+            text, forbid_dtd=True, forbid_entities=True, forbid_external=True
         )
     except DefusedXmlException:
+        # Caught first on purpose: it is a ValueError and must never fall back.
         raise ExtractFailure("xml_forbidden", "DTDs and entities are not allowed") from None
-    except ParseError:
+    except (ParseError, LookupError, ValueError):
         raise ExtractFailure("malformed_xml", "the XML is not well-formed") from None
     root = _convert(element, 0, [0])
     if root.name != "OFX":
@@ -305,11 +342,37 @@ def _institution(root: Node) -> str | None:
     return None
 
 
+def _parse_ofx2(text: str) -> Node:
+    """Text that opens with ``<?xml`` or ``<?OFX``: XML, else the SGML tokenizer.
+
+    Only XML that is not well-formed falls back. A DTD or an entity
+    declaration has already refused the file (``xml_forbidden``), and the
+    tokenizer refuses every ``<?`` and ``<!`` left after the leading
+    instructions. A file with no ``</OFX>`` was cut short: it stays
+    ``malformed_xml``, because the tokenizer would read what is left of it
+    (half an amount included) without a word.
+    """
+    try:
+        return parse_xml(text)
+    except ExtractFailure as failure:
+        if failure.code != "malformed_xml" or _OFX_END.search(text) is None:
+            raise
+        malformed = failure
+    leading = _LEADING_INSTRUCTIONS.match(text)
+    try:
+        return parse_sgml(text[leading.end() :] if leading is not None else text)
+    except ExtractFailure as failure:
+        if failure.code == "malformed_ofx":
+            # Neither XML nor an SGML body with an OFX element: say the former.
+            raise malformed from None
+        raise
+
+
 def _parse(data: bytes) -> Node:
-    stripped = data.lstrip(b"\xef\xbb\xbf \t\r\n")
-    if stripped[:5].lower() == b"<?xml":
-        return parse_xml(stripped)
     text, _ = decode_text(data, encodings=("utf-8-sig", "cp1252", "latin-1"))
+    opening = text.lstrip("\ufeff \t\r\n")
+    if _XML_OPENING.match(opening):
+        return _parse_ofx2(opening)
     headers, _ = _split_sgml_header(text)
     text, _ = decode_text(data, encodings=_sgml_encoding(headers))
     _, body = _split_sgml_header(text)
