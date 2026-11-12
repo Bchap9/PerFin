@@ -20,6 +20,7 @@ from app.ingestion.sandbox import child
 from app.ingestion.sandbox.protocol import ExtractOptions
 from app.ingestion.sandbox.runner import SandboxConfig, run_extraction
 from tests.fixtures import synth_documents as synth
+from tests.fixtures import synth_pdf_damaged as damaged
 
 pytestmark = pytest.mark.security
 
@@ -86,6 +87,18 @@ def test_pdf_javascript_and_launch_actions_are_inert() -> None:
     dumped = result.model_dump_json()
     assert "calc.exe" not in dumped
     assert "tracker.invalid" not in dumped
+
+
+def test_pdf_with_an_unreadable_xref_entry_is_read_and_its_script_inert() -> None:
+    result = run_extraction("pdf", damaged.damaged_xref_statement_pdf(True), config=CONFIG)
+    assert result.ok
+    assert result.meta is not None
+    assert result.meta.javascript
+    assert "javascript_removed" in result.warnings
+    assert damaged.TITLE in result.pages[0].text
+    dumped = result.model_dump_json()
+    assert damaged.SCRIPT_MARKER not in dumped
+    assert "app.alert" not in dumped
 
 
 def test_encrypted_pdf_is_a_review_case() -> None:

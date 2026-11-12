@@ -15,6 +15,15 @@ cleared. Nothing of the removed content is returned (no URIs, no scripts,
 no file names). Pages are rendered with ``annots=False``. A browser engine
 never sees the file on the server side.
 
+A cross-reference entry whose object is not in the file (common in files
+saved more than once) does not make the document unreadable: an object MuPDF
+cannot load holds nothing MuPDF could run, so both passes step over it
+(:func:`_object_errors`). ``Document.scrub`` stops at such an entry, before
+the objects numbered after it; this module's own pass over every object is
+therefore the one that counts. It skips only what cannot be loaded: an
+action that is found and cannot be cleared refuses the document
+(``malformed_pdf``).
+
 **Caps (C2).** At most :attr:`ExtractOptions.max_pages` pages (later pages:
 ``truncated``), at most :attr:`ExtractOptions.max_pdf_objects` objects,
 every render (OCR and previews) within :attr:`ExtractOptions.max_render_pixels`
@@ -101,6 +110,16 @@ def _has_key(doc: Any, xref: int, key: str) -> bool:
     return bool(kind and kind != "null")
 
 
+def _object_errors() -> tuple[type[Exception], ...]:
+    """What asking for one object raises when the object cannot be loaded.
+
+    PyMuPDF's own checks raise ``ValueError`` or ``RuntimeError``; MuPDF's
+    errors (``FzErrorBase``, "cannot find object in xref") are neither.
+    """
+    mupdf_error: type[Exception] = importlib.import_module("pymupdf").mupdf.FzErrorBase
+    return (RuntimeError, ValueError, mupdf_error)
+
+
 def _actions(doc: Any, xref: int) -> tuple[bool, bool]:
     """Whether object ``xref`` is (or holds, under ``/A``) a JavaScript or launch action."""
     javascript = launch = False
@@ -116,10 +135,11 @@ def _actions(doc: Any, xref: int) -> tuple[bool, bool]:
 def inventory_active_content(doc: Any) -> dict[str, Any]:
     """Count what C8 removes (module doc); reads object dictionaries only."""
     javascript = launch = False
+    unreadable = _object_errors()
     for xref in range(1, doc.xref_length()):
         try:
             is_js, is_launch = _actions(doc, xref)
-        except (RuntimeError, ValueError):
+        except unreadable:
             continue
         javascript = javascript or is_js
         launch = launch or is_launch
@@ -140,16 +160,13 @@ def inventory_active_content(doc: Any) -> dict[str, Any]:
     }
 
 
-def strip_active_content(pymupdf: Any, doc: Any) -> None:
-    """Remove JavaScript, embedded files, links and automatic actions in memory (C8)."""
-    pdf = pymupdf._as_pdf_document(doc)
-    pymupdf.mupdf.pdf_disable_js(pdf)
+def _scrub(doc: Any, *, javascript: bool) -> None:
     doc.scrub(
         attached_files=True,
         clean_pages=False,
         embedded_files=True,
         hidden_text=False,
-        javascript=True,
+        javascript=javascript,
         metadata=False,
         redactions=False,
         remove_links=True,
@@ -158,6 +175,25 @@ def strip_active_content(pymupdf: Any, doc: Any) -> None:
         thumbnails=True,
         xml_metadata=False,
     )
+
+
+def strip_active_content(pymupdf: Any, doc: Any) -> None:
+    """Remove JavaScript, embedded files, links and automatic actions in memory (C8).
+
+    Raises (the caller refuses the document) when a link, an embedded file, a
+    catalog entry or an action that was found cannot be removed.
+    """
+    pdf = pymupdf._as_pdf_document(doc)
+    pymupdf.mupdf.pdf_disable_js(pdf)
+    unreadable = _object_errors()
+    try:
+        _scrub(doc, javascript=True)
+    except unreadable:
+        # Its JavaScript pass gives up at the first object it cannot load.
+        # Links, attachments and embedded files are removed without that
+        # pass (a failure there still raises); the loop below disarms the
+        # scripts, those numbered after the unreadable object included.
+        _scrub(doc, javascript=False)
     catalog = doc.pdf_catalog()
     for key in ("OpenAction", "AA", "Names/JavaScript", "Names/EmbeddedFiles"):
         if _has_key(doc, catalog, key):
@@ -166,13 +202,15 @@ def strip_active_content(pymupdf: Any, doc: Any) -> None:
     for xref in range(1, doc.xref_length()):
         try:
             is_js, is_launch = _actions(doc, xref)
-            if not (is_js or is_launch):
-                continue
-            for key in ("S", "JS", "F", "Win", "Unix", "Mac", "A", "AA"):
-                if _has_key(doc, xref, key):
-                    doc.xref_set_key(xref, key, "null")
-        except (RuntimeError, ValueError):
+        except unreadable:
+            continue  # cannot be loaded: no action MuPDF could reach
+        if not (is_js or is_launch):
             continue
+        for key in ("S", "JS", "F", "Win", "Unix", "Mac", "A", "AA"):
+            if _has_key(doc, xref, key):
+                doc.xref_set_key(xref, key, "null")
+        if any(_actions(doc, xref)):
+            raise ExtractFailure("malformed_pdf", "active content cannot be removed")
 
 
 def _text_words(page: Any) -> list[RawWord]:
@@ -424,7 +462,9 @@ def extract_pdf(data: bytes, options: ExtractOptions, kind: str) -> ExtractResul
 
     MuPDF's own exceptions (``FzErrorBase``: page-tree cycles, its nesting
     limit, broken objects) are not ``RuntimeError``s; found by the upload fuzz
-    corpus (``tests/security/fuzz``).
+    corpus (``tests/security/fuzz``). The one exception is an object that
+    cannot be loaded while active content is looked for and removed (module
+    doc): it is stepped over.
     """
     pymupdf = _pymupdf()
     try:
