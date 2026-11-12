@@ -10,6 +10,9 @@
 * Records end with ``^``. Fields: ``D`` date, ``T``/``U`` amount, ``P``
   payee, ``M`` memo, ``N`` check number, ``C`` cleared flag, ``L`` category,
   and ``S``/``E``/``$`` split lines.
+* **No record is dropped without a count**: a record with no readable date or
+  amount, and a last record with no ``^``, are not transactions; each section
+  that lost records adds one warning ``transaction_skipped:<n>``.
 * **Dates** carry no format marker. All dates of the file are looked at
   together: a first component above 12 means day-month-year, a second
   component above 12 means month-day-year; both is an error; neither keeps
@@ -29,9 +32,11 @@ from decimal import Decimal
 from typing import Final, Literal
 
 from app.ingestion.extract.common import ExtractFailure, clean_text, decode_text, parse_amount
+from app.ingestion.extract.ofx import skipped_warnings
 from app.ingestion.extract.registry import register
 from app.ingestion.sandbox.protocol import (
     MAX_STATEMENTS,
+    WARNINGS_MAX,
     ExtractedTransaction,
     ExtractOptions,
     ExtractResult,
@@ -72,6 +77,8 @@ class _Section:
     account_name: str | None
     records: list[_Record] = field(default_factory=list)
     truncated: bool = False
+    #: Records of the section that are not read (so far: one with no ``^``).
+    unread: int = 0
 
 
 @dataclass(frozen=True)
@@ -195,6 +202,7 @@ def _sections(text: str, options: ExtractOptions, warnings: set[str]) -> list[_S
             record.splits[-1]["amount"] = value
     if current is not None and record != _Record():
         warnings.add("last_record_unterminated")
+        current.unread += 1
     return sections
 
 
@@ -231,14 +239,17 @@ def extract_qif(data: bytes, options: ExtractOptions, kind: str) -> ExtractResul
     if order == "mdy_assumed":
         warnings.add("date_order_assumed_mdy")
     statements: list[Statement] = []
+    #: Records not read, per section (a set would merge two equal counts).
+    skipped: list[int] = []
     for section in sections:
         transactions: list[ExtractedTransaction] = []
+        unread = section.unread
         for record in section.records:
             parts = _date_parts(record.date_raw or "")
             posted = _to_date(parts, order) if parts is not None else None
             amount = parse_amount(record.amount_raw)
             if posted is None or amount is None:
-                warnings.add("transaction_skipped_invalid_date_or_amount")
+                unread += 1
                 continue
             splits = _splits(record.splits, warnings)
             if splits and sum((s.amount for s in splits), Decimal(0)) != amount:
@@ -257,6 +268,7 @@ def extract_qif(data: bytes, options: ExtractOptions, kind: str) -> ExtractResul
             )
         if section.truncated:
             warnings.add(f"transactions_truncated:{options.max_transactions}")
+        skipped.append(unread)
         dates = [t.posted for t in transactions]
         statements.append(
             Statement(
@@ -276,7 +288,7 @@ def extract_qif(data: bytes, options: ExtractOptions, kind: str) -> ExtractResul
         ok=True,
         extractor_version=VERSION,
         statements=statements,
-        warnings=sorted(warnings),
+        warnings=[*sorted(warnings), *skipped_warnings(skipped, WARNINGS_MAX - len(warnings))],
     )
 
 

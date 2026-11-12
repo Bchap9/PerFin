@@ -18,7 +18,9 @@ For every ``INVSTMTRS``:
   ``reinvest`` of the same amount, so the cash nets to zero as it does in
   the account), ``INVEXPENSE``, ``TRANSFER``, ``SPLIT`` (``split_ratio`` =
   ``(NEWUNITS, OLDUNITS)``) and ``INVBANKTRAN`` (cash ``deposit`` /
-  ``withdrawal``); unknown kinds are counted in a warning;
+  ``withdrawal``); unknown kinds raise a warning, and each activity of a
+  known kind that cannot be read is counted: a statement that lost any adds
+  one ``transaction_skipped:<n>`` to the result's warnings;
 * ``INVBAL/AVAILCASH``: the closing cash balance;
 * ``SECLISTMSGSRSV1``: ticker, name and kind of each ``SECID`` (a CUSIP or
   ISIN ``UNIQUEID`` is kept as such; without a ticker the CUSIP/ISIN is the
@@ -86,6 +88,31 @@ _INCOME_TYPES: Final[dict[str, InvestmentActivityType]] = {
 }
 _KNOWN: Final = frozenset(
     {*_BUY, *_SELL, "INCOME", "REINVEST", "INVEXPENSE", "TRANSFER", "SPLIT", "INVBANKTRAN"}
+)
+#: Aggregates this module walks: the SGML tokenizer nests them even when a
+#: file leaves their end tags out (:data:`app.ingestion.extract.ofx.AGGREGATES`).
+INVESTMENT_AGGREGATES: Final = frozenset(
+    {
+        *_KNOWN,
+        *POSITION_KINDS,
+        *INFO_KINDS,
+        "INVSTMTMSGSRSV1",
+        "INVSTMTTRNRS",
+        "INVSTMTRS",
+        "INVACCTFROM",
+        "INVTRANLIST",
+        "INVPOSLIST",
+        "INVPOS",
+        "INVBAL",
+        "INVTRAN",
+        "INVBUY",
+        "INVSELL",
+        "SECID",
+        "SECLISTMSGSRSV1",
+        "SECLIST",
+        "SECINFO",
+        "STMTTRN",
+    }
 )
 _DATE: Final = re.compile(r"^\s*(\d{4})(\d{2})(\d{2})")
 
@@ -425,6 +452,7 @@ def _statement(
     options: ExtractOptions,
     budget: list[int],
     warnings: set[str],
+    skipped: list[int],
     institution: str | None,
 ) -> InvestmentStatement:
     account_node = node.child("INVACCTFROM")
@@ -442,6 +470,7 @@ def _statement(
     activity: list[InvestmentActivity] = []
     truncated = False
     unknown = 0
+    unread = 0
     if tranlist is not None:
         for item in tranlist.children:
             if item.name in ("DTSTART", "DTEND"):
@@ -457,12 +486,13 @@ def _statement(
             except ValidationError:
                 rows = None
             if rows is None:
-                warnings.add("investment_activity_skipped_invalid")
+                unread += 1
                 continue
             activity.extend(rows)
             budget[0] -= 1
     if unknown:
         warnings.add("investment_activity_kind_unsupported")
+    skipped.append(unread)
     if truncated:
         warnings.add(f"transactions_truncated:{options.max_transactions}")
     cash: Balance | None = None
@@ -496,14 +526,19 @@ def investment_statements(
     options: ExtractOptions,
     budget: list[int],
     warnings: set[str],
+    skipped: list[int],
     institution: str | None,
 ) -> list[InvestmentStatement]:
-    """Every ``INVSTMTRS`` of the file (module doc); ``budget`` caps activity rows."""
+    """Every ``INVSTMTRS`` of the file (module doc); ``budget`` caps activity rows.
+
+    ``skipped`` receives, per statement, how many activity records of a known
+    kind could not be read.
+    """
     nodes = list(root.iter("INVSTMTRS"))
     if not nodes:
         return []
     catalogue = _Catalogue(root)
     return [
-        _statement(node, kind, catalogue, options, budget, warnings, institution)
+        _statement(node, kind, catalogue, options, budget, warnings, skipped, institution)
         for node in nodes[:MAX_STATEMENTS]
     ]

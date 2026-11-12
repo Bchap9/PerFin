@@ -9,9 +9,13 @@
   encoding a file declares (often wrong, sometimes unknown to the parser) is
   never used.
 * **SGML (OFX 1.x)**: a small tokenizer of our own (``<TAG>value`` with
-  optional end tags for leaf elements). It never resolves entities beyond the
-  five predefined ones and numeric references, and any markup declaration
-  (``<!DOCTYPE``, ``<!ENTITY``, ``<![CDATA[``...) refuses the file. An OFX 2
+  optional end tags for leaf elements). A tag with no value opens an
+  aggregate only when its name has an end tag somewhere in the file or is an
+  aggregate the readers walk (:data:`AGGREGATES`); otherwise it is a leaf
+  printed empty, and the fields after it stay where they are. It never
+  resolves entities beyond the five predefined ones and numeric references,
+  and any markup declaration (``<!DOCTYPE``, ``<!ENTITY``, ``<![CDATA[``...)
+  refuses the file. An OFX 2
   opening over a body that is not well-formed XML (SGML leaves with no end
   tag) is read by this tokenizer once its leading ``<?xml ...?>`` and
   ``<?OFX ...?>`` instructions are removed; nothing else is removed, so every
@@ -24,8 +28,15 @@
   **last four digits** of the account id (the full number never leaves the
   sandbox), currency, period, ledger and available balances, transactions
   (``FITID``, type, posted and user dates, amount, name/payee, memo, check
-  number). Investment statements (``INVSTMTRS``: positions, activity, cash)
-  are read by :mod:`app.ingestion.extract.ofx_invest` on the same tree.
+  number). Transactions are the ``STMTTRN`` of the statement's
+  ``BANKTRANLIST`` and those directly under the statement (a stray end tag
+  closes the list early in some exports). Investment statements
+  (``INVSTMTRS``: positions, activity, cash) are read by
+  :mod:`app.ingestion.extract.ofx_invest` on the same tree.
+* **No record is dropped without a count**: a transaction with no readable
+  date or amount, or one the reader cannot reach (nested where no transaction
+  belongs), is counted, and each statement that lost records adds one warning
+  ``transaction_skipped:<n>`` (:func:`skipped_warnings`).
 * Caps: nesting depth, element count, transactions (``max_transactions``,
   then ``truncated``). Text fields are whitespace-collapsed, cut and
   formula-neutralised (C7).
@@ -35,7 +46,7 @@ from __future__ import annotations
 
 import html
 import re
-from collections.abc import Iterator
+from collections.abc import Iterator, Sequence
 from dataclasses import dataclass, field
 from datetime import date
 from typing import TYPE_CHECKING, Final
@@ -51,10 +62,11 @@ from app.ingestion.extract.common import (
     last4,
     parse_amount,
 )
-from app.ingestion.extract.ofx_invest import investment_statements
+from app.ingestion.extract.ofx_invest import INVESTMENT_AGGREGATES, investment_statements
 from app.ingestion.extract.registry import register
 from app.ingestion.sandbox.protocol import (
     MAX_STATEMENTS,
+    WARNINGS_MAX,
     Balance,
     ExtractedTransaction,
     ExtractOptions,
@@ -74,7 +86,38 @@ MAX_ELEMENTS: Final = 2_000_000
 #: Unescape passes after the first, for values an exporter escaped more than once.
 MAX_EXTRA_UNESCAPES: Final = 2
 
+#: Statement aggregates: each is read on its own, wherever it sits.
+STATEMENTS: Final = frozenset({"STMTRS", "CCSTMTRS", "INVSTMTRS"})
+
+#: Aggregates the readers walk. In SGML an aggregate always carries its end
+#: tag, and that is how the tokenizer knows one; these names nest even in a
+#: file that leaves the end tag out, as they did before empty leaves were told
+#: apart from aggregates.
+AGGREGATES: Final = INVESTMENT_AGGREGATES | {
+    "OFX",
+    "SIGNONMSGSRSV1",
+    "SONRS",
+    "STATUS",
+    "FI",
+    "BANKMSGSRSV1",
+    "STMTTRNRS",
+    "STMTRS",
+    "CREDITCARDMSGSRSV1",
+    "CCSTMTTRNRS",
+    "CCSTMTRS",
+    "BANKACCTFROM",
+    "CCACCTFROM",
+    "BANKTRANLIST",
+    "STMTTRN",
+    "PAYEE",
+    "CURRENCY",
+    "ORIGCURRENCY",
+    "LEDGERBAL",
+    "AVAILBAL",
+}
+
 _TOKEN: Final = re.compile(r"<(/?)([A-Za-z0-9_.]+)>([^<]*)")
+_END_TAG: Final = re.compile(r"</([A-Za-z0-9_.]+)>")
 _DECLARATION: Final = re.compile(r"<[!?]")
 _STILL_ESCAPED: Final = re.compile(r"&(?:lt|gt|amp);")
 #: How an OFX 2 file opens: the XML declaration, or the OFX instruction alone.
@@ -113,6 +156,21 @@ class Node:
             if node.name == name:
                 yield node
             stack.extend(reversed(node.children))
+
+
+def skipped_warnings(counts: Sequence[int], room: int) -> list[str]:
+    """``transaction_skipped:<n>`` for each statement that did not read ``n`` records.
+
+    One warning per statement, in order, and never deduplicated: the importer
+    adds the counts up. ``room`` is how many warnings the result can still
+    hold; with more statements than that, the last warning carries the sum of
+    the rest, so the total is always the number of records not read.
+    """
+    counts = [count for count in counts if count > 0]
+    room = max(room, 1)
+    if len(counts) > room:
+        counts = [*counts[: room - 1], sum(counts[room - 1 :])]
+    return [f"transaction_skipped:{count}" for count in counts]
 
 
 # ---------------------------------------------------------------------------
@@ -154,6 +212,11 @@ def _unescape(value: str) -> str:
 def parse_sgml(body: str) -> Node:
     if _DECLARATION.search(body):
         raise ExtractFailure("markup_declaration_forbidden", "markup declarations are not allowed")
+    # Names closed somewhere in the file: only these, and the aggregates the
+    # readers walk, nest when printed with no value. Any other empty tag is a
+    # leaf with nothing in it (``<NAME>`` on a line of its own), and taking it
+    # for an aggregate would put the fields that follow inside it.
+    closed = {name.upper() for name in _END_TAG.findall(body)}
     root = Node("#root")
     stack = [root]
     count = 0
@@ -173,6 +236,8 @@ def parse_sgml(body: str) -> Node:
         value = raw.strip()
         if value:
             stack[-1].children.append(Node(name, _unescape(value)))
+        elif name not in closed and name not in AGGREGATES:
+            stack[-1].children.append(Node(name))
         else:
             node = Node(name)
             stack[-1].children.append(node)
@@ -262,11 +327,11 @@ def _balance(node: Node | None) -> Balance | None:
     return Balance(amount=amount, as_of=_date(node.text("DTASOF")))
 
 
-def _transaction(node: Node, warnings: set[str]) -> ExtractedTransaction | None:
+def _transaction(node: Node) -> ExtractedTransaction | None:
+    """The transaction of a ``STMTTRN``; ``None`` without a readable date and amount."""
     posted = _date(node.text("DTPOSTED"))
     amount = parse_amount(node.text("TRNAMT"))
     if posted is None or amount is None:
-        warnings.add("transaction_skipped_invalid_date_or_amount")
         return None
     name = node.text("NAME") or node.text("PAYEE", "NAME")
     currency = _currency(node.text("CURRENCY", "CURSYM") or node.text("ORIGCURRENCY", "CURSYM"))
@@ -284,12 +349,43 @@ def _transaction(node: Node, warnings: set[str]) -> ExtractedTransaction | None:
     )
 
 
+def _transaction_nodes(node: Node) -> list[Node]:
+    """The ``STMTTRN`` the statement is read from, in the file's order.
+
+    Those of its ``BANKTRANLIST`` and those directly under the statement
+    itself: a stray ``</BANKTRANLIST>`` between two transactions closes the
+    list early, and the rest land beside it.
+    """
+    found: list[Node] = []
+    for child in node.children:
+        if child.name == "STMTTRN":
+            found.append(child)
+        elif child.name == "BANKTRANLIST":
+            found.extend(item for item in child.children if item.name == "STMTTRN")
+    return found
+
+
+def _transaction_count(node: Node) -> int:
+    """Every ``STMTTRN`` under the statement at any depth (not in a nested statement)."""
+    count = 0
+    stack = list(node.children)
+    while stack:
+        item = stack.pop()
+        if item.name in STATEMENTS:
+            continue
+        if item.name == "STMTTRN":
+            count += 1
+        stack.extend(item.children)
+    return count
+
+
 def _statement(
     node: Node,
     source_format: str,
     options: ExtractOptions,
     budget: list[int],
     warnings: set[str],
+    skipped: list[int],
     institution: str | None = None,
 ) -> Statement:
     account_node = node.child("BANKACCTFROM") or node.child("CCACCTFROM")
@@ -303,19 +399,23 @@ def _statement(
     transactions: list[ExtractedTransaction] = []
     tranlist = node.child("BANKTRANLIST")
     truncated = False
-    if tranlist is not None:
-        for item in tranlist.children:
-            if item.name != "STMTTRN":
-                continue
-            if budget[0] <= 0:
-                truncated = True
-                break
-            transaction = _transaction(item, warnings)
-            if transaction is not None:
-                transactions.append(transaction)
-                budget[0] -= 1
+    items = _transaction_nodes(node)
+    # A transaction nested where the reader does not look (inside another
+    # one whose end tag is missing, say) is not read: it is counted.
+    unread = _transaction_count(node) - len(items)
+    for item in items:
+        if budget[0] <= 0:
+            truncated = True
+            break
+        transaction = _transaction(item)
+        if transaction is None:
+            unread += 1
+            continue
+        transactions.append(transaction)
+        budget[0] -= 1
     if truncated:
         warnings.add(f"transactions_truncated:{options.max_transactions}")
+    skipped.append(unread)
     return Statement(
         source_format="qfx" if source_format == "qfx" else "ofx",
         account=StatementAccount(
@@ -382,16 +482,18 @@ def _parse(data: bytes) -> Node:
 def extract_ofx(data: bytes, options: ExtractOptions, kind: str) -> ExtractResult:
     root = _parse(data)
     warnings: set[str] = set()
+    #: Records not read, per statement (a set would merge two equal counts).
+    skipped: list[int] = []
     budget = [options.max_transactions]
     institution = _institution(root)
     nodes = [node for name in ("STMTRS", "CCSTMTRS") for node in root.iter(name)]
     if len(nodes) > MAX_STATEMENTS:
         warnings.add(f"statements_truncated:{MAX_STATEMENTS}")
     statements = [
-        _statement(node, kind, options, budget, warnings, institution)
+        _statement(node, kind, options, budget, warnings, skipped, institution)
         for node in nodes[:MAX_STATEMENTS]
     ]
-    investments = investment_statements(root, kind, options, budget, warnings, institution)
+    investments = investment_statements(root, kind, options, budget, warnings, skipped, institution)
     if not statements and not investments:
         raise ExtractFailure("no_statements", "no bank, credit card or investment statement found")
     return ExtractResult(
@@ -400,7 +502,7 @@ def extract_ofx(data: bytes, options: ExtractOptions, kind: str) -> ExtractResul
         extractor_version=VERSION,
         statements=statements,
         investments=investments,
-        warnings=sorted(warnings),
+        warnings=[*sorted(warnings), *skipped_warnings(skipped, WARNINGS_MAX - len(warnings))],
     )
 
 

@@ -235,11 +235,27 @@ def test_ofx_without_statement() -> None:
     assert caught.value.code == "no_statements"
 
 
-def test_ofx_deep_nesting_is_refused() -> None:
-    data = b"OFXHEADER:100\n\n<OFX>" + b"<A>" * 200 + b"<STMTRS>"
+@pytest.mark.parametrize(
+    "body",
+    [
+        # A name with an end tag somewhere in the file is an aggregate.
+        pytest.param(b"<A>" * 200 + b"<STMTRS></A>", id="closed-name"),
+        # A known aggregate nests even with no end tag at all.
+        pytest.param(b"<STMTTRN>" * 200 + b"<STMTRS>", id="known-aggregate"),
+    ],
+)
+def test_ofx_deep_nesting_is_refused(body: bytes) -> None:
+    data = b"OFXHEADER:100\n\n<OFX>" + body
     with pytest.raises(ExtractFailure) as caught:
         extract_ofx(data, OPTIONS, "ofx")
     assert caught.value.code == "too_deep"
+
+
+def test_ofx_unclosed_unknown_empty_tags_do_not_nest() -> None:
+    # No ``</A>`` anywhere: 200 empty leaves side by side, nothing deep to refuse.
+    data = b"OFXHEADER:100\n\n<OFX>" + b"<A>" * 200 + b"<STMTRS>"
+    result = extract_ofx(data, OPTIONS, "ofx")
+    assert [len(statement.transactions) for statement in result.statements] == [0]
 
 
 def test_ofx_transaction_cap() -> None:
@@ -254,7 +270,7 @@ def test_ofx_bad_amounts_are_skipped_with_a_warning() -> None:
     data = ofx_sgml(TXNS).replace(f"<TRNAMT>{TXNS[1].amount}".encode(), b"<TRNAMT>NaN")
     result = extract_ofx(data, OPTIONS, "ofx")
     assert len(result.statements[0].transactions) == len(TXNS) - 1
-    assert "transaction_skipped_invalid_date_or_amount" in result.warnings
+    assert result.warnings == ["transaction_skipped:1"]
 
 
 # ---------------------------------------------------------------------------
