@@ -1341,6 +1341,130 @@ table; never a PDF's page table) before it looks for a column mapping:
   `parser_version = brokerage_activity_table/1`, and the upload list offers
   the review queue rather than the cash-ledger column mapping.
 
+#### Brokerage positions exports (CSV, TSV, XLSX)
+
+A brokerage's "Positions" export (Fidelity's *Portfolio Positions* download:
+`Account Number, Account Name, Symbol, Description, Quantity, Last Price,
+Last Price Change, Current Value, Today's Gain/Loss Dollar, Today's
+Gain/Loss Percent, Total Gain/Loss Dollar, Total Gain/Loss Percent, Percent
+Of Account, Cost Basis Total, Average Cost Basis, Type`, and layouts like
+it) lists what every account holds at the moment of the download: one row
+per holding, with its units, price, value and cost basis. It has no dates
+and no actions, so it is neither activity nor a cash ledger. The structured
+importer reads table 0 of a CSV, TSV or XLSX with
+`app/ingestion/parsers/positions_table.py` (in the worker, on the stored
+table; never a PDF's page table) before it looks for an activity table or a
+column mapping:
+
+- **Recognised** when a header among the first 11 rows names a symbol, a
+  quantity and a market value column (`Current Value`, `Market Value`,
+  `Total Value`, `Value`) and names **no** date and action columns (that is
+  an activity export), and at least half of its data rows read. Optional:
+  account number, account name, description (the security's name), price,
+  cost basis (the position's total: `Cost Basis Total`, `Cost Basis`),
+  percent of account, currency. The columns that restate these (price
+  change, the day's and total gain, the average cost, `Type`) are not read.
+- **The day**: the export's `Date downloaded Nov-11-2026 7:35 p.m ET` note
+  (also `11/11/2026`, `2026-11-11`) is the day the positions are valued.
+  An export that prints none is dated the day the file was received (the
+  run summary says `as_of_assumed`).
+- **Rows**: one-cell rows (blank lines, the disclaimer paragraphs, the
+  download note) are notes. A row is the account's **cash** when its symbol
+  ends in `**` (the core position: `SPAXX**`, `FCASH**`), reads `Pending
+  Activity`, or it has no quantity and a description that reads like cash
+  (`HELD IN MONEY MARKET`): its value is part of the statement's closing
+  cash, never a holding, as the PDF statement parser treats a core account.
+  Any other row is a **position**: a security (the symbol; a CUSIP with a
+  valid check digit is kept as the CUSIP; without a usable symbol, the
+  description alone, matched by name like any name-only security) with a
+  non-zero quantity, and its price, value and cost basis when printed
+  (`n/a` and `--` are blanks; `$1,000.71`, `+$53.11`, `-$250.00` and
+  `(12.50)` are numbers). A price quoted per 100 of face value (a bond) is
+  marked `price_per_100`, and one quoted per share of a contract of 100 (an
+  option) is stored per contract, so quantity x price is the value either
+  way. A negative quantity is a short position (kept out of the lot engine
+  with an `investment_short_position` notice, as for any statement). A row
+  that gives no security, no quantity or no value is **skipped and
+  counted, never guessed**. The formula guard is set aside only to
+  recognise headers and parse numbers; names keep it and a symbol that
+  would be a formula is no symbol.
+- **Accounts**: one `InvestmentStatement` per account-number cell and
+  account name together (so two accounts never fold into one, even in a
+  file whose numbers are all masked alike), in order of first appearance;
+  one statement without an account column. Only the last four digits of
+  the number are kept. The account name (`Individual`, `ROTH IRA`) names
+  the statement's account and makes it a `retirement` account when it reads
+  like one; the Fidelity header names the institution. Period and `as_of`
+  are the one day of the download; there is no activity.
+- **What the export says about itself**: each position's quantity x price
+  against its printed value (`positions`), and, when every valued row
+  prints its **percent of account**, whether the rows are the whole
+  account: the percentages add up to 100 (within the rounding of two
+  decimals per row). Then `total_value` is the sum of the rows; when they
+  do not add up (rows were cut from the file), it is the total the
+  percentages imply and the `total_value` check fails by the difference. A
+  positions export has no activity, so a failed `positions` check is the
+  fault of the positions that fail it and of nothing else: they carry the
+  `reconciliation` doubt and are named in `doubtful_positions`. An account
+  with a skipped row prints no cash and no total.
+- **Hold** (step 3 of "Brokerage statements"): a position whose value is
+  not quantity x price waits (an `investment_lines_held` item listing it,
+  or `investment_reconciliation_failed` when nothing else of the account
+  would be written) until a person says "import as read"; the account's
+  other positions are imported. Rows that are not the whole account
+  (`total_value`) import with an `investment_figures_differ` notice.
+  Either way no balance is recorded from figures that did not add up.
+- **Commit, as a snapshot**: the positions are the whole account on that
+  day, so `statement_import` brings the account's holdings to them rather
+  than only opening what its history does not explain. Per security:
+  units the account does not hold yet enter as one `transfer_in` on the day
+  (memo `Units held per positions export`), costed so that the position's
+  cost basis is the printed one (the printed basis less what the account
+  already carries; the price when no basis is printed, with an
+  `investment_opening_basis_unknown` item); units the export no longer
+  lists leave as one `transfer_out` (memo `Units no longer held per
+  positions export`; a transfer realises no gain). A position known only
+  from statements and exports (every open lot opened by an opening or
+  snapshot row, in a FIFO account) whose basis would still differ from the
+  printed one by more than a cent is **reset**: everything held leaves and
+  the reported units enter at the printed basis, so units and basis are
+  the export's exactly. A position with lots of its own (bought through
+  imported activity) keeps them: only its units follow the export, its
+  basis stays what its history says (an average-cost account is never
+  reset either). Each position's price becomes the day's `price` row
+  (`source = statement`), and holdings plus cash the account's balance
+  snapshot for the day, so net worth follows. When the account already
+  holds what the export lists nothing is written, so a re-run, the same
+  export twice, or tomorrow's export of unchanged holdings adds no row
+  (the day's prices and balance are still recorded).
+- **Order**: an export older than investment activity already recorded for
+  the account, that would change its units, is not applied
+  (`investment_out_of_order`). Activity moving units on or before the day
+  of a snapshot row already recorded is held the same way: the export
+  already counts those units. With both of a broker's exports, import the
+  activity first, then the positions.
+- **Accounts without digits**: an export that masks its account numbers
+  gives no last four digits, so each statement is an `unknown_account`
+  item answered in the Accounts dialog (create the proposed account, or
+  pick one). Where a statement was put is remembered for the document (the
+  item's resolution records the statement's key and the account,
+  `app/domain/imports/statement_answers.py`), so a later re-run of the same
+  document (an "import as read" answer, "process again") does not ask
+  again. Another file asks again; real account numbers match by their last
+  four digits from the second file on.
+- **Limits**: lots are dated the day of the export that first reported
+  them, not the day of purchase, so the short/long-term split of a
+  position known only from exports is not the broker's. Between two
+  exports nothing is known: a market value is the latest price times the
+  units of the last export (`GET /investments/holdings` names that day per
+  account, `positions_as_of`, and the app says the values are estimates).
+  A document read this way records `parser_version =
+  brokerage_positions_table/1`; its run summary has `positions_table`
+  (statements, `as_of`, positions, cash rows, notes, skipped rows,
+  warnings); skipped rows raise one `lines_skipped` item, a table none of
+  whose rows reads an `unparsed` item (`positions_unreadable`). A mapping
+  chosen explicitly for a run still imports the table as a cash ledger.
+
 #### Loan statements (Phase 5)
 
 A loan or mortgage statement is one payment and the balances around it,

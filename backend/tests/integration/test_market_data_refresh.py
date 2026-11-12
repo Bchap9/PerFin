@@ -22,6 +22,7 @@ from sqlalchemy.orm import Session
 
 from app.core import clock
 from app.core.settings import Settings
+from app.db.models import Event
 from app.db.rls import set_context
 from app.domain.fx.models import FxRate
 from app.domain.investments.models import Price
@@ -33,6 +34,7 @@ from app.workers.handlers.market_data import (
     REFRESH_INTERVAL,
     REFRESH_JOB_TYPE,
     RefreshPricesPayload,
+    refresh_interval,
     refresh_market_data,
     refresh_prices,
 )
@@ -73,6 +75,18 @@ def _prices(db: Session, household_id: uuid.UUID) -> dict[uuid.UUID, Price]:
     return out
 
 
+def _price_events(db: Session, household_id: uuid.UUID) -> list[dict[str, Any]]:
+    set_context(db, household_id)
+    rows = db.execute(
+        select(Event)
+        .where(Event.household_id == household_id, Event.type == "price.updated")
+        .order_by(Event.id)
+    ).scalars()
+    out = [dict(r.payload or {}) for r in rows]
+    set_context(db, None)
+    return out
+
+
 def _price_provider(**update: Any) -> HttpJsonPriceProvider:
     config = HttpJsonConfig.from_settings(price_settings(Settings(), **update))
     return HttpJsonPriceProvider(config, resolver=resolver(), proxy=None)
@@ -95,6 +109,9 @@ def test_refresh_is_scheduled_and_does_nothing_by_default(
 ) -> None:
     (job,) = [j for j in SCHEDULE.jobs() if j.job_type == REFRESH_JOB_TYPE]
     assert job.interval == REFRESH_INTERVAL
+    # PERFIN_PRICE_REFRESH_MINUTES sets the interval (six hours by default).
+    assert refresh_interval(Settings()) == REFRESH_INTERVAL
+    assert refresh_interval(Settings(price_refresh_minutes=15)) == timedelta(minutes=15)
     hid = _household(ledger, factories)
     ledger.run(make_security, hid, symbol=synthetic_symbol())
     refresh_prices(_ctx(db), RefreshPricesPayload())
@@ -141,12 +158,17 @@ def test_one_request_per_symbol_for_the_whole_instance(
     assert second_prices[b_shared.id].close == Decimal("250.5")
     assert b_euro.id not in second_prices
 
+    # Each household whose prices changed is told so (a count, never a symbol).
+    assert _price_events(db, first) == [{"count": 1}]
+    assert _price_events(db, second) == [{"count": 1}]
+
     # A second run replaces the fetched close, still not the manual one.
     closes[shared] = "251"
     closes[own] = "99"
     refresh_market_data(db, prices=_price_provider(), fx=None, today=TODAY)
     assert _prices(db, first)[a_shared.id].close == Decimal("251")
     assert _prices(db, first)[a_own.id].close == Decimal("11")
+    assert len(_price_events(db, first)) == 2
 
 
 def test_ecb_rates_are_crossed_to_each_base_currency(

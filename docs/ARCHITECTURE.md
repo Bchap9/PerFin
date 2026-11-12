@@ -126,7 +126,10 @@ SECURITY.md "Container hardening"). Pulls jobs from a Postgres table using
   one `recurring.detect` per household and day; writes `detected`
   scheduled transactions, never touches manual ones.
 - `refresh_prices`: scheduled, only if a price provider is enabled.
-  (Built in Phase 5 as an instance-level recurring job every 6 hours,
+  (Built in Phase 5 as an instance-level recurring job every 6 hours
+  (`PERFIN_PRICE_REFRESH_MINUTES`; also queued on demand by `POST
+  /investments/prices/refresh`, at most one extra run a minute; a household
+  whose prices changed gets a `price.updated` event),
   `app/workers/handlers/market_data.py`: with `PERFIN_PRICE_PROVIDER` and
   `PERFIN_FX_PROVIDER` both `none`, the default, it returns without any
   connection; otherwise it asks the price provider once per distinct

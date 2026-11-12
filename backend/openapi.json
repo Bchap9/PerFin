@@ -9640,12 +9640,25 @@
                 "type": "null"
               }
             ]
+          },
+          "positions_as_of": {
+            "anyOf": [
+              {
+                "format": "date",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Positions As Of"
           }
         },
         "required": [
           "account_id",
           "cost_method",
-          "market_value_base"
+          "market_value_base",
+          "positions_as_of"
         ],
         "title": "HoldingAccountOut",
         "type": "object"
@@ -9816,6 +9829,17 @@
             "title": "Account Id",
             "type": "string"
           },
+          "average_cost": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Average Cost"
+          },
           "cost_basis": {
             "$ref": "#/components/schemas/Money"
           },
@@ -9856,6 +9880,16 @@
               }
             ]
           },
+          "price_change": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/PriceChange"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "quantity": {
             "title": "Quantity",
             "type": "string"
@@ -9890,7 +9924,9 @@
           "security",
           "quantity",
           "cost_basis",
+          "average_cost",
           "price",
+          "price_change",
           "market_value",
           "market_value_base",
           "unrealized",
@@ -9949,6 +9985,9 @@
             "title": "Missing Rates",
             "type": "array"
           },
+          "price_feed": {
+            "$ref": "#/components/schemas/PriceFeedOut"
+          },
           "unpriced_security_ids": {
             "items": {
               "format": "uuid",
@@ -9966,6 +10005,7 @@
           "base_currency",
           "holdings",
           "accounts",
+          "price_feed",
           "market_value",
           "cost_basis",
           "unrealized",
@@ -15162,15 +15202,102 @@
             "format": "date",
             "title": "Price Date",
             "type": "string"
+          },
+          "source": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source"
+          },
+          "updated_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Updated At"
           }
         },
         "required": [
           "close",
           "currency",
           "price_date",
-          "basis"
+          "basis",
+          "source",
+          "updated_at"
         ],
         "title": "PriceBrief",
+        "type": "object"
+      },
+      "PriceChange": {
+        "description": "How the latest stored close moved from the stored close before it.",
+        "properties": {
+          "fraction": {
+            "title": "Fraction",
+            "type": "string"
+          },
+          "previous_close": {
+            "title": "Previous Close",
+            "type": "string"
+          },
+          "since": {
+            "format": "date",
+            "title": "Since",
+            "type": "string"
+          },
+          "value": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Money"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "since",
+          "previous_close",
+          "value",
+          "fraction"
+        ],
+        "title": "PriceChange",
+        "type": "object"
+      },
+      "PriceFeedOut": {
+        "description": "Whether prices are fetched (``PERFIN_PRICE_PROVIDER``) and how often.",
+        "properties": {
+          "enabled": {
+            "title": "Enabled",
+            "type": "boolean"
+          },
+          "refresh_minutes": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Refresh Minutes"
+          }
+        },
+        "required": [
+          "enabled",
+          "refresh_minutes"
+        ],
+        "title": "PriceFeedOut",
         "type": "object"
       },
       "PriceOut": {
@@ -15241,6 +15368,20 @@
           "next_cursor"
         ],
         "title": "PricePage",
+        "type": "object"
+      },
+      "PriceRefreshAccepted": {
+        "description": "``POST /investments/prices/refresh``: a refresh is queued for the worker.",
+        "properties": {
+          "queued": {
+            "title": "Queued",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "queued"
+        ],
+        "title": "PriceRefreshAccepted",
         "type": "object"
       },
       "PriceSet": {
@@ -33578,6 +33719,51 @@
           }
         },
         "summary": "Time- and money-weighted returns and gains",
+        "tags": [
+          "investments"
+        ]
+      }
+    },
+    "/api/v1/investments/prices/refresh": {
+      "post": {
+        "operationId": "post_price_refresh_api_v1_investments_prices_refresh_post",
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PriceRefreshAccepted"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {}
+            },
+            "description": "Problem details"
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {}
+            },
+            "description": "Problem details"
+          },
+          "409": {
+            "content": {
+              "application/problem+json": {}
+            },
+            "description": "Problem details"
+          },
+          "422": {
+            "content": {
+              "application/problem+json": {}
+            },
+            "description": "Problem details"
+          }
+        },
+        "summary": "Fetch prices from the configured feed now (member or above)",
         "tags": [
           "investments"
         ]

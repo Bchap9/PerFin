@@ -45,6 +45,17 @@ export function readAsActivity(row: {
   return row.parser_version?.startsWith("brokerage_activity_table/") ?? false;
 }
 
+/**
+ * A brokerage positions export the server read as what each account holds:
+ * the review queue has what is left (accounts to choose, figures that do not
+ * add up); a column mapping would turn its holdings into cash rows.
+ */
+export function readAsPositions(row: {
+  parser_version: string | null;
+}): boolean {
+  return row.parser_version?.startsWith("brokerage_positions_table/") ?? false;
+}
+
 export function statusTone(status: DocumentStatus): BadgeTone {
   switch (status) {
     case "processed":
@@ -255,9 +266,11 @@ export function UploadPage() {
                 cell: (row) =>
                   row.status === "needs_review" && canWrite ? (
                     <span className="ledger-actions">
-                      {readAsActivity(row) ? (
+                      {readAsActivity(row) || readAsPositions(row) ? (
                         <span className="ledger-muted">
-                          Read as investment activity
+                          {readAsPositions(row)
+                            ? "Read as investment holdings"
+                            : "Read as investment activity"}
                         </span>
                       ) : (
                         <Link

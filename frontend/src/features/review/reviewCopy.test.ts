@@ -32,6 +32,7 @@ const REASONS: readonly [ReviewItem["kind"], string][] = [
   ["unparsed", "mapping_ambiguous"],
   ["unparsed", "mapping_failed"],
   ["unparsed", "activity_unreadable"],
+  ["unparsed", "positions_unreadable"],
   ["unparsed", "extraction_failed"],
   ["unparsed", "format_not_supported"],
   ["unparsed", "encrypted"],

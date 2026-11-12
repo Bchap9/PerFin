@@ -82,6 +82,9 @@ export const deletePrice = async (securityId: string, priceId: string): Promise<
 export const getHoldings = (account: string) =>
   unwrap(api.GET("/api/v1/investments/holdings", { params: { query: account === "" ? {} : { account } } }));
 
+/** Ask the worker to fetch prices now (`409 price-feed-disabled` without a feed); the open app updates when it is done. */
+export const refreshPrices = () => unwrap(api.POST("/api/v1/investments/prices/refresh"));
+
 export const getPerformance = (range: PerformanceRange, account: string) =>
   unwrap(
     api.GET("/api/v1/investments/performance", {

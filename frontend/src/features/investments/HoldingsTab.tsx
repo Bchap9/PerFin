@@ -10,12 +10,16 @@ import { EmptyState } from "../../components/EmptyState";
 import { MoneyText } from "../../components/MoneyText";
 import { Table, type TableColumn } from "../../components/Table";
 import { formatDate } from "../../lib/dates";
+import { queryRoots } from "../../lib/queryKeys";
+import { useCanWrite } from "../accounts/api";
 import { nameLookup, useAccounts } from "../planning/queries";
-import { QueryState } from "../planning/PlanningPage";
-import { getHoldings, investmentKeys, type Holding, type Holdings, type Lot } from "./api";
+import { ErrorLine, QueryState } from "../planning/PlanningPage";
+import { useAction } from "../planning/useAction";
+import { getHoldings, investmentKeys, refreshPrices, type Holding, type Holdings, type Lot } from "./api";
 import { CostMethodCard } from "./CostMethodCard";
 import { formatFraction, formatQuantity, securityLabel } from "./format";
-import { AllocationBars, GainText, titleCase } from "./parts";
+import { freshnessNote, importedOn, priceSourceLabel } from "./freshness";
+import { AllocationBars, ChangeText, GainText, titleCase } from "./parts";
 
 function LotsDialog({ holding, onClose }: { holding: Holding; onClose: () => void }) {
   const columns: TableColumn<Lot>[] = [
@@ -83,12 +87,44 @@ function Totals({ data }: { data: Holdings }) {
   );
 }
 
+/**
+ * How current the figures are: what is held is known up to the last import,
+ * prices may be newer, so values in between are estimates. With a price feed,
+ * a person who may write can ask for fresh prices now.
+ */
+function Freshness({ data }: { data: Holdings }) {
+  const canWrite = useCanWrite();
+  const refresh = useAction(refreshPrices, {
+    invalidate: [queryRoots.investments, queryRoots.netWorth, queryRoots.dashboard],
+    success: "Fetching prices; the figures update when they arrive",
+  });
+  const note = freshnessNote(data);
+  const canRefresh = data.price_feed.enabled && canWrite;
+  if (note === null && !canRefresh) {
+    return null;
+  }
+  return (
+    <Card title="How current this is" headingLevel={2}>
+      {note === null ? null : <p className="muted">{note}</p>}
+      {canRefresh ? (
+        <>
+          <Button size="sm" disabled={refresh.busy} onClick={() => void refresh.run()}>
+            Refresh prices
+          </Button>
+          <ErrorLine message={refresh.error} />
+        </>
+      ) : null}
+    </Card>
+  );
+}
+
 export function HoldingsTab({ account }: { account: string }) {
   const query = useQuery({ queryKey: investmentKeys.holdings(account), queryFn: () => getHoldings(account) });
   const accounts = useAccounts();
   const accountName = nameLookup(accounts.data);
   const [lotsOf, setLotsOf] = useState<Holding | null>(null);
   const data = query.data;
+  const asOf = (h: Holding) => (data === undefined ? null : importedOn(data, h.account_id));
 
   const columns: TableColumn<Holding>[] = [
     {
@@ -107,7 +143,19 @@ export function HoldingsTab({ account }: { account: string }) {
         </>
       ),
     },
-    { id: "account", header: "Account", cell: (h) => accountName(h.account_id) },
+    {
+      id: "account",
+      header: "Account",
+      cell: (h) => {
+        const day = asOf(h);
+        return (
+          <>
+            {accountName(h.account_id)}
+            {day === null ? null : <span className="cell-note">as of {formatDate(day) ?? day}</span>}
+          </>
+        );
+      },
+    },
     { id: "qty", header: "Quantity", align: "end", cell: (h) => formatQuantity(h.quantity) },
     {
       id: "price",
@@ -119,9 +167,16 @@ export function HoldingsTab({ account }: { account: string }) {
         ) : (
           <>
             <MoneyText amount={h.price.close} currency={h.price.currency} tone="none" fractionDigits={4} />
-            {h.price.basis === "trade" ? <span className="muted"> (last trade)</span> : null}
+            <span className="cell-note">{formatDate(h.price.price_date) ?? h.price.price_date}</span>
+            <span className="cell-note">{priceSourceLabel(h.price)}</span>
           </>
         ),
+    },
+    {
+      id: "change",
+      header: "Price change",
+      align: "end",
+      cell: (h) => (h.price_change === null ? "n/a" : <ChangeText change={h.price_change} />),
     },
     {
       id: "value",
@@ -129,7 +184,21 @@ export function HoldingsTab({ account }: { account: string }) {
       align: "end",
       cell: (h) => (h.market_value === null ? "n/a" : <MoneyText amount={h.market_value.amount} currency={h.market_value.currency} tone="none" />),
     },
-    { id: "cost", header: "Cost basis", align: "end", cell: (h) => <MoneyText amount={h.cost_basis.amount} currency={h.cost_basis.currency} tone="none" /> },
+    {
+      id: "cost",
+      header: "Cost basis",
+      align: "end",
+      cell: (h) => (
+        <>
+          <MoneyText amount={h.cost_basis.amount} currency={h.cost_basis.currency} tone="none" />
+          {h.average_cost === null ? null : (
+            <span className="cell-note">
+              <MoneyText amount={h.average_cost} currency={h.cost_basis.currency} tone="none" fractionDigits={4} /> a unit
+            </span>
+          )}
+        </>
+      ),
+    },
     {
       id: "gain",
       header: "Unrealised gain",
@@ -164,10 +233,14 @@ export function HoldingsTab({ account }: { account: string }) {
             </p>
           ) : null}
           {data.holdings.length === 0 ? (
-            <EmptyState title="No holdings yet" description="Record a buy under Transactions, or import a brokerage statement." />
+            <EmptyState
+              title="No holdings yet"
+              description="Upload your broker's positions export (a CSV of what each account holds) or a statement, or record a buy under Transactions."
+            />
           ) : (
             <>
               <Totals data={data} />
+              <Freshness data={data} />
               <Table caption="Holdings" columns={columns} rows={data.holdings} rowKey={(h) => `${h.account_id}:${h.security.id}`} maxHeight="none" />
               <div className="planning-grid">
                 <Card title="By asset class" headingLevel={3}>

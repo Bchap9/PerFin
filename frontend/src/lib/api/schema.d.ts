@@ -1917,6 +1917,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/investments/prices/refresh": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Fetch prices from the configured feed now (member or above) */
+        post: operations["post_price_refresh_api_v1_investments_prices_refresh_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/investments/transactions": {
         parameters: {
             query?: never;
@@ -6466,6 +6483,8 @@ export interface components {
             account_id: string;
             cost_method: components["schemas"]["CostMethod"];
             market_value_base: components["schemas"]["Money"] | null;
+            /** Positions As Of */
+            positions_as_of: string | null;
         };
         /** HoldingAi */
         HoldingAi: {
@@ -6500,12 +6519,15 @@ export interface components {
              * Format: uuid
              */
             account_id: string;
+            /** Average Cost */
+            average_cost: string | null;
             cost_basis: components["schemas"]["Money"];
             /** Lots */
             lots: components["schemas"]["LotOut"][];
             market_value: components["schemas"]["Money"] | null;
             market_value_base: components["schemas"]["Money"] | null;
             price: components["schemas"]["PriceBrief"] | null;
+            price_change: components["schemas"]["PriceChange"] | null;
             /** Quantity */
             quantity: string;
             security: components["schemas"]["SecurityBrief"];
@@ -6537,6 +6559,7 @@ export interface components {
             market_value: components["schemas"]["Money"];
             /** Missing Rates */
             missing_rates: components["schemas"]["MissingRate"][];
+            price_feed: components["schemas"]["PriceFeedOut"];
             /** Unpriced Security Ids */
             unpriced_security_ids: string[];
             unrealized: components["schemas"]["GainsOut"];
@@ -8260,6 +8283,36 @@ export interface components {
              * Format: date
              */
             price_date: string;
+            /** Source */
+            source: string | null;
+            /** Updated At */
+            updated_at: string | null;
+        };
+        /**
+         * PriceChange
+         * @description How the latest stored close moved from the stored close before it.
+         */
+        PriceChange: {
+            /** Fraction */
+            fraction: string;
+            /** Previous Close */
+            previous_close: string;
+            /**
+             * Since
+             * Format: date
+             */
+            since: string;
+            value: components["schemas"]["Money"] | null;
+        };
+        /**
+         * PriceFeedOut
+         * @description Whether prices are fetched (``PERFIN_PRICE_PROVIDER``) and how often.
+         */
+        PriceFeedOut: {
+            /** Enabled */
+            enabled: boolean;
+            /** Refresh Minutes */
+            refresh_minutes: number | null;
         };
         /** PriceOut */
         PriceOut: {
@@ -8291,6 +8344,14 @@ export interface components {
             items: components["schemas"]["PriceOut"][];
             /** Next Cursor */
             next_cursor: string | null;
+        };
+        /**
+         * PriceRefreshAccepted
+         * @description ``POST /investments/prices/refresh``: a refresh is queued for the worker.
+         */
+        PriceRefreshAccepted: {
+            /** Queued */
+            queued: boolean;
         };
         /**
          * PriceSet
@@ -19117,6 +19178,62 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["PerformanceOut"];
+                };
+            };
+            /** @description Problem details */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Problem details */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Problem details */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Problem details */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+        };
+    };
+    post_price_refresh_api_v1_investments_prices_refresh_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PriceRefreshAccepted"];
                 };
             };
             /** @description Problem details */

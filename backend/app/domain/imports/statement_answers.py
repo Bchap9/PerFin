@@ -29,6 +29,15 @@ and, for a statement whose key an answer names:
   document, unless the run itself assigns it (the Accounts dialog);
 * imports it despite the overlap, or as read, **only on that account**.
 
+**Where a statement went** is remembered the same way: when a person puts a
+statement on an account (the Accounts dialog, "use this account" on an
+``unknown_account`` item) and the re-run imports it there, the item's
+resolution records the statement's key with that account (:data:`PLACED`).
+Later imports of the document put that statement on that account again, so
+a statement that names its account by no digits (an export that masks its
+account numbers) is asked about once, not on every re-run. A placement
+alone imports nothing that would otherwise be held.
+
 Any other statement, including another statement of the same account and a
 statement read differently after a reprocess, a lesson (Teach PerFin) or a
 parser change, is checked as though nothing had been answered, and is held
@@ -57,6 +66,8 @@ from app.domain.documents.models import Document, ReviewItem, ReviewItemState
 #: Resolution keys of the two answers.
 IMPORT_ANYWAY: Final = "import_anyway"
 IMPORT_AS_READ: Final = "import_as_read"
+#: Resolution key of an account choice the re-run carried out (module doc).
+PLACED: Final = "placed"
 #: Payload and resolution key naming the statement an item is about.
 KEY_FIELD: Final = "statement_key"
 #: Resolution key: the lines of the item an "import as read" answer imports
@@ -139,6 +150,10 @@ class StatementAnswers:
             else:
                 self.chosen[(target, key, account_id)] = lines
 
+    def place(self, target: Target, key: str, account_id: uuid.UUID) -> None:
+        """A person put the statement on the account (nothing more is said by it)."""
+        self.placed[(target, key)] = account_id
+
     def lines(self, target: Target, key: str, account_id: uuid.UUID) -> frozenset[int] | None:
         """The lines the "import as read" answer named (None: all of them)."""
         return self.chosen.get((target, key, account_id))
@@ -175,10 +190,13 @@ def document_answers(db: Session, document: Document) -> StatementAnswers:
     for resolution in rows:
         if not isinstance(resolution, dict):
             continue
+        answer: str | None
         if resolution.get(IMPORT_ANYWAY) is True:
             answer = IMPORT_ANYWAY
         elif resolution.get(IMPORT_AS_READ) is True:
             answer = IMPORT_AS_READ
+        elif resolution.get(PLACED) is True:
+            answer = None
         else:
             continue
         account_id = _uuid(resolution.get("account_id"))
@@ -186,11 +204,14 @@ def document_answers(db: Session, document: Document) -> StatementAnswers:
         target = resolution.get("target")
         if account_id is None or key is None or target not in ("statement", "investment"):
             continue
-        found.add(
-            "investment" if target == "investment" else "statement",
-            key,
-            account_id,
-            answer,
-            _lines(resolution.get(LINES_FIELD)),
-        )
+        kind: Target = "investment" if target == "investment" else "statement"
+        if answer is None:
+            found.place(kind, key, account_id)
+        else:
+            found.add(kind, key, account_id, answer, _lines(resolution.get(LINES_FIELD)))
     return found
+
+
+def placement(target: Target, key: str, account_id: uuid.UUID) -> dict[str, Any]:
+    """The resolution keys recording that a statement was put on an account."""
+    return {PLACED: True, "target": target, KEY_FIELD: key, "account_id": str(account_id)}

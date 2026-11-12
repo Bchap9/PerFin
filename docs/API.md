@@ -165,6 +165,7 @@ DELETE          /fx-rates/{id}
 GET/POST/PATCH/DELETE /investments/transactions
 GET             /investments/holdings?account=
 GET             /investments/performance?range=&account=
+POST            /investments/prices/refresh     fetch prices now (needs a price feed)
 GET/PUT         /investments/accounts/{id}/cost-method   fifo | average
 
 GET/POST/PATCH/DELETE /loans                   a loan/mortgage/line of credit: terms, on a new or existing account
@@ -379,7 +380,10 @@ summary) has `mapping_suggested`; for a brokerage activity export
 (INGESTION.md "Brokerage activity exports") it also has `brokerage_table`
 (`parser`, `statements`, `rows`, `notes`, `unknown_activity`, `skipped`,
 `warnings`), `mapping_bypassed` (the saved mapping the brokerage reading took
-precedence over, or null) and `investments`. `POST
+precedence over, or null) and `investments`; for a brokerage positions export
+(INGESTION.md "Brokerage positions exports") `positions_table` (`parser`,
+`statements`, `as_of`, `as_of_assumed`, `positions`, `cash_rows`, `notes`,
+`skipped`, `warnings`) and `investments`. `POST
 /imports/{document_id}/apply-mapping` (member or above, `Idempotency-Key`
 honoured) takes optional `mapping_id`, `account_id` and `group` (with
 `account_id` only, else `422`: the statement of a multi-account CSV the
@@ -1165,14 +1169,36 @@ fractions rounded half-even to 10 decimals (`"0.2100000000"` = 21 %).
   `investment.cost_method_changed`.
 - **Holdings** (`GET /investments/holdings?account=`): as of today, per
   account and security `{"account_id", "security", "quantity",
-  "cost_basis", "price": {"close", "currency", "price_date", "basis":
-  "price"|"trade"}, "market_value", "market_value_base", "unrealized":
-  {"short_term", "long_term", "total"}, "weight", "lots": [...]}`, plus
-  `accounts` (cost method and value per account), totals (`market_value`,
+  "cost_basis", "average_cost", "price": {"close", "currency",
+  "price_date", "basis": "price"|"trade", "source", "updated_at"},
+  "price_change": {"since", "previous_close", "value", "fraction"},
+  "market_value", "market_value_base", "unrealized": {"short_term",
+  "long_term", "total"}, "weight", "lots": [...]}`, plus `accounts` (cost
+  method, value and `positions_as_of` per account), `price_feed`
+  (`{"enabled", "refresh_minutes"}`), totals (`market_value`,
   `cost_basis`, `unrealized`) and `allocation` (`asset_class`, `sector`,
   `account`: `[{"key", "value", "weight"}]`) in the household's base
   currency, `unpriced_security_ids` and `missing_rates`. Only visible
   accounts count; a hidden `account` filter is `404 account-not-found`.
+  `price.source` says where a stored close came from (`manual`,
+  `statement` for an imported statement or positions export, or the price
+  feed's name) and `updated_at` when it was written; both are null for a
+  trade price. `price_change` is the move from the stored close before
+  the latest one (null with fewer than two stored closes): the change in
+  the holding's value in the account currency and as a fraction of the
+  earlier close. `positions_as_of` is the last day an imported brokerage
+  statement or export of the account covers (null: nothing was imported).
+  **Between imports the figures are estimates**: the latest price times
+  the units of the last import, which the account may no longer hold.
+- **Refresh prices** (`POST /investments/prices/refresh`, member or above,
+  scope `investments:write`): queues one run of the worker's
+  `refresh_prices` job now and answers `202 {"queued": true}`; `409
+  price-feed-disabled` when `PERFIN_PRICE_PROVIDER` is `none`. The job is
+  instance-level (it names no household) and requests within the same
+  minute share one run, so nobody can make the worker call the provider
+  more often than that. Audited (`prices.refresh_requested`). When prices
+  change, the household gets a `price.updated` event (`{"count"}`), on
+  which the app refetches holdings and net worth.
 - **Performance** (`GET /investments/performance?range=&account=`, range
   `1m|3m|6m|ytd|1y|3y|5y|max`, default `1y`): `start`, `end`, `days`,
   `start_value`, `end_value`, `inflows`, `outflows`, `income`, `fees`,
@@ -1318,8 +1344,10 @@ day, a fetched rate included (`source` becomes `manual`); not in the future
 audited (`fx_rate.set|delete`) and emit `fx.rate_set|rate_deleted` with the
 rate id. Fetched rates (`PERFIN_FX_PROVIDER=ecb`) and fetched prices
 (`PERFIN_PRICE_PROVIDER=http_json`) come from the `refresh_prices` worker
-job, never replace a manual row, and carry the provider name as `source`;
-what they send is in docs/security/integrations.md.
+job (every `PERFIN_PRICE_REFRESH_MINUTES`, six hours by default, and on
+`POST /investments/prices/refresh`), never replace a manual row, and carry
+the provider name as `source`; what they send is in
+docs/security/integrations.md.
 
 Net worth notes (`app.domain.networth`, router `networth`; any role, scope
 `networth:read`; DATA_MODEL.md "Net worth"):
