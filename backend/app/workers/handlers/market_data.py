@@ -1,10 +1,13 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """``refresh_prices``: the opt-in price and FX feeds (ARCHITECTURE.md "Jobs").
 
-An instance-level recurring job (every :data:`REFRESH_INTERVAL`, one per slot
-however many workers run). With neither ``PERFIN_PRICE_PROVIDER`` nor
-``PERFIN_FX_PROVIDER`` set (the default) it returns at once and contacts
-nothing.
+An instance-level recurring job (every ``PERFIN_PRICE_REFRESH_MINUTES``,
+:data:`REFRESH_INTERVAL` by default; one per slot however many workers run),
+also queued on demand by ``POST /investments/prices/refresh``
+(``app.integrations.prices.refresh.request_refresh``: at most one extra run
+per ``MANUAL_REFRESH_SECONDS`` for the whole instance). With neither
+``PERFIN_PRICE_PROVIDER`` nor ``PERFIN_FX_PROVIDER`` set (the default) it
+returns at once and contacts nothing.
 
 With a price provider it collects the distinct ticker symbols of every
 household's securities (each household read in its own RLS context), asks
@@ -20,6 +23,9 @@ household, the rates of the currencies that household uses against its base
 currency (``app.integrations.fx.store``; manual rates win). The ECB request
 carries nothing household-specific at all.
 
+A household whose prices changed gets a ``price.updated`` event (a count,
+never a symbol), so an open app shows the new values at once.
+
 Failures of one feed do not stop the other; the job is not retried by the
 queue (``max_attempts=1``): the next slot tries again. Logs carry counts
 only, never symbols.
@@ -32,32 +38,46 @@ from dataclasses import dataclass
 from datetime import date, timedelta
 from typing import Final
 
-from pydantic import BaseModel, ConfigDict
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
 from app.core import clock
+from app.core.events import emit
 from app.core.logging import get_logger
-from app.core.settings import get_settings
+from app.core.settings import Settings, get_settings
 from app.db.rls import set_context
 from app.integrations.fx.base import FxProvider, FxProviderError, FxQuote
 from app.integrations.fx.registry import external_fx_provider
 from app.integrations.fx.store import store_reference_rates
 from app.integrations.prices.base import PriceProvider, PriceProviderConfigError, PriceQuote
+from app.integrations.prices.refresh import REFRESH_JOB_TYPE, RefreshPricesPayload
 from app.integrations.prices.registry import external_price_provider
 from app.integrations.prices.store import household_symbols, store_quotes
 from app.workers.registry import JobContext, PermanentJobError, job_handler
 from app.workers.scheduler import recurring
 
+__all__ = [
+    "REFRESH_INTERVAL",
+    "REFRESH_JOB_TYPE",
+    "REFRESH_TIMEOUT_SECONDS",
+    "RefreshPricesPayload",
+    "RefreshStats",
+    "household_ids",
+    "refresh_interval",
+    "refresh_market_data",
+    "refresh_prices",
+]
+
 log = get_logger(__name__)
 
-REFRESH_JOB_TYPE: Final = "refresh_prices"
+#: The default interval (``PERFIN_PRICE_REFRESH_MINUTES=360``).
 REFRESH_INTERVAL: Final = timedelta(hours=6)
 REFRESH_TIMEOUT_SECONDS: Final = 1800.0
 
 
-class RefreshPricesPayload(BaseModel):
-    model_config = ConfigDict(extra="forbid")
+def refresh_interval(settings: Settings) -> timedelta:
+    """How often the recurring refresh runs (``PERFIN_PRICE_REFRESH_MINUTES``)."""
+    return timedelta(minutes=settings.price_refresh_minutes)
 
 
 @dataclass
@@ -115,9 +135,11 @@ def refresh_market_data(
     for household_id in households:
         set_context(db, household_id)
         if prices is not None and quotes:
-            stats.prices_written += store_quotes(
-                db, household_id, quotes, source=prices.name, today=day
-            )
+            written = store_quotes(db, household_id, quotes, source=prices.name, today=day)
+            stats.prices_written += written
+            if written:
+                # The open app refetches holdings and net worth (a count only).
+                emit(db, household_id, "price.updated", {"count": written})
         if fx is not None and rates:
             stats.rates_written += store_reference_rates(
                 db, household_id, rates, source=fx.name, today=day
@@ -156,4 +178,4 @@ def refresh_prices(ctx: JobContext, payload: RefreshPricesPayload) -> None:
     refresh_market_data(ctx.session, prices=prices, fx=external_fx_provider(settings))
 
 
-recurring(REFRESH_JOB_TYPE, REFRESH_INTERVAL, RefreshPricesPayload())
+recurring(REFRESH_JOB_TYPE, refresh_interval(get_settings()), RefreshPricesPayload())

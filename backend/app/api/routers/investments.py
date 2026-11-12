@@ -11,6 +11,10 @@
   unrealised gains and allocation of visible accounts.
 * ``GET /investments/performance?range=&account=``: any role; TWR, MWR,
   realised and unrealised gains of visible accounts.
+* ``POST /investments/prices/refresh``: member or above; queues one run of
+  the worker's price refresh now (``202``). ``409 price-feed-disabled``
+  when no price feed is configured. Requests within the same minute share
+  one run, instance-wide.
 * ``GET /investments/accounts/{account_id}/cost-method`` (any role) and
   ``PUT`` (member or above, an account the caller may edit): ``fifo`` or
   ``average``; changing it replays the account's lots.
@@ -31,7 +35,10 @@ from app.api.routers.accounts import PROBLEMS, scoped_role
 from app.auth.deps import DbSession
 from app.auth.models import HouseholdRole
 from app.auth.principal import Principal
+from app.core.audit import audit
+from app.core.errors import ProblemError
 from app.core.idempotency import IdempotencyKeyHeader, idempotent, payload_of
+from app.core.settings import get_settings
 from app.domain.investments import holdings as holdings_service
 from app.domain.investments import performance as performance_service
 from app.domain.investments import transactions as service
@@ -47,8 +54,10 @@ from app.domain.investments.schemas import (
     InvestmentTxnPage,
     InvestmentTxnUpdate,
     PerformanceOut,
+    PriceRefreshAccepted,
     Range,
 )
+from app.integrations.prices.refresh import price_feed_enabled, request_refresh
 
 router = APIRouter(tags=["investments"])
 
@@ -189,6 +198,35 @@ def get_performance(
     account: AccountFilter = None,
 ) -> PerformanceOut:
     return performance_service.performance(db, principal, range_=range, account_id=account)
+
+
+@router.post(
+    "/investments/prices/refresh",
+    response_model=PriceRefreshAccepted,
+    status_code=status.HTTP_202_ACCEPTED,
+    responses=PROBLEMS,
+    summary="Fetch prices from the configured feed now (member or above)",
+)
+def post_price_refresh(request: Request, db: DbSession, principal: Writer) -> PriceRefreshAccepted:
+    if not price_feed_enabled(get_settings()):
+        raise ProblemError(
+            409,
+            "price-feed-disabled",
+            "No price feed is configured",
+            "Prices are not fetched on this installation (PERFIN_PRICE_PROVIDER is none). "
+            "Enter prices by hand, or import a statement or positions export.",
+        )
+    request_refresh(db)
+    audit(
+        db,
+        action="prices.refresh_requested",
+        target_type="household",
+        target_id=principal.household_id,
+        household_id=principal.household_id,
+        user_id=principal.user_id,
+        request=request,
+    )
+    return PriceRefreshAccepted(queued=True)
 
 
 @router.get(

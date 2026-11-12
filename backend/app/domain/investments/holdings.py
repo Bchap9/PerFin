@@ -10,6 +10,15 @@ when hidden). As of today:
   account and base currencies, unrealised gain split into short and long
   term by each open lot's holding period (``lots.holding_term``), and its
   weight in the total;
+* per holding too: the average cost per unit, where its close came from
+  and when it was written (``price.source``, ``price.updated_at``: a
+  statement, a manual entry or the price feed), and how it moved from the
+  stored close before it (``price_change``);
+* per account: the last day an imported statement or export covers
+  (``positions_as_of``). Market values between imports are **estimates**:
+  the latest price times the units of the last import, which the account
+  may no longer hold. ``price_feed`` says whether prices are fetched and
+  how often;
 * totals and allocation by asset class, sector (``unclassified`` without
   one) and account in the household's base currency. Weights are fractions
   rounded half-even to 10 decimals. Values that cannot be priced or
@@ -21,20 +30,25 @@ from __future__ import annotations
 
 import uuid
 from collections import defaultdict
+from collections.abc import Collection
+from dataclasses import dataclass
+from datetime import date, datetime
 from decimal import Decimal, localcontext
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.auth.principal import Principal
 from app.core.money import Money, calc_context, to_storage
+from app.core.settings import get_settings
 from app.domain.accounts.models import Account
 from app.domain.accounts.visibility import get_visible_account
 from app.domain.fx.service import base_currency
+from app.domain.imports.models import StatementRecord
 from app.domain.investments import lots as engine
 from app.domain.investments import service
-from app.domain.investments.lots import format_units
-from app.domain.investments.models import Holding, InvestmentTxn, Lot, Security
+from app.domain.investments.lots import format_units, quantize_units
+from app.domain.investments.models import Holding, InvestmentTxn, Lot, Price, Security
 from app.domain.investments.returns import round_rate
 from app.domain.investments.schemas import (
     AllocationOut,
@@ -44,9 +58,12 @@ from app.domain.investments.schemas import (
     HoldingsOut,
     LotOut,
     PriceBrief,
+    PriceChange,
+    PriceFeedOut,
     SecurityBrief,
 )
-from app.domain.investments.valuation import Converter, PriceBook
+from app.domain.investments.valuation import Close, Converter, PriceBook
+from app.integrations.prices.refresh import price_feed_enabled
 
 UNCLASSIFIED = "unclassified"
 
@@ -78,6 +95,103 @@ def allocation(values: dict[str, Decimal], total: Decimal, currency: str) -> lis
         )
         for key, value in sorted(values.items(), key=lambda kv: (-kv[1], kv[0]))
     ]
+
+
+@dataclass(frozen=True)
+class _Stored:
+    """One stored close of a security."""
+
+    on: date
+    close: Decimal
+    source: str
+    updated_at: datetime
+
+
+def latest_stored(
+    db: Session, household_id: uuid.UUID, security_ids: Collection[uuid.UUID], until: date
+) -> dict[uuid.UUID, list[_Stored]]:
+    """The two latest stored closes of each security on or before ``until``, newest first."""
+    if not security_ids:
+        return {}
+    rank = (
+        func.row_number()
+        .over(partition_by=Price.security_id, order_by=Price.price_date.desc())
+        .label("rank")
+    )
+    ranked = (
+        select(
+            Price.security_id, Price.price_date, Price.close, Price.source, Price.updated_at, rank
+        )
+        .where(
+            Price.household_id == household_id,
+            Price.security_id.in_(list(security_ids)),
+            Price.price_date <= until,
+        )
+        .subquery()
+    )
+    found: dict[uuid.UUID, list[_Stored]] = defaultdict(list)
+    rows = db.execute(
+        select(ranked).where(ranked.c.rank <= 2).order_by(ranked.c.security_id, ranked.c.rank)
+    )
+    for security_id, on, close, source, updated_at, _ in rows:
+        found[security_id].append(_Stored(on, close, source, updated_at))
+    return found
+
+
+def positions_as_of(
+    db: Session, household_id: uuid.UUID, account_ids: Collection[uuid.UUID]
+) -> dict[uuid.UUID, date]:
+    """The last day an imported brokerage statement or export of each account covers."""
+    if not account_ids:
+        return {}
+    rows = db.execute(
+        select(StatementRecord.account_id, func.max(StatementRecord.period_end))
+        .where(
+            StatementRecord.household_id == household_id,
+            StatementRecord.account_id.in_(list(account_ids)),
+            StatementRecord.kind == "investment",
+            StatementRecord.outcome == "imported",
+        )
+        .group_by(StatementRecord.account_id)
+    )
+    return {account_id: day for account_id, day in rows if day is not None}
+
+
+def price_feed() -> PriceFeedOut:
+    settings = get_settings()
+    enabled = price_feed_enabled(settings)
+    return PriceFeedOut(
+        enabled=enabled, refresh_minutes=settings.price_refresh_minutes if enabled else None
+    )
+
+
+def _price_brief(close: Close, currency: str, stored: list[_Stored]) -> PriceBrief:
+    latest = stored[0] if stored and close.basis == "price" and stored[0].on == close.on else None
+    return PriceBrief(
+        close=format_units(close.close),
+        currency=currency,
+        price_date=close.on,
+        basis=close.basis,
+        source=latest.source if latest is not None else None,
+        updated_at=latest.updated_at if latest is not None else None,
+    )
+
+
+def _price_change(
+    close: Close, stored: list[_Stored], value: Decimal | None, currency: str
+) -> PriceChange | None:
+    """The move from the stored close before the latest (``value``: per unit, converted)."""
+    if close.basis != "price" or len(stored) < 2 or stored[0].on != close.on:
+        return None
+    previous = stored[1]
+    if previous.close <= 0:
+        return None
+    return PriceChange(
+        since=previous.on,
+        previous_close=format_units(previous.close),
+        value=Money.of(to_storage(value), currency) if value is not None else None,
+        fraction=f"{round_rate((close.close - previous.close) / previous.close):f}",
+    )
 
 
 def holdings(
@@ -127,6 +241,8 @@ def holdings(
     book = PriceBook(
         db, household_id, security_ids, until=as_of, trades=db.execute(txn_stmt).scalars()
     )
+    stored = latest_stored(db, household_id, security_ids, as_of)
+    covered = positions_as_of(db, household_id, account_ids)
     base = base_currency(db, household_id)
     to_base = Converter(db, household_id, base, until=as_of)
     to_account: dict[str, Converter] = {}
@@ -183,6 +299,11 @@ def holdings(
                     )
                 )
             market = row.quantity * unit if unit is not None else None
+            closes = stored.get(security.id, [])
+            moved: Decimal | None = None
+            if close is not None and len(closes) > 1:
+                per_unit = convert(close.close - closes[1].close, security.currency, as_of)
+                moved = row.quantity * per_unit if per_unit is not None else None
             market_base = (
                 to_base(row.quantity * close.close, security.currency, as_of)
                 if close is not None
@@ -214,13 +335,18 @@ def holdings(
                     ),
                     quantity=format_units(row.quantity),
                     cost_basis=Money.of(row.cost_basis, account.currency),
+                    average_cost=(
+                        format_units(quantize_units(row.cost_basis / row.quantity))
+                        if row.quantity > 0
+                        else None
+                    ),
                     price=(
-                        PriceBrief(
-                            close=format_units(close.close),
-                            currency=security.currency,
-                            price_date=close.on,
-                            basis=close.basis,
-                        )
+                        _price_brief(close, security.currency, closes)
+                        if close is not None
+                        else None
+                    ),
+                    price_change=(
+                        _price_change(close, closes, moved, account.currency)
                         if close is not None
                         else None
                     ),
@@ -263,9 +389,11 @@ def holdings(
                 account_id=a,
                 cost_method=methods[a],
                 market_value_base=Money.of(to_storage(by_account.get(a, Decimal(0))), base),
+                positions_as_of=covered.get(a),
             )
             for a in account_ids
         ],
+        price_feed=price_feed(),
         market_value=Money.of(to_storage(total), base),
         cost_basis=Money.of(to_storage(totals["cost"]), base),
         unrealized=gains_out(totals["short"], totals["long"], base),

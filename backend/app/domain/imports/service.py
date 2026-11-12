@@ -62,6 +62,18 @@ The flow (INGESTION.md "Parse", "Match and deduplicate", "Commit"):
      used and choose it explicitly. Rows skipped (an action no known phrase
      types, a row that does not read) raise one ``low_confidence_field`` item
      (``lines_skipped``, counts only).
+   * **Brokerage positions exports** come before those: when table 0 of a
+     CSV, TSV or XLSX is a "Positions" export
+     (``app.ingestion.parsers.positions_table``: a symbol, a quantity and a
+     market value column, no date or action), its rows become one
+     investment statement per account whose positions are what the account
+     holds on the day of the download, committed by
+     ``app.domain.investments.statement_import`` as a positions snapshot
+     (holdings brought to the export's, a price per position, the account's
+     value). The run summary carries ``positions_table`` (counts). A
+     mapping chosen explicitly on a re-run still reads the table as a cash
+     ledger. Rows that do not read raise one ``low_confidence_field`` item
+     (``lines_skipped``); their account records no balance.
    * **Multi-account CSV/TSV** (``MappingSpec.account_column``): one
      statement per account (``from_table_grouped``), each matched by the
      last four digits of its account cell exactly like an OFX statement
@@ -126,9 +138,9 @@ import uuid
 from collections.abc import Collection, Sequence
 from dataclasses import dataclass, field
 from decimal import Decimal
-from typing import TYPE_CHECKING, Any, Final, cast
+from typing import TYPE_CHECKING, Any, Final, Literal, cast
 
-from pydantic import ValidationError
+from pydantic import BaseModel, ValidationError
 from sqlalchemy import ColumnElement, delete, or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
@@ -182,6 +194,7 @@ from app.domain.imports.schemas import (
 from app.domain.imports.statement_answers import (
     StatementAnswers,
     document_answers,
+    placement,
     statement_key,
 )
 from app.domain.imports.statement_records import (
@@ -215,6 +228,10 @@ from app.ingestion.parsers.brokerage_table import (
     read_activity_table,
     suggest_activity_mapping,
 )
+from app.ingestion.parsers.positions_table import PARSER_NAME as POSITIONS_PARSER
+from app.ingestion.parsers.positions_table import PARSER_VERSION as POSITIONS_PARSER_VERSION
+from app.ingestion.parsers.positions_table import TABLE_KINDS as POSITIONS_TABLE_KINDS
+from app.ingestion.parsers.positions_table import PositionsTable, read_positions_table
 from app.ingestion.parsers.structured import (
     MappingSuggestion,
     ParsedStatement,
@@ -672,6 +689,8 @@ class _Run:
     #: and the saved mapping that reading took precedence over.
     activity: ActivityTable | None = None
     mapping_bypassed: uuid.UUID | None = None
+    #: Table 0 read as a brokerage positions export (``positions_table`` in the summary).
+    positions: PositionsTable | None = None
     #: Accounts a person assigned to the document's statements, by
     #: ``(target, index)`` (``POST /documents/{id}/accounts/apply``).
     assigned: dict[tuple[str, int], uuid.UUID] = field(default_factory=dict)
@@ -756,6 +775,7 @@ class _Run:
                 if self.activity is not None
                 else {}
             ),
+            **({"positions_table": self.positions.summary()} if self.positions is not None else {}),
         }
 
 
@@ -1590,6 +1610,25 @@ def activity_table(result: ExtractResult, spec: MappingSpec | None = None) -> Ac
     return read_activity_table(result.tables[0], spec)
 
 
+def positions_table(result: ExtractResult, document: Document) -> PositionsTable | None:
+    """Table 0 of a CSV/TSV/XLSX read as a brokerage positions export (None: it is not one).
+
+    Only a delimited or spreadsheet file's own table qualifies (never a
+    PDF's page table, nor a file that also carries statements). The day the
+    file was received dates the positions when the export prints no
+    download date.
+    """
+    if (
+        result.statements
+        or result.investments
+        or not result.tables
+        or result.kind not in POSITIONS_TABLE_KINDS
+    ):
+        return None
+    received = document.created_at.date() if document.created_at is not None else None
+    return read_positions_table(result.tables[0], received_on=received)
+
+
 def saved_activity_mapping(
     db: Session,
     household_id: uuid.UUID,
@@ -1608,16 +1647,19 @@ def saved_activity_mapping(
 def stored_investments(document: Document, db: Session | None = None) -> list[InvestmentStatement]:
     """The investment statements an import of ``document`` reads, in the importer's order.
 
-    The stored ones (OFX, PDF), else those of a brokerage activity table, read
-    again from the stored table (they are never stored themselves): as
-    recognised on its own, else through the household's saved activity-mode
-    mapping for the layout (with ``db``).
+    The stored ones (OFX, PDF), else those of a brokerage positions export
+    or activity table, read again from the stored table (they are never
+    stored themselves): as recognised on its own, else (activity) through
+    the household's saved activity-mode mapping for the layout (with ``db``).
     """
     result = _stored_result(document)
     if result is None:
         return []
     if result.investments:
         return list(result.investments)
+    positions = positions_table(result, document)
+    if positions is not None:
+        return positions.statements
     found = activity_table(result)
     if found is None and db is not None and result.tables:
         choice = saved_activity_mapping(
@@ -1745,6 +1787,35 @@ def _import_activity(
         run.document.period_start, run.document.period_end = dates
 
 
+def _import_positions(run: _Run, positions: PositionsTable) -> None:
+    """Record what reading table 0 as a brokerage positions export did (module doc)."""
+    run.positions = positions
+    run.document.parser_version = f"{POSITIONS_PARSER}/{POSITIONS_PARSER_VERSION}"
+    if not positions.statements:
+        run.review(
+            ReviewKind.UNPARSED,
+            {
+                "reason": "positions_unreadable",
+                "table": 0,
+                "parser": POSITIONS_PARSER,
+                "skipped_rows": positions.skipped,
+            },
+        )
+    elif positions.skipped:
+        run.review(
+            ReviewKind.LOW_CONFIDENCE_FIELD,
+            {
+                "reason": "lines_skipped",
+                "count": positions.skipped,
+                "unknown_activity": 0,
+                "unknown_actions": [],
+                "parser": POSITIONS_PARSER,
+            },
+        )
+    if positions.as_of is not None and run.document.period_start is None:
+        run.document.period_start = run.document.period_end = positions.as_of
+
+
 def _open_items(db: Session, document: Document) -> int:
     """The document's open items that wait on a person (a notice does not)."""
     return review_repo.open_items_of(db, document.household_id, document.id)
@@ -1791,10 +1862,18 @@ def import_extraction(
     if result.statements:
         _import_statements(run, result, account_id=account_id)
     elif result.tables:
-        # A brokerage activity export is investment activity, unless the
-        # person chose a cash-ledger mapping for this run (module doc).
-        activity, mapping = _activity_reading(run, result, mapping_id, account_id)
-        if activity is None:
+        # A brokerage positions or activity export is investment data, unless
+        # the person chose a cash-ledger mapping for this run (module doc).
+        positions = positions_table(result, document) if mapping_id is None else None
+        activity, mapping = (
+            _activity_reading(run, result, mapping_id, account_id)
+            if positions is None
+            else (None, None)
+        )
+        if positions is not None:
+            _import_positions(run, positions)
+            statements = positions.statements
+        elif activity is None:
             _import_table(run, result, mapping_id=mapping_id, account_id=account_id, group=group)
         else:
             _import_activity(run, result, activity, account_id=account_id, mapping=mapping)
@@ -1907,6 +1986,41 @@ def request_apply(
     return ImportAccepted(job_id=job_id, state="queued", document_id=document.id)
 
 
+def _placed(
+    db: Session,
+    document: Document,
+    result: ExtractResult,
+    item: dict[str, Any],
+    payload: ApplyMappingJob,
+    imported_into: Collection[str],
+) -> dict[str, Any]:
+    """Where the re-run put the statement an ``unknown_account`` item asked about.
+
+    The account the run assigned to it (the Accounts dialog's assignment,
+    or the account chosen for that statement), when the run imported into
+    that account: recorded with the statement's key so later imports of
+    the document put it there again (``statement_answers``). Empty for an
+    item about anything else (a group of a table, an unparsed file).
+    """
+    index = item.get("statement")
+    if not isinstance(index, int) or isinstance(index, bool):
+        return {}
+    investment = item.get("investment") is True
+    target: Literal["statement", "investment"] = "investment" if investment else "statement"
+    account_id = next(
+        (a.account_id for a in payload.assignments if a.target == target and a.index == index),
+        payload.account_id if payload.statement == index else None,
+    )
+    if account_id is None or str(account_id) not in imported_into:
+        return {}
+    statements: Sequence[BaseModel] = (
+        stored_investments(document, db) if investment else result.statements
+    )
+    if not 0 <= index < len(statements):
+        return {}
+    return placement(target, statement_key(statements[index]), account_id)
+
+
 def run_apply_job(
     db: Session,
     household_id: uuid.UUID,
@@ -1944,11 +2058,15 @@ def run_apply_job(
         "mapping_id": outcome.summary.get("mapping_id"),
         "account_id": str(payload.account_id) if payload.account_id else None,
     }
+    imported_into = {str(a) for a in outcome.summary.get("accounts", [])}
     for item in answered:
         item.state = ReviewItemState.RESOLVED
         item.resolved_at = now
         item.resolved_by = payload.requested_by
-        item.resolution = resolution
+        item.resolution = {
+            **resolution,
+            **_placed(db, document, result, item.payload or {}, payload, imported_into),
+        }
     db.flush()
     status = DocumentStatus.NEEDS_REVIEW if _open_items(db, document) else DocumentStatus.PROCESSED
     db.add(

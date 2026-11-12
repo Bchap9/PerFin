@@ -156,6 +156,32 @@ statements"). Per statement:
    ``investment_opening_basis_unknown`` item asking for the cost basis. A
    history the engine still refuses (selling units never held) rolls the
    statement back (savepoint) with an ``investment_lot_conflict`` item.
+   A **positions export** (``app.ingestion.parsers.positions_table``: what
+   every account holds on the day of the download, no activity) is a
+   *snapshot*: its positions are the whole account on ``as_of``
+   (:func:`_snapshot_adjustments`). Per security, on that day: units the
+   account does not hold yet enter as one ``transfer_in`` (memo
+   :data:`SNAPSHOT_IN_MEMO`) costed so that the position's cost basis is
+   the one the export prints (its printed basis less what the account
+   already carries; the price when it prints none, with the
+   ``investment_opening_basis_unknown`` item of an opening); units it no
+   longer lists leave as one ``transfer_out`` (memo
+   :data:`SNAPSHOT_OUT_MEMO`; a transfer realises nothing). A position
+   known only from statements and exports (every open lot opened by an
+   opening or snapshot row, :data:`SYNTHETIC_MEMOS`, in a FIFO account)
+   whose basis would still differ from the printed one by more than
+   :data:`BASIS_TOLERANCE` is **reset**: every unit held leaves and the
+   reported units enter at the printed basis, so units and basis are the
+   export's exactly. A position with lots of its own (bought through
+   imported activity) keeps them: only its units are brought to the
+   export's, its basis stays what its history says. Nothing changes when
+   the account already holds what the export lists, so a re-run, or the
+   same export twice, adds nothing. An export older than investment
+   activity already recorded for the account, that would change its
+   units, is not applied (``investment_out_of_order``); and activity
+   moving units on or before the day of a snapshot row already recorded
+   is held the same way (the snapshot already counts it), so import
+   activity first, then the positions.
 8. **Prices**: each position's unit price on ``as_of`` becomes a ``price``
    row (``source = statement``) unless one exists for that day from another
    source; a price quoted per 100 of face value (a bond) is stored as one
@@ -211,6 +237,7 @@ from app.domain.imports.statement_records import (
 )
 from app.domain.investments.models import (
     AssetClass,
+    CostMethod,
     Holding,
     InvestmentTxn,
     InvestmentTxnType,
@@ -219,9 +246,10 @@ from app.domain.investments.models import (
     Security,
     security_name_key,
 )
-from app.domain.investments.service import replay_position
+from app.domain.investments.service import cost_method, replay_position
 from app.ingestion.match.accounts import match_account
 from app.ingestion.parsers.brokerage import position_value, reconcile_investment
+from app.ingestion.parsers.positions_table import is_positions_snapshot
 from app.ingestion.parsers.vocabulary import SUGGESTED_DOUBT
 from app.ingestion.sandbox.protocol import (
     DOCUMENT_STATEMENT_FORMATS,
@@ -248,10 +276,24 @@ SETTLE_WINDOW_DAYS: Final = 5
 OPENING_MEMO: Final = "Opening position from statement"
 #: Memo of the opening a sale of units held before an activity export implies.
 UNKNOWN_BASIS_MEMO: Final = "Opening position before this export (cost basis unknown)"
+#: Memos of the rows a positions export writes (module doc, step 7).
+SNAPSHOT_IN_MEMO: Final = "Units held per positions export"
+SNAPSHOT_OUT_MEMO: Final = "Units no longer held per positions export"
+#: Openings the importer made up from a statement's or export's figures: a
+#: position whose open lots all come from them has no history of its own.
+SYNTHETIC_MEMOS: Final = frozenset({OPENING_MEMO, UNKNOWN_BASIS_MEMO, SNAPSHOT_IN_MEMO})
+#: A cost basis within this of the printed one is the printed one.
+BASIS_TOLERANCE: Final = Decimal("0.01")
 OPENING_TYPES: Final = frozenset(
     {InvestmentTxnType.BUY, InvestmentTxnType.REINVEST, InvestmentTxnType.TRANSFER_IN}
 )
 CLOSING_TYPES: Final = frozenset({InvestmentTxnType.SELL, InvestmentTxnType.TRANSFER_OUT})
+#: Rows that change the units an account holds.
+UNIT_ROW_TYPES: Final = (
+    OPENING_TYPES
+    | CLOSING_TYPES
+    | frozenset({InvestmentTxnType.SPLIT, InvestmentTxnType.CORPORATE_ACTION})
+)
 _SEP: Final = "\x1f"
 
 Review = Callable[[ReviewKind, dict[str, Any]], None]
@@ -1478,6 +1520,226 @@ def _openings(
     return openings
 
 
+def _snapshot_since(ctx: _Context, account: Account, on: date) -> bool:
+    """Whether a positions export already says what the account held on or after ``on``."""
+    found = ctx.db.execute(
+        select(InvestmentTxn.id)
+        .where(
+            InvestmentTxn.household_id == ctx.household_id,
+            InvestmentTxn.account_id == account.id,
+            InvestmentTxn.trade_date >= on,
+            InvestmentTxn.memo.in_((SNAPSHOT_IN_MEMO, SNAPSHOT_OUT_MEMO)),
+        )
+        .limit(1)
+    ).scalar_one_or_none()
+    return found is not None
+
+
+@dataclass(frozen=True)
+class _Held:
+    """What the lot engine holds of one security in an account."""
+
+    units: Decimal
+    basis: Decimal
+    #: Every open lot was opened by a row of :data:`SYNTHETIC_MEMOS`.
+    synthetic: bool
+
+
+def _held_positions(ctx: _Context, account: Account) -> dict[uuid.UUID, _Held]:
+    lots = ctx.db.execute(
+        select(Lot.security_id, Lot.remaining_quantity, Lot.cost_per_unit, Lot.opening_txn_id)
+        .where(
+            Lot.household_id == ctx.household_id,
+            Lot.account_id == account.id,
+            Lot.remaining_quantity > 0,
+        )
+        .order_by(Lot.security_id, Lot.open_date, Lot.id)
+    ).all()
+    openings = {row.opening_txn_id for row in lots if row.opening_txn_id is not None}
+    synthetic: set[uuid.UUID] = set()
+    if openings:
+        synthetic = set(
+            ctx.db.execute(
+                select(InvestmentTxn.id).where(
+                    InvestmentTxn.household_id == ctx.household_id,
+                    InvestmentTxn.id.in_(openings),
+                    InvestmentTxn.type == InvestmentTxnType.TRANSFER_IN,
+                    InvestmentTxn.memo.in_(SYNTHETIC_MEMOS),
+                )
+            ).scalars()
+        )
+    units: dict[uuid.UUID, Decimal] = defaultdict(Decimal)
+    basis: dict[uuid.UUID, Decimal] = defaultdict(Decimal)
+    own: set[uuid.UUID] = set()
+    with localcontext(calc_context()):
+        for security_id, remaining, cost_per_unit, opening in lots:
+            units[security_id] += remaining
+            basis[security_id] += remaining * cost_per_unit
+            if opening not in synthetic:
+                own.add(security_id)
+    return {
+        security_id: _Held(units[security_id], basis[security_id], security_id not in own)
+        for security_id in units
+    }
+
+
+def _snapshot_adjustments(
+    ctx: _Context,
+    account: Account,
+    positions: Sequence[tuple[InvestmentPosition, Security]],
+    on: date,
+    existing: set[str],
+    waiting: Collection[uuid.UUID] = (),
+) -> list[InvestmentTxn] | None:
+    """The rows that bring the account's holdings to a positions export's (module doc, step 7).
+
+    None: the export is older than activity already recorded and would
+    change the account's units (an ``investment_out_of_order`` item says
+    so); nothing of it is written. ``waiting``: securities whose position
+    waits for a person; they are left as they are.
+    """
+    held = _held_positions(ctx, account)
+    units: dict[uuid.UUID, Decimal] = defaultdict(Decimal)
+    costs: dict[uuid.UUID, Decimal | None] = {}
+    sample: dict[uuid.UUID, InvestmentPosition] = {}
+    securities: dict[uuid.UUID, Security] = {}
+    for position, security in positions:
+        if position.quantity <= 0:
+            continue
+        units[security.id] += position.quantity
+        sample.setdefault(security.id, position)
+        securities[security.id] = security
+        known = costs.get(security.id, Decimal(0))
+        costs[security.id] = (
+            known + abs(position.cost_basis)
+            if known is not None and position.cost_basis is not None
+            else None
+        )
+    prints_cost = any(position.cost_basis is not None for position, _ in positions)
+    resettable = cost_method(ctx.db, ctx.household_id, account.id) is CostMethod.FIFO
+    #: (type, security, units, unit price or None)
+    plan: list[tuple[InvestmentTxnType, uuid.UUID, Decimal, Decimal | None]] = []
+    unknown_basis: set[uuid.UUID] = set()
+    with localcontext(calc_context()):
+        for security_id in sorted(set(units) | set(held), key=lambda u: u.bytes):
+            if security_id in waiting:
+                continue
+            have = held.get(security_id, _Held(Decimal(0), Decimal(0), synthetic=True))
+            want = units.get(security_id, Decimal(0))
+            shown = sample.get(security_id)
+            price = shown.price_per_unit if shown is not None else None
+            if want <= UNIT_TOLERANCE:
+                if have.units > UNIT_TOLERANCE:
+                    plan.append((InvestmentTxnType.TRANSFER_OUT, security_id, have.units, None))
+                continue
+            security = securities[security_id]
+            # The printed basis is in the account's currency; a security
+            # quoted in another one keeps the basis its history gives it.
+            cost = costs.get(security_id) if security.currency == account.currency else None
+            delta = want - have.units
+            reset = (
+                cost is not None and resettable and have.synthetic and have.units > UNIT_TOLERANCE
+            )
+            if delta > UNIT_TOLERANCE and cost is not None and cost >= have.basis - BASIS_TOLERANCE:
+                # More units, and a basis that grew with them.
+                unit_cost = max(cost - have.basis, Decimal(0)) / delta
+                plan.append((InvestmentTxnType.TRANSFER_IN, security_id, delta, unit_cost))
+            elif cost is not None and abs(delta) <= UNIT_TOLERANCE:
+                if reset and abs(cost - have.basis) > BASIS_TOLERANCE:
+                    plan.append((InvestmentTxnType.TRANSFER_OUT, security_id, have.units, price))
+                    plan.append((InvestmentTxnType.TRANSFER_IN, security_id, want, cost / want))
+            elif reset and cost is not None:
+                # Fewer units, or more units at a lower basis: only the
+                # export says what the position costs now.
+                plan.append((InvestmentTxnType.TRANSFER_OUT, security_id, have.units, price))
+                plan.append((InvestmentTxnType.TRANSFER_IN, security_id, want, cost / want))
+            elif delta > UNIT_TOLERANCE:
+                plan.append((InvestmentTxnType.TRANSFER_IN, security_id, delta, price))
+                if (
+                    prints_cost
+                    and shown is not None
+                    and shown.cost_basis is None
+                    and price != Decimal(1)
+                ):
+                    unknown_basis.add(security_id)
+            elif delta < -UNIT_TOLERANCE:
+                plan.append((InvestmentTxnType.TRANSFER_OUT, security_id, -delta, price))
+    if not plan:
+        return []
+    if _later_activity(ctx, account, on):
+        ctx.review(
+            ReviewKind.LOW_CONFIDENCE_FIELD,
+            {
+                "reason": "investment_out_of_order",
+                "account_id": str(account.id),
+                "as_of": on.isoformat(),
+                "rows": len(plan),
+            },
+        )
+        return None
+    rows: list[InvestmentTxn] = []
+    asked: list[InvestmentTxn] = []
+    for index, (kind, security_id, quantity, unit_price) in enumerate(plan):
+        digest = hashlib.sha256(
+            _SEP.join(
+                (
+                    HASH_VERSION,
+                    str(account.id),
+                    "snapshot",
+                    str(ctx.document.id),
+                    str(security_id),
+                    on.isoformat(),
+                    kind.value,
+                    _units(quantity),
+                    str(index),
+                )
+            ).encode()
+        ).hexdigest()
+        existing.add(digest)
+        opening = kind is InvestmentTxnType.TRANSFER_IN
+        row = InvestmentTxn(
+            id=uuid7(),
+            household_id=ctx.household_id,
+            account_id=account.id,
+            security_id=security_id,
+            type=kind,
+            trade_date=on,
+            quantity=quantity.quantize(QUANTUM),
+            price=unit_price.quantize(QUANTUM) if unit_price is not None else None,
+            amount=Decimal(0),
+            fees=Decimal(0),
+            currency=account.currency,
+            lot_links=[],
+            memo=SNAPSHOT_IN_MEMO if opening else SNAPSHOT_OUT_MEMO,
+            import_hash=digest,
+            source_document_id=ctx.document.id,
+        )
+        ctx.db.add(row)
+        rows.append(row)
+        if opening and security_id in unknown_basis:
+            asked.append(row)
+    if asked:
+        ctx.db.flush()
+        ctx.review(
+            ReviewKind.LOW_CONFIDENCE_FIELD,
+            {
+                "reason": "investment_opening_basis_unknown",
+                "account_id": str(account.id),
+                "costed_at": "price",
+                "securities": [
+                    {
+                        "security_id": str(row.security_id),
+                        "quantity": _units(row.quantity or Decimal(0)),
+                        "trade_date": row.trade_date.isoformat(),
+                        "transaction_id": str(row.id),
+                    }
+                    for row in asked[:IDS_MAX]
+                ],
+            },
+        )
+    return rows
+
+
 def _shortfall_openings(
     ctx: _Context,
     account: Account,
@@ -1688,9 +1950,18 @@ def _write(
                 continue
         existing.add(digest)
         created.append(_txn(ctx, account, activity, security_id, digest))
-    if on is not None and created and _later_activity(ctx, account, on):
+    moved = [r.trade_date for r in created if r.type in UNIT_ROW_TYPES]
+    if (
+        on is not None
+        and created
+        and (
+            _later_activity(ctx, account, on)
+            or (bool(moved) and _snapshot_since(ctx, account, min(moved)))
+        )
+    ):
         # Its rows predate activity already recorded, which an opening
-        # position may already count: adding them could double units.
+        # position (or a positions export) may already count: adding them
+        # could double units.
         ctx.review(
             ReviewKind.LOW_CONFIDENCE_FIELD,
             {
@@ -1704,7 +1975,14 @@ def _write(
     db.add_all(created)
     db.flush()
     openings: list[InvestmentTxn] = []
-    if on is not None and (statement.positions or had_positions):
+    if on is not None and is_positions_snapshot(statement):
+        # The export is the whole account on that day (module doc, step 7).
+        adjusted = _snapshot_adjustments(ctx, account, positions, on, existing, waiting_ids)
+        if adjusted is None:
+            return None
+        openings = adjusted
+        db.flush()
+    elif on is not None and (statement.positions or had_positions):
         openings = _openings(ctx, account, statement, positions, created, on, existing, waiting_ids)
         db.flush()
     elif not statement.positions and statement.source_format == "csv":

@@ -298,6 +298,26 @@ class PriceBrief(_Output):
     price_date: date
     #: ``price`` (a stored close) or ``trade`` (the last trade price).
     basis: Literal["price", "trade"]
+    #: Where a stored close came from: ``manual``, ``statement`` (an imported
+    #: statement or positions export) or the price feed's name. None for a
+    #: trade price.
+    source: str | None
+    #: When the stored close was last written (a feed rewrites the day's
+    #: close on every refresh). None for a trade price.
+    updated_at: datetime | None
+
+
+class PriceChange(_Output):
+    """How the latest stored close moved from the stored close before it."""
+
+    #: The day of the earlier close.
+    since: date
+    previous_close: str
+    #: The change in the holding's value, in the account currency (None:
+    #: no exchange rate).
+    value: Money | None
+    #: ``(close - previous) / previous``, rounded half-even to 10 decimals.
+    fraction: str
 
 
 class GainsOut(_Output):
@@ -323,7 +343,11 @@ class HoldingOut(_Output):
     security: SecurityBrief
     quantity: str
     cost_basis: Money
+    #: Cost basis per unit, in the account currency.
+    average_cost: str | None
     price: PriceBrief | None
+    #: None without two stored closes (one price, or a trade price).
+    price_change: PriceChange | None
     market_value: Money | None
     market_value_base: Money | None
     unrealized: GainsOut | None
@@ -341,6 +365,24 @@ class HoldingAccountOut(_Output):
     account_id: uuid.UUID
     cost_method: CostMethod
     market_value_base: Money | None
+    #: The last day an imported statement or export of the account covers:
+    #: what it holds is known up to then (None: nothing was imported, its
+    #: transactions were entered by hand).
+    positions_as_of: date | None
+
+
+class PriceFeedOut(_Output):
+    """Whether prices are fetched (``PERFIN_PRICE_PROVIDER``) and how often."""
+
+    enabled: bool
+    #: Minutes between two refreshes by the worker (None: no feed).
+    refresh_minutes: int | None
+
+
+class PriceRefreshAccepted(_Output):
+    """``POST /investments/prices/refresh``: a refresh is queued for the worker."""
+
+    queued: bool
 
 
 class MissingRate(_Output):
@@ -355,6 +397,7 @@ class HoldingsOut(_Output):
     base_currency: str
     holdings: list[HoldingOut]
     accounts: list[HoldingAccountOut]
+    price_feed: PriceFeedOut
     market_value: Money
     cost_basis: Money
     unrealized: GainsOut

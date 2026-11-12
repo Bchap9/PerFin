@@ -592,6 +592,7 @@ POLICIES: Final[Mapping[str, Policy]] = MappingProxyType(
         ),
         f"GET {API}/investments/holdings": scoped("investments:read", role=V),
         f"GET {API}/investments/performance": scoped("investments:read", role=V),
+        f"POST {API}/investments/prices/refresh": scoped("investments:write", role=M),
         f"GET {API}/investments/accounts/{{account_id}}/cost-method": scoped(
             "investments:read", role=V, params=ACCT
         ),

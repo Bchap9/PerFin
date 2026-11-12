@@ -300,6 +300,10 @@ class Settings(BaseSettings):
     price_provider_api_key: SecretStr | None = None
     # Most distinct symbols asked for per refresh run (one request each).
     price_provider_max_symbols: Annotated[int, Field(ge=1, le=5000)] = 500
+    # How often the worker's refresh_prices job runs (prices and FX rates), in
+    # minutes: 360 (every six hours) by default, 5 at the least. Each run is
+    # one request per distinct symbol: mind the provider's own limits.
+    price_refresh_minutes: Annotated[int, Field(ge=5, le=1440)] = 360
     # "ecb": the European Central Bank's daily reference rates (one fixed URL,
     # nothing household-specific is sent).
     fx_provider: Literal["none", "ecb"] = "none"

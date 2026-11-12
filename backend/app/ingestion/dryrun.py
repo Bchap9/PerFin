@@ -25,7 +25,10 @@ JSON document:
    column mapping and the rows it reads, and for a brokerage activity export
    (``app.ingestion.parsers.brokerage_table``) the investment statements the
    importer would commit instead (per account: last four digits, rows by
-   type); structured statements as extracted.
+   type), and for a brokerage positions export
+   (``app.ingestion.parsers.positions_table``) the positions snapshot per
+   account (the day it is valued, with today standing in for the day of
+   receipt when the file prints none); structured statements as extracted.
 6. ``match``: only with ``--household`` and a reachable database: the
    account the last four digits would match, read in a ``READ ONLY``
    transaction that is rolled back.
@@ -206,7 +209,9 @@ class DryRun:
         return found
 
     def parse(self, kind: str, result: ExtractResult, found: Classification) -> ExtractResult:
+        from app.core import clock
         from app.ingestion.parsers.brokerage_table import TABLE_KINDS, read_activity_table
+        from app.ingestion.parsers.positions_table import read_positions_table
         from app.ingestion.parsers.registry import DOCUMENT_KINDS, parse_extraction
         from app.ingestion.parsers.structured import from_table, suggest_mapping
 
@@ -257,6 +262,16 @@ class DryRun:
                         }
                         for s in activity.statements
                     ],
+                }
+            positions = (
+                read_positions_table(result.tables[0], received_on=clock.utcnow().date())
+                if kind in TABLE_KINDS
+                else None
+            )
+            if positions is not None:
+                tables[0]["brokerage_positions"] = {
+                    **positions.summary(),
+                    "accounts": [_investment_summary(s) for s in positions.statements],
                 }
             self.emit("parse", tables=tables)
             return result

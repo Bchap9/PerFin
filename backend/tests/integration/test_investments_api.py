@@ -372,12 +372,16 @@ def test_fifo_lots_holdings_and_realised_gains(world: World, factories: Factorie
     entry = _by_symbol(holdings)[(str(world.brokerage.id), "SYNF")]
     assert entry["quantity"] == "8"
     assert entry["cost_basis"] == _money("960.00")
+    assert entry["price"].pop("updated_at") is not None
     assert entry["price"] == {
         "close": "130",
         "currency": "USD",
         "price_date": "2026-06-29",
         "basis": "price",
+        "source": "manual",
     }
+    assert entry["average_cost"] == "120"
+    assert entry["price_change"] is None  # one stored close: nothing to compare it with
     assert entry["market_value"] == _money("1040.00")
     assert entry["unrealized"] == {
         "short_term": _money("80.00"),
@@ -889,3 +893,154 @@ def test_statement_seed_lots_survive_replay(world: World, factories: Factories) 
         PERFORMANCE, params={"range": "max", "account": str(world.brokerage.id)}
     ).json()
     assert performance["realized"]["total"] == _money("20.00")
+
+
+# ---------------------------------------------------------------------------
+# Where a price came from, how it moved, and what the account was last told
+# ---------------------------------------------------------------------------
+
+
+def _security_row(world: World, factories: Factories, sec: dict[str, Any]) -> Any:
+    from app.domain.investments.models import Security
+
+    with factories.transaction() as db:
+        set_context(db, world.household_id)
+        row = db.get(Security, uuid.UUID(sec["id"]))
+        assert row is not None
+        db.expunge(row)
+        return row
+
+
+def test_holdings_say_where_a_price_came_from_and_how_it_moved(
+    world: World, factories: Factories
+) -> None:
+    sec = _security(world.member, "SYNP")
+    traded = _security(world.member, "SYNT")
+    for security, price, amount in ((sec, "100", "-1000"), (traded, "20", "-200")):
+        _txn(
+            world.member,
+            world.brokerage,
+            "buy",
+            "2026-06-01",
+            security=security,
+            quantity="10",
+            price=price,
+            amount=amount,
+        )
+    row = _security_row(world, factories, sec)
+    world.ledger.run(make_price, row, close="100", price_date=date(2026, 6, 26), source="statement")
+    world.ledger.run(make_price, row, close="104", price_date=date(2026, 6, 29), source="http_json")
+
+    holdings = world.viewer.get(HOLDINGS, params={"account": str(world.brokerage.id)}).json()
+    entry = _by_symbol(holdings)[(str(world.brokerage.id), "SYNP")]
+    assert entry["average_cost"] == "100"
+    assert (entry["price"]["source"], entry["price"]["basis"]) == ("http_json", "price")
+    assert entry["price"]["updated_at"] is not None
+    assert entry["price_change"] == {
+        "since": "2026-06-26",
+        "previous_close": "100",
+        "value": _money("40.00"),
+        "fraction": "0.0400000000",
+    }
+    # Valued at its last trade: no stored close, so no source and no move.
+    other = _by_symbol(holdings)[(str(world.brokerage.id), "SYNT")]
+    assert other["price"] == {
+        "close": "20",
+        "currency": "USD",
+        "price_date": "2026-06-01",
+        "basis": "trade",
+        "source": None,
+        "updated_at": None,
+    }
+    assert other["price_change"] is None
+    # Entered by hand: no statement or export says what the account holds.
+    assert [a["positions_as_of"] for a in holdings["accounts"]] == [None]
+    assert holdings["price_feed"] == {"enabled": False, "refresh_minutes": None}
+
+
+def test_holdings_name_the_last_day_an_import_covers_and_the_feed(
+    world: World, factories: Factories, settings: Settings, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from app.domain.imports.models import StatementRecord
+    from app.domain.investments import holdings as holdings_module
+    from tests.fixtures.imports import make_extracted_document, table_result
+
+    sec = _security(world.member, "SYNQ")
+    _txn(
+        world.member,
+        world.brokerage,
+        "buy",
+        "2026-06-01",
+        security=sec,
+        quantity="1",
+        price="10",
+        amount="-10",
+    )
+    with factories.transaction() as db:
+        set_context(db, world.household_id)
+        document = make_extracted_document(db, world.household_id, result=table_result())
+        for start, end, outcome in (
+            (date(2026, 5, 1), date(2026, 5, 31), "imported"),
+            (date(2026, 6, 15), date(2026, 6, 15), "imported"),
+            # A statement set aside as a duplicate says nothing new.
+            (date(2026, 6, 20), date(2026, 6, 28), "skipped"),
+        ):
+            db.add(
+                StatementRecord(
+                    household_id=world.household_id,
+                    account_id=world.brokerage.id,
+                    document_id=document.id,
+                    kind="investment",
+                    outcome=outcome,
+                    period_start=start,
+                    period_end=end,
+                    period_stated=False,
+                    source_format="csv",
+                    currency="USD",
+                )
+            )
+    feed = settings.model_copy(update={"price_provider": "http_json", "price_refresh_minutes": 15})
+    monkeypatch.setattr(holdings_module, "get_settings", lambda: feed)
+    holdings = world.member.get(HOLDINGS).json()
+    assert [a["positions_as_of"] for a in holdings["accounts"]] == ["2026-06-15"]
+    assert holdings["price_feed"] == {"enabled": True, "refresh_minutes": 15}
+
+
+def test_price_refresh_is_queued_once_a_minute_and_only_with_a_feed(
+    world: World, factories: Factories, settings: Settings, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from app.api.routers import investments as router_module
+    from app.core import clock
+    from app.db.models import AuditLog, Job
+    from app.db.queue import queue_scope
+
+    refresh = f"{API}/investments/prices/refresh"
+    # No feed (the default): nothing to fetch, nothing is queued.
+    off = world.member.post(refresh)
+    assert off.status_code == 409, off.text
+    assert off.json()["type"].endswith("price-feed-disabled")
+    assert world.viewer.post(refresh).status_code == 403
+
+    feed = settings.model_copy(update={"price_provider": "http_json"})
+    monkeypatch.setattr(router_module, "get_settings", lambda: feed)
+    now = clock.utcnow()
+    monkeypatch.setattr(clock, "utcnow", lambda: now)  # both requests in one minute
+    first = world.member.post(refresh)
+    assert first.status_code == 202, first.text
+    assert first.json() == {"queued": True}
+    assert world.owner.post(refresh).status_code == 202
+    with factories.transaction() as db:
+        # Instance-level: no household is named by the job, and two requests share it.
+        with queue_scope(db):
+            jobs = list(db.execute(select(Job).where(Job.type == "refresh_prices")).scalars())
+            manual = [
+                (j.household_id, j.payload)
+                for j in jobs
+                if (j.dedupe_key or "").startswith("manual:refresh_prices:")
+            ]
+        assert manual == [(None, {})]
+        set_context(db, world.household_id)
+        audits = db.execute(
+            select(AuditLog).where(AuditLog.action == "prices.refresh_requested")
+        ).scalars()
+        assert len(list(audits)) == 2
