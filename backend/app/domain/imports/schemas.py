@@ -11,8 +11,12 @@ way of reading the amount is used:
   ``indicator_column`` the column holds an unsigned amount and the row is an
   outflow when the indicator cell is one of ``outflow_values`` (``DR``,
   ``Debit``; compared case-insensitively), an inflow otherwise.
-* ``debit_column`` and/or ``credit_column``: unsigned outflow and inflow
-  columns; the amount is ``credit - debit`` (signs in the cells are ignored).
+* ``debit_column`` and/or ``credit_column``: outflow and inflow columns; the
+  amount is ``credit - debit`` with each cell's printed sign, so a negative
+  debit is money in and a negative credit money out (a reversal, or a lone
+  ``Inflow`` column of negative cells). A column that prints every amount
+  negative (``-25.00`` under ``Amount Debit``) is read by magnitude; a lone
+  credit column never is.
 
 ``decimal_separator`` is ``.`` (``1,234.56``) or ``,`` (``1.234,56``);
 currency symbols, spaces and apostrophes are ignored, ``(12.34)`` and
@@ -497,8 +501,9 @@ class SuggestionRole(_Output):
         "memo",
     ]
     column: int
-    #: How the header named the role.
-    match: Literal["exact", "word", "substring"]
+    #: How the header named the role (``content``: it did not, the column's
+    #: cells are direction words).
+    match: Literal["exact", "word", "substring", "content"]
     #: Share of the column's non-empty sample cells that fit the role (0-1).
     fit: float
 
@@ -511,11 +516,18 @@ class MappingSuggestionOut(_Output):
     ``doubts`` are codes: ``header_not_exact``, ``rows_unreadable``,
     ``date_order_guessed``, ``no_rows``, ``indicator_values_unknown`` (an
     indicator cell that is no direction word, or a signed amount beside
-    it). ``activity_type_unknown`` is a brokerage activity suggestion with
-    actions PerFin does not type. ``sign_evidence`` is ``activity`` for an
-    activity-mode suggestion (amounts keep their own signs), else
-    ``debit_credit``, ``indicator``, ``balance`` or null (a signed amount
-    column read as "positive is money in" on trust).
+    it), ``sign_unverified`` (nothing proves the sign and the table looks
+    like a card export, or its amounts say nothing: one sign only, or more
+    rows of money in than of money out), ``indicator_contradicts_sign``
+    (direction words and the amounts' signs disagree) and
+    ``investment_columns`` (a security, a quantity and a price column:
+    trades, not a cash ledger). ``activity_type_unknown`` is a brokerage
+    activity suggestion with actions PerFin does not type.
+    ``sign_evidence`` is ``activity`` for an activity-mode suggestion
+    (amounts keep their own signs), else ``debit_credit``, ``indicator``,
+    ``balance``, ``indicator_correlation`` (direction or transaction-type
+    words that go with the signs of the amounts) or null (signed amounts
+    read as "positive is money in" on trust).
     """
 
     spec: MappingSpec
@@ -525,7 +537,9 @@ class MappingSuggestionOut(_Output):
     failed_rows: int
     footer_rows: int
     accounts: int
-    sign_evidence: Literal["debit_credit", "indicator", "balance", "activity"] | None
+    sign_evidence: (
+        Literal["debit_credit", "indicator", "balance", "indicator_correlation", "activity"] | None
+    )
     doubts: list[str]
     roles: list[SuggestionRole]
 
@@ -560,7 +574,10 @@ class AccountProposal(_Output):
     """A new account ready to create for one of a document's accounts (editable)."""
 
     name: str
-    type: AccountType
+    #: Null for a table whose sign was taken on trust and whose header names
+    #: no card: nothing says what kind of account it is, so a person chooses
+    #: (a card export read as a checking account would turn purchases into income).
+    type: AccountType | None
     #: What kind of account within ``type`` the file's name for it says (``roth_ira``).
     subtype: str | None = None
     currency: str | None

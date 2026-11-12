@@ -24,15 +24,23 @@ The flow (INGESTION.md "Parse", "Match and deduplicate", "Commit"):
      XLSX and the person whose document it is may save mappings (member or
      above): the suggestion is saved as a new mapping (audited
      ``import_mapping.create`` with ``origin: suggested``) so the next file
-     is recognised, and the run summary says ``mapping_suggested``. A
-     single signed amount column read on trust (no debit/credit columns, no
-     indicator, no running balance that agrees) is never used to write into a
-     liability account (a card export may list purchases as positive). A
+     is recognised, and the run summary says ``mapping_suggested``. The
+     sign of a file is proven or the file waits: signed amounts read on
+     trust (no debit/credit columns, no indicator, no running balance that
+     agrees, no direction words that go with the signs) are not confident
+     when the header names a card, every amount has one sign or more rows
+     are money in than money out (the suggestion's ``sign_unverified``
+     doubt; ``auto_import: sign_unverified`` when it is the only one), and
+     a sign on trust is never used to write into a liability account (a
+     card export may list purchases as positive). A table of securities
+     trades (``investment_columns``) and direction words that contradict
+     the signs (``indicator_contradicts_sign``) are never confident either. A
      statement whose account is not known yet still gets its own
      ``account_required``/``unknown_account`` item, and the mapping saved
-     from such a suggestion is marked ``sign_unverified``: whenever it
+     from a suggestion on trust is marked ``sign_unverified``: whenever it
      later meets a liability account (the re-run after a person picks the
-     card, next month's file) the import waits as ``mapping_required``
+     card, next month's file), or a file whose own suggestion doubts the
+     sign, the import waits as ``mapping_required``
      (``auto_import: sign_unverified``) until a person saves the mapping's
      spec in the editor (which clears the mark) or chooses the mapping
      explicitly for that re-run. With one account-bound mapping among the
@@ -1294,7 +1302,9 @@ def _held(run: _Run, result: ExtractResult, suggestion: MappingSuggestion | None
     if suggestion is None:
         return "no_suggestion"
     if not suggestion.confident:
-        return "not_confident"
+        # The columns are found and only the sign is unproven: the same
+        # question as a sign on trust that meets a card account.
+        return "sign_unverified" if suggestion.doubts == ("sign_unverified",) else "not_confident"
     if result.kind not in AUTO_MAPPING_KINDS:
         return "not_delimited"
     if not _may_save_mappings(run):
@@ -1302,7 +1312,7 @@ def _held(run: _Run, result: ExtractResult, suggestion: MappingSuggestion | None
     return None
 
 
-def _sign_held(on_trust: bool, targets: list[_Target]) -> str | None:
+def _sign_held(on_trust: bool, targets: list[_Target], doubted: bool = False) -> str | None:
     """A sign taken on trust is never used to write into a liability account.
 
     ``on_trust``: a suggestion without ``sign_evidence``, or a mapping saved
@@ -1310,10 +1320,16 @@ def _sign_held(on_trust: bool, targets: list[_Target]) -> str | None:
     yet are left to their ``unknown_account`` / ``account_required`` item;
     the mapping saved meanwhile keeps ``sign_unverified``, so the re-run
     after a person picks a liability account is held here again.
+
+    ``doubted``: the suggestion for this very table doubts the sign
+    (``sign_unverified``: a card-like header, amounts of one sign, more
+    money in than out). A mapping still on trust is not used for such a
+    file whatever the account, which also stops a mapping saved from a card
+    export before those doubts existed.
     """
     if not on_trust:
         return None
-    if any(t.account is not None and t.account.type in LIABILITY_TYPES for t in targets):
+    if doubted or any(t.account is not None and t.account.type in LIABILITY_TYPES for t in targets):
         return "sign_unverified"
     return None
 
@@ -1473,9 +1489,13 @@ def _import_table(
         run.mapping_suggested = True
     else:
         # A mapping saved from a trust-only suggestion is checked again
-        # whenever it meets a liability account, unless the person chose it.
-        if _sign_held(saved.sign_unverified and mapping_id is None, targets) is not None:
-            _mapping_review(run, table, choice, suggest_mapping(table), "sign_unverified")
+        # whenever it meets a liability account or a file whose sign the
+        # suggestion doubts, unless the person chose it.
+        on_trust = saved.sign_unverified and mapping_id is None
+        fresh = suggest_mapping(table) if on_trust else None
+        doubted = fresh is not None and "sign_unverified" in fresh.doubts
+        if _sign_held(on_trust, targets, doubted) is not None:
+            _mapping_review(run, table, choice, fresh, "sign_unverified")
             return
         mapping = saved
     run.mapping_id = mapping.id

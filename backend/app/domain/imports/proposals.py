@@ -11,7 +11,12 @@ again from the stored extraction (never stored themselves):
   institution breaking ties) and nothing about it is waiting for review;
 * ``new``: an open ``unknown_account`` item says no account matched; a
   ``proposal`` (name, type, currency, institution, last four digits, an
-  opening balance when the statement prints one) is ready to create;
+  opening balance when the statement prints one) is ready to create. A
+  table (CSV, TSV, XLSX) says nothing about its account's type: the
+  proposal is a credit card when the header names one
+  (``app.ingestion.parsers.structured.names_card``), has no type when the
+  mapping's sign was taken on trust (``import_mapping.sign_unverified``: a
+  person chooses), and is a checking account otherwise;
 * ``ambiguous``: several accounts match (``candidates``), plus a proposal;
 * ``conflict``: an account matched but cannot take it (another currency, not
   an investment account for a brokerage statement), plus a proposal;
@@ -77,7 +82,7 @@ from app.domain.imports.service import (
     stored_investments,
 )
 from app.ingestion.match.accounts import importable_account_ids, match_account
-from app.ingestion.parsers.structured import from_table_grouped
+from app.ingestion.parsers.structured import from_table_grouped, names_card
 from app.ingestion.sandbox.protocol import ExtractResult, InvestmentStatement, Statement
 from app.ml.client import MLAccount, MLHints
 
@@ -132,6 +137,9 @@ class _Found:
     from_model: bool = False
     #: The subtype the document prints (an account index's group, a PDF parser).
     subtype: str | None = None
+    #: Tables only: the header names a card export; the mapping's sign is on trust.
+    card_named: bool = False
+    sign_on_trust: bool = False
 
 
 def _statements(result: ExtractResult) -> list[_Found]:
@@ -187,12 +195,12 @@ def _investment(index: int, statement: InvestmentStatement) -> _Found:
 
 def _table_spec(
     db: Session, document: Document, result: ExtractResult, items: Sequence[ReviewItem]
-) -> MappingSpec | None:
-    """The cash mapping the import used: the one an item names, else the saved one."""
+) -> tuple[MappingSpec | None, bool]:
+    """The cash mapping the import used, and whether its sign is still on trust.
+
+    The mapping an item names, else the saved one for the table's header.
+    """
     for item in items:
-        spec = _item_spec(db, document, item.payload or {})
-        if spec is not None:
-            return spec
         raw = (item.payload or {}).get("mapping_id")
         if isinstance(raw, str):
             try:
@@ -200,27 +208,35 @@ def _table_spec(
             except ValueError:
                 mapping = None
             if mapping is not None:
-                return _spec(mapping)
+                spec = _item_spec(db, document, item.payload or {}) or _spec(mapping)
+                return spec, mapping.sign_unverified
     choice = choose_mapping(
         db, document.household_id, result.tables[0], account_id=document.account_id, allowed=None
     )
-    return choice.spec
+    return choice.spec, choice.mapping is not None and choice.mapping.sign_unverified
 
 
 def _tables(
     db: Session, document: Document, result: ExtractResult, items: Sequence[ReviewItem]
 ) -> list[_Found]:
-    spec = _table_spec(db, document, result, items)
+    spec, on_trust = _table_spec(db, document, result, items)
     if spec is None or spec.mode != "cash":
         return []
-    statements = from_table_grouped(result.tables[0], spec)
+    table = result.tables[0]
+    statements = from_table_grouped(table, spec)
     if spec.account_column is None:
-        parsed = statements[0] if statements else None
-        if parsed is None:
-            return []
-        return [_parsed("table", 0, parsed)]
-    readable = [s for s in statements if s.transactions]
-    return [_parsed("group", index, parsed) for index, parsed in enumerate(readable)]
+        found = [_parsed("table", 0, parsed) for parsed in statements[:1]]
+    else:
+        readable = [s for s in statements if s.transactions]
+        found = [_parsed("group", index, parsed) for index, parsed in enumerate(readable)]
+    card = (
+        spec.has_header
+        and len(table.rows) > spec.skip_rows
+        and names_card(table.rows[spec.skip_rows])
+    )
+    for entry in found:
+        entry.card_named, entry.sign_on_trust = card, on_trust
+    return found
 
 
 def _parsed(target: AssignmentTarget, index: int, parsed: Any) -> _Found:
@@ -306,12 +322,23 @@ def _item_for(found: _Found, items: Sequence[ReviewItem]) -> ReviewItem | None:
     return None
 
 
-def _type(found: _Found) -> AccountType:
+def _type(found: _Found) -> AccountType | None:
+    """The type to propose (None: nothing says, a person chooses).
+
+    The document's own word for it first. A table has none: its header may
+    name a card; when its sign was taken on trust the type is left open
+    rather than called a checking account (accepting that for a card export
+    is how purchases became income).
+    """
     word = (found.account_type or "").strip().lower()
     kind = TYPE_WORDS.get(word)
     if kind is not None:
         return kind
-    return AccountType.BROKERAGE if found.target == "investment" else AccountType.CHECKING
+    if found.target == "investment":
+        return AccountType.BROKERAGE
+    if found.card_named:
+        return AccountType.CREDIT_CARD
+    return None if found.sign_on_trust else AccountType.CHECKING
 
 
 def _proposal(found: _Found, institution: str | None, base_currency: str | None) -> AccountProposal:
@@ -319,13 +346,17 @@ def _proposal(found: _Found, institution: str | None, base_currency: str | None)
     # The account's own name says what kind it is (``ROTH IRA``, ``529``,
     # ``Health Savings Account``); an investment account may move between
     # brokerage and retirement on it.
-    guessed, subtype = guess_subtype(found.name, None if kind in INVESTMENT_TYPES else kind)
+    guessed, subtype = (
+        guess_subtype(found.name, None if kind in INVESTMENT_TYPES else kind)
+        if kind is not None
+        else (None, None)
+    )
     if kind in INVESTMENT_TYPES and guessed is not None:
         kind = guessed
-    if found.subtype is not None and valid_subtype(kind, found.subtype):
+    if kind is not None and found.subtype is not None and valid_subtype(kind, found.subtype):
         # The document said so (an index's ``EDUCATION (529) ACCOUNTS`` group).
         subtype = found.subtype
-    label = TYPE_LABELS.get(kind, "Account")
+    label = TYPE_LABELS.get(kind, "Account") if kind is not None else "Account"
     if found.name and institution and institution.lower() not in found.name.lower():
         name = f"{institution.split()[0]} {found.name}"
     elif found.name:

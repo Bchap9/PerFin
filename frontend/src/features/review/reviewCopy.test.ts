@@ -86,6 +86,68 @@ describe("review explanations", () => {
     );
   });
 
+  it.each([
+    ["sign_unverified", "Money in or money out?", "Positive amounts are"],
+    [
+      "indicator_contradicts_sign",
+      "The words and the signs disagree",
+      "Positive amounts are",
+    ],
+    ["investment_columns", "Trades, not a cash ledger", "Investment activity"],
+  ])(
+    "asks the question of a mapping suggestion's doubt: %s",
+    (doubt, title, word) => {
+      const general = explain(item("unparsed", { reason: "mapping_required" }));
+      const found = explain(
+        item("unparsed", {
+          reason: "mapping_required",
+          auto_import: "not_confident",
+          suggestion: { confident: false, doubts: ["rows_unreadable", doubt] },
+        }),
+      );
+      expect(found.title).toBe(title);
+      expect(found.what).not.toBe(general.what);
+      expect(found.why).toBeDefined();
+      // The mapping editor is the answer to every doubt.
+      expect(found.steps[0]).toContain("Map columns");
+      expect(found.steps.join(" ")).toContain(word);
+    },
+  );
+
+  it("asks for the sign when that is all that held the file", () => {
+    // A mapping saved on trust that met a card account carries no doubt of its own.
+    const found = explain(
+      item("unparsed", {
+        reason: "mapping_required",
+        auto_import: "sign_unverified",
+        suggestion: { confident: true, doubts: [] },
+      }),
+    );
+    expect(found.title).toBe("Money in or money out?");
+  });
+
+  it("keeps the general words for the other doubts, and names trades first", () => {
+    const general = explain(item("unparsed", { reason: "mapping_required" }));
+    expect(general.title).toBe("Needs a column mapping");
+    expect(
+      explain(
+        item("unparsed", {
+          reason: "mapping_required",
+          auto_import: "not_confident",
+          suggestion: { doubts: ["date_order_guessed"] },
+        }),
+      ),
+    ).toEqual(general);
+    expect(
+      explain(
+        item("unparsed", {
+          reason: "mapping_required",
+          suggestion: { doubts: ["sign_unverified", "investment_columns"] },
+        }),
+      ).title,
+    ).toBe("Trades, not a cash ledger");
+  });
+
   it("lists the unknown actions of skipped rows", () => {
     const found = explain(
       item("low_confidence_field", {

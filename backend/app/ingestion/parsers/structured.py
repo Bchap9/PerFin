@@ -18,7 +18,11 @@ original file.
   parse (footers, totals, blank amounts) are skipped and reported by row
   number; the running-balance column, when mapped, gives the closing balance
   and a reconciliation check (each balance must equal the previous one plus
-  the row's amount). An empty currency cell is the account's currency; any
+  the row's amount). A debit or credit cell keeps its printed sign: a
+  negative debit is money in and a negative credit money out (a reversal),
+  unless that column prints every amount negative
+  (:func:`_printed_negative`). An empty currency cell is the
+  account's currency; any
   other cell that is not a three-letter code makes the row unreadable. A row
   with at most one filled cell (the disclaimer paragraphs and "Date
   downloaded" line brokerages append) can never be a transaction: it is a
@@ -37,8 +41,13 @@ original file.
   column's cells fit the role, pairs assigned globally best first; with a
   confidence (``confident``, ``score``, per-role reasons, the rows that read
   and the doubts) the importer uses to import a never-seen layout on its
-  own (``app.domain.imports.service``). :func:`suggest_spec` is its spec
-  alone, for the mapping editor.
+  own (``app.domain.imports.service``). The sign convention is proven
+  (debit/credit columns, an indicator, a reconciling running balance,
+  direction words that go with the amounts' signs) or, taken on trust, it
+  is a doubt for a table that looks like a card export or whose amounts say
+  nothing (``sign_unverified``); a table of securities trades is never a
+  confident cash ledger (``investment_columns``). :func:`suggest_spec` is
+  its spec alone, for the mapping editor.
 """
 
 from __future__ import annotations
@@ -377,7 +386,17 @@ def _text(row: Sequence[str], column: int | None) -> str | None:
     return cleaned or None
 
 
-def _row_amount(row: Sequence[str], spec: MappingSpec) -> Decimal | None:
+def _row_amount(
+    row: Sequence[str], spec: MappingSpec, printed_negative: frozenset[str] = frozenset()
+) -> Decimal | None:
+    """The row's signed amount (None: it does not read).
+
+    Debit and credit cells keep their printed sign (``credit - debit``): a
+    negative debit is a credit and a negative credit a debit, which is also
+    how a lone ``Inflow`` column of negative cells is money out. The
+    columns named in ``printed_negative`` (:func:`_printed_negative`) print
+    every amount negative and are read by magnitude.
+    """
     sep = spec.decimal_separator
     if spec.amount_column is not None:
         raw = _cell(row, spec.amount_column)
@@ -397,7 +416,45 @@ def _row_amount(row: Sequence[str], spec: MappingSpec) -> Decimal | None:
         return None
     if debit is None and credit is None:
         return None
-    return abs(credit or Decimal(0)) - abs(debit or Decimal(0))
+    money_out = debit or Decimal(0)
+    money_in = credit or Decimal(0)
+    if "debit" in printed_negative:
+        money_out = abs(money_out)
+    if "credit" in printed_negative:
+        money_in = abs(money_in)
+    return money_in - money_out
+
+
+def _printed_negative(table: Table, spec: MappingSpec) -> frozenset[str]:
+    """Which of a debit and a credit column print every amount as a negative number.
+
+    Some exports write a withdrawal as ``-25.00`` under ``Amount Debit``:
+    the minus is the column's notation, not a reversal. A column counts
+    when its cells that read hold at least one negative amount and no
+    positive one; its cells are then read by magnitude. That is never said
+    of a lone credit column: negative cells under a lone ``Inflow`` header
+    are money out, the minus sign being all that says which way.
+    """
+    columns: list[tuple[str, int]] = []
+    if spec.debit_column is not None:
+        columns.append(("debit", spec.debit_column))
+        if spec.credit_column is not None:
+            columns.append(("credit", spec.credit_column))
+    found: set[str] = set()
+    for name, column in columns:
+        negative = positive = False
+        for index in _body_rows(table, spec):
+            raw = _text(table.rows[index], column)
+            amount = parse_cell_amount(raw, spec.decimal_separator) if raw else None
+            if amount is None:
+                continue
+            negative = negative or amount < 0
+            positive = positive or amount > 0
+            if positive:
+                break
+        if negative and not positive:
+            found.add(name)
+    return frozenset(found)
 
 
 def _currency(row: Sequence[str], spec: MappingSpec) -> str | bool | None:
@@ -448,7 +505,12 @@ def _filled(row: Sequence[str]) -> int:
     return seen
 
 
-def _read_rows(table: Table, spec: MappingSpec, indexes: Iterable[int]) -> ParsedStatement:
+def _read_rows(
+    table: Table,
+    spec: MappingSpec,
+    indexes: Iterable[int],
+    printed_negative: frozenset[str] = frozenset(),
+) -> ParsedStatement:
     """``indexes`` rows of ``table`` read with ``spec``, as one statement."""
     parsed = ParsedStatement(source_format="csv", truncated=table.truncated)
     balances: list[tuple[int, date, Decimal, Decimal]] = []
@@ -462,7 +524,7 @@ def _read_rows(table: Table, spec: MappingSpec, indexes: Iterable[int]) -> Parse
             continue
         raw_date = _cell(row, spec.date_column)
         posted = parse_cell_date(raw_date, spec.date_format) if raw_date else None
-        amount = _row_amount(row, spec)
+        amount = _row_amount(row, spec, printed_negative)
         currency = _currency(row, spec)
         if posted is None or amount is None or currency is False:
             parsed.skipped_rows.append(index)
@@ -506,7 +568,7 @@ def from_table(table: Table, spec: MappingSpec) -> ParsedStatement:
     readable row names the same account. The importer reads such a table
     with :func:`from_table_grouped`.
     """
-    parsed = _read_rows(table, spec, _body_rows(table, spec))
+    parsed = _read_rows(table, spec, _body_rows(table, spec), _printed_negative(table, spec))
     if spec.account_column is not None and parsed.transactions:
         column = spec.account_column
         found = {
@@ -558,6 +620,7 @@ def from_table_grouped(table: Table, spec: MappingSpec) -> list[ParsedStatement]
     if spec.account_column is None:
         return [from_table(table, spec)]
     column = spec.account_column
+    printed_negative = _printed_negative(table, spec)
     rows: dict[str, list[int]] = {}
     for index in _body_rows(table, spec):
         row = table.rows[index]
@@ -567,7 +630,7 @@ def from_table_grouped(table: Table, spec: MappingSpec) -> list[ParsedStatement]
     orphans: list[int] = []
     notes: list[int] = []
     for key, indexes in rows.items():
-        parsed = _read_rows(table, spec, indexes)
+        parsed = _read_rows(table, spec, indexes, printed_negative)
         if not parsed.transactions:
             orphans.extend(parsed.skipped_rows)
             notes.extend(parsed.note_rows)
@@ -634,7 +697,15 @@ ROLE_FIT_MIN: Final = 0.6
 EXACT: Final = 3
 WORD: Final = 2
 SUBSTRING: Final = 1
-MATCH_NAMES: Final[dict[int, str]] = {EXACT: "exact", WORD: "word", SUBSTRING: "substring"}
+#: No header word names the role: the column's cells alone say so (a column of
+#: ``Debit``/``Credit`` under a header such as ``Credit Debit Indicator``).
+CONTENT: Final = 0
+MATCH_NAMES: Final[dict[int, str]] = {
+    EXACT: "exact",
+    WORD: "word",
+    SUBSTRING: "substring",
+    CONTENT: "content",
+}
 
 #: Roles in tie-break order, with the header words that name them.
 #: Header words per role. English first; then the words German, French,
@@ -758,6 +829,38 @@ INFLOW_WORDS: Final = frozenset(
         *("h", "haben", "bij", "crédit", "haber", "abono", "avere", "crédito", "credito"),
     }
 )
+#: Transaction-type cells that go with money out / money in. Beside a
+#: *signed* amount they are evidence for the sign convention
+#: (:func:`_correlate`); they never sign an unsigned amount, because
+#: ``Payment`` is money in on a card and money out of a checking account.
+TYPE_OUTFLOW_WORDS: Final = frozenset({"purchase", "sale", "fee", "payment sent"})
+TYPE_INFLOW_WORDS: Final = frozenset({"payment", "refund", "return"})
+_DIRECTION: Final = OUTFLOW_WORDS | INFLOW_WORDS
+_ANY_OUTFLOW: Final = OUTFLOW_WORDS | TYPE_OUTFLOW_WORDS
+_ANY_INFLOW: Final = INFLOW_WORDS | TYPE_INFLOW_WORDS
+#: Share of a column's cells that must be direction or type words for the
+#: column to be read as one when its header does not name it.
+DIRECTION_FIT_MIN: Final = 0.9
+#: Direction words and signs are compared on at least this many rows, and
+#: prove a sign convention when this share of them agree.
+CORRELATION_MIN_ROWS: Final = 4
+CORRELATION_AGREE_MIN: Final = 0.95
+
+
+def _bounded(words: str) -> re.Pattern[str]:
+    return re.compile(rf"(?<![a-z0-9])(?:{words})(?![a-z0-9])")
+
+
+#: Header words only a card export uses.
+_CARD_HEADER: Final = _bounded(
+    r"card no|card number|card used|member name|merchant|statement balance"
+)
+_POST_DATE_HEADER: Final = _bounded(r"post(?:ed)? date")
+_TRANSACTION_DATE_HEADER: Final = _bounded(r"trans(?:action|\.)? date")
+#: Header words of a securities trade: what was traded, how many, at what price.
+_SECURITY_HEADER: Final = _bounded(r"symbol|ticker|cusip|isin|fund|security")
+_QUANTITY_HEADER: Final = _bounded(r"quantity|qty|shares|units")
+_PRICE_HEADER: Final = _bounded(r"price|nav")
 _ACCOUNT_CELL: Final = re.compile(r"[A-Za-z0-9*#.\- ]{4,34}")
 _SETTLEMENT_DATE: Final = re.compile(
     r"settle|value|effective|due|valut|wertstell|valeur|valor|rente"
@@ -793,9 +896,21 @@ class MappingSuggestion:
     column, every read row's indicator is a direction word beside an
     unsigned amount (else ``indicator_values_unknown``). ``sign_evidence``
     says what proves the sign convention (``debit_credit``, ``indicator``,
-    a reconciling running ``balance``) or is None when a single signed
-    amount column is read as "positive is money in" on trust. Reasons carry
-    roles, column indexes, match kinds and shares only, never cell text.
+    a reconciling running ``balance``, ``indicator_correlation``: direction
+    or transaction-type words that go with the signs of the amounts) or is
+    None when signed amounts are read as "positive is money in" on trust.
+    A sign on trust is the doubt ``sign_unverified`` when the header names
+    a card export (:func:`names_card`), when every amount has the same
+    sign, or when more rows are money in than money out (a card export
+    lists purchases as positive); under a header that names a card a
+    running balance is no proof either (a card's balance is what is owed,
+    which adds up with purchases read as money in).
+    ``indicator_contradicts_sign``: direction
+    words and signs disagree row to row, or agree with each other against
+    the running balance. ``investment_columns``: the header names a
+    security, a quantity and a price (:func:`names_trades`), so the rows are
+    trades, not a cash ledger. Reasons carry roles, column indexes, match
+    kinds and shares only, never cell text.
     """
 
     spec: MappingSpec
@@ -996,12 +1111,65 @@ def _data_rows(rows: Sequence[Sequence[str]]) -> list[Sequence[str]]:
     return [row for row in rows if _filled(row) == 2]
 
 
+def names_card(header: Sequence[str]) -> bool:
+    """Whether a header row has words only a card export uses.
+
+    ``Card No.``, ``Card Number``, ``Card Used``, ``Member Name``,
+    ``Merchant``, ``Statement Balance``, or a ``Post Date`` beside a
+    ``Transaction Date``. Such a file may list purchases as positive
+    amounts, so its sign is never taken on trust.
+    """
+    names = [_header_cell(cell) for cell in header]
+    if any(_CARD_HEADER.search(name) for name in names):
+        return True
+    return any(_POST_DATE_HEADER.search(name) for name in names) and any(
+        _TRANSACTION_DATE_HEADER.search(name) for name in names
+    )
+
+
+def names_trades(header: Sequence[str]) -> bool:
+    """Whether a header row names a security, a quantity and a price (a list of trades)."""
+    names = [_header_cell(cell) for cell in header]
+    return all(
+        any(pattern.search(name) for name in names)
+        for pattern in (_SECURITY_HEADER, _QUANTITY_HEADER, _PRICE_HEADER)
+    )
+
+
+def _direction_column(body: Sequence[Sequence[str]], taken: set[int]) -> _Pick | None:
+    """The column whose cells are direction or transaction-type words, found by content.
+
+    At least :data:`DIRECTION_FIT_MIN` of its non-empty cells are such words
+    (``Debit``/``Credit``, ``Purchase``/``Payment``; one-letter marks only
+    count under a header that names an indicator) and both directions
+    occur. ``taken`` columns already have a role that rules them out. The
+    best fitting column wins, the leftmost on a tie.
+    """
+    best: _Pick | None = None
+    for column in range(max((len(row) for row in body), default=0)):
+        if column in taken:
+            continue
+        cells = [
+            _header_cell(row[column]) for row in body if column < len(row) and row[column].strip()
+        ]
+        words = [c for c in cells if len(c) > 1 and c in _ANY_OUTFLOW | _ANY_INFLOW]
+        if not any(w in _ANY_OUTFLOW for w in words) or not any(w in _ANY_INFLOW for w in words):
+            continue
+        fit = len(words) / len(cells)
+        if fit >= DIRECTION_FIT_MIN and (best is None or fit > best.fit):
+            best = _Pick(column, CONTENT, round(fit, 3))
+    return best
+
+
 @dataclass(frozen=True)
 class _Candidate:
     spec: MappingSpec
     picks: dict[str, _Pick]
     date_order_guessed: bool
     rank: float
+    #: A column of direction or type words beside *signed* amounts: it is not
+    #: in the spec (the amounts sign themselves) but is compared with them.
+    direction: int | None = None
 
 
 def _candidate(table: Table, skip: int) -> _Candidate | None:
@@ -1029,35 +1197,45 @@ def _candidate(table: Table, skip: int) -> _Candidate | None:
         "date_column": picks["date"].column,
         "date_format": date_format,
         "decimal_separator": separator,
-        "payee_column": picks["payee"].column if "payee" in picks else None,
-        "memo_column": picks["memo"].column if "memo" in picks else None,
-        "balance_column": picks["balance"].column if "balance" in picks else None,
-        "currency_column": picks["currency"].column if "currency" in picks else None,
-        "account_column": picks["account"].column if "account" in picks else None,
     }
+    direction: int | None = None
     if "amount" in picks:
         fields["amount_column"] = picks["amount"].column
         picks.pop("debit", None)
         picks.pop("credit", None)
-        if "indicator" in picks and _signed(column_values(picks["amount"].column), separator):
-            # The amounts carry their own sign: a "Type" column of direction
-            # words beside them is a description, not the sign.
-            picks.pop("indicator")
-        if "indicator" in picks:
-            values = {v.strip() for v in column_values(picks["indicator"].column) if v.strip()}
+        # A column of direction words: named by its header, else found by
+        # its cells (never a column that is the date, money or an account).
+        named = picks.pop("indicator", None)
+        text_roles = {p.column for role, p in picks.items() if role in ("payee", "memo")}
+        taken = {p.column for p in picks.values()} - text_roles
+        found = named or _direction_column(body, taken)
+        if found is not None and _signed(column_values(picks["amount"].column), separator):
+            # The amounts carry their own sign: the words beside them are
+            # not the sign, they are compared with it (:func:`_correlate`).
+            direction = found.column
+        elif found is not None:
+            values = {v.strip() for v in column_values(found.column) if v.strip()}
             outflow = sorted(v for v in values if v.casefold() in OUTFLOW_WORDS)
-            fields["indicator_column"] = picks["indicator"].column
-            fields["outflow_values"] = outflow[:OUTFLOW_VALUES_MAX]
+            if outflow:
+                # Unsigned amounts: the direction word signs each row.
+                for role in ("payee", "memo"):
+                    if role in picks and picks[role].column == found.column:
+                        del picks[role]
+                picks["indicator"] = found
+                fields["indicator_column"] = found.column
+                fields["outflow_values"] = outflow[:OUTFLOW_VALUES_MAX]
     else:
         picks.pop("indicator", None)
         fields["debit_column"] = picks["debit"].column if "debit" in picks else None
         fields["credit_column"] = picks["credit"].column if "credit" in picks else None
+    for role in ("payee", "memo", "balance", "currency", "account"):
+        fields[f"{role}_column"] = picks[role].column if role in picks else None
     try:
         spec = MappingSpec.model_validate(fields)
     except ValueError:
         return None
     rank = sum(p.level + p.fit for p in picks.values())
-    return _Candidate(spec, picks, tied, rank)
+    return _Candidate(spec, picks, tied, rank, direction)
 
 
 def _signed(values: Iterable[str], separator: str) -> bool:
@@ -1083,13 +1261,82 @@ def _indicator_doubtful(table: Table, spec: MappingSpec, rows: Iterable[int]) ->
     for index in rows:
         row = table.rows[index]
         word = (_text(row, spec.indicator_column) or "").casefold()
-        if word not in OUTFLOW_WORDS | INFLOW_WORDS:
+        if word not in _DIRECTION:
             return True
         raw = _cell(row, spec.amount_column)
         amount = parse_cell_amount(raw, spec.decimal_separator) if raw is not None else None
         if amount is not None and amount < 0:
             return True
     return False
+
+
+@dataclass(frozen=True)
+class _Correlation:
+    """What the direction words beside signed amounts say about the sign convention."""
+
+    #: The convention the words prove (None: they prove nothing).
+    sign: Sign | None = None
+    #: Words and signs disagree row to row.
+    contradicts: bool = False
+    #: Plain direction words voted (``debit``/``credit``), not transaction types.
+    strong: bool = False
+
+
+def _correlate(table: Table, spec: MappingSpec, column: int, rows: Iterable[int]) -> _Correlation:
+    """Compare the direction words of ``column`` with the signs of the amounts on ``rows``.
+
+    A row votes for "positive is money out" when an outflow word stands
+    beside a positive amount or an inflow word beside a negative one, else
+    for "positive is money in"; rows with another word, or a zero amount,
+    do not vote. When plain direction words of both directions occur
+    (``debit``/``credit``, ``withdrawal``/``deposit``) only they vote;
+    otherwise the transaction-type words do too (``purchase``, ``payment``,
+    ``fee``, ``refund``). With at least :data:`CORRELATION_MIN_ROWS` votes
+    and both directions present, :data:`CORRELATION_AGREE_MIN` of them
+    agreeing proves that convention and anything less is a contradiction;
+    fewer rows or one direction alone prove nothing.
+    """
+    if spec.amount_column is None:
+        return _Correlation()
+    pairs: list[tuple[str, bool]] = []
+    for index in rows:
+        row = table.rows[index]
+        raw = _cell(row, spec.amount_column)
+        amount = parse_cell_amount(raw, spec.decimal_separator) if raw is not None else None
+        if amount:
+            pairs.append((_header_cell(_cell(row, column) or ""), amount > 0))
+    plain = [(word in OUTFLOW_WORDS, positive) for word, positive in pairs if word in _DIRECTION]
+    strong = any(out for out, _ in plain) and any(not out for out, _ in plain)
+    votes = (
+        plain
+        if strong
+        else [
+            (word in _ANY_OUTFLOW, positive)
+            for word, positive in pairs
+            if word in _ANY_OUTFLOW | _ANY_INFLOW
+        ]
+    )
+    both = any(out for out, _ in votes) and any(not out for out, _ in votes)
+    if len(votes) < CORRELATION_MIN_ROWS or not both:
+        return _Correlation(strong=strong)
+    outflow_positive = sum(1 for out, positive in votes if out == positive) / len(votes)
+    if outflow_positive >= CORRELATION_AGREE_MIN:
+        return _Correlation(Sign.OUTFLOW_POSITIVE, strong=strong)
+    if 1 - outflow_positive >= CORRELATION_AGREE_MIN:
+        return _Correlation(Sign.INFLOW_POSITIVE, strong=strong)
+    return _Correlation(contradicts=True, strong=strong)
+
+
+def _sign_says_nothing(amounts: Sequence[Decimal]) -> bool:
+    """Whether amounts read as "positive is money in" look as likely the other way round.
+
+    Every amount of one sign says nothing about which way the money went,
+    and more rows of money in than of money out is the shape of a card
+    export that lists its purchases as positive amounts.
+    """
+    positive = sum(1 for amount in amounts if amount > 0)
+    negative = sum(1 for amount in amounts if amount < 0)
+    return positive == 0 or positive > negative
 
 
 def _balances_agree(statements: list[ParsedStatement]) -> bool:
@@ -1135,12 +1382,22 @@ def suggest_mapping(table: Table) -> MappingSuggestion | None:
     a role when its body cells fit (dates parse, amounts parse, currencies
     are three-letter codes, an indicator holds direction words such as
     ``DR``/``CR``, an account column several account-number-like values);
-    an empty column never takes one, and an indicator is dropped when the
-    sampled amounts already carry a minus sign (a "Type" column beside a
-    signed amount describes the row, it does not sign it). The best candidate is then read in full
-    with :func:`from_table_grouped` to count the rows that read (and, with a
-    running balance, which sign reconciles); the trailing rows after the last
-    readable one are footers. No model of any kind (ADR-0007).
+    an empty column never takes one. A column of direction words is also
+    found by its cells alone (:func:`_direction_column`). Beside unsigned
+    amounts it is the indicator that signs each row; beside amounts that
+    already carry a minus sign it is left out of the spec (a "Type" column
+    beside a signed amount describes the row, it does not sign it) and
+    compared with the signs instead (:func:`_correlate`): words that go
+    with the signs prove the convention (``indicator_correlation``, the
+    spec's ``sign`` set to what they prove), words that go against them, or
+    against a running balance that reconciles, are a doubt
+    (``indicator_contradicts_sign``; transaction-type words that merely
+    disagree among themselves do not overrule a reconciling balance). The
+    best candidate is then read in full with :func:`from_table_grouped` to
+    count the rows that read (and, with a running balance, which sign
+    reconciles); the trailing rows after the last readable one are footers.
+    The doubts about the sign and the kind of table are described on
+    :class:`MappingSuggestion`. No model of any kind (ADR-0007).
     """
     if len(table.rows) < 2:
         return None
@@ -1152,6 +1409,7 @@ def suggest_mapping(table: Table) -> MappingSuggestion | None:
     if best is None:
         return None
     spec, statements, balance_agrees = _read_suggested(table, best.spec)
+    header = table.rows[spec.skip_rows]
     rows = [t.row for s in statements for t in s.transactions if t.row is not None]
     skipped = sorted(r for s in statements for r in s.skipped_rows)
     notes = [r for s in statements for r in s.note_rows]
@@ -1159,12 +1417,28 @@ def suggest_mapping(table: Table) -> MappingSuggestion | None:
     failed = tuple(r for r in skipped if r < last)
     footer = sum(1 for r in (*skipped, *notes) if r > last)
     accounts = sum(1 for s in statements if s.transactions) or 1
-    if spec.debit_column is not None or spec.credit_column is not None:
+    amounts = [t.amount for s in statements for t in s.transactions]
+    correlation = _Correlation()
+    if best.direction is not None and spec.indicator_column is None:
+        correlation = _correlate(table, spec, best.direction, rows)
+    against_balance = (
+        balance_agrees and correlation.sign is not None and correlation.sign is not spec.sign
+    )
+    if spec.debit_column is not None and spec.credit_column is not None:
         evidence: str | None = "debit_credit"
+    elif spec.debit_column is not None:
+        # A lone column whose cells carry signs is a signed amount under
+        # another name: its header proves nothing.
+        evidence = None if any(a > 0 for a in amounts) else "debit_credit"
+    elif spec.credit_column is not None:
+        evidence = None if any(a < 0 for a in amounts) else "debit_credit"
     elif spec.indicator_column is not None:
         evidence = "indicator"
     elif balance_agrees:
         evidence = "balance"
+    elif correlation.sign is not None:
+        evidence = "indicator_correlation"
+        spec = spec.model_copy(update={"sign": correlation.sign})
     else:
         evidence = None
     required = [best.picks["date"]] + [
@@ -1181,6 +1455,18 @@ def suggest_mapping(table: Table) -> MappingSuggestion | None:
         doubts.append("date_order_guessed")
     if _indicator_doubtful(table, spec, rows):
         doubts.append("indicator_values_unknown")
+    if against_balance or (correlation.contradicts and (correlation.strong or not balance_agrees)):
+        doubts.append("indicator_contradicts_sign")
+    card = names_card(header)
+    if rows and (
+        (evidence is None and (card or _sign_says_nothing(amounts)))
+        # A card's running balance is what is owed: it adds up with
+        # purchases read as money in, so it proves nothing about a card.
+        or (evidence == "balance" and card)
+    ):
+        doubts.append("sign_unverified")
+    if names_trades(header):
+        doubts.append("investment_columns")
     readable = len(rows) / (len(rows) + len(failed)) if rows else 0.0
     quality = sum(p.level / EXACT for p in required) / len(required)
     score = round(quality * readable * (0.9 if best.date_order_guessed else 1.0), 3)

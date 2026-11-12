@@ -253,7 +253,7 @@ def test_debit_credit_indicator_and_sign_conventions() -> None:
     assert [t.amount for t in split.transactions] == [
         Decimal("-10.00"),
         Decimal("2.50"),
-        Decimal("-1.00"),
+        Decimal("1.00"),  # a negative debit beside positive ones is a reversal: money in
     ]
     flagged = from_table(
         table,
