@@ -34,6 +34,23 @@ proxy to `ghcr.io/bchap9/perfin-egress`, the optional local-model adapter to
 digest, in production; never run `latest`. The chart refuses
 `image.tag=latest`.
 
+**`edge`: the newest release, pre-releases included.** Every image also
+carries `edge`, moved by the release workflow to each new release, release
+candidates too, once all three images of that release passed their scan
+(`scripts/move_edge.sh`). It moves for the three images together or not at
+all, and by digest, so `edge` is the very image that was scanned and
+signed: `cosign verify ghcr.io/bchap9/perfin:edge ...` checks the same
+signature. A Compose deployment that uses `:edge` for `perfin`,
+`perfin-egress` and `perfin-ml` gets each release by re-pulling
+(`docker compose pull && docker compose up -d`), with no tag to edit.
+What that costs: a pull is an upgrade, and migrations only move forward,
+so **back up before every pull**, exactly as for a pinned upgrade
+(below); and `docker compose up` after `pull` may start a release you
+have not read the notes of. To go back, restore the backup and pin the
+previous version's exact tag. The manual workflow `edge`
+(Actions → edge → Run workflow, with a version) points `edge` at any
+existing release: to start it, or to move it back after a bad release.
+
 ## Before every upgrade
 
 1. **Read the release notes** of every release between your version and the

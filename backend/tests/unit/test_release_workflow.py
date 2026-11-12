@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import importlib.util
 import re
+import subprocess  # nosec B404 - runs scripts/move_edge.sh with a test-controlled argument
 import sys
 from functools import cache
 from pathlib import Path
@@ -93,8 +94,50 @@ def test_permissions_are_least_privilege() -> None:
         },
         "chart": {"contents": "read", "packages": "write", "id-token": "write"},
         "release": {"contents": "write"},
+        "edge": {"contents": "read", "packages": "write"},
     }
     assert {name: job["permissions"] for name, job in jobs().items()} == expected
+
+
+def test_edge_moves_only_after_every_image_and_by_digest() -> None:
+    edge = jobs()["edge"]
+    assert set(edge["needs"]) == {"check", "image"}
+    run = steps("edge")[step_index("edge", "scripts/move_edge.sh")]["run"]
+    assert '"$VERSION"' in run
+    assert "${{" not in run  # inputs and secrets only through env
+    script = (ROOT / "scripts" / "move_edge.sh").read_text(encoding="utf-8")
+    assert "--preserve-digests" in script
+    assert "images=(perfin perfin-egress perfin-ml)" in script
+    images = {entry["name"] for entry in jobs()["image"]["strategy"]["matrix"]["image"]}
+    assert images == {"perfin", "perfin-egress", "perfin-ml"}  # the script's list
+
+
+def test_manual_edge_workflow_is_dispatch_only_and_least_privilege() -> None:
+    data = yaml.safe_load((WORKFLOWS / "edge.yml").read_text(encoding="utf-8"))
+    triggers = {str(k): v for k, v in data.items()}["True"]
+    assert set(triggers) == {"workflow_dispatch"}
+    assert data["permissions"] == {}
+    job = data["jobs"]["edge"]
+    assert job["permissions"] == {"contents": "read", "packages": "write"}
+    for step in job["steps"]:
+        if "run" in step:
+            assert "${{" not in step["run"]
+        if str(step.get("uses", "")).startswith("actions/checkout@"):
+            assert step["with"]["persist-credentials"] is False
+
+
+@pytest.mark.parametrize(
+    "version", ["", "v1.0.0", "1.0", "1.0.0;id", "1.0.0 rc", "../1.0.0", "1.0.0-"]
+)
+def test_move_edge_refuses_a_bad_version_before_touching_the_registry(version: str) -> None:
+    result = subprocess.run(
+        ["bash", str(ROOT / "scripts" / "move_edge.sh"), version],
+        capture_output=True,
+        text=True,
+        check=False,
+        env={"PATH": "/usr/bin:/bin", "IMAGE_NAMESPACE": "invalid.invalid/none"},
+    )
+    assert result.returncode == 64, result.stderr
 
 
 @pytest.mark.parametrize("workflow", sorted(WORKFLOWS.glob("*.yml")), ids=lambda p: p.name)
