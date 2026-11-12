@@ -167,10 +167,10 @@ GET             /investments/holdings?account=
 GET             /investments/performance?range=&account=
 GET/PUT         /investments/accounts/{id}/cost-method   fifo | average
 
-GET/POST/PATCH/DELETE /loans                   terms of a loan/mortgage/line-of-credit account
+GET/POST/PATCH/DELETE /loans                   a loan/mortgage/line of credit: terms, on a new or existing account
 GET             /loans/{id}/schedule?basis=     original | projected (from today)
 POST            /loans/{id}/simulate            extra payments what-if (stores nothing)
-GET/POST        /loans/{id}/payments            payment splits, checked against the schedule
+GET/POST        /loans/{id}/payments            payments (the split, or the amount paid), checked against the schedule
 DELETE          /loans/{id}/payments/{payment_id}
 GET/POST        /loans/{id}/rate-changes
 DELETE          /loans/{id}/rate-changes/{change_id}
@@ -1197,8 +1197,12 @@ loan-not-found`; on an account the caller may only view, writes are `403`.
   "rate_type", "term_months", "origination_date", "payment_amount",
   "payment_day", "escrow_amount", "lender", "maturity_date", "projection",
   "created_at", "updated_at"}`): `POST /loans` (`Idempotency-Key` honoured)
-  takes `account_id` (type loan, mortgage or line_of_credit: `422
-  invalid-loan-account`; one loan per account, `409 loan-exists`), the
+  takes either `account` (`{"name", "type"?: "loan" (default) | "mortgage"
+  | "line_of_credit"}`: the loan's account is opened with it, in the
+  principal's currency, as `POST /accounts` would, in the same transaction;
+  a token also needs `accounts:write`) or `account_id` (an existing account
+  of type loan, mortgage or line_of_credit: `422 invalid-loan-account`; one
+  loan per account, `409 loan-exists`), the
   terms (money in the account currency, `422 currency-mismatch`),
   `payment_amount` (principal and interest; default the level payment),
   `payment_day` (default the origination day) and `escrow_amount`. Terms
@@ -1237,13 +1241,23 @@ loan-not-found`; on an account the caller may only view, writes are `403`.
   "escrow", "fees", "total", "balance_after", "transaction_id",
   "source_document_id", "schedule_check", "created_at"}`): `GET
   /loans/{id}/payments?from=&to=&limit=` (oldest first, at most 1200);
-  `POST` (`Idempotency-Key` honoured) `{"paid_on", "principal",
-  "interest", "escrow"?, "fees"?, "transaction_id"?}` (parts `>= 0`, not
-  all zero, `422 invalid-payment`; dated from origination to today, `422
+  `POST` (`Idempotency-Key` honoured) takes the split, `{"paid_on",
+  "principal", "interest", "escrow"?, "fees"?, "transaction_id"?}` (parts
+  `>= 0`, not all zero, `422 invalid-payment`), or the amount paid alone,
+  `{"paid_on", "amount", "transaction_id"?}` (above zero, `422
+  invalid-payment`; `amount` with any part is `422 validation-failed`),
+  which is split as a lender applies it: the period's interest first (the
+  interest due on the balance owed the day before, less the interest that
+  payments already recorded for the same due date paid), then the loan's
+  `escrow_amount` (once per due date too), the rest to principal. The
+  stored payment is the split, an estimate from what was recorded at that
+  moment; an amount paid on the origination date is all principal. Either way: dated from origination to today, `422
   invalid-payment-date`; a linked transaction must be visible, `404
-  transaction-not-found`); `DELETE .../payments/{payment_id}` (`404
+  transaction-not-found`; `DELETE .../payments/{payment_id}` (`404
   loan-payment-not-found`). `schedule_check` compares the interest with the
-  interest due on the balance owed the day before at the period's rate:
+  interest due on the balance owed the day before at the period's rate,
+  less the interest that earlier payments for the same due date paid (so
+  an extra payment after the regular one is expected to carry none):
   `{"status": "ok" (within one minor unit) | "differs" | "unchecked",
   "expected_interest", "difference"}`. It is `unchecked` when nothing was
   owed the day before, and for a payment on the origination date unless a

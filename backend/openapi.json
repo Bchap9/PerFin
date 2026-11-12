@@ -11199,6 +11199,27 @@
         "title": "LinkTarget",
         "type": "string"
       },
+      "LoanAccountCreate": {
+        "additionalProperties": false,
+        "description": "The account ``POST /loans`` opens for a new loan (in the principal's currency).",
+        "properties": {
+          "name": {
+            "maxLength": 200,
+            "minLength": 1,
+            "title": "Name",
+            "type": "string"
+          },
+          "type": {
+            "$ref": "#/components/schemas/AccountType",
+            "default": "loan"
+          }
+        },
+        "required": [
+          "name"
+        ],
+        "title": "LoanAccountCreate",
+        "type": "object"
+      },
       "LoanAi": {
         "additionalProperties": false,
         "properties": {
@@ -11387,12 +11408,29 @@
       },
       "LoanCreate": {
         "additionalProperties": false,
-        "description": "``POST /loans``: the terms of an existing loan, mortgage or line-of-credit account.\n\n``payment_amount`` (principal and interest) defaults to the level\npayment; ``payment_day`` to the origination date's day.",
+        "description": "``POST /loans``: a loan, mortgage or line of credit and its terms.\n\nEither ``account`` (a new account is opened with the loan, in one step)\nor ``account_id`` (an existing loan, mortgage or line-of-credit account\nwithout terms). ``payment_amount`` (principal and interest) defaults to\nthe level payment; ``payment_day`` to the origination date's day.",
         "properties": {
+          "account": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/LoanAccountCreate"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "account_id": {
-            "format": "uuid",
-            "title": "Account Id",
-            "type": "string"
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Account Id"
           },
           "escrow_amount": {
             "anyOf": [
@@ -11471,7 +11509,6 @@
           }
         },
         "required": [
-          "account_id",
           "principal_original",
           "rate",
           "term_months",
@@ -11609,8 +11646,18 @@
       },
       "LoanPaymentCreate": {
         "additionalProperties": false,
-        "description": "``POST /loans/{id}/payments``: a payment's split (parts >= 0, loan currency).",
+        "description": "``POST /loans/{id}/payments``: a payment, as its split or as the amount paid.\n\nEither the split (``principal`` and ``interest``, optionally ``escrow``\nand ``fees``; parts >= 0, loan currency), or ``amount`` alone: the total\npaid (> 0), which the service splits as the lender would (the period's\ninterest first, then the loan's escrow, the rest to principal).",
         "properties": {
+          "amount": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/MoneyIn"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "escrow": {
             "anyOf": [
               {
@@ -11632,7 +11679,14 @@
             ]
           },
           "interest": {
-            "$ref": "#/components/schemas/MoneyIn"
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/MoneyIn"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "paid_on": {
             "format": "date",
@@ -11640,7 +11694,14 @@
             "type": "string"
           },
           "principal": {
-            "$ref": "#/components/schemas/MoneyIn"
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/MoneyIn"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "transaction_id": {
             "anyOf": [
@@ -11656,9 +11717,7 @@
           }
         },
         "required": [
-          "paid_on",
-          "principal",
-          "interest"
+          "paid_on"
         ],
         "title": "LoanPaymentCreate",
         "type": "object"
@@ -18087,7 +18146,7 @@
         "type": "object"
       },
       "ScheduleCheckOut": {
-        "description": "A payment compared with the schedule: interest expected on the balance before it.\n\n``status``: ``ok`` within one minor unit, ``differs`` otherwise,\n``unchecked`` when the balance before the payment is not known.",
+        "description": "A payment compared with the schedule: interest expected on the balance before it\n(less the interest earlier payments of the same period paid).\n\n``status``: ``ok`` within one minor unit, ``differs`` otherwise,\n``unchecked`` when the balance before the payment is not known.",
         "properties": {
           "difference": {
             "anyOf": [
@@ -34113,7 +34172,7 @@
             "description": "Problem details"
           }
         },
-        "summary": "Describe a loan account's terms (member or above)",
+        "summary": "Add a loan: its terms, on a new or an existing account (member or above)",
         "tags": [
           "loans"
         ]
@@ -34469,7 +34528,7 @@
             "description": "Problem details"
           }
         },
-        "summary": "Record a payment's split (member or above)",
+        "summary": "Record a payment, as its split or the amount paid (member or above)",
         "tags": [
           "loans"
         ]

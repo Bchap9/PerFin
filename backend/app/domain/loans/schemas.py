@@ -19,6 +19,8 @@ from pydantic import BaseModel, BeforeValidator, ConfigDict, Field, model_valida
 
 from app.core.dates import BusinessDate
 from app.core.money import Money, MoneyIn
+from app.domain.accounts.models import AccountType
+from app.domain.accounts.schemas import Name
 from app.domain.loans.models import LENDER_MAX, TERM_MONTHS_MAX, RateType
 
 MAX_PAGE: Final = 500
@@ -62,14 +64,25 @@ def _not_null(model: BaseModel, names: tuple[str, ...]) -> None:
 # ---------------------------------------------------------------------------
 
 
-class LoanCreate(_Input):
-    """``POST /loans``: the terms of an existing loan, mortgage or line-of-credit account.
+class LoanAccountCreate(_Input):
+    """The account ``POST /loans`` opens for a new loan (in the principal's currency)."""
 
-    ``payment_amount`` (principal and interest) defaults to the level
-    payment; ``payment_day`` to the origination date's day.
+    name: Name
+    #: ``loan``, ``mortgage`` or ``line_of_credit``.
+    type: AccountType = AccountType.LOAN
+
+
+class LoanCreate(_Input):
+    """``POST /loans``: a loan, mortgage or line of credit and its terms.
+
+    Either ``account`` (a new account is opened with the loan, in one step)
+    or ``account_id`` (an existing loan, mortgage or line-of-credit account
+    without terms). ``payment_amount`` (principal and interest) defaults to
+    the level payment; ``payment_day`` to the origination date's day.
     """
 
-    account_id: uuid.UUID
+    account_id: uuid.UUID | None = None
+    account: LoanAccountCreate | None = None
     principal_original: MoneyIn
     rate: RateIn
     rate_type: RateType = RateType.FIXED
@@ -79,6 +92,12 @@ class LoanCreate(_Input):
     payment_day: PaymentDay | None = None
     escrow_amount: MoneyIn | None = None
     lender: Lender | None = None
+
+    @model_validator(mode="after")
+    def _check(self) -> Self:
+        if (self.account_id is None) == (self.account is None):
+            raise ValueError("give account_id (an existing account) or account (a new one)")
+        return self
 
 
 class LoanUpdate(_Input):
@@ -251,18 +270,36 @@ class SimulationOut(_Output):
 
 
 class LoanPaymentCreate(_Input):
-    """``POST /loans/{id}/payments``: a payment's split (parts >= 0, loan currency)."""
+    """``POST /loans/{id}/payments``: a payment, as its split or as the amount paid.
+
+    Either the split (``principal`` and ``interest``, optionally ``escrow``
+    and ``fees``; parts >= 0, loan currency), or ``amount`` alone: the total
+    paid (> 0), which the service splits as the lender would (the period's
+    interest first, then the loan's escrow, the rest to principal).
+    """
 
     paid_on: BusinessDate
-    principal: MoneyIn
-    interest: MoneyIn
+    amount: MoneyIn | None = None
+    principal: MoneyIn | None = None
+    interest: MoneyIn | None = None
     escrow: MoneyIn | None = None
     fees: MoneyIn | None = None
     transaction_id: uuid.UUID | None = None
 
+    @model_validator(mode="after")
+    def _check(self) -> Self:
+        parts = (self.principal, self.interest, self.escrow, self.fees)
+        if self.amount is not None:
+            if any(part is not None for part in parts):
+                raise ValueError("give amount alone, or the split (principal and interest)")
+        elif self.principal is None or self.interest is None:
+            raise ValueError("give amount, or both principal and interest")
+        return self
+
 
 class ScheduleCheckOut(_Output):
-    """A payment compared with the schedule: interest expected on the balance before it.
+    """A payment compared with the schedule: interest expected on the balance before it
+    (less the interest earlier payments of the same period paid).
 
     ``status``: ``ok`` within one minor unit, ``differs`` otherwise,
     ``unchecked`` when the balance before the payment is not known.
