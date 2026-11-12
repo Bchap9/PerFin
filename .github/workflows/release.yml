@@ -317,6 +317,32 @@ jobs:
           if-no-files-found: error
           retention-days: 7
 
+  # Moves the `edge` tag (the newest release, pre-releases included) of all
+  # three images to this release, by digest, once every image job passed
+  # (docs/UPGRADING.md "Image tags"). One image failing skips this job, so
+  # the three never point at different releases.
+  edge:
+    name: Move the edge tag
+    needs: [check, image]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      packages: write # retag in ghcr.io
+    env:
+      VERSION: ${{ needs.check.outputs.version }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Point edge at this release's images (by digest)
+        env:
+          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          ACTOR: ${{ github.actor }}
+        run: |
+          printf '%s' "$GHCR_TOKEN" | skopeo login ghcr.io -u "$ACTOR" --password-stdin
+          scripts/move_edge.sh "$VERSION" | tee -a "$GITHUB_STEP_SUMMARY"
+
   release:
     name: GitHub release
     needs: [check, image, chart]

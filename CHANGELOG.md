@@ -37,7 +37,15 @@ What remains (details in docs/ROADMAP.md):
 
 ## [Unreleased]
 
-Nothing yet.
+### Added
+
+- An `edge` image tag on `perfin`, `perfin-egress` and `perfin-ml`: the
+  newest release, release candidates included, so a deployment can follow
+  releases by re-pulling. The release workflow's new `edge` job moves it
+  with `scripts/move_edge.sh` once every image of the release passed, for
+  all three together and by digest (the scanned, signed image); the manual
+  `edge` workflow points it at any existing release. `docs/UPGRADING.md`
+  ("Versioning policy") explains what following it costs.
 
 ## [1.0.0-rc.8] - 2026-11-12
 

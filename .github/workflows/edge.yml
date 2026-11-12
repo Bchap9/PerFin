@@ -1,0 +1,40 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+#
+# Point the moving `edge` tag of every image at an existing release, by hand
+# (docs/UPGRADING.md "Image tags"): to start `edge` at a release published
+# before the release workflow moved it, or to move it back after a bad
+# release. The release workflow's `edge` job does the same on every tag.
+name: edge
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Release to point edge at, without the v (for example 1.0.0-rc.8)"
+        required: true
+        type: string
+
+permissions: {}
+
+jobs:
+  edge:
+    name: Move the edge tag
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      packages: write # retag in ghcr.io
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Point edge at the release's images (by digest)
+        env:
+          # Passed through the environment, never interpolated into the
+          # script, so the input cannot inject shell (move_edge.sh validates it).
+          VERSION: ${{ inputs.version }}
+          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          ACTOR: ${{ github.actor }}
+        run: |
+          printf '%s' "$GHCR_TOKEN" | skopeo login ghcr.io -u "$ACTOR" --password-stdin
+          scripts/move_edge.sh "$VERSION" | tee -a "$GITHUB_STEP_SUMMARY"
