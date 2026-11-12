@@ -37,7 +37,17 @@ What remains (details in docs/ROADMAP.md):
 
 ## [Unreleased]
 
-Nothing yet.
+### Fixed
+
+- **Loans: a payment dated on the origination date no longer zeroes the
+  loan's balance.** The balance sync read "the balance the day before",
+  which does not exist on day zero, as 0.00. Payments made on the
+  origination date now come off the original principal (a statement or
+  manual balance dated earlier still wins), and later payments follow on
+  from that day's balance instead of the full principal. Their
+  `schedule_check` stays `unchecked`: no interest has run yet. A loan's
+  balances are rebuilt on the next change to it or its payments; no
+  migration.
 
 ## [1.0.0-rc.7] - 2026-11-11
 

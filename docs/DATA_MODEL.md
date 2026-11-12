@@ -512,11 +512,15 @@ account, deleted with it. Phase 5 notes (`app/domain/loans/`):
   negative balance on the liability side). `app.domain.loans.service`
   owns the account's `computed` `balance_snapshot` rows: the original
   principal on the origination date and, for each day with payments, the
-  balance at the end of the day before less the principal paid. They are
-  rebuilt after every change to the loan or its payments and deleted with
-  the loan. Loan statements add `statement` snapshots (previous and new
-  principal balance), which beat `computed` ones on the same day, so a
-  balance read from a statement anchors the chain.
+  balance at the end of the day before less the principal paid. The day
+  before origination has no balance: payments made on the origination
+  date come off the original principal, unless a `statement` or `manual`
+  snapshot dated earlier gives a balance (read like on any other day).
+  The snapshots are rebuilt after every change to the loan or its
+  payments and deleted with the loan. Loan statements add `statement`
+  snapshots (previous and new principal balance), which beat `computed`
+  ones on the same day, so a balance read from a statement anchors the
+  chain.
 
 ## Manual assets and liabilities
 
