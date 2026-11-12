@@ -93,6 +93,155 @@ describe("loans", () => {
   });
 });
 
+describe("adding a loan", () => {
+  const household = { id: "h-1", name: "Home", base_currency: "EUR" };
+  const accounts = async (call: Parameters<Handler>[0], extra: Record<string, unknown>[]) => {
+    const base = referenceHandlers()["GET /api/v1/accounts"] ?? (() => json({ items: [], next_cursor: null }));
+    const body = (await (await base(call)).json()) as { items: Record<string, unknown>[] };
+    return json({ items: [...body.items, ...extra.map((entry) => ({ ...body.items[0], ...entry }))], next_cursor: null });
+  };
+  const handlers = (extra: Record<string, Handler> = {}): Record<string, Handler> => ({
+    ...ownerSession(),
+    ...referenceHandlers(),
+    "GET /api/v1/households/:id": () => json(household),
+    "GET /api/v1/loans": () => json({ items: [], next_cursor: null }),
+    "POST /api/v1/loans": () => json(loan, 201),
+    ...extra,
+  });
+
+  it("opens the loan's account with it: a name, a type and the terms", async () => {
+    const api = mockApi(handlers());
+    renderApp("/loans");
+    const user = userEvent.setup();
+    await user.click(await screen.findByRole("button", { name: "New loan" }));
+    const dialog = await screen.findByRole("dialog", { name: "New loan" });
+    // No account of a loan type is waiting for terms: nothing to choose.
+    expect(within(dialog).queryByLabelText(/^Account/)).not.toBeInTheDocument();
+    expect(await within(dialog).findByLabelText(/^Original amount \(EUR\)/)).toBeInTheDocument();
+    await user.click(within(dialog).getByRole("button", { name: "Add loan" }));
+    expect(await within(dialog).findByText("Give the loan a name.")).toBeInTheDocument();
+    expect(api.callsTo("POST", "/api/v1/loans")).toHaveLength(0);
+
+    await user.type(within(dialog).getByLabelText(/^Name/), " Home mortgage ");
+    await user.selectOptions(within(dialog).getByLabelText(/^Type/), "Mortgage");
+    await user.type(within(dialog).getByLabelText(/^Original amount/), "200000");
+    await user.type(within(dialog).getByLabelText(/^Yearly rate/), "6.125");
+    await user.type(within(dialog).getByLabelText(/^Term/), "360");
+    await user.click(within(dialog).getByRole("button", { name: "Add loan" }));
+    await vi.waitFor(() => { expect(api.callsTo("POST", "/api/v1/loans")).toHaveLength(1); });
+    expect(api.callsTo("POST", "/api/v1/loans")[0]?.body).toMatchObject({
+      account: { name: "Home mortgage", type: "mortgage" },
+      principal_original: { amount: "200000", currency: "EUR" },
+      rate: "0.06125",
+      term_months: 360,
+    });
+    expect(api.callsTo("POST", "/api/v1/loans")[0]?.body).not.toHaveProperty("account_id");
+    expect(await screen.findByText("Loan added")).toBeInTheDocument();
+    expect(screen.queryByRole("dialog", { name: "New loan" })).not.toBeInTheDocument();
+  });
+
+  it("can use an account of a loan type that has no terms yet", async () => {
+    const waiting = { id: "a0000000-0000-4000-8000-0000000000aa", name: "Car loan", type: "loan", currency: "USD" };
+    const api = mockApi(handlers({ "GET /api/v1/accounts": (call) => accounts(call, [waiting]) }));
+    renderApp("/loans");
+    const user = userEvent.setup();
+    await user.click(await screen.findByRole("button", { name: "New loan" }));
+    const dialog = await screen.findByRole("dialog", { name: "New loan" });
+    const account = await within(dialog).findByLabelText(/^Account/);
+    expect(account).toHaveDisplayValue("A new account");
+    await user.selectOptions(account, "Car loan");
+    expect(within(dialog).queryByLabelText(/^Name/)).not.toBeInTheDocument();
+    expect(within(dialog).getByLabelText(/^Original amount \(USD\)/)).toBeInTheDocument();
+    await user.type(within(dialog).getByLabelText(/^Original amount/), "15000");
+    await user.type(within(dialog).getByLabelText(/^Yearly rate/), "4.5");
+    await user.type(within(dialog).getByLabelText(/^Term/), "60");
+    await user.click(within(dialog).getByRole("button", { name: "Add loan" }));
+    await vi.waitFor(() => { expect(api.callsTo("POST", "/api/v1/loans")).toHaveLength(1); });
+    expect(api.callsTo("POST", "/api/v1/loans")[0]?.body).toMatchObject({ account_id: waiting.id, principal_original: { amount: "15000", currency: "USD" } });
+    expect(api.callsTo("POST", "/api/v1/loans")[0]?.body).not.toHaveProperty("account");
+  });
+});
+
+describe("recording a loan payment", () => {
+  const schedule = { loan_id: LOAN, basis: "projected", start_balance: money("190000.00"), rows: [], totals: { payments: 327, principal: money("190000.00"), interest: money("205000.00"), extra: money("0"), escrow: money("0"), paid: money("395000.00"), payoff_date: "2054-01-15" } };
+  const payment = {
+    id: "p-1",
+    loan_id: LOAN,
+    paid_on: "2026-11-01",
+    principal: money("245.43"),
+    interest: money("969.79"),
+    escrow: money("0.00"),
+    fees: money("0.00"),
+    total: money("1215.22"),
+    balance_after: money("189754.57"),
+    transaction_id: null,
+    source_document_id: null,
+    schedule_check: { status: "ok", expected_interest: money("969.79"), difference: money("0.00") },
+    created_at: STAMP,
+  };
+  const open = async () => {
+    const state = { items: [] as (typeof payment)[] };
+    const api = mockApi({
+      ...ownerSession(),
+      ...referenceHandlers(),
+      "GET /api/v1/loans/:id": () => json(loan),
+      "GET /api/v1/loans/:id/schedule": () => json(schedule),
+      "GET /api/v1/loans/:id/payments": () => json({ items: state.items }),
+      "POST /api/v1/loans/:id/payments": () => {
+        state.items = [payment];
+        return json(payment, 201);
+      },
+    });
+    renderApp(`/loans/${LOAN}`);
+    const user = userEvent.setup();
+    await user.click(await screen.findByRole("tab", { name: "Payments" }));
+    return { api, user, form: await screen.findByRole("form", { name: "Record a payment" }) };
+  };
+  const posted = (api: ReturnType<typeof mockApi>) => api.callsTo("POST", `/api/v1/loans/${LOAN}/payments`);
+
+  it("takes the amount paid alone and shows the split the server worked out", async () => {
+    const { api, user, form } = await open();
+    expect(within(form).getByLabelText(/^Enter/)).toHaveDisplayValue("Amount paid");
+    expect(within(form).queryByLabelText(/^Principal/)).not.toBeInTheDocument();
+    await user.click(within(form).getByRole("button", { name: "Record payment" }));
+    expect(await screen.findByText("Enter the amount paid, above zero.")).toBeInTheDocument();
+    expect(posted(api)).toHaveLength(0);
+
+    const paidOn = within(form).getByLabelText(/^Paid on/);
+    await user.clear(paidOn);
+    await user.type(paidOn, "2026-11-01");
+    await user.type(within(form).getByLabelText(/^Amount paid \(USD\)/), "1215.22");
+    await user.click(within(form).getByRole("button", { name: "Record payment" }));
+    await vi.waitFor(() => { expect(posted(api)).toHaveLength(1); });
+    expect(posted(api)[0]?.body).toEqual({ paid_on: "2026-11-01", amount: { amount: "1215.22", currency: "USD" } });
+    expect(await screen.findByText("Payment recorded")).toBeInTheDocument();
+    const row = within(await screen.findByRole("table", { name: "Payments" })).getByRole("row", { name: /Matches schedule/ });
+    expect(within(row).getByText("$245.43")).toBeInTheDocument();
+    expect(within(row).getByText("$969.79")).toBeInTheDocument();
+    expect(within(form).getByLabelText(/^Amount paid/)).toHaveValue("");
+  });
+
+  it("still takes the split from a statement", async () => {
+    const { api, user, form } = await open();
+    await user.selectOptions(within(form).getByLabelText(/^Enter/), "Principal and interest");
+    expect(within(form).queryByLabelText(/^Amount paid/)).not.toBeInTheDocument();
+    const paidOn = within(form).getByLabelText(/^Paid on/);
+    await user.clear(paidOn);
+    await user.type(paidOn, "2026-11-01");
+    await user.type(within(form).getByLabelText(/^Principal/), "245.43");
+    await user.type(within(form).getByLabelText(/^Interest/), "969.79");
+    await user.type(within(form).getByLabelText(/^Fees/), "5");
+    await user.click(within(form).getByRole("button", { name: "Record payment" }));
+    await vi.waitFor(() => { expect(posted(api)).toHaveLength(1); });
+    expect(posted(api)[0]?.body).toEqual({
+      paid_on: "2026-11-01",
+      principal: { amount: "245.43", currency: "USD" },
+      interest: { amount: "969.79", currency: "USD" },
+      fees: { amount: "5", currency: "USD" },
+    });
+  });
+});
+
 describe("editing a loan", () => {
   const schedule = { loan_id: LOAN, basis: "projected", start_balance: money("190000.00"), rows: [], totals: { payments: 327, principal: money("190000.00"), interest: money("205000.00"), extra: money("0"), escrow: money("0"), paid: money("395000.00"), payoff_date: "2054-01-15" } };
   const handlers = (extra: Record<string, Handler> = {}): Record<string, Handler> => ({

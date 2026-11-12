@@ -23,6 +23,12 @@ here checks again):
 
 Rules:
 
+* A loan is created on an existing account (``account_id``) or opens its
+  own (``account``: a name and a type; the account is created like ``POST
+  /accounts`` does, in the principal's currency, opened on the origination
+  date, audited as ``account.create``; a token also needs
+  ``accounts:write``). Both rows are written in the request's transaction:
+  terms that are refused leave no account behind.
 * The account must be of type loan, mortgage or line of credit (``422
   invalid-loan-account``), have no loan yet (``409 loan-exists``), and
   amounts are in its currency (``422 currency-mismatch``).
@@ -33,6 +39,17 @@ Rules:
   invalid-payment-date``); its parts are ``>= 0`` and not all zero (``422
   invalid-payment``); a linked transaction must be visible to the caller
   (``404 transaction-not-found``).
+* A payment given as the **amount paid** alone (above zero, else ``422
+  invalid-payment``) is split by :func:`split_amount` the way a lender
+  applies it: first the interest of the period (the interest on the
+  balance owed the day before at the period's rate, as in the schedule
+  check), then the loan's ``escrow_amount``, the rest to principal. A
+  period's interest and escrow are taken once: what the payments already
+  recorded for the same due date (the nearest one) paid of them is
+  deducted, so a second payment in a period goes to principal. The split
+  is an estimate from what is recorded at that moment (record payments
+  oldest first); it is stored like any other and not recomputed. An amount
+  paid on the origination date is all principal (no interest has run).
 
 **Balance sync**: the loan account's balance is the principal owed (as a
 negative balance on a liability account). The service owns the account's
@@ -76,8 +93,10 @@ from app.core.errors import ProblemError
 from app.core.events import emit
 from app.core.money import Money, calc_context, minor_units, sum_amounts
 from app.domain.accounts import repo as accounts_repo
+from app.domain.accounts import service as accounts_service
 from app.domain.accounts.balances import Anchor, Movement, balance_on
 from app.domain.accounts.models import Account, AccountType, BalanceSnapshot, BalanceSource
+from app.domain.accounts.schemas import AccountCreate
 from app.domain.accounts.visibility import (
     account_not_found,
     can_edit_account,
@@ -577,17 +596,13 @@ def create_loan(
     db: Session, principal: Principal, data: LoanCreate, *, request: HTTPConnection | None
 ) -> LoanOut:
     household_id = _household(principal, HouseholdRole.MEMBER)
-    get_visible_account(db, principal, data.account_id)
-    if not can_edit_account(db, principal, data.account_id):
+    account_id = data.account_id or _open_account(db, principal, data, request=request)
+    get_visible_account(db, principal, account_id)
+    if not can_edit_account(db, principal, account_id):
         raise forbidden("You can view this account but not change it.")
-    account = get_visible_account(db, principal, data.account_id, need="edit", lock=True)
+    account = get_visible_account(db, principal, account_id, need="edit", lock=True)
     if account.type not in LOAN_ACCOUNT_TYPES:
-        raise ProblemError(
-            422,
-            "invalid-loan-account",
-            "Not a loan account",
-            "A loan describes an account of type loan, mortgage or line_of_credit.",
-        )
+        raise _not_a_loan_account()
     if loan_for_account(db, household_id, account.id) is not None:
         raise ProblemError(409, "loan-exists", "Loan exists", "This account already has a loan.")
     for money in (data.principal_original, data.payment_amount, data.escrow_amount):
@@ -623,6 +638,44 @@ def create_loan(
     sync_balance(db, loan)
     _record(db, principal, loan, "create", event="created", after=_state(loan), request=request)
     return loan_out(db, loan)
+
+
+def _not_a_loan_account() -> ProblemError:
+    return ProblemError(
+        422,
+        "invalid-loan-account",
+        "Not a loan account",
+        "A loan describes an account of type loan, mortgage or line_of_credit.",
+    )
+
+
+def _open_account(
+    db: Session, principal: Principal, data: LoanCreate, *, request: HTTPConnection | None
+) -> uuid.UUID:
+    """Open the account of a new loan (module doc, "Rules"); the caller adds the terms."""
+    if data.account is None:  # pragma: no cover - the schema requires one of the two
+        raise account_not_found()
+    if not principal.has_scope("accounts:write"):
+        raise ProblemError(
+            403,
+            "insufficient-scope",
+            "Insufficient scope",
+            "This token lacks the 'accounts:write' scope.",
+        )
+    if data.account.type not in LOAN_ACCOUNT_TYPES:
+        raise _not_a_loan_account()
+    opened = accounts_service.create_account(
+        db,
+        principal,
+        AccountCreate(
+            type=data.account.type,
+            name=data.account.name,
+            currency=data.principal_original.currency,
+            opened_on=data.origination_date,
+        ),
+        request=request,
+    )
+    return opened.id
 
 
 def _level(loan: Loan) -> Decimal:
@@ -852,9 +905,17 @@ def simulate(
 
 
 def _check(
-    loan: Loan, terms: amort.Terms, ledger: AccountLedger, payment: LoanPayment
+    loan: Loan,
+    terms: amort.Terms,
+    ledger: AccountLedger,
+    payment: LoanPayment,
+    already_paid: Decimal,
 ) -> tuple[ScheduleCheckOut, Decimal | None]:
-    """The payment's interest against a period's interest on the balance owed the day before.
+    """The payment's interest against the interest still due for its period.
+
+    That is a period's interest on the balance owed the day before, less
+    ``already_paid``: the interest of the period's earlier payments (a
+    period's interest is due once: an extra payment after it carries none).
 
     ``unchecked`` when nothing was owed the day before, and on the
     origination date when no earlier snapshot gives a balance: no interest
@@ -869,7 +930,7 @@ def _check(
         return ScheduleCheckOut(status="unchecked", expected_interest=None, difference=None), after
     number = amort.nearest_due_number(terms, payment.paid_on)
     rate = amort.rate_in_force(terms, amort.due_date(terms, number - 1))
-    expected = amort.period_interest(before, rate, currency)
+    expected = max(ZERO, amort.period_interest(before, rate, currency) - already_paid)
     difference = payment.interest - expected
     tolerance = Decimal(1).scaleb(-minor_units(currency))
     return (
@@ -909,9 +970,18 @@ def _payment_out(
 def payments_out(db: Session, loan: Loan, payments: Sequence[LoanPayment]) -> list[LoanPaymentOut]:
     terms = terms_of(db, loan)
     ledger = account_ledger(db, _account(db, loan))
+    # The interest each payment's period had already been paid before it
+    # (payments in date order; a period is the nearest due date).
+    already_paid: dict[uuid.UUID, Decimal] = {}
+    per_period: dict[int, Decimal] = defaultdict(lambda: ZERO)
+    for earlier in payments_of(db, loan):
+        number = amort.nearest_due_number(terms, earlier.paid_on)
+        already_paid[earlier.id] = per_period[number]
+        per_period[number] += earlier.interest
     result = []
     for payment in payments:
-        check, after = _check(loan, terms, ledger, payment)
+        paid = already_paid.get(payment.id, ZERO)
+        check, after = _check(loan, terms, ledger, payment, paid)
         result.append(_payment_out(payment, check, after))
     return result
 
@@ -949,6 +1019,34 @@ def check_payment_date(loan: Loan, paid_on: date) -> None:
         )
 
 
+def split_amount(
+    db: Session, loan: Loan, paid_on: date, amount: Decimal
+) -> tuple[Decimal, Decimal, Decimal]:
+    """``(principal, interest, escrow)`` of ``amount`` paid on ``paid_on`` (module doc).
+
+    Call before the payment is stored: the balance and the period's earlier
+    payments are read from what is recorded.
+    """
+    terms = terms_of(db, loan)
+    owed = account_ledger(db, _account(db, loan)).owed_before(loan, paid_on)
+    if owed is None:
+        # Paid on the origination date: no interest has run and no period
+        # has started, so nothing is due but principal.
+        return amount, ZERO, ZERO
+    number = amort.nearest_due_number(terms, paid_on)
+    same_period = [
+        p for p in payments_of(db, loan) if amort.nearest_due_number(terms, p.paid_on) == number
+    ]
+    rate = amort.rate_in_force(terms, amort.due_date(terms, number - 1))
+    interest_due = amort.period_interest(owed, rate, loan.currency) if owed > 0 else ZERO
+    interest_due = max(ZERO, interest_due - sum_amounts(p.interest for p in same_period))
+    escrow_paid = sum_amounts(p.escrow for p in same_period)
+    escrow_due = max(ZERO, (loan.escrow_amount or ZERO) - escrow_paid)
+    interest = min(amount, interest_due)
+    escrow = min(amount - interest, escrow_due)
+    return amount - interest - escrow, interest, escrow
+
+
 def add_payment(
     db: Session,
     principal: Principal,
@@ -959,11 +1057,15 @@ def add_payment(
 ) -> LoanPaymentOut:
     loan = require_editable(db, principal, loan_id)
     parts = [data.principal, data.interest, data.escrow, data.fees]
-    for money in parts:
+    for money in (data.amount, *parts):
         if money is not None and money.currency != loan.currency:
             raise _currency_mismatch(loan.currency)
     amounts = [m.amount if m is not None else ZERO for m in parts]
-    if any(a < 0 for a in amounts) or all(a == 0 for a in amounts):
+    if data.amount is not None and data.amount.amount <= 0:
+        raise ProblemError(
+            422, "invalid-payment", "Invalid payment", "The amount paid is above zero."
+        )
+    if data.amount is None and (any(a < 0 for a in amounts) or all(a == 0 for a in amounts)):
         raise ProblemError(
             422,
             "invalid-payment",
@@ -973,6 +1075,8 @@ def add_payment(
     check_payment_date(loan, data.paid_on)
     if data.transaction_id is not None:
         get_visible_transaction(db, principal, data.transaction_id)
+    if data.amount is not None:
+        amounts = [*split_amount(db, loan, data.paid_on, data.amount.amount), ZERO]
     payment = LoanPayment(
         household_id=loan.household_id,
         loan_id=loan.id,

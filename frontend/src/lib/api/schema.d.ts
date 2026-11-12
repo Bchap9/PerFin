@@ -1998,7 +1998,7 @@ export interface paths {
         /** Loans I can see */
         get: operations["get_loans_api_v1_loans_get"];
         put?: never;
-        /** Describe a loan account's terms (member or above) */
+        /** Add a loan: its terms, on a new or an existing account (member or above) */
         post: operations["post_loan_api_v1_loans_post"];
         delete?: never;
         options?: never;
@@ -2035,7 +2035,7 @@ export interface paths {
         /** Recorded payments, checked against the schedule */
         get: operations["get_payments_api_v1_loans__loan_id__payments_get"];
         put?: never;
-        /** Record a payment's split (member or above) */
+        /** Record a payment, as its split or the amount paid (member or above) */
         post: operations["post_payment_api_v1_loans__loan_id__payments_post"];
         delete?: never;
         options?: never;
@@ -6999,6 +6999,16 @@ export interface components {
          * @enum {string}
          */
         LinkTarget: "transaction" | "investment_txn" | "loan_payment" | "account" | "tax_year";
+        /**
+         * LoanAccountCreate
+         * @description The account ``POST /loans`` opens for a new loan (in the principal's currency).
+         */
+        LoanAccountCreate: {
+            /** Name */
+            name: string;
+            /** @default loan */
+            type: components["schemas"]["AccountType"];
+        };
         /** LoanAi */
         LoanAi: {
             /** Account */
@@ -7041,17 +7051,17 @@ export interface components {
         };
         /**
          * LoanCreate
-         * @description ``POST /loans``: the terms of an existing loan, mortgage or line-of-credit account.
+         * @description ``POST /loans``: a loan, mortgage or line of credit and its terms.
          *
-         *     ``payment_amount`` (principal and interest) defaults to the level
-         *     payment; ``payment_day`` to the origination date's day.
+         *     Either ``account`` (a new account is opened with the loan, in one step)
+         *     or ``account_id`` (an existing loan, mortgage or line-of-credit account
+         *     without terms). ``payment_amount`` (principal and interest) defaults to
+         *     the level payment; ``payment_day`` to the origination date's day.
          */
         LoanCreate: {
-            /**
-             * Account Id
-             * Format: uuid
-             */
-            account_id: string;
+            account?: components["schemas"]["LoanAccountCreate"] | null;
+            /** Account Id */
+            account_id?: string | null;
             escrow_amount?: components["schemas"]["MoneyIn"] | null;
             /** Lender */
             lender?: string | null;
@@ -7126,18 +7136,24 @@ export interface components {
         };
         /**
          * LoanPaymentCreate
-         * @description ``POST /loans/{id}/payments``: a payment's split (parts >= 0, loan currency).
+         * @description ``POST /loans/{id}/payments``: a payment, as its split or as the amount paid.
+         *
+         *     Either the split (``principal`` and ``interest``, optionally ``escrow``
+         *     and ``fees``; parts >= 0, loan currency), or ``amount`` alone: the total
+         *     paid (> 0), which the service splits as the lender would (the period's
+         *     interest first, then the loan's escrow, the rest to principal).
          */
         LoanPaymentCreate: {
+            amount?: components["schemas"]["MoneyIn"] | null;
             escrow?: components["schemas"]["MoneyIn"] | null;
             fees?: components["schemas"]["MoneyIn"] | null;
-            interest: components["schemas"]["MoneyIn"];
+            interest?: components["schemas"]["MoneyIn"] | null;
             /**
              * Paid On
              * Format: date
              */
             paid_on: string;
-            principal: components["schemas"]["MoneyIn"];
+            principal?: components["schemas"]["MoneyIn"] | null;
             /** Transaction Id */
             transaction_id?: string | null;
         };
@@ -9238,7 +9254,8 @@ export interface components {
         };
         /**
          * ScheduleCheckOut
-         * @description A payment compared with the schedule: interest expected on the balance before it.
+         * @description A payment compared with the schedule: interest expected on the balance before it
+         *     (less the interest earlier payments of the same period paid).
          *
          *     ``status``: ``ok`` within one minor unit, ``differs`` otherwise,
          *     ``unchecked`` when the balance before the payment is not known.
