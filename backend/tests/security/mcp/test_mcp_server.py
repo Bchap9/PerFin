@@ -274,9 +274,12 @@ RAW_LEAKS = {
 }
 
 
-def leaky_api(status: int = 200) -> AiApi:
-    item_id = str(uuid.uuid4())
+# A fixed, well-formed UUID: a random one carries digits, and about one run in
+# 175 they spelled one of the digit strings the scrub test asserts are absent.
+ITEM_ID = "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee"
 
+
+def leaky_api(status: int = 200) -> AiApi:
     def handler(request: httpx.Request) -> httpx.Response:
         if status != 200:
             return httpx.Response(
@@ -296,7 +299,7 @@ def leaky_api(status: int = 200) -> AiApi:
                 "next_cursor": "MjAyNi0wMS0wMXwwMTkz",
                 "items": [
                     {
-                        "id": item_id,
+                        "id": ITEM_ID,
                         "label": f"Checking {RAW_LEAKS['masked']}",
                         "memo": " / ".join(RAW_LEAKS.values()),
                         "amount": {"amount": "-123456789.00", "currency": "USD"},
@@ -328,6 +331,12 @@ def test_second_stage_scrubs_what_the_api_let_through() -> None:
         assert body["next_cursor"] == "MjAyNi0wMS0wMXwwMTkz"
         for placeholder in ("[ACCT]", "[GOVID]", "[EMAIL]", "[PHONE]", "[ADDRESS]"):
             assert placeholder in text
+
+
+def test_leak_test_id_holds_no_asserted_digits() -> None:
+    assert uuid.UUID(ITEM_ID)
+    for digits in ("123456789012", "5678", "6789", "5551234567", "4111", "742"):
+        assert digits not in ITEM_ID
 
 
 def test_kill_switch_and_policy_refusals_are_reported() -> None:
