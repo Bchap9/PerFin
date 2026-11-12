@@ -6,14 +6,14 @@ All notable changes to PerFin are recorded here. The format follows
 
 ## Status
 
-The current release candidate is `v1.0.0-rc.7`; the final `v1.0.0` follows the
+The current release candidate is `v1.0.0-rc.8`; the final `v1.0.0` follows the
 external security review. Every phase (0-7) is implemented. Alembic head is
-`0012`. On 2026-11-11: SPDX;
-backend ruff, ruff format, mypy --strict (699 source files), bandit, OpenAPI
-drift and 8344 pytest tests with `-n 8` (the Helm chart tests aside, which
+`0012`. On 2026-11-12: SPDX;
+backend ruff, ruff format, mypy --strict (704 source files), bandit, OpenAPI
+drift and 8405 pytest tests with `-n 6` (the Helm chart tests aside, which
 need `helm`), of which the OCR tests (20) need Tesseract and could not run
 in that environment (both sets run in CI); frontend
-eslint, tsc, 678 vitest tests in 74 files and the production build. As of rc.2: `pip-audit` finds no known vulnerabilities and
+eslint, tsc, 694 vitest tests in 75 files and the production build. As of rc.2: `pip-audit` finds no known vulnerabilities and
 `npm audit --audit-level=high` passes with 10 moderate advisories in dev
 tooling (eslint, typescript-eslint, minimatch), none high.
 CI is green end to end on GitHub Actions for commit `21d2b38`: `ci` run
@@ -37,9 +37,15 @@ What remains (details in docs/ROADMAP.md):
 
 ## [Unreleased]
 
-A broker's positions export is imported as what each account holds, with
-its cost basis; holdings show how current they are; prices can be fetched
-more often and on request. No migration.
+Nothing yet.
+
+## [1.0.0-rc.8] - 2026-11-12
+
+Eighth release candidate of 1.0.0. A broker's positions export is
+imported as what each account holds, with its cost basis; holdings show
+how current they are; prices can be fetched more often and on request. A
+loan payment is recorded by the amount paid, and "New loan" opens the
+loan's account. No migration.
 
 ### Added
 
