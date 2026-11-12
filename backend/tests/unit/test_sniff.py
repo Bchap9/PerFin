@@ -5,10 +5,13 @@ from __future__ import annotations
 
 import io
 import zipfile
+from collections.abc import Callable
 
 import pytest
 
+from app.ingestion.extract.common import ExtractFailure, decode_text
 from app.ingestion.intake.sniff import SNIFF_BYTES, FileType, Rejected, RejectReason, sniff
+from tests.fixtures import synth_sniff_cases as cases
 from tests.fixtures.statements import csv_bytes, ofx_sgml, ofx_xml, qif_bytes, synth_transactions
 
 TXNS = synth_transactions(4)
@@ -177,3 +180,205 @@ def test_a_table_under_lines_about_the_account_is_csv() -> None:
 )
 def test_lines_that_only_look_like_a_table_stay_text(data: bytes) -> None:
     assert sniff(data) == FileType.TEXT
+
+
+# ---------------------------------------------------------------------------
+# Real-world text tables and oddly headed statement files
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("build", "expected"),
+    [
+        (cases.csv_quoted_decimal_commas, FileType.CSV),
+        (cases.csv_multiline_quoted_cell, FileType.CSV),
+        (cases.csv_preamble_with_continuation_rows, FileType.CSV),
+        (cases.csv_summary_block_then_table, FileType.CSV),
+        (cases.ofx_header_keys_before_ofxheader, FileType.OFX),
+        (cases.ofx_data_key_header, FileType.OFX),
+        (cases.ofx_xml_declaration_without_ofx_pi, FileType.OFX),
+        (cases.qif_with_leading_comments, FileType.QIF),
+        (cases.qfx_with_trailing_nul, FileType.QFX),
+    ],
+    ids=lambda value: getattr(value, "__name__", None),
+)
+def test_real_world_text_file_is_sniffed_as_what_it_is(
+    build: Callable[[], bytes], expected: FileType
+) -> None:
+    assert sniff(build()) == expected
+
+
+def test_window_cut_inside_a_quoted_cell_is_still_csv() -> None:
+    """A long export is judged on the records the window holds whole."""
+    row = b'2026-04-03;Juniper Row Books;"Order 000-17\ntwo paperbacks\ngift wrapped";-24.80\n'
+    data = b"Date;Payee;Memo;Amount\n" + row * 200
+    assert len(data) > SNIFF_BYTES
+    assert sniff(data) == FileType.CSV
+
+
+@pytest.mark.parametrize(
+    "data",
+    [
+        b"a,b\x00,c\n1,2,3\n",
+        b"\x00Date,Amount\n2026-01-01,1.00\n",
+        b"Date,Amount\n2026-01-01,1.00\x00\n",
+        cases.qfx_with_trailing_nul() + b"\n<STMTTRN>",
+        cases.qfx_with_trailing_nul().replace(b"<OFX>", b"<OFX>\x00", 1),
+        # Nothing but padding is not text.
+        b"\x00",
+        b"  \n\x00\x00",
+    ],
+)
+def test_nul_inside_text_is_still_binary(data: bytes) -> None:
+    """Only NUL padding at the very end of the file is ignored."""
+    assert sniff(data) == Rejected(RejectReason.BINARY_UNKNOWN)
+
+
+def test_nul_at_the_end_of_a_full_window_is_not_padding() -> None:
+    """The window cannot tell padding from a NUL in the middle of a longer file."""
+    line = b"2026-01-01,Synthetic,1.00\n"
+    head = (line * (SNIFF_BYTES // len(line) + 1))[: SNIFF_BYTES - 2] + b"\x00\x00"
+    assert sniff(head + line) == Rejected(RejectReason.BINARY_UNKNOWN)
+    assert sniff(head) == Rejected(RejectReason.BINARY_UNKNOWN)
+
+
+def test_trailing_nul_padding_is_dropped_on_decode() -> None:
+    text, _ = decode_text(b"Date,Amount\n2026-01-01,1.00\n\x00\x00")
+    assert text == "Date,Amount\n2026-01-01,1.00\n"
+    for data in (b"a,b\x00,c\n", b"a,b\n\x00\n", b"\x00a,b\n"):
+        with pytest.raises(ExtractFailure) as caught:
+            decode_text(data)
+        assert caught.value.code == "binary_content"
+
+
+PROSE = (
+    b"Dear member, thank you for staying with us this year and for your patience.\n"
+    b"We have moved the branch to a new address.\n"
+    b"\n"
+    b'Our teller said, "the new counters open on Monday, the old ones close on Friday," and\n'
+    b"we hope the change is an easy one.\n"
+    b"Statements are posted on the first working day.\n"
+    b"\n"
+    b"Fees, rates, limits and opening hours are unchanged, as are your account numbers.\n"
+    b"Kind regards\n"
+    b"The branch team\n"
+)
+
+
+@pytest.mark.parametrize(
+    "data",
+    [
+        PROSE,
+        PROSE.replace(b"\n", b"\r\n"),
+        # A quotation left open runs to the end of the letter: no table.
+        PROSE.replace(b'Friday,"', b"Friday,"),
+        # ... and one that only closes pages later is no cell either.
+        PROSE.replace(b'Friday,"', b"Friday,") * 3,
+        # A quotation that opens a line and closes two lines on.
+        b"Synthetic notes, first.\n"
+        b'"A quoted remark, begun here\n'
+        b"and carried on, over a line\n"
+        b'and closed here."\n'
+        b"Third line.\n",
+        # A list with a comma here and there.
+        b"Things to bring:\n- passport, or an identity card\n- proof of address\n- the form\n",
+    ],
+)
+def test_prose_with_commas_is_still_plain_text(data: bytes) -> None:
+    assert sniff(data) == FileType.TEXT
+
+
+@pytest.mark.parametrize(
+    "data",
+    [
+        b'<?xml version="1.0" encoding="UTF-8"?><Document><Stmt/></Document>',
+        b'<?xml version="1.0"?>\n<Document xmlns="urn:example:invalid"><OFX></OFX></Document>',
+        # The root must follow the declaration: a DOCTYPE or a comment in between is refused.
+        b'<?xml version="1.0"?>\n<!DOCTYPE OFX [<!ENTITY a "b">]>\n<OFX></OFX>',
+        b'<?xml version="1.0"?>\n<OFXS><OFX></OFX></OFXS>',
+    ],
+)
+def test_xml_that_is_not_ofx_is_still_refused(data: bytes) -> None:
+    assert sniff(data) == Rejected(RejectReason.XML_NOT_OFX)
+
+
+@pytest.mark.parametrize(
+    ("data", "verdict"),
+    [
+        # Lines before <OFX> that are not KEY:VALUE headers.
+        (b"Synthetic notes about a file\n<OFX>\n</OFX>\n", FileType.TEXT),
+        (b"DATA:OFXSGML\nsome words, and more\n<OFX>\n</OFX>\n", FileType.TEXT),
+        (b"DATA:<b>\n<OFX>\n</OFX>\n", FileType.TEXT),
+        # A comment line does not make any text a QIF.
+        (b"# Synthetic notes\nSecond line.\n", FileType.TEXT),
+        (b"# a,b,c\n1,2,3\n4,5,6\n", FileType.CSV),
+    ],
+)
+def test_headers_that_only_look_like_ofx_or_qif(data: bytes, verdict: FileType) -> None:
+    assert sniff(data) == verdict
+
+
+@pytest.mark.parametrize(
+    "build",
+    [
+        cases.csv_quoted_decimal_commas,
+        cases.csv_multiline_quoted_cell,
+        cases.csv_preamble_with_continuation_rows,
+        cases.csv_summary_block_then_table,
+        cases.ofx_header_keys_before_ofxheader,
+        cases.ofx_data_key_header,
+        cases.ofx_xml_declaration_without_ofx_pi,
+        cases.qif_with_leading_comments,
+        cases.qfx_with_trailing_nul,
+    ],
+    ids=lambda value: getattr(value, "__name__", None),
+)
+def test_markup_in_accepted_file_is_still_refused(build: Callable[[], bytes]) -> None:
+    """Every newly accepted shape is a polyglot as soon as it carries active markup."""
+    data = build()
+    for old in (b"Larkspur", b"Juniper", b"MOSSY", b"HOLLOW", b"Mossy"):
+        if old in data:
+            assert sniff(data.replace(old, b"<script>x</script>", 1)) == Rejected(
+                RejectReason.POLYGLOT
+            )
+            assert sniff(data.replace(old, b"javascript:x", 1)) == Rejected(RejectReason.POLYGLOT)
+            break
+    else:  # pragma: no cover - every builder names one of the words above
+        raise AssertionError("no cell to replace")
+
+
+def test_markup_in_accepted_csv_is_still_refused() -> None:
+    data = cases.csv_quoted_decimal_commas().replace(
+        b"Marrow Lane Books 22", b"<script>alert(1)</script>"
+    )
+    assert b"<script>" in data
+    assert sniff(data) == Rejected(RejectReason.POLYGLOT)
+    # Past the window the whole-file scan of the upload intake finds it.
+    from app.ingestion.intake.sniff import MarkupScanner
+
+    scanner = MarkupScanner()
+    assert scanner.feed(data)
+
+
+@pytest.mark.parametrize(
+    ("counts", "table"),
+    [
+        # Header and first row together, then a shorter row after each row.
+        ([1, 1, 1, 0, 4, 4, 2, 4, 2, 4, 2], True),
+        ([4, 4, 0, 4, 0, 4], True),
+        # A shorter line right under the header: not a continuation.
+        ([4, 0, 4, 0, 4, 0, 4], False),
+        # Two shorter lines running: the table is over.
+        ([1, 4, 4, 2, 2, 4, 2, 4], False),
+        # Fewer than three rows of the table's shape.
+        ([1, 4, 4, 2], False),
+        # A preamble as wide as the table is still not a preamble.
+        ([2, 3, 3, 1, 3, 1, 3], False),
+    ],
+)
+def test_rows_after_preamble_allows_one_shorter_row_between_rows(
+    counts: list[int], table: bool
+) -> None:
+    from app.ingestion.intake.sniff import _rows_after_preamble
+
+    assert _rows_after_preamble(counts) is table

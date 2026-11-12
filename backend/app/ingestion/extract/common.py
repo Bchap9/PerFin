@@ -33,9 +33,14 @@ _WS: Final = re.compile(r"\s+")
 
 
 def decode_text(data: bytes, *, encodings: tuple[str, ...] = ENCODINGS) -> tuple[str, str]:
-    """``(text, encoding)``; UTF-16/32 and text with NUL/control bytes are refused."""
+    """``(text, encoding)``; UTF-16/32 and text with NUL/control bytes are refused.
+
+    NUL bytes at the very end of the data are padding some writers leave
+    after the last line and are dropped; a NUL anywhere else is refused.
+    """
     if data.startswith((b"\xff\xfe", b"\xfe\xff")):
         raise ExtractFailure("unsupported_encoding", "UTF-16/32 text is not supported")
+    data = data.rstrip(b"\x00")
     for encoding in encodings:
         try:
             text = data.decode(encoding)
