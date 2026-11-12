@@ -21,7 +21,7 @@ from app.core.settings import Settings
 from app.domain.accounts import service as accounts_service
 from app.domain.accounts.models import Account, AccountType
 from app.domain.loans import service as loans_service
-from app.domain.loans.amortization import Terms, schedule
+from app.domain.loans.amortization import Terms, period_interest, schedule
 from tests.fixtures.factories import AuthedClient, Factories
 from tests.fixtures.households import (
     API,
@@ -147,6 +147,61 @@ def test_create_loan_computes_the_payment_and_syncs_the_balance(
 
     listed = world.viewer.get(LOANS).json()["items"]
     assert [item["id"] for item in listed] == [loan["id"]]
+
+
+def test_create_loan_opens_its_account_in_one_step(
+    world: World, actors: Actors, factories: Factories
+) -> None:
+    def body(**extra: Any) -> dict[str, Any]:
+        terms = _mortgage_body(world.mortgage, **extra)
+        del terms["account_id"]
+        return {"account": {"name": "Lake house", "type": "mortgage"}, **terms}
+
+    before = {a["id"] for a in world.member.get(f"{API}/accounts").json()["items"]}
+    # Refused terms leave no account behind.
+    low = world.member.post(LOANS, json=body(payment_amount=_usd("1000.00")))
+    assert problem_type(low) == "loan-payment-too-low"
+    wrong = body()
+    wrong["account"]["type"] = "checking"
+    assert problem_type(world.member.post(LOANS, json=wrong)) == "invalid-loan-account"
+    both = {**body(), "account_id": str(world.car.id)}
+    assert problem_type(world.member.post(LOANS, json=both)) == "validation-failed"
+    neither = body()
+    del neither["account"]
+    assert problem_type(world.member.post(LOANS, json=neither)) == "validation-failed"
+    assert problem_type(world.viewer.post(LOANS, json=body())) == "forbidden"
+    raw = factories.token(world.member.record, scopes=("loans:read", "loans:write"))
+    refused = actors.anonymous().post(
+        LOANS, headers={"Authorization": f"Bearer {raw}"}, json=body()
+    )
+    assert (refused.status_code, problem_type(refused)) == (403, "insufficient-scope")
+    assert {a["id"] for a in world.member.get(f"{API}/accounts").json()["items"]} == before
+    assert household_audit(factories, world.household_id, "account.create") == []
+
+    loan = _post(world.member, LOANS, body())
+    assert loan["payment_amount"] == _usd("1519.03")
+    account = world.member.get(f"{API}/accounts/{loan['account_id']}").json()
+    assert loan["account_id"] not in before
+    assert (account["name"], account["type"], account["currency"]) == (
+        "Lake house",
+        "mortgage",
+        "USD",
+    )
+    assert account["opened_on"] == "2024-03-01"
+    assert account["can_edit"] is True
+    assert account["balance"]["amount"] == "-250000.00"
+    [opened] = household_audit(factories, world.household_id, "account.create")
+    assert opened.target_id == loan["account_id"]
+    assert len(household_audit(factories, world.household_id, "loan.create")) == 1
+    # A member who sees only granted accounts keeps the loan they added.
+    assert [item["id"] for item in world.member.get(LOANS).json()["items"]] == [loan["id"]]
+
+    # The defaults: a plain loan account.
+    plain = body()
+    plain["account"] = {"name": "Boat"}
+    del plain["escrow_amount"]
+    boat = _post(world.member, LOANS, plain)
+    assert world.member.get(f"{API}/accounts/{boat['account_id']}").json()["type"] == "loan"
 
 
 def test_loan_rules(world: World) -> None:
@@ -275,6 +330,85 @@ def test_payments_split_balance_sync_and_schedule_check(world: World) -> None:
         "transaction_id": str(hidden_txn.id),
     }
     assert problem_type(world.member.post(url, json=linked)) == "transaction-not-found"
+
+
+def test_payment_by_amount_is_split_interest_first(world: World, factories: Factories) -> None:
+    loan = _post(world.member, LOANS, _mortgage_body(world.mortgage))
+    url = f"{LOANS}/{loan['id']}/payments"
+    rows = schedule(_terms()).rows
+    # The scheduled payment with escrow: split exactly as the schedule does.
+    first = _post(world.member, url, {"paid_on": "2024-04-01", "amount": _usd("1869.03")})
+    assert first["principal"] == _usd(f"{rows[0].principal}")
+    assert first["interest"] == _usd("1276.04")
+    assert first["escrow"] == _usd("350.00")
+    assert first["fees"] == _usd("0.00")
+    assert first["total"] == _usd("1869.03")
+    assert first["schedule_check"]["status"] == "ok"
+    assert first["balance_after"] == _usd("249757.01")
+    # The period's interest and escrow are paid: a second payment is principal.
+    extra = _post(world.member, url, {"paid_on": "2024-04-10", "amount": _usd("500.00")})
+    assert (extra["principal"], extra["interest"], extra["escrow"]) == (
+        _usd("500.00"),
+        _usd("0.00"),
+        _usd("0.00"),
+    )
+    assert extra["schedule_check"] == {
+        "status": "ok",
+        "expected_interest": _usd("0.00"),
+        "difference": _usd("0.00"),
+    }
+    assert extra["balance_after"] == _usd("249257.01")
+    assert _balance(world.member, world.mortgage) == "-249257.01"
+    # Less than the interest due: all interest; the next payment pays the rest.
+    due = period_interest(D("249257.01"), D("0.06125"), "USD")
+    assert due == D("1272.25")
+    short = _post(world.member, url, {"paid_on": "2024-05-01", "amount": _usd("1000.00")})
+    assert (short["principal"], short["interest"], short["escrow"]) == (
+        _usd("0.00"),
+        _usd("1000.00"),
+        _usd("0.00"),
+    )
+    rest = _post(world.member, url, {"paid_on": "2024-05-02", "amount": _usd("1000.00")})
+    assert (rest["principal"], rest["interest"], rest["escrow"]) == (
+        _usd("377.75"),
+        _usd("272.25"),
+        _usd("350.00"),
+    )
+    assert rest["balance_after"] == _usd("248879.26")
+    checks = [p["schedule_check"]["status"] for p in world.viewer.get(url).json()["items"]]
+    assert checks == ["ok", "ok", "differs", "ok"]
+    audited = household_audit(factories, world.household_id, "loan.payment_add")
+    recorded = audited[-1].after
+    assert recorded is not None
+    assert D(recorded["principal"]) == D("377.75")
+
+    both = {"paid_on": "2024-06-01", "amount": _usd("10"), "interest": _usd("1")}
+    assert problem_type(world.member.post(url, json=both)) == "validation-failed"
+    neither = {"paid_on": "2024-06-01", "escrow": _usd("10")}
+    assert problem_type(world.member.post(url, json=neither)) == "validation-failed"
+    zero = {"paid_on": "2024-06-01", "amount": _usd("0")}
+    assert problem_type(world.member.post(url, json=zero)) == "invalid-payment"
+    euros = {"paid_on": "2024-06-01", "amount": {"amount": "10", "currency": "EUR"}}
+    assert problem_type(world.member.post(url, json=euros)) == "currency-mismatch"
+
+
+def test_payment_by_amount_without_interest_or_escrow_is_all_principal(world: World) -> None:
+    body = {
+        "account_id": str(world.car.id),
+        "principal_original": _usd("12000.00"),
+        "rate": "0",
+        "term_months": 24,
+        "origination_date": "2025-01-15",
+    }
+    loan = _post(world.member, LOANS, body)
+    url = f"{LOANS}/{loan['id']}/payments"
+    paid = _post(world.member, url, {"paid_on": "2025-02-15", "amount": _usd("500.00")})
+    assert (paid["principal"], paid["interest"], paid["escrow"]) == (
+        _usd("500.00"),
+        _usd("0.00"),
+        _usd("0.00"),
+    )
+    assert _balance(world.member, world.car) == "-11500.00"
 
 
 def test_simulate_extra_payments(world: World) -> None:

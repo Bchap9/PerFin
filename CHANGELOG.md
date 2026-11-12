@@ -37,7 +37,40 @@ What remains (details in docs/ROADMAP.md):
 
 ## [Unreleased]
 
-Nothing yet.
+No migration.
+
+### Added
+
+- **Loans: record a payment by the amount paid.** Most lenders take one
+  payment and apply it themselves, so the split is not something a person
+  knows when they pay. "Record a payment" on a loan now asks for the date
+  and the amount paid (the split of a statement is still there, under
+  "Principal and interest"). `POST /loans/{id}/payments` takes `{"paid_on",
+  "amount"}` and splits it as a lender does: the interest due for the
+  period first, then the loan's escrow, the rest to principal; a second
+  payment in the same period goes to principal. The stored payment is that
+  split (an estimate from the balance recorded at that moment), so
+  schedules, balances and net worth work as before (API.md "Loans notes").
+
+### Changed
+
+- **Loans: "New loan" opens the loan's account too.** A loan needed an
+  account of a loan type made on the Accounts page first. The dialog now
+  asks for a name and a type (loan, mortgage, line of credit) with the
+  terms and creates both; the Accounts page lists it like every other
+  account. An account of a loan type that has no terms yet can still be
+  picked instead. `POST /loans` takes `account: {"name", "type"}` in place
+  of `account_id`; both rows are written in one transaction, so refused
+  terms leave no account behind (a token needs `accounts:write` as well).
+
+### Fixed
+
+- **Loans: an extra payment after the month's regular one is no longer
+  flagged "Interest differs".** The schedule check expected a full month
+  of interest on every payment. A period's interest is due once: the check
+  now deducts the interest that earlier payments for the same due date
+  paid, so an extra payment with no interest matches, and a payment that
+  makes up interest an earlier one left short does too.
 
 ## [1.0.0-rc.7] - 2026-11-11
 

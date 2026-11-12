@@ -53,6 +53,23 @@ describe("loan form", () => {
     });
   });
 
+  it("opens a new account with the loan when given a name and a type", () => {
+    const form = { ...emptyLoanForm("2026-11-03"), principal: "15000", rate: "4.5", term: "60", lender: " Fictional Bank " };
+    expect(buildLoanCreate(form, { name: "  Car loan ", type: "loan", currency: "USD" })).toEqual({
+      ok: true,
+      body: {
+        account: { name: "Car loan", type: "loan" },
+        principal_original: { amount: "15000", currency: "USD" },
+        rate: "0.045",
+        rate_type: "fixed",
+        term_months: 60,
+        origination_date: "2026-11-03",
+        lender: "Fictional Bank",
+      },
+    });
+    expect(buildLoanCreate(form, { name: "  ", type: "mortgage", currency: "USD" })).toEqual({ ok: false, problems: { name: "Give the loan a name." } });
+  });
+
   it("names every problem of a new loan", () => {
     const form = { ...emptyLoanForm("2026-11-03"), principal: "0", rate: "100", term: "1201", origination: "", payment: "-1", escrow: "x" };
     expect(buildLoanCreate(form, undefined)).toEqual({

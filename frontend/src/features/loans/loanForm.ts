@@ -28,7 +28,15 @@ export interface LoanForm {
   lender: string;
 }
 
-export type LoanProblems = Partial<Record<"account" | "principal" | "rate" | "term" | "origination" | "payment" | "paymentDay" | "escrow", string>>;
+export type LoanProblems = Partial<Record<"account" | "name" | "principal" | "rate" | "term" | "origination" | "payment" | "paymentDay" | "escrow", string>>;
+
+/** The account types a loan may have (`LOAN_ACCOUNT_TYPES` on the server). */
+export type LoanAccountType = "loan" | "mortgage" | "line_of_credit";
+
+/** Where a new loan goes: an account that exists, or one opened with the loan. */
+export type LoanTarget = { id: string; currency: string } | { name: string; type: LoanAccountType; currency: string };
+
+export const ACCOUNT_NAME_MAX = 120;
 
 export type LoanBody<B> = { ok: true; body: B } | { ok: false; problems: LoanProblems };
 
@@ -113,16 +121,22 @@ function check(form: LoanForm): Checked {
   return { problems, fraction };
 }
 
-/** `POST /loans` for `account`; blank optional terms are left to the server's defaults. */
-export function buildLoanCreate(form: LoanForm, account: { id: string; currency: string } | undefined): LoanBody<LoanCreate> {
+/**
+ * `POST /loans` on `target` (an existing account, or the name and type of the
+ * account to open with the loan); blank optional terms are left to the
+ * server's defaults.
+ */
+export function buildLoanCreate(form: LoanForm, target: LoanTarget | undefined): LoanBody<LoanCreate> {
   const { problems, fraction } = check(form);
-  if (account === undefined) {
+  if (target === undefined) {
     problems.account = "Choose a loan account.";
+  } else if (!("id" in target) && target.name.trim() === "") {
+    problems.name = "Give the loan a name.";
   }
-  if (Object.keys(problems).length > 0 || account === undefined || fraction === null) {
+  if (Object.keys(problems).length > 0 || target === undefined || fraction === null) {
     return { ok: false, problems };
   }
-  const currency = account.currency;
+  const currency = target.currency;
   const payment = form.payment.trim();
   const day = form.paymentDay.trim();
   const escrow = form.escrow.trim();
@@ -130,7 +144,7 @@ export function buildLoanCreate(form: LoanForm, account: { id: string; currency:
   return {
     ok: true,
     body: {
-      account_id: account.id,
+      ...("id" in target ? { account_id: target.id } : { account: { name: target.name.trim(), type: target.type } }),
       principal_original: { amount: form.principal.trim(), currency },
       rate: fraction,
       rate_type: form.rateType,

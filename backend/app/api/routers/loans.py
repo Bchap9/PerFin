@@ -4,7 +4,9 @@
 * ``GET /loans?cursor=&limit=``, ``GET /loans/{id}``: any role; loans of
   visible accounts only, with the balance owed and a payoff projection.
 * ``POST /loans`` (``Idempotency-Key`` honoured), ``PATCH`` / ``DELETE
-  /loans/{id}``: member or above, on an account the caller may edit.
+  /loans/{id}``: member or above, on an account the caller may edit;
+  ``POST`` with ``account`` opens the loan's account too (a token then
+  also needs ``accounts:write``).
 * ``GET /loans/{id}/schedule?basis=original|projected``: any role.
 * ``POST /loans/{id}/simulate``: any role (stores nothing): payoff date,
   interest saved and payments saved with one-off and recurring extras.
@@ -86,7 +88,7 @@ def get_loans(
     response_model=LoanOut,
     status_code=status.HTTP_201_CREATED,
     responses=PROBLEMS,
-    summary="Describe a loan account's terms (member or above)",
+    summary="Add a loan: its terms, on a new or an existing account (member or above)",
 )
 def post_loan(
     body: LoanCreate,
@@ -182,7 +184,7 @@ def get_payments(
     response_model=LoanPaymentOut,
     status_code=status.HTTP_201_CREATED,
     responses=PROBLEMS,
-    summary="Record a payment's split (member or above)",
+    summary="Record a payment, as its split or the amount paid (member or above)",
 )
 def post_payment(
     loan_id: uuid.UUID,
