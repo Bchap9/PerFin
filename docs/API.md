@@ -1251,7 +1251,7 @@ loan-not-found`; on an account the caller may only view, writes are `403`.
   payments already recorded for the same due date paid), then the loan's
   `escrow_amount` (once per due date too), the rest to principal. The
   stored payment is the split, an estimate from what was recorded at that
-  moment. Either way: dated from origination to today, `422
+  moment; an amount paid on the origination date is all principal. Either way: dated from origination to today, `422
   invalid-payment-date`; a linked transaction must be visible, `404
   transaction-not-found`; `DELETE .../payments/{payment_id}` (`404
   loan-payment-not-found`). `schedule_check` compares the interest with the
@@ -1259,7 +1259,11 @@ loan-not-found`; on an account the caller may only view, writes are `403`.
   less the interest that earlier payments for the same due date paid (so
   an extra payment after the regular one is expected to carry none):
   `{"status": "ok" (within one minor unit) | "differs" | "unchecked",
-  "expected_interest", "difference"}`. Loan statements add payments too
+  "expected_interest", "difference"}`. It is `unchecked` when nothing was
+  owed the day before, and for a payment on the origination date unless a
+  statement or manual balance dated earlier says what was owed (no
+  interest has run on day zero; `balance_after` is the original principal
+  less the principal paid that day). Loan statements add payments too
   (INGESTION.md "Loan statements"). Every change rebuilds the loan
   account's `computed` balances, so its balance is the principal owed.
 - **Rate changes** (`{"id", "loan_id", "effective_date", "new_rate",
