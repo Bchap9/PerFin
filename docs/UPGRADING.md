@@ -277,6 +277,37 @@ need it ([PORTABILITY.md](PORTABILITY.md)).
 
 ## Notes for specific releases
 
+### 1.0.0-rc.8
+
+- No migration. One new setting, `PERFIN_PRICE_REFRESH_MINUTES` (how often
+  the worker fetches prices and exchange rates): its default, 360, is the
+  six hours the job ran at before, so nothing changes unless you set it.
+- A broker's positions export (Fidelity's *Portfolio Positions* CSV and
+  layouts like it) is now imported as what each account holds
+  (INGESTION.md "Brokerage positions exports"). One uploaded before this
+  release waits in the review queue as unparsed: use "Process again" on it.
+  With both of a broker's exports, import the activity first, then the
+  positions; the other order is held for review so that units are not
+  counted twice.
+- A statement or export whose account you chose by hand (its file prints no
+  account digits) is no longer asked about again when its document is
+  imported again. Choices made before this release are not remembered: the
+  next re-run of such a document asks once more.
+- `GET /investments/holdings` gained fields (`average_cost`,
+  `price.source`, `price.updated_at`, `price_change`,
+  `accounts[].positions_as_of`, `price_feed`); nothing was removed. New
+  endpoint: `POST /investments/prices/refresh` (`investments:write`, member
+  or above; `409 price-feed-disabled` without a price feed). Households get
+  a `price.updated` event when fetched prices change.
+- Loans: `POST /loans/{id}/payments` also takes `{"paid_on", "amount"}`
+  and works out the split; `POST /loans` also takes `account` (`{"name",
+  "type"}`) to open the loan's account with it, for which a token needs
+  `accounts:write` too. `account_id` and a payment's full split are
+  accepted as before.
+- Loans: balances of a loan with a payment on its origination date were
+  recorded as too low. They are rebuilt the next time the loan or one of
+  its payments changes; nothing else is needed.
+
 ### 1.0.0-rc.7
 
 - No migration and no new settings.
