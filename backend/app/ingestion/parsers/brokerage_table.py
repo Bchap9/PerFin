@@ -49,7 +49,10 @@ Every other row must give
   :func:`~app.ingestion.parsers.structured.best_date_format`). A cell
   printed ``10/14/2026 as of 10/10/2026`` is read as its first date, the
   trade date (:func:`_trade_date_text`); the second is dropped and decides
-  nothing, the day/month order included,
+  nothing, the day/month order included. When no day is above 12 the order
+  is a guess (``date_order_guessed``), unless the whole header is a known
+  US broker layout and the amounts are written ``$`` first: then the dates
+  are month first (:func:`_date_format`),
 * an action :func:`activity_type` types (``YOU BOUGHT``, ``REINVESTMENT ...
   (Cash)``, ``DIVIDEND RECEIVED``, ``Electronic Funds Transfer Paid``, ...;
   ``TRANSFERRED FROM/TO`` is a transfer of units when the row names a security
@@ -286,7 +289,36 @@ HEADERS: Final[Mapping[str, Role]] = {
 LAYOUT_INSTITUTIONS: Final[Mapping[tuple[str, ...], str]] = {
     ("run date", "account", "account number", "action", "symbol"): "Fidelity Investments",
     ("run date", "action", "symbol", "description", "type"): "Fidelity Investments",
+    # A whole header, in the two column orders the export has been written in.
+    (
+        "date",
+        "action",
+        "symbol",
+        "description",
+        "quantity",
+        "price",
+        "fees comm",
+        "amount",
+    ): "Charles Schwab",
+    (
+        "date",
+        "action",
+        "symbol",
+        "description",
+        "price",
+        "quantity",
+        "fees comm",
+        "amount",
+    ): "Charles Schwab",
 }
+#: The month-first formats a known US broker layout settles when the dates
+#: alone read day first just as well (:func:`_date_format`).
+US_TIE_FORMATS: Final[frozenset[str]] = frozenset({"MM/DD/YYYY", "MM/DD/YY"})
+#: Filled amount cells a table needs before the way it writes money says anything.
+DOLLAR_FIRST_MIN_CELLS: Final = 4
+#: Share of the filled amount cells that must start with the dollar sign.
+DOLLAR_FIRST_SHARE: Final = 0.9
+_DOLLAR_FIRST: Final = re.compile(r"[-+(]?\$")
 #: Roles a header must name (plus one of :data:`SECURITY_ROLES`).
 REQUIRED_ROLES: Final = ("date", "action", "amount")
 SECURITY_ROLES: Final = ("symbol", "quantity")
@@ -786,11 +818,41 @@ class _Reader:
         )
 
 
-def _date_format(header: Header, body: Sequence[Sequence[str]]) -> tuple[DateFormat, bool]:
-    """One format for the date and settlement columns; whether the day/month order is a guess."""
+def _dollar_first(amounts: Sequence[str]) -> bool:
+    """Whether the amount cells are written the US way: ``$`` first (after a sign or bracket).
+
+    At least :data:`DOLLAR_FIRST_MIN_CELLS` filled cells, and
+    :data:`DOLLAR_FIRST_SHARE` of them: a handful of cells, or a column
+    that only sometimes prints the symbol, says nothing.
+    """
+    filled = [a.strip() for a in amounts if a.strip()]
+    if len(filled) < DOLLAR_FIRST_MIN_CELLS:
+        return False
+    marked = sum(1 for a in filled if _DOLLAR_FIRST.match(a))
+    return marked >= DOLLAR_FIRST_SHARE * len(filled)
+
+
+def _date_format(
+    table: Table, header: Header, body: Sequence[Sequence[str]]
+) -> tuple[DateFormat, bool]:
+    """One format for the date and settlement columns; whether the day/month order is a guess.
+
+    A tie between month first and day first (no day above 12) is no guess
+    when two independent signs say the file is a US broker's: its whole
+    header is a known layout (:data:`LAYOUT_INSTITUTIONS`) and its amounts
+    are written ``$`` first (:func:`_dollar_first`). Either alone leaves
+    the order a guess, and so does any other tie.
+    """
     roles: tuple[Role, ...] = ("date", "settle")
     values = [_trade_date_text(_cell(r, header.columns.get(role))) for r in body for role in roles]
     found, _, tied = best_date_format(v for v in values if v)
+    if (
+        tied
+        and found in US_TIE_FORMATS
+        and layout_institution(table, header.row) is not None
+        and _dollar_first([_cell(r, header.columns.get("amount")) for r in body])
+    ):
+        tied = False
     return (found or "MM/DD/YYYY"), tied
 
 
@@ -846,7 +908,7 @@ def read_activity_table(
         guessed = False
         separator: str = spec.decimal_separator
     else:
-        date_format, guessed = _date_format(header, body)
+        date_format, guessed = _date_format(table, header, body)
         amounts = [_cell(r, header.columns["amount"]) for r in body]
         separator = guess_decimal_separator(a for a in amounts if a)
     out = ActivityTable(header=header)
@@ -930,7 +992,7 @@ def activity_spec(table: Table) -> MappingSpec | None:
     if header is None:
         return None
     body = _body(table, header)
-    date_format, _ = _date_format(header, body)
+    date_format, _ = _date_format(table, header, body)
     amounts = [_cell(r, header.columns["amount"]) for r in body]
     separator = guess_decimal_separator(a for a in amounts if a)
     fields: dict[str, object] = {
@@ -965,7 +1027,7 @@ def suggest_activity_mapping(table: Table) -> MappingSuggestion | None:
     read = read_activity_table(table, spec)
     header = header_from_spec(spec)
     body = _body(table, header)
-    _, guessed = _date_format(header, body)
+    _, guessed = _date_format(table, header, body)
     rows = read.rows if read is not None else 0
     unknown = read.unknown_activity if read is not None else 0
     skipped = read.skipped if read is not None else 0

@@ -26,6 +26,7 @@ from app.ingestion.parsers.brokerage_table import (
     ActivityTable,
     find_header,
     read_activity_table,
+    suggest_activity_mapping,
 )
 from app.ingestion.sandbox.protocol import (
     ExtractOptions,
@@ -670,6 +671,98 @@ def test_a_row_named_total_with_text_is_not_a_total_line(row: list[str]) -> None
     assert found is not None
     assert found.notes == 0
     assert found.unknown_activity + found.skipped == 1
+
+
+# ---------------------------------------------------------------------------
+# A day/month tie on a known US broker layout
+# ---------------------------------------------------------------------------
+
+#: Every day and month is 12 or less and neither part is constant: the dates
+#: alone cannot say which comes first.
+_TIED_DAYS = ("04/02/2021", "04/05/2021", "09/03/2020", "08/08/2020", "08/01/2020", "05/06/2017")
+
+
+def _tied_rows(amount: str = "-$254.95") -> list[list[str]]:
+    return [
+        _broker("Buy", quantity="10", price="$25.00", fees="$4.95", amount=amount, day=day)
+        for day in _TIED_DAYS
+    ]
+
+
+def test_tied_dates_on_a_known_us_layout_read_month_first() -> None:
+    found = read_activity_table(_broker_table(*_tied_rows()))
+    assert found is not None
+    assert "date_order_guessed" not in found.warnings
+    (statement,) = found.statements
+    assert statement.account.institution == "Charles Schwab"
+    assert len(statement.activity) == len(_TIED_DAYS)
+    assert max(a.trade_date for a in statement.activity) == date(2021, 4, 5)
+    by_day = sorted(a.trade_date for a in statement.activity)
+    assert by_day[-2] == date(2021, 4, 2)  # the first row of the file, month first
+    assert all(a.low_confidence == [] for a in statement.activity)
+    suggestion = suggest_activity_mapping(_broker_table(*_tied_rows()))
+    assert suggestion is not None
+    assert (suggestion.confident, suggestion.spec.date_format) == (True, "MM/DD/YYYY")
+
+
+def test_tied_dates_with_price_before_quantity_read_month_first() -> None:
+    header = [*BROKER_HEADER]
+    header[4], header[5] = header[5], header[4]
+    rows = [[*r[:4], r[5], r[4], *r[6:]] for r in _tied_rows()]
+    found = read_activity_table(_table([header, *rows]))
+    assert found is not None
+    assert "date_order_guessed" not in found.warnings
+    assert found.statements[0].account.institution == "Charles Schwab"
+    assert found.statements[0].activity[0].quantity == Decimal(10)
+
+
+def test_tied_dates_without_dollar_amounts_stay_a_guess() -> None:
+    found = read_activity_table(_broker_table(*_tied_rows("-254.95")))
+    assert found is not None
+    assert "date_order_guessed" in found.warnings
+    assert all(a.low_confidence == ["trade_date"] for a in found.statements[0].activity)
+
+
+def test_tied_dates_on_an_unknown_layout_stay_a_guess() -> None:
+    header = [cell for cell in BROKER_HEADER if cell != "Fees & Comm"]
+    rows = [[*r[:6], r[7]] for r in _tied_rows()]
+    found = read_activity_table(_table([header, *rows]))
+    assert found is not None
+    assert found.rows == len(_TIED_DAYS)
+    assert "date_order_guessed" in found.warnings
+    assert found.statements[0].account.institution is None
+
+
+def test_tied_dates_with_too_few_dollar_amounts_stay_a_guess() -> None:
+    # Three amounts are not enough to say how the file writes money.
+    found = read_activity_table(_broker_table(*_tied_rows()[:3]))
+    assert found is not None
+    assert "date_order_guessed" in found.warnings
+
+
+def test_tied_dates_with_a_tenth_of_bare_amounts_stay_a_guess() -> None:
+    rows = _tied_rows()
+    rows[0][7] = "-254.95"  # five of six start with the symbol: under nine in ten
+    found = read_activity_table(_broker_table(*rows))
+    assert found is not None
+    assert "date_order_guessed" in found.warnings
+
+
+@pytest.mark.parametrize("amount", ["-$254.95", "+$254.95", "($254.95)", "$254.95"])
+def test_a_sign_or_bracket_before_the_dollar_is_still_dollar_first(amount: str) -> None:
+    found = read_activity_table(_broker_table(*_tied_rows(amount)))
+    assert found is not None
+    assert "date_order_guessed" not in found.warnings
+
+
+def test_tied_dashed_dates_on_a_known_layout_stay_a_guess() -> None:
+    # Only the slash forms are settled: a US export does not write dashes.
+    rows = _tied_rows()
+    for row in rows:
+        row[0] = row[0].replace("/", "-")
+    found = read_activity_table(_broker_table(*rows))
+    assert found is not None
+    assert "date_order_guessed" in found.warnings
 
 
 # ---------------------------------------------------------------------------
