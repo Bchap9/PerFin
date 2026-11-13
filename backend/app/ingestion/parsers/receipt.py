@@ -81,6 +81,12 @@ PARSER_NAME: Final = "receipt_basic"
 PARSER_VERSION: Final = "1"
 #: Receipts are short; a longer document is not read as one.
 MAX_RECEIPT_LINES: Final = 400
+#: A receipt is one page, sometimes two; a longer document is a statement, a
+#: bill or a contract however many "Total" lines it prints.
+MAX_RECEIPT_PAGES: Final = 2
+#: The most a two-page document with none of ``_RECEIPT_WORDS`` scores: below
+#: ``registry.MIN_SCORE``, so it is a receipt only when the classifier says so.
+UNWORDED_TWO_PAGE_SCORE: Final = 0.3
 #: Header lines the merchant is looked for in.
 HEADER_LINES: Final = 8
 MAX_CANDIDATES: Final = 5
@@ -217,6 +223,33 @@ _RECEIPT_WORDS: Final = (
     "your order",
     "order date",
     "auth",
+)
+#: What a loan bill, a mortgage statement or an investment statement prints
+#: beside its "Total" or "Amount due" and no till or order confirmation does
+#: (whole words of the folded text). "year to date", "ytd", "due date" and
+#: "account number" are left out on purpose: loyalty totals, invoices and
+#: store accounts print them on real receipts.
+_BILL_WORDS: Final = (
+    "principal balance",
+    "outstanding principal",
+    "principal paid",
+    "interest paid",
+    "interest rate",
+    "escrow",
+    "payoff",
+    "loan number",
+    "loan seq",
+    "payment due date",
+    "past due",
+    "amount past due",
+    "payment coupon",
+    "payment allocation",
+    "account statement",
+    "activity statement",
+    "starting cash",
+    "ending cash",
+    "net asset value",
+    "vested balance",
 )
 _QTY_ONLY: Final = re.compile(r"^(\d{1,4})\s?[@xX]\s?(\S{0,20})$")
 _QTY_IN: Final = re.compile(r"\b(\d{1,4})\s?[@x]\s?$")
@@ -777,11 +810,15 @@ def _items(typed: Sequence[_Line], start: int) -> list[ReceiptLine]:
 # -- the parser ----------------------------------------------------------------------
 
 
-def _scores(view_lines: Sequence[ViewLine]) -> float:
+def _scores(view_lines: Sequence[ViewLine], *, pages: int = 1) -> float:
+    """How much the lines read as a receipt (0 to 0.95); ``pages`` is the
+    page count of the document they come from (a mail body is one page)."""
     if not view_lines or len(view_lines) > MAX_RECEIPT_LINES:
         return 0.0
     text = " " + " ".join(fold(line.text) for line in view_lines) + " "
     if any(f" {word} " in text for word in _STATEMENT_WORDS):
+        return 0.0
+    if any(f" {word} " in text for word in _BILL_WORDS):
         return 0.0
     typed = _typed(view_lines)
     # Keywords count even where OCR lost the amount next to them.
@@ -795,10 +832,13 @@ def _scores(view_lines: Sequence[ViewLine]) -> float:
     score += 0.15 if "subtotal" in kinds else 0.0
     score += 0.1 if "tax" in kinds else 0.0
     score += 0.1 if ("tender" in kinds or "change" in kinds) else 0.0
-    score += 0.1 if any(f" {word} " in text for word in _RECEIPT_WORDS) else 0.0
+    worded = any(f" {word} " in text for word in _RECEIPT_WORDS)
+    score += 0.1 if worded else 0.0
     score += 0.05 if "item" in kinds else 0.0
     if " invoice " in text and " receipt " not in text:
         score = min(score, 0.3)
+    if pages == MAX_RECEIPT_PAGES and not worded:
+        score = min(score, UNWORDED_TWO_PAGE_SCORE)
     return round(min(score, 0.95), 4)
 
 
@@ -934,7 +974,10 @@ class ReceiptParser(DocumentParser):
     kind: ClassVar[Literal["statement", "payslip", "receipt"]] = "receipt"
 
     def detect(self, view: DocumentView) -> float:
-        return _scores([line for line in view.lines if line.page <= 2])
+        if view.page_count > MAX_RECEIPT_PAGES:
+            return 0.0
+        lines = [line for line in view.lines if line.page <= MAX_RECEIPT_PAGES]
+        return _scores(lines, pages=view.page_count)
 
     def parse(
         self, view: DocumentView, *, threshold: float, date_order: str | None = None

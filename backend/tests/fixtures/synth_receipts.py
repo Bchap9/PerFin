@@ -30,7 +30,7 @@ from decimal import ROUND_HALF_UP, Decimal
 from email.message import EmailMessage
 from email.policy import default as default_policy
 from html import escape
-from typing import Final
+from typing import Final, Literal
 
 import numpy as np
 from PIL import Image, ImageDraw, ImageFilter, ImageFont
@@ -499,3 +499,51 @@ def receipt_html_email(
         maintype, subtype = ctype.split("/", 1)
         msg.add_attachment(data, maintype=maintype, subtype=subtype, filename=name)
     return msg.as_bytes()
+
+
+# -- documents that are not receipts -------------------------------------------
+
+BillKind = Literal["auto_loan", "student_loan", "activity_statement"]
+
+_BILLS: Final[dict[str, str]] = {
+    "auto_loan": """NORTHGATE AUTO CREDIT
+Loan Number ****4417
+Payment Due Date 04/18/2026
+Principal Balance      12,480.55
+Regular payment           412.30
+Late charge                 6.00
+Amount Past Due             0.00
+Total amount due          418.30
+Detach the payment coupon and return it with your payment
+""",
+    "student_loan": """CEDARBROOK EDUCATION LOANS
+Interest bill
+Loan Seq 0003
+Interest Rate 5.25%
+Outstanding Principal    8,930.00
+Interest accrued            38.42
+Total                       38.42
+Thank you for your payment
+""",
+    "activity_statement": """HARBORLIGHT SECURITIES
+Activity Statement
+March 1, 2026 to March 31, 2026
+Starting Cash       1,250.00
+Deposits              400.00
+Commissions             3.50
+Ending Cash         1,646.50
+Net Asset Value    18,204.75
+Total              18,204.75
+""",
+}
+
+
+def bill_text(kind: BillKind) -> str:
+    """A short bill or statement that prints a total and is not a receipt.
+
+    Each has a ``Total`` or ``Total amount due`` line (what the receipt
+    parser looks for) and two or three phrases no till prints (a loan
+    number, a principal balance, starting and ending cash). Lenders, numbers
+    and figures are invented.
+    """
+    return _BILLS[kind]

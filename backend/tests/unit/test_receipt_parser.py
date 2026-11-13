@@ -9,8 +9,10 @@ documents (``tests/fixtures/synth_receipts.py``).
 
 from __future__ import annotations
 
+from dataclasses import replace
 from datetime import date
 from decimal import Decimal
+from email.message import EmailMessage
 
 import pytest
 
@@ -18,7 +20,7 @@ from app.ingestion.extract.eml import extract_eml
 from app.ingestion.extract.pdf import extract_pdf
 from app.ingestion.parsers import receipt as rp
 from app.ingestion.parsers.base import DocumentView
-from app.ingestion.parsers.registry import PARSERS, parse_extraction
+from app.ingestion.parsers.registry import MIN_SCORE, PARSERS, parse_extraction
 from app.ingestion.sandbox.protocol import ExtractOptions, Receipt
 from tests.fixtures import synth_receipts as sr
 
@@ -310,8 +312,6 @@ def test_receipt_mail_body() -> None:
 
 
 def test_a_mail_that_is_not_a_receipt() -> None:
-    from email.message import EmailMessage
-
     msg = EmailMessage()
     msg["From"] = "Friend <friend@example.invalid>"
     msg["Subject"] = "Lunch?"
@@ -337,3 +337,66 @@ def test_a_line_with_an_ssn_or_ein_is_never_the_merchant() -> None:
     receipt = _read(text)
     assert receipt.merchant == "CORNER MARKET"
     assert not any("000-00-0000" in c for c in receipt.merchant_candidates)
+
+
+# -- what is not a receipt (bills, long documents) -------------------------------------
+
+
+@pytest.mark.parametrize("kind", ["auto_loan", "student_loan", "activity_statement"])
+def test_a_bill_is_not_a_receipt(kind: sr.BillKind) -> None:
+    assert _score(sr.bill_text(kind)) == 0.0
+
+
+def test_more_than_two_pages_is_not_a_receipt() -> None:
+    spec = sr.receipt_spec(4245)
+    result = extract_pdf(sr.receipt_pdf(spec), ExtractOptions(previews=False), "pdf")
+    view = DocumentView.from_result(result)
+    parser = rp.ReceiptParser()
+    assert view.page_count == 1
+    assert parser.detect(view) >= 0.8
+    assert parser.detect(replace(view, page_count=rp.MAX_RECEIPT_PAGES)) > 0.0
+    assert parser.detect(replace(view, page_count=4)) == 0.0
+
+
+TWO_PAGE_ORDER = """HILLVIEW SUPPLY CO
+ORDER 7731
+BRACKET        3.49
+SUBTOTAL       3.49
+TAX            0.30
+TOTAL          3.79
+"""
+
+
+def test_two_pages_without_receipt_words_is_below_the_minimum() -> None:
+    lines = rp.view_lines_from_text(TWO_PAGE_ORDER)
+    one_page = rp._scores(lines)
+    assert one_page >= 0.7
+    assert rp._scores(lines, pages=1) == one_page
+    assert rp._scores(lines, pages=2) <= 0.3 < MIN_SCORE
+    # A receipt word on the page: two pages keep the score of one.
+    thanked = rp.view_lines_from_text(TWO_PAGE_ORDER + "THANK YOU\n")
+    assert rp._scores(thanked, pages=2) == rp._scores(thanked) > one_page
+
+
+def test_a_mail_bill_is_not_a_receipt_mail() -> None:
+    msg = EmailMessage()
+    msg["From"] = "Northgate Auto Credit <billing@northgate.invalid>"
+    msg["Subject"] = "Your bill is ready"
+    msg["Date"] = "Wed, 01 Apr 2026 12:00:00 +0000"
+    msg.set_content(sr.bill_text("auto_loan"))
+    result = extract_eml(msg.as_bytes(), ExtractOptions(), "eml")
+    assert result.email is not None
+    assert "Total amount due" in result.email.body_text
+    assert rp.parse_email_receipt(result, threshold=THRESHOLD) is None
+
+
+def test_no_synthetic_receipt_prints_a_bill_word() -> None:
+    """The bill words open one new zero path in ``_scores``: no receipt of the
+    accuracy sets may walk into it (the page rules do not apply to one page)."""
+    specs = [*sr.tuning_specs(), *sr.held_out_specs()]
+    assert specs
+    for spec in specs:
+        lines = rp.view_lines_from_text(sr.receipt_text(spec))
+        text = " " + " ".join(rp.fold(line.text) for line in lines) + " "
+        printed = [word for word in rp._BILL_WORDS if f" {word} " in text]
+        assert printed == [], (spec.seed, printed)
