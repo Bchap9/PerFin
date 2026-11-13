@@ -677,6 +677,8 @@ a child answering with parser output is `bad_output`.
     order they happened, so the running balances agree (warning
     `rows_newest_first`); only when a running balance is printed or every
     row stands in one section.
+  - *Titles.* The line printed over a header, and the title of a block
+    (`Account summary`), is never the second line of the row above it.
   - *Balances.* A dated line whose description starts with an opening or
     closing label is a balance, whatever column its figure is in, and
     never a transaction (a payee that starts with a label, `New Balance
@@ -685,7 +687,13 @@ a child answering with parser output is `bad_output`.
     a line is the one printed, and a closing label after `previous`,
     `last` or `prior` closes nothing. A label printed without its figure
     takes the figure printed alone on the line next to it (confidence
-    0.9).
+    0.9). A dash standing apart between a label and its figure (`Ending
+    Balance - $992.50`) is a minus or only a separator: the reading the
+    rows agree with is taken (the other balance and the rows' total, or
+    the running balance beside the first or last row), and a balance
+    nothing settles is not given at all, so the statement is held
+    unreconciled instead of recorded with the wrong sign. `-$992.50`, and
+    `- $992.50` in a cell of its own, are negative as printed.
   - *Period and year.* The period is looked for in this order, each step
     only when those before it found nothing: (1) a labelled period (also
     `Statement For`, `Billing Cycle`, `Period Covered`, `Statement
@@ -731,7 +739,10 @@ a child answering with parser output is `bad_output`.
     first account or share (`rows_outside_account`); date-led lines
     ending in an amount under a section title and no header
     (`rows_without_header:<n>`; a titled section without a header is not
-    read); and each dated entry right of the left group of a table
+    read), and the same lines with words on them after a header of
+    heading words that ended the table without being one PerFin reads
+    (`Date | Balance`; figures by day under it have no words and are not
+    counted); and each dated entry right of the left group of a table
     printed two or three times across the page (`Number | Date Paid |
     Amount` three times: the left group is read, the others are counted,
     `table_across_unread:<n>`, and the statement cannot add up and is

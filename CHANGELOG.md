@@ -282,11 +282,17 @@ What remains (details in docs/ROADMAP.md):
 - **No statement line disappears without a count.** Undated lines with
   a figure between dated rows, rows above the first account of a member
   statement, dated lines under a section title that has no header row
-  (`rows_without_header:<n>`) and the entries of a table printed two or
-  three times across the page beyond its left group
+  (`rows_without_header:<n>`), lines of a date, words and a figure after
+  a header of heading words that ended the table, and the entries of a
+  table printed two or three times across the page beyond its left group
   (`table_across_unread:<n>`) are counted and raise the `lines_skipped`
   item, so the document waits instead of ending `processed` with fewer
   rows than it prints.
+- **A dash after a balance label is not taken for a minus unread.**
+  `Ending Balance - $992.50` is read as the rows say (positive when they
+  add up to it, an overdraft when they end below zero); when nothing
+  settles it no balance is recorded and the statement waits. The title
+  of the next table is no longer added to the memo of the row above it.
 - **Credit-union shares are named by their titles** when the title
   carries a figure (`Dividends Paid YTD: 4.12`) or starts with the
   share's number (`ID 0040 - SHARE DRAFT`); a member statement of three
