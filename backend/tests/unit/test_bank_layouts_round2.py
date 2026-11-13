@@ -26,6 +26,11 @@ the dated line, the foreign amount, the rate, then the amount) is the row's.
 Beside it what must stay unread: a total under such a row, a figure four
 lines down, a figure under a table with two money columns, and a figure
 that follows another dated line.
+
+A balance label reads its own figure: the text searched for it ends where
+the next label of the summary starts (``Opening Balance pending | Closing
+Balance 410.00`` has no opening balance). Two labels with a figure each on
+one line, and ``Previous Statement Balance`` as one label, read as before.
 """
 
 from __future__ import annotations
@@ -37,7 +42,7 @@ from app.ingestion.extract.pdf import extract_pdf
 from app.ingestion.parsers.base import Cell, DocumentView, ParseOutcome, ViewLine
 from app.ingestion.parsers.registry import parse_extraction
 from app.ingestion.parsers.statement_header import Role
-from app.ingestion.parsers.table_statement import TableStatementParser
+from app.ingestion.parsers.table_statement import TableStatementParser, _Summary
 from app.ingestion.sandbox.protocol import ExtractOptions, ExtractResult, Statement
 from tests.fixtures import synth_bank_layouts2 as synth
 
@@ -790,3 +795,51 @@ def test_a_dated_line_ends_the_wait() -> None:
     )
     assert _transactions(outcome) == [("Bakery", Decimal("-3.00"))]
     assert outcome.skipped_lines == 1
+
+
+# -- a balance label and the figure of the next label ---------------------------
+
+
+def _summary(*cells: tuple[str, float]) -> _Summary:
+    """The summary read from one hand-built line."""
+    (line,) = _view([list(cells)]).lines
+    summary = _Summary()
+    TableStatementParser()._scan_summary(line, summary)
+    return summary
+
+
+def test_a_label_does_not_take_the_next_labels_figure() -> None:
+    summary = _summary(("Opening Balance pending", 62.0), ("Closing Balance 410.00", 300.0))
+    assert summary.opening is None
+    assert summary.closing is not None
+    assert summary.closing.value == Decimal("410.00")
+    # The same in one cell, and with a total's label as the next one.
+    summary = _summary(("Opening Balance n/a Closing Balance 410.00", 62.0))
+    assert summary.opening is None
+    assert summary.closing is not None
+    assert summary.closing.value == Decimal("410.00")
+    summary = _summary(("New Balance see page 2", 62.0), ("Payments and Credits 35.00", 300.0))
+    assert summary.closing is None
+    assert summary.credits_total is not None
+    assert summary.credits_total.value == Decimal("35.00")
+
+
+def test_two_labels_and_two_figures_on_one_line() -> None:
+    summary = _summary(("Opening Balance 120.00 Closing Balance 410.00", 62.0))
+    assert summary.opening is not None
+    assert summary.opening.value == Decimal("120.00")
+    assert summary.closing is not None
+    assert summary.closing.value == Decimal("410.00")
+
+
+def test_previous_statement_balance_is_one_label() -> None:
+    # ``Statement Balance`` inside it is not "the next label", and no closing
+    # balance either.
+    summary = _summary(("Previous Statement Balance 88.00", 62.0))
+    assert summary.opening is not None
+    assert summary.opening.value == Decimal("88.00")
+    assert summary.closing is None
+    # A label that overlaps this one's end does not cut its figure off.
+    summary = _summary(("Balance Brought Forward 61.00", 62.0))
+    assert summary.opening is not None
+    assert summary.opening.value == Decimal("61.00")

@@ -1462,9 +1462,26 @@ class TableStatementParser(DocumentParser):
         A match lying inside a match of one of ``inside`` is no match
         (``statement balance`` in ``Previous Statement Balance``); with
         ``earlier``, neither is one after ``previous``, ``last`` or ``prior``.
+
+        The figure is looked for up to the next label of the summary only
+        (``Opening Balance pending  Closing Balance 410.00`` has no opening
+        balance): a label that starts at or after this one's end. A longer
+        label containing this one starts before it and ends nothing.
         """
         text = line.text[:MAX_LINE]
         outer = [match.span() for label in inside for match in _label_pattern(label).finditer(text)]
+        starts = sorted(
+            {
+                match.start()
+                for label in (
+                    *self.opening_labels,
+                    *self.closing_labels,
+                    *self.credit_total_labels,
+                    *self.charge_total_labels,
+                )
+                for match in _label_pattern(label).finditer(text)
+            }
+        )
         for label in sorted(labels, key=len, reverse=True):
             for match in _label_pattern(label).finditer(text):
                 start, end = match.span()
@@ -1473,7 +1490,8 @@ class TableStatementParser(DocumentParser):
                 before = text[:start].split()
                 if earlier and before and normalise(before[-1]) in EARLIER_STATEMENT_WORDS:
                     continue
-                amounts = find_amounts(text[end:])
+                stop = next((s for s in starts if s >= end), len(text))
+                amounts = find_amounts(text[end:stop])
                 if amounts:
                     return amounts[0]
         return None
