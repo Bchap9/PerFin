@@ -547,11 +547,53 @@ def test_card_words_in_a_long_sentence_are_no_cue() -> None:
         # Whole words only.
         ("Savingsplan Rewards", True),
         ("Deposit protection notice", True),
+        # Lines that name the account: the word is the first or the second,
+        # and a few words at most are printed with it.
+        ("Business Checking", False),
+        ("Deposits and Additions", False),
+        ("Savings Account ******0041", False),
+        ("Premier Checking Account XXXX0041", False),
+        # Lines of a card statement that only mention a deposit account: the
+        # one the card is paid from, what its rewards saved.
+        ("AutoPay from Checking ending 7731", True),
+        ("Payment from Savings ******0041", True),
+        ("Rewards savings this year $12.40", True),
+        ("Your total savings with this card", True),
     ],
 )
 def test_a_deposit_account_word_vetoes_the_card_reader(line: str, card: bool) -> None:
     view = _view([[("Corporate Card", 62.0)], [(line, 62.0)], HEADER, ROW])
     assert (CardStatementParser().detect(view) > 0) is card
+
+
+@pytest.mark.parametrize(
+    "line", ["AutoPay from Checking ending 7731", "Rewards savings this year $12.40"]
+)
+def test_a_card_statement_that_mentions_a_deposit_account_keeps_card_signs(line: str) -> None:
+    view = _view(
+        [
+            [("Previous Balance 100.00", 62.0)],
+            [("New Balance 184.99", 62.0)],
+            [("Minimum Payment Due 25.00", 62.0)],
+            [(line, 62.0)],
+            HEADER,
+            [("01/05/2025", 62.0), ("Grocer Fennel", 150.0), ("45.00", 500.0)],
+            [("01/07/2025", 62.0), ("Saltmarsh Outfitters", 150.0), ("119.99", 500.0)],
+            [("01/12/2025", 62.0), ("Payment received", 150.0), ("-80.00", 500.0)],
+        ]
+    )
+    best = max(PARSERS, key=lambda p: p.detect(view))
+    assert best.name == "card_statement_generic"
+    (statement,) = best.parse(view, threshold=0.85).statements
+    assert statement.account.account_type == "creditcard"
+    # Purchases are money out and the payment is money in.
+    assert [t.amount for t in statement.transactions] == [
+        Decimal("-45.00"),
+        Decimal("-119.99"),
+        Decimal("80.00"),
+    ]
+    assert statement.reconciliation is not None
+    assert statement.reconciliation.status == "ok"
 
 
 def test_a_deposit_account_word_among_the_rows_is_no_veto() -> None:

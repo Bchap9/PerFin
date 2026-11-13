@@ -42,6 +42,9 @@ And statements that print words another reader listens for:
 * :func:`other_card_ending_in`: a card statement of an issuer no parser is
   written for, which prints ``Card ending in 4410`` (likewise one of Demo
   Card Services' two phrases).
+* :func:`card_paid_from_checking`: the same card statement with the lines
+  ``AutoPay from Checking ending 7731`` and ``Rewards savings this year
+  $12.40``: words of a deposit account on a statement that is not one.
 
 And statements whose amounts print no sign, in tables a title gives the
 direction of:
@@ -612,8 +615,25 @@ _CARD_ROWS: Final[tuple[ExpectedRow, ...]] = (
 _CARD_PREVIOUS: Final = _d("512.30")
 
 
+#: Lines a card statement prints about the bank account it is paid from and
+#: about what its rewards saved: each holds a word a deposit account is named
+#: by, and neither names the account the statement is of.
+CARD_AUTOPAY_LINE: Final = "AutoPay from Checking ending 7731"
+CARD_REWARDS_LINE: Final = "Rewards savings this year $12.40"
+
+
 def other_card_ending_in() -> bytes:
     """A card statement (charges positive) that prints ``Card ending in 4410``."""
+    return _card_ending_in(autopay=False)
+
+
+def card_paid_from_checking() -> bytes:
+    """:func:`other_card_ending_in` with :data:`CARD_AUTOPAY_LINE` under the
+    card's number and :data:`CARD_REWARDS_LINE` under the summary."""
+    return _card_ending_in(autopay=True)
+
+
+def _card_ending_in(*, autopay: bool) -> bytes:
     buf = io.BytesIO()
     c = canvas.Canvas(buf, pagesize=letter)
     charges = -sum((a for _, a, _ in _CARD_ROWS if a < 0), Decimal(0))
@@ -634,6 +654,9 @@ def other_card_ending_in() -> bytes:
             [(40, "Minimum Payment Due"), (-300, "$25.00")],
         ],
     )
+    if autopay:
+        _line(c, 718, [(40, CARD_AUTOPAY_LINE)])
+        _line(c, 636, [(40, CARD_REWARDS_LINE)])
     _line(c, 618, [(40, "Date"), (110, "Description"), (-560, "Amount")], size=8)
     _rows(
         c,
@@ -947,6 +970,7 @@ EXPECTED_ROWS: Final[dict[str, list[ExpectedRow]]] = {
     "checking_with_card_note": list(_NOTE_ROWS),
     "other_current_account": list(_CURRENT_ROWS),
     "other_card_ending_in": list(_CARD_ROWS),
+    "card_paid_from_checking": list(_CARD_ROWS),
     "sectioned_unsigned_checking": list(_SECTION_ROWS),
     "sectioned_repeat_without_title": list(_SECTION_ROWS),
     "card_unsigned_payments": list(_UNSIGNED_CARD_ROWS),

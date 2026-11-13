@@ -258,6 +258,24 @@ def test_a_statement_of_another_bank_keeps_its_own_currency_and_type() -> None:
     assert card.account.last4 == "4410"
 
 
+def test_a_card_paid_from_a_checking_account_is_still_a_card() -> None:
+    # Two short lines of page 1 hold a deposit-account word, and neither
+    # names the account the statement is of.
+    assert "Checking" in synth.CARD_AUTOPAY_LINE
+    assert "savings" in synth.CARD_REWARDS_LINE
+    data = synth.card_paid_from_checking()
+    for result in (_unhinted(data), _read(data)):
+        statement = _only(result)
+        assert _parser(statement) == "card_statement_generic"
+        assert statement.account.account_type == "creditcard"
+        assert statement.account.last4 == "4410"
+        # Charges are money out and the payment money in, as without the two lines.
+        assert _rows(statement) == synth.EXPECTED_ROWS["card_paid_from_checking"]
+        assert _rows(statement) == _rows(_only(_unhinted(synth.other_card_ending_in())))
+        assert _status(statement) == "ok"
+        assert _skipped(result) == 0
+
+
 def _statement_of_account() -> bytes:
     return synth_card_statement.card_pdf(synth_card_statement.card_statement())
 
@@ -390,10 +408,18 @@ def test_an_amount_under_no_numeric_column_is_not_moved() -> None:
             # 12.00 is printed over the description column, far from every
             # heading: it is a figure in the text (a quantity, a rate), no amount.
             [("01/07/2026", 62.0), ("Tea", 150.0), ("12.00", 290.0)],
+            # The same on a row that reads, and on one that prints no payee:
+            # the figure joins no column, the description's least of all.
+            [("01/08/2026", 62.0), ("Bakery", 150.0), ("12.00", 290.0), ("3.00", 500.0)],
+            [("01/09/2026", 62.0), ("12.00", 290.0), ("7.00", 500.0)],
         ]
     )
     (statement,) = outcome.statements
-    assert [(t.payee, t.amount) for t in statement.transactions] == [("Coffee", Decimal("4.50"))]
+    assert [(t.payee, t.amount) for t in statement.transactions] == [
+        ("Coffee", Decimal("4.50")),
+        ("Bakery", Decimal("3.00")),
+        (None, Decimal("7.00")),
+    ]
     assert outcome.skipped_lines == 1
 
 
@@ -447,13 +473,62 @@ def test_a_date_led_cell_away_from_the_date_column_is_no_row() -> None:
         [
             HEADER,
             [("01/05/2026", 62.0), ("Coffee", 150.0), ("4.50", 500.0)],
-            # Starts under the description, 150 points right of the dates.
-            [("01/31/2026 average daily balance", 215.0), ("812.44", 500.0)],
+            # Under ``Description``, 88 points right of the dates: the cell is
+            # the description's, and its first word is no date of a row.
+            [("01/31/2026 average daily balance", 150.0), ("812.44", 500.0)],
         ]
     )
     (statement,) = outcome.statements
-    assert [t.payee for t in statement.transactions] == ["Coffee"]
+    assert [(t.posted, t.payee) for t in statement.transactions] == [(date(2026, 1, 5), "Coffee")]
     assert outcome.skipped_lines == 0
+    assert "dates_carried" not in outcome.warnings
+
+
+@pytest.mark.parametrize(
+    "line",
+    [
+        "01/01/2026 to 01/31/2026 average balance",
+        "01/01 through 01/31 interest earned",
+        "01/01 thru 01/31/2026 interest earned",
+        "Jan 1 - Jan 31 interest earned",
+        "01/01/2026 \u2013 01/31/2026 average balance",
+    ],
+)
+@pytest.mark.parametrize("more_rows", [False, True], ids=["last-line", "rows-follow"])
+def test_a_line_that_starts_with_a_range_of_dates_is_no_row(line: str, more_rows: bool) -> None:
+    # A summary line printed from the date column, its figure under
+    # ``Amount``: the first date of a range dates no transaction.
+    after = [_row(20, "Tea", "-9.00")] if more_rows else []
+    outcome = _parse(
+        [
+            [("Statement period 01/01/2026 - 01/31/2026", 62.0)],
+            HEADER,
+            [("01/05/2026", 62.0), ("Coffee", 150.0), ("-4.50", 500.0)],
+            [(line, 62.0), ("97.00", 500.0)],
+            *after,
+        ]
+    )
+    (statement,) = outcome.statements
+    assert [t.payee for t in statement.transactions] == ["Coffee", *(["Tea"] if more_rows else [])]
+    # No row, no row with the date above it, and nothing to count: a summary line.
+    assert outcome.skipped_lines == 0
+    assert "dates_carried" not in outcome.warnings
+
+
+def test_a_fused_date_before_a_payee_that_starts_with_a_range_word_is_split() -> None:
+    # ``To`` starts payees too: only a second date after it makes a range.
+    outcome = _parse(
+        [
+            HEADER,
+            [("01/05/2026 To Savings 0041", 62.0), ("-50.00", 500.0)],
+            [("01/07/2026 Through Road Cafe", 62.0), ("-4.50", 500.0)],
+        ]
+    )
+    (statement,) = outcome.statements
+    assert [(t.posted, t.payee, t.amount) for t in statement.transactions] == [
+        (date(2026, 1, 5), "To Savings 0041", Decimal("-50.00")),
+        (date(2026, 1, 7), "Through Road Cafe", Decimal("-4.50")),
+    ]
 
 
 # -- balances, hand-built -------------------------------------------------------
@@ -607,6 +682,117 @@ def test_a_payee_that_mentions_a_balance_is_still_a_row() -> None:
     )
     statement = _one(outcome)
     assert [t.amount for t in statement.transactions] == [Decimal("-5.00"), Decimal("-20.00")]
+
+
+@pytest.mark.parametrize("reader", [TableStatementParser, CardStatementParser])
+def test_a_payee_that_starts_with_a_balance_label_is_still_a_row(
+    reader: type[TableStatementParser],
+) -> None:
+    card = reader is CardStatementParser
+    sign = Decimal(-1) if card else Decimal(1)
+    view = _view(
+        [
+            [("Previous balance 100.00", 62.0)],
+            [("Ending balance 284.99", 62.0)],
+            HEADER,
+            [("01/05/2026", 62.0), ("Grocer Fennel", 150.0), ("45.00", 500.0)],
+            # A shop and a brewery named like a balance: purchases, with an amount.
+            [("01/07/2026", 62.0), ("New Balance Outlet 114", 150.0), ("119.99", 500.0)],
+            [("01/09/2026", 62.0), ("Opening Balance Brewing Co", 150.0), ("20.00", 500.0)],
+        ]
+    )
+    outcome = reader().parse(view, threshold=0.85)
+    statement = _one(outcome)
+    assert [(t.payee, t.amount) for t in statement.transactions] == [
+        ("Grocer Fennel", sign * Decimal("45.00")),
+        ("New Balance Outlet 114", sign * Decimal("119.99")),
+        ("Opening Balance Brewing Co", sign * Decimal("20.00")),
+    ]
+    # The balances are the summary's, untouched by the rows.
+    assert _balances(statement) == (sign * Decimal("100.00"), sign * Decimal("284.99"))
+    assert _status(statement) == "ok"
+    assert outcome.skipped_lines == 0
+
+
+@pytest.mark.parametrize(
+    "label",
+    [
+        "Ending Balance",
+        "Ending Balance on 01/31/2026",
+        "Ending Balance as of January 31",
+        "Ending balance this period",
+    ],
+)
+def test_a_dated_label_with_a_date_or_a_few_small_words_is_a_balance_line(label: str) -> None:
+    outcome = _parse([[("Beginning balance 100.00", 62.0)], HEADER, ROW, _row(31, label, "95.50")])
+    statement = _one(outcome)
+    assert [t.payee for t in statement.transactions] == ["Coffee"]
+    assert _balances(statement) == (Decimal("100.00"), Decimal("95.50"))
+    assert _status(statement) == "ok"
+
+
+def test_a_dated_line_with_only_a_balance_figure_is_a_balance_whatever_follows_the_label() -> None:
+    # No figure in a money column: nothing here could be a transaction.
+    outcome = _parse(
+        [
+            TWO_SIDED,
+            [("01/01/2026", 62.0), ("Balance Forward Harbour Branch", 150.0), ("100.00", 520.0)],
+            [("01/05/2026", 62.0), ("Coffee", 150.0), ("4.50", 380.0), ("95.50", 520.0)],
+        ]
+    )
+    statement = _one(outcome)
+    assert [t.payee for t in statement.transactions] == ["Coffee"]
+    assert _balances(statement) == (Decimal("100.00"), Decimal("95.50"))
+    assert outcome.skipped_lines == 0
+
+
+def test_an_undated_row_before_a_dated_balance_line_takes_the_date_above_it() -> None:
+    outcome = _parse(
+        [
+            [("Beginning balance 100.00", 62.0)],
+            HEADER,
+            ROW,
+            [("Tea", 150.0), ("-9.00", 500.0)],
+            [("01/31/2026", 62.0), ("Ending Balance", 150.0), ("86.50", 500.0)],
+        ]
+    )
+    statement = _one(outcome)
+    assert [(t.posted, t.payee, t.amount) for t in statement.transactions] == [
+        (date(2026, 1, 5), "Coffee", Decimal("-4.50")),
+        (date(2026, 1, 5), "Tea", Decimal("-9.00")),
+    ]
+    assert _balances(statement) == (Decimal("100.00"), Decimal("86.50"))
+    assert _status(statement) == "ok"
+    assert outcome.skipped_lines == 0
+
+
+class _LabelledParser(TableStatementParser):
+    """An opening label that holds a closing one after a word of its own."""
+
+    opening_labels = (*TableStatementParser.opening_labels, "carried statement balance")
+
+
+def test_a_closing_label_inside_an_opening_label_closes_nothing() -> None:
+    # ``statement balance`` lies inside the longer label, and no ``previous``,
+    # ``last`` or ``prior`` stands before it.
+    view = _view([[("Carried statement balance 410.00", 62.0)], HEADER, ROW])
+    statement = _one(_LabelledParser().parse(view, threshold=0.85))
+    assert _balances(statement) == (Decimal("410.00"), None)
+
+
+def test_two_figures_beside_a_label_are_not_one_balance() -> None:
+    # ``1`` and ``234.00`` are two cells (a count and a figure), not 1,234.00.
+    outcome = _parse(
+        [[("Beginning Balance on", 62.0)], [("1", 300.0), ("234.00", 330.0)], HEADER, ROW],
+        step=10.0,
+    )
+    assert _balances(_one(outcome)) == (None, None)
+    # A currency sign in a cell of its own is still one amount alone on its line.
+    outcome = _parse(
+        [[("Beginning Balance on", 62.0)], [("$", 300.0), ("410.00", 310.0)], HEADER, ROW],
+        step=10.0,
+    )
+    assert _balances(_one(outcome)) == (Decimal("410.00"), None)
 
 
 # -- section titles and the direction of unsigned amounts -----------------------
@@ -941,6 +1127,135 @@ def test_a_header_after_an_unread_table_is_no_repeat() -> None:
     assert _amounts(outcome) == [Decimal("-700.00"), Decimal("900.00")]
 
 
+@pytest.mark.parametrize(
+    "wrap",
+    [
+        "Checks 2 items branch 14",
+        "Fees waived for this deposit",
+        "Transactions batch 0088",
+        "Payments desk 3",
+    ],
+)
+def test_a_wrapped_line_that_starts_with_a_title_word_is_no_title(wrap: str) -> None:
+    outcome = _parse(
+        [
+            [("Deposits", 62.0)],
+            HEADER,
+            _row(5, "Mobile deposit", "900.00"),
+            # Right under the row, in the description column: the row's second line.
+            [(wrap, 150.0)],
+            _row(9, "Salary Fennel Works", "1,180.00"),
+        ]
+    )
+    statement = _one(outcome)
+    assert [(t.amount, t.type) for t in statement.transactions] == [
+        (Decimal("900.00"), statement.transactions[0].type),
+        (Decimal("1180.00"), statement.transactions[0].type),
+    ]
+    assert statement.transactions[0].type != "fee"
+    assert statement.transactions[0].memo == wrap
+
+
+def test_a_title_under_a_row_is_one_at_the_margin_or_when_it_is_the_whole_key() -> None:
+    outcome = _parse(
+        [
+            [("Deposits", 62.0)],
+            HEADER,
+            _row(5, "Salary", "900.00"),
+            # Left of the description column: a title, whatever follows its key.
+            [("Checks paid this period", 62.0)],
+            _row(9, "Rent", "700.00"),
+            # In the description column, the key and nothing else: a sub-heading.
+            [("Fees", 150.0)],
+            _row(12, "Paper statements", "3.00"),
+            [("Deposits continued", 150.0)],
+            _row(14, "Bonus", "50.00"),
+        ]
+    )
+    statement = _one(outcome)
+    assert [(t.amount, t.type, t.memo) for t in statement.transactions] == [
+        (Decimal("900.00"), statement.transactions[0].type, None),
+        (Decimal("-700.00"), statement.transactions[1].type, None),
+        (Decimal("-3.00"), "fee", None),
+        (Decimal("50.00"), statement.transactions[3].type, None),
+    ]
+
+
+def test_a_pending_heading_under_a_row_is_no_wrapped_line() -> None:
+    outcome = _parse(
+        [
+            HEADER,
+            _row(5, "Coffee", "-4.50"),
+            [("Pending transactions", 150.0)],
+            _row(9, "Tea", "-2.00"),
+        ]
+    )
+    statement = _one(outcome)
+    assert [(t.payee, t.memo) for t in statement.transactions] == [("Coffee", None)]
+    assert outcome.pending_items == 1
+
+
+def test_the_last_line_of_the_page_before_says_nothing_of_a_repeated_header() -> None:
+    view = _pages(
+        [
+            [
+                [("Electronic Withdrawals", 62.0)],
+                HEADER,
+                _row(5, "Rent", "700.00"),
+                [("Withdrawals carried to the next page", 62.0)],
+            ],
+            [HEADER, _row(9, "Gas", "40.00")],
+        ]
+    )
+    outcome = TableStatementParser().parse(view, threshold=0.85)
+    assert _amounts(outcome) == [Decimal("-700.00"), Decimal("-40.00")]
+
+
+@pytest.mark.parametrize(
+    "above",
+    [
+        # A title the table does not know.
+        [("Direct Deposits", 62.0)],
+        # A known one with its total on the line: no title, and no page furniture.
+        [("Deposits and additions", 62.0), ("900.00", 500.0)],
+        [("Other Additions 900.00", 62.0)],
+    ],
+    ids=["unknown-title", "title-with-total", "unknown-with-total"],
+)
+def test_a_header_under_another_sections_line_is_no_repeat(above: list[tuple[str, float]]) -> None:
+    view = _pages(
+        [
+            [[("Electronic Withdrawals", 62.0)], HEADER, _row(5, "Rent", "700.00")],
+            [above, HEADER, _row(9, "Salary", "900.00")],
+        ]
+    )
+    outcome = TableStatementParser().parse(view, threshold=0.85)
+    # The withdrawals' direction ends with their section: the figure is as printed.
+    assert _amounts(outcome) == [Decimal("-700.00"), Decimal("900.00")]
+
+
+@pytest.mark.parametrize(
+    "above",
+    [
+        [[("Harbour Lantern Bank", 62.0)], [("Account number ending 4410", 62.0)]],
+        [[("Statement period 01/01/2026 - 01/31/2026", 62.0)], [("Page 2 of 3", 400.0)]],
+        [],
+    ],
+    ids=["bank-and-account", "period-and-page", "nothing"],
+)
+def test_page_furniture_over_a_repeated_header_keeps_the_direction(
+    above: list[list[tuple[str, float]]],
+) -> None:
+    view = _pages(
+        [
+            [[("Electronic Withdrawals", 62.0)], HEADER, _row(5, "Rent", "700.00")],
+            [*above, HEADER, _row(9, "Gas", "40.00")],
+        ]
+    )
+    outcome = TableStatementParser().parse(view, threshold=0.85)
+    assert _amounts(outcome) == [Decimal("-700.00"), Decimal("-40.00")]
+
+
 def test_a_printed_sign_beats_the_section() -> None:
     outcome = _parse(
         [
@@ -1034,6 +1349,43 @@ def test_rows_take_the_date_printed_above_them() -> None:
     assert _warnings(result).count("dates_carried") == 1
     # A date read one line up is believed enough to import: nothing waits on it.
     assert not any("posted_date" in t.low_confidence for t in statement.transactions)
+
+
+def test_a_carried_date_is_believed_less_than_a_printed_one() -> None:
+    statement = _only(_read(synth.date_once_per_day()))
+    days = [posted for posted, _, _ in synth.EXPECTED_ROWS["date_once_per_day"]]
+    carried = [index for index, day in enumerate(days) if index and day == days[index - 1]]
+    assert len(carried) == 9
+    for index, txn in enumerate(statement.transactions):
+        # The date is the least sure field of a carried row (0.9), and of no other.
+        assert (txn.confidence == 0.9) is (index in carried), (index, txn.confidence)
+        assert txn.confidence is not None
+        assert txn.confidence >= 0.9
+
+
+def test_a_figure_without_a_payee_between_rows_is_counted_not_read() -> None:
+    outcome = _parse(
+        [HEADER, _row(5, "Coffee", "-4.50"), [("-3.00", 500.0)], _row(9, "Refund", "9.25")]
+    )
+    assert [payee for _, payee in _payees(outcome)] == ["Coffee", "Refund"]
+    assert outcome.skipped_lines == 1
+    assert outcome.skipped_regions == [(1, (500.0, 128.0, 525.0, 137.0))]
+    assert "dates_carried" not in outcome.warnings
+
+
+def test_an_undated_line_at_the_top_of_a_page_takes_no_date_from_the_page_before() -> None:
+    # The table runs on without a header; the day of the line is not known.
+    view = _pages(
+        [
+            [HEADER, _row(5, "Coffee", "-4.50")],
+            [_undated("Bakery", "-3.00"), _row(9, "Refund", "9.25")],
+        ]
+    )
+    outcome = TableStatementParser().parse(view, threshold=0.85)
+    assert [payee for _, payee in _payees(outcome)] == ["Coffee", "Refund"]
+    assert outcome.skipped_lines == 1
+    assert outcome.skipped_regions == [(2, (150.0, 100.0, 525.0, 109.0))]
+    assert "dates_carried" not in outcome.warnings
 
 
 def test_lines_under_an_ordinary_table_are_not_rows() -> None:

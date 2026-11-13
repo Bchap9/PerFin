@@ -26,7 +26,9 @@ are read the same way:
    amount is a transaction; a dated line whose description starts with an
    opening or closing label is a balance line whatever column its figure
    is in (:meth:`TableStatementParser._balance_row`: the balance column,
-   else the rightmost money column), never a transaction: the first
+   else the rightmost money column), never a transaction (with a figure in
+   a money column, only when the description is the label, a date and
+   small words: ``New Balance Outlet 114`` is a payee and a row): the first
    opening and the last closing one are the statement's; a following line with only
    description text (and foreign-column text) continues the previous row's
    memo (wrapped text, a category line); a ``CR``/``DR`` alone in the
@@ -41,7 +43,9 @@ are read the same way:
    when that column has no figure of its own on the line. A date printed
    so close to the description that the two are one cell is split off it
    (:meth:`TableStatementParser._split_fused_date`), on a line with a
-   figure only: a wrapped line that starts with a date stays a wrap. With
+   figure only: a wrapped line that starts with a date stays a wrap, and
+   so does a line that starts with a range of dates (``01/01 through
+   01/31 interest earned``). With
    a figure in both the debit and the credit column, a zero is no figure
    (``$250.00 | -$0.00``); two amounts, or two zeros, say nothing and the
    row is counted as skipped. A year-less numeric text is a date only when
@@ -65,8 +69,14 @@ are read the same way:
    :data:`NOT_TITLE_WORDS` (``Interest summary``) is no title. A header
    without a title, on a later page than the last row and with the columns
    of the table being read, is that table's header **printed again**: the
-   direction and the type carry on. Any other header without a title starts
-   a table with neither. A dated line without a readable amount is counted as skipped.
+   direction and the type carry on, unless the line over it speaks of a
+   section (:data:`SECTION_WORDS`: a title the table does not know,
+   ``Direct Deposits``, or one with its total on the line). Any other header
+   without a title starts a table with neither. Right under a row, a line
+   of description text that starts with a title's key is the row's wrapped
+   text unless it is the whole key or starts left of the description column
+   (:meth:`TableStatementParser._heading_under_row`). A dated line without
+   a readable amount is counted as skipped.
    **A date printed once per day.** An undated line of a table with
    description text and exactly one figure in a money column, no total, no
    balance label and no section title, at most :data:`CARRY_LINES` line
@@ -313,6 +323,16 @@ EARLIER_STATEMENT_WORDS: Final = frozenset({"previous", "last", "prior"})
 #: to the line beside it (``Beginning Balance on``, ``Ending Balance as of``):
 #: a longer line is a sentence.
 LABEL_TAIL_WORDS: Final = 3
+#: Words a balance line may print after its label beside a date (``Ending
+#: Balance as of January 31``, ``Beginning balance this period``). Any other
+#: word after the label of a line with a figure in a money column makes it a
+#: payee (``New Balance Outlet 114``).
+LABEL_SMALL_WORDS: Final = frozenset(
+    {
+        "on", "as", "of", "at", "for", "from", "to", "the", "this", "last", "previous",
+        "prior", "period", "statement", "cycle", "month", "date", "page",
+    }
+)  # fmt: skip
 #: Line heights between a label and the figure printed beside it.
 ADJACENT_LINES: Final = 1.5
 #: A marker after a row's date (``January 9 *``: a processing date).
@@ -328,6 +348,8 @@ CARRY_LINES: Final = 2.5
 MIN_CARRIED: Final = 2
 #: The most words the date of a line outside a table is looked for in.
 LEAD_DATE_WORDS: Final = 3
+#: Words between the two dates of a range (``01/01 through 01/31``).
+RANGE_WORDS: Final = frozenset({"to", "through", "thru", "until", "-", "\u2013", "\u2014"})
 #: Yearless styles a month-named row date may be printed in.
 NAMED_YEARLESS: Final[tuple[DateStyle, ...]] = ("mon_d", "d_mon")
 
@@ -576,6 +598,10 @@ _OUT_WORDS: Final = frozenset(
     {"withdrawals", "debits", "subtractions", "checks", "fees", "charges", "purchases"}
 )
 _IN_WORDS: Final = frozenset({"deposits", "credits", "additions", "payments"})
+#: Words that make a line over a header the line of a section (its title,
+#: known or not, or its total): a header under such a line is no page header
+#: printed again.
+SECTION_WORDS: Final = _IN_WORDS | _OUT_WORDS
 #: Lines above a header searched for its section's title.
 TITLE_LINES_ABOVE: Final = 2
 
@@ -968,7 +994,9 @@ class TableStatementParser(DocumentParser):
         row printed as one cell).
 
         Nothing changes unless the line then has a figure in a numeric
-        column: a wrapped line that starts with a date stays a wrap.
+        column: a wrapped line that starts with a date stays a wrap. And a
+        date that starts a range (``01/01 through 01/31 interest earned``,
+        a summary line with its figure under ``Amount``) is no row's date.
         """
         if cells.get("date"):
             return
@@ -987,6 +1015,8 @@ class TableStatementParser(DocumentParser):
         else:
             return
         rest = list(words[size:])
+        if self._range_led(first.text):
+            return
         split: dict[Role, list[Cell]] = {
             other: [c for c in found if c is not first] for other, found in cells.items()
         }
@@ -1004,6 +1034,27 @@ class TableStatementParser(DocumentParser):
             split["description"] = [join_cells(rest), *split.get("description", [])]
         cells.clear()
         cells.update(split)
+
+    def _range_led(self, text: str) -> bool:
+        """``text`` starts with a range of dates: a date (its first one to
+        :data:`LEAD_DATE_WORDS` words), a range word (:data:`RANGE_WORDS`)
+        and a second date. The word alone starts payees too (``01/05 To
+        Savings 0041``)."""
+        words = text.split()
+
+        def dated(at: int) -> list[int]:
+            """The sizes of the dates that start at ``words[at]``."""
+            return [
+                size
+                for size in range(1, LEAD_DATE_WORDS + 1)
+                if at + size <= len(words)
+                and self._date_shaped(" ".join(words[at : at + size]).strip(_DATE_MARKS))
+            ]
+
+        return any(
+            len(words) > size and words[size].lower() in RANGE_WORDS and bool(dated(size + 1))
+            for size in dated(0)
+        )
 
     def without_stubs(self, lines: Sequence[ViewLine]) -> list[ViewLine]:
         """``lines`` without payment stubs: a stub marker line (``Please detach
@@ -1261,6 +1312,21 @@ class TableStatementParser(DocumentParser):
                 return self._title(above)
         return None
 
+    def _section_line_above(self, lines: Sequence[ViewLine], index: int) -> bool:
+        """The nearest line with letters among the :data:`TITLE_LINES_ABOVE`
+        before the header at ``lines[index]``, on its page, speaks of a
+        section (:data:`SECTION_WORDS`): a title the table does not know
+        (``Direct Deposits``) or one printed with its total (``Deposits and
+        additions 900.00``). Page furniture (the bank, the account, the
+        period, the page number) does not."""
+        header = lines[index]
+        for above in reversed(lines[max(0, index - TITLE_LINES_ABOVE) : index]):
+            if above.page != header.page:
+                break
+            if any(ch.isalpha() for ch in above.text):
+                return not SECTION_WORDS.isdisjoint(above.norm.split())
+        return False
+
     def _collect(self, lines: Sequence[ViewLine]) -> tuple[list[_Row], _Summary, int, int, bool]:
         rows: list[_Row] = []
         summary = _Summary()
@@ -1335,6 +1401,7 @@ class TableStatementParser(DocumentParser):
                     and row_page is not None
                     and line.page > row_page
                     and [c.role for c in header] == [c.role for c in columns]
+                    and not self._section_line_above(lines, index)
                 ):
                     # No title, and not the header of the table being read
                     # printed again on a later page: a table of its own.
@@ -1377,7 +1444,7 @@ class TableStatementParser(DocumentParser):
                     continue
                 if figures:
                     loose.append((line.page, line.bbox))
-                last = self._not_a_row(line, norm, cells, summary, last, scan)
+                last = self._not_a_row(line, norm, cells, summary, last, scan, columns)
                 if last is not None:
                     if held and last is held[-1]:
                         waiting.append((line, True))
@@ -1402,6 +1469,10 @@ class TableStatementParser(DocumentParser):
                         summary.opening, summary.opening_in_table = figure, True
                 elif figure is not None:
                     summary.closing, summary.closing_in_table = figure, True
+                if not pending:
+                    # A dated line of the table: the undated rows above it
+                    # are of the day printed over them, as before a dated row.
+                    settle(dated=True)
                 anchor = None if pending else row
                 continue
             if row.amount is None and row.debit is None and row.credit is None:
@@ -1462,8 +1533,9 @@ class TableStatementParser(DocumentParser):
 
     def _undated_figures(self, line: ViewLine, norm: str, cells: Mapping[Role, list[Cell]]) -> int:
         """How many figures an undated line of a table has in its money
-        columns; 0 for a total, a pending heading, a section title and a
-        line that starts with a balance label (none of them is a row)."""
+        columns; 0 for a total, a pending heading, a section title, a line
+        that starts with a range of dates and one that starts with a balance
+        label (none of them is a row)."""
         figures = sum(
             1
             for role, found in cells.items()
@@ -1478,6 +1550,9 @@ class TableStatementParser(DocumentParser):
         if any(norm.startswith(marker) for marker in self.pending_markers):
             return 0
         if self._title(line) is not None:
+            return 0
+        if self._range_led(line.text):
+            # ``01/01 through 01/31 interest earned``: a line of the summary.
             return 0
         described = normalise(" ".join(c.text for c in cells.get("description", [])))
         labels = (*self.opening_labels, *self.closing_labels)
@@ -1522,24 +1597,45 @@ class TableStatementParser(DocumentParser):
         """The kind and figure of a dated line whose description starts with
         an opening or closing label: the balance cell when it reads, else
         the rightmost money cell that reads (``Beginning Balance`` printed
-        under ``Amount`` or ``Deposit``)."""
-        kind: Literal["opening", "closing"]
-        if any(desc_norm.startswith(label) for label in self.opening_labels):
-            kind = "opening"
-        elif any(desc_norm.startswith(label) for label in self.closing_labels):
-            kind = "closing"
-        else:
+        under ``Amount`` or ``Deposit``).
+
+        With a figure in a money column the line could be a transaction, so
+        the description has to be the label and no more than a balance line
+        says after it (:meth:`_label_only`): a payee that starts with a
+        label (``New Balance Outlet 114``, ``Opening Balance Brewing Co``)
+        is a row, and its amount is no balance.
+        """
+        roles: tuple[Role, ...] = ("amount", "debit", "credit")
+        money = sorted(
+            (cell for role in roles for cell in cells.get(role, [])),
+            key=lambda cell: cell.x0,
+            reverse=True,
+        )
+        paid = next((a for c in money if (a := read_amount(c.text)) is not None), None)
+        kind: Literal["opening", "closing"] | None = None
+        for found, labels in (("opening", self.opening_labels), ("closing", self.closing_labels)):
+            if any(
+                desc_norm.startswith(label)
+                and (paid is None or self._label_only(desc_norm[len(label) :]))
+                for label in labels
+            ):
+                kind = "opening" if found == "opening" else "closing"
+                break
+        if kind is None:
             return None
         figure = self._amount(cells.get("balance"))
-        if figure is None:
-            roles: tuple[Role, ...] = ("amount", "debit", "credit")
-            money = sorted(
-                (cell for role in roles for cell in cells.get(role, [])),
-                key=lambda cell: cell.x0,
-                reverse=True,
-            )
-            figure = next((a for c in money if (a := read_amount(c.text)) is not None), None)
-        return kind, figure
+        return kind, figure if figure is not None else paid
+
+    @staticmethod
+    def _label_only(tail: str) -> bool:
+        """``tail`` (normalised, what a line prints after a balance label)
+        names no payee: nothing, or a date and words that are each one of
+        :data:`LABEL_SMALL_WORDS` or a month."""
+        words = [word for word in tail.split() if any(ch.isalpha() for ch in word)]
+        return all(
+            word in LABEL_SMALL_WORDS or month_day(f"{word} 1", "mon_d") is not None
+            for word in words
+        )
 
     def _label_alone(self, line: ViewLine) -> Literal["opening", "closing"] | None:
         """The balance a line names without printing its figure: it starts
@@ -1558,7 +1654,7 @@ class TableStatementParser(DocumentParser):
         """Balances printed beside their label, for those no label gave.
 
         A label line without a figure takes the amount of an amount-only
-        line (one cell, an amount) that is its neighbour in line order on
+        line (all of it reads as one amount) that is its neighbour in line order on
         its page, the tops at most :data:`ADJACENT_LINES` line heights
         apart: the next line first, else the one before.
         """
@@ -1574,7 +1670,6 @@ class TableStatementParser(DocumentParser):
                 beside = lines[other]
                 if (
                     beside.page != line.page
-                    or len(beside.cells) != 1
                     or abs(beside.bbox[1] - line.bbox[1]) > ADJACENT_LINES * line.height
                 ):
                     continue
@@ -1595,11 +1690,15 @@ class TableStatementParser(DocumentParser):
         summary: _Summary,
         last: _Row | None,
         scan: Callable[[ViewLine], None],
+        columns: Sequence[Column] = (),
     ) -> _Row | None:
         """Handle an undated line in the table; return the row a wrap may extend.
 
         ``scan`` reads a line of the summary (at once, or after the
-        candidate rows held back before it: :meth:`_collect`)."""
+        candidate rows held back before it: :meth:`_collect`). A line right
+        under a row that starts with a section title's key is the row's
+        wrapped text unless it is printed as a heading
+        (:meth:`_heading_under_row`, by the table's ``columns``)."""
         if any(norm.startswith(prefix.strip()) for prefix in self.skip_prefixes):
             return None
         # A credit/debit marker alone in a money column (``CR`` under the amount).
@@ -1616,7 +1715,7 @@ class TableStatementParser(DocumentParser):
             and only_text
             and line.page == last.page
             and line.bbox[1] - last.bbox[3] < 1.5 * line.height
-            and self._section(norm) is None
+            and not self._heading_under_row(line, norm, columns)
             and not find_amounts(line.text)
         ):
             last.memo.extend(c.text for c in cells.get("description", []))
@@ -1641,6 +1740,24 @@ class TableStatementParser(DocumentParser):
                 return None
         scan(line)
         return None
+
+    def _heading_under_row(self, line: ViewLine, norm: str, columns: Sequence[Column]) -> bool:
+        """A line of description text right under a row is a heading, not the
+        row's second line: a pending marker, or a section title that is its
+        whole key (``Fees``, ``Deposits continued``) or starts left of the
+        description column, where no wrapped text is printed. ``Checks 2
+        items branch 14`` under a payee is the row's memo: read as a title
+        it would turn the unsigned rows after it into money out."""
+        found = self._section(norm)
+        if found is None:
+            return False
+        title = section_title(norm, self.section_titles)
+        if found[0] or title is None:
+            return True
+        if len(norm.split()) - title.continued == len(title.key.split()):
+            return True
+        described = next((c for c in columns if c.role == "description"), None)
+        return described is None or line.bbox[0] < described.x0 - line.height
 
     @staticmethod
     def _amount(cells: list[Cell] | None) -> Amount | None:
@@ -2346,8 +2463,32 @@ WEAK_CARD_VOCABULARY: Final = ("new charges", "cardmember", "card member")
 CARD_CUE_WORDS: Final = 8
 #: A whole word of these on a short page-1 line outside the rows names a
 #: deposit account (``Business Checking``, ``Total Deposits``): the statement
-#: is not a card's, whatever card words are there.
+#: is not a card's, whatever card words are there. Only on a line that
+#: **names** the account (:func:`names_deposit_account`): a card statement
+#: mentions them too (``AutoPay from Checking ending 7731``, ``Rewards
+#: savings this year $12.40``).
 DEPOSIT_ACCOUNT_WORDS: Final = ("checking", "savings", "deposits", "withdrawals")
+#: Where a deposit-account word stands on a line that names the account: it
+#: is one of the first two words...
+DEPOSIT_WORD_LEAD: Final = 2
+#: ...of at most three (``Business Checking Account``, ``Deposits and
+#: Additions``); figures, account numbers and dates are not counted.
+DEPOSIT_TITLE_WORDS: Final = 3
+
+
+def names_deposit_account(text: str) -> bool:
+    """``text`` (a line as printed) names a deposit account or its totals:
+    a title or a label (``Checking Summary``, ``Premier Savings 1,204.00``,
+    ``Total Deposits 2,000.00``), not a line that mentions one (``AutoPay
+    from Checking ending 7731``)."""
+    words = [
+        normalise(word)
+        for word in text.split()
+        if any(ch.isalpha() for ch in word) and not any(ch.isdigit() for ch in word)
+    ]
+    return len(words) <= DEPOSIT_TITLE_WORDS and any(
+        word in DEPOSIT_ACCOUNT_WORDS for word in words[:DEPOSIT_WORD_LEAD]
+    )
 
 
 class CardStatementParser(TableStatementParser):
@@ -2357,7 +2498,9 @@ class CardStatementParser(TableStatementParser):
     outside its rows on lines of at most :data:`CARD_CUE_WORDS` words, a card
     word (:data:`CARD_VOCABULARY`) or two of the weak ones
     (:data:`WEAK_CARD_VOCABULARY`), and no such line names a deposit account
-    (:data:`DEPOSIT_ACCOUNT_WORDS`).
+    (:data:`DEPOSIT_ACCOUNT_WORDS`, :func:`names_deposit_account`: a line
+    that only mentions one, as a card paid from a checking account prints,
+    vetoes nothing).
     """
 
     name: ClassVar[str] = "card_statement_generic"
@@ -2368,13 +2511,14 @@ class CardStatementParser(TableStatementParser):
         if self.fingerprints:
             return super().detect(view)
         page_one = self.prepare([line for line in view.lines if line.page <= 1])
-        short = [
-            f" {line.norm} "
+        cues = [
+            line
             for line in self.summary_lines(page_one)
             if len(line.text.split()) <= CARD_CUE_WORDS
         ]
-        if any(f" {word} " in text for text in short for word in DEPOSIT_ACCOUNT_WORDS):
+        if any(names_deposit_account(line.text) for line in cues):
             return 0.0
+        short = [f" {line.norm} " for line in cues]
         strong = any(f" {word} " in text for text in short for word in CARD_VOCABULARY)
         # Each weak word once (``Card Member`` and ``Cardmember`` are one).
         weak = len(
