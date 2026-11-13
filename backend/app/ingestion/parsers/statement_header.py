@@ -27,6 +27,8 @@ without a PDF.
   line ("Stacked headers" below).
 * :func:`across_start` says where the second copy of a table printed two or
   three times across the page starts ("Tables printed across the page").
+* :func:`across_groups` gives the columns of every copy of such a table,
+  one list per printed group.
 
 How :func:`read_header` works on a line:
 
@@ -92,6 +94,14 @@ read them). When it is not (``Date | Amount | Date | Amount``: a table of
 daily balances), the line is no header; it is :func:`header_like`, so it
 ends the table above it and nothing under it is read or counted.
 
+:func:`across_groups` gives the same line's columns group by group: one
+list per printed group, left to right, each column with the span of its
+own heading (a heading printed in one cell with its neighbour's, ``Amount
+Date``, has the span of its own words). Its first list is what
+:func:`read_header` returns before the ``across`` column. It is None
+wherever :func:`read_header` declares no ``across`` column: on any line
+that is no table across, and on ``Date | Amount`` pairs.
+
 Stacked headers
 ---------------
 
@@ -137,7 +147,7 @@ from __future__ import annotations
 
 import math
 import re
-from collections.abc import Mapping, Sequence
+from collections.abc import Collection, Mapping, Sequence
 from dataclasses import dataclass
 from itertools import combinations, pairwise
 from typing import Final, Literal
@@ -448,12 +458,12 @@ def _headings(
     return [*whole, *parts], unmatched
 
 
-def _across(
+def _across_headings(
     line: ViewLine, headers: Mapping[str, Role]
-) -> tuple[list[tuple[Role, Cell]], float] | None:
-    """The headings of the first group of a table printed across the page and
-    the ``x0`` the second group starts at (module doc, "Tables printed across
-    the page"), or None when ``line`` is no such header."""
+) -> tuple[list[tuple[Role, Cell]], int] | None:
+    """Every heading of a table printed across the page, left to right, and
+    how many of them are one group (module doc, "Tables printed across the
+    page"), or None when ``line`` is no such header."""
     if not _plain(line):
         return None
     numbers = ACROSS_CHECK_HEADINGS - headers.keys()
@@ -472,9 +482,36 @@ def _across(
         if len(roles) % size or group * (len(roles) // size) != roles:
             continue
         if "date" in group and "amount" in group:
-            return headings[:size], headings[size][1].x0
+            return headings, size
         return None
     return None
+
+
+def _across(
+    line: ViewLine, headers: Mapping[str, Role]
+) -> tuple[list[tuple[Role, Cell]], float] | None:
+    """The headings of the first group of a table printed across the page and
+    the ``x0`` the second group starts at, or None when ``line`` is no such
+    header."""
+    found = _across_headings(line, headers)
+    if found is None:
+        return None
+    headings, size = found
+    return headings[:size], headings[size][1].x0
+
+
+def _group_columns(group: Sequence[tuple[Role, Cell]]) -> dict[Role, Column]:
+    """One column per role of one group of headings: the first heading of a role."""
+    columns: dict[Role, Column] = {}
+    for role, cell in group:
+        columns.setdefault(role, Column(role, cell.x0, cell.x1))
+    return columns
+
+
+def _is_table(roles: Collection[Role]) -> bool:
+    """A group of an across table that is a header by itself: besides its
+    date it names a description or check number and a money column."""
+    return bool(set(roles) & {"description", "check"} and set(roles) & MONEY_ROLES)
 
 
 def across_start(line: ViewLine, headers: Mapping[str, Role] = HEADERS) -> float | None:
@@ -490,6 +527,28 @@ def across_start(line: ViewLine, headers: Mapping[str, Role] = HEADERS) -> float
     return None if found is None else found[1]
 
 
+def across_groups(
+    line: ViewLine, headers: Mapping[str, Role] = HEADERS
+) -> list[list[Column]] | None:
+    """The columns of each group of a table printed across the page.
+
+    For a line :func:`read_header` reads as a table across (its result ends
+    with an ``across`` column): one list of columns per printed group, left
+    to right, each column with its own heading's span; the first list is
+    :func:`read_header`'s columns without the ``across`` one. None for any
+    other line: a plain header, a line that is no header, and ``Date |
+    Amount`` pairs (balances by day), whose entries are no transactions.
+    """
+    found = _across_headings(line, headers)
+    if found is None:
+        return None
+    headings, size = found
+    groups = [_group_columns(headings[at : at + size]) for at in range(0, len(headings), size)]
+    if not _is_table(groups[0].keys()):
+        return None
+    return [list(group.values()) for group in groups]
+
+
 def read_header(line: ViewLine, headers: Mapping[str, Role] = HEADERS) -> list[Column] | None:
     """The table columns ``line`` declares, or None when it is no header.
 
@@ -502,10 +561,8 @@ def read_header(line: ViewLine, headers: Mapping[str, Role] = HEADERS) -> list[C
     across = _across(line, headers)
     if across is not None:
         group, start = across
-        left: dict[Role, Column] = {}
-        for role, cell in group:
-            left.setdefault(role, Column(role, cell.x0, cell.x1))
-        if not (left.keys() & {"description", "check"} and left.keys() & MONEY_ROLES):
+        left = _group_columns(group)
+        if not _is_table(left.keys()):
             return None  # ``Date | Amount`` pairs: balances by day
         return [*left.values(), Column("across", start, math.inf)]
     plain = _plain(line)

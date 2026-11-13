@@ -1,5 +1,6 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""Header recognition, round two: a grid of labels and values, a rule glyph.
+"""Header recognition, round two: a grid of labels and values, a rule glyph,
+the column groups of a table printed across the page.
 
 Hand-built lines only, as in ``test_statement_header.py``: every line is
 made of ``(text, x0)`` cells and nothing but headings is printed.
@@ -7,6 +8,7 @@ made of ``(text, x0)`` cells and nothing but headings is printed.
 
 from __future__ import annotations
 
+import itertools
 import math
 
 import pytest
@@ -15,6 +17,7 @@ from app.ingestion.parsers.base import Cell, ViewLine
 from app.ingestion.parsers.statement_header import (
     Column,
     Role,
+    across_groups,
     across_start,
     header_like,
     heading_role,
@@ -187,3 +190,133 @@ def test_a_letter_after_a_heading_is_no_unit() -> None:
         "(EUR)I",
     ):
         assert heading_role(printed) is None, printed
+
+
+# -- the groups of a table printed across the page ----------------------------------
+
+_THREE_ACROSS = [
+    ("Number", 40.0),
+    ("Date Paid", 100.0),
+    ("Amount", 180.0),
+    ("Number", 240.0),
+    ("Date Paid", 300.0),
+    ("Amount", 380.0),
+    ("Number", 440.0),
+    ("Date Paid", 500.0),
+    ("Amount", 580.0),
+]
+
+
+def test_groups_of_a_table_across() -> None:
+    """``Number | Date Paid | Amount`` three times: one list of columns per
+    printed group, left to right, each column with its own heading's span."""
+    line = _line(_THREE_ACROSS)
+    groups = across_groups(line)
+    assert groups is not None
+    assert [[c.role for c in group] for group in groups] == [["check", "date", "amount"]] * 3
+    assert groups[1] == [
+        Column("check", 240.0, 270.0),
+        Column("date", 300.0, 345.0),  # the second ``Date Paid`` cell's span
+        Column("amount", 380.0, 410.0),
+    ]
+    assert groups[2][0] == Column("check", 440.0, 470.0)
+    assert groups[2][2] == Column("amount", 580.0, 610.0)
+    # ``read_header`` reads as before: the first group, then everything beside it.
+    header = read_header(line)
+    assert header == [*groups[0], Column("across", 240.0, math.inf)]
+    # Twice across is two groups.
+    twice = across_groups(_line(_THREE_ACROSS[:6]))
+    assert twice is not None
+    assert [[c.role for c in group] for group in twice] == [["check", "date", "amount"]] * 2
+    # No column of one group reaches into the next.
+    for left, right in itertools.pairwise(groups):
+        assert max(c.x1 for c in left) <= min(c.x0 for c in right)
+
+
+def test_groups_of_one_cell_headings() -> None:
+    """The last heading of a group printed so close to the first of the next
+    that they are one cell (``Amount Date``, twice): each heading has the
+    span of its own words, and each goes to its own group."""
+    line = _line(
+        [
+            ("Date", 40.0),
+            ("Description", 90.0),
+            ("Amount Date", 200.0),
+            ("Description", 290.0),
+            ("Amount Date", 400.0),
+            ("Description", 490.0),
+            ("Amount", 600.0),
+        ]
+    )
+    assert across_groups(line) == [
+        [
+            Column("date", 40.0, 60.0),
+            Column("description", 90.0, 145.0),
+            Column("amount", 200.0, 230.0),
+        ],
+        [
+            Column("date", 235.0, 255.0),
+            Column("description", 290.0, 345.0),
+            Column("amount", 400.0, 430.0),
+        ],
+        [
+            Column("date", 435.0, 455.0),
+            Column("description", 490.0, 545.0),
+            Column("amount", 600.0, 630.0),
+        ],
+    ]
+    # A whole group printed as one cell.
+    packed = _line(
+        [
+            ("Number", 40.0),
+            ("Date Paid", 100.0),
+            ("Amount", 180.0),
+            ("Number Date Paid Amount", 240.0),
+        ]
+    )
+    assert across_groups(packed) == [
+        [Column("check", 40.0, 70.0), Column("date", 100.0, 145.0), Column("amount", 180.0, 210.0)],
+        [
+            Column("check", 240.0, 270.0),
+            Column("date", 275.0, 320.0),
+            Column("amount", 325.0, 355.0),
+        ],
+    ]
+
+
+def test_a_plain_header_has_no_groups() -> None:
+    plain = _line([("Date", 40.0), ("Description", 100.0), ("Amount", 300.0), ("Balance", 400.0)])
+    assert read_header(plain) is not None
+    assert across_groups(plain) is None
+    # One group and the start of a second: not printed twice.
+    uneven = _line([*_THREE_ACROSS[:3], ("Number", 240.0), ("Date Paid", 300.0)])
+    assert across_groups(uneven) is None
+    # A cell that is no heading beside the groups.
+    assert across_groups(_line([*_THREE_ACROSS[:6], ("Notes", 640.0)])) is None
+    # A line of entries, not of headings.
+    entries = _line([("3051", 40.0), ("03/04", 100.0), ("66.00", 180.0), ("3052", 240.0)])
+    assert across_groups(entries) is None
+    # The grid of labels and values is no table across.
+    grid = _line(
+        [
+            ("Date", 40.0),
+            ("Description", 100.0),
+            ("Amount", 250.0),
+            ("Description", 330.0),
+            ("Amount", 500.0),
+        ]
+    )
+    assert across_groups(grid) is None
+
+
+def test_date_balance_pairs_have_no_groups() -> None:
+    """Balances by day, printed across: no table of transactions, so no
+    groups to read entries by, whichever word heads the figures."""
+    balances = _line([("Date", 40.0), ("Balance", 100.0), ("Date", 220.0), ("Balance", 280.0)])
+    assert across_groups(balances) is None
+    amounts = _line([("Date", 40.0), ("Amount", 100.0), ("Date", 220.0), ("Amount", 280.0)])
+    assert across_start(amounts) == 220.0
+    assert read_header(amounts) is None
+    assert across_groups(amounts) is None
+    one_cell = _line([("Date Balance Date Balance", 40.0)])
+    assert across_groups(one_cell) is None
