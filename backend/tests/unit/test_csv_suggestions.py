@@ -31,12 +31,15 @@ from app.ingestion.parsers.structured import (
     from_table,
     from_table_grouped,
     group_last4,
+    parse_cell_amount,
+    parse_cell_date,
     spec_fingerprint,
     suggest_mapping,
     suggest_spec,
 )
 from app.ingestion.sandbox.protocol import ExtractOptions, Table
 from tests.fixtures import synth_csv_layouts as layouts
+from tests.fixtures import synth_sniff_cases as sniff_cases
 from tests.fixtures.synth_activity_csv import (
     COLUMNS,
     HEADER,
@@ -434,8 +437,9 @@ def test_grouping_keeps_unnamed_accounts_apart_and_reports_unreadable_rows() -> 
     ]
     assert statements[1].skipped_rows == [5]  # "Joint"'s unreadable row
     assert statements[0].skipped_rows == []
-    # The total row belongs to the empty-account group, which has a readable row.
-    assert statements[2].skipped_rows == [6]
+    # The total row belongs to the empty-account group, which has a readable
+    # row; after the table's last readable row and undated, it is a footer.
+    assert (statements[2].skipped_rows, statements[2].footer_rows) == ([], [6])
     assert statements[2].note_rows == [7]  # notes follow their (empty) account cell
     unreadable = _table([["Date", "Account Number", "Amount"], ["x", "1", "y"]])
     empty = from_table_grouped(unreadable, spec)
@@ -1102,3 +1106,314 @@ def test_a_number_column_wins_over_a_name_column() -> None:
     assert _roles(table)["account"] == 2
     # Matched by their digits like any numbered statement; the nickname is not read.
     assert _groups(table) == [(None, "4410", 4), (None, "9026", 3)]
+
+
+# ---------------------------------------------------------------------------
+# Words, shapes and rows that are not transactions
+# ---------------------------------------------------------------------------
+
+
+def _reason(suggestion: MappingSuggestion, role: str) -> tuple[int, str]:
+    found = [(r.column, r.match) for r in suggestion.reasons if r.role == role]
+    assert len(found) == 1, suggestion.reasons
+    return found[0]
+
+
+@pytest.mark.parametrize("header", ["Created", "Datetime", "Timestamp", "Date Processed"])
+def test_more_headers_name_the_date_exactly(header: str) -> None:
+    suggestion = _suggested(_extracted(layouts.export_dated_under(header)))
+    assert _reason(suggestion, "date") == (0, "exact")
+    assert suggestion.confident, suggestion.doubts
+    assert suggestion.parsed_rows == len(layouts.STAMPED_ROWS)
+
+
+def test_a_date_word_still_needs_cells_that_are_dates() -> None:
+    rows = [
+        ["Created", "Posted", "Amount"],
+        ["Ada Finch", "2026-02-03", "-61.30"],
+        ["Noor Vale", "2026-02-06", "-27.85"],
+    ]
+    assert _suggested(_table(rows)).spec.date_column == 1
+
+
+def test_a_timestamp_with_a_spaced_zone_offset_parses() -> None:
+    for text in (
+        "2026-02-25 20:48:09 +0000",
+        "2026-02-25 20:48:09 -05:00",
+        "2026-02-25T20:48:09 Z",
+    ):
+        assert parse_cell_date(text, "YYYY-MM-DD") == date(2026, 2, 25), text
+    assert parse_cell_date("2026-02-25 20:48:09 +00", "YYYY-MM-DD") is None
+    table = _extracted(layouts.export_dated_under("created", zone=" +0000"))
+    suggestion = _suggested(table)
+    assert suggestion.confident, suggestion.doubts
+    parsed = from_table(table, suggestion.spec)
+    assert [t.posted_date for t in parsed.transactions][:2] == [date(2026, 2, 3), date(2026, 2, 6)]
+    assert len(parsed.transactions) == len(layouts.STAMPED_ROWS)
+
+
+def test_gross_is_the_amount_beside_fee_and_net() -> None:
+    table = _extracted(layouts.payments_gross_fee_net())
+    suggestion = _suggested(table)
+    assert _reason(suggestion, "amount") == (5, "exact")
+    assert suggestion.confident, suggestion.doubts
+    assert _read(table, suggestion.spec)[:3] == [
+        Decimal("-48.20"),
+        Decimal("-26.75"),
+        Decimal("120.00"),
+    ]
+    # A fee on a row: gross and net differ, so which of them is the amount
+    # is for a person to say. Gross is offered, not imported on its own.
+    with_fee = _suggested(_extracted(layouts.payments_gross_fee_net(fees=True)))
+    assert _reason(with_fee, "amount") == (5, "word")
+    assert with_fee.doubts == ("header_not_exact",)
+    # ``Gross`` alone (a payslip's column, a price list) is no amount word.
+    alone = _table(
+        [["Date", "Name", "Gross"], ["2026-03-03", "A", "-1.00"], ["2026-03-04", "B", "2"]]
+    )
+    assert suggest_mapping(alone) is None
+
+
+def test_credit_amount_and_debit_amount_are_the_credit_and_debit_columns() -> None:
+    table = _extracted(layouts.credit_debit_amount_columns())
+    suggestion = _suggested(table)
+    assert _reason(suggestion, "credit") == (2, "exact")
+    assert _reason(suggestion, "debit") == (3, "exact")
+    assert suggestion.spec.amount_column is None
+    assert (suggestion.confident, suggestion.sign_evidence) == (True, "debit_credit")
+    assert _read(table, suggestion.spec) == [
+        Decimal("1850.00"),
+        Decimal("-200.00"),
+        Decimal("-1500.00"),
+        Decimal("920.00"),
+        Decimal("-3.00"),
+    ]
+
+
+def test_a_parenthesised_qualifier_is_a_unit_suffix() -> None:
+    table = _extracted(layouts.wallet_export_with_opening_row())
+    suggestion = _suggested(table)
+    assert _reason(suggestion, "date") == (2, "exact")  # ``Datetime``
+    assert _reason(suggestion, "amount") == (6, "exact")  # ``Amount (total)``
+    assert "header_not_exact" not in suggestion.doubts
+    # A part of the amount is not the amount, whichever column comes first.
+    rows = [
+        ["Date", "Amount (fee)", "Amount (total)", "Balance (pending)"],
+        ["2026-04-02", "0.25", "-14.50", "85.50"],
+        ["2026-04-05", "0.00", "-36.00", "49.50"],
+    ]
+    fee_first = _suggested(_table(rows))
+    assert _reason(fee_first, "amount") == (2, "exact")
+    assert _reason(fee_first, "balance") == (3, "exact")
+    # Two columns told apart by their qualifiers alone: a person says which.
+    rows[0] = ["Date", "Amount (original)", "Amount (converted)", "Balance"]
+    either = _suggested(_table(rows))
+    assert _reason(either, "amount") == (1, "word")
+    assert "header_not_exact" in either.doubts
+    # Units are read as before, also on two columns.
+    rows[0] = ["Date", "Amount (USD)", "Amount (EUR)", "Balance"]
+    assert _reason(_suggested(_table(rows)), "amount") == (1, "exact")
+
+
+def test_a_row_without_a_date_or_an_amount_is_a_note_row() -> None:
+    """The first row of a wallet export: the holder's name and ``$0``, nothing else."""
+    table = _extracted(layouts.wallet_export_with_opening_row())
+    suggestion = _suggested(table)
+    assert suggestion.failed_rows == ()
+    assert suggestion.parsed_rows == 5
+    assert suggestion.confident, suggestion.doubts
+    # The balance column holds that one cell: it checks nothing, so it proves nothing.
+    assert suggestion.sign_evidence is None
+    parsed = from_table(table, suggestion.spec)
+    assert (parsed.note_rows, parsed.skipped_rows) == ([1], [])
+    assert [t.amount for t in parsed.transactions][:3] == [
+        Decimal("-14.50"),
+        Decimal("-36.00"),
+        Decimal("40.00"),
+    ]
+    # A row with a date and no amount is still a row that did not read.
+    rows = [
+        ["Date", "Amount", "Payee", "Memo"],
+        ["2026-01-14", "-1.00", "Blue Owl", ""],
+        ["", "", "Pending items", "see below"],
+        ["2026-01-15", "", "Share transfer", ""],
+        ["2026-01-16", "2.00", "Maple", ""],
+    ]
+    spec = MappingSpec(date_column=0, date_format="YYYY-MM-DD", amount_column=1, payee_column=2)
+    mixed = from_table(_table(rows), spec)
+    assert (mixed.note_rows, mixed.skipped_rows) == ([2], [3])
+
+
+def test_a_continuation_row_is_appended_to_its_rows_memo() -> None:
+    table = _extracted(sniff_cases.csv_preamble_with_continuation_rows())
+    suggestion = _suggested(table)
+    assert suggestion.doubts == ("date_order_guessed",)  # every day is 12 or less
+    assert (suggestion.parsed_rows, suggestion.failed_rows) == (4, ())
+    parsed = from_table(table, suggestion.spec)
+    assert [(t.raw_payee, t.memo, t.amount) for t in parsed.transactions] == [
+        ("DEBIT PURCHASE", "01/03/26 xx-0000 MOSSY OAK DELI", Decimal("-18.40")),
+        ("DEBIT PURCHASE", "02/03/26 xx-0000 TERN STREET CAFE", Decimal("-6.75")),
+        ("FUND TRANSFER", "from 000-0-000001 QUILLFEATHER", Decimal("250.00")),
+        ("DEBIT PURCHASE", "05/03/26 xx-0000 PEBBLE LANE GROCER", Decimal("-32.10")),
+    ]
+    assert (parsed.note_rows, parsed.skipped_rows) == ([], [])
+
+
+def test_only_a_cell_under_the_description_continues_a_row() -> None:
+    spec = MappingSpec(
+        date_column=0, date_format="YYYY-MM-DD", amount_column=1, payee_column=2, memo_column=3
+    )
+    rows = [
+        ["Date", "Amount", "Payee", "Memo"],
+        ["2026-01-14", "-1.00", "Blue Owl", "card 0000"],
+        ["", "", "", "second line"],
+        ["", "", "third line"],
+        ["2026-01-15", "-2.00", "Maple", ""],
+        ["Statement notes"],  # under the date column: a note, not a description
+        ["2026-01-16", "3.00", "Initech", ""],
+        ["", "", "", ""],
+        ["", "", "not directly below a row"],
+    ]
+    parsed = from_table(_table(rows), spec)
+    assert [t.memo for t in parsed.transactions] == [
+        "card 0000 second line third line",
+        None,
+        None,
+    ]
+    assert parsed.note_rows == [5, 8]
+    # A single cell after the last row of a table that has no other
+    # continuation is what it always was: a closing note.
+    closing = from_table(
+        _table([*rows[:2], rows[4], ["", "", "Thank you for banking with us"]]), spec
+    )
+    assert [t.memo for t in closing.transactions] == ["card 0000", None]
+    assert closing.note_rows == [3]
+
+
+def test_a_short_trailing_footer_does_not_dilute_the_fit() -> None:
+    table = _extracted(layouts.export_with_short_footer())
+    suggestion = _suggested(table)
+    assert _reason(suggestion, "date") == (0, "exact")
+    assert next(r.fit for r in suggestion.reasons if r.role == "date") == 1.0
+    assert (suggestion.parsed_rows, suggestion.failed_rows, suggestion.footer_rows) == (2, (), 2)
+    assert (suggestion.confident, suggestion.sign_evidence) == (True, "balance")
+    # Short rows that outnumber the rows before them are not a footer block:
+    # the file leaves out its empty trailing cells, and every row is looked at.
+    rows = [
+        ["Date", "Amount", "Payee", "Memo"],
+        ["03/04/2026", "-1.00", "Blue Owl", "weekly"],
+        ["25/04/2026", "-2.00", "Maple"],
+        ["26/04/2026", "3.00", "Initech"],
+        ["27/04/2026", "-4.00", "Corner Fuel"],
+    ]
+    ragged = _suggested(_table(rows))
+    assert (ragged.spec.date_format, ragged.parsed_rows) == ("DD/MM/YYYY", 4)
+    assert ragged.confident, ragged.doubts
+
+
+def test_rows_after_the_last_readable_row_are_footers() -> None:
+    table = _extracted(layouts.export_with_short_footer())
+    parsed = from_table(table, _suggested(table).spec)
+    assert (parsed.skipped_rows, parsed.footer_rows) == ([], [3, 4])
+    # A trailing row that has a date is a transaction that did not read, not a footer.
+    spec = MappingSpec(date_column=0, date_format="YYYY-MM-DD", amount_column=1, payee_column=2)
+    rows = [
+        ["Date", "Amount", "Payee"],
+        ["2026-01-14", "-1.00", "Blue Owl"],
+        ["Subtotal", "-1.00", ""],
+        ["2026-01-15", "2.00", "Maple"],
+        ["2026-01-16", "n/a", "Initech"],
+        ["Total", "1.00", ""],
+    ]
+    mixed = from_table(_table(rows), spec)
+    assert (mixed.skipped_rows, mixed.footer_rows) == ([2, 4], [5])
+    # Nothing reads: every row is reported, none is called a footer.
+    none = from_table(_table([rows[0], rows[2], rows[5]]), spec)
+    assert (none.skipped_rows, none.footer_rows) == ([1, 2], [])
+
+
+def test_a_pending_date_cell_is_a_pending_row() -> None:
+    table = _extracted(layouts.card_with_pending_rows())
+    suggestion = _suggested(table)
+    assert _reason(suggestion, "date") == (0, "exact")
+    assert (suggestion.parsed_rows, suggestion.failed_rows) == (5, ())
+    assert suggestion.confident, suggestion.doubts
+    parsed = from_table(table, suggestion.spec)
+    assert parsed.pending_rows == [1, 2]
+    assert parsed.skipped_rows == []
+    assert [t.row for t in parsed.transactions] == [3, 4, 5, 6, 7]
+    assert parsed.transactions[0].posted_date == date(2026, 10, 27)
+
+
+def test_an_amount_with_more_decimals_than_are_kept_is_rounded() -> None:
+    assert parse_cell_amount("318,40277777778", ",") == Decimal("318.402778")
+    tiny = parse_cell_amount("-0.0000005", ".")  # half to even, and never -0
+    assert tiny is not None
+    assert (tiny, tiny.is_signed()) == (Decimal("0"), False)
+    assert str(parse_cell_amount("-48.20", ".")) == "-48.20"  # a short amount stays as printed
+    assert parse_cell_amount("2.0000015", ".") == Decimal("2.000002")
+    table = _extracted(layouts.export_with_long_decimals())
+    suggestion = _suggested(table)
+    assert suggestion.failed_rows == ()
+    assert suggestion.confident, suggestion.doubts
+    assert _read(table, suggestion.spec)[:2] == [Decimal("-58.30"), Decimal("318.402778")]
+
+
+def test_an_amount_behind_a_lettered_currency_parses() -> None:
+    lettered = layouts.LETTERED_CURRENCY
+    assert parse_cell_amount(f"{lettered}18.250", ".") == Decimal("18.250")
+    assert parse_cell_amount(f"-{lettered}18.250", ".") == Decimal("-18.250")
+    assert parse_cell_amount(f"{lettered}-18.250", ".") == Decimal("-18.250")
+    assert parse_cell_amount("1 234,50 K\u010d", ",") == Decimal("1234.50")
+    assert parse_cell_amount("45,00 z\u0142", ",") == Decimal("45.00")
+    assert parse_cell_amount("\u20bd 99.90", ".") == Decimal("99.90")  # a currency sign
+    # Words are not currencies: no more than three letters, and not plain ASCII ones.
+    words = ("Caf\u00e9s 12", "No 5", "A1", f"{lettered}", "\u062f.\u0625. twelve", "50\u00a2")
+    for text in words:
+        assert parse_cell_amount(text, ".") is None, text
+    table = _extracted(layouts.export_with_lettered_currency())
+    suggestion = _suggested(table)
+    assert (suggestion.parsed_rows, suggestion.failed_rows) == (4, ())
+    assert _read(table, suggestion.spec) == [
+        Decimal("-18.250"),
+        Decimal("-4.500"),
+        Decimal("1250.000"),
+        Decimal("-9.750"),
+    ]
+
+
+def test_month_name_dates_without_separators_or_a_century_parse() -> None:
+    assert parse_cell_date("07Mar2026 00:00:00", "DDMMMYYYY") == date(2026, 3, 7)
+    assert parse_cell_date("7March2026", "DDMMMYYYY") == date(2026, 3, 7)
+    assert parse_cell_date("14-Aug-25", "DD-MMM-YY") == date(2025, 8, 14)
+    assert parse_cell_date("14-Aug-2025", "DD-MMM-YY") is None
+    assert parse_cell_date("14-Aug-25", "DD-MMM-YYYY") is None
+    compact = _suggested(_extracted(layouts.export_with_month_name_dates()))
+    assert (compact.spec.date_format, compact.confident) == ("DDMMMYYYY", True)
+    short = _extracted(layouts.export_with_month_name_dates(short_year=True))
+    suggestion = _suggested(short)
+    assert (suggestion.spec.date_format, suggestion.confident) == ("DD-MMM-YY", True)
+    assert from_table(short, suggestion.spec).transactions[0].posted_date == date(2025, 8, 14)
+
+
+def test_a_balance_printed_once_a_day_reconciles() -> None:
+    table = _extracted(layouts.checking_with_daily_balance())
+    suggestion = _suggested(table)
+    assert (suggestion.confident, suggestion.sign_evidence) == (True, "balance")
+    parsed = from_table(table, suggestion.spec)
+    assert parsed.balance_mismatches == []
+    assert parsed.closing_balance is not None
+    assert (parsed.closing_balance.amount, parsed.closing_balance.as_of) == (
+        Decimal("4250.65"),
+        date(2026, 7, 8),
+    )
+    # A day's balance that is not the sum of the day's rows is still caught,
+    # on the row that prints it.
+    rows = [list(r) for r in table.rows]
+    rows[5][3] = "4317.15"
+    wrong = from_table(_table(rows), suggestion.spec)
+    assert wrong.balance_mismatches == [5, 6]
+    # Newest first: the day's balance stands on the day's first printed row.
+    newest = _table([list(table.rows[0]), *(list(r) for r in reversed(table.rows[1:]))])
+    assert [r[3] for r in newest.rows[1:]] == ["4250.65", "4317.05", "", "", "1555.40", ""]
+    assert from_table(newest, suggestion.spec).balance_mismatches == []

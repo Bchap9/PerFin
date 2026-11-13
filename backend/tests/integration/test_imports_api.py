@@ -514,7 +514,8 @@ def test_rerun_does_not_repeat_open_review_items(
     owner = actors.new(role="owner")
     household_id = _hh(owner.record)
     account = ledger.account(household_id)
-    rows = [*SAMPLE_ROWS, ["Total", "1427.90", ""]]
+    # A dated row whose amount does not read (a footer would not be reported).
+    rows = [*SAMPLE_ROWS, ["01/08/2026", "Card fee", "n/a", ""]]
     document_id = _document(factories, household_id, account, result=table_result(rows))
     _mapping(factories, household_id)
     done: set[uuid.UUID] = set()
@@ -541,6 +542,41 @@ def test_rerun_does_not_repeat_open_review_items(
     ]
     assert count == 3
     assert owner.get(f"{API}/imports/{document_id}/preview").json()["status"] == "needs_review"
+
+
+def test_trailing_footers_and_pending_rows_are_counted_not_reported(
+    actors: Actors, factories: Factories, ledger: LedgerFactories
+) -> None:
+    """Rows after the last readable one are footers: they raise no ``rows_skipped``."""
+    owner = actors.new(role="owner")
+    household_id = _hh(owner.record)
+    account = ledger.account(household_id)
+    rows = [
+        SAMPLE_ROWS[0],
+        ["Pending", "Tin Roof Diner", "-12.40", ""],
+        *SAMPLE_ROWS[1:],
+        ["Total", "1427.90", ""],
+        ["", "Closing balance", "", "2427.90"],  # no date, no amount: a note
+    ]
+    document_id = _document(factories, household_id, account, result=table_result(rows))
+    _mapping(factories, household_id)
+    assert owner.post(f"{API}/imports/{document_id}/apply-mapping", json={}).status_code == 202
+    assert run_jobs(factories, household_id, APPLY_MAPPING_JOB_TYPE, done=set())
+    with factories.transaction() as db:
+        set_context(db, household_id)
+        items = list(
+            db.execute(select(ReviewItem).where(ReviewItem.document_id == document_id)).scalars()
+        )
+        count = len(
+            list(db.execute(select(Transaction).where(Transaction.account_id == account.id)))
+        )
+    assert items == []
+    assert count == 3  # the pending row is not imported
+    preview = owner.get(f"{API}/imports/{document_id}/preview").json()
+    assert preview["status"] == "processed"
+    summary = preview["last_import"]
+    assert (summary["imported"], summary["skipped_rows"]) == (3, 0)
+    assert (summary["footer_rows"], summary["pending_rows"]) == (1, 1)
 
 
 # ---------------------------------------------------------------------------

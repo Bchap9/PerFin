@@ -29,6 +29,31 @@ so a test runs it through the real delimited extractor or the upload path.
   cells differ on every row (who the money went to, not whose it is).
 * :func:`export_with_payee_and_category` - no account column; a ``Payee``
   and a ``Category`` column of a few repeated values.
+
+Words, shapes and rows that are not transactions:
+
+* :func:`export_dated_under` - the date column under another name
+  (``Created``, ``Datetime``, ``Timestamp``, ``Date Processed``), its cells
+  timestamps, optionally with a zone offset after a space.
+* :func:`payments_gross_fee_net` - a payment service's ``Gross``, ``Fee``
+  and ``Net`` columns, with or without a row that carries a fee.
+* :func:`credit_debit_amount_columns` - ``Credit Amount`` and ``Debit
+  Amount`` columns.
+* :func:`wallet_export_with_opening_row` - ``Datetime``, ``Amount (total)``
+  and ``Amount (fee)``; the first row holds the holder's name and an opening
+  balance of ``$0`` and nothing else.
+* :func:`export_with_short_footer` - two transactions under a five-column
+  header, then two three-cell footer rows.
+* :func:`card_with_pending_rows` - ``Date Processed`` with two rows whose
+  date cell says ``Pending``.
+* :func:`export_with_long_decimals` - one amount printed with eleven
+  decimals (decimal commas).
+* :func:`export_with_lettered_currency` - amounts behind a currency written
+  in letters and a right-to-left mark.
+* :func:`export_with_month_name_dates` - ``07Mar2026 00:00:00`` or
+  ``14-Aug-25`` dates.
+* :func:`checking_with_daily_balance` - a running balance printed on the
+  last row of each day only.
 """
 
 from __future__ import annotations
@@ -218,3 +243,173 @@ def export_with_payee_and_category() -> bytes:
         ("2026-11-24", "Northgate Fuel Stop", "Transport", "-44.65"),
     ]
     return _file(("Date", "Payee", "Category", "Amount"), rows)
+
+
+#: (timestamp, description, amount as printed): mostly money out, one deposit.
+STAMPED_ROWS: Final[tuple[tuple[str, str, str], ...]] = (
+    ("2026-02-03 09:12:44", "Harbor Lane Grocery", "-61.30"),
+    ("2026-02-06 18:40:02", "Tin Roof Diner", "-27.85"),
+    ("2026-02-11 07:55:19", "Northgate Fuel Stop", "-43.10"),
+    ("2026-02-14 11:03:27", "Marlow Design Payroll", "2840.00"),
+    ("2026-02-20 16:21:37", "Paper Kite Books", "-17.45"),
+    ("2026-02-25 20:48:09", "Brightwater Utilities", "-59.20"),
+)
+
+
+def export_dated_under(header: str, *, zone: str = "") -> bytes:
+    """``<header>,Description,Amount``: timestamps under ``header``.
+
+    ``zone`` is appended to every timestamp (``" +0000"``: an offset after a space).
+    """
+    rows = [(f"{stamp}{zone}", payee, amount) for stamp, payee, amount in STAMPED_ROWS]
+    return _file((header, "Description", "Amount"), rows)
+
+
+def payments_gross_fee_net(*, fees: bool = False) -> bytes:
+    """``Date,Time,Name,Status,Currency,Gross,Fee,Net``: a payment service's export.
+
+    Without ``fees`` every fee is zero, so gross and net are the same figure;
+    with ``fees`` the one sale carries a fee and they differ on that row.
+    """
+    sale = ("120.00", "-3.78", "116.22") if fees else ("120.00", "0.00", "120.00")
+    rows = [
+        ("2026-03-03", "08:14:10", "Harbor Lane Grocery", "Completed", "USD", "-48.20", "0.00"),
+        ("2026-03-06", "19:02:41", "Tin Roof Diner", "Completed", "USD", "-26.75", "0.00"),
+        ("2026-03-12", "10:30:05", "Juniper Row Books", "Completed", "USD", *sale[:2]),
+        ("2026-03-17", "13:47:52", "Northgate Fuel Stop", "Completed", "USD", "-39.90", "0.00"),
+        ("2026-03-24", "21:15:33", "Silver Fern Cafe", "Completed", "USD", "-8.40", "0.00"),
+    ]
+    nets = ["-48.20", "-26.75", sale[2], "-39.90", "-8.40"]
+    header = ("Date", "Time", "Name", "Status", "Currency", "Gross", "Fee", "Net")
+    return _file(header, [(*row, net) for row, net in zip(rows, nets, strict=True)])
+
+
+def credit_debit_amount_columns() -> bytes:
+    """``Date,Description,Credit Amount,Debit Amount,Currency``: one figure per row."""
+    rows = [
+        ("2026-04-02", "Marlow Design invoice 14", "1850.00", "", "USD"),
+        ("2026-04-05", "Card load", "", "200.00", "USD"),
+        ("2026-04-09", "Withdrawal to bank", "", "1500.00", "USD"),
+        ("2026-04-16", "Marlow Design invoice 15", "920.00", "", "USD"),
+        ("2026-04-23", "Service charge", "", "3.00", "USD"),
+    ]
+    return _file(("Date", "Description", "Credit Amount", "Debit Amount", "Currency"), rows)
+
+
+def wallet_export_with_opening_row() -> bytes:
+    """A wallet's statement: the first row is the holder's name and ``$0`` only.
+
+    ``Holder,ID,Datetime,Description,From,To,Amount (total),Amount (fee),Opening
+    Balance``; amounts are printed ``- $14.50`` / ``+ $40.00``.
+    """
+    header = (
+        "Holder",
+        "ID",
+        "Datetime",
+        "Description",
+        "From",
+        "To",
+        "Amount (total)",
+        "Amount (fee)",
+        "Opening Balance",
+    )
+    activity = [
+        ("7001", "2026-04-02T09:14:05", "Lunch", "Ada Finch", "Noor Vale", "- $14.50"),
+        ("7002", "2026-04-05T20:31:48", "Tickets", "Ada Finch", "Ines Okoro", "- $36.00"),
+        ("7003", "2026-04-09T12:02:17", "Rent share", "Noor Vale", "Ada Finch", "+ $40.00"),
+        ("7004", "2026-04-15T08:45:30", "Coffee", "Ada Finch", "Noor Vale", "- $4.75"),
+        ("7005", "2026-04-21T17:20:56", "Groceries", "Ada Finch", "Ines Okoro", "- $22.10"),
+    ]
+    rows: list[Row] = [("harborfinch", "", "", "", "", "", "", "", "$0")]
+    rows += [("", *cells, "$0.00", "") for cells in activity]
+    return _file(header, rows)
+
+
+def export_with_short_footer() -> bytes:
+    """Two transactions under a five-column header, then two three-cell footer rows."""
+    rows: list[Row] = [
+        ("2026-10-14", "Harbor Lane Grocery", "R-1001", "-52.40", "1147.60"),
+        ("2026-10-28", "Tin Roof Diner", "R-1002", "-31.15", "1116.45"),
+        ("Overdraft limit agreed", "2026-10-31", "+0.00"),
+        ("Interest charged this period", "2026-10-31", "+0.00"),
+    ]
+    return _file(("Date", "Description", "Reference", "Amount", "Balance"), rows)
+
+
+def card_with_pending_rows() -> bytes:
+    """``Date Processed,Description,Amount``: two rows not yet processed (``Pending``)."""
+    rows = [
+        ("Pending", "SILVER FERN CAFE", "-7.80"),
+        ("Pending", "NORTHGATE FUEL STOP", "-38.25"),
+        ("27/10/2026", "HARBOR LANE GROCERY", "-45.10"),
+        ("25/10/2026", "PAYMENT RECEIVED THANK YOU", "300.00"),
+        ("21/10/2026", "TIN ROOF DINER", "-29.60"),
+        ("16/10/2026", "PAPER KITE BOOKS", "-13.99"),
+        ("14/10/2026", "COPPER PINE HARDWARE", "-64.35"),
+    ]
+    return _file(("Date Processed", "Description", "Amount"), rows)
+
+
+def export_with_long_decimals() -> bytes:
+    """``Date;Payee;Amount`` (decimal commas): one amount has eleven decimals."""
+    rows = [
+        ("2026-06-02", "Harbor Lane Grocery", "-58,30"),
+        ("2026-06-05", "Copper Pine Fund distribution", "318,40277777778"),
+        ("2026-06-09", "Tin Roof Diner", "-27,65"),
+        ("2026-06-18", "Brightwater Utilities", "-61,02"),
+        ("2026-06-24", "Lantern Street Pharmacy", "-14,85"),
+    ]
+    return _file(("Date", "Payee", "Amount"), rows, delimiter=";")
+
+
+#: A currency written in letters with a right-to-left mark before the number.
+LETTERED_CURRENCY: Final = "\u062f.\u0625.\u200f"
+
+
+def export_with_lettered_currency() -> bytes:
+    """``Date,Payee,Outflow,Inflow``: every amount behind :data:`LETTERED_CURRENCY`."""
+    figures = [
+        ("2026-05-03", "Harbor Lane Grocery", "18.250", "0.000"),
+        ("2026-05-07", "Tin Roof Diner", "4.500", "0.000"),
+        ("2026-05-15", "Marlow Design Payroll", "0.000", "1250.000"),
+        ("2026-05-22", "Northgate Fuel Stop", "9.750", "0.000"),
+    ]
+    rows = [
+        (day, payee, f"{LETTERED_CURRENCY}{out}", f"{LETTERED_CURRENCY}{into}")
+        for day, payee, out, into in figures
+    ]
+    return _file(("Date", "Payee", "Outflow", "Inflow"), rows)
+
+
+def export_with_month_name_dates(*, short_year: bool = False) -> bytes:
+    """``Date,Description,Amount``: ``07Mar2026 00:00:00`` dates, or ``14-Aug-25`` ones."""
+    days = (
+        ("14-Aug-25", "19-Aug-25", "02-Sep-25", "23-Sep-25")
+        if short_year
+        else (
+            "07Mar2026 00:00:00",
+            "15Mar2026 00:00:00",
+            "02Apr2026 00:00:00",
+            "21Apr2026 00:00:00",
+        )
+    )
+    rows = [
+        (days[0], "Harbor Lane Grocery", "-47.35"),
+        (days[1], "Marlow Design Payroll", "2840.00"),
+        (days[2], "Tin Roof Diner", "-25.10"),
+        (days[3], "Northgate Fuel Stop", "-41.80"),
+    ]
+    return _file(("Date", "Description", "Amount"), rows)
+
+
+def checking_with_daily_balance() -> bytes:
+    """``Date,Description,Amount,Balance``: the balance on the last row of each day only."""
+    rows = [
+        ("2026-07-01", "Willow Court Rent", "-1210.00", ""),
+        ("2026-07-01", "Harbor Lane Grocery", "-74.60", "1555.40"),
+        ("2026-07-03", "Northgate Fuel Stop", "-45.10", ""),
+        ("2026-07-03", "Tin Roof Diner", "-33.25", ""),
+        ("2026-07-03", "Marlow Design Payroll", "2840.00", "4317.05"),
+        ("2026-07-08", "Brightwater Utilities", "-66.40", "4250.65"),
+    ]
+    return _file(("Date", "Description", "Amount", "Balance"), rows)

@@ -15,18 +15,25 @@ original file.
   closing balance.
 * :func:`from_table`: a CSV/TSV table read with a :class:`MappingSpec`
   (columns, date format, sign convention, decimal separator). Rows that do not
-  parse (footers, totals, blank amounts) are skipped and reported by row
-  number; the running-balance column, when mapped, gives the closing balance
-  and a reconciliation check (each balance must equal the previous one plus
-  the row's amount). A debit or credit cell keeps its printed sign: a
+  parse (blank amounts, a date in another form) are skipped and reported by
+  row number; the unreadable rows after the table's last readable row whose
+  date cell is no date are footers (totals, closing lines), listed apart and
+  not reported. The running-balance column, when mapped, gives the closing
+  balance and a reconciliation check (each printed balance must equal the
+  one printed before plus the amounts of the rows since, so a balance
+  printed once a day reconciles too). A debit or credit cell keeps its printed sign: a
   negative debit is money in and a negative credit money out (a reversal),
   unless that column prints every amount negative
   (:func:`_printed_negative`). An empty currency cell is the
   account's currency; any
   other cell that is not a three-letter code makes the row unreadable. A row
   with at most one filled cell (the disclaimer paragraphs and "Date
-  downloaded" line brokerages append) can never be a transaction: it is a
-  note row, neither imported nor reported.
+  downloaded" line brokerages append), or without a date and without an
+  amount, can never be a transaction: it is a note row, neither imported
+  nor reported. A one-cell row under the description of the transaction
+  row directly above it continues that description and is appended to the
+  row's memo; a row whose date cell says ``Pending`` is a pending row,
+  counted and not imported (:func:`_read_rows`).
 * :func:`from_table_grouped`: a multi-account table (``account_column``)
   as one statement per account, each carrying only the **last four digits**
   of its account cell (:func:`cell_last4`), so the importer matches it like
@@ -57,14 +64,15 @@ from __future__ import annotations
 
 import hashlib
 import re
+import unicodedata
 from collections import Counter
 from collections.abc import Iterable, Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import date
 from decimal import Decimal, InvalidOperation
 from typing import Final
 
-from app.core.money import AMOUNT_PLACES, MAX_ABS_AMOUNT
+from app.core.money import AMOUNT_PLACES, MAX_ABS_AMOUNT, quantize
 from app.domain.imports.schemas import (
     DATE_FORMATS,
     OUTFLOW_VALUES_MAX,
@@ -138,11 +146,21 @@ class ParsedStatement:
     closing_balance: ClosingBalance | None = None
     #: Table rows (0-based) that could not be read with the mapping.
     skipped_rows: list[int] = field(default_factory=list)
-    #: Table rows with at most one filled cell (a disclaimer paragraph, a
-    #: "Date downloaded" line): never a transaction, not reported as skipped.
+    #: Table rows that can never be a transaction (a disclaimer paragraph, a
+    #: "Date downloaded" line, a row without a date and an amount): not
+    #: reported as skipped.
     note_rows: list[int] = field(default_factory=list)
-    #: Rows whose running balance disagrees with the previous row plus the amount.
+    #: Unreadable table rows after the table's last readable row whose date
+    #: cell is no date (totals, closing lines): not reported as skipped.
+    footer_rows: list[int] = field(default_factory=list)
+    #: Table rows whose date cell says ``Pending``: not yet a transaction,
+    #: neither imported nor reported, only counted.
+    pending_rows: list[int] = field(default_factory=list)
+    #: Rows whose running balance disagrees with the balance printed before
+    #: plus the amounts since.
     balance_mismatches: list[int] = field(default_factory=list)
+    #: How many printed balances were compared with the one printed before.
+    balance_checks: int = 0
     #: The date order was guessed (QIF dates that fit both M/D and D/M).
     date_order_assumed: bool = False
     truncated: bool = False
@@ -275,8 +293,11 @@ _MONTHS: Final = {
         start=1,
     )
 }
+#: A time of day after the date, ignored: ``10:22``, ``10:22:05.123``,
+#: ``10:22 PM``, with a zone (``Z``, ``+0100``, ``-05:00``) that may follow a blank.
 _TIME_SUFFIX: Final = (
-    r"(?:[ T]\d{1,2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:\s?[AaPp][Mm])?(?:Z|[+-]\d{2}:?\d{2})?)?"
+    r"(?:[ T]\d{1,2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:\s?[AaPp][Mm])?"
+    r"(?:\s?(?:Z|[+-]\d{2}:?\d{2}))?)?"
 )
 _D: Final = r"(?P<d>\d{1,2})"
 _M: Final = r"(?P<m>\d{1,2})"
@@ -301,6 +322,8 @@ _DATE_PATTERNS: Final[dict[str, re.Pattern[str]]] = {
         "DD MMM YYYY": rf"{_D} {_B} {_Y4}",
         "DD-MMM-YYYY": rf"{_D}-{_B}-{_Y4}",
         "MMM DD, YYYY": rf"{_B} {_D},? {_Y4}",
+        "DDMMMYYYY": rf"{_D}{_B}{_Y4}",
+        "DD-MMM-YY": rf"{_D}-{_B}-{_Y2}",
     }.items()
 }
 
@@ -334,6 +357,36 @@ def parse_cell_date(text: str, fmt: DateFormat) -> date | None:
 
 _STRIP: Final = re.compile("[\\s\u00a0\u202f'\u2019$\u20ac\u00a3\u00a5\u20b9]|[A-Z]{3}$|^[A-Z]{3}")
 _PLAIN_DECIMAL: Final = re.compile(r"^\d+(?:\.\d+)?$")
+#: A currency written in letters: one to three letters, each with or without
+#: a dot after it (``zł``, ``Kč``, ``лв.``, the dotted abbreviations of the
+#: Arabic script).
+_LETTERS: Final = r"(?:[^\W\d_]\.?){1,3}"
+_LETTERED_BEFORE: Final = re.compile(rf"^(?P<sign>[-+(]?)\s*(?P<letters>{_LETTERS})\s*(?=[-+]?\d)")
+_LETTERED_AFTER: Final = re.compile(rf"(?<=\d)\s*(?P<letters>{_LETTERS})(?P<sign>[-)]*)$")
+#: Signs of a hundredth or a thousandth of a currency (cent, mill, pfennig):
+#: ``50¢`` is not 50 of anything, so the cell stays unreadable.
+_SUBUNIT_SIGNS: Final = frozenset("\u00a2\uffe0\u20a5\u20b0")
+
+
+def _without_lettered_currency(value: str) -> str:
+    """``value`` without the currency signs, direction marks and currency letters around a number.
+
+    Only called for a cell with a character outside ASCII. Every currency
+    sign (Unicode ``Sc``, but :data:`_SUBUNIT_SIGNS`) and format character
+    (``Cf``: the left-to-right and right-to-left marks) goes; so does a
+    currency written in letters before or after the number
+    (:data:`_LETTERS`) when one of its letters is not ASCII. Plain ASCII
+    letters are left to :data:`_STRIP`, which knows three-letter codes
+    only: a word before a number is not a currency.
+    """
+    kept = "".join(
+        c for c in value if c in _SUBUNIT_SIGNS or unicodedata.category(c) not in ("Sc", "Cf")
+    )
+    for pattern in (_LETTERED_BEFORE, _LETTERED_AFTER):
+        match = pattern.search(kept)
+        if match is not None and not match["letters"].isascii():
+            kept = kept[: match.start()] + match["sign"] + kept[match.end() :]
+    return kept
 
 
 def parse_cell_amount(text: str, decimal_separator: str) -> Decimal | None:
@@ -341,12 +394,18 @@ def parse_cell_amount(text: str, decimal_separator: str) -> Decimal | None:
 
     Accepts ``1,234.56`` / ``1.234,56`` (by ``decimal_separator``), a leading
     ``+``/``-``, ``(12.34)`` and ``12.34-`` as negatives, currency symbols,
-    a leading or trailing ISO code, spaces and apostrophes. At most
-    :data:`~app.core.money.AMOUNT_PLACES` decimals.
+    a leading or trailing ISO code, a currency written in letters of another
+    script with its direction marks (:func:`_without_lettered_currency`),
+    spaces and apostrophes. More than
+    :data:`~app.core.money.AMOUNT_PLACES` decimals are rounded half-even to
+    that many, as the OFX reader does: one cell an export computed (an
+    average, a conversion) does not make its row unreadable.
     """
     value = text.strip()
     if value.startswith("'"):  # the import-side formula guard (C7)
         value = value[1:]
+    if not value.isascii():
+        value = _without_lettered_currency(value)
     value = _STRIP.sub("", value.upper())
     negative = False
     if value.startswith("(") and value.endswith(")"):
@@ -371,12 +430,14 @@ def parse_cell_amount(text: str, decimal_separator: str) -> Decimal | None:
         amount = Decimal(value)
     except InvalidOperation:  # pragma: no cover - the pattern admits only numbers
         return None
-    exponent = amount.as_tuple().exponent
-    if not isinstance(exponent, int) or -exponent > AMOUNT_PLACES:
-        return None
     if amount > MAX_ABS_AMOUNT:
         return None
-    return -amount if negative else amount
+    if negative:
+        amount = -amount
+    exponent = amount.as_tuple().exponent
+    if isinstance(exponent, int) and -exponent > AMOUNT_PLACES:
+        return quantize(amount)
+    return amount
 
 
 def _cell(row: Sequence[str], column: int | None) -> str | None:
@@ -536,24 +597,76 @@ def _filled(row: Sequence[str]) -> int:
     return seen
 
 
+#: What a date cell says on a row the bank has not booked yet.
+PENDING_CELL: Final = "pending"
+
+
+def _blank(row: Sequence[str], *columns: int | None) -> bool:
+    """Whether none of the mapped ``columns`` of ``row`` holds anything."""
+    return not any((_cell(row, column) or "").strip() for column in columns if column is not None)
+
+
+def _continuation(row: Sequence[str], spec: MappingSpec) -> str | None:
+    """The text of a row whose one filled cell stands under the payee or the memo header."""
+    for column in (spec.payee_column, spec.memo_column):
+        text = _text(row, column)
+        if text is not None:
+            return text
+    return None
+
+
 def _read_rows(
     table: Table,
     spec: MappingSpec,
     indexes: Iterable[int],
     printed_negative: frozenset[str] = frozenset(),
 ) -> ParsedStatement:
-    """``indexes`` rows of ``table`` read with ``spec``, as one statement."""
+    """``indexes`` rows of ``table`` read with ``spec``, as one statement.
+
+    Rows that are not transactions are told apart before anything is
+    called unreadable:
+
+    * a row with one filled cell is a note row, unless it continues the
+      description of the transaction row directly above it (below);
+    * a row whose date cell and amount cells are all empty is a note row
+      wherever it stands (a holder's name beside an opening balance, a
+      section title over two cells);
+    * a row whose date cell says ``Pending`` is a pending row.
+
+    A **continuation row** is a row with one filled cell, under the payee
+    or the memo header, directly below a transaction row or below another
+    continuation of it (exports that print the merchant on a second
+    line). Its text is appended to that row's memo. After the last
+    transaction row it only counts when an earlier row of the table was
+    continued too: otherwise a single closing line is the note it always
+    was.
+    """
     parsed = ParsedStatement(source_format="csv", truncated=table.truncated)
-    balances: list[tuple[int, date, Decimal, Decimal]] = []
+    balances: list[tuple[int, date, Decimal, Decimal | None]] = []
+    #: (position of the transaction, row, text) of each candidate continuation.
+    continued: list[tuple[int, int, str]] = []
+    #: The last transaction row, or the last continuation row below it.
+    line = -1
     for index in indexes:
         row = table.rows[index]
         filled = _filled(row)
         if not filled:
             continue
         if filled == 1:
+            text = _continuation(row, spec) if parsed.transactions and index == line + 1 else None
+            if text is None:
+                parsed.note_rows.append(index)
+            else:
+                continued.append((len(parsed.transactions) - 1, index, text))
+                line = index
+            continue
+        if _blank(row, spec.date_column, spec.amount_column, spec.debit_column, spec.credit_column):
             parsed.note_rows.append(index)
             continue
         raw_date = _cell(row, spec.date_column)
+        if raw_date is not None and _header_cell(raw_date) == PENDING_CELL:
+            parsed.pending_rows.append(index)
+            continue
         posted = parse_cell_date(raw_date, spec.date_format) if raw_date else None
         amount = _row_amount(row, spec, printed_negative)
         currency = _currency(row, spec)
@@ -570,25 +683,71 @@ def _read_rows(
                 row=index,
             )
         )
+        line = index
         if spec.balance_column is not None:
             raw_balance = _text(row, spec.balance_column)
             balance = (
                 parse_cell_amount(raw_balance, spec.decimal_separator) if raw_balance else None
             )
-            if balance is not None:
-                balances.append((index, posted, amount, balance))
+            balances.append((index, posted, amount, balance))
+    _append_continuations(parsed, continued)
     if parsed.transactions:
         dates = [t.posted_date for t in parsed.transactions]
         parsed.period_start, parsed.period_end = min(dates), max(dates)
         currencies = {t.currency for t in parsed.transactions if t.currency}
         if len(currencies) == 1:
             parsed.currency = next(iter(currencies))
-    if balances:
-        chronological = _chronological(balances)
-        _, last_date, _, last_balance = chronological[-1]
+    chronological = _chronological(balances)
+    printed = [(posted, balance) for _, posted, _, balance in chronological if balance is not None]
+    if printed:
+        last_date, last_balance = printed[-1]
         parsed.closing_balance = ClosingBalance(last_balance, last_date)
         parsed.balance_mismatches = _reconcile(chronological)
+        parsed.balance_checks = len(printed) - 1
     return parsed
+
+
+def _append_continuations(parsed: ParsedStatement, continued: list[tuple[int, int, str]]) -> None:
+    """Append the continuation rows to their transactions' memos (:func:`_read_rows`).
+
+    Those below the last transaction are note rows unless a row before it
+    was continued.
+    """
+    last = len(parsed.transactions) - 1
+    established = any(position < last for position, _, _ in continued)
+    for position, index, text in continued:
+        if position == last and not established:
+            parsed.note_rows.append(index)
+            continue
+        transaction = parsed.transactions[position]
+        memo = f"{transaction.memo} {text}" if transaction.memo else text
+        parsed.transactions[position] = replace(transaction, memo=memo)
+    parsed.note_rows.sort()
+
+
+def _split_footers(table: Table, spec: MappingSpec, statements: Sequence[ParsedStatement]) -> None:
+    """Move the unreadable rows that trail the table from ``skipped_rows`` to ``footer_rows``.
+
+    A footer is an unreadable row after the last readable row of the whole
+    table (not of its own account's rows) whose date cell is no date: a
+    total, a closing line. A trailing row that has a date is a transaction
+    that did not read and stays reported. A table without any readable row
+    has no footer: every row stays reported.
+    """
+    last = max((t.row for s in statements for t in s.transactions if t.row is not None), default=-1)
+    if last < 0:
+        return
+    for parsed in statements:
+        footers = [
+            index
+            for index in parsed.skipped_rows
+            if index > last
+            and parse_cell_date(_cell(table.rows[index], spec.date_column) or "", spec.date_format)
+            is None
+        ]
+        if footers:
+            parsed.footer_rows = footers
+            parsed.skipped_rows = [index for index in parsed.skipped_rows if index not in footers]
 
 
 def from_table(table: Table, spec: MappingSpec) -> ParsedStatement:
@@ -600,6 +759,7 @@ def from_table(table: Table, spec: MappingSpec) -> ParsedStatement:
     with :func:`from_table_grouped`.
     """
     parsed = _read_rows(table, spec, _body_rows(table, spec), _printed_negative(table, spec))
+    _split_footers(table, spec, [parsed])
     if spec.account_column is not None and parsed.transactions:
         column = spec.account_column
         found = {
@@ -646,7 +806,10 @@ def from_table_grouped(table: Table, spec: MappingSpec) -> list[ParsedStatement]
     not a number, carries ``account_name`` (the cell of its first readable
     row, :func:`_account_name`) and no ``last4``. Unreadable rows are
     reported in their account's group; those of no group with a readable row
-    (footers, totals) in the first group, like the note rows. Without an
+    (footers, totals) in the first group, like the note rows and the
+    pending rows; the ones that trail the whole table are footers
+    (:func:`_split_footers`). A continuation row has no account cell, so in
+    a grouped table it stays a note row. Without an
     ``account_column``: the one statement of :func:`from_table`. A table
     without any readable row gives one empty statement listing the skipped
     rows.
@@ -663,11 +826,13 @@ def from_table_grouped(table: Table, spec: MappingSpec) -> list[ParsedStatement]
     groups: list[tuple[int, ParsedStatement]] = []
     orphans: list[int] = []
     notes: list[int] = []
+    pending: list[int] = []
     for key, indexes in rows.items():
         parsed = _read_rows(table, spec, indexes, printed_negative)
         if not parsed.transactions:
             orphans.extend(parsed.skipped_rows)
             notes.extend(parsed.note_rows)
+            pending.extend(parsed.pending_rows)
             continue
         parsed.last4 = key[0]
         first = parsed.transactions[0].row
@@ -682,6 +847,7 @@ def from_table_grouped(table: Table, spec: MappingSpec) -> list[ParsedStatement]
                 source_format="csv",
                 skipped_rows=sorted(orphans),
                 note_rows=sorted(notes),
+                pending_rows=sorted(pending),
                 truncated=table.truncated,
             )
         ]
@@ -689,6 +855,9 @@ def from_table_grouped(table: Table, spec: MappingSpec) -> list[ParsedStatement]
         statements[0].skipped_rows = sorted([*statements[0].skipped_rows, *orphans])
     if notes:
         statements[0].note_rows = sorted([*statements[0].note_rows, *notes])
+    if pending:
+        statements[0].pending_rows = sorted([*statements[0].pending_rows, *pending])
+    _split_footers(table, spec, statements)
     return statements
 
 
@@ -701,22 +870,31 @@ def group_last4(table: Table, spec: MappingSpec, group: int) -> str | None:
 
 
 def _chronological(
-    rows: list[tuple[int, date, Decimal, Decimal]],
-) -> list[tuple[int, date, Decimal, Decimal]]:
+    rows: list[tuple[int, date, Decimal, Decimal | None]],
+) -> list[tuple[int, date, Decimal, Decimal | None]]:
     """Rows in time order: files list newest-first or oldest-first; keep their order."""
     if len(rows) > 1 and rows[0][1] > rows[-1][1]:
         return list(reversed(rows))
     return rows
 
 
-def _reconcile(rows: Iterable[tuple[int, date, Decimal, Decimal]]) -> list[int]:
-    """Rows whose balance is not the previous balance plus their amount."""
+def _reconcile(rows: Iterable[tuple[int, date, Decimal, Decimal | None]]) -> list[int]:
+    """Rows whose balance is not the balance printed before plus the amounts since.
+
+    ``rows`` are every transaction in time order, the balance None where
+    the row prints none: an export that prints the balance once a day (on
+    the day's last row) reconciles over the day's rows together.
+    """
     mismatches: list[int] = []
     previous: Decimal | None = None
+    since = Decimal(0)
     for index, _, amount, balance in rows:
-        if previous is not None and previous + amount != balance:
+        since += amount
+        if balance is None:
+            continue
+        if previous is not None and previous + since != balance:
             mismatches.append(index)
-        previous = balance
+        previous, since = balance, Decimal(0)
     return mismatches
 
 
@@ -766,6 +944,7 @@ ROLE_WORDS: Final[dict[str, tuple[str, ...]]] = {
         "settlement date",
         "settle date",
         "posted",
+        *("date processed", "created", "datetime", "timestamp"),
         *("datum", "buchungstag", "buchungsdatum", "valuta", "wertstellung", "valutadatum"),
         *("date opération", "date operation", "date de valeur", "date comptable"),
         *("fecha", "fecha valor", "fecha operación", "fecha operacion", "fecha contable"),
@@ -787,11 +966,13 @@ ROLE_WORDS: Final[dict[str, tuple[str, ...]]] = {
     ),
     "debit": (
         *("debit", "debits", "withdrawal", "withdrawals", "money out", "paid out", "outflow"),
+        *("debit amount", "amount debit"),
         *("soll", "lastschrift", "ausgang", "ausgaben", "débit", "debe", "cargo", "cargos"),
         *("retiro", "retiros", "af", "uscite", "addebito", "addebiti", "débito", "debito"),
     ),
     "credit": (
         *("credit", "credits", "deposit", "deposits", "money in", "paid in", "inflow"),
+        *("credit amount", "amount credit"),
         *("haben", "gutschrift", "eingang", "einnahmen", "crédit", "haber", "abono", "abonos"),
         *("depósito", "deposito", "bij", "entrate", "accredito", "accrediti", "crédito"),
         "credito",
@@ -917,9 +1098,21 @@ _POSTING_DATE: Final = re.compile(r"post|book|buchung|boek|compta|contab")
 _TRANSACTION_DATE: Final = re.compile(r"trans|trade|run|op[eé]ra|moviment|lan[cç]amento")
 
 
+#: A qualifier that names a part of a figure: ``Amount (fee)`` is not the
+#: amount, whichever of ``Amount (fee)`` and ``Amount (total)`` comes first.
+_PART: Final = r"(?!(?:fees?|tax|vat|tip)\))"
 #: A unit after a money header (``Bedrag (EUR)``, ``Amount (USD)``, ``Betrag in EUR``):
 #: the header still names its role exactly.
-_UNIT_SUFFIX: Final = re.compile(r"\s*(?:\((?:[a-z]{3}|[$\u20ac\u00a3\u00a5])\)|\bin [a-z]{3})$")
+_UNIT_SUFFIX: Final = re.compile(
+    rf"\s*(?:\({_PART}(?:[a-z]{{3}}|[$\u20ac\u00a3\u00a5])\)|\bin [a-z]{{3}})$"
+)
+#: Any other parenthesised qualifier (``Amount (total)``, ``Date (UTC)``) is
+#: read the same way, when that leaves a name no other column has
+#: (:func:`_role_names`).
+_QUALIFIER: Final = re.compile(rf"\s*\({_PART}[^()]*\)$")
+#: Beside a ``Fee`` and a ``Net`` column, ``Gross`` is the amount (a payment
+#: service's export); on its own it is no amount word.
+_GROSS_HEADERS: Final = ("gross", "fee", "net")
 
 
 @dataclass(frozen=True)
@@ -1111,9 +1304,41 @@ class _Pick:
     fit: float
 
 
+def _gross_level(names: Sequence[str], body: Sequence[Sequence[str]]) -> int:
+    """How a ``Gross`` header names the amount (0: it does not).
+
+    Only beside a ``Fee`` and a ``Net`` column (:data:`_GROSS_HEADERS`).
+    Exactly, when gross and net are the same figure on every row: no fee
+    was taken, so there is one amount. Else as a word only: the fee makes
+    them differ, which of the two the account saw is for a person to say,
+    and the suggestion is not confident (``header_not_exact``).
+    """
+    if any(names.count(name) != 1 for name in _GROSS_HEADERS):
+        return 0
+    gross, net = names.index("gross"), names.index("net")
+    same = all(_text(row, gross) == _text(row, net) for row in body)
+    return EXACT if same else WORD
+
+
+def _role_names(header: Sequence[str]) -> list[str]:
+    """The header cells as the role words are matched against them.
+
+    Folded (:func:`_header_cell`), without a unit (:data:`_UNIT_SUFFIX`) and
+    without another parenthesised qualifier (:data:`_QUALIFIER`). When two
+    columns differ by their qualifiers alone (``Amount (original)``,
+    ``Amount (converted)``) the qualifier is what tells them apart: both
+    keep theirs, so neither names the role exactly and a person chooses.
+    """
+    names = [_UNIT_SUFFIX.sub("", _header_cell(cell)) for cell in header]
+    bare = [_QUALIFIER.sub("", name) for name in names]
+    return [
+        short if bare.count(short) == 1 else name for name, short in zip(names, bare, strict=True)
+    ]
+
+
 def _assign(header: Sequence[str], body: Sequence[Sequence[str]]) -> dict[str, _Pick]:
     """Roles for the columns of ``header``, best (column, role) pair first."""
-    names = [_UNIT_SUFFIX.sub("", _header_cell(c)) for c in header]
+    names = _role_names(header)
 
     def column_values(column: int) -> list[str]:
         return [row[column] for row in body if column < len(row)]
@@ -1127,6 +1352,7 @@ def _assign(header: Sequence[str], body: Sequence[Sequence[str]]) -> dict[str, _
         and _role_fit("account", column_values(column)) >= ROLE_FIT_MIN
         for column, name in enumerate(names)
     )
+    gross = _gross_level(names, body)
     pairs: list[tuple[float, int, int, str, float]] = []
     memo_candidates: list[tuple[float, int, int, float]] = []
     for column, name in enumerate(names):
@@ -1134,7 +1360,7 @@ def _assign(header: Sequence[str], body: Sequence[Sequence[str]]) -> dict[str, _
             continue
         values = column_values(column)
         for role, words in ROLE_WORDS.items():
-            level = _match_level(name, words)
+            level = gross if (role, name) == ("amount", "gross") else _match_level(name, words)
             if not level:
                 continue
             fit = _role_fit(role, values, "" if numbered else name)
@@ -1186,9 +1412,21 @@ def guess_decimal_separator(values: Iterable[str]) -> str:
     return "," if comma > point else "."
 
 
-def _data_rows(rows: Sequence[Sequence[str]]) -> list[Sequence[str]]:
-    """Rows with at least two filled cells (a disclaimer paragraph is one cell)."""
-    return [row for row in rows if _filled(row) == 2]
+def _data_rows(rows: Sequence[Sequence[str]], width: int = 0) -> list[Sequence[str]]:
+    """Rows with at least two filled cells (a disclaimer paragraph is one cell).
+
+    The rows at the end that have fewer cells than the header (``width``:
+    the header up to its last named cell) are a footer block and left out,
+    so a short table's totals do not decide what its columns hold. A
+    footer block is no longer than the table above it: when the short rows
+    outnumber the rows before them, the file just writes its rows without
+    their empty trailing cells, and all are kept.
+    """
+    data = [row for row in rows if _filled(row) == 2]
+    end = len(data)
+    while end and len(data[end - 1]) < width:
+        end -= 1
+    return data[:end] if end >= len(data) - end else data
 
 
 def names_card(header: Sequence[str]) -> bool:
@@ -1257,7 +1495,8 @@ def _candidate(table: Table, skip: int) -> _Candidate | None:
     header = table.rows[skip]
     if sum(1 for c in header if c.strip()) < 2:
         return None
-    body = _data_rows(table.rows[skip + 1 : skip + 1 + SUGGEST_SAMPLE_ROWS])
+    width = max(index for index, cell in enumerate(header) if cell.strip()) + 1
+    body = _data_rows(table.rows[skip + 1 : skip + 1 + SUGGEST_SAMPLE_ROWS], width)
     if not body:
         return None
     picks = _assign(header, body)
@@ -1420,8 +1659,13 @@ def _sign_says_nothing(amounts: Sequence[Decimal]) -> bool:
 
 
 def _balances_agree(statements: list[ParsedStatement]) -> bool:
-    checked = sum(1 for s in statements for _ in s.transactions)
-    return checked >= 2 and not any(s.balance_mismatches for s in statements)
+    """Whether a printed balance was checked against the one before, and none disagreed.
+
+    A balance column that is printed on one row only (an opening balance)
+    checks nothing, so it proves nothing.
+    """
+    checked = sum(s.balance_checks for s in statements)
+    return checked >= 1 and not any(s.balance_mismatches for s in statements)
 
 
 def _read_suggested(
@@ -1494,10 +1738,10 @@ def suggest_mapping(table: Table) -> MappingSuggestion | None:
     header = table.rows[spec.skip_rows]
     rows = [t.row for s in statements for t in s.transactions if t.row is not None]
     skipped = sorted(r for s in statements for r in s.skipped_rows)
-    notes = [r for s in statements for r in s.note_rows]
+    trailing = [r for s in statements for r in (*s.note_rows, *s.footer_rows)]
     last = max(rows, default=-1)
     failed = tuple(r for r in skipped if r < last)
-    footer = sum(1 for r in (*skipped, *notes) if r > last)
+    footer = sum(1 for r in (*skipped, *trailing) if r > last)
     accounts = sum(1 for s in statements if s.transactions) or 1
     amounts = [t.amount for s in statements for t in s.transactions]
     correlation = _Correlation()

@@ -167,7 +167,7 @@ def test_amount_cells(text: str, separator: str, expected: str) -> None:
 
 @pytest.mark.parametrize(
     "text",
-    ["", "abc", "1.2.3", "12.1234567", "1e5", "NaN", "--5", "100000000000000", "=1+2"],
+    ["", "abc", "1.2.3", "1e5", "NaN", "--5", "100000000000000", "=1+2"],
 )
 def test_non_amount_cells(text: str) -> None:
     assert parse_cell_amount(text, ".") is None

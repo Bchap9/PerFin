@@ -681,6 +681,10 @@ class _Run:
     duplicates: int = 0
     possible_duplicates: int = 0
     skipped_rows: int = 0
+    #: Table rows after the last readable one (totals, closing lines) and
+    #: rows the bank had not booked yet (``Pending``): counted, never reported.
+    footer_rows: int = 0
+    pending_rows: int = 0
     skipped_currency: int = 0
     snapshots: int = 0
     rules_changed: int = 0
@@ -762,6 +766,8 @@ class _Run:
             "duplicates": self.duplicates,
             "possible_duplicates": self.possible_duplicates,
             "skipped_rows": self.skipped_rows,
+            "footer_rows": self.footer_rows,
+            "pending_rows": self.pending_rows,
             "skipped_currency": self.skipped_currency,
             "snapshots": self.snapshots,
             "rules_changed": self.rules_changed,
@@ -813,6 +819,10 @@ def _category_id(run: _Run, name: str | None) -> uuid.UUID | None:
 
 
 def _row_problems(run: _Run, parsed: ParsedStatement, account: Account) -> None:
+    # Footers and pending rows are not problems: ``rows_skipped`` is raised
+    # for the rows that should have read (``parsed.skipped_rows``) only.
+    run.footer_rows += len(parsed.footer_rows)
+    run.pending_rows += len(parsed.pending_rows)
     if parsed.skipped_rows:
         run.skipped_rows += len(parsed.skipped_rows)
         run.review(

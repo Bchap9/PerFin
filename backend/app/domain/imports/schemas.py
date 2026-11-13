@@ -20,7 +20,8 @@ way of reading the amount is used:
 
 ``decimal_separator`` is ``.`` (``1,234.56``) or ``,`` (``1.234,56``);
 currency symbols, spaces and apostrophes are ignored, ``(12.34)`` and
-``12.34-`` are negative. ``date_format`` is one of :data:`DATE_FORMATS`
+``12.34-`` are negative, and more than six decimals are rounded half-even
+to six. ``date_format`` is one of :data:`DATE_FORMATS`
 (month names are English three-letter abbreviations, whatever the locale).
 ``currency`` fixes the currency of every row (default: the account's);
 ``currency_column`` reads it per row (an empty cell means the account's
@@ -107,6 +108,8 @@ DATE_FORMATS: Final[dict[str, str]] = {
     "DD MMM YYYY": "31 Jan 2026",
     "DD-MMM-YYYY": "31-Jan-2026",
     "MMM DD, YYYY": "Jan 31, 2026",
+    "DDMMMYYYY": "31Jan2026",
+    "DD-MMM-YY": "31-Jan-26",
 }
 
 DateFormat = Literal[
@@ -125,6 +128,8 @@ DateFormat = Literal[
     "DD MMM YYYY",
     "DD-MMM-YYYY",
     "MMM DD, YYYY",
+    "DDMMMYYYY",
+    "DD-MMM-YY",
 ]
 
 _FINGERPRINT = re.compile(r"^[0-9a-f]{64}$")
