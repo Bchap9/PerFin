@@ -408,3 +408,134 @@ def test_value_under_and_over() -> None:
     assert value_under(lines, 3, label) is None
     other_page = [lines[1], ViewLine(2, 2, lines[2].cells, lines[2].text, 10.0)]
     assert value_under(other_page, 0, other) is None
+
+
+# Review findings: year-to-date figures under, after or beside the period's.
+
+
+def _row(index: int, *cells: tuple[str, float]) -> ViewLine:
+    y = 40.0 + 20.0 * index
+    built = tuple(Cell(text, x, y, x + 6.0 * len(text), y + 10.0, None) for text, x in cells)
+    return ViewLine(
+        page=1, index=index, cells=built, text=" ".join(t for t, _ in cells), height=10.0
+    )
+
+
+_OVER = (("Gross pay", 140.0), ("Total deductions", 260.0), ("Net pay", 420.0))
+_CURRENT_ROW = (("Current", 40.0), ("$2,400.00", 140.0), ("$591.60", 260.0), ("$1,808.40", 420.0))
+_YTD_ROW = (("YTD", 40.0), ("$9,600.00", 140.0), ("$2,366.40", 260.0), ("$7,233.60", 420.0))
+
+
+@pytest.mark.parametrize("ytd_first", [False, True])
+def test_labels_over_a_current_and_a_year_to_date_row(ytd_first: bool) -> None:
+    rows = (_YTD_ROW, _CURRENT_ROW) if ytd_first else (_CURRENT_ROW, _YTD_ROW)
+    lines = [
+        _row(0, ("Initech Example Ltd", 40.0)),
+        _row(1, ("Pay Stub", 40.0)),
+        _row(2, *_OVER),
+        _row(3, *rows[0]),
+        _row(4, *rows[1]),
+    ]
+    payslip = _payslip(_hand_view(lines))
+    assert (payslip.gross, payslip.total_deductions, payslip.net) == (
+        Decimal("2400.00"),
+        Decimal("591.60"),
+        Decimal("1808.40"),
+    )
+    assert payslip.adds_up is True
+
+
+def test_labels_over_a_year_to_date_row_alone_are_not_read() -> None:
+    lines = [
+        _row(0, ("Initech Example Ltd", 40.0)),
+        _row(1, ("Pay Stub", 40.0)),
+        _row(2, *_OVER),
+        _row(3, *_YTD_ROW),
+        # Not the period's row: nothing says what these figures are.
+        _row(4, ("Hours", 40.0), ("80.00", 140.0), ("0.00", 260.0), ("80.00", 420.0)),
+    ]
+    outcome = PayslipParser().parse(_hand_view(lines), threshold=conf.DEFAULT_THRESHOLD)
+    assert outcome.payslip is None
+    assert outcome.warnings == ["no_payslip_figures"]
+
+
+def test_a_year_to_date_block_after_the_summary_is_not_read() -> None:
+    lines = [
+        _row(0, ("Initech Example Ltd", 40.0)),
+        _row(1, ("Pay Stub", 40.0)),
+        _row(2, ("Gross Pay", 40.0), ("2,400.00", 200.0)),
+        _row(3, ("Total Deductions", 40.0), ("591.60", 200.0)),
+        _row(4, ("Net Pay", 40.0), ("1,808.40", 200.0)),
+        _row(5, ("Year to Date", 40.0)),
+        _row(6, ("Gross Pay", 40.0), ("9,600.00", 200.0)),
+        _row(7, ("Total Deductions", 40.0), ("2,366.40", 200.0)),
+        _row(8, ("Net Pay", 40.0), ("7,233.60", 200.0)),
+    ]
+    payslip = _payslip(_hand_view(lines))
+    assert (payslip.gross, payslip.total_deductions, payslip.net) == (
+        Decimal("2400.00"),
+        Decimal("591.60"),
+        Decimal("1808.40"),
+    )
+    assert payslip.adds_up is True
+    # The year-to-date block alone gives nothing.
+    alone = PayslipParser().parse(
+        _hand_view([*lines[:2], *lines[5:]]), threshold=conf.DEFAULT_THRESHOLD
+    )
+    assert alone.payslip is None
+
+
+def test_the_first_reading_of_a_figure_stands() -> None:
+    lines = [
+        _row(0, ("Initech Example Ltd", 40.0)),
+        _row(1, ("Pay Stub", 40.0)),
+        _row(2, ("Gross Pay", 40.0), ("2,400.00", 200.0)),
+        _row(3, ("Net Pay", 40.0), ("1,808.40", 200.0)),
+        _row(4, ("Summary of the year", 40.0)),
+        _row(5, ("Gross Pay", 40.0), ("9,600.00", 200.0)),
+        _row(6, ("Net Pay", 40.0), ("7,233.60", 200.0)),
+    ]
+    payslip = _payslip(_hand_view(lines))
+    assert (payslip.gross, payslip.net) == (Decimal("2400.00"), Decimal("1808.40"))
+
+
+def test_a_rate_is_not_the_current_earnings_when_the_current_cell_is_blank() -> None:
+    lines = [
+        _row(0, ("Initech Example Ltd", 40.0)),
+        _row(1, ("Pay Stub", 40.0)),
+        _row(
+            2,
+            ("Earnings", 40.0),
+            ("Hours", 160.0),
+            ("Rate", 230.0),
+            ("Current", 300.0),
+            ("YTD", 400.0),
+        ),
+        _row(
+            3,
+            ("Regular", 40.0),
+            ("80.00", 160.0),
+            ("30.00", 230.0),
+            ("2,400.00", 300.0),
+            ("9,600.00", 400.0),
+        ),
+        _row(4, ("Overtime", 40.0), ("0.00", 160.0), ("45.00", 230.0), ("900.00", 400.0)),
+        _row(5, ("Gross Pay", 40.0), ("2,400.00", 300.0), ("10,500.00", 400.0)),
+        _row(6, ("Net Pay", 40.0), ("2,400.00", 300.0), ("10,500.00", 400.0)),
+    ]
+    payslip = _payslip(_hand_view(lines))
+    assert [(e.label, e.amount) for e in payslip.earnings] == [("Regular", Decimal("2400.00"))]
+    assert payslip.gross == Decimal("2400.00")
+
+
+def test_a_heading_starting_with_employer_is_no_employer() -> None:
+    lines = [
+        _row(0, ("Initech Example Ltd", 40.0)),
+        _row(1, ("Earnings Statement", 40.0)),
+        _row(2, ("Gross Pay", 40.0), ("2,400.00", 300.0)),
+        _row(3, ("Employer Paid Benefits", 40.0)),
+        _row(4, ("Net Pay", 40.0), ("2,400.00", 300.0)),
+    ]
+    assert _payslip(_hand_view(lines)).employer == "Initech Example Ltd"
+    lines[3] = _row(3, ("Employer: Sample Works Co", 40.0))
+    assert _payslip(_hand_view(lines)).employer == "Sample Works Co"

@@ -24,12 +24,15 @@ this reader works on cells (:mod:`app.ingestion.parsers.labelled_cells`):
    :attr:`LoanRead.due`, never to the payment; in *paid* the parts and the
    total are the payment (:attr:`LoanRead.money`), each from the period's
    column. A year-to-date column is never read. A header naming it and
-   exactly one other column makes that other the period's whatever its
-   words; a paid heading with one period header under it (``Paid Last
-   Month`` alone) has that one column. With more than one unnamed column,
-   or with no header saying what the figures are, nothing is read and the
-   warning is ``loan_columns_unknown``. In *account*: the outstanding principal
-   (``balance``), the previous one and the interest rate.
+   exactly one other column makes that other the period's, unless its words
+   say it is the next payment (``Amount Due``, ``Current Payment``,
+   ``Next``, ``Billed``, ``Scheduled``); a paid heading with one period
+   header under it (``Paid Last Month`` alone) has that one column. With
+   more than one unnamed column, a column of the next payment, or no header
+   saying what the figures are, nothing is read and the warning is
+   ``loan_columns_unknown``. A paid figure printed negative (a reversal) is
+   not read. In *account*: the outstanding principal (``balance``), the
+   previous one and the interest rate.
 4. **Labels over or under their value**: an account or due label with no
    amount on its line takes the cell under it, else the one over it.
 5. **Dates**: the statement date, the next due date (``Payment date`` is
@@ -37,7 +40,9 @@ this reader works on cells (:mod:`app.ingestion.parsers.labelled_cells`):
    payment was received; after the label or under it.
 6. **The day paid**, when no label gave it, is a row of the activity table
    whose description says ``payment`` (and not late, fee, due, reversal,
-   returned) and whose amount stands in the payments column. With the
+   returned, nor scheduled, pending, upcoming, next, future: not received
+   yet) and whose amount stands in the payments column. A row dated after
+   the statement date is no payment made. With the
    payment's total known: the latest row of that amount, else, when all
    payment rows add up to it, the latest of them, else nothing and the
    warning ``loan_payment_row_mismatch``. With no total: the latest row.
@@ -154,7 +159,24 @@ _NUMBER_LABELS: Final = ("loan number", "loan no", "account number", "account no
 #: Money columns an activity table may name; a payment stands in the first two.
 _ACTIVITY_COLUMNS: Final[tuple[str, ...]] = ("payments", "amount", "charges")
 #: Words in a row's description that say it is not a payment received.
-_NOT_A_PAYMENT: Final = ("late", "fee", "due", "reversal", "reversed", "returned")
+_NOT_A_PAYMENT: Final = (
+    "late",
+    "fee",
+    "due",
+    "reversal",
+    "reversed",
+    "returned",
+    # Not received yet.
+    "schedul",
+    "pending",
+    "upcoming",
+    "next",
+    "future",
+)
+#: Words in the header of the one column beside a year-to-date column that say
+#: it is not what was paid (the next payment's split, what was billed).
+_NOT_PAID_WORDS: Final = frozenset({"due", "next", "billed", "scheduled", "upcoming"})
+_NOT_PAID_PHRASES: Final = ("current payment", "regular payment", "monthly payment")
 _MONTH_START: Final = re.compile(
     r"(?i)(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\.?,?$"
 )
@@ -236,6 +258,14 @@ def _heading(cell: Cell) -> Kind | None:
         ):
             return kind
     return None
+
+
+def _names_the_next_payment(header: Cell) -> bool:
+    """``header`` says its column is what is due or billed, not what was paid."""
+    norm = normalise(header.text)
+    return bool(_NOT_PAID_WORDS & set(norm.split())) or any(
+        f" {phrase} " in f" {norm} " for phrase in _NOT_PAID_PHRASES
+    )
 
 
 def _year_to_date_header(line: ViewLine) -> list[PeriodColumn]:
@@ -524,7 +554,7 @@ class _Reader:
         region.unknown = False
         if named:
             region.columns = inside
-        elif not named and len(others) == 1:
+        elif len(others) == 1 and not _names_the_next_payment(others[0]):
             region.columns = sorted(
                 [*inside, PeriodColumn("current", others[0].x0, others[0].x1)],
                 key=lambda column: column.x0,
@@ -564,9 +594,16 @@ class _Reader:
                 return cell
         return None
 
-    def _money(self, target: dict[str, Decimal], name: str, cell: Cell) -> bool:
+    def _money(
+        self, target: dict[str, Decimal], name: str, cell: Cell, *, paid: bool = False
+    ) -> bool:
+        """Keep the amount of ``cell`` as ``name`` (the first reading stands).
+
+        ``paid``: a part of the payment made; printed negative it is a
+        reversal, which is no payment of that size, and it is not read.
+        """
         amount = amount_of(cell)
-        if amount is None or name in target:
+        if amount is None or name in target or (paid and amount.value < 0):
             return False
         target[name] = abs(amount.value)
         if amount.currency:
@@ -669,7 +706,7 @@ class _Reader:
                 # Two figures after a label and no header saying what they are.
                 self.warn("loan_columns_unknown")
                 return
-            if self._money(read.money, name, amounts[0]):
+            if self._money(read.money, name, amounts[0], paid=True):
                 self._keep(name, [label, amounts[0]])
         else:
             name = _PAID_LABELS.get(norm)
@@ -680,7 +717,7 @@ class _Reader:
                 self.warn("loan_columns_unknown")
                 return
             chosen = current_cells(amounts, region.columns)
-            if chosen and self._money(read.money, name, chosen[0]):
+            if chosen and self._money(read.money, name, chosen[0], paid=True):
                 self._keep(name, [label, chosen[0]])
 
     # -- the page ---------------------------------------------------------------
@@ -745,7 +782,14 @@ class _Reader:
             return
         if "paid_on" in read.dates or not self.rows:
             return
-        rows = sorted(self.rows, key=lambda row: row.day)
+        # A row dated after the statement was printed is a payment to come.
+        printed = read.dates.get("statement_date")
+        rows = sorted(
+            (row for row in self.rows if printed is None or row.day <= printed),
+            key=lambda row: row.day,
+        )
+        if not rows:
+            return
         total = money.get("total")
         chosen: list[_PaymentRow]
         if total is None:

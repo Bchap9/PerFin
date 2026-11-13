@@ -13,8 +13,12 @@ in the wordings payroll services print:
   (``Current | YTD``, ``This Period | YTD``, in either order) a figure is
   the one in the period's column, never the year-to-date one
   (:mod:`app.ingestion.parsers.labelled_cells`); a label whose figures all
-  stand outside the period's column is left unread. With no header naming
-  the columns the first figure after the label is taken, as before.
+  stand outside the period's column is left unread, a single figure
+  included (a block under a lone ``Year to Date`` header gives nothing).
+  With no header naming the columns the first figure after the label is
+  taken, as before. A figure standing under another header of that line
+  (``Hours``, ``Rate``) is no figure of either column. The first reading of
+  gross, net and the deductions total stands.
 * **Sections**: the lines under a *Deductions* (*Taxes*, *Withholdings*)
   heading are the deduction lines, those under *Earnings* (*Payments*,
   *Pay*) the earnings, down to the labelled total. A heading may be one
@@ -23,14 +27,18 @@ in the wordings payroll services print:
   heading. A line starting with ``Total`` is never a line item. With no
   printed total the deductions total is the sum of the deduction lines.
 * **Labels over values**: a line of two or more labels with no amount takes
-  each value from the cell under its label.
+  each value from the cell under its label. A row naming the year so far
+  (``YTD 9,600.00 ...``) is never that line: it is skipped, and the row
+  after it is taken only when it names the period (``Current``).
 * **Period**: ``Pay period <date> - <date>``, else a start and an end label
   (:data:`PERIOD_LABELS`), each with its date after it; one without the
   other is no period. **Pay date**: after ``Pay date``. Dates are numeric
   (order from the values, else ``MM/DD``) or with month names.
 * **Employer**: the cell under an ``EMPLOYER`` heading, else what follows
-  the word on its line (never another label: ``EMPLOYER | PAY PERIOD``),
-  else the first line of the page.
+  the word on its line when the word is a cell of its own or a colon
+  follows it (never another label: ``EMPLOYER | PAY PERIOD``; never the
+  rest of a heading: ``Employer Paid Benefits``), else the first line of
+  the page.
 
 Checks: ``gross - total deductions = net`` (and the deduction lines add up
 to their total) within the reconciliation tolerance; a payslip that does not
@@ -136,6 +144,8 @@ _NOT_A_NAME: Final = (
     *DEDUCTION_HEADINGS,
     *EARNING_HEADINGS,
 )
+#: A row label naming the period (the values row under a line of labels).
+_CURRENT_ROWS: Final = frozenset({"current", "this period", "current period", "this pay period"})
 _DATE_TOKEN: Final = re.compile(r"\d{1,4}[/.-]\d{1,2}[/.-]\d{2,4}")
 _CURRENCY: Final = re.compile(r"\bcurrency\s*:?\s*([A-Z]{3})\b", re.IGNORECASE)
 _EVERYWHERE: Final = float("inf")
@@ -197,6 +207,8 @@ class _Block:
     x1: float
     section: Section | None
     columns: list[PeriodColumn]
+    #: The other headers of the columns' line (``Hours``, ``Rate``): their x-ranges.
+    others: tuple[tuple[float, float], ...] = ()
 
     @property
     def whole(self) -> bool:
@@ -204,6 +216,52 @@ class _Block:
 
     def holds(self, cell: Cell) -> bool:
         return self.x0 <= cell.x0 < self.x1
+
+    def set_columns(self, line: ViewLine, columns: list[PeriodColumn]) -> None:
+        """Take the columns ``line`` heads inside this block, and its other headers."""
+        self.columns = [c for c in columns if self.x0 <= c.x0 < self.x1]
+        self.others = tuple(
+            (cell.x0, cell.x1)
+            for cell in line.cells
+            if self.holds(cell)
+            and has_letters(cell.text)
+            and normalise(cell.text) not in DEDUCTION_HEADINGS | EARNING_HEADINGS
+            and not any(cell.overlap(c.x0, c.x1) > 0 for c in columns)
+        )
+
+    def in_a_period_column(self, cell: Cell) -> bool:
+        """``cell`` stands nearer a period or year-to-date column than another header."""
+
+        def distance(x0: float, x1: float) -> tuple[float, float]:
+            gap = max(0.0, max(cell.x0, x0) - min(cell.x1, x1))
+            return gap, abs(cell.centre - (x0 + x1) / 2)
+
+        if not self.others or not self.columns:
+            return True
+        return min(distance(c.x0, c.x1) for c in self.columns) <= min(
+            distance(x0, x1) for x0, x1 in self.others
+        )
+
+
+def _values_row(lines: list[ViewLine], at: int) -> int | None:
+    """The line holding the values under the labels of ``lines[at]``, else None.
+
+    The next line; when that one names the year so far, the line after it if
+    it names the period (``Current``), else none: a year-to-date figure is
+    never the period's.
+    """
+    row = at + 1
+    if row >= len(lines):
+        return None
+    if not any(is_year_to_date(cell.text) for cell in lines[row].cells):
+        return row
+    row += 1
+    names_period = (
+        row < len(lines)
+        and lines[row].page == lines[at].page
+        and any(normalise(cell.text) in _CURRENT_ROWS for cell in lines[row].cells)
+    )
+    return row if names_period else None
 
 
 def _blocks(line: ViewLine, columns: list[PeriodColumn]) -> list[_Block]:
@@ -220,8 +278,9 @@ def _blocks(line: ViewLine, columns: list[PeriodColumn]) -> list[_Block]:
     for at, (cell, section) in enumerate(headings):
         x0 = -_EVERYWHERE if at == 0 else cell.x0
         x1 = headings[at + 1][0].x0 if at + 1 < len(headings) else _EVERYWHERE
-        inside = [c for c in columns if x0 <= c.x0 < x1]
-        blocks.append(_Block(x0, x1, section, inside))
+        block = _Block(x0, x1, section, [])
+        block.set_columns(line, columns)
+        blocks.append(block)
     return blocks
 
 
@@ -236,16 +295,16 @@ def _close(blocks: list[_Block], slot: Slot) -> None:
 def _figure(pair: LabelPair, line: ViewLine, blocks: list[_Block]) -> tuple[Cell, Decimal] | None:
     """The period's figure of a labelled pair: its cell and its value.
 
-    Several amounts under a header naming the columns: the one in the
-    period's column, or nothing. One amount, or no header: the first. A
-    dash between the label and the first figure is the label's separator
+    Under a header naming the columns: the amount in the period's column,
+    or nothing (a single figure under a year-to-date header is the year's).
+    No header: the first. A dash between the label and the first figure is the label's separator
     (:func:`app.ingestion.parsers.text.separator_sign`).
     """
     if not pair.amounts:
         return None
     columns = next((b.columns for b in blocks if b.holds(pair.label)), [])
     chosen = pair.amounts[0]
-    if len(pair.amounts) > 1 and columns:
+    if columns:
         current = current_cells(pair.amounts, columns)
         if not current:
             return None
@@ -272,7 +331,9 @@ def _item(line: ViewLine, block: _Block) -> tuple[str, Decimal, list[Cell]] | No
     if not pairs or not amounts:
         return None
     if block.columns:
-        current = current_cells(amounts, block.columns)
+        current = current_cells(
+            [cell for cell in amounts if block.in_a_period_column(cell)], block.columns
+        )
         if not current:
             return None
         chosen, label = current[0], pairs[0].label.text
@@ -331,12 +392,22 @@ class PayslipParser(DocumentParser):
         deduction_cells: list[Cell] = []
         lines = [line for line in view.lines if line.page <= 1]
         values: set[int] = set()  # lines read as the values under a line of labels
+
+        def keep(slot: Slot, value: Decimal, read: list[Cell]) -> None:
+            """A labelled figure; the first reading stands (a later one is the year's)."""
+            if slot not in figures:
+                figures[slot] = abs(value) if slot == "deductions" else value
+                cells[slot] = read
+            _close(blocks, slot)
+
         for at, line in enumerate(lines):
             if at in values:
                 continue
             norm = line.norm
             heading = next((c for c in line.cells if normalise(c.text) == "employer"), None)
             end = label_end(line.text, "employer")
+            if heading is None and end is not None and line.text[end:].lstrip()[:1] != ":":
+                end = None  # a heading that starts with the word (``Employer Paid Benefits``)
             if heading is not None or end is not None:
                 beside = line.text[end:].strip(" :") if end is not None else ""
                 under = value_under(lines, at, heading, text=True) if heading is not None else None
@@ -382,28 +453,26 @@ class PayslipParser(DocumentParser):
             if not find_amounts(line.text):
                 labels = [cell for cell in line.cells if has_letters(cell.text)]
                 over = False
-                if len(labels) >= 2 and not columns:
+                row = _values_row(lines, at) if len(labels) >= 2 and not columns else None
+                if row is not None:
                     for cell in labels:
                         slot = _slot(cell.text, bare=True)
-                        under = value_under(lines, at, cell) if slot is not None else None
+                        under = value_under(lines, row - 1, cell) if slot is not None else None
                         amount = amount_of(under) if under is not None else None
                         if slot is None or under is None or amount is None:
                             continue
-                        figures[slot] = abs(amount.value) if slot == "deductions" else amount.value
-                        cells[slot] = [cell, under]
-                        _close(blocks, slot)
+                        keep(slot, amount.value, [cell, under])
                         over = True
-                if over:
-                    values.add(at + 1)
+                if over and row is not None:
+                    values.update(range(at + 1, row + 1))
                     continue
                 started = _blocks(line, columns)
                 if started:
                     blocks = started
-                elif columns and not blocks:
-                    blocks = [_Block(-_EVERYWHERE, _EVERYWHERE, None, columns)]
                 elif columns:
+                    blocks = blocks or [_Block(-_EVERYWHERE, _EVERYWHERE, None, [])]
                     for block in blocks:
-                        block.columns = [c for c in columns if block.x0 <= c.x0 < block.x1]
+                        block.set_columns(line, columns)
                 continue
             matched = False
             for pair in label_pairs(line):
@@ -411,9 +480,7 @@ class PayslipParser(DocumentParser):
                 figure = _figure(pair, line, blocks) if slot is not None else None
                 if slot is None or figure is None:
                     continue
-                figures[slot] = abs(figure[1]) if slot == "deductions" else figure[1]
-                cells[slot] = [pair.label, figure[0]]
-                _close(blocks, slot)
+                keep(slot, figure[1], [pair.label, figure[0]])
                 matched = True
             if not matched and not any(block.columns for block in blocks):
                 # A word between the label and its figure (``Gross pay USD 4,250.00``).
@@ -425,9 +492,7 @@ class PayslipParser(DocumentParser):
                         None,
                     )
                     if value is not None:
-                        figures[slot] = abs(value) if slot == "deductions" else value
-                        cells[slot] = list(line.cells)
-                        _close(blocks, slot)
+                        keep(slot, value, list(line.cells))
                         matched = True
             if matched:
                 continue

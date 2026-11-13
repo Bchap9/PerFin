@@ -464,6 +464,11 @@ def test_a_bare_payment_row_gives_the_day_paid() -> None:
         [(72.0, "03/14/2026"), (160.0, "Late payment fee"), (400.0, "$455.20")],
         [(72.0, "03/14/2026"), (160.0, "Payment reversal"), (400.0, "$455.20")],
         [(72.0, "03/14/2026"), (160.0, "Service contract"), (400.0, "$455.20")],
+        # Not yet received: scheduled, pending, upcoming, the next one.
+        [(72.0, "04/15/2026"), (160.0, "Next scheduled payment"), (400.0, "$455.20")],
+        [(72.0, "03/14/2026"), (160.0, "Scheduled autopay payment"), (400.0, "$455.20")],
+        [(72.0, "03/14/2026"), (160.0, "Pending payment"), (400.0, "$455.20")],
+        [(72.0, "03/14/2026"), (160.0, "Upcoming payment"), (400.0, "$455.20")],
         # No date first, or two amounts and nothing to say which was paid.
         [(72.0, "Payment Received"), (160.0, "03/14/2026"), (400.0, "$455.20")],
         [(72.0, "03/14/2026"), (160.0, "Payment Received"), (300.0, "$455.20"), (400.0, "$455.20")],
@@ -479,3 +484,103 @@ def test_a_bare_payment_row_of_another_amount_gives_no_date() -> None:
     read = read_periodic(_lines([row, *_ALLOCATION]), FULL_STYLES)
     assert "paid_on" not in read.dates
     assert read.warnings == ["loan_payment_row_mismatch"]
+
+
+# Review findings: rows that are no payment made, and columns that are not the paid one.
+
+_HEAD = [
+    [(72.0, "Statement Date"), (200.0, "03/20/2026")],
+    [(72.0, "Outstanding Principal"), (200.0, "$182,440.17")],
+]
+_PAID = [
+    [(72.0, "Past Payments Breakdown")],
+    [(200.0, "Paid Last Month"), (400.0, "Paid Year to Date")],
+    [(72.0, "Principal"), (200.0, "$410.37"), (400.0, "$2,444.91")],
+    [(72.0, "Interest"), (200.0, "$761.88"), (400.0, "$4,588.59")],
+    [(72.0, "Escrow"), (200.0, "$301.50"), (400.0, "$1,809.00")],
+    [(72.0, "Total"), (200.0, "$1,473.75"), (400.0, "$8,842.50")],
+]
+_ACTIVITY = [
+    [(72.0, "Transaction Activity")],
+    [(72.0, "Date"), (160.0, "Description"), (400.0, "Charges"), (480.0, "Payments")],
+    [(72.0, "03/02/2026"), (160.0, "Payment received"), (480.0, "$1,473.75")],
+]
+
+
+@pytest.mark.parametrize(
+    "row",
+    [
+        [(72.0, "04/01/2026"), (160.0, "Scheduled autopay payment"), (480.0, "$1,473.75")],
+        [(72.0, "03/19/2026"), (160.0, "Pending payment"), (480.0, "$1,473.75")],
+        [(72.0, "03/19/2026"), (160.0, "Upcoming payment"), (480.0, "$1,473.75")],
+        [(72.0, "03/19/2026"), (160.0, "Next payment"), (480.0, "$1,473.75")],
+        # Nothing in its words says so, but no payment was made after the statement was printed.
+        [(72.0, "04/01/2026"), (160.0, "Payment"), (480.0, "$1,473.75")],
+    ],
+)
+def test_a_scheduled_or_pending_row_is_not_the_day_paid(row: list[tuple[float, str]]) -> None:
+    view = _lines([*_HEAD, *_PAID, *_ACTIVITY, row])
+    read = read_periodic(view, FULL_STYLES)
+    assert read.dates["paid_on"] == date(2026, 3, 2)
+    loan = LoanStatementParser().parse(view, threshold=confidence.DEFAULT_THRESHOLD).loan
+    assert loan is not None
+    assert loan.paid_on == date(2026, 3, 2)
+
+
+def test_only_a_row_after_the_statement_date_gives_no_day_paid() -> None:
+    row = [(72.0, "04/01/2026"), (160.0, "Payment"), (480.0, "$1,473.75")]
+    view = _lines([*_HEAD, *_PAID, *_ACTIVITY[:2], row])
+    read = read_periodic(view, FULL_STYLES)
+    assert "paid_on" not in read.dates
+    loan = LoanStatementParser().parse(view, threshold=confidence.DEFAULT_THRESHOLD).loan
+    assert loan is not None
+    assert loan.paid_on is None
+    assert "paid_on" in loan.low_confidence
+
+
+@pytest.mark.parametrize(
+    "row",
+    [
+        [(72.0, "04/15/2026"), (160.0, "Next scheduled payment"), (400.0, "$455.20")],
+        [(72.0, "03/16/2026"), (160.0, "Pending payment"), (400.0, "$455.20")],
+    ],
+)
+def test_a_bare_scheduled_row_does_not_beat_the_payment_received(
+    row: list[tuple[float, str]],
+) -> None:
+    paid = [(72.0, "03/14/2026"), (160.0, "Payment Received. Thank you!"), (400.0, "$455.20")]
+    read = read_periodic(_lines([paid, row, *_ALLOCATION]), FULL_STYLES)
+    assert read.dates == {"paid_on": date(2026, 3, 14)}
+
+
+@pytest.mark.parametrize(
+    "header", ["Amount Due", "Current Payment", "Next Payment", "Billed", "Scheduled Payment"]
+)
+def test_a_due_column_beside_the_year_to_date_is_not_the_payment(header: str) -> None:
+    # The one other column is the next payment's split: it is never stored as the payment.
+    rows = [
+        [(200.0, header), (400.0, "Paid Year to Date")],
+        [(72.0, "Principal"), (200.0, "$412.08"), (400.0, "$2,444.91")],
+        [(72.0, "Interest"), (200.0, "$760.17"), (400.0, "$4,588.59")],
+        [(72.0, "Total"), (200.0, "$1,172.25"), (400.0, "$7,033.50")],
+    ]
+    read = read_periodic(_lines(rows), FULL_STYLES)
+    assert read.money == {}
+    assert read.warnings == ["loan_columns_unknown"]
+
+
+def test_a_negative_paid_figure_is_not_read() -> None:
+    # A column printed negative is a reversal, not a payment of that size.
+    rows = [
+        *_PAID[:2],
+        [(72.0, "Principal"), (200.0, "-$410.37"), (400.0, "$2,444.91")],
+        [(72.0, "Interest"), (200.0, "-$761.88"), (400.0, "$4,588.59")],
+        [(72.0, "Total"), (200.0, "-$1,172.25"), (400.0, "$7,033.50")],
+    ]
+    assert read_periodic(_lines(rows), FULL_STYLES).money == {}
+    allocation = [
+        [(72.0, "Payment Allocation")],
+        [(72.0, "Principal"), (200.0, "($371.85)")],
+        [(72.0, "Interest"), (200.0, "$83.35")],
+    ]
+    assert read_periodic(_lines(allocation), FULL_STYLES).money == {"interest": Decimal("83.35")}
