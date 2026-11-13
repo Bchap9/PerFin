@@ -7,17 +7,30 @@ W-2, the 1099 family, SSA-1099, 1098, 1098-E, 1098-T and 1095-A/B/C) from
 the stored pages, in the worker:
 
 * **Form type**: a heading ``Form <type>`` (``Form W-2``, ``Form 1099-INT``;
-  the longest type wins, so ``1098-E`` is not read as ``1098``). Every
+  the longest type wins, so ``1098-E`` is not read as ``1098``), or, as a
+  broker's composite statement prints it, a cell that starts with the year
+  and the type (``2025 1099-DIV Dividends and Distributions``). Every
   heading starts a section, so a consolidated statement (1099-INT, -DIV and
   -B on consecutive pages) gives one form each; identical copies of a form
-  (Copy B, C, 2 on one sheet) are kept once.
-* **Tax year**: ``Tax year 2025``, ``For calendar year 2025`` or the year
-  printed on the heading line.
+  (Copy B, C, 2 on one sheet) are kept once. Two headings of different
+  forms on one line open two sections side by side, cut at the second
+  heading's left edge: each reads only the cells on its side. A mention is
+  no heading: a contents line (it ends in a page number and holds no
+  amount), a line naming three or more forms, a ``Form <type>`` inside
+  parentheses.
+* **Tax year**: the year a heading starts with, else ``Tax year 2025``,
+  ``For calendar year 2025`` or the year printed on the section's side of
+  the heading line.
+* **Dot leaders**: a cell is cut at every run of three or more dots
+  (:func:`split_leaders`), so ``Total ordinary dividends......1,840.25`` is
+  a label and its amount.
 * **Amount boxes** by label: a box is a cell starting with its id and the
   first words of its label (``1 Wages, tips, other compensation``); the
   word ``Box`` before the id is part of the label (``Box 3. Benefits Paid
   in 2025``, as the SSA-1099 prints it), a box named inside a sentence
-  (``Description of Amount in Box 3``) is not one; its
+  (``Description of Amount in Box 3``) is not one; a box id printed
+  apart from its label (``1a`` | ``Total ordinary dividends``) is read with
+  it when the two together are the label; its
   amount is the first amount below it in its column (up to the next label)
   or right after it on the same line. W-2 box 12 (``12a``..``12d``: code and
   amount) is stored per code (``12_D``); a text box with an amount sibling
@@ -40,7 +53,8 @@ boxes. Because the stored extraction would still hold the page text, the
 worker then calls :func:`redact_identity`, which rewrites the pages, lines,
 layout tables and text of a tax form so that only form vocabulary (the
 words of the registered forms' titles and labels), amounts, years, box ids
-and codes remain; everything else (names, addresses, TINs, account
+and codes remain (a word of label, dot leaders and amount is kept when each
+of its pieces is); everything else (names, addresses, TINs, account
 numbers) becomes ``***`` before the extraction is stored or indexed.
 :func:`carries_tax_identity` extends this to documents outside the
 registered set: any document no statement, payslip or loan parser read
@@ -57,7 +71,7 @@ from __future__ import annotations
 
 import re
 from collections.abc import Iterable, Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from decimal import Decimal
 from functools import cache
 from typing import ClassVar, Final
@@ -78,6 +92,7 @@ from app.ingestion.parsers.base import (
     DocumentView,
     ParseOutcome,
     ViewLine,
+    join_cells,
 )
 from app.ingestion.parsers.text import normalise, read_amount
 from app.ingestion.sandbox.protocol import ExtractResult, LayoutTable, Page, TaxFormRead
@@ -111,6 +126,17 @@ _MONTHS: Final = (
 _MONTH_WORDS: Final = {m.lower(): m for m in _MONTHS}
 _MARKS: Final = frozenset({"x", "X", "✓", "✔", "✗", "✘"})
 _YEAR_RE: Final = re.compile(r"^(?:19|20)\d{2}$")
+#: A cell that may be a year-first heading (``2025 1099-DIV ...``).
+_YEAR_FIRST: Final = re.compile(r"^(?:19|20)\d{2}\s")
+#: Dot leaders between a label and its amount: three or more dots, also
+#: printed with single spaces between them.
+_LEADER: Final = re.compile(r"\s*\.(?: ?\.){2,}\s*")
+_PARENTHESISED: Final = re.compile(r"\([^()]*\)")
+#: The page number a contents line ends in.
+_PAGE_NUMBER: Final = re.compile(r"^\d{1,3}$")
+_DECIMALS: Final = re.compile(r"\d[.,]\d{2}(?!\d)")
+#: A line naming this many different forms lists them; it heads none.
+_LISTED_FORMS: Final = 3
 _LABELLED_YEAR: Final = (
     re.compile(r"\btax year (\d{4})\b"),
     re.compile(r"\b(\d{4}) tax year\b"),
@@ -184,6 +210,19 @@ class _FormInfo:
     heading: re.Pattern[str]
     labels: tuple[_Label, ...]
     stored: frozenset[str]
+    #: The normalised form type (``1099 div``).
+    type_norm: str = ""
+    #: A cell starting with a year and the type (``2025 1099 div ...``).
+    year_heading: re.Pattern[str] = re.compile(r"(?!)")
+    #: Box ids that can stand alone in a cell (lower case, at most three characters).
+    short_ids: frozenset[str] = frozenset()
+
+    def heading_year(self, cell: Cell) -> int | None:
+        """The year ``cell`` starts with when it is a year-first heading of this form."""
+        match = self.year_heading.match(normalise(_PARENTHESISED.sub(" ", cell.text)))
+        if match is None or not _YEAR_MIN <= int(match.group(1)) <= _YEAR_MAX:
+            return None
+        return int(match.group(1))
 
     def label_of(self, cell: Cell) -> _Label | None:
         # "Box 3. Benefits Paid in 2025": the word before the id is no label word.
@@ -200,7 +239,9 @@ class _FormInfo:
 def _forms_of(form_set: FormSet) -> list[_FormInfo]:
     infos: list[_FormInfo] = []
     for form in form_set.forms.values():
-        heading = re.compile(rf"\bform {re.escape(normalise(form.form_type))}(?: |$)")
+        type_norm = normalise(form.form_type)
+        heading = re.compile(rf"\bform {re.escape(type_norm)}(?: |$)")
+        year_heading = re.compile(rf"^(\d{{4}}) {re.escape(type_norm)}(?: |$)")
         labels = tuple(
             _Label(box, _label_key(box))
             for box in form.boxes
@@ -208,16 +249,28 @@ def _forms_of(form_set: FormSet) -> list[_FormInfo]:
         )
         # Longer keys first: "1 wages tips" must not hide "12a see instructions".
         labels = tuple(sorted(labels, key=lambda lab: -len(lab.key)))
-        infos.append(_FormInfo(form, form_set.jurisdiction, heading, labels, form.stored_keys()))
+        short_ids = frozenset(lab.box.id.lower() for lab in labels if len(lab.box.id) <= 3)
+        infos.append(
+            _FormInfo(
+                form,
+                form_set.jurisdiction,
+                heading,
+                labels,
+                form.stored_keys(),
+                type_norm,
+                year_heading,
+                short_ids,
+            )
+        )
     # Longest form type first ("1098 e" before "1098").
-    return sorted(infos, key=lambda info: -len(normalise(info.form.form_type)))
+    return sorted(infos, key=lambda info: -len(info.type_norm))
 
 
 def _all_forms() -> list[_FormInfo]:
     out: list[_FormInfo] = []
     for code in jurisdictions():
         out.extend(_forms_of(get_form_set(code)))
-    return sorted(out, key=lambda info: -len(normalise(info.form.form_type)))
+    return sorted(out, key=lambda info: -len(info.type_norm))
 
 
 @cache
@@ -239,6 +292,64 @@ def vocabulary() -> frozenset[str]:
 
 
 # ---------------------------------------------------------------------------
+# Dot leaders
+# ---------------------------------------------------------------------------
+
+
+def _word_spans(cell: Cell) -> list[tuple[int, int, float, float]]:
+    """``(start, end, x0, x1)`` per word of the cell's text; one span when not known."""
+    spans: list[tuple[int, int, float, float]] = []
+    if cell.words and " ".join(word for word, _, _ in cell.words) == cell.text:
+        offset = 0
+        for word, x0, x1 in cell.words:
+            spans.append((offset, offset + len(word), x0, x1))
+            offset += len(word) + 1
+    return spans or [(0, len(cell.text), cell.x0, cell.x1)]
+
+
+def _piece(cell: Cell, spans: Sequence[tuple[int, int, float, float]], a: int, b: int) -> Cell:
+    """Characters ``a..b`` of ``cell``: a cut inside a word is placed by character offset."""
+    words: list[tuple[str, float, float]] = []
+    for start, end, x0, x1 in spans:
+        lo, hi = max(a, start), min(b, end)
+        if lo >= hi:
+            continue
+        width = (x1 - x0) / max(end - start, 1)
+        words.append((cell.text[lo:hi], x0 + (lo - start) * width, x0 + (hi - start) * width))
+    return Cell(
+        cell.text[a:b], words[0][1], cell.y0, words[-1][2], cell.y1, cell.conf, tuple(words)
+    )
+
+
+def split_leaders(cell: Cell) -> tuple[Cell, ...]:
+    """``cell`` cut at every run of dot leaders (module doc); alone when it has none."""
+    text = cell.text
+    if ". ." not in text and "..." not in text:
+        return (cell,)
+    cuts: list[tuple[int, int]] = []
+    start = 0
+    for match in _LEADER.finditer(text):
+        if match.start() > start:
+            cuts.append((start, match.start()))
+        start = match.end()
+    if start == 0:
+        return (cell,)
+    if start < len(text):
+        cuts.append((start, len(text)))
+    if not cuts:
+        return (cell,)  # nothing but dots
+    spans = _word_spans(cell)
+    return tuple(_piece(cell, spans, a, b) for a, b in cuts)
+
+
+def _split_line(line: ViewLine) -> ViewLine:
+    if "." not in line.text:
+        return line
+    cells = tuple(piece for cell in line.cells for piece in split_leaders(cell))
+    return line if len(cells) == len(line.cells) else replace(line, cells=cells)
+
+
+# ---------------------------------------------------------------------------
 # Sections
 # ---------------------------------------------------------------------------
 
@@ -247,30 +358,97 @@ def vocabulary() -> frozenset[str]:
 class _Section:
     info: _FormInfo
     lines: list[ViewLine]
+    #: The heading line (its cells on the section's side).
     heading: ViewLine
+    #: The cell that names the form.
+    cell: Cell
+    #: The section's side of the page: it reads cells whose left edge is in ``x0 <= x < x1``.
+    x0: float = float("-inf")
+    x1: float = float("inf")
+
+    def add(self, line: ViewLine) -> None:
+        clipped = _clip(line, self.x0, self.x1)
+        if clipped is not None:
+            self.lines.append(clipped)
 
 
-def _heading(line: ViewLine, forms: Sequence[_FormInfo]) -> _FormInfo | None:
-    norm = line.norm
-    if "form" not in norm:
+def _clip(line: ViewLine, x0: float, x1: float) -> ViewLine | None:
+    """``line`` with only the cells whose left edge is in ``x0 <= x < x1``."""
+    cells = tuple(c for c in line.cells if x0 <= c.x0 < x1)
+    if len(cells) == len(line.cells):
+        return line
+    if not cells:
         return None
+    return replace(line, cells=cells, text=" ".join(c.text for c in cells))
+
+
+def _is_contents(line: ViewLine) -> bool:
+    """A contents line: it ends in a page number and holds no amount with decimals."""
+    if len(line.cells) < 2 or not _PAGE_NUMBER.match(line.cells[-1].text.strip()):
+        return False
+    return not any(_DECIMALS.search(cell.text) for cell in line.cells)
+
+
+def _forms_named(norm: str, forms: Sequence[_FormInfo]) -> int:
+    """How many different form types ``norm`` names (``forms``: longest type first)."""
+    rest = f" {norm} "
+    count = 0
     for info in forms:
-        if info.heading.search(norm):
-            return info
-    return None
+        key = f" {info.type_norm} "
+        if key in rest:
+            count += 1
+            rest = rest.replace(key, " | ")
+    return count
+
+
+def _headings(line: ViewLine, forms: Sequence[_FormInfo]) -> list[tuple[_FormInfo, Cell]]:
+    """The forms ``line`` heads, each with its heading cell (module doc), left to right."""
+    norm = line.norm
+    has_form = "form" in norm
+    if not has_form and not any(_YEAR_FIRST.match(cell.text) for cell in line.cells):
+        return []
+    if _is_contents(line) or _forms_named(norm, forms) >= _LISTED_FORMS:
+        return []
+    found: dict[str, tuple[_FormInfo, Cell]] = {}
+    for cell in line.cells:
+        text = normalise(_PARENTHESISED.sub(" ", cell.text))
+        info = next((i for i in forms if i.heading_year(cell) is not None), None)
+        if info is None and "form" in text:
+            info = next((i for i in forms if i.heading.search(text)), None)
+        if info is not None:
+            found.setdefault(info.form.form_type, (info, cell))
+    if not found and has_form:
+        # "Form" and the type in neighbouring cells.
+        text = normalise(_PARENTHESISED.sub(" ", line.text))
+        info = next((i for i in forms if i.heading.search(text)), None)
+        if info is not None:
+            ends = [c for c in line.cells if normalise(c.text).endswith("form")]
+            return [(info, ends[0] if ends else line.cells[0])]
+    return sorted(found.values(), key=lambda pair: pair[1].x0)
 
 
 def _sections(view: DocumentView, forms: Sequence[_FormInfo]) -> list[_Section]:
     sections: list[_Section] = []
+    current: list[_Section] = []
     before: list[ViewLine] = []
-    for line in view.lines:
-        info = _heading(line, forms)
-        if info is not None:
-            lines = before if not sections else []
+    for raw in view.lines:
+        line = _split_line(raw)
+        heads = _headings(line, forms)
+        if heads:
+            lead = before if not sections else []
             before = []
-            sections.append(_Section(info, [*lines, line], line))
-        elif sections:
-            sections[-1].lines.append(line)
+            current = []
+            for position, (info, cell) in enumerate(heads):
+                x0 = cell.x0 if position else float("-inf")
+                x1 = heads[position + 1][1].x0 if position + 1 < len(heads) else float("inf")
+                section = _Section(info, [], _clip(line, x0, x1) or line, cell, x0, x1)
+                for each in (*lead, line):
+                    section.add(each)
+                current.append(section)
+            sections.extend(current)
+        elif current:
+            for section in current:
+                section.add(line)
         else:
             before.append(line)
     return sections
@@ -479,6 +657,9 @@ def _issuer(lines: Sequence[ViewLine], info: _FormInfo) -> tuple[str | None, lis
 
 
 def _tax_year(section: _Section) -> tuple[int | None, float]:
+    year = section.info.heading_year(section.cell)
+    if year is not None:
+        return year, conf.GENERIC
     for line in section.lines[:40]:
         for pattern in _LABELLED_YEAR:
             match = pattern.search(line.norm)
@@ -491,9 +672,70 @@ def _tax_year(section: _Section) -> tuple[int | None, float]:
     return None, 0.0
 
 
+def _with_lone_ids(line: ViewLine, info: _FormInfo) -> ViewLine:
+    """``line`` with a box id printed apart from its label joined to it.
+
+    Only where the id is a box of the form, the next cell starts with a
+    letter and the two together are that box's label.
+    """
+    cells = line.cells
+    if len(cells) < 2 or not any(
+        c.text.strip().rstrip(".:").lower() in info.short_ids for c in cells
+    ):
+        return line
+    out: list[Cell] = []
+    index = 0
+    while index < len(cells):
+        cell = cells[index]
+        following = cells[index + 1] if index + 1 < len(cells) else None
+        if (
+            following is not None
+            and cell.text.strip().rstrip(".:").lower() in info.short_ids
+            and following.text.lstrip()[:1].isalpha()
+        ):
+            joined = join_cells([cell, following])
+            if info.label_of(joined) is not None:
+                out.append(joined)
+                index += 2
+                continue
+        out.append(cell)
+        index += 1
+    return line if len(out) == len(cells) else replace(line, cells=tuple(out))
+
+
+def _label_lines(section: _Section) -> list[ViewLine]:
+    return [_with_lone_ids(line, section.info) for line in section.lines]
+
+
+def _holds_form_boxes(section: _Section) -> bool:
+    """Two label cells of the form's own boxes, or one of its tables with a value.
+
+    Identity labels (a recipient's name, an account number) do not count:
+    any statement prints those. The other numbered boxes do, amounts or
+    not: a 1098-E has one amount box and one checkbox.
+    """
+    info = section.info
+    lines = _label_lines(section)
+    hits = 0
+    for line in lines:
+        for cell in line.cells:
+            label = info.label_of(cell)
+            box12 = info.form.form_type == "W-2" and _BOX12_RE.match(normalise(cell.text))
+            if box12 or (label is not None and label.box.kind is not BoxKind.IDENTITY):
+                hits += 1
+            if hits >= 2:
+                return True
+    # 1095-A/B/C print their amounts and covered months in tables without box labels.
+    read = _Read()
+    if "21A" in info.stored:
+        _part3(lines, read)
+    _monthly_tables(lines, info, read)
+    return any(key in info.stored for key in read.boxes)
+
+
 def _read_boxes(section: _Section) -> _Read:
     info = section.info
-    lines = section.lines
+    lines = _label_lines(section)
     read = _Read()
     stored = info.stored
     for index, line in enumerate(lines):
@@ -583,9 +825,7 @@ class TaxFormParser(DocumentParser):
         sections = _sections(view, forms)
         if not sections:
             return 0.0
-        first = sections[0]
-        hits = sum(1 for line in first.lines for cell in line.cells if first.info.label_of(cell))
-        return 0.97 if hits >= 2 else 0.3
+        return 0.97 if any(_holds_form_boxes(section) for section in sections) else 0.3
 
     def parse(
         self, view: DocumentView, *, threshold: float, date_order: str | None = None
@@ -610,6 +850,9 @@ def _keep(token: str, words: frozenset[str]) -> bool:
         return True
     if read_amount(token.rstrip(".,;:")) is not None:
         return True
+    if "..." in core:
+        # Label, dot leaders and amount printed as one word: kept when every piece is.
+        return all(_keep(piece, words) for piece in _LEADER.split(core) if piece)
     if _YEAR_RE.match(core) or _BOX_ID_TOKEN.match(core) or _SHORT_CODE.match(core):
         return True
     parts = normalise(core).split()

@@ -26,7 +26,11 @@ number), so its issuer is ``None``.
 :func:`synth_form` builds a form with seeded amounts; :func:`expected_boxes`
 is what a parser must return for it (stored box keys, ``Decimal``);
 :func:`form_pdf` / :func:`forms_pdf` draw one or several forms (one per
-page, as in a consolidated 1099).
+page, as in a consolidated 1099). :func:`composite_1099_pdf` is a broker's
+composite statement as clearing firms print it: a cover page that names
+its forms in a sentence and a contents block, then forms side by side under
+headings that start with the year (``2025 1099-DIV ...``, no word "Form"),
+each box one string of label, dot leaders and amount.
 """
 
 from __future__ import annotations
@@ -532,6 +536,75 @@ def forms_pdf(forms: Iterable[SynthTaxForm]) -> bytes:
 
 def form_pdf(form: SynthTaxForm) -> bytes:
     return forms_pdf([form])
+
+
+#: What a parser must return for :func:`composite_1099_pdf` (form type -> boxes).
+COMPOSITE_BOXES: Final[dict[str, dict[str, Decimal]]] = {
+    "1099-DIV": {
+        "1a": Decimal("1840.25"),
+        "1b": Decimal("1210.40"),
+        "2a": Decimal("96.15"),
+        "3": Decimal("12.00"),
+        "4": Decimal("184.02"),
+    },
+    "1099-INT": {"1": Decimal("311.08"), "4": Decimal("31.10")},
+}
+
+
+def composite_1099_pdf(tax_year: int = 2025) -> bytes:
+    """A broker's composite 1099 statement of two pages (module doc).
+
+    Page 1 only mentions forms (a sentence, a contents block with page
+    numbers). Page 2 prints a 1099-B summary (no box ids) beside the
+    1099-DIV, whose first box id stands apart from its label, and the
+    1099-INT below them; both print a box 4.
+    """
+    buf = io.BytesIO()
+    c = canvas.Canvas(buf, pagesize=letter)
+    left, right = 36.0, 310.0
+
+    def put(x: float, y: float, value: str, *, bold: bool = False) -> None:
+        c.setFont(BOLD if bold else FONT, 8)
+        c.drawString(x, y, value)
+
+    put(left, 750, ISSUERS["1099-DIV"] or "", bold=True)
+    put(left, 736, f"Year-End Statement for {tax_year}", bold=True)
+    put(left, 708, "This statement includes IRS Form 1099-B, 1099-DIV, 1099-INT and 1099-MISC.")
+    put(left, 680, "Contents", bold=True)
+    put(left, 666, "Form 1099-DIV Dividends and Distributions ........ 2")
+    put(left, 652, "Details of dividends (Form 1099-DIV) ........ 4")
+    put(left, 40, "Synthetic test document. Every name and number on it is invented.")
+    c.showPage()
+
+    y = 740.0
+    put(left, y, "Summary of Form 1099-B", bold=True)
+    put(
+        right,
+        y,
+        f"{tax_year} 1099-DIV Dividends and Distributions OMB No. 0000-0000",
+        bold=True,
+    )
+    y -= 16
+    put(left, y, "Gross proceeds......................9,412.77")
+    put(right, y, "1a")  # the id drawn apart from its label
+    put(right + 30, y, "Total ordinary dividends......................1,840.25")
+    for row in (
+        "1b Qualified dividends......1,210.40",
+        "2a Total capital gain distributions......96.15",
+        "3 Nondividend distributions......12.00",
+        "4 Federal income tax withheld......184.02",
+    ):
+        y -= 14
+        put(right, y, row)
+    y -= 60
+    put(left, y, f"{tax_year} 1099-INT Interest Income", bold=True)
+    for row in ("1 Interest income......311.08", "4 Federal income tax withheld......31.10"):
+        y -= 14
+        put(left, y, row)
+    put(left, 40, "Synthetic test document. Every name and number on it is invented.")
+    c.showPage()
+    c.save()
+    return buf.getvalue()
 
 
 def all_forms(seed: int = 0, tax_year: int = 2025) -> list[SynthTaxForm]:
