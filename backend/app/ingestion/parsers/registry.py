@@ -11,6 +11,13 @@ one extraction (:func:`parse_extraction`):
    payslip (receipt, tax form) parser for a ``payslip`` (``receipt``,
    ``tax_form``) kind. The fingerprint's ``date_order``
    is handed to a generic parser.
+   **A statement is never a receipt.** Before any choice, the receipt
+   parser's score is set to 0 for a document the classifier calls a
+   statement, and for one with a transaction table header on its pages
+   (``statement_generic`` above 0) that the classifier does not call a
+   receipt (:func:`_without_receipt`): a page of activity that ends in
+   "Total" lines is not a purchase. So the receipt parser is neither
+   chosen nor tried as a fallback there, and ``ParseInfo.scores`` shows 0.
 2. Otherwise every parser scores the pages (``detect``); the best score of
    at least :data:`MIN_SCORE` wins (ties: the order of :data:`PARSERS`, so
    an institution parser beats the generic one).
@@ -92,6 +99,22 @@ def _ref(parser: DocumentParser) -> ParserRef:
     return ParserRef(
         name=parser.name, version=parser.version, institution=parser.institution, kind=parser.kind
     )
+
+
+def _without_receipt(scores: dict[str, float], kind: str | None) -> dict[str, float]:
+    """``scores`` with the receipt parsers at 0 where the document is a statement.
+
+    That is: the classifier says ``statement``, or a transaction table header
+    is on the pages (the generic statement parser scores above 0) and the
+    classifier does not say ``receipt``. A document classified as a receipt
+    keeps its receipt parser, table or not.
+    """
+    if kind == "receipt":
+        return scores
+    if kind != "statement" and scores.get(TableStatementParser.name, 0.0) <= 0:
+        return scores
+    receipts = {p.name for p in PARSERS if p.kind == "receipt"}
+    return {name: 0.0 if name in receipts else score for name, score in scores.items()}
 
 
 def _hinted(
@@ -189,7 +212,7 @@ def parse_extraction(
     / ``unknown_headings``.
     """
     view = DocumentView.from_result(result)
-    scores = {p.name: p.detect(view) for p in PARSERS}
+    scores = _without_receipt({p.name: p.detect(view) for p in PARSERS}, kind)
     chosen = _hinted(scores, parser_name=parser_name, institution=institution, kind=kind)
     if chosen is None:
         best = max(PARSERS, key=lambda p: scores[p.name])

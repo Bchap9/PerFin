@@ -1,0 +1,81 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+"""Which parser reads a page that looks like both a statement and a receipt.
+
+A page with a transaction table, or one the classifier calls a statement,
+is never read by the receipt parser; a document classified as a receipt
+still is, table or not (``registry._without_receipt``).
+"""
+
+from __future__ import annotations
+
+from app.ingestion.extract.pdf import extract_pdf
+from app.ingestion.parsers.registry import PARSERS, _without_receipt, parse_extraction
+from app.ingestion.sandbox.protocol import ExtractOptions, ExtractResult
+from tests.fixtures import synth_parser_choice as pc
+from tests.fixtures import synth_receipts as sr
+
+OPTIONS = ExtractOptions(previews=False, ocr=False)
+
+
+def _extract(data: bytes) -> ExtractResult:
+    result = extract_pdf(data, OPTIONS, "pdf")
+    assert result.ok, result.error
+    return result
+
+
+def test_a_page_with_a_transaction_table_is_not_a_receipt() -> None:
+    parse = parse_extraction(_extract(pc.activity_page_with_totals())).parse
+    assert parse is not None
+    assert parse.parser is not None
+    assert parse.parser.name == "statement_generic"
+    assert parse.receipt is None
+    scores = {s.name: s.score for s in parse.scores}
+    assert scores["receipt_basic"] == 0.0
+
+
+def test_the_activity_rows_are_read_and_the_total_lines_are_not() -> None:
+    result = parse_extraction(_extract(pc.activity_page_with_totals()))
+    (statement,) = result.statements
+    assert len(statement.transactions) == len(pc.ACTIVITY_ROWS) == 6
+    read = " ".join(f"{t.payee} {t.memo}".lower() for t in statement.transactions)
+    for word in ("subtotal", "tax", "total", "thank you"):
+        assert word not in read
+
+
+def test_a_statement_classification_vetoes_the_receipt_parser() -> None:
+    result = _extract(sr.receipt_pdf(sr.receipt_spec(4242)))
+    parse = parse_extraction(result, kind="statement").parse
+    assert parse is not None
+    assert parse.parser is None
+    assert "no_parser" in parse.warnings
+    assert parse.receipt is None
+
+
+def test_a_classified_receipt_with_an_item_table_is_still_a_receipt() -> None:
+    parse = parse_extraction(_extract(pc.receipt_with_item_table()), kind="receipt").parse
+    assert parse is not None
+    assert parse.parser is not None
+    assert parse.parser.name == "receipt_basic"
+    assert parse.receipt is not None
+    assert parse.receipt.total == pc.RECEIPT_TOTAL
+
+
+def test_receipts_without_a_table_are_unchanged() -> None:
+    parse = parse_extraction(_extract(sr.receipt_pdf(sr.receipt_spec(4242)))).parse
+    assert parse is not None
+    assert parse.parser is not None
+    assert parse.parser.name == "receipt_basic"
+    assert parse.receipt is not None
+
+
+def test_only_the_receipt_parsers_lose_their_score() -> None:
+    scores = {p.name: 0.5 for p in PARSERS}
+    receipts = {p.name for p in PARSERS if p.kind == "receipt"}
+    assert receipts
+    for kind in ("statement", None, "unknown"):
+        vetoed = _without_receipt(scores, kind)
+        assert {name for name, score in vetoed.items() if score == 0.0} == receipts
+    assert _without_receipt(scores, "receipt") == scores
+    no_table = {**scores, "statement_generic": 0.0}
+    assert _without_receipt(no_table, None) == no_table
+    assert _without_receipt(no_table, "payslip") == no_table
