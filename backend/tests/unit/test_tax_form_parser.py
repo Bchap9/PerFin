@@ -19,8 +19,15 @@ from pydantic import ValidationError
 from app.domain.tax.forms import form_def, sanitize_boxes
 from app.ingestion.extract.pdf import extract_pdf
 from app.ingestion.parsers import confidence
+from app.ingestion.parsers.base import Cell, DocumentView, ViewLine
 from app.ingestion.parsers.registry import parse_extraction, reparse
-from app.ingestion.parsers.tax_forms import PARSER_NAME, REDACTED, redact_identity, redact_text
+from app.ingestion.parsers.tax_forms import (
+    PARSER_NAME,
+    REDACTED,
+    read_tax_forms,
+    redact_identity,
+    redact_text,
+)
 from app.ingestion.sandbox.protocol import ExtractOptions, ExtractResult, TaxFormRead
 from tests.fixtures import synth_tax_forms as synth
 
@@ -101,6 +108,58 @@ def test_consolidated_statement_gives_one_form_per_heading() -> None:
         assert read.boxes == synth.expected_boxes(form)
 
 
+def test_ssa_1099_is_not_read_as_a_1099() -> None:
+    form = synth.synth_form("SSA-1099", seed=3)
+    (read,) = _forms(_parse(synth.form_pdf(form)))
+    assert read.form_type == "SSA-1099"
+    assert set(read.boxes) == {"3", "5", "6"}
+    # The form has no payer box: the only payer is the administration itself.
+    assert read.issuer_name is None
+
+
+def _line(index: int, y: float, *cells: tuple[float, str]) -> ViewLine:
+    built = tuple(Cell(text, x, y, x + 6.0 * len(text), y + 10.0) for x, text in cells)
+    return ViewLine(
+        page=1, index=index, cells=built, text=" ".join(c.text for c in built), height=10.0
+    )
+
+
+def _view(*lines: ViewLine) -> DocumentView:
+    return DocumentView(lines=lines, source_format="pdf", truncated=False, page_count=1)
+
+
+def test_box_prefix_before_an_id_is_a_label() -> None:
+    view = _view(
+        _line(0, 40.0, (36.0, "Form SSA-1099"), (300.0, "2025")),
+        _line(1, 80.0, (36.0, "Box 3. Benefits Paid in 2025"), (300.0, "Box 4. Benefits Repaid")),
+        _line(2, 96.0, (36.0, "18,240.00"), (300.0, "NONE")),
+        _line(3, 130.0, (36.0, "Box 5. Net Benefits for 2025")),
+        _line(4, 146.0, (36.0, "18,240.00")),
+    )
+    (read,) = read_tax_forms(view, threshold=confidence.DEFAULT_THRESHOLD)
+    assert read.form_type == "SSA-1099"
+    assert read.tax_year == 2025
+    assert read.boxes == {"3": Decimal("18240.00"), "5": Decimal("18240.00")}
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "Description of Amount in Box 3 Benefits Paid",  # a sentence naming the box
+        "Boxes 3 Benefits Paid",
+        "Box Box 3 Benefits Paid",
+        "Box office 3 Benefits Paid",
+    ],
+)
+def test_box_inside_a_sentence_is_no_label(text: str) -> None:
+    view = _view(
+        _line(0, 40.0, (36.0, "Form SSA-1099"), (300.0, "2025")),
+        _line(1, 80.0, (36.0, text)),
+        _line(2, 96.0, (36.0, "512.00")),
+    )
+    assert read_tax_forms(view, threshold=confidence.DEFAULT_THRESHOLD) == []
+
+
 def test_identical_copies_are_kept_once() -> None:
     form = synth.synth_form("W-2", seed=4)
     reads = _forms(_parse(synth.forms_pdf([form, form, form])))
@@ -114,7 +173,6 @@ def test_reparse_keeps_the_choice() -> None:
 
 
 def test_a_mention_of_a_form_is_not_a_form() -> None:
-    from app.ingestion.parsers.base import DocumentView
     from app.ingestion.parsers.tax_forms import TaxFormParser
 
     result = _extract(synth.form_pdf(synth.synth_form("W-2")))
@@ -156,7 +214,8 @@ def test_identity_values_never_leave_the_parser(form_type: str) -> None:
     some_amount = next(iter(synth.expected_boxes(form).values()))
     if some_amount != 1:
         assert f"{some_amount:,.2f}" in redacted.text
-    assert form.issuer in redacted.text  # appended once, from the parsed form
+    if form.issuer is not None:
+        assert form.issuer in redacted.text  # appended once, from the parsed form
     # The parser still reads the redacted pages the same way.
     again = parse_extraction(redacted, threshold=confidence.DEFAULT_THRESHOLD)
     assert _forms(again)[0].boxes == read.boxes

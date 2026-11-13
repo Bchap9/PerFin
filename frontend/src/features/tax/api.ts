@@ -36,6 +36,7 @@ export const US_FORMS: readonly string[] = [
   "1099-R",
   "1099-G",
   "1099-SA",
+  "SSA-1099",
   "1098",
   "1098-E",
   "1098-T",

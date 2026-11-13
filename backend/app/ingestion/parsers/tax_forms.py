@@ -3,8 +3,8 @@
 
 Reads the information returns of a jurisdiction's form set
 (``app.domain.tax.forms``, plug-in point "Tax form sets"; the US set ships
-W-2, the 1099 family, 1098, 1098-E, 1098-T and 1095-A/B/C) from the stored
-pages, in the worker:
+W-2, the 1099 family, SSA-1099, 1098, 1098-E, 1098-T and 1095-A/B/C) from
+the stored pages, in the worker:
 
 * **Form type**: a heading ``Form <type>`` (``Form W-2``, ``Form 1099-INT``;
   the longest type wins, so ``1098-E`` is not read as ``1098``). Every
@@ -14,7 +14,10 @@ pages, in the worker:
 * **Tax year**: ``Tax year 2025``, ``For calendar year 2025`` or the year
   printed on the heading line.
 * **Amount boxes** by label: a box is a cell starting with its id and the
-  first words of its label (``1 Wages, tips, other compensation``); its
+  first words of its label (``1 Wages, tips, other compensation``); the
+  word ``Box`` before the id is part of the label (``Box 3. Benefits Paid
+  in 2025``, as the SSA-1099 prints it), a box named inside a sentence
+  (``Description of Amount in Box 3``) is not one; its
   amount is the first amount below it in its column (up to the next label)
   or right after it on the same line. W-2 box 12 (``12a``..``12d``: code and
   amount) is stored per code (``12_D``); a text box with an amount sibling
@@ -25,7 +28,9 @@ pages, in the worker:
   the same kind of header (``15_ALL``, ``15_<MON>``).
 * **Issuer name**: the first line under the form's issuer box label (W-2
   box c, the 1099 payer box, the 1098 lender box...): the payer's or
-  employer's display name, the only text kept.
+  employer's display name, the only text kept. A form with no issuer box
+  (SSA-1099: its numbered boxes 1, 2, 7 and 8 identify the beneficiary) has
+  no issuer name.
 
 **Identity boxes are never read.** Nothing from an SSN/TIN/EIN, name,
 address, account, control or policy number box gets into the output: the
@@ -112,6 +117,8 @@ _LABELLED_YEAR: Final = (
     re.compile(r"\bfor (?:the )?calendar year (\d{4})\b"),
 )
 _BOX12_RE: Final = re.compile(r"^12\s?[a-d]\b")
+#: Printed before a box id on some forms (normalised).
+_BOX_PREFIX: Final = "box "
 _CODE_RE: Final = re.compile(r"^[A-Z]{1,2}$")
 _PART3_RE: Final = re.compile(r"^(2[1-9]|3[0-3])\b")
 #: Tokens kept by :func:`redact_identity` besides the vocabulary.
@@ -179,7 +186,8 @@ class _FormInfo:
     stored: frozenset[str]
 
     def label_of(self, cell: Cell) -> _Label | None:
-        text = normalise(cell.text)
+        # "Box 3. Benefits Paid in 2025": the word before the id is no label word.
+        text = normalise(cell.text).removeprefix(_BOX_PREFIX)
         for label in self.labels:
             if text == label.key or text.startswith(label.key + " "):
                 return label

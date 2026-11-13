@@ -3,8 +3,8 @@
 
 Every form of the ``US`` form set (``app.domain.tax.forms.us``) can be drawn
 in an IRS-like layout: a heading (``Form W-2``, the title, the year), an
-identity block (payer/employer, TINs, recipient name and address, account
-and control numbers, state ids) and a grid of numbered boxes, each with its
+identity block (payer/employer, TINs, recipient name and address, account,
+control and claim numbers, state ids) and a grid of numbered boxes, each with its
 label on top and its amount below. Special parts:
 
 * W-2: box 12a-d (code and amount) and box 14 "Other" (labelled lines,
@@ -16,10 +16,12 @@ label on top and its amount below. Special parts:
 
 **Identity data is fake and obvious** (:data:`FAKE_SSN` ``000-00-0000``,
 :data:`FAKE_EIN` ``00-0000000``, an invented name and address, account,
-control, policy and state id numbers): :data:`IDENTITY_TOKENS` lists the
+control, policy, claim and state id numbers): :data:`IDENTITY_TOKENS` lists the
 strings tests look for to prove none of it is stored or served. The issuer
 (payer/employer/lender) **name** is not identity data: it is kept as
-``tax_form_data.issuer_name``.
+``tax_form_data.issuer_name``. An SSA-1099 has no issuer box (its numbered
+boxes 1, 2, 7 and 8 are the beneficiary's name, number, address and claim
+number), so its issuer is ``None``.
 
 :func:`synth_form` builds a form with seeded amounts; :func:`expected_boxes`
 is what a parser must return for it (stored box keys, ``Decimal``);
@@ -58,6 +60,7 @@ ACCOUNT: Final = "ACCT0000111122"
 CONTROL: Final = "CTRL0000099"
 STATE_ID: Final = "ZZ STATEID0000"
 POLICY: Final = "POLICY0000777"
+CLAIM: Final = "CLAIM0000444"
 BIRTH: Final = "01/01/1900"
 RTN: Final = "000000000"
 
@@ -77,6 +80,7 @@ IDENTITY_TOKENS: Final = (
     "ctrl0000099",
     "stateid0000",
     "policy0000777",
+    "claim0000444",
     "01/01/1900",
 )
 
@@ -103,8 +107,9 @@ def identity_tokens_in(text: str) -> list[str]:
     return found
 
 
-#: A fictional issuer per form type (kept as the issuer name).
-ISSUERS: Final = {
+#: A fictional issuer per form type (kept as the issuer name). ``None``: the
+#: form has no issuer box (an SSA-1099 has one payer, the administration).
+ISSUERS: Final[dict[str, str | None]] = {
     "W-2": "Fictional Widgets Inc",
     "1099-INT": "Sample National Bank",
     "1099-DIV": "Placeholder Brokerage",
@@ -114,6 +119,7 @@ ISSUERS: Final = {
     "1099-R": "Mock Retirement Trust",
     "1099-G": "Department of Example Revenue",
     "1099-SA": "Pretend HSA Bank",
+    "SSA-1099": None,
     "1098": "Placeholder Home Lending",
     "1098-E": "Sample Student Loans",
     "1098-T": "University of Nowhere Real",
@@ -149,6 +155,7 @@ KEY_BOXES: Final[dict[str, tuple[str, ...]]] = {
     "1099-R": ("1", "2a", "4"),
     "1099-G": ("1", "2", "4"),
     "1099-SA": ("1",),
+    "SSA-1099": ("3", "5", "6"),
     "1098": ("1", "2", "5", "6"),
     "1098-E": ("1",),
     "1098-T": ("1", "5"),
@@ -163,7 +170,8 @@ FORM_TYPES: Final = tuple(KEY_BOXES)
 class SynthTaxForm:
     form_type: str
     tax_year: int
-    issuer: str
+    #: None when the form has no issuer box (:data:`ISSUERS`).
+    issuer: str | None
     #: Plain amount boxes (box id -> amount).
     amounts: dict[str, Decimal] = field(default_factory=dict)
     #: W-2 box 12 (code, amount), at most four.
@@ -257,8 +265,9 @@ def _fmt(value: Decimal) -> str:
 def _identity_values(form: SynthTaxForm, box: BoxDef) -> list[str]:
     """Fake values for an identity box (module doc)."""
     label = box.label.lower()
+    issuer = form.issuer or ""
     if box.id == form_def("US", form.form_type).issuer_box_id:
-        return [form.issuer, ISSUER_STREET, ISSUER_CITY, PHONE]
+        return [issuer, ISSUER_STREET, ISSUER_CITY, PHONE]
     if box.id == "rtn":
         return [RTN]
     if box.id == "covered":
@@ -266,7 +275,7 @@ def _identity_values(form: SynthTaxForm, box: BoxDef) -> list[str]:
     if box.id in ("responsible", "employee"):
         return [RECIPIENT, FAKE_SSN, RECIPIENT_STREET, RECIPIENT_CITY]
     if box.id in ("employer", "issuer"):
-        return [form.issuer, FAKE_EIN, ISSUER_STREET, ISSUER_CITY]
+        return [issuer, FAKE_EIN, ISSUER_STREET, ISSUER_CITY]
     if "state" in label and ("id" in label or "no." in label or "number" in label):
         return [STATE_ID]
     if "tin" in label or "social security" in label or "ssn" in label or "identification" in label:
@@ -281,6 +290,8 @@ def _identity_values(form: SynthTaxForm, box: BoxDef) -> list[str]:
         return [BIRTH]
     if "control" in label:
         return [CONTROL]
+    if "claim" in label:
+        return [CLAIM]
     if "account" in label or "acct" in label:
         return [ACCOUNT]
     if "zip" in label and "address" not in label:

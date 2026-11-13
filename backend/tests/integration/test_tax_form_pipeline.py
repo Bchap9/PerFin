@@ -240,6 +240,33 @@ def test_forms_reach_the_vault_and_identity_reaches_nothing(env: Env, admin_engi
     assert coverage == list(next(f for f in forms if f.form_type == "1095-B").coverage)
 
 
+def test_ssa_1099_lands_in_the_tax_vault(env: Env, admin_engine: Engine) -> None:
+    form = synth.synth_form("SSA-1099", seed=8, tax_year=2025)
+    pdf = synth.form_pdf(form)
+    document = env.ingest(pdf, "ssa-1099.pdf")
+    assert document.status is DocumentStatus.PROCESSED, document.error
+    assert document.kind is DocumentKind.TAX_FORM
+    assert document.tax_year == 2025
+    (row,) = env.query(select(TaxFormData).where(TaxFormData.document_id == document.id))
+    assert row.form_type == "SSA-1099"
+    assert row.issuer_name is None
+    assert form_boxes(row) == {box: form.amounts[box] for box in ("3", "5", "6")}
+    (item,) = env.query(select(TaxChecklistItem))
+    assert (item.expected_form, item.status) == ("SSA-1099", ChecklistStatus.RECEIVED)
+    # The stored pages keep the labels and amounts, and neither the
+    # beneficiary's number nor the claim number printed in boxes 2 and 8.
+    stored = str(document.extraction).lower()
+    assert "benefits paid" in stored
+    assert f"{form.amounts['3']:,.2f}" in stored
+    assert synth.FAKE_SSN not in stored
+    assert synth.CLAIM.lower() not in stored
+    _assert_no_identity(stored, "the stored extraction")
+    _assert_no_identity(_database_text(admin_engine), "the database")
+    detail = env.owner.get(f"{API}/documents/{document.id}")
+    assert detail.status_code == 200
+    _assert_no_identity(detail.text, "the document")
+
+
 def test_a_reparsed_form_is_not_counted_twice(env: Env) -> None:
     form = synth.synth_form("1099-INT", seed=9, tax_year=2025)
     document = env.ingest(synth.form_pdf(form), "1099-int.pdf")
