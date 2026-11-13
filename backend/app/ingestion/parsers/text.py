@@ -15,7 +15,10 @@ quantifiers, so a crafted page cannot make matching expensive.
   integer is not an amount, so dates and reference numbers are never read
   as money. :func:`find_amounts` joins a lone symbol to the figure after it
   and a lone sign to a symbol, never to bare digits (``900.00 - 150.00`` is
-  two positive figures).
+  two positive figures). :attr:`Amount.sign_detached` says the sign stood a
+  space away: on a summary line it may be the separator after a label
+  (``Ending Balance - $992.50``), which only the reader of that line can
+  tell.
 * :func:`read_date` for one :data:`DateStyle`; :func:`guess_numeric_style`
   tells ``DD/MM`` from ``MM/DD`` from the values themselves (a day above 12)
   and says when it cannot. Yearless styles (``MM/DD``, ``DD/MM``,
@@ -85,7 +88,10 @@ _NUMERIC_DATE: Final = re.compile(r"(\d{1,4})[/.-](\d{1,2})(?:[/.-](\d{2,4}))?")
 _D_MON_Y: Final = re.compile(r"(\d{1,2})[\s-]([A-Za-z]{3,9})\.?[\s-](\d{4})")
 #: ``03-Nov-25`` / ``03/Nov/2025``: joined parts, so a two-digit year is a year
 #: (``16 Dec 20`` may be a day, a month and a count).
-_D_MON_Y_JOINED: Final = re.compile(r"(\d{1,2})[-/]([A-Za-z]{3,9})[-/](\d{4}|\d{2})")
+#: The separator is printed twice (``03-Nov/25`` is not a date).
+_D_MON_Y_JOINED: Final = re.compile(
+    r"(?P<day>\d{1,2})(?P<sep>[-/])(?P<month>[A-Za-z]{3,9})(?P=sep)(?P<year>\d{4}|\d{2})"
+)
 _MON_D_Y: Final = re.compile(r"([A-Za-z]{3,9})\.?\s(\d{1,2}),?\s(\d{4})")
 _MON_D: Final = re.compile(r"([A-Za-z]{3,9})\.?\s(\d{1,2})")
 _D_MON: Final = re.compile(r"(\d{1,2})[\s-]([A-Za-z]{3,9})\.?")
@@ -102,6 +108,10 @@ class Amount:
     #: A plus sign was printed.
     positive_marked: bool = False
     symbol: str | None = None
+    #: The sign stood one space from the symbol or figure after it (``- $12.00``,
+    #: ``- 12.00``). Printed as a sign it is one; after a label on a line of
+    #: text it may be a separator (``Ending Balance - $992.50``).
+    sign_detached: bool = False
 
     @property
     def currency(self) -> str | None:
@@ -138,6 +148,7 @@ def read_amount(text: str) -> Amount | None:
         negative_marked=negative,
         positive_marked=sign == "+",
         symbol=match["cur"],
+        sign_detached=bool(match["sign"] and match["gap"]),
     )
 
 
@@ -172,7 +183,8 @@ def symbol_currency(texts: Iterable[str]) -> str | None:
 def _figure(tokens: list[str], index: int) -> tuple[str, int]:
     """The text of the figure starting at ``tokens[index]`` and the tokens it takes.
 
-    A lone currency symbol takes the token after it; a lone sign takes the
+    A lone currency symbol, with or without its sign (``$``, ``-$``), takes
+    the token after it; a lone sign takes the
     token after it when that starts with a currency symbol (and the one
     after that when the symbol stands alone too). A sign before bare digits
     is an operator of the line (``900.00 - 150.00``) and takes nothing.
@@ -181,11 +193,13 @@ def _figure(tokens: list[str], index: int) -> tuple[str, int]:
     following = tokens[index + 1] if index + 1 < len(tokens) else ""
     if token in _CURRENCY_SYMBOLS and following:
         return f"{token} {following}", 2
+    if len(token) == 2 and token[0] in _SIGNS and token[1] in _CURRENCY_SYMBOLS and following:
+        return f"{token} {following}", 2
     if token in _SIGNS and following[:1] in _CURRENCY_SYMBOLS:
         if following not in _CURRENCY_SYMBOLS:
             return f"{token} {following}", 2
         if index + 2 < len(tokens):
-            return f"{token}{following} {tokens[index + 2]}", 3
+            return f"{token} {following} {tokens[index + 2]}", 3
     return token, 1
 
 
@@ -310,11 +324,17 @@ def read_date(
         match = re.fullmatch(r"(\d{4})[/.-](\d{1,2})[/.-](\d{1,2})", text)
         return _make(int(match[1]), int(match[2]), int(match[3])) if match else None
     if style == "d_mon_y":
-        match = _D_MON_Y.fullmatch(text) or _D_MON_Y_JOINED.fullmatch(text)
-        if match is None or match[2].lower() not in _MONTHS:
+        match = _D_MON_Y.fullmatch(text)
+        if match is not None:
+            day_text, name, year_text = match[1], match[2], match[3]
+        elif (match := _D_MON_Y_JOINED.fullmatch(text)) is not None:
+            day_text, name, year_text = match["day"], match["month"], match["year"]
+        else:
             return None
-        year = int(match[3]) if len(match[3]) == 4 else _year(match[3])
-        return _make(year, _MONTHS[match[2].lower()], int(match[1]))
+        if name.lower() not in _MONTHS:
+            return None
+        year = int(year_text) if len(year_text) == 4 else _year(year_text)
+        return _make(year, _MONTHS[name.lower()], int(day_text))
     match = _MON_D_Y.fullmatch(text)
     if match is None or match[1].lower() not in _MONTHS:
         return None
