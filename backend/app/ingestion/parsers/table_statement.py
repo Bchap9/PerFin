@@ -95,6 +95,18 @@ are read the same way:
    header** (outside any table, up to the next header, block title or page
    end; warning ``rows_without_header:<n>``): nothing is imported from
    those.
+   **A table printed across the page.** ``Number | Date Paid | Amount``
+   printed two or three times side by side
+   (:func:`~app.ingestion.parsers.statement_header.across_start`) is read as
+   far as its **left group**: the header gives the left group's columns and
+   one ``across`` column from the second group on, which takes every cell
+   that starts there before any other rule. On a line whose left group
+   prints a date, each date among the ``across`` cells (words shaped like
+   a date that are no figure: ``4.11`` under ``Amount`` is none) is one entry
+   found and not read: counted as skipped, the line's box once (warning
+   ``table_across_unread:<n>``). The statement then cannot add up and is
+   held. ``Date | Amount`` printed across (balances by day) is no table we
+   read: it ends the table above and nothing under it is counted.
    A **payment stub** is left out before anything is read
    (:meth:`TableStatementParser.without_stubs`): from a line saying to
    detach it (``Please detach here``, ``Return this portion``..., without
@@ -773,6 +785,9 @@ class _Summary:
     carried: int = 0
     #: Date-led lines under a section title and no header (counted, not read).
     headerless: int = 0
+    #: Entries right of the left group of a table printed across the page
+    #: (counted, not read).
+    across: int = 0
     #: The total printed after a section's rows (``Total deposits``), by the
     #: section's number (:attr:`_Row.section`): the first one per section.
     section_totals: dict[int, Amount] = field(default_factory=dict)
@@ -994,7 +1009,15 @@ class TableStatementParser(DocumentParser):
     def _assign(self, line: ViewLine, columns: Sequence[Column]) -> dict[Role, list[Cell]]:
         out: dict[Role, list[Cell]] = {}
         unclaimed: list[Cell] = []
+        # A table printed across the page: all from its second copy on is
+        # one column, whatever heading a cell stands under or near.
+        across = next((c.x0 for c in columns if c.role == "across"), None)
+        if across is not None:
+            columns = [c for c in columns if c.role != "across"]
         for cell in line.cells:
+            if across is not None and cell.x0 >= across:
+                out.setdefault("across", []).append(cell)
+                continue
             best: Column | None = None
             best_overlap = 0.0
             for column in columns:
@@ -1519,6 +1542,9 @@ class TableStatementParser(DocumentParser):
                 self._scan_summary(line, summary)
                 continue
             cells = self._assign(line, columns)
+            # The other copies of a table printed across the page are no part
+            # of the line as the left group's columns read it.
+            across = cells.pop("across", [])
             self._split_lead(cells)
             self._split_fused_date(cells, columns)
             date_text = " ".join(c.text for c in cells.get("date", [])).strip(_DATE_MARKS)
@@ -1553,6 +1579,12 @@ class TableStatementParser(DocumentParser):
                         section += 1
                     pending, title, anchor = False, found, None
                 continue
+            beside = self._across_entries(across, date_text)
+            if beside:
+                # Entries found beside the left group and not read: counted.
+                skipped += beside
+                summary.across += beside
+                summary.skipped_boxes.append((line.page, line.bbox))
             row = self._row(line, cells, date_text, title, section)
             balance_row = self._balance_row(normalise(" ".join(row.description)), cells)
             if balance_row is not None:
@@ -1626,6 +1658,36 @@ class TableStatementParser(DocumentParser):
             section=section,
             carried=carried,
         )
+
+    def _across_entries(self, cells: Sequence[Cell], date_text: str) -> int:
+        """How many entries ``cells`` hold: the cells right of the left group
+        of a table printed across the page, on a line whose left group is
+        dated ``date_text``. One per date printed in them: one to
+        :data:`LEAD_DATE_WORDS` words of a cell, shaped like a date, that
+        are no figure (``4.11`` under ``Amount`` is no date; a date printed
+        close to its amount is one cell, ``04/24/2026 330.00``). Where the
+        left group's own date reads as a figure (``03.04``), a date cannot
+        be told from an amount that way and everything date-shaped counts:
+        an entry too many holds the statement, as an entry not read does."""
+        figures_are_dates = read_amount(date_text) is not None
+        entries = 0
+        for cell in cells:
+            words = cell.text.split()
+            at = 0
+            while at < len(words):
+                for size in range(min(LEAD_DATE_WORDS, len(words) - at), 0, -1):
+                    text = " ".join(words[at : at + size]).strip(_DATE_MARKS)
+                    if (
+                        text
+                        and self._date_shaped(text)
+                        and (figures_are_dates or read_amount(text) is None)
+                    ):
+                        entries += 1
+                        at += size
+                        break
+                else:
+                    at += 1
+        return entries
 
     @staticmethod
     def _total_line(line: ViewLine, norm: str) -> Amount | None:
@@ -2104,6 +2166,8 @@ class TableStatementParser(DocumentParser):
         warnings: list[str] = ["rows_outside_account"] if rows else []
         if preamble.headerless:
             warnings.append(f"rows_without_header:{preamble.headerless}")
+        if preamble.across:
+            warnings.append(f"table_across_unread:{preamble.across}")
         for account in split.accounts:
             if not self.lines_have_table(account.lines):
                 warnings.append("account_without_tables")
@@ -2264,6 +2328,8 @@ class TableStatementParser(DocumentParser):
             warnings.append("rows_outside_account")
         if preamble.headerless:
             warnings.append(f"rows_without_header:{preamble.headerless}")
+        if preamble.across:
+            warnings.append(f"table_across_unread:{preamble.across}")
         for section in sections:
             read = self.read_statement(
                 view,
@@ -2361,6 +2427,8 @@ class TableStatementParser(DocumentParser):
         )
         if summary.headerless:
             outcome.warnings.append(f"rows_without_header:{summary.headerless}")
+        if summary.across:
+            outcome.warnings.append(f"table_across_unread:{summary.across}")
         if not found_header:
             outcome.warnings.append("no_table_header")
             return outcome

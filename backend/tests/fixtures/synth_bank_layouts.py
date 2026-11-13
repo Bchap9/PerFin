@@ -72,6 +72,16 @@ And statements whose lines a reader may drop without a word, or take for rows:
   lines of date, text and figure with no header (counted, never read), then
   ``WITHDRAWALS`` over a ``Date | Description | Amount`` table of 4 rows.
 
+And statements with a table printed two or three times across the page:
+
+* :func:`checks_three_across`: a signed ``Date | Description | Amount``
+  table of 5 rows, then ``Checks Paid`` over ``Number | Date Paid | Amount``
+  printed three times side by side: 4 lines holding 11 checks, one number
+  marked ``*``. The left group is read; the 7 checks beside it are counted.
+* :func:`daily_balances_three_across`: the same first table, then ``Daily
+  Balance Summary`` over ``Date | Amount`` printed three times with 3 lines
+  of balances: no rows, and nothing to count.
+
 And statements whose rows print ``MM/DD`` and whose period is hard to find
 or not printed at all (drawn with today's creation date, as a bank's own
 file has: the day a file was made bounds the year its rows can be in):
@@ -986,6 +996,119 @@ def titled_sections_without_headers() -> bytes:
     return buf.getvalue()
 
 
+# -- tables printed two or three across ------------------------------------------
+
+_ACROSS_OPENING: Final = _d("4,105.62")
+_ACROSS_ROWS: Final[tuple[ExpectedRow, ...]] = (
+    (date(2026, 4, 2), _d("1,640.00"), "Payroll Thistlecombe Joinery"),
+    (date(2026, 4, 3), _d("-58.14"), "Card Purchase Garthside Grocer"),
+    (date(2026, 4, 7), _d("-121.36"), "Bill Pay Oxlease Water"),
+    (date(2026, 4, 9), _d("85.00"), "Mobile Deposit"),
+    (date(2026, 4, 14), _d("-40.00"), "ATM Cash Saltmarsh Row"),
+)
+#: ``(number as printed, paid, amount)``, in the order they are printed: three
+#: to a line, left to right. ``*`` marks a break in the numbers. Two amounts
+#: (``4.11``, ``12.05``) could be read as a day and a month: they are figures.
+#: The widest amount of the third group (``330.00``) starts so close to its
+#: date that the two are one cell: still one check.
+_ACROSS_CHECKS: Final[tuple[tuple[str, date, Decimal], ...]] = (
+    ("2301", date(2026, 4, 15), _d("120.00")),
+    ("2302", date(2026, 4, 15), _d("4.11")),
+    ("2303", date(2026, 4, 16), _d("65.40")),
+    ("2304", date(2026, 4, 17), _d("210.75")),
+    ("2305", date(2026, 4, 20), _d("12.05")),
+    ("2306", date(2026, 4, 21), _d("38.00")),
+    ("2308*", date(2026, 4, 22), _d("92.18")),
+    ("2309", date(2026, 4, 23), _d("15.00")),
+    ("2310", date(2026, 4, 24), _d("330.00")),
+    ("2311", date(2026, 4, 27), _d("47.60")),
+    ("2312", date(2026, 4, 28), _d("71.25")),
+)
+#: Per group of the checks table: where the number and the date start and
+#: where the amount ends.
+_ACROSS_GROUPS: Final = ((40.0, 95.0, 215.0), (240.0, 295.0, 415.0), (440.0, 495.0, 575.0))
+#: The checks of the left group: the ones a reader of one group returns.
+ACROSS_CHECKS_READ: Final[tuple[ExpectedRow, ...]] = tuple(
+    (paid, -amount, f"CHECK {number.rstrip('*')}")
+    for number, paid, amount in _ACROSS_CHECKS[:: len(_ACROSS_GROUPS)]
+)
+#: ``(day, balance)`` of the daily-balance table, three to a line.
+_ACROSS_DAILY: Final[tuple[tuple[str, str], ...]] = (
+    ("04/01", "4,105.62"),
+    ("04/02", "5,745.62"),
+    ("04/03", "5,687.48"),
+    ("04/07", "5,566.12"),
+    ("04/09", "5,651.12"),
+    ("04/14", "5,611.12"),
+    ("04/21", "5,611.12"),
+    ("04/28", "5,611.12"),
+    ("04/30", "5,611.12"),
+)
+ACROSS_DAILY_BALANCES: Final = tuple(_d(balance) for _, balance in _ACROSS_DAILY)
+
+
+def _across_page(
+    bank: str, last4: str, closing: Decimal
+) -> tuple[io.BytesIO, canvas.Canvas, float]:
+    """The first table of both builders; the ``y`` of the line under its last row."""
+    buf = io.BytesIO()
+    c = canvas.Canvas(buf, pagesize=letter)
+    _head(c, bank, last4, "04/01/2026 - 04/30/2026", _ACROSS_OPENING, closing)
+    _signed_rows(c, 650, _ACROSS_ROWS)
+    return buf, c, 636 - 13 * len(_ACROSS_ROWS)
+
+
+def checks_three_across() -> bytes:
+    """Five signed rows, then eleven checks printed three to a line."""
+    paid = sum((amount for _, _, amount in _ACROSS_CHECKS), Decimal(0))
+    closing = _running(_ACROSS_OPENING, _ACROSS_ROWS)[-1] - paid
+    buf, c, y = _across_page("Marlpit Savings Bank", "5127", closing)
+    y -= 15
+    _line(c, y, [(40, "Checks Paid")], size=10, bold=True)
+    header: list[tuple[float, str]] = []
+    for number_x, date_x, amount_x in _ACROSS_GROUPS:
+        header += [(number_x, "Number"), (date_x, "Date Paid"), (-amount_x, "Amount")]
+    _line(c, y - 16, header, size=8)
+    lines: list[list[tuple[float, str]]] = []
+    for start in range(0, len(_ACROSS_CHECKS), len(_ACROSS_GROUPS)):
+        cells: list[tuple[float, str]] = []
+        for (number, day, amount), (number_x, date_x, amount_x) in zip(
+            _ACROSS_CHECKS[start : start + len(_ACROSS_GROUPS)], _ACROSS_GROUPS, strict=False
+        ):
+            cells += [
+                (number_x, number),
+                (date_x, day.strftime("%m/%d/%Y")),
+                (-amount_x, _money(amount)),
+            ]
+        lines.append(cells)
+    _rows(c, y - 30, lines)
+    c.save()
+    return buf.getvalue()
+
+
+def daily_balances_three_across() -> bytes:
+    """Five signed rows, then nine balances by day printed three to a line."""
+    closing = _running(_ACROSS_OPENING, _ACROSS_ROWS)[-1]
+    buf, c, y = _across_page("Dunmallow Federal Bank", "8046", closing)
+    y -= 15
+    _line(c, y, [(40, "Daily Balance Summary")], size=10, bold=True)
+    header: list[tuple[float, str]] = []
+    for _, date_x, amount_x in _ACROSS_GROUPS:
+        header += [(date_x - 55, "Date"), (-(amount_x - 55), "Amount")]
+    _line(c, y - 16, header, size=8)
+    lines: list[list[tuple[float, str]]] = []
+    for start in range(0, len(_ACROSS_DAILY), len(_ACROSS_GROUPS)):
+        cells: list[tuple[float, str]] = []
+        for (day, balance), (_, date_x, amount_x) in zip(
+            _ACROSS_DAILY[start : start + len(_ACROSS_GROUPS)], _ACROSS_GROUPS, strict=False
+        ):
+            cells += [(date_x - 55, day), (-(amount_x - 55), balance)]
+        lines.append(cells)
+    _rows(c, y - 30, lines)
+    c.save()
+    return buf.getvalue()
+
+
 # -- totals of sections, totals of the year, and rows printed newest first ------
 
 _NEWEST_OPENING: Final = _d("3,206.71")
@@ -1314,6 +1437,8 @@ EXPECTED_ROWS: Final[dict[str, list[ExpectedRow]]] = {
     "unlabelled_period_once": list(_ONCE_ROWS),
     "two_ranges_on_page_one": list(_ONCE_ROWS),
     "statement_for_period": list(_FOR_ROWS),
+    "checks_three_across": [*_ACROSS_ROWS, *ACROSS_CHECKS_READ],
+    "daily_balances_three_across": list(_ACROSS_ROWS),
 }
 
 #: ``(opening, closing)`` of the builders that are about balances.

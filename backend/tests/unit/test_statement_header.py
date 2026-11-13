@@ -8,6 +8,7 @@ built from ``(text, x0)`` cells and nothing but column headings is printed.
 
 from __future__ import annotations
 
+import math
 from collections.abc import Mapping
 from typing import ClassVar
 
@@ -20,6 +21,7 @@ from app.ingestion.parsers.registry import parse_extraction
 from app.ingestion.parsers.statement_header import (
     Column,
     Role,
+    across_start,
     header_like,
     heading_role,
     read_header,
@@ -1022,3 +1024,117 @@ def test_card_long_heading_is_read_as_a_card() -> None:
     assert statement.reconciliation is not None
     assert statement.reconciliation.status == "ok"
     assert info.skipped_lines == 0
+
+
+# -- tables printed two or three across -------------------------------------------
+
+_CHECKS_ACROSS = [
+    ("Number", 40.0),
+    ("Date Paid", 100.0),
+    ("Amount", 185.0),
+    ("Number", 240.0),
+    ("Date Paid", 300.0),
+    ("Amount", 385.0),
+    ("Number", 440.0),
+    ("Date Paid", 500.0),
+    ("Amount", 585.0),
+]
+
+
+def test_repeated_column_group_is_found() -> None:
+    line = _line(_CHECKS_ACROSS)
+    assert across_start(line) == 240.0
+    # The left group is the header; all from the second group on is one column.
+    assert read_header(line) == [
+        Column("check", 40.0, 70.0),
+        Column("date", 100.0, 145.0),
+        Column("amount", 185.0, 215.0),
+        Column("across", 240.0, math.inf),
+    ]
+    # Twice across, and with a heading the vocabulary knows as it is.
+    twice = _line(
+        [
+            ("Check No", 40.0),
+            ("Date", 100.0),
+            ("Amount", 185.0),
+            ("Check No", 300.0),
+            ("Date", 360.0),
+            ("Amount", 445.0),
+        ]
+    )
+    assert across_start(twice) == 300.0
+    assert [c.role for c in read_header(twice) or []] == ["check", "date", "amount", "across"]
+
+
+def test_a_plain_header_has_no_repeat() -> None:
+    plain = _line([("Date", 62.0), ("Description", 150.0), ("Amount", 420.0), ("Balance", 500.0)])
+    assert across_start(plain) is None
+    assert [c.role for c in read_header(plain) or []] == [
+        "date",
+        "description",
+        "amount",
+        "balance",
+    ]
+    # One group of a checks table: ``Number`` is no heading of its own there.
+    assert across_start(_line(_CHECKS_ACROSS[:3])) is None
+    # Two dates and one amount: a posting date, not a second table.
+    two_dates = _line(
+        [("Trans Date", 40.0), ("Post Date", 110.0), ("Description", 180.0), ("Amount", 420.0)]
+    )
+    assert across_start(two_dates) is None
+    assert [c.role for c in read_header(two_dates) or []] == [
+        "date",
+        "post_date",
+        "description",
+        "amount",
+    ]
+    # The groups differ: no repeat.
+    uneven = _line(
+        [
+            ("Date", 40.0),
+            ("Description", 100.0),
+            ("Amount", 250.0),
+            ("Date", 320.0),
+            ("Amount", 400.0),
+        ]
+    )
+    assert across_start(uneven) is None
+    # A figure on the line: rows, never a header.
+    figures = _line([*_CHECKS_ACROSS[:8], ("Amount 12.00", 585.0)])
+    assert across_start(figures) is None
+    # A word that is no heading, and ``Number`` away from a date heading.
+    assert across_start(_line([*_CHECKS_ACROSS, ("Notes", 640.0)])) is None
+    apart = _line(
+        [
+            ("Number", 40.0),
+            ("Amount", 100.0),
+            ("Date", 185.0),
+            ("Number", 240.0),
+            ("Amount", 300.0),
+            ("Date", 385.0),
+        ]
+    )
+    assert across_start(apart) is None
+    assert read_header(apart) is None
+
+
+def test_date_balance_pairs_are_not_an_across_table() -> None:
+    balances = _line([("Date", 62.0), ("Balance", 150.0), ("Date", 300.0), ("Balance", 390.0)])
+    assert across_start(balances) is None
+    assert read_header(balances) is None
+    assert header_like(balances)
+    # ``Date | Amount`` three times repeats, and its first group is no header
+    # (no description, no check number): a table of daily balances.
+    amounts = _line(
+        [
+            ("Date", 40.0),
+            ("Amount", 140.0),
+            ("Date", 220.0),
+            ("Amount", 300.0),
+            ("Date", 336.0),
+            ("Amount", 400.0),
+        ]
+    )
+    assert across_start(amounts) == 220.0
+    assert read_header(amounts) is None
+    assert header_like(amounts)

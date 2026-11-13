@@ -40,6 +40,10 @@ For``), the classifier's period, a range printed once on page 1, and, when
 nothing says when the statement is from, a year assumed from the day the
 file was made or arrived (:func:`assume_years`): the rows are kept, each
 waiting on its date, never split around a date printed in a notice.
+
+And tables printed two or three across the page: the left group of a checks
+table is read and every check beside it is counted; a table of daily
+balances printed across is neither read nor counted.
 """
 
 from __future__ import annotations
@@ -2400,3 +2404,75 @@ def test_a_range_inside_a_sentence_on_page_one_is_no_period() -> None:
     assert "period_unlabelled" not in outcome.warnings
     assert [t.posted for t in statement.transactions] == [date(2026, 3, 2)]
     assert "year_assumed:2026" in outcome.warnings
+
+
+# -- tables printed two or three across -------------------------------------------
+
+
+def test_checks_across_the_page_are_counted() -> None:
+    result = _read(synth.checks_three_across())
+    statement = _only(result)
+    expected = synth.EXPECTED_ROWS["checks_three_across"]
+    assert _rows(statement) == expected
+    assert len(statement.transactions) == 9
+    checks = statement.transactions[5:]
+    assert [t.payee for t in checks] == ["CHECK 2301", "CHECK 2304", "CHECK 2308", "CHECK 2311"]
+    assert all(t.amount < 0 for t in checks)
+    # Seven checks stand right of the left group: found, not read, counted.
+    assert _skipped(result) == 7
+    assert "table_across_unread:7" in _warnings(result)
+    assert result.parse is not None
+    # One box per line of the checks table, whatever it holds.
+    assert len(result.parse.skipped_regions) == 4
+    # They were not read, so the statement cannot add up: it is held.
+    assert _status(statement) == "mismatch"
+
+
+def test_daily_balances_across_the_page_are_neither_read_nor_counted() -> None:
+    result = _read(synth.daily_balances_three_across())
+    statement = _only(result)
+    assert _rows(statement) == synth.EXPECTED_ROWS["daily_balances_three_across"]
+    assert len(statement.transactions) == 5
+    assert not {t.amount for t in statement.transactions} & set(synth.ACROSS_DAILY_BALANCES)
+    assert _skipped(result) == 0
+    assert not any(w.startswith("table_across_unread") for w in _warnings(result))
+    assert _status(statement) == "ok"
+
+
+ACROSS_HEADER = [
+    ("Number", 62.0),
+    ("Date Paid", 110.0),
+    ("Amount", 200.0),
+    ("Number", 260.0),
+    ("Date Paid", 310.0),
+    ("Amount", 400.0),
+]
+
+
+def test_only_dates_right_of_the_left_group_are_entries() -> None:
+    outcome = _parse(
+        [
+            ACROSS_HEADER,
+            # Two checks; the second one's amount could be a day and a month.
+            [
+                ("3101", 62.0),
+                ("01/05/2026", 110.0),
+                ("20.00", 200.0),
+                ("3102", 260.0),
+                ("01/06/2026", 310.0),
+                ("4.11", 400.0),
+            ],
+            # One check, alone in the left group: nothing beside it.
+            [("3103", 62.0), ("01/07/2026", 110.0), ("7.50", 200.0)],
+            # No check at the left: a date at the right belongs to no entry.
+            [("Checks paid through", 62.0), ("01/31/2026", 310.0)],
+        ]
+    )
+    statement = _one(outcome)
+    assert [(t.payee, t.amount) for t in statement.transactions] == [
+        ("CHECK 3101", Decimal("-20.00")),
+        ("CHECK 3103", Decimal("-7.50")),
+    ]
+    assert outcome.skipped_lines == 1
+    assert outcome.skipped_regions == [(1, (62.0, 114.0, 420.0, 123.0))]
+    assert outcome.warnings.count("table_across_unread:1") == 1
