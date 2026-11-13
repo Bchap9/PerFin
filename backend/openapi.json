@@ -727,7 +727,14 @@
             "type": "boolean"
           },
           "type": {
-            "$ref": "#/components/schemas/AccountType"
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/AccountType"
+              },
+              {
+                "type": "null"
+              }
+            ]
           }
         },
         "required": [
@@ -12915,7 +12922,9 @@
               "DD.MM.YY",
               "DD MMM YYYY",
               "DD-MMM-YYYY",
-              "MMM DD, YYYY"
+              "MMM DD, YYYY",
+              "DDMMMYYYY",
+              "DD-MMM-YY"
             ],
             "title": "Date Format",
             "type": "string"
@@ -13109,7 +13118,7 @@
         "type": "object"
       },
       "MappingSuggestionOut": {
-        "description": "The deterministic mapping guess and how far it can be trusted.\n\n``confident`` (no ``doubts``) is what the importer needs to import a\nnever-seen CSV/TSV layout without asking (INGESTION.md \"Parse\");\n``doubts`` are codes: ``header_not_exact``, ``rows_unreadable``,\n``date_order_guessed``, ``no_rows``, ``indicator_values_unknown`` (an\nindicator cell that is no direction word, or a signed amount beside\nit). ``activity_type_unknown`` is a brokerage activity suggestion with\nactions PerFin does not type. ``sign_evidence`` is ``activity`` for an\nactivity-mode suggestion (amounts keep their own signs), else\n``debit_credit``, ``indicator``, ``balance`` or null (a signed amount\ncolumn read as \"positive is money in\" on trust).",
+        "description": "The deterministic mapping guess and how far it can be trusted.\n\n``confident`` (no ``doubts``) is what the importer needs to import a\nnever-seen CSV/TSV layout without asking (INGESTION.md \"Parse\");\n``doubts`` are codes: ``header_not_exact``, ``rows_unreadable``,\n``date_order_guessed``, ``no_rows``, ``indicator_values_unknown`` (an\nindicator cell that is no direction word, or a signed amount beside\nit), ``sign_unverified`` (nothing proves the sign and the table looks\nlike a card export, or its amounts say nothing: one sign only, or more\nrows of money in than of money out), ``indicator_contradicts_sign``\n(direction words and the amounts' signs disagree) and\n``investment_columns`` (a security, a quantity and a price column:\ntrades, not a cash ledger) and ``no_header`` (the table has no header\nrow, ``spec.has_header`` is false, and its columns were read from the\nshapes of their cells with no running balance to prove them).\n``activity_type_unknown`` is a brokerage\nactivity suggestion with actions PerFin does not type.\n``sign_evidence`` is ``activity`` for an activity-mode suggestion\n(amounts keep their own signs), else ``debit_credit``, ``indicator``,\n``balance``, ``indicator_correlation`` (direction or transaction-type\nwords that go with the signs of the amounts) or null (signed amounts\nread as \"positive is money in\" on trust).",
         "properties": {
           "accounts": {
             "title": "Accounts",
@@ -13156,6 +13165,7 @@
                   "debit_credit",
                   "indicator",
                   "balance",
+                  "indicator_correlation",
                   "activity"
                 ],
                 "type": "string"
@@ -20786,7 +20796,7 @@
         "type": "object"
       },
       "SuggestionRole": {
-        "description": "Why the suggestion gave a column a role (no cell text).",
+        "description": "Why the suggestion gave a column a role (no cell text).\n\nThe roles of a cash ledger, then those only a brokerage activity\nsuggestion gives (``app.ingestion.parsers.brokerage_table``; ``other``:\na column the reader knows and does not read).",
         "properties": {
           "column": {
             "title": "Column",
@@ -20800,7 +20810,8 @@
             "enum": [
               "exact",
               "word",
-              "substring"
+              "substring",
+              "content"
             ],
             "title": "Match",
             "type": "string"
@@ -20816,7 +20827,17 @@
               "currency",
               "account",
               "payee",
-              "memo"
+              "memo",
+              "settle",
+              "action",
+              "symbol",
+              "description",
+              "quantity",
+              "price",
+              "commission",
+              "fees",
+              "account_name",
+              "other"
             ],
             "title": "Role",
             "type": "string"

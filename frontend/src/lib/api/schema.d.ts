@@ -3581,7 +3581,7 @@ export interface components {
              * @default false
              */
             suggested_by_model: boolean;
-            type: components["schemas"]["AccountType"];
+            type: components["schemas"]["AccountType"] | null;
         };
         /**
          * AccountType
@@ -7495,7 +7495,7 @@ export interface components {
              * Date Format
              * @enum {string}
              */
-            date_format: "YYYY-MM-DD" | "YYYY/MM/DD" | "YYYY.MM.DD" | "YYYYMMDD" | "MM/DD/YYYY" | "MM/DD/YY" | "MM-DD-YYYY" | "DD/MM/YYYY" | "DD/MM/YY" | "DD-MM-YYYY" | "DD.MM.YYYY" | "DD.MM.YY" | "DD MMM YYYY" | "DD-MMM-YYYY" | "MMM DD, YYYY";
+            date_format: "YYYY-MM-DD" | "YYYY/MM/DD" | "YYYY.MM.DD" | "YYYYMMDD" | "MM/DD/YYYY" | "MM/DD/YY" | "MM-DD-YYYY" | "DD/MM/YYYY" | "DD/MM/YY" | "DD-MM-YYYY" | "DD.MM.YYYY" | "DD.MM.YY" | "DD MMM YYYY" | "DD-MMM-YYYY" | "MMM DD, YYYY" | "DDMMMYYYY" | "DD-MMM-YY";
             /** Debit Column */
             debit_column?: number | null;
             /**
@@ -7558,11 +7558,21 @@ export interface components {
          *     ``doubts`` are codes: ``header_not_exact``, ``rows_unreadable``,
          *     ``date_order_guessed``, ``no_rows``, ``indicator_values_unknown`` (an
          *     indicator cell that is no direction word, or a signed amount beside
-         *     it). ``activity_type_unknown`` is a brokerage activity suggestion with
-         *     actions PerFin does not type. ``sign_evidence`` is ``activity`` for an
-         *     activity-mode suggestion (amounts keep their own signs), else
-         *     ``debit_credit``, ``indicator``, ``balance`` or null (a signed amount
-         *     column read as "positive is money in" on trust).
+         *     it), ``sign_unverified`` (nothing proves the sign and the table looks
+         *     like a card export, or its amounts say nothing: one sign only, or more
+         *     rows of money in than of money out), ``indicator_contradicts_sign``
+         *     (direction words and the amounts' signs disagree) and
+         *     ``investment_columns`` (a security, a quantity and a price column:
+         *     trades, not a cash ledger) and ``no_header`` (the table has no header
+         *     row, ``spec.has_header`` is false, and its columns were read from the
+         *     shapes of their cells with no running balance to prove them).
+         *     ``activity_type_unknown`` is a brokerage
+         *     activity suggestion with actions PerFin does not type.
+         *     ``sign_evidence`` is ``activity`` for an activity-mode suggestion
+         *     (amounts keep their own signs), else ``debit_credit``, ``indicator``,
+         *     ``balance``, ``indicator_correlation`` (direction or transaction-type
+         *     words that go with the signs of the amounts) or null (signed amounts
+         *     read as "positive is money in" on trust).
          */
         MappingSuggestionOut: {
             /** Accounts */
@@ -7582,7 +7592,7 @@ export interface components {
             /** Score */
             score: number;
             /** Sign Evidence */
-            sign_evidence: ("debit_credit" | "indicator" | "balance" | "activity") | null;
+            sign_evidence: ("debit_credit" | "indicator" | "balance" | "indicator_correlation" | "activity") | null;
             spec: components["schemas"]["MappingSpec"];
         };
         /**
@@ -10085,6 +10095,10 @@ export interface components {
         /**
          * SuggestionRole
          * @description Why the suggestion gave a column a role (no cell text).
+         *
+         *     The roles of a cash ledger, then those only a brokerage activity
+         *     suggestion gives (``app.ingestion.parsers.brokerage_table``; ``other``:
+         *     a column the reader knows and does not read).
          */
         SuggestionRole: {
             /** Column */
@@ -10095,12 +10109,12 @@ export interface components {
              * Match
              * @enum {string}
              */
-            match: "exact" | "word" | "substring";
+            match: "exact" | "word" | "substring" | "content";
             /**
              * Role
              * @enum {string}
              */
-            role: "date" | "amount" | "debit" | "credit" | "indicator" | "balance" | "currency" | "account" | "payee" | "memo";
+            role: "date" | "amount" | "debit" | "credit" | "indicator" | "balance" | "currency" | "account" | "payee" | "memo" | "settle" | "action" | "symbol" | "description" | "quantity" | "price" | "commission" | "fees" | "account_name" | "other";
         };
         /** SummaryCategory */
         SummaryCategory: {
