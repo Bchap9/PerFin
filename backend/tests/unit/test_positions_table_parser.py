@@ -19,6 +19,7 @@ from app.ingestion.parsers.positions_table import (
     PARSER_NAME,
     RECONCILIATION_DOUBT,
     TOTAL_SYMBOLS,
+    PositionsTable,
     as_of_title,
     block_account,
     downloaded_on,
@@ -411,10 +412,235 @@ def test_blocks_with_the_same_title_are_still_two_statements() -> None:
         ("=Individual ...4417", ("4417", "'=Individual")),
         ("Holdings 11/06/2026", (None, None)),
         ("Account: 0000-4417", ("4417", None)),
+        ("Rollover IRA XXXX-8820", ("8820", "Rollover IRA")),
+        ("Individual 4417", ("4417", "Individual")),
+        ("Trust u/a 05/01/2012 ...4417", ("4417", "Trust u/a")),
+        # Digits are never gathered across the words of a name or a short mask.
+        ("Solo 401k ...497", (None, "Solo 401k")),
+        ("Kid 529 ...497", (None, "Kid 529")),
+        ("Joint 401k ...1234", ("1234", "Joint 401k")),
+        # Notes, years, dates, amounts and telephone numbers name no account.
+        ("Year-end holdings 2026", (None, None)),
+        ("Generated 06 Nov 2026 at 14:05", (None, None)),
+        ("Portfolio 2026 Q4", (None, None)),
+        ("Report 20261106", (None, None)),
+        ("Margin balance $1,234.00", (None, None)),
+        ("Margin balance 1,234.00", (None, None)),
+        ("Prices delayed 20 minutes", (None, None)),
+        ("Prices are delayed ...", (None, None)),
+        ("Questions? Call 800-555-0100", (None, None)),
+        ("Synthetic Brokerage is not a real company and its fund SGRX is 1234", (None, None)),
     ],
 )
 def test_block_account(text: str, account: tuple[str | None, str | None]) -> None:
     assert block_account(text) == account
+
+
+def _lines(found: PositionsTable | None) -> list[tuple[str | None, str | None, list[str | None]]]:
+    assert found is not None
+    return [
+        (s.account.last4, s.account.name, [p.security.symbol for p in s.positions])
+        for s in found.statements
+    ]
+
+
+_FUND_A: list[str] = ["SGRX", "SYNTHETIC GROWTH INDEX FUND", "10", "$5.00", "$50.00", "$40.00"]
+_FUND_B: list[str] = ["SBND", "SYNTHETIC TOTAL BOND FUND", "4", "$25.00", "$100.00", "$80.00"]
+_FUND_C: list[str] = ["SVAL", "SYNTHETIC VALUE INDEX ETF", "2", "$10.00", "$20.00", "$10.00"]
+
+
+def _cash(value: str) -> list[str]:
+    return ["Cash & Cash Investments", "--", "--", "--", value, "--"]
+
+
+def _total(value: str, label: str = "Account Total") -> list[str]:
+    return [label, "--", "--", "--", value, "--"]
+
+
+def test_account_lines_under_one_header_are_separate_accounts() -> None:
+    """The header printed once: the lines naming the accounts keep their rows apart."""
+    found = read_positions_table(_extract(broker_all_accounts_positions_csv(one_header=True)))
+    assert found is not None
+    assert [(s.account.last4, s.account.name) for s in found.statements] == [
+        ("4417", "Individual"),
+        ("8820", "Roth IRA"),
+    ]
+    assert [len(s.positions) for s in found.statements] == [2, 2]
+    assert (found.total_rows, found.cash_rows, found.skipped) == (2, 2, 0)
+    for statement, block in zip(found.statements, (BROKER_INDIVIDUAL, BROKER_ROTH), strict=True):
+        assert statement.cash_closing is not None
+        assert statement.cash_closing.amount == block.cash
+        assert statement.total_value is not None
+        assert statement.total_value.amount == block.total
+        assert statement.reconciliation is not None
+        assert statement.reconciliation.status == "ok"
+    # Without total rows the lines alone do it.
+    table = _table(
+        [
+            ["Individual ...4417"],
+            list(BROKER_HEADER),
+            _FUND_A,
+            _cash("$10.00"),
+            ["Roth IRA ...8820"],
+            _FUND_B,
+            _FUND_C,
+            _cash("$5.00"),
+        ]
+    )
+    found = read_positions_table(table, received_on=DAY)
+    assert _lines(found) == [
+        ("4417", "Individual", ["SGRX"]),
+        ("8820", "Roth IRA", ["SBND", "SVAL"]),
+    ]
+    # The same account named again (a page break) is still that account.
+    table = _table(
+        [
+            ["Individual ...4417"],
+            list(BROKER_HEADER),
+            _FUND_A,
+            ["Individual ...4417"],
+            _FUND_B,
+        ]
+    )
+    found = read_positions_table(table, received_on=DAY)
+    assert _lines(found) == [("4417", "Individual", ["SGRX", "SBND"])]
+
+
+@pytest.mark.parametrize(
+    "between",
+    [
+        # A total row, then more rows: another account whose line was not read.
+        [_total("$60.00"), ["Roth IRA (see the note below)"]],
+        [_total("$60.00")],
+        # A line with a number that names no account, then more rows.
+        [["Roth IRA no. 88 (margin)"]],
+    ],
+    ids=["total-and-line", "total", "line-with-digits"],
+)
+def test_rows_past_the_end_of_a_block_leave_it_without_an_account(
+    between: list[list[str]],
+) -> None:
+    """Nothing says whose the later rows are: the statement names no account and no value."""
+    table = _table(
+        [
+            ["Individual ...4417"],
+            list(BROKER_HEADER),
+            _FUND_A,
+            _cash("$10.00"),
+            *between,
+            _FUND_B,
+            _FUND_C,
+            _cash("$5.00"),
+            _total("$125.00"),
+        ]
+    )
+    found = read_positions_table(table, received_on=DAY)
+    assert found is not None
+    (statement,) = found.statements
+    assert (statement.account.last4, statement.account.name) == (None, None)
+    assert (statement.cash_closing, statement.total_value) == (None, None)
+    assert "accounts_unclear" in found.warnings
+    assert len(statement.positions) == 3
+
+
+def test_a_plain_note_inside_a_block_changes_nothing() -> None:
+    table = _table(
+        [
+            ["Individual ...4417"],
+            list(BROKER_HEADER),
+            _FUND_A,
+            ["Fixed income"],
+            _FUND_B,
+            _cash("$10.00"),
+            _total("$160.00"),
+            ["Prices delayed 20 minutes"],
+        ]
+    )
+    found = read_positions_table(table, received_on=DAY)
+    assert _lines(found) == [("4417", "Individual", ["SGRX", "SBND"])]
+    assert found is not None
+    assert found.warnings == ["as_of_assumed"]
+    assert found.statements[0].total_value is not None
+
+
+def test_a_note_above_the_header_never_names_the_account() -> None:
+    for note in ("Year-end holdings 2026", "Prices delayed 20 minutes"):
+        found = read_positions_table(
+            _table([[note], list(BROKER_HEADER), _FUND_A, _FUND_B]), received_on=DAY
+        )
+        assert _lines(found) == [(None, None, ["SGRX", "SBND"])], note
+    # A note between the line naming a block and its header does not hide the line.
+    table = _table(
+        [
+            ["Individual ...4417"],
+            ["Prices delayed 20 minutes"],
+            list(BROKER_HEADER),
+            _FUND_A,
+            _total("$50.00"),
+            ["Roth IRA ...8820"],
+            ["Prices delayed 20 minutes"],
+            list(BROKER_HEADER),
+            _FUND_B,
+            _total("$100.00"),
+        ]
+    )
+    found = read_positions_table(table, received_on=DAY)
+    assert _lines(found) == [("4417", "Individual", ["SGRX"]), ("8820", "Roth IRA", ["SBND"])]
+
+
+def test_a_block_with_another_header_is_read_by_its_own_columns() -> None:
+    other = ["Symbol", "Description", "Maturity", "Market Value", "Quantity", "Price"]
+    table = _table(
+        [
+            ["Individual ...4417"],
+            list(BROKER_HEADER),
+            _FUND_A,
+            _total("$50.00"),
+            ["Roth IRA ...8820"],
+            other,
+            ["SBND", "SYNTHETIC TOTAL BOND FUND", "--", "$100.00", "4", "$25.00"],
+            ["Account Total", "--", "--", "$100.00", "--", "--"],
+        ]
+    )
+    found = read_positions_table(table, received_on=DAY)
+    assert _lines(found) == [("4417", "Individual", ["SGRX"]), ("8820", "Roth IRA", ["SBND"])]
+    assert found is not None
+    assert (found.skipped, found.total_rows) == (0, 2)
+    second = found.statements[1]
+    assert (second.positions[0].quantity, second.positions[0].market_value) == (
+        Decimal(4),
+        Decimal("100.00"),
+    )
+    assert second.total_value is not None
+    assert second.total_value.amount == Decimal("100.00")
+
+
+def test_a_total_row_that_sums_the_quantities_is_still_a_total() -> None:
+    table = _table(
+        [list(BROKER_HEADER), _FUND_A, _FUND_B, ["Total", "", "14", "", "$150.00", "$120.00"]]
+    )
+    found = read_positions_table(table, received_on=DAY)
+    assert _lines(found) == [(None, None, ["SGRX", "SBND"])]
+    assert found is not None
+    assert (found.positions, found.total_rows, found.skipped) == (2, 1, 0)
+
+
+def test_a_total_without_a_cash_row_is_kept_only_when_the_holdings_are_it() -> None:
+    def read(total: str) -> PositionsTable:
+        table = _table(
+            [["Individual ...4417"], list(BROKER_HEADER), _FUND_A, _FUND_B, _total(total)]
+        )
+        found = read_positions_table(table, received_on=DAY)
+        assert found is not None
+        return found
+
+    agrees, differs = read("$150.00"), read("$999.00")
+    assert agrees.statements[0].total_value is not None
+    assert "total_unchecked" not in agrees.warnings
+    # No cash row to make up the difference: the total is not the holdings' and is not kept.
+    assert differs.statements[0].total_value is None
+    assert differs.warnings == ["total_unchecked", "as_of_assumed"]
+    assert differs.statements[0].account.last4 == "4417"
 
 
 def test_the_title_dates_the_positions_only_above_the_header() -> None:

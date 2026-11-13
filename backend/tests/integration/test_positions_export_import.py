@@ -197,7 +197,8 @@ def test_positions_export_lands_as_holdings_with_cost_basis_on_each_account(env:
     assert env.document(document_id).status is DocumentStatus.PROCESSED
 
 
-def test_all_accounts_export_lands_on_each_account(env: Env) -> None:
+@pytest.mark.parametrize("one_header", [False, True], ids=["header-per-block", "one-header"])
+def test_all_accounts_export_lands_on_each_account(env: Env, one_header: bool) -> None:
     blocks = (BROKER_INDIVIDUAL, BROKER_ROTH)
     kinds = (AccountType.BROKERAGE, AccountType.RETIREMENT)
     accounts = [
@@ -206,7 +207,10 @@ def test_all_accounts_export_lands_on_each_account(env: Env) -> None:
         )
         for block, kind in zip(blocks, kinds, strict=True)
     ]
-    document_id = env.ingest(broker_all_accounts_positions_csv(), "All-Accounts-Positions.csv")
+    # With the header printed once, only the lines naming the accounts keep them apart.
+    document_id = env.ingest(
+        broker_all_accounts_positions_csv(one_header=one_header), "All-Accounts-Positions.csv"
+    )
 
     document = env.document(document_id)
     assert document.status is DocumentStatus.PROCESSED, _items(env, document_id)

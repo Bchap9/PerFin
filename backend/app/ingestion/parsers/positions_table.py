@@ -34,10 +34,11 @@ note gives the day the positions are valued (:func:`downloaded_on`), else a
 title above the header that says ``as of`` a date does (:func:`as_of_title`).
 A row that repeats the header row is a note too. Every other row is
 
-* a **total**: a row with no quantity whose symbol cell is one of
-  :data:`TOTAL_SYMBOLS` (``Account Total``). It is not data: it is neither a
-  holding nor skipped, and it does not count towards
-  :data:`READ_SHARE_MIN`. Its value is the account's printed total (below);
+* a **total**: a row whose symbol cell is one of :data:`TOTAL_SYMBOLS`
+  (``Account Total``), whatever its other cells print (a total may sum the
+  quantity column too). It is not data: it is neither a holding nor
+  skipped, and it does not count towards :data:`READ_SHARE_MIN`. Its value
+  is the account's printed total (below);
 * **cash**: the account's core position (a symbol ending in ``**``:
   ``SPAXX**``, ``FCASH**``), ``Pending Activity``, a symbol cell that starts
   with the word cash (``Cash & Cash Investments``), or a row with no
@@ -62,14 +63,22 @@ symbol that would be a formula is no symbol.
 **Accounts**: rows are grouped by their account-number cell together with
 the account's name (so two accounts never fold into one, even when an export
 masks every number alike), one statement per account in order of first
-appearance. Without an account-number column the table is read in *blocks*:
-the header row starts the first, every repetition of it the next, and rows
-of different blocks never share a statement. The nearest one-cell line above
-a block's header names its account (:func:`block_account`: ``Roth IRA
-...8820``), when it prints a number or a mask; a table with one header and
-no such line is one statement, as before. Only the last four digits of the
-number are kept. The name becomes the statement account's name and makes it
-a ``retirement`` account when it reads like one. A known broker layout
+appearance. Without an account-number column the table is read in *blocks*,
+and rows of different blocks never share a statement. A block starts at the
+header row, at every later header row (the same one repeated, or another
+positions header without an account column, whose columns then read the
+rows under it) and at a one-cell line that names another account than the
+block it stands in (:func:`block_account`: ``Roth IRA ...8820``, a name
+that ends in a masked or plain account number). The nearest such line above
+a block's rows names its account; notes between the line and the header do
+not hide it, and a table with one header and no such line is one statement.
+Rows that follow a block's total row, or a one-cell line that prints a
+number or a mask and is not read as an account, may be another account's:
+that block's statement then names no account and prints no cash and no
+total (warning ``accounts_unclear``), so the importer asks whose it is
+instead of matching it by digits. Only the last four digits of the number
+are kept. The name becomes the statement account's name and makes it a
+``retirement`` account when it reads like one. A known broker layout
 (:data:`LAYOUT_INSTITUTIONS`) names the institution.
 
 **What the statement says about itself** (the checks of
@@ -88,7 +97,10 @@ whose rows end in a total row is checked against that instead: the printed
 total is the statement's ``total_value``, so the check compares the
 holdings plus the cash rows with it. Total rows of one account that
 disagree (a subtotal and a total) are no total, and a ``Grand Total`` is an
-account's only when the file has one account. An account with a row that
+account's only when the file has one account. A total row of an account
+with no cash row is kept only when the holdings add up to it: otherwise
+nothing printed makes up the difference, so it is not the statement's
+``total_value`` (warning ``total_unchecked``). An account with a row that
 could not be read prints no cash and no total: the importer then records no
 balance for it.
 
@@ -239,8 +251,19 @@ _AS_OF: Final = re.compile(r"\bas\s+of\b", re.IGNORECASE)
 #: The words a title puts before the account it names.
 _TITLE_LEAD: Final = re.compile(r"^\s*positions\s+for(?:\s+account)?\b[\s:]*", re.IGNORECASE)
 _CLOCK: Final = re.compile(r"\d{1,2}:\d{2}(?::\d{2})?")
-#: A token of a title that is (part of) an account number: digits, or a mask.
-_NUMBER_TOKEN: Final = re.compile(r".*\d.*|[*#xX.\u2022-]*[*#xX.\u2022][*#xX.\u2022-]*")
+#: The last token of a line naming an account: a masked number (``...8820``,
+#: ``XXXX-8820``), a mask alone (``XXXX``) or a plain number (``0000-4417``).
+_MASKED_NUMBER: Final = re.compile(r"(?P<mask>[*#xX.\u2022-]{2,})(?P<digits>\d+(?:-\d+)*)")
+_MASK_ONLY: Final = re.compile(r"[*#xX\u2022-]{3,}")
+_PLAIN_NUMBER: Final = re.compile(r"[A-Za-z]?\d+(?:-\d+)*")
+#: A telephone number is not an account number.
+_PHONE: Final = re.compile(r"(?:1-)?\d{3}-\d{3}-\d{4}")
+#: A token of a note that may be (part of) an account number: a digit, or a mask.
+_NUMBERISH: Final = re.compile(r".*\d.*|[*#xX\u2022-]*[*#xX\u2022]{3,}[*#xX\u2022-]*")
+#: Most words a line may print before the number and still name an account.
+NAME_WORDS_MAX: Final = 6
+#: Digits of an account number kept, and the fewest that are a number.
+LAST4: Final = 4
 #: Names (normalised) that say no account.
 _NO_NAMES: Final = frozenset({"all accounts", "account", "accounts", "account number", "acct"})
 _MONTHS: Final = {
@@ -431,6 +454,50 @@ def as_of_title(rows: Sequence[Sequence[str]]) -> date | None:
     return None
 
 
+def _title_tokens(text: str) -> list[str]:
+    """The words of a one-cell line without its dates and times of day."""
+    rest = " ".join(text.removeprefix("'").split())
+    for pattern in (*_DAY_FORMATS, _CLOCK):
+        rest = pattern.sub(" ", rest)
+    return rest.split()
+
+
+def _is_year_or_day(digits: str) -> bool:
+    """``2026`` or ``20261106``: a year or a day, not an account number."""
+    if len(digits) == LAST4:
+        return 1900 <= int(digits) <= 2099
+    if len(digits) != 8:
+        return False
+    try:
+        date(int(digits[:4]), int(digits[4:6]), int(digits[6:]))
+    except ValueError:
+        return False
+    return 1900 <= int(digits[:4]) <= 2099
+
+
+def _account_number(token: str) -> tuple[bool, str | None]:
+    """Whether ``token`` is an account number or a mask, and its last four digits.
+
+    The digits are those of this one token, never gathered from the words
+    beside it. A masked number may be short (``...497``: a number with no
+    last four); a plain one has four digits or more and is not a year, a
+    day or a telephone number.
+    """
+    if _PHONE.fullmatch(token) is not None:
+        return False, None
+    masked = _MASKED_NUMBER.fullmatch(token)
+    if masked is not None and masked["mask"].strip("-"):
+        digits = masked["digits"].replace("-", "")
+        return True, digits[-LAST4:] if len(digits) >= LAST4 else None
+    if _MASK_ONLY.fullmatch(token) is not None and token.strip("-"):
+        return True, None
+    if _PLAIN_NUMBER.fullmatch(token) is not None:
+        digits = re.sub(r"\D", "", token)
+        if len(digits) >= LAST4 and not (token.isdigit() and _is_year_or_day(digits)):
+            return True, digits[-LAST4:]
+    return False, None
+
+
 def block_account(text: str) -> tuple[str | None, str | None]:
     """``(last four digits, name)`` of the account a one-cell line names.
 
@@ -438,26 +505,38 @@ def block_account(text: str) -> tuple[str | None, str | None]:
     of the line without a leading ``Positions for`` / ``Positions for
     account``, without everything from `` as of `` on and without any date
     or time of day, so the moment of the download is never the account's
-    digits. The name is what stands before the first token that holds a
-    digit or is a mask (``...``, ``XXXX``); the digits are the last four
-    from that token on. A line with no such token names no account (it is a
-    note), and neither does ``All-Accounts``.
+    digits. The line names an account only when its **last** word is an
+    account number or a mask (:func:`_account_number`: ``...8820``,
+    ``XXXX-8820``, ``0000-4417``, ``XXXX``); the digits are that word's
+    alone, and the name is the (at most :data:`NAME_WORDS_MAX`) words before
+    it. Any other line names no account (it is a note): one that ends in a
+    word, a year, a day, an amount or a telephone number, a sentence, and
+    ``All-Accounts``.
     """
     rest = " ".join(text.removeprefix("'").split())
     cut = _AS_OF.search(rest)
     if cut is not None:
         rest = rest[: cut.start()]
-    rest = _TITLE_LEAD.sub("", rest)
-    for pattern in (*_DAY_FORMATS, _CLOCK):
-        rest = pattern.sub(" ", rest)
-    tokens = rest.split()
-    first = next((i for i, t in enumerate(tokens) if _NUMBER_TOKEN.fullmatch(t)), None)
-    if first is None:
+    tokens = _title_tokens(_TITLE_LEAD.sub("", rest))
+    if not tokens or any("$" in token or "%" in token for token in tokens):
         return None, None
-    name = " ".join(tokens[:first]).strip(" :,-")
-    if not normalise(name) or normalise(name) in _NO_NAMES:
-        return cell_last4(" ".join(tokens[first:])), None
-    return cell_last4(" ".join(tokens[first:])), neutralise_formula(name)[:NAME_MAX]
+    numbered, last4 = _account_number(tokens[-1])
+    if not numbered:
+        return None, None
+    words = tokens[:-1]
+    while words and _account_number(words[-1])[0]:
+        words.pop()  # a number printed in groups: ``0000 1111 4417``
+    if len(words) > NAME_WORDS_MAX:
+        return None, None
+    name = " ".join(words).strip(" :,-")
+    if not re.search(r"[^\W\d_]", name) or normalise(name) in _NO_NAMES:
+        return last4, None
+    return last4, neutralise_formula(name)[:NAME_MAX]
+
+
+def _may_name_an_account(text: str) -> bool:
+    """A one-cell line that prints a number or a mask (and so may name an account)."""
+    return any(_NUMBERISH.fullmatch(token) for token in _title_tokens(text))
 
 
 def _cell(row: Sequence[str], column: int | None) -> str:
@@ -550,6 +629,12 @@ class _Group:
     incomplete: bool = False
     #: The values of the account's total rows.
     totals: list[Decimal] = field(default_factory=list)
+    #: The block the rows stand in (None: the table has an account-number column).
+    block: int | None = None
+    #: Rows of the block may be another account's: it names none (module doc).
+    unclear: bool = False
+    #: Its total row was not kept: no cash row, and the holdings are not it.
+    total_unchecked: bool = False
 
     @property
     def printed_total(self) -> Decimal | None:
@@ -559,7 +644,7 @@ class _Group:
 
 @dataclass(frozen=True)
 class _Block:
-    """The rows under one header row of a table with no account-number column."""
+    """The rows of one account in a table with no account-number column."""
 
     index: int
     last4: str | None = None
@@ -632,9 +717,7 @@ class _Reader:
     def is_total(self, row: Sequence[str]) -> str | None:
         """The normalised label of a total row (None: ``row`` is not one)."""
         label = normalise(_cell(row, self.col("symbol")))
-        if label in TOTAL_SYMBOLS and self.number(row, "quantity") is None:
-            return label
-        return None
+        return label if label in TOTAL_SYMBOLS else None
 
     def read(self, row: Sequence[str], block: _Block | None = None) -> _Row | None:
         """One data row: a position, cash, or None (it could not be read)."""
@@ -712,15 +795,22 @@ def _statement(
             if group.printed_total is not None:
                 # The account's own total row: holdings plus cash must be it.
                 total = group.printed_total
+                held = sum((v for v in values if v is not None), Decimal(0))
+                if cash is None and (any(v is None for v in values) or held != total):
+                    # No cash row makes up the difference, and without a
+                    # closing cash nothing would check it: not kept.
+                    total = None
+                    group.total_unchecked = True
             elif all(v is not None for v in values):
                 rows_total = sum((v for v in values if v is not None), Decimal(0))
                 total = _percent_total(rows, rows_total)
-    name = next((r.name for r in rows if r.name), None)
+    # Rows that may be another account's: the statement says neither (module doc).
+    name = None if group.unclear else next((r.name for r in rows if r.name), None)
     statement = InvestmentStatement(
         source_format="csv",
         account=StatementAccount(
             account_type=account_type_for(name),
-            last4=rows[0].last4,
+            last4=None if group.unclear else rows[0].last4,
             currency=currency,
             name=name,
             institution=institution,
@@ -761,21 +851,67 @@ def _heading(row: Sequence[str]) -> list[str]:
     return names
 
 
-def _block(rows: Sequence[Sequence[str]], header_row: int, index: int) -> _Block:
-    """The block under the header at ``header_row``, named by the one-cell line above it.
+def _first_block(above: Sequence[Sequence[str]]) -> _Block:
+    """The block under the table's header, named by a one-cell line above it.
 
-    The nearest row above that is not blank; a row of several cells there
-    (the last row of the block before) names nothing.
+    The nearest line that names an account (:func:`block_account`); blank
+    rows and notes between it and the header are passed over, a row of
+    several cells is not.
     """
-    for row in reversed(rows[:header_row]):
+    for row in reversed(above):
         if _filled(row) == 0:
             continue
         text = _only_cell(row)
         if text is None:
             break
-        last4, name = block_account(text)
-        return _Block(index, last4, name)
-    return _Block(index)
+        named = block_account(text)
+        if named != (None, None):
+            return _Block(0, *named)
+    return _Block(0)
+
+
+@dataclass
+class _Blocks:
+    """Which block a row of a table with no account-number column stands in (module doc)."""
+
+    block: _Block
+    #: No row of ``block`` was read yet.
+    fresh: bool = True
+    #: The account a line named again since the block's last row.
+    again: tuple[str | None, str | None] | None = None
+    #: The block printed its total, or a line that may name another account.
+    closed: bool = False
+    #: Blocks with rows past their end.
+    unclear: set[int] = field(default_factory=set)
+
+    def _open(self, last4: str | None, name: str | None) -> None:
+        self.block = _Block(self.block.index + 1, last4, name)
+        self.fresh, self.again, self.closed = True, None, False
+
+    def note(self, text: str) -> None:
+        """A one-cell line: it may name the account of the rows that follow."""
+        named = block_account(text)
+        if named == (None, None):
+            self.closed = self.closed or (not self.fresh and _may_name_an_account(text))
+        elif self.fresh:
+            self.block = _Block(self.block.index, *named)
+        elif named != (self.block.last4, self.block.name):
+            self._open(*named)
+        else:
+            self.again = named
+
+    def header(self) -> None:
+        """A header row: the rows under it are another block, unless none was read yet."""
+        if not self.fresh:
+            self._open(*(self.again or (None, None)))
+
+    def total(self) -> None:
+        self.fresh, self.again, self.closed = False, None, True
+
+    def data(self) -> None:
+        if self.closed:
+            self.unclear.add(self.block.index)
+        self.fresh, self.again = False, None
 
 
 def read_positions_table(
@@ -802,38 +938,66 @@ def read_positions_table(
     out = PositionsTable(header=header, as_of=on, as_of_assumed=printed is None)
     heading = _heading(table.rows[header.row])
     # Blocks only where no column says whose a row is (module doc, "Accounts").
-    block = _block(table.rows, header.row, 0) if reader.col("account") is None else None
+    blocks = _Blocks(_first_block(above)) if reader.col("account") is None else None
     groups: dict[str, _Group] = {}
     grand: list[Decimal] = []
     body = 0
+
+    def group_of(row: Sequence[str]) -> _Group:
+        block = blocks.block if blocks is not None else None
+        index = block.index if block is not None else None
+        return groups.setdefault(reader.account(row, block)[0], _Group(block=index))
+
     for index, row in enumerate(table.rows[header.row + 1 :], header.row + 1):
         if _filled(row) < 2:
             out.notes += 1
+            text = _only_cell(row)
+            if blocks is not None and text is not None:
+                blocks.note(text)
             continue
         if _heading(row) == heading:
             out.notes += 1
-            if block is not None:
-                block = _block(table.rows, index, block.index + 1)
+            if blocks is not None:
+                blocks.header()
+            continue
+        columns = _roles(row) if blocks is not None else None
+        if (
+            blocks is not None
+            and columns is not None
+            and "account" not in columns
+            and all(role in columns for role in REQUIRED_ROLES)
+        ):
+            # Another positions header: the rows under it are read by its columns.
+            out.notes += 1
+            reader, heading = _Reader(Header(index, columns), on), _heading(row)
+            blocks.header()
             continue
         total = reader.is_total(row)
         if total is not None:
             out.total_rows += 1
             value = reader.number(row, "value")
-            if value is None:
-                continue
             if total == _GRAND_TOTAL:
-                grand.append(value)
-            else:
-                groups.setdefault(reader.account(row, block)[0], _Group()).totals.append(value)
+                if value is not None:
+                    grand.append(value)
+                continue
+            if blocks is not None:
+                blocks.total()
+            if value is not None:
+                group_of(row).totals.append(value)
             continue
         body += 1
-        read = reader.read(row, block)
+        if blocks is not None:
+            blocks.data()
+        read = reader.read(row, blocks.block if blocks is not None else None)
         if read is None:
             out.skipped += 1
             # The account it belongs to is no longer whole.
-            groups.setdefault(reader.account(row, block)[0], _Group()).incomplete = True
+            group_of(row).incomplete = True
             continue
-        groups.setdefault(read.key, _Group()).rows.append(read)
+        group_of(row).rows.append(read)
+    for group in groups.values():
+        if blocks is not None and group.block in blocks.unclear:
+            group.unclear = group.incomplete = True
     read_rows = sum(len(g.rows) for g in groups.values())
     if not body or read_rows < READ_SHARE_MIN * body:
         return None
@@ -866,6 +1030,10 @@ def read_positions_table(
         out.statements.append(statement)
     if out.skipped:
         out.warnings.append("rows_unreadable")
+    if any(g.unclear and g.rows for g in groups.values()):
+        out.warnings.append("accounts_unclear")
+    if any(g.total_unchecked for g in groups.values()):
+        out.warnings.append("total_unchecked")
     if mixed:
         out.warnings.append("currency_mixed")
     if out.as_of_assumed:

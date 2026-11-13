@@ -117,6 +117,24 @@ def test_option_trade_price_is_per_contract_and_classed() -> None:
     assert trade.fees == Decimal("0.65")
 
 
+def test_option_trade_without_a_catalogue_uses_its_own_contract_size() -> None:
+    # A mini contract of ten shares, said by the trade itself; the file has no SECLIST.
+    data = (
+        synth.ofx_option_trades()
+        .replace(b"<OPTBUYTYPE>", b"<SHPERCTRCT>10</SHPERCTRCT><OPTBUYTYPE>")
+        .replace(b"<TOTAL>-370.65", b"<TOTAL>-37.65")
+    )
+    (trade,) = _only(data).activity
+    assert trade.unit_price == Decimal("18.50")
+    assert trade.amount == Decimal("-37.65")
+    # A size that is not believed is the usual hundred.
+    data = synth.ofx_option_trades().replace(
+        b"<OPTBUYTYPE>", b"<SHPERCTRCT>0</SHPERCTRCT><OPTBUYTYPE>"
+    )
+    (trade,) = _only(data).activity
+    assert trade.unit_price == Decimal("185.00")
+
+
 def _debt_trade(verb: str, price: bytes, total: bytes) -> bytes:
     inner = "INVBUY" if verb == "BUY" else "INVSELL"
     return (

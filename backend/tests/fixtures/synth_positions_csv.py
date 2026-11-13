@@ -20,7 +20,8 @@ person appears, and nothing is read from outside this module.
   another broker's shape: a title line naming the account and the moment of
   the download, no account column, a ``Cash & Cash Investments`` row, an
   ``Account Total`` row and a trailing comma on every line; the second prints
-  one such block per account, each under a line naming it.
+  one such block per account, each under a line naming it (``one_header``:
+  the header row once, above the first block only).
 """
 
 from __future__ import annotations
@@ -275,9 +276,9 @@ BROKER_ROTH: Final = BrokerBlock(
 )
 
 
-def _broker_rows(block: BrokerBlock) -> list[list[str]]:
+def _broker_rows(block: BrokerBlock, *, header: bool = True) -> list[list[str]]:
     """The header, the holdings, the cash row and the total row of one block."""
-    rows = [list(BROKER_HEADER)]
+    rows = [list(BROKER_HEADER)] if header else []
     rows += [
         [
             h.symbol,
@@ -311,9 +312,16 @@ def broker_positions_csv(*, total: Decimal | None = None) -> bytes:
 
 def broker_all_accounts_positions_csv(
     blocks: Sequence[BrokerBlock] = (BROKER_INDIVIDUAL, BROKER_ROTH),
+    *,
+    one_header: bool = False,
 ) -> bytes:
-    """Every account: a title, then per account a line naming it and its block."""
+    """Every account: a title, then per account a line naming it and its block.
+
+    ``one_header``: the header row is printed under the first account's line
+    only, so nothing but the lines naming the accounts keeps them apart.
+    """
     lines: list[Sequence[str]] = [[f"Positions for All-Accounts as of {_BROKER_MOMENT}"], []]
-    for block in blocks:
-        lines += [[block.title], *_broker_rows(block), []]
+    for index, block in enumerate(blocks):
+        rows = _broker_rows(block, header=index == 0 or not one_header)
+        lines += [[block.title], *rows, []]
     return _broker_bytes(lines)

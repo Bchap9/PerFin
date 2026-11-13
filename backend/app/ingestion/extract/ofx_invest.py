@@ -21,7 +21,8 @@ For every ``INVSTMTRS``:
   is the price of one share while its ``UNITS`` are contracts, so a
   ``POSOPT`` (and a ``BUYOPT``/``SELLOPT``) carries the price of one
   contract: ``UNITPRICE`` x ``SHPERCTRCT`` of the security's ``OPTINFO``
-  (100 when the file has none). Brokers do not all follow the definition,
+  (else the trade aggregate's own; 100 when the file has none). Brokers
+  do not all follow the definition,
   so the value printed beside the price settles it: the reading whose
   product is strictly nearer to ``MKTVAL`` (a trade's ``TOTAL``) is kept,
   and the definition applies when no value is printed (:func:`_nearer`).
@@ -230,6 +231,12 @@ def _priced(
     return price, False
 
 
+def _contract_size(raw: str | None) -> Decimal | None:
+    """A believable ``SHPERCTRCT`` (1 to :data:`MAX_CONTRACT_SIZE`), else None."""
+    size = parse_amount(raw)
+    return size if size is not None and 1 <= size <= MAX_CONTRACT_SIZE else None
+
+
 def _secid(node: OfxNode | None) -> tuple[str, str] | None:
     """``(UNIQUEIDTYPE, UNIQUEID)`` of a ``SECID`` aggregate, normalised."""
     if node is None:
@@ -259,19 +266,20 @@ class _Catalogue:
                 name = clean_text(secinfo.text("SECNAME"), limit=200)
                 self._infos[key] = (ticker or None, name, asset_class)
                 if info_kind == "OPTINFO":
-                    size = parse_amount(info.text("SHPERCTRCT"))
-                    if size is not None and 1 <= size <= MAX_CONTRACT_SIZE:
+                    size = _contract_size(info.text("SHPERCTRCT"))
+                    if size is not None:
                         self._sizes[key] = size
 
-    def contract_size(self, secid: OfxNode | None) -> Decimal:
+    def contract_size(self, secid: OfxNode | None, own: str | None = None) -> Decimal:
         """Shares per contract of an option: its ``OPTINFO``'s ``SHPERCTRCT``, else 100.
 
-        A value outside 1 to :data:`MAX_CONTRACT_SIZE` is not believed.
+        ``own``: the ``SHPERCTRCT`` of the trade aggregate itself, used when
+        the catalogue has none for the security. A value outside 1 to
+        :data:`MAX_CONTRACT_SIZE` is not believed.
         """
         key = _secid(secid)
-        if key is None:
-            return DEFAULT_CONTRACT_SIZE
-        return self._sizes.get(key, DEFAULT_CONTRACT_SIZE)
+        listed = self._sizes.get(key) if key is not None else None
+        return listed or _contract_size(own) or DEFAULT_CONTRACT_SIZE
 
     def ref(
         self, secid: OfxNode | None, default_class: AssetClassCode | None
@@ -377,7 +385,7 @@ def _trade(
         units,
         _quantity(inner.text("UNITPRICE")),
         total,
-        catalogue.contract_size(inner.child("SECID")),
+        catalogue.contract_size(inner.child("SECID"), item.text("SHPERCTRCT")),
     )
     return [
         InvestmentActivity(
