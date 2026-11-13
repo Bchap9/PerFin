@@ -544,3 +544,44 @@ def test_a_date_and_a_word_in_the_date_column_are_no_two_dates() -> None:
     ]
     # Found and not imported: each of the three is counted.
     assert outcome.skipped_lines == 3
+
+
+# -- cents printed without a zero in a money column -----------------------------
+
+
+def test_cents_without_a_zero_are_read_in_a_money_column() -> None:
+    outcome = _parse(
+        [
+            [("Date", 62.0), ("Description", 150.0), ("Amount", 400.0), ("Balance", 500.0)],
+            [("01/05/2026", 62.0), ("Interest", 150.0), (".15", 400.0), ("100.15", 500.0)],
+            [("01/06/2026", 62.0), ("Service fee", 150.0), ("-.30", 400.0), ("99.85", 500.0)],
+            [("01/07/2026", 62.0), ("Rebate", 150.0), ("$.45", 400.0), ("100.30", 500.0)],
+        ]
+    )
+    assert _amounts(outcome) == [
+        ("Interest", Decimal("0.15")),
+        ("Service fee", Decimal("-0.30")),
+        ("Rebate", Decimal("0.45")),
+    ]
+    assert outcome.skipped_lines == 0
+    (statement,) = outcome.statements
+    assert statement.reconciliation is not None
+    assert statement.reconciliation.running_mismatches == []
+
+
+def test_a_figure_that_is_no_cents_is_still_no_amount() -> None:
+    outcome = _parse(
+        [
+            [("Date", 62.0), ("Description", 150.0), ("Amount", 400.0)],
+            [("01/05/2026", 62.0), ("Coffee", 150.0), ("4.50", 400.0)],
+            # One digit, three digits, a dot: none is cents, and the line is
+            # counted as it was.
+            [("01/06/2026", 62.0), ("Rate", 150.0), (".5", 400.0)],
+            [("01/07/2026", 62.0), ("Ratio", 150.0), (".125", 400.0)],
+            [("01/08/2026", 62.0), ("Dots", 150.0), (".", 400.0)],
+            # Under the description heading ``.15`` is text, not money.
+            [("01/09/2026", 62.0), ("Build .15", 150.0)],
+        ]
+    )
+    assert _amounts(outcome) == [("Coffee", Decimal("4.50"))]
+    assert outcome.skipped_lines == 4

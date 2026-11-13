@@ -68,7 +68,9 @@ are read the same way:
    Purchase``) is split off it on a dated line of a table with one money
    column that got no cell
    (:meth:`TableStatementParser._split_fused_amount`): the word at the
-   money heading's end of the cell, never the one at the other end. A date printed
+   money heading's end of the cell, never the one at the other end. Cents
+   printed without a zero (``.15``) are an amount in a money column and
+   nowhere else. A date printed
    so close to the description that the two are one cell is split off it
    (:meth:`TableStatementParser._split_fused_date`), on a line with a
    figure only: a wrapped line that starts with a date stays a wrap, and
@@ -2269,9 +2271,12 @@ class TableStatementParser(DocumentParser):
 
     @staticmethod
     def _amount(cells: list[Cell] | None) -> Amount | None:
+        """The amount the cells of one money column print. Under a money
+        heading cents may stand without a zero (``.15``); anywhere else such
+        a text is no amount."""
         if not cells:
             return None
-        return read_amount(" ".join(c.text for c in cells))
+        return read_amount(" ".join(c.text for c in cells), bare_cents=True)
 
     def _direction(self, rule: SectionRule | None) -> Direction | None:
         """What ``rule`` says for this parser's kind of account."""
