@@ -67,6 +67,24 @@ are read the same way:
    of the table being read, is that table's header **printed again**: the
    direction and the type carry on. Any other header without a title starts
    a table with neither. A dated line without a readable amount is counted as skipped.
+   **A date printed once per day.** An undated line of a table with
+   description text and exactly one figure in a money column, no total, no
+   balance label and no section title, at most :data:`CARRY_LINES` line
+   heights below the row (or such a line) above it on its page, is a
+   *candidate* row with the date printed above it. Candidates become rows,
+   in printed order, when a dated row follows in the same table (its header
+   printed again on a later page does not end it); those left when the
+   table ends are rows only when the statement has :data:`MIN_CARRIED`
+   such rows already, and otherwise what they always were: summary lines
+   under the table. Their date scores at most ``confidence.DERIVED``
+   (warning ``dates_carried``).
+   **Found and not read.** Any other undated line with a figure in a money
+   column that a dated row follows (two figures in one column, a line too
+   far below the row above) is counted as skipped, as is each date-led
+   line ending in an amount printed **under a section title and no
+   header** (outside any table, up to the next header, block title or page
+   end; warning ``rows_without_header:<n>``): nothing is imported from
+   those.
    A **payment stub** is left out before anything is read
    (:meth:`TableStatementParser.without_stubs`): from a line saying to
    detach it (``Please detach here``, ``Return this portion``..., without
@@ -138,7 +156,8 @@ are read the same way:
    statement, with the account's last four digits, printed name, type and
    pages; the lines before the first account (an overview) only offer their
    period, and a row there belongs to no account (skipped,
-   ``rows_outside_account``). :meth:`TableStatementParser.read_statement`
+   ``rows_outside_account``; the same for rows above the first section of
+   7). :meth:`TableStatementParser.read_statement`
    reads one account's lines for the brokerage parsers too (a combined
    statement's checking account).
 7. **Accounts without a number.** A credit union prints a member's shares
@@ -165,7 +184,7 @@ from __future__ import annotations
 
 import re
 from calendar import monthrange
-from collections.abc import Iterable, Mapping, Sequence
+from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from datetime import date, timedelta
 from decimal import Decimal
@@ -301,6 +320,14 @@ _DATE_MARKS: Final = " *\u2020"
 #: How far left of the date heading a cell may start and still begin with the
 #: row's date (dates printed a little outside their column).
 FUSED_DATE_SLACK: Final = 25.0
+#: Line heights an undated row may start below the row above it and still
+#: take that row's date (a date printed once per day).
+CARRY_LINES: Final = 2.5
+#: Rows with a carried date a statement needs before undated lines at the
+#: end of a table are rows too (the layout is proven).
+MIN_CARRIED: Final = 2
+#: The most words the date of a line outside a table is looked for in.
+LEAD_DATE_WORDS: Final = 3
 #: Yearless styles a month-named row date may be printed in.
 NAMED_YEARLESS: Final[tuple[DateStyle, ...]] = ("mon_d", "d_mon")
 
@@ -614,6 +641,8 @@ class _Row:
     #: The number of the row's section: it goes up each time a section starts
     #: or ends at a header, and stays over a page break the section runs across.
     section: int = 0
+    #: The line printed no date: ``date_text`` is the date of the row above.
+    carried: bool = False
 
 
 @dataclass
@@ -641,6 +670,10 @@ class _Summary:
     #: as ``(field, x0, x1)``, and the page and index of the last such line.
     above: list[tuple[str, float, float]] = field(default_factory=list)
     above_line: tuple[int, int] | None = None
+    #: Rows that took the date printed above them.
+    carried: int = 0
+    #: Date-led lines under a section title and no header (counted, not read).
+    headerless: int = 0
 
 
 @dataclass
@@ -1227,6 +1260,15 @@ class TableStatementParser(DocumentParser):
         row_page: int | None = None
         last: _Row | None = None
         found_header = False
+        # A date printed once per day (module doc): the dated line or
+        # candidate above, the candidates held back, the other undated lines
+        # with a figure, and the lines whose summary scan waits with them.
+        anchor: _Row | None = None
+        held: list[_Row] = []
+        loose: list[tuple[int, BBox]] = []
+        waiting: list[tuple[ViewLine, bool]] = []
+        # The page a section title was printed on with no header after it yet.
+        titled: int | None = None
 
         def runs_on(found: SectionTitle, page: int) -> bool:
             """``found`` names the section being read once more: marked
@@ -1237,9 +1279,38 @@ class TableStatementParser(DocumentParser):
                 and (found.continued or (row_page is not None and page > row_page))
             )
 
+        def scan(line: ViewLine) -> None:
+            """Read ``line`` as a summary line, after the candidates held."""
+            if held:
+                waiting.append((line, False))
+            else:
+                self._scan_summary(line, summary)
+
+        def settle(*, dated: bool) -> None:
+            """A dated row follows the lines held back (``dated``), or the table ends."""
+            nonlocal skipped, row_page
+            promote = bool(held) and (dated or summary.carried >= MIN_CARRIED)
+            if promote:
+                rows.extend(held)
+                summary.carried += len(held)
+                row_page = held[-1].page
+            if dated:
+                skipped += len(loose)
+                summary.skipped_boxes.extend(loose)
+            queued = list(waiting)
+            held.clear()
+            loose.clear()
+            waiting.clear()
+            for queued_line, of_candidate in queued:
+                # Left alone, a candidate and its wrapped lines are what they
+                # were before: lines of the summary.
+                if not (promote and of_candidate):
+                    self._scan_summary(queued_line, summary)
+
         for index, line in enumerate(lines):
             header = self.columns(line)
             if header is not None:
+                before = section
                 above = self._title_above(lines, index)
                 if above is not None:
                     if not runs_on(above, line.page):
@@ -1255,14 +1326,26 @@ class TableStatementParser(DocumentParser):
                     # printed again on a later page: a table of its own.
                     title = None
                     section += 1
-                columns, pending, last = header, False, None
+                if section != before:
+                    settle(dated=False)
+                columns, pending, last, anchor, titled = header, False, None, None, None
                 found_header = True
                 continue
             norm = line.norm
             if columns is not None and self._header_like(line):
                 # The header of a table we do not read ("Date | Balance"): ours ends.
-                columns, last = None, None
+                settle(dated=False)
+                columns, last, anchor = None, None, None
             if columns is None:
+                if self._title(line) is not None:
+                    titled = line.page
+                elif titled != line.page or block_title(norm) or self._header_like(line):
+                    titled = None
+                elif self._date_led_amount(line):
+                    # A row of a section printed without a header: not read.
+                    skipped += 1
+                    summary.skipped_boxes.append((line.page, line.bbox))
+                    summary.headerless += 1
                 self._scan_summary(line, summary)
                 continue
             cells = self._assign(line, columns)
@@ -1270,28 +1353,33 @@ class TableStatementParser(DocumentParser):
             self._split_fused_date(cells, columns)
             date_text = " ".join(c.text for c in cells.get("date", [])).strip(_DATE_MARKS)
             if not date_text or not self._date_shaped(date_text):
-                last = self._not_a_row(line, norm, cells, summary, last)
+                figures = 0 if pending else self._undated_figures(line, norm, cells)
+                if figures == 1 and self._carries(line, cells, anchor) and anchor is not None:
+                    last = anchor = self._row(
+                        line, cells, anchor.date_text, title, section, carried=True
+                    )
+                    held.append(last)
+                    waiting.append((line, True))
+                    continue
+                if figures:
+                    loose.append((line.page, line.bbox))
+                last = self._not_a_row(line, norm, cells, summary, last, scan)
                 if last is not None:
+                    if held and last is held[-1]:
+                        waiting.append((line, True))
                     continue
                 if any(norm.startswith(marker) for marker in self.pending_markers):
-                    pending, title = True, None
+                    settle(dated=False)
+                    pending, title, anchor = True, None, None
                     section += 1
                 elif (found := self._title(line)) is not None:
                     if not runs_on(found, line.page):
+                        settle(dated=False)
                         section += 1
-                    pending, title = False, found
+                    pending, title, anchor = False, found, None
                 continue
-            description = [c.text for c in cells.get("description", [])]
-            number = " ".join(c.text for c in cells.get("check", [])).strip(" *")
-            is_check = bool(number) and not description
-            if is_check:
-                description = ["CHECK", number]
-            desc_norm = normalise(" ".join(description))
-            balance = self._amount(cells.get("balance"))
-            amount = self._amount(cells.get("amount"))
-            debit = self._amount(cells.get("debit"))
-            credit = self._amount(cells.get("credit"))
-            balance_row = self._balance_row(desc_norm, cells)
+            row = self._row(line, cells, date_text, title, section)
+            balance_row = self._balance_row(normalise(" ".join(row.description)), cells)
             if balance_row is not None:
                 # A balance line, whatever column its figure is in: never a row.
                 kind, figure = balance_row
@@ -1300,40 +1388,119 @@ class TableStatementParser(DocumentParser):
                         summary.opening, summary.opening_in_table = figure, True
                 elif figure is not None:
                     summary.closing, summary.closing_in_table = figure, True
+                anchor = None if pending else row
                 continue
-            if amount is None and debit is None and credit is None:
+            if row.amount is None and row.debit is None and row.credit is None:
                 if pending:
                     continue
+                settle(dated=True)
                 skipped += 1
                 summary.skipped_boxes.append((line.page, line.bbox))
-                last = None
+                last, anchor = None, row
                 continue
+            settle(dated=True)
             row_page = line.page
             if pending:
                 pending_items += 1
-                last = None
+                last = anchor = None
                 continue
-            rule = title.rule if title is not None else None
-            used = [c for role_cells in cells.values() for c in role_cells]
-            last = _Row(
-                page=line.page,
-                date_text=date_text,
-                description=description,
-                amount=amount,
-                debit=debit,
-                credit=credit,
-                balance=balance,
-                ocr=_min(*(c.conf for c in used)),
-                bbox=line.bbox,
-                section_type=rule.kind if rule is not None else None,
-                check=is_check,
-                foreign=[c.text for c in cells.get("foreign", [])],
-                direction=self._direction(rule),
-                section=section,
-            )
-            rows.append(last)
+            last = anchor = row
+            rows.append(row)
+        settle(dated=False)
         self._adjacent_balances(lines, summary)
         return rows, summary, pending_items, skipped, found_header
+
+    def _row(
+        self,
+        line: ViewLine,
+        cells: Mapping[Role, list[Cell]],
+        date_text: str,
+        title: SectionTitle | None,
+        section: int,
+        *,
+        carried: bool = False,
+    ) -> _Row:
+        """The row ``line`` is, its cells in their columns, under ``title``."""
+        description = [c.text for c in cells.get("description", [])]
+        number = " ".join(c.text for c in cells.get("check", [])).strip(" *")
+        is_check = bool(number) and not description
+        if is_check:
+            description = ["CHECK", number]
+        rule = title.rule if title is not None else None
+        used = [c for role_cells in cells.values() for c in role_cells]
+        return _Row(
+            page=line.page,
+            date_text=date_text,
+            description=description,
+            amount=self._amount(cells.get("amount")),
+            debit=self._amount(cells.get("debit")),
+            credit=self._amount(cells.get("credit")),
+            balance=self._amount(cells.get("balance")),
+            ocr=_min(*(c.conf for c in used)),
+            bbox=line.bbox,
+            section_type=rule.kind if rule is not None else None,
+            check=is_check,
+            foreign=[c.text for c in cells.get("foreign", [])],
+            direction=self._direction(rule),
+            section=section,
+            carried=carried,
+        )
+
+    def _undated_figures(self, line: ViewLine, norm: str, cells: Mapping[Role, list[Cell]]) -> int:
+        """How many figures an undated line of a table has in its money
+        columns; 0 for a total, a pending heading, a section title and a
+        line that starts with a balance label (none of them is a row)."""
+        figures = sum(
+            1
+            for role, found in cells.items()
+            if role in MONEY_ROLES
+            for cell in found
+            if read_amount(cell.text) is not None
+        )
+        if not figures:
+            return 0
+        if any(norm.startswith(prefix.strip()) for prefix in self.skip_prefixes):
+            return 0
+        if any(norm.startswith(marker) for marker in self.pending_markers):
+            return 0
+        if self._title(line) is not None:
+            return 0
+        described = normalise(" ".join(c.text for c in cells.get("description", [])))
+        labels = (*self.opening_labels, *self.closing_labels)
+        if any(norm.startswith(label) or described.startswith(label) for label in labels):
+            return 0
+        return figures
+
+    def _carries(
+        self, line: ViewLine, cells: Mapping[Role, list[Cell]], anchor: _Row | None
+    ) -> bool:
+        """An undated line with one figure is a candidate row (module doc):
+        it has description text, its figure reads in one money column, and
+        it starts at most :data:`CARRY_LINES` line heights below ``anchor``
+        (the dated line or candidate above it) on the same page."""
+        if anchor is None or line.page != anchor.page:
+            return False
+        if line.bbox[1] - anchor.bbox[3] > CARRY_LINES * line.height:
+            return False
+        if not any(ch.isalpha() for c in cells.get("description", []) for ch in c.text):
+            return False
+        read = [
+            role
+            for role, found in cells.items()
+            if role in MONEY_ROLES and self._amount(found) is not None
+        ]
+        return len(read) == 1
+
+    def _date_led_amount(self, line: ViewLine) -> bool:
+        """``line`` starts with a date (its first one to
+        :data:`LEAD_DATE_WORDS` words) and its last cell reads as an amount."""
+        if read_amount(line.cells[-1].text) is None:
+            return False
+        words = line.text.split()
+        return any(
+            len(words) > size and self._date_shaped(" ".join(words[:size]).strip(_DATE_MARKS))
+            for size in range(LEAD_DATE_WORDS, 0, -1)
+        )
 
     def _balance_row(
         self, desc_norm: str, cells: Mapping[Role, list[Cell]]
@@ -1413,8 +1580,12 @@ class TableStatementParser(DocumentParser):
         cells: dict[Role, list[Cell]],
         summary: _Summary,
         last: _Row | None,
+        scan: Callable[[ViewLine], None],
     ) -> _Row | None:
-        """Handle an undated line in the table; return the row a wrap may extend."""
+        """Handle an undated line in the table; return the row a wrap may extend.
+
+        ``scan`` reads a line of the summary (at once, or after the
+        candidate rows held back before it: :meth:`_collect`)."""
         if any(norm.startswith(prefix.strip()) for prefix in self.skip_prefixes):
             return None
         # A credit/debit marker alone in a money column (``CR`` under the amount).
@@ -1454,7 +1625,7 @@ class TableStatementParser(DocumentParser):
                 # is the statement's, as for a dated one.
                 summary.closing, summary.closing_in_table = carried, True
                 return None
-        self._scan_summary(line, summary)
+        scan(line)
         return None
 
     @staticmethod
@@ -1650,6 +1821,8 @@ class TableStatementParser(DocumentParser):
         outcome.skipped_regions.extend(preamble.skipped_boxes)
         outcome.skipped_regions.extend((row.page, row.bbox) for row in rows)
         warnings: list[str] = ["rows_outside_account"] if rows else []
+        if preamble.headerless:
+            warnings.append(f"rows_without_header:{preamble.headerless}")
         for account in split.accounts:
             if not self.lines_have_table(account.lines):
                 warnings.append("account_without_tables")
@@ -1764,11 +1937,17 @@ class TableStatementParser(DocumentParser):
     ) -> ParseOutcome:
         """One statement per section (module doc, 7)."""
         outcome = ParseOutcome()
-        _, preamble, pending, skipped, _ = self._collect(preamble_lines)
+        rows, preamble, pending, skipped, _ = self._collect(preamble_lines)
         outcome.pending_items += pending
-        outcome.skipped_lines += skipped
+        # A row above the first section belongs to no account: counted.
+        outcome.skipped_lines += skipped + len(rows)
         outcome.skipped_regions.extend(preamble.skipped_boxes)
+        outcome.skipped_regions.extend((row.page, row.bbox) for row in rows)
         warnings: list[str] = ["accounts_by_balance"]
+        if rows:
+            warnings.append("rows_outside_account")
+        if preamble.headerless:
+            warnings.append(f"rows_without_header:{preamble.headerless}")
         for section in sections:
             read = self.read_statement(
                 view,
@@ -1864,6 +2043,8 @@ class TableStatementParser(DocumentParser):
             skipped_lines=skipped,
             skipped_regions=list(summary.skipped_boxes),
         )
+        if summary.headerless:
+            outcome.warnings.append(f"rows_without_header:{summary.headerless}")
         if not found_header:
             outcome.warnings.append("no_table_header")
             return outcome
@@ -1908,6 +2089,9 @@ class TableStatementParser(DocumentParser):
             date_conf = self.base if certain else conf.GUESSED
             if period is not None and not (period[0] <= posted <= period[1]):
                 date_conf = min(date_conf, conf.INFERRED)
+            if row.carried:
+                # Printed on the row above, once for the day.
+                date_conf = min(date_conf, conf.DERIVED)
             payee = " ".join(row.description).strip() or None
             score = {
                 "posted_date": conf.scaled(date_conf, row.ocr),
@@ -1997,6 +2181,8 @@ class TableStatementParser(DocumentParser):
         ]
         if view.truncated:
             outcome.warnings.append("truncated")
+        if any(row.carried for row in rows):
+            outcome.warnings.append("dates_carried")
         if not certain:
             outcome.warnings.append("date_order_guessed")
         date_order = styles[0] if styles[0] in ("mdy", "dmy", "ymd") else None

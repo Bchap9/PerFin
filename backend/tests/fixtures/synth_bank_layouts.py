@@ -57,6 +57,18 @@ direction of:
   Credits`` table prints the payment without a sign and whose
   ``Purchases`` table prints one refund with a minus.
 
+And statements whose lines a reader may drop without a word, or take for rows:
+
+* :func:`date_once_per_day`: ``Date | Description | Paid out | Paid in |
+  Balance`` with 14 rows over 5 days, the date printed on the first row of
+  each day only and the balance on every row; the last day holds 3 rows.
+* :func:`summary_lines_under_table`: an ordinary dated table followed
+  directly by ``Interest earned this period`` and ``Average ledger
+  balance`` lines whose figures sit in the amount column: no rows.
+* :func:`titled_sections_without_headers`: ``DEPOSITS & CREDITS`` over 3
+  lines of date, text and figure with no header (counted, never read), then
+  ``WITHDRAWALS`` over a ``Date | Description | Amount`` table of 4 rows.
+
 :data:`EXPECTED_ROWS` gives, per builder, the rows a correct reading returns
 (``(posted, amount, payee)``, money out negative); :data:`EXPECTED_BALANCES`
 the opening and closing balance of the builders that are about balances.
@@ -798,6 +810,132 @@ def card_unsigned_payments() -> bytes:
     return buf.getvalue()
 
 
+# -- lines found and not read, and dates printed once per day -------------------
+
+_DAILY_OPENING: Final = _d("1,932.44")
+_DAILY_ROWS: Final[tuple[ExpectedRow, ...]] = (
+    (date(2026, 5, 4), _d("-42.18"), "Card Purchase Larchmere Bakery"),
+    (date(2026, 5, 4), _d("-310.00"), "Standing Order Pennywell Lettings"),
+    (date(2026, 5, 4), _d("1,640.00"), "Salary Brackenholt Glassworks"),
+    (date(2026, 5, 8), _d("-18.75"), "Card Purchase Otterburn Books"),
+    (date(2026, 5, 8), _d("-64.20"), "Direct Debit Kestrelside Water"),
+    (date(2026, 5, 8), _d("-25.00"), "Cash Machine Tanner Row"),
+    (date(2026, 5, 13), _d("85.00"), "Transfer From Saver"),
+    (date(2026, 5, 13), _d("-131.46"), "Card Purchase Windlestone Grocers"),
+    (date(2026, 5, 13), _d("-9.99"), "Direct Debit Lapwing Mobile"),
+    (date(2026, 5, 21), _d("-57.30"), "Card Purchase Fernhollow Garage"),
+    (date(2026, 5, 21), _d("240.00"), "Cheque Paid In"),
+    (date(2026, 5, 28), _d("-72.64"), "Direct Debit Marlpit Energy"),
+    (date(2026, 5, 28), _d("-14.50"), "Card Purchase Sedgewick Cafe"),
+    (date(2026, 5, 28), _d("-200.00"), "Transfer To Saver"),
+)
+
+
+def date_once_per_day() -> bytes:
+    """Fourteen rows over five days; only the first row of a day prints its date."""
+    buf = io.BytesIO()
+    c = canvas.Canvas(buf, pagesize=letter)
+    balances = _running(_DAILY_OPENING, _DAILY_ROWS)
+    _head(
+        c, "Pellbrook Savings Bank", "5127", "05/01/2026 - 05/31/2026", _DAILY_OPENING, balances[-1]
+    )
+    _line(
+        c,
+        650,
+        [
+            (40, "Date"),
+            (110, "Description"),
+            (-400, "Paid out"),
+            (-470, "Paid in"),
+            (-550, "Balance"),
+        ],
+        size=8,
+    )
+    lines: list[list[tuple[float, str]]] = []
+    printed: date | None = None
+    for (posted, amount, payee), balance in zip(_DAILY_ROWS, balances, strict=True):
+        cells: list[tuple[float, str]] = []
+        if posted != printed:
+            cells.append((40, posted.strftime("%m/%d/%Y")))
+            printed = posted
+        cells += [
+            (110, payee),
+            (-400 if amount < 0 else -470, _money(amount)),
+            (-550, _money(balance)),
+        ]
+        lines.append(cells)
+    _rows(c, 636, lines)
+    c.save()
+    return buf.getvalue()
+
+
+_UNDER_OPENING: Final = _d("2,418.06")
+_UNDER_ROWS: Final[tuple[ExpectedRow, ...]] = (
+    (date(2026, 7, 2), _d("-88.14"), "POS Purchase Dunmallow Hardware"),
+    (date(2026, 7, 9), _d("1,512.00"), "Direct Deposit Quarrybank Textiles"),
+    (date(2026, 7, 15), _d("-760.00"), "Rent Heronsgate Court"),
+    (date(2026, 7, 22), _d("-39.95"), "Skylark Broadband Online Pmt"),
+    (date(2026, 7, 31), _d("0.38"), "Interest Credit"),
+)
+
+
+def summary_lines_under_table() -> bytes:
+    """An ordinary table; two summary lines right under it have a figure under ``Amount``."""
+    buf = io.BytesIO()
+    c = canvas.Canvas(buf, pagesize=letter)
+    closing = _running(_UNDER_OPENING, _UNDER_ROWS)[-1]
+    _head(c, "Yarrowfield Bank", "3390", "07/01/2026 - 07/31/2026", _UNDER_OPENING, closing)
+    _signed_rows(c, 650, _UNDER_ROWS)
+    _rows(
+        c,
+        636 - 13 * len(_UNDER_ROWS),
+        [
+            [(110, "Interest earned this period"), (-500, "0.38")],
+            [(110, "Average ledger balance"), (-500, "2,611.47")],
+        ],
+    )
+    c.save()
+    return buf.getvalue()
+
+
+_HEADERLESS_OPENING: Final = _d("1,275.90")
+#: Printed under ``DEPOSITS & CREDITS`` with no header: counted, never read.
+_HEADERLESS_DEPOSITS: Final[tuple[ExpectedRow, ...]] = (
+    (date(2026, 9, 3), _d("1,420.00"), "Payroll Coldharbour Printworks"),
+    (date(2026, 9, 12), _d("75.00"), "Mobile Deposit"),
+    (date(2026, 9, 25), _d("31.20"), "Refund Ashlar Street Cobblers"),
+)
+_HEADERLESS_WITHDRAWALS: Final[tuple[ExpectedRow, ...]] = (
+    (date(2026, 9, 1), _d("-890.00"), "Rent Wrenfield Estates"),
+    (date(2026, 9, 8), _d("-52.61"), "Card Purchase Tolbooth Market"),
+    (date(2026, 9, 17), _d("-104.33"), "Bill Pay Northmoor Gas"),
+    (date(2026, 9, 26), _d("-40.00"), "ATM Cash Chandlers Wharf"),
+)
+
+
+def titled_sections_without_headers() -> bytes:
+    """Deposits under a title alone; withdrawals under a title and a header."""
+    buf = io.BytesIO()
+    c = canvas.Canvas(buf, pagesize=letter)
+    everything = (*_HEADERLESS_DEPOSITS, *_HEADERLESS_WITHDRAWALS)
+    closing = _running(_HEADERLESS_OPENING, everything)[-1]
+    _head(
+        c, "Corriedale Trust Bank", "6052", "09/01/2026 - 09/30/2026", _HEADERLESS_OPENING, closing
+    )
+    _line(c, 660, [(40, "DEPOSITS & CREDITS")], size=10, bold=True)
+    y = _rows(
+        c,
+        644,
+        [
+            [(40, posted.strftime("%m/%d/%Y")), (110, payee), (-560, _money(amount))]
+            for posted, amount, payee in _HEADERLESS_DEPOSITS
+        ],
+    )
+    _unsigned_table(c, y - 15, "WITHDRAWALS", _HEADERLESS_WITHDRAWALS)
+    c.save()
+    return buf.getvalue()
+
+
 EXPECTED_ROWS: Final[dict[str, list[ExpectedRow]]] = {
     "left_heading_right_figures": list(_LEFT_ROWS),
     "tight_date_checking": list(_TIGHT_ROWS),
@@ -812,6 +950,9 @@ EXPECTED_ROWS: Final[dict[str, list[ExpectedRow]]] = {
     "sectioned_unsigned_checking": list(_SECTION_ROWS),
     "sectioned_repeat_without_title": list(_SECTION_ROWS),
     "card_unsigned_payments": list(_UNSIGNED_CARD_ROWS),
+    "date_once_per_day": list(_DAILY_ROWS),
+    "summary_lines_under_table": list(_UNDER_ROWS),
+    "titled_sections_without_headers": list(_HEADERLESS_WITHDRAWALS),
 }
 
 #: ``(opening, closing)`` of the builders that are about balances.

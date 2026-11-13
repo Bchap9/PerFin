@@ -22,6 +22,12 @@ section gives it (``Deposits and additions``, ``Electronic withdrawals``,
 ``Payments and credits`` on a card), across a page break under the header
 printed again; a printed sign, ``CR`` or a debit or credit column always
 says more than a title, and a table without a title has no direction.
+
+And lines that used to vanish: a row under a date printed once per day takes
+the date above it; a line with a figure that cannot be read between two
+rows, a row above the first share and the date-led lines of a titled section
+without a header are counted. Summary lines under an ordinary table stay
+what they were: no rows, and nothing counted.
 """
 
 from __future__ import annotations
@@ -1007,3 +1013,279 @@ def test_a_card_title_gives_a_bank_statement_no_direction() -> None:
     # ``Payments`` is money in on a card and says nothing on a bank account.
     outcome = _parse([[("Payments", 62.0)], HEADER, _row(5, "Loan payment", "120.00")])
     assert _amounts(outcome) == [Decimal("120.00")]
+
+
+# -- dates printed once per day; lines found and not read ------------------------
+
+
+def _warnings(result: ExtractResult) -> list[str]:
+    assert result.parse is not None
+    return list(result.parse.warnings)
+
+
+def test_rows_take_the_date_printed_above_them() -> None:
+    result = _read(synth.date_once_per_day())
+    statement = _only(result)
+    expected = synth.EXPECTED_ROWS["date_once_per_day"]
+    assert len(statement.transactions) == 14
+    assert _rows(statement) == expected
+    assert _status(statement) == "ok"
+    assert _skipped(result) == 0
+    assert _warnings(result).count("dates_carried") == 1
+    # A date read one line up is believed enough to import: nothing waits on it.
+    assert not any("posted_date" in t.low_confidence for t in statement.transactions)
+
+
+def test_lines_under_an_ordinary_table_are_not_rows() -> None:
+    result = _read(synth.summary_lines_under_table())
+    statement = _only(result)
+    assert _rows(statement) == synth.EXPECTED_ROWS["summary_lines_under_table"]
+    assert _status(statement) == "ok"
+    assert _skipped(result) == 0
+    assert "dates_carried" not in _warnings(result)
+
+
+def test_an_unreadable_line_between_rows_is_counted() -> None:
+    odd = [("Adjustment", 150.0), ("4.50", 490.0), ("3.00", 515.0)]
+    outcome = _parse([HEADER, _row(5, "Coffee", "-4.50"), odd, _row(9, "Refund", "9.25")])
+    statement = _one(outcome)
+    assert [t.payee for t in statement.transactions] == ["Coffee", "Refund"]
+    assert outcome.skipped_lines == 1
+    # The line itself: third on the page, from its text to its last figure.
+    assert outcome.skipped_regions == [(1, (150.0, 128.0, 535.0, 137.0))]
+    assert "dates_carried" not in outcome.warnings
+
+
+_SHARE_HEADER = TWO_SIDED
+
+
+def _two_shares(above: list[list[tuple[str, float]]]) -> list[list[tuple[str, float]]]:
+    """Two shares told apart by their opening rows, ``above`` printed before the first."""
+    return [
+        *above,
+        [("REGULAR SAVINGS - ID 0001", 62.0)],
+        _SHARE_HEADER,
+        [("03/01/2026", 62.0), ("Beginning Balance", 150.0), ("100.00", 520.0)],
+        [("03/05/2026", 62.0), ("Deposit", 150.0), ("20.00", 450.0), ("120.00", 520.0)],
+        [("PLAIN CHECKING - ID 0009", 62.0)],
+        _SHARE_HEADER,
+        [("03/01/2026", 62.0), ("Beginning Balance", 150.0), ("300.00", 520.0)],
+        [("03/07/2026", 62.0), ("Coffee", 150.0), ("4.50", 380.0), ("295.50", 520.0)],
+    ]
+
+
+def test_rows_before_the_first_share_are_counted() -> None:
+    stray = [("03/02/2026", 62.0), ("Courtesy credit", 150.0), ("5.00", 450.0)]
+    outcome = _parse(_two_shares([_SHARE_HEADER, stray]))
+    assert "accounts_by_balance" in outcome.warnings
+    assert [[t.payee for t in s.transactions] for s in outcome.statements] == [
+        ["Deposit"],
+        ["Coffee"],
+    ]
+    assert outcome.skipped_lines == 1
+    assert outcome.skipped_regions == [(1, (62.0, 114.0, 470.0, 123.0))]
+    assert "rows_outside_account" in outcome.warnings
+
+
+def test_shares_with_nothing_above_them_count_nothing() -> None:
+    outcome = _parse(_two_shares([]))
+    assert len(outcome.statements) == 2
+    assert outcome.skipped_lines == 0
+    assert "rows_outside_account" not in outcome.warnings
+
+
+def test_lines_of_a_headerless_section_are_counted_not_read() -> None:
+    result = _read(synth.titled_sections_without_headers())
+    statement = _only(result)
+    assert _rows(statement) == synth.EXPECTED_ROWS["titled_sections_without_headers"]
+    assert len(statement.transactions) == 4
+    assert all(t.amount < 0 for t in statement.transactions)
+    assert _skipped(result) == 3
+    assert "rows_without_header:3" in _warnings(result)
+    assert result.parse is not None
+    assert len(result.parse.skipped_regions) == 3
+    # The deposits were not read, so the statement cannot add up: it is held.
+    assert _status(statement) == "mismatch"
+
+
+def _undated(payee: str, amount: str) -> list[tuple[str, float]]:
+    return [(payee, 150.0), (amount, 500.0)]
+
+
+def _payees(outcome: ParseOutcome) -> list[tuple[date, str | None]]:
+    return [(t.posted, t.payee) for t in _one(outcome).transactions]
+
+
+def test_an_undated_line_between_rows_takes_the_date_above_it() -> None:
+    outcome = _parse(
+        [
+            HEADER,
+            _row(15, "Coffee", "-4.50"),
+            _undated("Bakery", "-3.00"),
+            [("Counter 4", 150.0)],
+            _row(19, "Refund", "9.25"),
+        ]
+    )
+    assert _payees(outcome) == [
+        (date(2026, 1, 15), "Coffee"),
+        (date(2026, 1, 15), "Bakery"),
+        (date(2026, 1, 19), "Refund"),
+    ]
+    carried = _one(outcome).transactions[1]
+    assert carried.amount == Decimal("-3.00")
+    # Its wrapped line is its own, and its date is believed enough to import.
+    assert carried.memo == "Counter 4"
+    assert "posted_date" not in carried.low_confidence
+    assert outcome.skipped_lines == 0
+    assert outcome.warnings.count("dates_carried") == 1
+
+
+def test_an_undated_line_far_below_the_row_above_is_counted_not_read() -> None:
+    lines = [
+        HEADER,
+        _row(5, "Coffee", "-4.50"),
+        _undated("Bakery", "-3.00"),
+        _row(9, "Tea", "-2.00"),
+    ]
+    outcome = _parse(lines, step=40.0)
+    assert [payee for _, payee in _payees(outcome)] == ["Coffee", "Tea"]
+    assert outcome.skipped_lines == 1
+    assert "dates_carried" not in outcome.warnings
+
+
+def test_undated_lines_at_the_end_of_a_table_need_a_proven_layout() -> None:
+    tail = [_undated("Service charge", "-2.00"), _undated("Paper statement", "-1.00")]
+    once = [
+        HEADER,
+        _row(5, "Coffee", "-4.50"),
+        _undated("Bakery", "-3.00"),
+        _row(9, "Tea", "-2.00"),
+    ]
+    outcome = _parse([*once, *tail])
+    # One carried row proves nothing: the lines under the table stay summary lines.
+    assert [payee for _, payee in _payees(outcome)] == ["Coffee", "Bakery", "Tea"]
+    assert outcome.skipped_lines == 0
+    twice = [*once, _undated("Stamps", "-1.10"), _row(12, "Bus", "-2.40")]
+    outcome = _parse([*twice, *tail])
+    assert _payees(outcome)[-3:] == [
+        (date(2026, 1, 12), "Bus"),
+        (date(2026, 1, 12), "Service charge"),
+        (date(2026, 1, 12), "Paper statement"),
+    ]
+    assert outcome.skipped_lines == 0
+
+
+def test_a_line_under_one_table_is_no_row_of_the_next() -> None:
+    outcome = _parse(
+        [
+            HEADER,
+            _row(5, "Coffee", "-4.50"),
+            _undated("Interest earned this period", "0.38"),
+            HEADER,
+            _row(9, "Refund", "9.25"),
+        ]
+    )
+    assert [payee for _, payee in _payees(outcome)] == ["Coffee", "Refund"]
+    assert outcome.skipped_lines == 0
+    assert "dates_carried" not in outcome.warnings
+
+
+def test_a_line_before_a_new_section_title_is_no_row() -> None:
+    outcome = _parse(
+        [
+            HEADER,
+            _row(5, "Pay", "50.00"),
+            _undated("Deposits this period", "50.00"),
+            [("Withdrawals", 62.0)],
+            _row(9, "Rent", "30.00"),
+        ]
+    )
+    assert _amounts(outcome) == [Decimal("50.00"), Decimal("-30.00")]
+    assert outcome.skipped_lines == 0
+
+
+def test_totals_and_balance_lines_between_rows_are_neither_rows_nor_counted() -> None:
+    outcome = _parse(
+        [
+            HEADER,
+            _row(5, "Coffee", "-4.50"),
+            _undated("Total for the day", "-4.50"),
+            _undated("Closing balance", "95.50"),
+            _row(9, "Refund", "9.25"),
+        ]
+    )
+    assert [payee for _, payee in _payees(outcome)] == ["Coffee", "Refund"]
+    assert outcome.skipped_lines == 0
+    assert _one(outcome).ledger_balance is not None
+
+
+def test_a_figure_in_both_money_columns_of_an_undated_line_is_counted() -> None:
+    outcome = _parse(
+        [
+            TWO_SIDED,
+            [("01/05/2026", 62.0), ("Coffee", 150.0), ("4.50", 380.0)],
+            [("Adjustment", 150.0), ("4.50", 380.0), ("3.00", 450.0)],
+            [("01/09/2026", 62.0), ("Refund", 150.0), ("9.25", 450.0)],
+        ]
+    )
+    assert [payee for _, payee in _payees(outcome)] == ["Coffee", "Refund"]
+    assert outcome.skipped_lines == 1
+
+
+def test_a_printed_sign_beats_the_section_on_a_carried_row() -> None:
+    outcome = _parse(
+        [
+            [("Withdrawals", 62.0)],
+            HEADER,
+            _row(5, "Rent", "30.00"),
+            _undated("Gas", "12.00"),
+            _undated("Rent rebate", "+5.00"),
+            _row(9, "Water", "8.00"),
+        ]
+    )
+    assert _amounts(outcome) == [
+        Decimal("-30.00"),
+        Decimal("-12.00"),
+        Decimal("5.00"),
+        Decimal("-8.00"),
+    ]
+
+
+def _led(day: int, text: str, amount: str) -> list[tuple[str, float]]:
+    return [(f"01/{day:02d}/2026", 62.0), (text, 150.0), (amount, 500.0)]
+
+
+def test_date_led_lines_without_a_title_or_a_header_are_not_counted() -> None:
+    outcome = _parse(
+        [
+            [("Rate changes", 62.0)],
+            _led(2, "Rate set to", "1.25"),
+            [("Fees information", 62.0)],
+            _led(3, "Fee schedule revised", "3.00"),
+            HEADER,
+            _row(9, "Refund", "9.25"),
+        ]
+    )
+    assert [payee for _, payee in _payees(outcome)] == ["Refund"]
+    assert outcome.skipped_lines == 0
+    assert not any(w.startswith("rows_without_header") for w in outcome.warnings)
+
+
+def test_a_headerless_section_ends_with_its_page_and_at_a_block_title() -> None:
+    view = _pages(
+        [
+            [
+                [("Deposits", 62.0)],
+                _led(2, "Pay", "50.00"),
+                [("Account Summary", 62.0)],
+                _led(3, "Rate set to", "1.25"),
+                [("Deposits", 62.0)],
+            ],
+            [_led(4, "Notice mailed", "1.00"), HEADER, _row(9, "Refund", "9.25")],
+        ]
+    )
+    outcome = TableStatementParser().parse(view, threshold=0.85)
+    assert [t.payee for t in _one(outcome).transactions] == ["Refund"]
+    assert outcome.skipped_lines == 1
+    assert outcome.skipped_regions == [(1, (62.0, 114.0, 525.0, 123.0))]
+    assert "rows_without_header:1" in outcome.warnings
