@@ -29,14 +29,24 @@ prints running balances, only the rows no balance vouches for are in
 doubt. On one that prints none, the one row whose amount is the whole
 difference (a row too many) is in doubt alone; otherwise every row is.
 
+**Order and sections.** Two more checks serve the parsers and decide
+nothing by themselves. :func:`newest_first` tells a statement printed with
+its latest row on top, whose running balances only agree once the rows are
+put back in the order they happened. :func:`section_mismatches` compares the
+total a section prints ("Total deposits") with the rows read under it; the
+sign of the printed total is not compared, since a section of withdrawals
+usually prints its total without one.
+
 Pure functions on :class:`~decimal.Decimal`; no I/O.
 """
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
+from datetime import date
 from decimal import Decimal
+from itertools import pairwise
 from typing import Final
 
 from app.core.money import sum_amounts
@@ -51,6 +61,41 @@ class Row:
     amount: Decimal
     #: The balance the statement prints after the row (None: not printed).
     balance: Decimal | None = None
+
+
+def newest_first(dates: Sequence[date | None]) -> bool:
+    """True when the rows are printed latest first.
+
+    Rows without a date (None) are ignored. At least three dates must be
+    present, none later than the one before it, and the first later than the
+    last: two rows, or rows all of one day, show no order.
+    """
+    present = [day for day in dates if day is not None]
+    if len(present) < 3 or present[0] <= present[-1]:
+        return False
+    return all(later <= earlier for earlier, later in pairwise(present))
+
+
+def section_mismatches(
+    rows: Sequence[Row], sections: Sequence[int], totals: Mapping[int, Decimal]
+) -> list[int]:
+    """Ids (sorted) of the sections whose printed total is not the sum of their rows.
+
+    ``sections[i]`` is the section of ``rows[i]``. Magnitudes are compared,
+    so the sign of the printed total does not matter. A section without a
+    printed total is not checked; a total printed for a section with no rows
+    is compared against zero.
+    """
+    if len(sections) != len(rows):
+        raise ValueError("sections must name one section per row")
+    out: list[int] = []
+    for section in sorted(totals):
+        read = sum_amounts(
+            row.amount for row, owner in zip(rows, sections, strict=True) if owner == section
+        )
+        if abs(abs(read) - abs(totals[section])) > TOLERANCE:
+            out.append(section)
+    return out
 
 
 def running_mismatches(opening: Decimal | None, rows: Sequence[Row]) -> list[int]:
