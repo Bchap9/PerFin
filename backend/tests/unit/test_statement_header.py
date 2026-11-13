@@ -291,6 +291,49 @@ def test_header_like_reads_words() -> None:
     assert not header_like(_line([("Date Balance 10.00", 40.0)]))
 
 
+def test_a_one_cell_title_or_wrap_ending_in_a_date_word_is_not_header_like() -> None:
+    # ``Posted`` is a date heading, and these are titles inside a table or a
+    # row's wrapped text: they must not end the table.
+    for printed in (
+        "Deposits Posted",
+        "Withdrawals Posted",
+        "Transaction Posted",
+        "Other Debits Posted",
+        "Credits Date Posted",
+        "Deposit Date",
+        "Description Date",
+        "Date Posted Transaction",
+    ):
+        assert not header_like(_line([(printed, 40.0)])), printed
+    # One cell is a header of a table we do not read when it starts with a
+    # date heading and names a column of figures.
+    for printed in ("Date Balance", "Date Amount Date Amount", "Posted Balance", "DATE AMOUNT USD"):
+        assert header_like(_line([(printed, 40.0)])), printed
+
+
+def test_cells_that_all_name_one_column_are_not_header_like() -> None:
+    # A row's wrapped text in two cells, both words for money in.
+    assert not header_like(_line([("Deposit", 110.0), ("Additions", 220.0)]))
+    assert not header_like(_line([("Withdrawal", 110.0), ("Other Debits", 220.0)]))
+    # Two columns of different kinds are the header of a table.
+    assert header_like(_line([("Deposits", 110.0), ("Withdrawals", 220.0)]))
+    assert header_like(_line([("Date", 40.0), ("Balance", 150.0)]))
+
+
+def test_banking_abbreviations_are_no_currency() -> None:
+    for printed in (
+        "DEBIT POS",
+        "DEBIT ATM",
+        "CREDIT ACH",
+        "BALANCE FWD",
+        "CREDIT ADJ",
+        "CREDIT INT",
+        "CREDIT DIV",
+    ):
+        assert heading_role(printed, statement_header.HEADERS) is None, printed
+    assert not header_like(_line([("DEBIT POS", 110.0), ("CREDIT ACH", 220.0)]))
+
+
 # -- whole documents ------------------------------------------------------------
 
 
@@ -345,6 +388,22 @@ def test_daily_balances_are_not_transactions() -> None:
     statement, info = _read(synth.daily_balance_after_rows())
     assert _rows(statement) == list(synth.DAILY_ROWS)
     assert not {t.amount for t in statement.transactions} & set(synth.DAILY_BALANCES)
+    assert info.skipped_lines == 0
+    assert statement.reconciliation is not None
+    assert statement.reconciliation.status == "ok"
+
+
+def test_titles_of_heading_words_inside_a_table_do_not_end_it() -> None:
+    statement, info = _read(synth.titles_inside_the_table())
+    assert _rows(statement) == list(synth.INSIDE_ROWS)
+    assert info.skipped_lines == 0
+    assert statement.reconciliation is not None
+    assert statement.reconciliation.status == "ok"
+
+
+def test_wrapped_heading_words_do_not_end_the_table() -> None:
+    statement, info = _read(synth.wrapped_heading_words())
+    assert _rows(statement) == list(synth.WRAPPED_ROWS)
     assert info.skipped_lines == 0
     assert statement.reconciliation is not None
     assert statement.reconciliation.status == "ok"
@@ -817,6 +876,55 @@ def test_a_line_with_an_amount_is_never_part_of_a_header() -> None:
     # A line too long to be headings is none either.
     long = [("Check", 95.0), ("Deposits/ " + "and more words " * 9, 330.0)]
     assert _unchanged([_line(long, 0), _line(_STACK_BOTTOM, 1)])
+
+
+def test_a_line_longer_than_the_limit_is_never_part_of_a_header() -> None:
+    # A heading nobody knows right of the money is an ``other`` column, so
+    # the two lines stack whatever it says: only its length differs here.
+    def bottom(filler: str) -> ViewLine:
+        return _line([*_STACK_BOTTOM, (filler, 600.0)], 1)
+
+    lead = len(_line(_STACK_BOTTOM).text) + 1
+    limit = statement_header.MAX_STACK_CHARS
+    assert limit == 130
+    fits = ("notes " * 40)[: limit - lead].strip().ljust(limit - lead, "s")
+    assert len(bottom(fits).text) == limit
+    stacked = stack_headers([_line(_STACK_TOP, 0), bottom(fits)])
+    assert len(stacked) == 1
+    assert _roles(stacked[0]) == [
+        "date",
+        "check",
+        "description",
+        "credit",
+        "debit",
+        "balance",
+        "other",
+    ]
+    over = bottom(fits + "s")
+    assert len(over.text) == limit + 1
+    assert _unchanged([_line(_STACK_TOP, 0), over])
+    # The top line, too.
+    top = _line([*_STACK_TOP, (fits + "s" * 40, 600.0)], 0)
+    assert len(top.text) > limit
+    assert _unchanged([top, bottom("notes")])
+    assert len(stack_headers([_line([*_STACK_TOP, ("Our", 600.0)], 0), bottom("notes")])) == 1
+
+
+def test_two_lines_that_make_a_headless_heading_are_not_stacked() -> None:
+    # Merged, the lines read ``New Transactions for the card | Foreign
+    # Spending | Amount``: a heading with no date column is never stacked.
+    top = _line([("New Transactions", 62.0), ("Foreign", 330.0)], 0)
+    bottom = _line([("for the card", 62.0), ("Spending", 330.0), ("Amount", 500.0)], 1)
+    assert read_header(top) is None
+    assert read_header(bottom) is None
+    assert _unchanged([top, bottom])
+
+
+def test_lines_in_reverse_vertical_order_are_not_stacked() -> None:
+    assert len(stack_headers([_at(_STACK_TOP, 100.0, 0), _at(_STACK_BOTTOM, 109.0, 1)])) == 1
+    # The second line printed above the first, or at its height: no header.
+    assert _unchanged([_at(_STACK_TOP, 109.0, 0), _at(_STACK_BOTTOM, 100.0, 1)])
+    assert _unchanged([_at(_STACK_TOP, 100.0, 0), _at(_STACK_BOTTOM, 100.0, 1)])
 
 
 def test_stacking_stops_at_three_lines() -> None:

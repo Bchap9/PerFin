@@ -21,7 +21,8 @@ without a PDF.
   (``ithdrawal``): only a long single word of a scanned page.
 * :func:`header_like` says a line is made of heading words only: the header
   of a table the reader does **not** read (a daily-balance table), which
-  ends the transaction table above it.
+  ends the transaction table above it. A title or a row's wrapped text
+  made of heading words is none (its doc says how they are told apart).
 * :func:`stack_headers` makes a header printed over two or three lines one
   line ("Stacked headers" below).
 
@@ -237,10 +238,12 @@ _UNIT_BRACKETS: Final = re.compile(r"\s*(?:\([^()\[\]]{1,10}\)|\[[^()\[\]]{1,10}
 #: A unit as a last word: three capital letters (``AMOUNT EUR``).
 _UNIT_WORD: Final = re.compile(r"\s+([A-Z]{3})\s*$")
 #: Three capital letters after a money heading that are a word, not a
-#: currency: ``AMOUNT DUE`` and ``BALANCE NEW`` are no column headings.
+#: currency: ``AMOUNT DUE``, ``BALANCE NEW`` and ``DEBIT POS`` are no column
+#: headings.
 NOT_A_UNIT: Final = frozenset(
     {"DUE", "NEW", "OLD", "END", "NET", "TAX", "FEE", "YTD", "MTD", "QTD", "APR", "APY"}
     | {"AVG", "MIN", "MAX", "OUT", "OWN", "ALL", "AND", "FOR", "THE", "PER", "NOW", "NOT"}
+    | {"POS", "ATM", "ACH", "FWD", "ADJ", "INT", "DIV"}
 )
 #: The lone unknown cell of a header is a description heading of at most
 #: this many words.
@@ -481,16 +484,26 @@ def header_like(line: ViewLine, headers: Mapping[str, Role] = HEADERS) -> bool:
     """Heading words only, two headings or more, no amount: a table we do not read.
 
     Headings printed in one cell count each (``Date | Amount | Date | Amount
-    Date | Amount``). A line of **one** cell is header-like only when one of
-    its headings is a date: ``Check Deposit`` under a row is the row's
-    wrapped text and must not end the table.
+    Date | Amount``). What ends a table must be told from a title printed
+    inside it and from a row's wrapped text, which may be heading words too:
+
+    * A line of two cells or more names columns of two kinds or more:
+      ``Deposit | Additions`` under a row are both money in, and no header.
+    * A line of **one** cell starts with a date heading and names a column
+      of figures (``Date Balance Date Balance``). ``Check Deposit`` and
+      ``Transaction Posted`` under a row are its wrapped text, ``Deposits
+      Posted`` over rows is a title.
     """
     if find_amounts(line.text):
         return False
     headings, unmatched = _headings(line, headers, len(line.cells) <= MAX_HEADER_CELLS)
     if unmatched or len(headings) < 2:
         return False
-    return len(line.cells) >= 2 or any(role in _DATE_ROLES for role, _ in headings)
+    roles = {role for role, _ in headings}
+    if len(line.cells) >= 2:
+        return len(roles) >= 2
+    first = min(headings, key=lambda heading: heading[1].x0)[0]
+    return first in _DATE_ROLES and bool(roles & NUMERIC_ROLES)
 
 
 def _stackable(group: Sequence[ViewLine]) -> bool:

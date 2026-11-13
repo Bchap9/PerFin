@@ -51,6 +51,15 @@ heading); only the **header** is unusual:
   no heading (the table has no balance column). A title is no header
   part: both headers read as they are printed.
 
+* :func:`titles_inside_the_table`: one plain header, then a title of
+  heading words in one cell over each group of rows (``Deposits Posted``,
+  ``Withdrawals Posted``). A title is no header: every row under it is
+  read.
+* :func:`wrapped_heading_words`: a plain table where the second line of a
+  row is made of heading words: ``Transaction Posted`` in one cell under
+  the first row, ``Deposit`` and ``Additions`` in two cells under the
+  fourth. Wrapped text is no header: every row after it is read.
+
 ``*_ROWS`` give what a correct reading returns: ``(payee, signed amount)``.
 """
 
@@ -647,4 +656,81 @@ def title_over_header() -> bytes:
         [[(40, day), (110, text), (-430, amount)] for day, text, amount in _TITLED_OUT],
         y=y,
     )
+    return _done(buf, c)
+
+
+#: ``(date, description, amount)``; the money in is printed first, under its title.
+_INSIDE: Final[tuple[tuple[str, str, str], ...]] = (
+    ("03/02/2026", "Fernhill Mills Payroll", "1,500.00"),
+    ("03/14/2026", "Mobile Deposit", "240.00"),
+    ("03/05/2026", "Tallow Street Market", "-82.40"),
+    ("03/09/2026", "Brindle Water Utility", "-61.15"),
+    ("03/20/2026", "Orchard Lane Rent", "-950.00"),
+    ("03/27/2026", "Kettle and Crumb Bakery", "-18.30"),
+)
+INSIDE_ROWS: Final[Expected] = tuple((text, _signed(amount)) for _, text, amount in _INSIDE)
+#: The titles printed inside the table: heading words, the last a date word.
+INSIDE_TITLES: Final = ("Deposits Posted", "Withdrawals Posted")
+
+
+def titles_inside_the_table() -> bytes:
+    """One header; a title of heading words in one cell over each group of rows."""
+    buf, c = _page(
+        "Greywether Savings Bank",
+        "Everyday Checking",
+        "1936",
+        "March 1, 2026 to March 31, 2026",
+        "1,200.00",
+        "1,828.15",
+    )
+    _line(
+        c, 590, [(40, "Date"), (110, "Description"), (-430, "Amount")], size=_HEAD_SIZE, bold=True
+    )
+    y = 576.0
+    for title, paid_in in zip(INSIDE_TITLES, (True, False), strict=True):
+        _line(c, y, [(40, title)], bold=True)
+        y = _rows(
+            c,
+            y - 13,
+            [
+                [(40, day), (110, text), (-430, amount)]
+                for day, text, amount in _INSIDE
+                if amount.startswith("-") != paid_in
+            ],
+        )
+    return _done(buf, c)
+
+
+#: Per row of :data:`_MEMO`-like rows: the cells of its wrapped second line.
+_WRAPPED: Final[tuple[tuple[str, str, str, tuple[tuple[float, str], ...]], ...]] = (
+    ("04/02/2026", "Fernhill Mills Payroll", "1,500.00", ((110, "Transaction Posted"),)),
+    ("04/06/2026", "Tallow Street Market", "-82.40", ()),
+    ("04/09/2026", "Brindle Water Utility", "-61.15", ()),
+    ("04/14/2026", "Mobile Deposit", "240.00", ((110, "Deposit"), (220, "Additions"))),
+    ("04/20/2026", "Orchard Lane Rent", "-950.00", ()),
+    ("04/27/2026", "Kettle and Crumb Bakery", "-18.30", ()),
+)
+WRAPPED_ROWS: Final[Expected] = tuple((text, _signed(amount)) for _, text, amount, _ in _WRAPPED)
+
+
+def wrapped_heading_words() -> bytes:
+    """A row's second line made of heading words, in one cell and in two."""
+    buf, c = _page(
+        "Hollin Ford Bank",
+        "Plain Checking",
+        "2748",
+        "April 1, 2026 to April 30, 2026",
+        "1,200.00",
+        "1,828.15",
+    )
+    _line(
+        c, 590, [(40, "Date"), (110, "Description"), (-430, "Amount")], size=_HEAD_SIZE, bold=True
+    )
+    y = 576.0
+    for day, text, amount, wrap in _WRAPPED:
+        _line(c, y, [(40, day), (110, text), (-430, amount)])
+        y -= 12
+        if wrap:
+            _line(c, y, list(wrap))
+            y -= 12
     return _done(buf, c)
