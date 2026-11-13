@@ -180,6 +180,10 @@ def preprocess(image: Image.Image, *, profile: Profile, max_pixels: int) -> Prep
     return Prepared(image=binarise(gray), scale_back=1.0 / factor, skew=skew)
 
 
+#: ``ExtractOptions.ocr_psm``: Tesseract page-segmentation mode 3 or 6.
+PageSegmentation = Literal["auto", "single_block"]
+
+
 @dataclass
 class OcrPage:
     words: list[RawWord]
@@ -192,7 +196,9 @@ class OcrPage:
 class OcrEngine:
     """One Tesseract instance for a document, with the document's time budget."""
 
-    def __init__(self, *, page_seconds: int, total_seconds: int) -> None:
+    def __init__(
+        self, *, page_seconds: int, total_seconds: int, psm: PageSegmentation = "auto"
+    ) -> None:
         path = tessdata_dir()
         if path is None:
             raise ExtractFailure("ocr_unavailable", "no Tesseract language data")
@@ -202,6 +208,9 @@ class OcrEngine:
             raise ExtractFailure("ocr_unavailable", "tesserocr is not installed") from exc
         self._tess = tesserocr
         self._api = tesserocr.PyTessBaseAPI(path=path, lang=LANGUAGE, oem=tesserocr.OEM.LSTM_ONLY)
+        # ``single_block`` skips Tesseract's page layout analysis, which can
+        # crash natively on some scans (``ExtractOptions.ocr_psm``).
+        self._psm = tesserocr.PSM.SINGLE_BLOCK if psm == "single_block" else tesserocr.PSM.AUTO
         self._page_ms = page_seconds * 1000
         self._deadline = time.monotonic() + total_seconds
 
@@ -228,7 +237,7 @@ class OcrEngine:
         prepared = preprocess(image, profile=profile, max_pixels=max_pixels)
         tess = self._tess
         api = self._api
-        api.SetPageSegMode(tess.PSM.AUTO)
+        api.SetPageSegMode(self._psm)
         api.SetVariable("preserve_interword_spaces", "1" if profile == "receipt" else "0")
         api.SetImage(prepared.image)
         api.SetSourceResolution(int(dpi / prepared.scale_back))

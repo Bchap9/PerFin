@@ -343,6 +343,7 @@ class _OcrBudget:
             self.engine = OcrEngine(
                 page_seconds=self.options.ocr_page_seconds,
                 total_seconds=self.options.ocr_total_seconds,
+                psm=self.options.ocr_psm,
             )
         self.pages += 1
         return self.engine

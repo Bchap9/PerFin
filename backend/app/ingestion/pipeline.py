@@ -280,6 +280,76 @@ def _finish(
     return status
 
 
+#: Extraction warnings of a document read on a retry after the OCR engine
+#: crashed its sandbox child (:func:`_extract`).
+OCR_RETRIED_WARNING: Final = "ocr_retried:single_block"
+OCR_DISABLED_WARNING: Final = "ocr_disabled_after_crash"
+
+
+def _extract(
+    deps: PipelineDeps, kind: str, blob: Blob, options: ExtractOptions, document: Document
+) -> ExtractResult:
+    """Extract ``blob`` in the sandbox; a PDF or image whose child crashed is tried again.
+
+    Tesseract's page layout analysis crashes natively (SIGSEGV) on some
+    scans, which kills the child (``crashed``) and used to fail the
+    document. After such a crash the document is read again, each time in a
+    **new** sandbox child with the same filter and limits:
+
+    1. with ``ocr_psm="single_block"`` (no layout analysis): the result
+       carries the warning ``ocr_retried:single_block``;
+    2. if that child crashes too, with ``ocr=False`` (text layers and page
+       previews only): the warning is ``ocr_disabled_after_crash`` and the
+       caller opens a review item (``ocr_failed``).
+
+    Any other sandbox error (``memory_limit``, ``timeout``, a denied system
+    call) is raised at once, as is a crash that both retries do not avoid:
+    the first crash is then the error reported. Tables, mails and archives
+    never run OCR and are not retried.
+    """
+
+    def run(with_options: ExtractOptions) -> ExtractResult:
+        return deps.extract(
+            kind,
+            open_plaintext(deps.store, deps.keyring, blob),
+            config=deps.sandbox,
+            options=with_options,
+        )
+
+    try:
+        return run(options)
+    except SandboxError as exc:
+        uses_ocr = options.ocr and options.max_ocr_pages > 0
+        if exc.code != "crashed" or kind not in DOCUMENT_KINDS or not uses_ocr:
+            raise
+        first = exc
+    retries: list[tuple[ExtractOptions, str]] = []
+    if options.ocr_psm != "single_block":
+        retries.append(
+            (options.model_copy(update={"ocr_psm": "single_block"}), OCR_RETRIED_WARNING)
+        )
+    retries.append(
+        (options.model_copy(update={"ocr_psm": "single_block", "ocr": False}), OCR_DISABLED_WARNING)
+    )
+    for retry_options, warning in retries:
+        log.warning(
+            "extraction child crashed; reading the document again",
+            extra={"document_id": str(document.id), "kind": kind, "retry": warning},
+        )
+        try:
+            result = run(retry_options)
+        except SandboxError as exc:
+            if exc.code != "crashed":
+                raise
+            continue
+        if not result.ok:
+            return result
+        # First, so the cap on the list never drops it.
+        warnings = [warning, *(w for w in result.warnings if w != warning)][:WARNINGS_MAX]
+        return result.model_copy(update={"warnings": warnings})
+    raise first
+
+
 def _review(db: Session, document: Document, kind: ReviewKind, payload: dict[str, Any]) -> None:
     repo.add_review_item(db, document.household_id, kind, payload, document_id=document.id)
 
@@ -907,12 +977,7 @@ def ingest_document(
     options = deps.options.model_copy(update={"depth": document_depth(document)})
     clear_search_index(db, document)
     try:
-        result = deps.extract(
-            kind,
-            open_plaintext(deps.store, deps.keyring, blob),
-            config=deps.sandbox,
-            options=options,
-        )
+        result = _extract(deps, kind, blob, options, document)
     except SandboxError as exc:
         log.warning(
             "extraction sandbox failed",
@@ -976,6 +1041,11 @@ def ingest_document(
     document.extraction = result.model_dump(mode="json")
     document.parser_version = result.extractor_version
     db.flush()
+    ocr_gave_up = OCR_DISABLED_WARNING in result.warnings
+    if ocr_gave_up:
+        # Read without OCR after the engine crashed twice: scanned pages have
+        # no text, and the person is told so (never a silent, partial read).
+        _review(db, document, ReviewKind.UNPARSED, {"reason": "ocr_failed", "kind": kind})
     indexed = update_search_index(db, document)
     stage.finish(
         kind=kind,
@@ -1074,4 +1144,6 @@ def ingest_document(
     stage = _Stage(db, document, IngestStage.COMMIT, attempt)
     promote_blob(db, deps.store, blob)
     stage.finish(area="permanent")
-    return _finish(db, document, outcome.status, facts=outcome.summary)
+    # A document whose scan OCR could not read has an open item: it waits.
+    status = DocumentStatus.NEEDS_REVIEW if ocr_gave_up else outcome.status
+    return _finish(db, document, status, facts=outcome.summary)

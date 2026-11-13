@@ -124,6 +124,12 @@ class ExtractOptions(_Strict):
     ocr: bool = True
     #: Tesseract profile: ``auto`` picks ``receipt`` for narrow, tall images.
     ocr_profile: Literal["auto", "document", "receipt"] = "auto"
+    #: Tesseract's page segmentation: ``auto`` runs its page layout analysis
+    #: (columns, tables, pictures); ``single_block`` reads the page as one
+    #: block of text and skips that analysis. The worker asks for
+    #: ``single_block`` when a child died during OCR (``pipeline``): the
+    #: layout analysis is where the engine crashes on some scans.
+    ocr_psm: Literal["auto", "single_block"] = "auto"
     ocr_dpi: int = Field(default=300, ge=72, le=600)
     #: Pages OCR'd at most per document (later pages: ``truncated``).
     max_ocr_pages: int = Field(default=50, ge=0, le=MAX_PAGES_CEILING)

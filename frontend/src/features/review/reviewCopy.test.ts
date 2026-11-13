@@ -39,6 +39,7 @@ const REASONS: readonly [ReviewItem["kind"], string][] = [
   ["unparsed", "no_records"],
   ["unparsed", "scan_failed"],
   ["unparsed", "container_incomplete"],
+  ["unparsed", "ocr_failed"],
   ["low_confidence_field", "lines_skipped"],
   ["low_confidence_field", "low_confidence"],
   ["low_confidence_field", "reconciliation_failed"],

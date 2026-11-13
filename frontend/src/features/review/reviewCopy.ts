@@ -427,6 +427,16 @@ const COPY: Readonly<Record<string, Copy>> = {
     what: "The virus scanner could not check this file, so it was not processed.",
     steps: ["Try “Process again” once the scanner is back."],
   }),
+  "unparsed:ocr_failed": () => ({
+    title: "The scan could not be read",
+    what: "The text recognition (OCR) stopped unexpectedly on this scan, twice. PerFin kept the document, but the words on its scanned pages were not read.",
+    why: "Nothing is imported from a page PerFin could not read.",
+    steps: [
+      "If your bank offers a PDF download or a CSV or OFX export, upload that instead of the scan.",
+      "Or scan the page again (straight, well lit, the whole page) and upload the new picture.",
+      "Dismiss this item to keep the document as it is.",
+    ],
+  }),
   "unparsed:container_incomplete": () => ({
     title: "Some contents were left out",
     what: "This archive or email had contents PerFin refused or could not reach.",
