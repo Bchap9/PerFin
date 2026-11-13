@@ -10,9 +10,12 @@
 * Records end with ``^``. Fields: ``D`` date, ``T``/``U`` amount, ``P``
   payee, ``M`` memo, ``N`` check number, ``C`` cleared flag, ``L`` category,
   and ``S``/``E``/``$`` split lines.
-* **No record is dropped without a count**: a record with no readable date or
-  amount, and a last record with no ``^``, are not transactions; each section
-  that lost records adds one warning ``transaction_skipped:<n>``.
+* **No record of a section that is read is dropped without a count**: a
+  record with no readable date or amount, and a last record with no ``^``,
+  are not transactions; each section that lost records adds one warning
+  ``transaction_skipped:<n>``. The records of a skipped section (``Invst``
+  among them) are not counted: ``section_skipped:<name>`` is all that says
+  so.
 * **Dates** carry no format marker. All dates of the file are looked at
   together: a first component above 12 means day-month-year, a second
   component above 12 means month-day-year; both is an error; neither keeps

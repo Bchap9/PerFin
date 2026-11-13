@@ -21,9 +21,14 @@ For every ``INVSTMTRS``:
   ``reinvest`` of the same amount, so the cash nets to zero as it does in
   the account), ``INVEXPENSE``, ``TRANSFER``, ``SPLIT`` (``split_ratio`` =
   ``(NEWUNITS, OLDUNITS)``) and ``INVBANKTRAN`` (cash ``deposit`` /
-  ``withdrawal``); unknown kinds raise a warning, and each activity of a
-  known kind that cannot be read is counted: a statement that lost any adds
-  one ``transaction_skipped:<n>`` to the result's warnings;
+  ``withdrawal``). **No activity is dropped without a count**: one of a
+  known kind that cannot be read, one of a kind this module has no reading
+  for (margin interest, a return of capital, a journal entry: the warning
+  ``investment_activity_kind_unsupported`` names the reason) and one of a
+  known kind that sits beside the list (after a stray ``</INVTRANLIST>``)
+  are each counted, and a statement that lost any adds one
+  ``transaction_skipped:<n>`` to the result's warnings. A tag of the list
+  with nothing inside it is no activity and is not counted;
 * ``INVBAL/AVAILCASH``: the closing cash balance;
 * ``SECLISTMSGSRSV1``: ticker, name and kind of each ``SECID`` (a CUSIP or
   ISIN ``UNIQUEID`` is kept as such; without a ticker the CUSIP/ISIN is the
@@ -484,6 +489,10 @@ def _statement(
                 continue
             if item.name not in _KNOWN:
                 unknown += 1
+                # An aggregate is a record (it carries an ``INVTRAN`` at
+                # least) and was not imported; a lone leaf is not one.
+                if item.children:
+                    unread += 1
                 continue
             if budget[0] <= 0:
                 truncated = True
@@ -499,6 +508,8 @@ def _statement(
             budget[0] -= 1
     if unknown:
         warnings.add("investment_activity_kind_unsupported")
+    # Activity beside the list (a stray ``</INVTRANLIST>`` closed it early) is not read.
+    unread += sum(1 for item in node.children if item.name in _KNOWN)
     skipped.append(unread)
     if truncated:
         warnings.add(f"transactions_truncated:{options.max_transactions}")
@@ -540,8 +551,8 @@ def investment_statements(
 ) -> list[InvestmentStatement]:
     """Every ``INVSTMTRS`` of the file (module doc); ``budget`` caps activity rows.
 
-    ``skipped`` receives, per statement, how many activity records of a known
-    kind could not be read.
+    ``skipped`` receives, per statement, how many activity records were not
+    read (module doc).
     """
     nodes = list(root.iter("INVSTMTRS"))
     if not nodes:

@@ -144,6 +144,18 @@ def ofx2_unknown_encoding(encoding: str) -> bytes:
     return (declaration + OFX_INSTRUCTION + xml_body()).encode("ascii")
 
 
+def ofx2_declared_encoding(encoding: str, payee: str, *, codec: str | None = None) -> bytes:
+    """OFX 2 whose declaration names ``encoding``, its first payee ``payee``.
+
+    The bytes are written in ``codec``: the declared encoding itself unless
+    another is given (a declaration that is wrong about its own file).
+    """
+    first, *rest = ROWS
+    declaration = XML_DECLARATION.format(encoding=encoding)
+    text = declaration + OFX_INSTRUCTION + xml_body([(first[0], first[1], payee), *rest])
+    return text.encode(codec or encoding)
+
+
 def xml_declaration_over_sgml_body() -> bytes:
     """``<?xml ...?>`` and ``<?OFX ...?>`` over an SGML body with unclosed leaves."""
     declaration = XML_DECLARATION.format(encoding="UTF-8")

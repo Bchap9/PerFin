@@ -308,7 +308,8 @@ def test_ofx_split_transfer_short_position_and_unknown_kinds() -> None:
     (short,) = statement.positions
     assert short.quantity == -20
     assert short.security.asset_class == "equity"
-    assert result.warnings == ["investment_activity_kind_unsupported"]
+    # The margin interest is not read: its kind is named and the record counted.
+    assert result.warnings == ["investment_activity_kind_unsupported", "transaction_skipped:1"]
     assert statement.as_of == date(2026, 1, 31)  # DTEND when the list has no DTASOF
 
 

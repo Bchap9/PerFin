@@ -6,8 +6,13 @@
   entity-expansion bombs ("billion laughs") are refused before any expansion.
   A file that opens with ``<?xml`` or ``<?OFX`` takes this route. The bytes
   are decoded here and the XML declaration is dropped before parsing, so the
-  encoding a file declares (often wrong, sometimes unknown to the parser) is
-  never used.
+  parser never looks up the encoding a file declares (often wrong, sometimes
+  unknown to it). The bytes are read as UTF-8 when they are UTF-8; when they
+  are not, the declared encoding is used if it is one of
+  :data:`DECLARABLE_ENCODINGS` (one byte per character, ASCII where the
+  markup is) and every byte is a character of it; then cp1252, then latin-1.
+  In well-formed XML a comment and any other processing instruction are
+  skipped and CDATA is literal text: nothing is fetched, run or expanded.
 * **SGML (OFX 1.x)**: a small tokenizer of our own (``<TAG>value`` with
   optional end tags for leaf elements). A tag with no value opens an
   aggregate only when its name has an end tag somewhere in the file or is an
@@ -16,12 +21,14 @@
   resolves entities beyond the five predefined ones and numeric references,
   and any markup declaration (``<!DOCTYPE``, ``<!ENTITY``, ``<![CDATA[``...)
   refuses the file. An OFX 2
-  opening over a body that is not well-formed XML (SGML leaves with no end
-  tag) is read by this tokenizer once its leading ``<?xml ...?>`` and
-  ``<?OFX ...?>`` instructions are removed; nothing else is removed, so every
-  other instruction or declaration still refuses the file, and a DTD refuses
-  it on the XML route before any fallback. A file cut short (no ``</OFX>``)
-  does not fall back.
+  opening over an SGML body (not well-formed XML, and no leaf that carries a
+  value is closed by an end tag anywhere) is read by this tokenizer once its
+  leading ``<?xml ...?>`` and ``<?OFX ...?>`` instructions are removed;
+  nothing else is removed, so every other instruction or declaration still
+  refuses the file, and a DTD refuses it on the XML route before any
+  fallback. XML that is damaged (leaves closed, but not well-formed) and a
+  file cut short (no ``</OFX>``) do not fall back: they stay
+  ``malformed_xml``.
 * Both are turned into the same small tree and walked for bank
   (``STMTRS``) and credit card (``CCSTMTRS``) statements: the institution
   (``FI/ORG``, used with the last four digits to match the account), account type, the
@@ -33,10 +40,12 @@
   closes the list early in some exports). Investment statements
   (``INVSTMTRS``: positions, activity, cash) are read by
   :mod:`app.ingestion.extract.ofx_invest` on the same tree.
-* **No record is dropped without a count**: a transaction with no readable
-  date or amount, or one the reader cannot reach (nested where no transaction
+* **No transaction is dropped without a count**: one with no readable date
+  or amount, or one the reader cannot reach (nested where no transaction
   belongs), is counted, and each statement that lost records adds one warning
-  ``transaction_skipped:<n>`` (:func:`skipped_warnings`).
+  ``transaction_skipped:<n>`` (:func:`skipped_warnings`). ``STMTTRN`` that
+  sit under no statement at all (after a stray ``</STMTRS>``, say) are not
+  read either: they are counted in one more warning of the same form.
 * Caps: nesting depth, element count, transactions (``max_transactions``,
   then ``truncated``). Text fields are whitespace-collapsed, cut and
   formula-neutralised (C7).
@@ -44,6 +53,7 @@
 
 from __future__ import annotations
 
+import codecs
 import html
 import re
 from collections.abc import Iterator, Sequence
@@ -127,6 +137,27 @@ _XML_DECLARATION: Final = re.compile(r"<\?xml\s[^<>]*\?>", re.IGNORECASE)
 #: only those: ``<?xml-stylesheet`` does not match, nor anything further down.
 _LEADING_INSTRUCTIONS: Final = re.compile(r"(?:\s*<\?(?:xml|ofx)\s[^<>]*\?>)+", re.IGNORECASE)
 _OFX_END: Final = re.compile(r"</OFX>", re.IGNORECASE)
+_DECLARED_ENCODING: Final = re.compile(
+    r"""<\?xml\s[^<>]*?\bencoding\s*=\s*["']([A-Za-z][A-Za-z0-9._-]{0,39})["']""", re.IGNORECASE
+)
+
+#: What every text file is tried as (the OFX 2 route may add a declared encoding).
+_ENCODINGS: Final = ("utf-8-sig", "cp1252", "latin-1")
+
+#: Encodings an XML declaration may name and be believed, as ``codecs.lookup``
+#: spells them: one byte per character and ASCII where the markup is, so
+#: decoding with one can change no tag, digit or sign, only the letters of a
+#: payee or a memo. Anything else (UTF-16, a multi-byte or EBCDIC code page,
+#: a codec that rewrites text such as ``unicode_escape``) is never applied.
+#: cp1252 and latin-1 are not listed: they are tried in any case.
+DECLARABLE_ENCODINGS: Final = frozenset(
+    {
+        *(f"cp125{n}" for n in (0, 1, 3, 4, 5, 6, 7, 8)),
+        *(f"iso8859-{n}" for n in (2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 13, 14, 15, 16)),
+        "koi8-r",
+        "koi8-u",
+    }
+)
 _DATE: Final = re.compile(r"^\s*(\d{4})(\d{2})(\d{2})")
 _CURRENCY: Final = re.compile(r"^[A-Z]{3}$")
 
@@ -273,8 +304,8 @@ def _convert(element: Element, depth: int, counter: list[int]) -> Node:
 def parse_xml(text: str) -> Node:
     """Parse decoded OFX 2 text.
 
-    The XML declaration is dropped first: ``text`` is already decoded, so the
-    encoding the file names is never looked up or applied.
+    The XML declaration is dropped first: ``text`` is already decoded
+    (:func:`_parse`), so the parser never looks up the encoding the file names.
     """
     declaration = _XML_DECLARATION.match(text)
     if declaration is not None:
@@ -379,6 +410,25 @@ def _transaction_count(node: Node) -> int:
     return count
 
 
+def _orphan_transactions(root: Node) -> int:
+    """Every ``STMTTRN`` of the file that sits under no statement.
+
+    A stray ``</STMTRS>`` (or the end tag of anything around it) between two
+    transactions closes the statement early; the rest land outside it, where
+    no reader looks.
+    """
+    count = 0
+    stack = [root]
+    while stack:
+        item = stack.pop()
+        if item.name in STATEMENTS:
+            continue
+        if item.name == "STMTTRN":
+            count += 1
+        stack.extend(item.children)
+    return count
+
+
 def _statement(
     node: Node,
     source_format: str,
@@ -442,15 +492,32 @@ def _institution(root: Node) -> str | None:
     return None
 
 
+def _sgml_shaped(body: str) -> bool:
+    """Whether no tag that carries a value has an end tag anywhere in ``body``.
+
+    That is how OFX 1 prints its leaves (``<TRNAMT>-6.25``), and what tells
+    an SGML body from XML that is merely damaged: in XML every leaf is
+    closed (``<TRNAMT>-6.25</TRNAMT>``).
+    """
+    closed = {name.upper() for name in _END_TAG.findall(body)}
+    return not any(
+        match.group(3).strip() and match.group(2).upper() in closed
+        for match in _TOKEN.finditer(body)
+        if not match.group(1)
+    )
+
+
 def _parse_ofx2(text: str) -> Node:
     """Text that opens with ``<?xml`` or ``<?OFX``: XML, else the SGML tokenizer.
 
-    Only XML that is not well-formed falls back. A DTD or an entity
-    declaration has already refused the file (``xml_forbidden``), and the
-    tokenizer refuses every ``<?`` and ``<!`` left after the leading
-    instructions. A file with no ``</OFX>`` was cut short: it stays
-    ``malformed_xml``, because the tokenizer would read what is left of it
-    (half an amount included) without a word.
+    Only an SGML body falls back (:func:`_sgml_shaped`). XML whose leaves are
+    closed and which is not well-formed is damaged, and stays
+    ``malformed_xml``: the tokenizer would read ``<TRNAMT>-4<B>2.18</TRNAMT>``
+    as an amount of -4 without a word. So does a file with no ``</OFX>``: it
+    was cut short, and what is left of it (half an amount included) would be
+    read the same way. A DTD or an entity declaration has already refused the
+    file (``xml_forbidden``), and the tokenizer refuses every ``<?`` and
+    ``<!`` left after the leading instructions.
     """
     try:
         return parse_xml(text)
@@ -459,8 +526,11 @@ def _parse_ofx2(text: str) -> Node:
             raise
         malformed = failure
     leading = _LEADING_INSTRUCTIONS.match(text)
+    body = text[leading.end() :] if leading is not None else text
+    if not _sgml_shaped(body):
+        raise malformed
     try:
-        return parse_sgml(text[leading.end() :] if leading is not None else text)
+        return parse_sgml(body)
     except ExtractFailure as failure:
         if failure.code == "malformed_ofx":
             # Neither XML nor an SGML body with an OFX element: say the former.
@@ -468,10 +538,33 @@ def _parse_ofx2(text: str) -> Node:
         raise
 
 
+def _declared_encoding(opening: str) -> str | None:
+    """The encoding the XML declaration names, when it may be believed.
+
+    ``None`` with no declaration, a name Python does not know (``USASCII``)
+    or one that is not in :data:`DECLARABLE_ENCODINGS` (``utf-16``).
+    """
+    match = _DECLARED_ENCODING.match(opening)
+    if match is None:
+        return None
+    try:
+        name = codecs.lookup(match.group(1)).name
+    except LookupError:
+        return None
+    return name if name in DECLARABLE_ENCODINGS else None
+
+
 def _parse(data: bytes) -> Node:
-    text, _ = decode_text(data, encodings=("utf-8-sig", "cp1252", "latin-1"))
+    text, used = decode_text(data, encodings=_ENCODINGS)
     opening = text.lstrip("\ufeff \t\r\n")
     if _XML_OPENING.match(opening):
+        # The declaration is ASCII: it reads the same whatever decoded it.
+        declared = _declared_encoding(opening)
+        if declared is not None and used != "utf-8":
+            # Not UTF-8: the declared encoding, if every byte is a character
+            # of it; else as before (a wrong declaration falls back).
+            text, _ = decode_text(data, encodings=(declared, *_ENCODINGS[1:]))
+            opening = text.lstrip("\ufeff \t\r\n")
         return _parse_ofx2(opening)
     headers, _ = _split_sgml_header(text)
     text, _ = decode_text(data, encodings=_sgml_encoding(headers))
@@ -496,6 +589,8 @@ def extract_ofx(data: bytes, options: ExtractOptions, kind: str) -> ExtractResul
     investments = investment_statements(root, kind, options, budget, warnings, skipped, institution)
     if not statements and not investments:
         raise ExtractFailure("no_statements", "no bank, credit card or investment statement found")
+    # Transactions outside every statement belong to none: one count of their own.
+    skipped.append(_orphan_transactions(root))
     return ExtractResult(
         kind=kind,
         ok=True,
