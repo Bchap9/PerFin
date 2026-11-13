@@ -65,8 +65,9 @@ are read the same way:
    or a third date is not read, and such a line takes no date from the
    line above either: it is counted. An **amount printed in one cell with
    the description** (``Amount Description`` over ``-$47.30 Card
-   Purchase``) is split off it on a dated line of a table with one money
-   column that got no cell
+   Purchase``) is split off it, where the header prints the two headings
+   as one cell, on a dated line of a table with one money column that got
+   no cell
    (:meth:`TableStatementParser._split_fused_amount`): the word at the
    money heading's end of the cell, never the one at the other end. Cents
    printed without a zero (``.15``) are an amount in a money column and
@@ -112,12 +113,14 @@ are read the same way:
    takes the amount printed alone on one of the next
    :data:`AMOUNT_BELOW_LINES` lines of its page (a card's purchase abroad:
    ``63.00 CAD``, ``1.28 Exchange Rate``, ``$49.22``): a line whose whole
-   text reads as one amount and that stands under no other numeric
-   heading. The lines of words between the two are the row's memo. Any
+   text reads as one amount and that stands under the money heading and
+   no other. The lines of words between the two are the row's memo. Any
    other line ends the search (a dated line, a total, a balance label, a
    title, a header, a line with a figure of its own in a numeric column,
-   one far below the line above it), and so does an amount that the
-   balance label printed alone under it takes; the row is then counted as
+   a figure alone under the description or under no heading, one far
+   below the line above it), and so does an amount that the balance label
+   printed alone under it takes, or one that is the total of the two or
+   more rows read in the section so far; the row is then counted as
    skipped
    (:meth:`TableStatementParser._amount_below`).
    **A date printed once per day.** An undated line of a table with
@@ -134,9 +137,18 @@ are read the same way:
    forward``) makes rows of the candidates above it as a dated row does,
    unless their chain starts right under a balance line: the lines
    **between two balance lines** (``Beginning Balance``, ``6 Credits This
-   Period``, ``Ending Balance``) are a summary and never rows, however many
-   dates the statement carried before; under ``Balance brought forward``
-   they are rows once a dated transaction row follows them.
+   Period``, ``Ending Balance``; the second dated or not) are a summary
+   and never rows, however many dates the statement carried before; under
+   ``Balance brought forward`` they are rows once a dated transaction row
+   follows them. One thing makes rows of such lines: their **running
+   balances** (:meth:`TableStatementParser._balances_chain`: each prints
+   an amount and a balance, the first follows from the figure of the
+   balance line over them, each next one from the one before, and the
+   closing line's figure is the last), as on the last page of a day that
+   goes on over a page break. Lines of a block that are not read are
+   counted as skipped when they may have been rows (each prints a figure
+   under ``Balance``, or the statement has :data:`MIN_CARRIED` rows with a
+   carried date already), and not otherwise.
    **Found and not read.** Any other undated line with a figure in a money
    column that a dated row follows (two figures in one column, a line too
    far below the row above) is counted as skipped, as is each date-led
@@ -152,8 +164,9 @@ are read the same way:
    **A table that reads no row.** When a table ends (at the header of the
    next one, at a line of heading words that is no header we read, at the
    end) without one row read under its header, its undated lines with a
-   figure in a money column are counted as skipped: with a row or more
-   they stay what they were (counted when a dated row follows them).
+   figure in a money column are counted as skipped, the candidates held
+   back under a dated line among them: with a row or more they stay what
+   they were (counted when a dated row follows them).
    **Titles.** The line printed over a header on its page (the title of
    the next table) and the title of a block (:func:`block_title`) are
    never the wrapped text of the row above them.
@@ -502,6 +515,8 @@ CARRY_LINES: Final = 2.5
 #: The lines under a dated line without a figure among which the row's
 #: amount, printed alone, is looked for (the amount under its row).
 AMOUNT_BELOW_LINES: Final = 3
+#: A figure printed alone is the total of the rows above it from this many rows on.
+MIN_TOTAL_ROWS: Final = 2
 #: Rows with a carried date a statement needs before undated lines at the
 #: end of a table are rows too (the layout is proven).
 MIN_CARRIED: Final = 2
@@ -1327,19 +1342,24 @@ class TableStatementParser(DocumentParser):
             return
         cells["date"] = [join_cells(words[:size])]
 
-    def _split_fused_amount(self, cells: dict[Role, list[Cell]], columns: Sequence[Column]) -> None:
+    def _split_fused_amount(
+        self, cells: dict[Role, list[Cell]], columns: Sequence[Column], header: ViewLine
+    ) -> None:
         """An amount printed so close to the description that the two are one
         cell (``Date | Amount Description`` over ``06/08 | -$47.30 Card
         Purchase``).
 
-        Only on a dated line of a table with exactly one money column that
+        Only where the ``header`` line itself prints the two headings as one
+        cell, on a dated line of a table with exactly one money column that
         got no cell: the one description cell that stands under both the
         money heading and the description heading loses its first word (the
         money column is left of the description) or its last (right of it)
         when that word reads as an amount; the word becomes the money cell
         and the rest stays the description. The word at the other end is
         never taken, whatever it reads as, and an undated line is a row's
-        second line as before.
+        second line as before. Under two headings printed apart a
+        description that reaches under ``Amount`` keeps its last word (a
+        foreign amount, a rate): it is no amount of the row.
         """
         money = [c for c in columns if c.role in MONEY_ROLES]
         described = next((c for c in columns if c.role == "description"), None)
@@ -1348,6 +1368,9 @@ class TableStatementParser(DocumentParser):
         if not self._dated(cells):
             return
         column = money[0]
+        left, right = min(column.x0, described.x0), max(column.x1, described.x1)
+        if not any(cell.x0 <= left and right <= cell.x1 for cell in header.cells):
+            return
         fused = [
             cell
             for cell in cells.get("description", [])
@@ -1416,21 +1439,22 @@ class TableStatementParser(DocumentParser):
         text only is a wrap)."""
         out: list[ViewLine] = []
         columns: list[Column] | None = None
+        head: ViewLine | None = None
         for line in lines:
             header = self.columns(line)
             if header is not None:
-                columns = header
+                columns, head = header, line
                 continue
             if columns is not None and self._header_like(line):
                 columns = None
-            if columns is None:
+            if columns is None or head is None:
                 out.append(line)
                 continue
             cells = self._assign(line, columns)
             self._split_lead(cells)
             self._split_fused_date(cells, columns)
             self._drop_posting_date(cells, columns, line)
-            self._split_fused_amount(cells, columns)
+            self._split_fused_amount(cells, columns, head)
             date_text = " ".join(c.text for c in cells.get("date", [])).strip(_DATE_MARKS)
             if date_text and self._date_shaped(date_text):
                 continue
@@ -1723,6 +1747,10 @@ class TableStatementParser(DocumentParser):
         table_rows = 0
         # Lines read already as the memo and the amount of the row above.
         taken: set[int] = set()
+        # The header line of the table being read.
+        head: ViewLine | None = None
+        # The figure of the balance line the candidates held stand under.
+        block_open: Amount | None = None
 
         def runs_on(found: SectionTitle, page: int) -> bool:
             """``found`` names the section being read once more: marked
@@ -1745,7 +1773,12 @@ class TableStatementParser(DocumentParser):
             line closes the block another balance line opened
             (``summary_block``: its lines are never rows), or the section
             ends; ``ended``: the table does (a table that read no row counts
-            its other lines with a figure)."""
+            its other lines with a figure, held back or not).
+
+            The lines of a summary block are counted when they may have been
+            rows: each prints a figure under ``Balance``, or the statement
+            prints its dates once per day (:data:`MIN_CARRIED` rows took
+            theirs from the line above)."""
             nonlocal skipped, row_page, table_rows
             promote = bool(held) and not summary_block and (dated or summary.carried >= MIN_CARRIED)
             if promote:
@@ -1753,6 +1786,12 @@ class TableStatementParser(DocumentParser):
                 summary.carried += len(held)
                 row_page = held[-1].page
                 table_rows += len(held)
+            elif (
+                summary_block
+                and (summary.carried >= MIN_CARRIED or all(row.balance is not None for row in held))
+            ) or (ended and table_rows == 0):
+                skipped += len(held)
+                summary.skipped_boxes.extend((row.page, row.bbox) for row in held)
             if dated or (ended and table_rows == 0):
                 skipped += len(loose)
                 summary.skipped_boxes.extend(loose)
@@ -1767,6 +1806,16 @@ class TableStatementParser(DocumentParser):
                 # were before: lines of the summary.
                 if not (promote and of_candidate):
                     self._scan_summary(queued_line, summary)
+
+        def close_block(closing: Amount | None) -> None:
+            """A balance line follows the lines held back. Under another
+            balance line they are a summary block and never rows, unless
+            their running balances say they are (:meth:`_balances_chain`:
+            the rows of a day that goes on over a page break); under a
+            transaction row they are of the day printed over them."""
+            block = bool(held) and held[0].balance_line
+            rows_of_day = not block or self._balances_chain(block_open, held, closing)
+            settle(dated=rows_of_day, summary_block=not rows_of_day)
 
         for index, line in enumerate(lines):
             if index in taken:
@@ -1793,7 +1842,7 @@ class TableStatementParser(DocumentParser):
                 if section != before:
                     settle(dated=False, ended=True)
                 columns, pending, last, anchor, titled = header, False, None, None, None
-                found_header, unread = True, None
+                found_header, unread, head = True, None, line
                 continue
             norm = line.norm
             if columns is not None and self._header_like(line):
@@ -1801,7 +1850,7 @@ class TableStatementParser(DocumentParser):
                 settle(dated=False, ended=True)
                 columns, last, anchor = None, None, None
                 unread = line.page
-            if columns is None:
+            if columns is None or head is None:
                 if self._title(line) is not None:
                     titled, unread = line.page, None
                 elif block_title(norm):
@@ -1827,7 +1876,7 @@ class TableStatementParser(DocumentParser):
             self._split_lead(cells)
             self._split_fused_date(cells, columns)
             self._drop_posting_date(cells, columns, line)
-            self._split_fused_amount(cells, columns)
+            self._split_fused_amount(cells, columns, head)
             date_text = " ".join(c.text for c in cells.get("date", [])).strip(_DATE_MARKS)
             if not date_text or not self._date_shaped(date_text):
                 figures = 0 if pending else self._undated_figures(line, norm, cells)
@@ -1847,6 +1896,17 @@ class TableStatementParser(DocumentParser):
                     held.append(last)
                     waiting.append((line, True))
                     continue
+                if (
+                    held
+                    and held[0].balance_line
+                    and not pending
+                    and self._undated_balance_line(norm, cells)
+                ):
+                    # A balance line printed without a date closes the block
+                    # a dated one opened, as a dated one does; the line
+                    # under it starts no chain from the block's lines.
+                    close_block(None)
+                    anchor = None
                 if not pending and dated_section == section:
                     total = self._total_line(line, norm)
                     if total is not None:
@@ -1903,11 +1963,11 @@ class TableStatementParser(DocumentParser):
                     # row. Not those that follow a balance line themselves:
                     # between two balance lines stands a summary (``6
                     # Credits This Period``), and only a dated transaction
-                    # row says otherwise.
-                    block = bool(held) and held[0].balance_line
-                    settle(dated=not block, summary_block=block)
+                    # row or their own running balances say otherwise.
+                    close_block(figure)
                 row.balance_line = True
                 anchor = None if pending else row
+                block_open = figure
                 continue
             if not pending:
                 dated_section = section
@@ -1920,6 +1980,11 @@ class TableStatementParser(DocumentParser):
                 if pending:
                     continue
                 below = self._amount_below(lines, index, cells, columns)
+                if below is not None and self._sums_rows(
+                    below[0], [r for r in (*rows, *held) if r.section == section]
+                ):
+                    # The section's total printed bare under a dated note.
+                    below = None
                 if below is not None:
                     # The amount printed alone under the row, and the lines
                     # of words between the two (module doc).
@@ -2001,9 +2066,9 @@ class TableStatementParser(DocumentParser):
         ``DR`` and ``DB``, None when there is none.
 
         The marker is the nearest cell right of the amount in a column no
-        heading word names, and is nothing but the marker (``Dr. Office`` is
-        a category). It is the amount's only when the amount prints none of
-        its own and no figure stands between the two: a marker behind
+        heading word names, and is nothing but the marker's letters (``Dr.
+        Office`` is a category, ``Dr.`` a title). It is the amount's only
+        when the amount prints none of its own and no figure stands between the two: a marker behind
         another figure is that figure's (``410.00 | 9,590.00 | CR``), in a
         column or, on ``line``, in none. A row with a debit or a credit
         column has its direction already.
@@ -2019,7 +2084,8 @@ class TableStatementParser(DocumentParser):
         if not right:
             return None
         cell = min(right, key=lambda c: c.x0)
-        credit = OWN_COLUMN_MARKERS.get(normalise(cell.text))
+        # The letters and nothing else: ``Dr.`` is a title, not a marker.
+        credit = OWN_COLUMN_MARKERS.get(cell.text.strip().lower())
         if credit is None:
             return None
         printed = [c for role_cells in cells.values() for c in role_cells]
@@ -2043,7 +2109,8 @@ class TableStatementParser(DocumentParser):
 
         Only in a table with exactly one money column that is not printed
         across the page, for a line with description text and no figure in
-        any numeric column. None when one of the next
+        any numeric column; the amount is alone on its line and all of it
+        stands under the money heading. None when one of the next
         :data:`AMOUNT_BELOW_LINES` lines is anything but words before the
         amount is found: nothing is read then and the row is counted as it
         was.
@@ -2075,8 +2142,10 @@ class TableStatementParser(DocumentParser):
             found = self._assign(line, columns)
             amount = read_amount(line.text)
             if amount is not None:
-                # Alone on its line; under ``Balance`` it would be a balance.
-                if any(role in NUMERIC_ROLES and role != money[0] for role in found):
+                # Alone on its line, and under the money heading: under
+                # ``Balance`` it would be a balance, under the description
+                # or under no heading a foreign amount or a quantity.
+                if set(found) != {money[0]}:
                     return None
                 if self._label_takes(lines, at):
                     return None
@@ -2103,6 +2172,45 @@ class TableStatementParser(DocumentParser):
             used.append(at)
             above = line
         return None
+
+    def _sums_rows(self, amount: Amount, rows: Sequence[_Row]) -> bool:
+        """``amount`` is the total of ``rows`` (two or more, the rows read
+        in a section so far): their sum, or the sum of their magnitudes,
+        whatever sign it is printed with."""
+        signed = [value for row in rows if (value := self._signed(row)) is not None]
+        if len(signed) < MIN_TOTAL_ROWS:
+            return False
+        return abs(amount.value) in (abs(sum(signed)), sum(abs(value) for value in signed))
+
+    def _balances_chain(
+        self, opening: Amount | None, held: Sequence[_Row], closing: Amount | None
+    ) -> bool:
+        """The lines ``held`` under a balance line are rows by their running
+        balances: each prints an amount and a balance, the first balance is
+        the ``opening`` line's figure with the first amount applied, each
+        next one follows from the one before, and the last is the figure of
+        the ``closing`` line when that prints one."""
+        at = self._ledger_balance(opening)
+        if at is None or not held:
+            return False
+        for row in held:
+            signed, after = self._signed(row), self._ledger_balance(row.balance)
+            if signed is None or after is None or at + signed != after:
+                return False
+            at = after
+        return closing is None or self._ledger_balance(closing) == at
+
+    def _undated_balance_line(self, norm: str, cells: Mapping[Role, list[Cell]]) -> bool:
+        """An undated line of a table is a balance line: it, or its
+        description, starts with an opening or closing label and names no
+        payee after it (:meth:`_label_only`)."""
+        described = normalise(" ".join(c.text for c in cells.get("description", [])))
+        labels = (*self.opening_labels, *self.closing_labels)
+        return any(
+            text.startswith(label) and self._label_only(text[len(label) :])
+            for text in (norm, described)
+            for label in labels
+        )
 
     def _label_takes(self, lines: Sequence[ViewLine], index: int) -> bool:
         """The amount alone on ``lines[index]`` is the figure of the balance
@@ -2772,7 +2880,7 @@ class TableStatementParser(DocumentParser):
             self._split_lead(cells)
             self._split_fused_date(cells, columns)
             self._drop_posting_date(cells, columns, line)
-            self._split_fused_amount(cells, columns)
+            self._split_fused_amount(cells, columns, lines[header])
             opening = self._opening_row(cells)
             if opening is not None:
                 if balance is None or opening.value != balance:
