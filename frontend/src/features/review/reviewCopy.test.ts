@@ -176,6 +176,19 @@ describe("review explanations", () => {
     );
   });
 
+  it("says records of a statement file were not read", () => {
+    const found = explain(
+      item("low_confidence_field", { reason: "lines_skipped", count: 2, source: "extraction" }),
+    );
+    expect(found.title).toBe("Some records were not read");
+    expect(found.what).toBe("2 records of this file could not be read and were not imported.");
+    expect(found.steps.join(" ")).not.toContain("Teach PerFin");
+    // Rows a table reader skipped keep their own words.
+    expect(explain(item("low_confidence_field", { reason: "lines_skipped", count: 2 })).title).toBe(
+      "Some rows were skipped",
+    );
+  });
+
   it("names both periods of an overlapping statement", () => {
     const found = explain(
       item("possible_duplicate", {

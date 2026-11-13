@@ -122,6 +122,13 @@ The flow (INGESTION.md "Parse", "Match and deduplicate", "Commit"):
      does not reconcile (``app.ingestion.reconcile``) has all its rows
      pending, a ``reconciliation_failed``/``reconciliation_unavailable``
      item with the figures, and writes no balance snapshot (SECURITY.md C12).
+   * Records the extractor could not read (OFX, QFX and QIF: a record with
+     no date or amount, an investment activity of a kind it does not read)
+     are counted in its ``transaction_skipped:<n>`` warnings, one per
+     statement. Their sum raises one ``low_confidence_field`` item per
+     document (``lines_skipped``: ``count``, ``source`` ``extraction``), so
+     the document waits in review although the rows that were read are
+     imported.
    * Brokerage statements (``result.investments``: OFX ``INVSTMTRS``,
      PDFs read by ``app.ingestion.parsers.brokerage``; brokerage activity
      tables above) go to
@@ -150,6 +157,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 import uuid
 from collections.abc import Collection, Sequence
 from dataclasses import dataclass, field
@@ -271,6 +279,9 @@ if TYPE_CHECKING:
 IDS_MAX: Final = 50
 #: Review kinds a re-run answers (resolved when the re-run goes through).
 RERUN_ANSWERS: Final = frozenset({ReviewKind.UNPARSED, ReviewKind.UNKNOWN_ACCOUNT})
+#: An extractor's count of the records of one statement it could not read
+#: (``app.ingestion.extract.ofx.skipped_warnings``; OFX, QFX and QIF).
+_SKIPPED_WARNING: Final = re.compile(r"transaction_skipped:(\d+)")
 #: Statuses whose stored extraction may be (re-)imported.
 IMPORTABLE_STATUSES: Final = frozenset({DocumentStatus.NEEDS_REVIEW, DocumentStatus.PROCESSED})
 #: Extraction kinds whose table may be imported with a confident suggestion
@@ -1164,6 +1175,32 @@ def _several_kinds(result: ExtractResult) -> bool:
     return len(named) > 1
 
 
+def records_skipped(result: ExtractResult) -> int:
+    """How many records of the file its extractor could not read.
+
+    The OFX and QIF extractors say so in ``transaction_skipped:<n>`` warnings,
+    one per statement (bank and brokerage alike); the counts add up.
+    """
+    found = (_SKIPPED_WARNING.fullmatch(warning) for warning in result.warnings)
+    return sum(int(match.group(1)) for match in found if match is not None)
+
+
+def _report_skipped(run: _Run, result: ExtractResult) -> None:
+    """Raise one ``lines_skipped`` item for the records the extractor lost.
+
+    One per document, whatever the number of statements and whether or not
+    each found its account: a file that lost records never ends
+    ``processed`` on the rows that were read. The warnings name no
+    statement, so the item names none either.
+    """
+    count = records_skipped(result)
+    if count:
+        run.review(
+            ReviewKind.LOW_CONFIDENCE_FIELD,
+            {"reason": "lines_skipped", "count": count, "source": "extraction"},
+        )
+
+
 def _import_statements(run: _Run, result: ExtractResult, *, account_id: uuid.UUID | None) -> None:
     single = len(result.statements) == 1 and not _several_kinds(result)
     for index, statement in enumerate(result.statements):
@@ -1988,6 +2025,7 @@ def import_extraction(
             statements = activity.statements
     elif not result.investments:
         run.review(ReviewKind.UNPARSED, {"reason": "no_records"})
+    _report_skipped(run, result)
     investments: dict[str, Any] | None = None
     if statements:
         # Brokerage statements (app.domain.investments.statement_import);

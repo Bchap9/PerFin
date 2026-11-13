@@ -620,6 +620,28 @@ def test_inv401k_account_is_typed_retirement(env: Env, aggregate: str) -> None:
     assert env.holdings(account) == _positions(january)
 
 
+def test_ofx_activity_of_an_unread_kind_waits_as_lines_skipped(env: Env) -> None:
+    """Margin interest is a kind the reader has no reading for: counted, and said."""
+    january, _ = synth.brokerage_series(seed=74)
+    account = env.brokerage(january)
+    interest = (
+        b"<MARGININTEREST><INVTRAN><FITID>SYN-MARGIN-1</FITID>"
+        b"<DTTRADE>" + january.end.strftime("%Y%m%d").encode("ascii") + b"</DTTRADE></INVTRAN>"
+        b"<TOTAL>-3.10</TOTAL><SUBACCTFUND>CASH</SUBACCTFUND></MARGININTEREST>"
+    )
+    data = _ofx_xml(january)
+    assert data.count(b"</INVTRANLIST>") == 1
+    document_id = env.ingest(data.replace(b"</INVTRANLIST>", interest + b"</INVTRANLIST>"), "x.ofx")
+
+    assert env.document(document_id).status is DocumentStatus.NEEDS_REVIEW
+    (item,) = env.open_reviews(document_id)
+    assert item.kind is ReviewKind.LOW_CONFIDENCE_FIELD
+    assert item.payload == {"reason": "lines_skipped", "count": 1, "source": "extraction"}
+    # Everything the reader did read is imported as before.
+    assert env.activity(account) == _expected(january)
+    assert env.holdings(account) == _positions(january)
+
+
 def test_unknown_account_is_chosen_later_from_the_stored_extraction(env: Env) -> None:
     january, _ = synth.brokerage_series(seed=66)
     document_id = env.ingest(synth.placeholder_pdf(january), "statement.pdf")

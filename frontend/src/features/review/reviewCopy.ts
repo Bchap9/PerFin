@@ -452,6 +452,20 @@ const COPY: Readonly<Record<string, Copy>> = {
           )
           .filter((text) => text !== "")
       : [];
+    if (item.payload["source"] === "extraction") {
+      // An OFX, QFX or QIF record the reader could not make out (no date, no
+      // amount, a kind of investment activity it does not read).
+      return {
+        title: "Some records were not read",
+        what: `${count(item, "count")} records of this file could not be read and were not imported.`,
+        why: "The file holds more records than PerFin imported: a record had no date or amount it could make out, or is of a kind it does not read. PerFin never guesses a record; everything else in the file was imported.",
+        steps: [
+          "Compare the imported rows with the file or your statement to find what is missing.",
+          "Add any that matter by hand (Transactions or Investments).",
+          "Dismiss this item once you are done.",
+        ],
+      };
+    }
     return {
       title: "Some rows were skipped",
       what: `${count(item, "count")} rows of this file were not imported${payloadNumber(item, "unknown_activity") ? `, ${count(item, "unknown_activity")} of them with an action PerFin does not know` : ""}.${examples.length > 0 ? ` Unknown actions: ${examples.join(", ")}.` : ""}`,

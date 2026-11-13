@@ -58,9 +58,10 @@ from app.domain.transactions.schemas import AUTO_PAIR_JOB_TYPE
 from app.ingestion import pipeline
 from app.ingestion.extract.delimited import extract_delimited
 from app.ingestion.intake.upload import receive_upload
-from app.ingestion.sandbox.protocol import ExtractOptions
+from app.ingestion.sandbox.protocol import ExtractOptions, ExtractResult
 from app.workers.handlers import ingest
 from tests.fixtures import synth_csv_layouts as layouts
+from tests.fixtures import synth_ofx_variants as ofx_variants
 from tests.fixtures.factories import Factories, UserRecord, without_ids
 from tests.fixtures.households import Actors, problem_type
 from tests.fixtures.imports import (
@@ -446,6 +447,109 @@ def test_mapping_with_an_account_routes_files_without_one(env: Env) -> None:
     assert document.status is DocumentStatus.PROCESSED
     assert document.account_id == account.id
     assert _amounts(env.transactions(account)) == _expected(stmt)
+
+
+# ---------------------------------------------------------------------------
+# A statement that lost records says so
+# ---------------------------------------------------------------------------
+
+
+def _variant_account(env: Env) -> Account:
+    """The checking account the files of ``synth_ofx_variants`` name."""
+    return env.ledger.account(env.household_id, number_last4=ofx_variants.ACCOUNT[-4:])
+
+
+def _skipped_items(env: Env, document_id: uuid.UUID) -> list[ReviewItem]:
+    return [r for r in env.open_reviews(document_id) if r.payload.get("reason") == "lines_skipped"]
+
+
+def test_ofx_with_skipped_records_raises_lines_skipped(env: Env) -> None:
+    account = _variant_account(env)
+    document_id = env.ingest(ofx_variants.sgml_with_unreadable_amount())
+
+    read = [r for i, r in enumerate(ofx_variants.ROWS) if i != ofx_variants.UNREADABLE_ROW]
+    assert _amounts(env.transactions(account)) == sorted((day, amount) for day, amount, _ in read)
+    assert env.document(document_id).status is DocumentStatus.NEEDS_REVIEW
+    (item,) = env.open_reviews(document_id)
+    assert item.kind is ReviewKind.LOW_CONFIDENCE_FIELD
+    assert item.payload == {"reason": "lines_skipped", "count": 1, "source": "extraction"}
+
+
+def test_statement_with_transactions_and_no_rows_is_not_processed(env: Env) -> None:
+    account = _variant_account(env)
+    body = ofx_variants.sgml_body()
+    for _, amount, _ in ofx_variants.ROWS:
+        body = body.replace(f"<TRNAMT>{amount}\n", "<TRNAMT>n/a\n")
+    document_id = env.ingest((ofx_variants.SGML_HEADER + body).encode("ascii"))
+
+    assert env.transactions(account) == []
+    assert env.document(document_id).status is DocumentStatus.NEEDS_REVIEW
+    (item,) = _skipped_items(env, document_id)
+    assert item.payload["count"] == len(ofx_variants.ROWS)
+    assert item.payload["source"] == "extraction"
+
+
+def test_each_statement_of_a_file_adds_its_skipped_records_to_one_item(env: Env) -> None:
+    """Two statements losing one record each: one item for the document, of two."""
+    account = _variant_account(env)
+    body = ofx_variants.sgml_with_unreadable_amount().decode("ascii")
+    body = body.removeprefix(ofx_variants.SGML_HEADER)
+    end = "</BANKMSGSRSV1>\n"
+    start, stop = body.index("<BANKMSGSRSV1>"), body.index(end) + len(end)
+    block = body[start:stop]
+    # The second statement is a later month, so its rows are not the first's again.
+    twice = body[:stop] + block.replace("202603", "202604") + body[stop:]
+    document_id = env.ingest((ofx_variants.SGML_HEADER + twice).encode("ascii"))
+
+    (item,) = _skipped_items(env, document_id)
+    assert item.payload == {"reason": "lines_skipped", "count": 2, "source": "extraction"}
+    assert len(env.transactions(account)) == 4
+    assert env.document(document_id).status is DocumentStatus.NEEDS_REVIEW
+
+
+def test_qif_with_a_record_without_an_amount_raises_lines_skipped(env: Env) -> None:
+    account = env.ledger.account(env.household_id)  # QIF names no account number
+    data = (
+        "!Type:Bank\n"
+        "D03/04/2026\nT-12.40\nPHarbor Lane Bakery\n^\n"
+        "D03/11/2026\nPQuill Stationers\n^\n"
+        "D03/19/2026\nT300.00\nPNorthfield Payroll\n^\n"
+    ).encode("ascii")
+    document_id = env.ingest(data, account=account, name="export.qif")
+
+    assert len(env.transactions(account)) == 2
+    assert env.document(document_id).status is DocumentStatus.NEEDS_REVIEW
+    (item,) = env.open_reviews(document_id)
+    assert item.payload == {"reason": "lines_skipped", "count": 1, "source": "extraction"}
+
+
+def test_rerunning_a_statement_that_lost_records_does_not_repeat_the_item(env: Env) -> None:
+    account = _variant_account(env)
+    document_id = env.ingest(ofx_variants.sgml_with_unreadable_amount())
+    for db in env.db():
+        document = db.get(Document, document_id)
+        assert document is not None
+        result = ExtractResult.model_validate(document.extraction)
+        outcome = imports_service.import_extraction(db, document, result)
+        assert outcome.status is DocumentStatus.NEEDS_REVIEW
+    assert len(_skipped_items(env, document_id)) == 1
+    assert len(env.transactions(account)) == 2
+
+
+def test_clean_ofx_raises_nothing(env: Env) -> None:
+    stmt = sample_statement(38)
+    account = env.checking(stmt)
+    document_id = env.ingest(ofx_sgml_bytes(stmt))
+    assert env.document(document_id).status is DocumentStatus.PROCESSED
+    assert env.reviews(document_id) == []
+    assert _amounts(env.transactions(account)) == _expected(stmt)
+
+    variant = _variant_account(env)
+    clean = (ofx_variants.SGML_HEADER + ofx_variants.sgml_body()).encode("ascii")
+    document_id = env.ingest(clean)
+    assert env.document(document_id).status is DocumentStatus.PROCESSED
+    assert env.reviews(document_id) == []
+    assert len(env.transactions(variant)) == len(ofx_variants.ROWS)
 
 
 # ---------------------------------------------------------------------------
