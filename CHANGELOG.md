@@ -75,7 +75,11 @@ What remains (details in docs/ROADMAP.md):
   prints dollars, not units. One that does not add up, prints no period or
   prints one that reads two ways records nothing and waits in review
   (`plan_statement_does_not_add_up`); a document of several plans is not
-  read.
+  read. Where funds are printed in groups, the plan's total is the last
+  total row, not a group's. A statement that also prints a year-to-date
+  table records its ending balance and no beginning balance. A cash
+  account's statement with the same summary header over dated
+  transactions is still read as a statement of transactions.
 - **The SSA-1099 is read** (INGESTION.md "Composite statements and the
   SSA-1099"). The US form set gains the Social Security benefit
   statement: boxes 3 to 6 are stored for the tax year; boxes 1, 2, 7 and
@@ -200,8 +204,9 @@ What remains (details in docs/ROADMAP.md):
 - **A written option stays out of the holdings.** An export or OFX file
   that sells an option the account did not hold (sold to open) is not a
   sale of units the lot engine can book. Everything else of the
-  statement now imports; the option's lines are left out and a
-  review item says which ("Written option left out"). A plain sale of
+  statement now imports; the option's lines while it is short are left
+  out and a review item says which ("Written option left out"). The sale
+  that closes a long option bought earlier is kept. A plain sale of
   shares bought before the export's first row still opens at an unknown
   cost basis.
 - **A receipt, payslip, tax form or loan document that could not be read

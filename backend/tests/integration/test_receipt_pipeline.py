@@ -353,3 +353,37 @@ def test_unreadable_receipt_says_so(env: Env, store: LocalFSBlobStore) -> None:
     assert "no_receipt_total" in opened[0].payload["warnings"]
     assert all(item.payload.get("reason") != "mapping_required" for item in env.items(doc_id))
     assert env.links(doc_id) == []
+
+
+def _faded_payslip_pdf() -> bytes:
+    """The words of a payslip and none of its amounts or dates."""
+    out = io.BytesIO()
+    pdf = canvas.Canvas(out, pagesize=(400, 400), invariant=1)
+    y = 370.0
+    pdf.setFont("Helvetica-Bold", 12)
+    pdf.drawString(20, y, "Example Works Payroll")
+    pdf.setFont("Helvetica", 8)
+    for text in (
+        "Earnings Statement",
+        "Pay Period",
+        "Pay Date",
+        "Gross Pay",
+        "Total Deductions",
+        "Net Pay",
+    ):
+        y -= 16
+        pdf.drawString(20, y, text)
+    pdf.showPage()
+    pdf.save()
+    return out.getvalue()
+
+
+def test_unreadable_payslip_says_so(env: Env, store: LocalFSBlobStore) -> None:
+    doc_id = env.upload(_faded_payslip_pdf(), "faded-payslip.pdf", store)
+    assert env.document(doc_id).status is DocumentStatus.NEEDS_REVIEW
+    opened = [item for item in env.items(doc_id) if item.state is ReviewItemState.OPEN]
+    assert [(item.kind, item.payload.get("reason")) for item in opened] == [
+        (ReviewKind.UNPARSED, "payslip_unreadable")
+    ]
+    assert opened[0].payload["parser"] == "payslip_basic"
+    assert all(item.payload.get("reason") != "mapping_required" for item in env.items(doc_id))

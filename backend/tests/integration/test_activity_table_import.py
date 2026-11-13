@@ -925,3 +925,86 @@ def test_a_long_option_sold_in_a_later_export_is_not_written(env: Env) -> None:
     assert (first, second) == ([], [])
     assert len(_option_trades(env, account)) == 2
     assert env.holdings(account) == []
+
+    # The second file read again: its own sale is not counted twice.
+    cells = extract_delimited(broker_activity_csv([sold]), ExtractOptions(), "csv").tables[0].rows
+    with env.factories.transaction() as db:
+        set_context(db, env.household_id)
+        sale = db.execute(
+            select(InvestmentTxn).where(
+                InvestmentTxn.account_id == account.id, InvestmentTxn.type == "sell"
+            )
+        ).scalar_one()
+        document = db.get(Document, sale.source_document_id)
+        assert document is not None
+        imports_service.import_extraction(db, document, table_result(cells))
+        again = list(
+            db.execute(select(ReviewItem).where(ReviewItem.document_id == document.id)).scalars()
+        )
+    assert again == []
+    assert len(_option_trades(env, account)) == 2
+    assert env.holdings(account) == []
+
+
+def _put_row(day: str, action: str, quantity: str, amount: str) -> list[str]:
+    return _broker_row(day, action, symbol=_PUT, quantity=quantity, price="$1.00", amount=amount)
+
+
+def test_a_long_option_closed_and_then_written_keeps_its_closing_sale(env: Env) -> None:
+    """Only the lines that move the option while it is short are left out."""
+    account = env.ledger.account(
+        env.household_id, type=AccountType.BROKERAGE, currency="USD", name="Synthetic Taxable"
+    )
+    first = [_put_row("10/14/2026", "Buy to Open", "1", "-$185.00")]
+    second = [
+        _put_row("10/21/2026", "Sell to Close", "1", "$240.00"),
+        _put_row("10/22/2026", "Sell to Open", "1", "$200.00"),
+        _put_row("10/28/2026", "Buy to Close", "1", "-$50.00"),
+    ]
+    _, before = _import(env, broker_activity_csv(first), account=account)
+    _, items = _import(env, broker_activity_csv(second), account=account)
+
+    assert before == []
+    # The option bought in the first file is sold: the account holds none.
+    assert _option_trades(env, account) == [
+        (date(2026, 10, 14), "buy", _PUT_OCC, Decimal(1), Decimal("-185.00")),
+        (date(2026, 10, 21), "sell", _PUT_OCC, Decimal(1), Decimal("240.00")),
+    ]
+    assert env.holdings(account) == []
+    (item,) = items
+    assert item.payload["reason"] == "investment_short_position"
+    assert item.payload["lines_left_out"] == 2
+    (position,) = item.payload["positions"]
+    assert position["quantity"] == "-1"
+
+
+def test_a_long_round_trip_before_a_written_one_in_one_file_is_kept(env: Env) -> None:
+    account, _, items = _broker_import(
+        env,
+        _put_row("10/14/2026", "Buy to Open", "1", "-$185.00"),
+        _put_row("10/21/2026", "Sell to Close", "1", "$240.00"),
+        _put_row("10/22/2026", "Sell to Open", "1", "$200.00"),
+        _put_row("10/28/2026", "Buy to Close", "1", "-$50.00"),
+    )
+    assert [(day, kind) for day, kind, _, _, _ in _option_trades(env, account)] == [
+        (date(2026, 10, 14), "buy"),
+        (date(2026, 10, 21), "sell"),
+    ]
+    assert env.holdings(account) == []
+    (item,) = items
+    assert item.payload["lines_left_out"] == 2
+
+
+def test_one_sale_that_closes_and_writes_leaves_the_whole_option_out(env: Env) -> None:
+    """Negative: a line that sells more than is held cannot be split, so no line of it is kept."""
+    account, _, items = _broker_import(
+        env,
+        _put_row("10/14/2026", "Buy to Open", "1", "-$185.00"),
+        _put_row("10/21/2026", "Sell to Open", "2", "$400.00"),
+        _put_row("10/28/2026", "Buy to Close", "1", "-$50.00"),
+    )
+    assert _option_trades(env, account) == []
+    assert env.holdings(account) == []
+    (item,) = items
+    assert item.payload["reason"] == "investment_short_position"
+    assert item.payload["lines_left_out"] == 3

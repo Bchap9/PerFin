@@ -1512,9 +1512,17 @@ OFX `INVSTMTRS` in the sandbox or from a PDF/scan's pages in the worker.
   (`positions`, `lines_left_out`). A **written option** is short without
   a printed position saying so (`_written_options`): an option (asset
   class `option` on any of its rows) whose running units over the
-  statement's own rows fall below zero was sold without being held. Its
-  unit lines are left out in the same way, everything else of the
-  statement is imported, and the same notice says so with
+  statement's own rows fall below zero was sold without being held. The
+  lines that move it while it is short (from the sale that takes the
+  count below zero through the purchase that brings it back to zero) are
+  left out in the same way; its lines before and after, such as the sale
+  that closes a long position bought in an earlier file, go to the lot
+  engine like any other. One line that takes the count from above zero
+  to below it (or back) closes and opens at once and cannot be split:
+  every unit line of that option is then left out, and units of it the
+  account already holds from another document stay as they are.
+  Everything else of the statement is imported, and the same notice says
+  so with
   `from_activity: true` and one `positions` entry per option with its
   lowest running units ("Written option left out" in the review queue).
   The count starts from the units the statement implies when it lists
@@ -1966,16 +1974,31 @@ Balance`, and a `Total` row (the roll-forward layout).
   on the line; otherwise 0. A bank summary headed `Beginning Balance |
   Deposits | Withdrawals | Ending Balance` is not one, nor is a sentence
   naming both balances. A table with a column the parser does not know is
-  not read at all.
+  not read at all. A cash account (a health savings account) may print
+  the same header over one summary row and its dated transactions below
+  it: when the pages carry a transaction table that the bank or card
+  statement reader recognises, this parser scores 0 and reads nothing,
+  and the statement reader has the document.
 - **Rows**: a name followed by figures with two decimals (parentheses are
   negative, a lone dash is zero). As many figures as columns are taken in
   order; fewer are placed under the header whose centre is nearest, each
   column at most once and in the printed order (a blank cell is zero). A
   line with figures that is no such row is counted (`lines_skipped`),
-  never guessed. `Sub Total` rows are skipped; only the row named `Total`
-  (`Totals`, `Grand Total`, `Account Total`, `Plan Total`) is the total, so
+  never guessed. `Sub Total` rows are skipped; only a row named `Total`
+  (`Totals`, `Grand Total`, `Account Total`, `Plan Total`) is a total, so
   a fund called "Total Market ..." is a fund. A table goes on over a page
   break when its header is printed again.
+- **Which total**: the **last** total row before the next roll-forward
+  header or the document's end. A statement that groups its funds prints
+  a `Total` under each group and the plan's total after them: when
+  another total row follows, the one before it was a group's and is
+  skipped, the rows between are the table's, and every fund row must add
+  up to the last total (`roll_forward_rows`). Group totals with no total
+  of the whole therefore fail the check and nothing is recorded. Any
+  later line named as a total and carrying a figure counts, also one
+  whose figures cannot be put under the columns (the check then fails).
+  Lines after the last total row (a `Vested Balance` line) are not the
+  table's.
 - **Checks** (`InvestmentReconciliation.checks`, each comparison within
   half a cent): `roll_forward`, on the total row beginning plus the
   movement columns is ending; `roll_forward_rows`, every row adds up the
@@ -1984,8 +2007,13 @@ Balance`, and a `Total` row (the roll-forward layout).
   columns headed withdrawals, distributions, fees and forfeitures are
   subtracted instead, and the convention under which the total row adds up
   is used for every row.
-- **Several tables**: a second roll-forward table with the same ending
-  total is the same money by source and is ignored. One with another
+- **Several tables**: a second roll-forward table with the same beginning
+  and ending totals is the same money by source and is ignored. One with
+  the same ending total and another beginning total covers another span
+  of time (a `Year to Date` table beside the period's): the ending total
+  is recorded as the balance, no figure of the total row is kept and no
+  opening balance is recorded, because which beginning total is the
+  period's is not known. One with another
   ending total means several plans or participants in one document:
   nothing is read (warning `plan_statement_several_accounts`) and the
   document waits as any unread document does. No total row: nothing can be
@@ -2729,7 +2757,10 @@ Phases 3-4 implementation (`app/domain/review/assist.py`, `actions.py`,
   table, `mapping_required`. It now waits as `unparsed` with the reason
   `receipt_unreadable`, `payslip_unreadable`, `tax_form_unreadable` or
   `loan_unreadable` (payload: `parser` and the parse `warnings`, which
-  say why), and its page tables are never offered to the mapping editor.
+  say why), and its page tables are never offered to the mapping editor,
+  also when one of them has dated rows (a payment history on a bill of
+  several loans): such a document cannot be mapped by hand, and "Process
+  again" reads it the same way until a parser can read it.
   The review copy (`reviewCopy.ts`) says what the document looks like,
   that nothing was recorded, and what to do; a `loan_unreadable` item
   whose warnings hold `loan_bill_several_loans` says it is a bill for

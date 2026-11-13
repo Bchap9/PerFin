@@ -21,6 +21,16 @@ rows add up to the total, in both tables. :func:`plan_statement_pdf`:
 * ``subtracted``: the ``Withdrawals`` column prints what left the plan as a
   positive figure (the reader has to subtract it).
 * ``period``: the dates printed after ``for period:``.
+* ``year_to_date``: a ``Year to Date`` table printed first, with the same
+  ending total and another beginning total (:data:`YTD_TOTAL`); it adds up
+  too, row by row.
+* ``grouped``: the funds in two groups, a ``Total`` row under each and a
+  ``Grand Total`` row (the plan's) after them.
+
+:func:`cash_summary_pdf` is not a plan statement: a cash account (a health
+savings account) that prints the same header over one summary row and,
+below it, a dated ``Date | Description | Amount | Balance`` table of
+:data:`CASH_ROWS`. Its transactions are what there is to read.
 """
 
 from __future__ import annotations
@@ -96,6 +106,36 @@ OTHER_FUNDS: Final[tuple[Row, ...]] = (
 )
 OTHER_TOTAL: Final[Row] = ("Total", "$5,000.00", "$50.00", "$100.00", "$0.00", "$0.00", "$5,150.00")
 
+#: ``year_to_date``: the same funds since 1 January of an earlier quarter.
+YTD_FUNDS: Final[tuple[Row, ...]] = (
+    (
+        "Example Target 2050 Fund",
+        "19,000.00",
+        "900.00",
+        "1,800.00",
+        "0.00",
+        "(300.00)",
+        "21,400.00",
+    ),
+    ("Example Bond Index Fund", "7,600.00", "(20.00)", "900.00", "0.00", "300.00", "8,780.00"),
+    FUNDS[2],
+)
+YTD_TOTAL: Final[Row] = (
+    "Total",
+    "$28,600.00",
+    "$890.00",
+    "$2,700.00",
+    "$0.00",
+    "$0.00",
+    "$32,190.00",
+)
+
+#: ``grouped``: the total under the first group (two funds) and the second (one).
+GROUP_TOTALS: Final[tuple[Row, Row]] = (
+    ("Total", "28,000.00", "380.00", "1,800.00", "0.00", "0.00", "30,180.00"),
+    ("Total", "2,000.00", "10.00", "0.00", "0.00", "0.00", "2,010.00"),
+)
+
 
 def _table(c: canvas.Canvas, y: float, title: str, rows: tuple[Row, ...], total: Row) -> float:
     c.setFont(BOLD, 8)
@@ -118,6 +158,8 @@ def plan_statement_pdf(
     second_plan: bool = False,
     subtracted: bool = False,
     period: str = "01/01/2026 - 03/31/2026",
+    year_to_date: bool = False,
+    grouped: bool = False,
 ) -> bytes:
     """The plan statement (module doc)."""
     buf = io.BytesIO()
@@ -134,7 +176,15 @@ def plan_statement_pdf(
     funds = SUBTRACTED_FUNDS if subtracted else FUNDS
     total = SUBTRACTED_TOTAL if subtracted else TOTAL
     first: Row = (total[0], "$30,100.00", total[2], total[3], total[4], total[5], total[6])
-    y = _table(c, 656, "By Investment", funds, first if tamper else total)
+    y = 656.0
+    if year_to_date:
+        y = _table(c, y, "Year to Date", YTD_FUNDS, YTD_TOTAL) - 16
+    if grouped:
+        grand: Row = ("Grand Total", *total[1:])
+        rows = (*funds[:2], GROUP_TOTALS[0], funds[2], GROUP_TOTALS[1])
+        y = _table(c, y, "By Investment", rows, grand)
+    else:
+        y = _table(c, y, "By Investment", funds, first if tamper else total)
     c.setFont(FONT, 9)
     c.drawString(40, y, "Vested Balance")
     c.drawRightString(COLUMNS[-1], y, "$31,000.00")
@@ -148,6 +198,52 @@ def plan_statement_pdf(
         c.setFont(FONT, 9)
         c.drawString(40, 734, "Example Works Profit Sharing Plan")
         _table(c, 700, "By Investment", OTHER_FUNDS, OTHER_TOTAL)
+    c.showPage()
+    c.save()
+    return buf.getvalue()
+
+
+CASH_INSTITUTION: Final = "Example Health Savings Bank"
+CASH_HEADERS: Final = (
+    "Beginning Balance",
+    "Contributions",
+    "Earnings",
+    "Distributions",
+    "Ending Balance",
+)
+CASH_COLUMNS: Final = (240, 320, 400, 480, 560)
+CASH_SUMMARY: Final = ("1,000.00", "200.00", "0.50", "(50.00)", "1,150.50")
+#: Date, description, amount, running balance.
+CASH_ROWS: Final[tuple[tuple[str, str, str, str], ...]] = (
+    ("01/15/2026", "Payroll Contribution", "200.00", "1,200.00"),
+    ("02/03/2026", "Example Pharmacy", "-50.00", "1,150.00"),
+    ("03/31/2026", "Interest", "0.50", "1,150.50"),
+)
+
+
+def cash_summary_pdf() -> bytes:
+    """A cash statement with a roll-forward summary over its transactions (module doc)."""
+    buf = io.BytesIO()
+    c = canvas.Canvas(buf, pagesize=letter)
+    c.setFont(FONT, 9)
+    c.drawString(40, 750, CASH_INSTITUTION)
+    c.drawString(40, 734, "Statement Period: 01/01/2026 - 03/31/2026")
+    y = 700.0
+    c.drawString(40, y, "Account Summary")
+    for header, x in zip(CASH_HEADERS, CASH_COLUMNS, strict=True):
+        c.drawRightString(x, y, header)
+    for name in ("Health Savings Cash", "Total"):
+        y -= 14
+        c.drawString(40, y, name)
+        for text, x in zip(CASH_SUMMARY, CASH_COLUMNS, strict=True):
+            c.drawRightString(x, y, text)
+    y -= 30
+    for row in (("Date", "Description", "Amount", "Balance"), *CASH_ROWS):
+        c.drawString(40, y, row[0])
+        c.drawString(120, y, row[1])
+        c.drawRightString(440, y, row[2])
+        c.drawRightString(560, y, row[3])
+        y -= 14
     c.showPage()
     c.save()
     return buf.getvalue()

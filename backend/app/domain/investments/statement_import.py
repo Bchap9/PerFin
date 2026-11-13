@@ -159,8 +159,15 @@ statements"). Per statement:
    A **written option** never reaches the engine (:func:`_written_options`):
    an option (``asset_class`` ``option`` on any of its rows) whose running
    units over the statement's own rows fall below zero was sold without
-   being held. Its unit lines are left out, as a printed short position's
-   are, everything else of the statement is imported, and the
+   being held. The lines that move it while it is short are left out, as
+   a printed short position's are: from the sale that takes the count
+   below zero through the purchase that brings it back to zero. Its lines
+   before and after (a long position closed before the option is written,
+   one bought afterwards) go to the engine like any other. One line that
+   takes the count from above zero to below it, or back, closes and opens
+   at once and cannot be split: then every unit line of the option is left
+   out (units of it the account already holds from another document stay
+   as they are). Everything else of the statement is imported, and the
    ``investment_short_position`` item says so (``from_activity`` when no
    printed position is negative; one ``positions`` entry per such option
    with its lowest running units). The count starts from the units the
@@ -398,6 +405,11 @@ class InvestmentImport:
 
 def _text(value: Decimal | None) -> str | None:
     return f"{value:f}" if value is not None else None
+
+
+def _plain(value: Decimal) -> Decimal:
+    """``value`` without trailing zeros (``-1``, not ``-1.0000000000``), never an exponent."""
+    return value.quantize(Decimal(1)) if value == value.to_integral_value() else value.normalize()
 
 
 def _units(value: Decimal) -> str:
@@ -1919,8 +1931,9 @@ def _written_options(
     account: Account,
     statement: InvestmentStatement,
     reported: Sequence[InvestmentPosition] = (),
-) -> list[tuple[SecurityRef, Decimal]]:
-    """Options the statement sells without holding them, with their lowest running units.
+) -> list[tuple[SecurityRef, Decimal, list[InvestmentActivity]]]:
+    """Options the statement sells without holding them: ``(security, lowest
+    running units, the lines left out)``.
 
     Module doc, step 7. Per security with an option row: the running units
     over the statement's unit rows, in the lot engine's order. They start
@@ -1928,7 +1941,9 @@ def _written_options(
     else its own: the units listed for the security, none when it is not
     listed, less what the rows add), else from the account's history
     (:func:`_history_units`). A security with a split among its rows is left
-    to the engine, as :func:`_shortfall_openings` leaves it.
+    to the engine, as :func:`_shortfall_openings` leaves it. The lines left
+    out are those moving the option while it is short; every one of its
+    lines when a single line crosses zero.
     """
     groups: list[tuple[set[tuple[str, str]], list[tuple[int, InvestmentActivity]]]] = []
     for index, row in enumerate(statement.activity):
@@ -1944,7 +1959,7 @@ def _written_options(
             if keys:
                 groups.append((keys, [(index, row)]))
     listed = reported or statement.positions
-    written: list[tuple[SecurityRef, Decimal]] = []
+    written: list[tuple[SecurityRef, Decimal, list[InvestmentActivity]]] = []
     for keys, rows in groups:
         refs = [row.security for _, row in rows if row.security is not None]
         if not any(ref.asset_class == "option" for ref in refs):
@@ -1959,11 +1974,18 @@ def _written_options(
         else:
             units = _history_units(ctx, account, refs[0])
         lowest = units
-        for move in moves:
+        short: list[InvestmentActivity] = []
+        crossed = False
+        for (_, row), move in zip(rows, moves, strict=True):
+            before = units
             units += move
             lowest = min(lowest, units)
+            if before < -UNIT_TOLERANCE or units < -UNIT_TOLERANCE:
+                short.append(row)
+                # Part of the line closes (or opens) a long position.
+                crossed = crossed or max(before, units) > UNIT_TOLERANCE
         if lowest < -UNIT_TOLERANCE:
-            written.append((refs[0], lowest))
+            written.append((refs[0], lowest, [row for _, row in rows] if crossed else short))
     return written
 
 
@@ -2197,18 +2219,20 @@ def _commit(
     # statement sells it and never held it (module doc, step 7). Kept out
     # the same way; one a printed short position already names is that one.
     options = [
-        (ref, lowest)
-        for ref, lowest in _written_options(ctx, account, statement, reported)
+        (ref, lowest, lines)
+        for ref, lowest, lines in _written_options(ctx, account, statement, reported)
         if not shorted & _ref_keys(ref)
     ]
-    shorted |= {key for ref, _ in options for key in _ref_keys(ref)}
+    # Only the lines that move a written option while it is short.
+    option_lines = {id(line) for _, _, lines in options for line in lines}
     writable = statement
     short_lines = 0
-    if shorted:
+    if shorted or options:
         activity = [
             a
             for a in statement.activity
-            if not (
+            if id(a) not in option_lines
+            and not (
                 a.type in UNIT_TYPES and a.security is not None and shorted & _ref_keys(a.security)
             )
         ]
@@ -2296,7 +2320,7 @@ def _commit(
     # doc, step 9): the account's value is not taken from them. Cash activity
     # that does not add up leaves the value alone when the statement's own
     # holdings and closing cash are its printed account value.
-    if shorted:
+    if shorted or options:
         # In the statement's value (and the snapshot below), not among the
         # holdings shown; its trades were left out with it. A written
         # option has no printed position: its lowest running units stand in.
@@ -2327,11 +2351,11 @@ def _commit(
                         {
                             "symbol": ref.symbol,
                             "name": ref.name,
-                            "quantity": _text(lowest),
+                            "quantity": _text(_plain(lowest)),
                             "market_value": None,
                             "page": None,
                         }
-                        for ref, lowest in options
+                        for ref, lowest, _ in options
                     ),
                 ][:IDS_MAX],
             },

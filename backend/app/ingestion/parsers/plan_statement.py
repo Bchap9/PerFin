@@ -31,10 +31,30 @@ year in a fund's name is no figure. As many figures as columns are taken in
 order; fewer are placed under the header whose centre is nearest (a blank
 cell is zero), each column at most once and in the printed order. A line
 with figures that cannot be read that way is counted, never guessed.
-``Sub Total`` rows are skipped. The row named exactly ``Total`` (or
-``Totals``, ``Grand Total``, ``Account Total``, ``Plan Total``) is the
+``Sub Total`` rows are skipped. A row named exactly ``Total`` (or
+``Totals``, ``Grand Total``, ``Account Total``, ``Plan Total``) is a
 printed total: a fund called "Total Market ..." is a fund. A table goes on
 over a page break when its header is printed again.
+
+**Which total.** The table's total is the **last** total row before the
+next roll-forward header (or the document's end). A statement that groups
+its funds prints a ``Total`` under each group and the plan's total after
+them: when another total row follows, the one before it was a group's (it
+is skipped, as a ``Sub Total`` is), the rows between the two are the
+table's rows, and every fund row must add up to the last total
+(``roll_forward_rows``), so a table of group totals with no total of the
+whole fails the check and nothing is recorded. Any later line named as a
+total and carrying a figure counts, even one whose figures cannot be put
+under the columns (the check then fails): a group's total is never taken
+for the plan's because the plan's could not be read. Lines after the last
+total row (a ``Vested Balance`` line) are not the table's.
+
+**A cash account's summary.** A health savings or cash account may print
+the same header over one summary row and, below it, its dated
+transactions. That document is a statement of transactions: when the
+pages carry a transaction table (a header the bank or card statement
+reader recognises), this parser scores 0 and reads nothing, and the
+statement reader has the document.
 
 **Checks** (``InvestmentReconciliation.checks``; tolerance
 :data:`~app.ingestion.reconcile.TOLERANCE` per comparison):
@@ -53,8 +73,13 @@ over a page break when its header is printed again.
 ``reported_total_value`` is the printed ending total and ``total_value``
 what the total row's own figures come to.
 
-**Several tables.** A second roll-forward table with the same ending total
-is the same money counted another way (by source) and is ignored. One with
+**Several tables.** A second roll-forward table with the same beginning
+and ending totals is the same money counted another way (by source) and is
+ignored. One with the same ending total and **another beginning total**
+covers another span of time (a ``Year to Date`` table beside the
+period's): the ending total is still the balance, but which beginning
+total is the period's is not known, so no figure of the total row is kept
+and the importer records no opening balance. One with
 another ending total means several plans or participants in one document:
 nothing is read (warning ``plan_statement_several_accounts``). No total row
 at all: a statement with no ``total_value``, reconciliation ``unavailable``
@@ -63,7 +88,8 @@ was recorded).
 
 **What is kept.** The institution (the document's first line), the period
 from a ``for period:`` / ``statement period:`` label (``as_of`` is its last
-day), ``account_type`` ``retirement``, and the total row as figures of the
+day), ``account_type`` ``retirement``, and (unless two tables disagree on
+the beginning total, above) the total row as figures of the
 group ``account_value``: the beginning total (``opening``), each movement
 column's total as it counts (``item``, labelled by its header) and the
 ending total (``closing``), which is what lets the importer record the
@@ -84,7 +110,12 @@ from typing import ClassVar, Final, Literal
 
 from app.ingestion.parsers import confidence as conf
 from app.ingestion.parsers.base import Cell, DocumentParser, DocumentView, ParseOutcome, ViewLine
-from app.ingestion.parsers.table_statement import PeriodCandidates, read_period
+from app.ingestion.parsers.table_statement import (
+    CardStatementParser,
+    PeriodCandidates,
+    TableStatementParser,
+    read_period,
+)
 from app.ingestion.parsers.text import DateStyle, normalise, read_amount, symbol_currency
 from app.ingestion.reconcile import TOLERANCE
 from app.ingestion.sandbox.protocol import (
@@ -257,8 +288,8 @@ def _place(
     return tuple(values)
 
 
-def _row(line: ViewLine, columns: Sequence[Column]) -> _Row | None:
-    """``line`` as a name and one figure per column, else None."""
+def _split(line: ViewLine) -> tuple[str, list[tuple[Cell, Decimal]]] | None:
+    """``line`` as a name and the figures printed after it, else None."""
     words = [box for cell in line.cells for box in cell.word_cells()]
     figures: list[tuple[Cell, Decimal]] = []
     while words:
@@ -275,8 +306,7 @@ def _row(line: ViewLine, columns: Sequence[Column]) -> _Row | None:
         return None
     if any(read_amount(word.text) is not None for word in words):
         return None  # a figure inside the name: not a row of this table
-    values = _place(figures[::-1], columns)
-    return _Row(name, values, line) if values is not None else None
+    return name, figures[::-1]
 
 
 @dataclass
@@ -287,6 +317,9 @@ class _Table:
     total: _Row | None = None
     #: Lines with figures between the header and the total that are no row.
     unread: list[ViewLine] = field(default_factory=list)
+    #: A total row after ``total`` could not be put under the columns:
+    #: ``total`` may be a group's, so the rows do not vouch for it.
+    doubt: bool = False
 
     @property
     def keys(self) -> tuple[str, ...]:
@@ -294,31 +327,59 @@ class _Table:
 
 
 def _tables(view: DocumentView) -> list[_Table]:
+    """The roll-forward tables, each closed by its last total row (module doc)."""
     tables: list[_Table] = []
     current: _Table | None = None
+    # What follows the current table's total row: the table's own only when
+    # another total row comes after it.
+    later_rows: list[_Row] = []
+    later_unread: list[ViewLine] = []
     for line in view.lines:
         columns = roll_forward_header(line)
         if columns is not None:
-            if current is not None and tuple(c.key for c in columns) == current.keys:
+            if (
+                current is not None
+                and current.total is None
+                and tuple(c.key for c in columns) == current.keys
+            ):
                 continue  # the header again after a page break
             current = _Table(line, columns)
             tables.append(current)
+            later_rows, later_unread = [], []
             continue
         if current is None:
             continue
-        row = _row(line, current.columns)
-        if row is None:
-            if _has_figure(line):
+        split = _split(line)
+        name = normalise(split[0]) if split is not None else ""
+        values = _place(split[1], current.columns) if split is not None else None
+        row = _Row(split[0], values, line) if split is not None and values is not None else None
+        if row is not None and name.startswith(SUBTOTAL_PREFIXES):
+            continue
+        is_total = name in TOTAL_NAMES
+        if current.total is None:
+            if row is None:
+                if _has_figure(line):
+                    current.unread.append(line)
+            elif is_total:
+                current.total = row
+            else:
+                current.rows.append(row)
+            continue
+        if is_total:
+            # The total above was a group's: what stood between is the table's.
+            current.rows.extend(later_rows)
+            current.unread.extend(later_unread)
+            later_rows, later_unread = [], []
+            if row is None:
                 current.unread.append(line)
-            continue
-        name = normalise(row.name)
-        if name.startswith(SUBTOTAL_PREFIXES):
-            continue
-        if name in TOTAL_NAMES:
-            current.total = row
-            current = None
-            continue
-        current.rows.append(row)
+                current.doubt = True
+            else:
+                current.total = row
+                current.doubt = False
+        elif row is not None:
+            later_rows.append(row)
+        elif _has_figure(line):
+            later_unread.append(line)
     for table in tables:
         if table.total is None:
             table.unread.clear()  # with no total row nothing says where the table ends
@@ -342,7 +403,7 @@ def _adds_up(row: _Row, columns: Sequence[Column], how: Convention) -> bool:
 
 
 def _rows_hold(table: _Table, total: _Row, how: Convention) -> bool:
-    if not all(_adds_up(row, table.columns, how) for row in table.rows):
+    if table.doubt or not all(_adds_up(row, table.columns, how) for row in table.rows):
         return False
     endings = sum((row.values[-1] for row in table.rows), Decimal(0))
     return abs(endings - total.values[-1]) <= TOLERANCE
@@ -432,6 +493,15 @@ def _same(a: Decimal, b: Decimal) -> bool:
     return abs(a - b) <= TOLERANCE
 
 
+#: The readers of dated transactions: a page they find a table on is theirs.
+_TRANSACTION_READERS: Final = (TableStatementParser(), CardStatementParser())
+
+
+def _has_transactions(view: DocumentView) -> bool:
+    """The pages carry a transaction table (module doc, "A cash account's summary")."""
+    return any(reader.has_table(view) for reader in _TRANSACTION_READERS)
+
+
 class RetirementPlanParser(DocumentParser):
     """A plan statement's roll-forward table as the plan's balance (module doc)."""
 
@@ -440,18 +510,16 @@ class RetirementPlanParser(DocumentParser):
     kind: ClassVar[Literal["statement"]] = "statement"
 
     def detect(self, view: DocumentView) -> float:
-        return (
-            DETECT_SCORE
-            if any(roll_forward_header(line) is not None for line in view.lines)
-            else 0.0
-        )
+        if not any(roll_forward_header(line) is not None for line in view.lines):
+            return 0.0
+        return 0.0 if _has_transactions(view) else DETECT_SCORE
 
     def parse(
         self, view: DocumentView, *, threshold: float, date_order: str | None = None
     ) -> ParseOutcome:
         outcome = ParseOutcome()
         tables = _tables(view)
-        if not tables:
+        if not tables or _has_transactions(view):
             return outcome
         totalled = [(table, table.total) for table in tables if table.total is not None]
         endings: list[Decimal] = []
@@ -492,6 +560,9 @@ class RetirementPlanParser(DocumentParser):
             return outcome
         table, total = totalled[0]
         check, how = _check(table, total)
+        # Tables that end alike and begin differently cover different spans
+        # of time: which beginning total is the period's is not guessed.
+        one_span = all(_same(other.values[0], total.values[0]) for _, other in totalled)
         scores["total_value"] = conf.GENERIC if check.status == "ok" else conf.UNRECONCILED
         ocr["total_value"] = [table.header.conf, total.line.conf]
         currency = symbol_currency(
@@ -508,7 +579,7 @@ class RetirementPlanParser(DocumentParser):
                 as_of=period.end if period else None,
                 total_value=Balance(amount=total.values[-1], as_of=period.end if period else None),
                 truncated=view.truncated,
-                figures=_figures(table, total, how),
+                figures=_figures(table, total, how) if one_span else [],
                 first_page=table.header.page,
                 last_page=total.line.page,
                 parser=ref,

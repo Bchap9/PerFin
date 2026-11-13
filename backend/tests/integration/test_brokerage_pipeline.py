@@ -2142,6 +2142,59 @@ def test_plan_statement_records_the_balance_and_no_holdings(env: Env) -> None:
     _nothing_but_balances(env, account)
 
 
+def test_plan_statement_with_group_totals_records_the_plans_total(env: Env) -> None:
+    """A ``Total`` under a group of funds is not the plan's: the last total row is."""
+    account = _plan_account(env)
+    document_id = env.ingest(
+        plan.plan_statement_pdf(grouped=True), "plan.pdf", account_id=account.id
+    )
+
+    assert env.document(document_id).status is DocumentStatus.PROCESSED, env.open_reviews(
+        document_id
+    )
+    assert {s.as_of_date: s.balance for s in env.snapshots(account)} == {
+        date(2026, 3, 31): plan.CLOSING,
+        date(2025, 12, 31): plan.OPENING,
+    }
+
+
+def test_plan_statement_with_a_year_to_date_table_records_no_opening_balance(env: Env) -> None:
+    """Two tables that begin differently: neither beginning total is the day before the period."""
+    account = _plan_account(env)
+    document_id = env.ingest(
+        plan.plan_statement_pdf(year_to_date=True, period="04/01/2026 - 06/30/2026"),
+        "plan.pdf",
+        account_id=account.id,
+    )
+
+    assert env.document(document_id).status is DocumentStatus.PROCESSED, env.open_reviews(
+        document_id
+    )
+    assert {s.as_of_date: s.balance for s in env.snapshots(account)} == {
+        date(2026, 6, 30): plan.CLOSING
+    }
+    _nothing_but_balances(env, account)
+
+
+def test_cash_statement_with_a_roll_forward_summary_imports_its_transactions(env: Env) -> None:
+    """A summary row over dated transactions is a bank statement, whatever its header says."""
+    account = env.ledger.account(
+        env.household_id, type=AccountType.CHECKING, currency="USD", name="Health savings"
+    )
+    document_id = env.ingest(plan.cash_summary_pdf(), "cash.pdf", account_id=account.id)
+
+    document = env.document(document_id)
+    assert document.parser_version is not None
+    assert document.parser_version.startswith("statement_generic/")
+    assert "account_type_mismatch" not in env.reasons(document_id)
+    rows = env.query(select(Transaction).where(Transaction.account_id == account.id))
+    assert sorted((t.posted_date, t.amount) for t in rows) == [
+        (date(2026, 1, 15), Decimal("200.00")),
+        (date(2026, 2, 3), Decimal("-50.00")),
+        (date(2026, 3, 31), Decimal("0.50")),
+    ]
+
+
 def test_plan_statement_asks_for_its_account_and_lands_on_the_one_chosen(env: Env) -> None:
     """A plan statement prints no account digits: a person says which account it is."""
     account = _plan_account(env)

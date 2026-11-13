@@ -388,3 +388,165 @@ def test_two_figures_under_one_header_are_not_a_row() -> None:
     assert check is not None
     assert (check.status, check.failed) == ("mismatch", ["roll_forward_rows"])
     assert outcome.skipped_lines == 1
+
+
+_GROUP_HEADER = (
+    "By Investment",
+    "Beginning Balance",
+    "Contributions",
+    "Earnings",
+    "Ending Balance",
+)
+_GROUPS = (
+    ("Stock Investments",),
+    ("Example Large Cap Fund", "10,000.00", "500.00", "100.00", "10,600.00"),
+    ("Example Small Cap Fund", "5,000.00", "200.00", "50.00", "5,250.00"),
+    ("Total", "15,000.00", "700.00", "150.00", "15,850.00"),
+    ("Bond Investments",),
+    ("Example Bond Index Fund", "8,000.00", "300.00", "20.00", "8,320.00"),
+    ("Total", "8,000.00", "300.00", "20.00", "8,320.00"),
+)
+
+
+def _grouped(*after: tuple[str, ...]) -> DocumentView:
+    return _lines(
+        ("Example Plan Services",),
+        ("Statement Period: 01/01/2026 - 03/31/2026",),
+        _GROUP_HEADER,
+        *_GROUPS,
+        *after,
+    )
+
+
+def test_a_total_under_a_group_of_funds_is_not_the_plans_total() -> None:
+    """Funds printed in groups: the last total row is the plan's, and every fund adds up to it."""
+    view = _grouped(("Grand Total", "23,000.00", "1,000.00", "170.00", "24,170.00"))
+    outcome = RetirementPlanParser().parse(view, threshold=0.85)
+
+    (statement,) = outcome.investments
+    assert statement.total_value is not None
+    assert statement.total_value.amount == Decimal("24170.00")
+    check = statement.reconciliation
+    assert check is not None
+    assert (check.status, check.failed) == ("ok", [])
+    assert [(f.role, f.amount) for f in statement.figures] == [
+        ("opening", Decimal("23000.00")),
+        ("item", Decimal("1000.00")),
+        ("item", Decimal("170.00")),
+        ("closing", Decimal("24170.00")),
+    ]
+    assert outcome.skipped_lines == 0
+
+
+def test_a_group_of_one_fund_before_the_account_total() -> None:
+    view = _lines(
+        ("Example Plan Services",),
+        ("Statement Period: 01/01/2026 - 03/31/2026",),
+        _GROUP_HEADER,
+        ("Example Large Cap Fund", "10,000.00", "500.00", "100.00", "10,600.00"),
+        ("Total", "10,000.00", "500.00", "100.00", "10,600.00"),
+        ("Example Bond Index Fund", "8,000.00", "300.00", "20.00", "8,320.00"),
+        ("Total", "8,000.00", "300.00", "20.00", "8,320.00"),
+        ("Account Total", "18,000.00", "800.00", "120.00", "18,920.00"),
+    )
+    (statement,) = RetirementPlanParser().parse(view, threshold=0.85).investments
+
+    assert statement.total_value is not None
+    assert statement.total_value.amount == Decimal("18920.00")
+    assert statement.reconciliation is not None
+    assert statement.reconciliation.status == "ok"
+
+
+def test_group_totals_with_no_total_of_the_whole_do_not_add_up() -> None:
+    """Negative: nothing says what the plan holds, so no group's total stands in for it."""
+    (statement,) = RetirementPlanParser().parse(_grouped(), threshold=0.85).investments
+
+    check = statement.reconciliation
+    assert check is not None
+    assert (check.status, check.failed) == ("mismatch", ["roll_forward_rows"])
+    assert statement.confidence["total_value"] < 0.85
+
+
+def test_a_later_total_that_cannot_be_placed_leaves_the_group_total_unvouched() -> None:
+    """Negative: the plan's total cannot be placed; the group total before it is no answer."""
+    view = _lines(
+        ("Example Plan Services",),
+        ("Statement Period: 01/01/2026 - 03/31/2026",),
+        _GROUP_HEADER,
+        ("Example Large Cap Fund", "10,000.00", "500.00", "100.00", "10,600.00"),
+        ("Total", "10,000.00", "500.00", "100.00", "10,600.00"),
+        ("Example Stable Value Fund", "0.00", "0.00", "0.00", "0.00"),
+        ("Grand Total", "10,000.00", "500.00", "100.00", "0.00", "10,600.00", "9,900.00"),
+    )
+    outcome = RetirementPlanParser().parse(view, threshold=0.85)
+
+    (statement,) = outcome.investments
+    check = statement.reconciliation
+    assert check is not None
+    assert (check.status, check.failed) == ("mismatch", ["roll_forward_rows"])
+    assert outcome.skipped_lines == 1
+
+
+def test_lines_after_the_last_total_are_not_the_tables() -> None:
+    """A vested balance and a note under the total change nothing."""
+    view = _grouped(
+        ("Grand Total", "23,000.00", "1,000.00", "170.00", "24,170.00"),
+        ("Vested Balance", "24,000.00"),
+        ("Example Loan Fund", "1.00", "2.00", "3.00", "4.00"),
+    )
+    outcome = RetirementPlanParser().parse(view, threshold=0.85)
+
+    (statement,) = outcome.investments
+    assert statement.reconciliation is not None
+    assert statement.reconciliation.status == "ok"
+    assert statement.total_value is not None
+    assert statement.total_value.amount == Decimal("24170.00")
+    assert outcome.skipped_lines == 0
+
+
+def test_a_year_to_date_table_gives_no_opening_balance() -> None:
+    """Two tables end alike and begin differently: the balance is kept, no opening figure is."""
+    header = ("By Investment", "Beginning Balance", "Contributions", "Earnings", "Ending Balance")
+    view = _lines(
+        ("Example Plan Services",),
+        ("Statement Period: 04/01/2026 - 06/30/2026",),
+        ("Year to Date",),
+        header,
+        ("Example Large Cap Fund", "9,000.00", "1,500.00", "100.00", "10,600.00"),
+        ("Total", "9,000.00", "1,500.00", "100.00", "10,600.00"),
+        ("This Period",),
+        header,
+        ("Example Large Cap Fund", "10,000.00", "500.00", "100.00", "10,600.00"),
+        ("Total", "10,000.00", "500.00", "100.00", "10,600.00"),
+    )
+    outcome = RetirementPlanParser().parse(view, threshold=0.85)
+
+    (statement,) = outcome.investments
+    assert outcome.warnings == []
+    assert statement.total_value is not None
+    assert statement.total_value.amount == Decimal("10600.00")
+    assert statement.reconciliation is not None
+    assert statement.reconciliation.status == "ok"
+    # Neither 9,000.00 nor 10,000.00 is offered as the balance before the period.
+    assert statement.figures == []
+
+
+def test_a_cash_statement_with_a_roll_forward_summary_keeps_its_transactions() -> None:
+    """Negative: a summary row over dated transactions is a statement of transactions."""
+    data = synth.cash_summary_pdf()
+    view = _view(data)
+    parser = RetirementPlanParser()
+    assert parser.detect(view) == 0.0
+    assert parser.parse(view, threshold=0.85).empty
+
+    result = _parse(data)
+    assert result.parse is not None
+    assert result.parse.parser is not None
+    assert result.parse.parser.name == "statement_generic", result.parse.scores
+    assert result.investments == []
+    (statement,) = result.statements
+    assert [(t.posted, t.amount) for t in statement.transactions] == [
+        (date(2026, 1, 15), Decimal("200.00")),
+        (date(2026, 2, 3), Decimal("-50.00")),
+        (date(2026, 3, 31), Decimal("0.50")),
+    ]
