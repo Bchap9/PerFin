@@ -103,7 +103,8 @@ are read the same way:
    dated ``Amount Due`` line is no row and its account number with all
    digits is not the statement's.
 3. **Summary.** Outside the rows: the statement period (``Statement period``,
-   ``Billing period``...), the account's last four digits (a masked number
+   ``Billing period``, ``Statement For``, ``Billing Cycle``, ``Activity
+   from``...), the account's last four digits (a masked number
    or "ending in"), the currency, and the opening/closing balances by label.
    The longest label on a line is the one printed: ``statement balance``
    inside ``Previous Statement Balance`` closes nothing, and a closing
@@ -147,7 +148,35 @@ are read the same way:
    "statement date", it is none (the rows' span is the period, as without
    one); fewer are outliers (a stub's dated line read as a row) and are
    skipped. Its confidence is ``confidence.DERIVED``: a stated period for
-   the duplicate guard.
+   the duplicate guard. ``Statement Issued``, ``Statement Ending`` and
+   ``Statement End Date`` are statement dates too; ``Created on`` and
+   ``Generated`` are not (the day a file was made is no statement date).
+   **Where the period comes from**, each step only when those before it
+   found nothing: (1) a labelled period, then the header band; (2) the
+   period the classifier read (``view.hints.period``), believed as far as
+   the classifier believes it (warning ``period_from_classifier``); (3) a
+   statement date; (4) a range **printed once on page 1** without a label
+   (:meth:`TableStatementParser._unlabelled_range`): above the first table
+   header, a cell that starts with a separated range with a year, of at
+   most :data:`UNLABELLED_RANGE_DAYS` days, when exactly one distinct range
+   does (two different ranges say nothing). It is believed like a header
+   band on one page (0.75, 0.1 less when its day/month order is a guess):
+   it dates the rows and is no stated period (warning
+   ``period_unlabelled``); (5) an **assumed year**.
+   **Assumed year.** With no period, no statement date and no such range,
+   rows that print a month and a day and no year used to be skipped. When
+   the latest day a row can be on is known (``view.ceiling``: the day the
+   PDF says it was made, or the day the file arrived, the earlier of the
+   two) and no row prints a year, :func:`assume_years` places them in the
+   latest run of the calendar that ends on or before that day: December
+   rows before January rows of one statement, never split around a date
+   printed in a notice. Every such date scores ``confidence.GUESSED``, so
+   each row is written pending; the period is the rows' span, inferred;
+   the warning ``year_assumed:<YYYY>`` (the year of the latest row) makes
+   the pipeline ask one question naming the year. Without a ceiling, with
+   rows that mix dates with and without a year, or with rows spread over
+   more than :data:`ASSUMED_SPAN_DAYS` days, the year-less rows are counted
+   as skipped, as before.
 4. **Signs.** ``bank``: a signed amount as printed, *Debit* negative and
    *Credit* positive, ``CR``/``DR`` markers honoured. ``card``: charges are
    printed positive and credits negative or with ``CR``; both the amounts and
@@ -223,13 +252,15 @@ from decimal import Decimal
 from functools import lru_cache
 from typing import ClassVar, Final, Literal, NamedTuple
 
-from app.ingestion.classify.dates import HEADER_BAND_LINES as BAND_LINES
 from app.ingestion.classify.dates import (
+    AMBIGUOUS_PENALTY,
+    ONE_PAGE_BAND_CONFIDENCE,
     DateOrder,
     band_confidence,
     find_ranges,
     header_band_range,
 )
+from app.ingestion.classify.dates import HEADER_BAND_LINES as BAND_LINES
 from app.ingestion.classify.dates import find_dates as classify_dates
 from app.ingestion.parsers import confidence as conf
 from app.ingestion.parsers.accounts import (
@@ -381,6 +412,11 @@ LEAD_DATE_WORDS: Final = 3
 RANGE_WORDS: Final = frozenset({"to", "through", "thru", "until", "-", "\u2013", "\u2014"})
 #: Yearless styles a month-named row date may be printed in.
 NAMED_YEARLESS: Final[tuple[DateStyle, ...]] = ("mon_d", "d_mon")
+#: The most days a range printed without a label may span and be the period.
+UNLABELLED_RANGE_DAYS: Final = 100
+#: Such a range starts within this many characters of its cell (a range
+#: further in is part of a sentence).
+UNLABELLED_RANGE_LEAD: Final = 5
 
 #: ``Currency: CAD``; the code in capitals (``currency are`` is no code).
 _CURRENCY: Final = re.compile(r"\b(?i:currency)\s*:?\s*([A-Z]{3})\b")
@@ -485,8 +521,10 @@ class PeriodRead:
 
     start: date
     end: date
-    #: ``label``: next to a period label; ``header``: the header band.
-    source: Literal["label", "header"]
+    #: ``label``: next to a period label; ``header``: the header band;
+    #: ``classifier``: the period the classifier read (``view.hints``);
+    #: ``range``: a range printed once, without a label, on page 1.
+    source: Literal["label", "header", "classifier", "range"]
     #: Confidence cap of the source (a band on one page is believed less).
     cap: float = 1.0
     #: The day/month order the printed period proves (a part above 12).
@@ -854,9 +892,15 @@ class TableStatementParser(DocumentParser):
     period_labels: ClassVar[tuple[str, ...]] = (
         "statement period",
         "billing period",
+        "billing cycle",
+        "period covered",
         "statement dates",
         "for the period",
         "statement from",
+        "statement for",
+        "statement covers",
+        "activity from",
+        "activity for",
         "opening closing date",
         "period",
     )
@@ -880,6 +924,11 @@ class TableStatementParser(DocumentParser):
         "date of statement",
         "billing date",
         "cycle date",
+        # Never ``created on`` or ``generated``: the day a file was made is no
+        # statement date (it only bounds an assumed year, ``view.ceiling``).
+        "statement issued",
+        "statement ending",
+        "statement end date",
     )
     previous_date_labels: ClassVar[tuple[str, ...]] = (
         "previous statement date",
@@ -1948,6 +1997,45 @@ class TableStatementParser(DocumentParser):
                 return posted
         return None
 
+    @staticmethod
+    def _month_day(row: _Row, styles: Sequence[DateStyle]) -> tuple[int, int] | None:
+        """``(month, day)`` of a row date printed without a year, else None."""
+        for style in styles:
+            if style in ("md", "dm"):
+                parts = numeric_parts(row.date_text)
+                if parts is None or parts[2] is not None:
+                    continue
+                month, day = (parts[0], parts[1]) if style == "md" else (parts[1], parts[0])
+                if 1 <= month <= 12 and 1 <= day <= 31:
+                    return month, day
+            elif style in NAMED_YEARLESS:
+                named = month_day(row.date_text, style)
+                if named is not None:
+                    return named
+        return None
+
+    def _unlabelled_range(
+        self, view: DocumentView, styles: Sequence[DateStyle], certain: bool
+    ) -> PeriodRead | None:
+        """A range printed once, without a label, on page 1 (module doc, "Summary")."""
+        order = period_order(self._period_styles(styles)) if certain else None
+        first = min((line.page for line in view.lines), default=None)
+        found: dict[tuple[date, date], tuple[bool, DateOrder | None]] = {}
+        for line in self.prepare([line for line in view.lines if line.page == first]):
+            if self.columns(line) is not None:
+                break
+            for cell in line.cells:
+                for hit in find_ranges(cell.text, order=order, max_days=UNLABELLED_RANGE_DAYS):
+                    if hit.at >= UNLABELLED_RANGE_LEAD:
+                        continue  # inside a sentence
+                    doubt, proven = found.get((hit.start, hit.end), (False, None))
+                    found[(hit.start, hit.end)] = (doubt or hit.ambiguous, proven or hit.order)
+        if len(found) != 1:
+            return None
+        ((start, end), (doubt, proven)) = next(iter(found.items()))
+        cap = ONE_PAGE_BAND_CONFIDENCE - (AMBIGUOUS_PENALTY if doubt else 0.0)
+        return PeriodRead(start, end, "range", cap, proven)
+
     # -- the statement ----------------------------------------------------------
 
     def _type(self, row: _Row, description: str) -> str | None:
@@ -2283,11 +2371,23 @@ class TableStatementParser(DocumentParser):
             certain and any(numeric_parts(r.date_text) is not None for r in rows)
         )
         read = self._period(summary, styles, view, order_known)
+        hinted = view.hints.period
+        if read is None and hinted is not None and hinted[0] <= hinted[1]:
+            # Nothing the parser reads as a period: the classifier's, as far
+            # as the classifier believes it.
+            read = PeriodRead(hinted[0], hinted[1], "classifier", view.hints.period_confidence)
+            outcome.warnings.append("period_from_classifier")
+        anchor = self._statement_date(summary, styles) if read is None else None
+        if read is None and anchor is None:
+            read = self._unlabelled_range(view, styles, order_known)
+            if read is not None:
+                outcome.warnings.append("period_unlabelled")
         if read is not None and not order_known and read.order is not None:
             # The rows fit both orders (or have none); the printed period proves one.
             styles, certain = follow_order(styles, read.order), True
         period = read.span if read is not None else None
-        anchor = self._statement_date(summary, styles) if read is None else None
+        #: Nothing printed says when the statement is from.
+        undated = read is None and anchor is None
         window, strict = period, False
         if anchor is not None:
             # Only a statement date: a yearless row is the latest date not after it.
@@ -2305,6 +2405,16 @@ class TableStatementParser(DocumentParser):
                 dates = [None if d is not None and d > anchor[0] else d for d in dates]
         if anchor is not None:
             period = anchored_period(*anchor, [d for d in dates if d is not None])
+        assumed = False
+        ceiling = view.ceiling
+        if undated and ceiling is not None and not any(d is not None for d in dates):
+            # No row prints a year either: the latest run of the calendar
+            # that ends on or before the day the file was made or arrived.
+            guess = assume_years([self._month_day(row, styles) for row in rows], ceiling)
+            years = [d.year for d in guess or () if d is not None]
+            if guess is not None and years:
+                dates, assumed = guess, True
+                outcome.warnings.append(f"year_assumed:{max(years)}")
         if newest_first(dates) and (
             any(row.balance is not None for row in rows) or len({row.section for row in rows}) == 1
         ):
@@ -2328,6 +2438,9 @@ class TableStatementParser(DocumentParser):
             if row.carried:
                 # Printed on the row above, once for the day.
                 date_conf = min(date_conf, conf.DERIVED)
+            if assumed:
+                # The year is a guess: the row waits for a person.
+                date_conf = min(date_conf, conf.GUESSED)
             payee = " ".join(row.description).strip() or None
             score = {
                 "posted_date": conf.scaled(date_conf, row.ocr),
@@ -2470,6 +2583,66 @@ class TableStatementParser(DocumentParser):
             reconciliation=result,
         )
         return outcome
+
+
+#: The longest run of the calendar the rows of one statement are assumed to
+#: cover when nothing says when it is from (half a year).
+ASSUMED_SPAN_DAYS: Final = 184
+#: A year with every day of the calendar (the circle the rows are placed on).
+_WHOLE_YEAR: Final = 2000
+_WHOLE_YEAR_DAYS: Final = 366
+
+
+def assume_years(
+    parts: Sequence[tuple[int, int] | None], ceiling: date
+) -> list[date | None] | None:
+    """Dates for rows that print a month and a day and no year (module doc, "Summary").
+
+    ``parts`` are the rows' ``(month, day)`` in printed order (None: a row
+    that is not year-less); ``ceiling`` is the latest day a row can be on.
+    The distinct pairs are placed on the circle of a year: the widest gap
+    between neighbours ends at the **first** day of the statement and starts
+    after its **last**. The last takes the latest year in which it is on or
+    before ``ceiling``; a pair later in the calendar than the last (December
+    rows of a statement ending in January) takes the year before, every
+    other pair the same year. A pair that is no real day in its year (29
+    February) gives None for its rows.
+
+    None (nothing is assumed) when no row has a pair, when first to last
+    spans more than :data:`ASSUMED_SPAN_DAYS`, or when two gaps are the
+    widest (two days half a year apart: nothing says which comes first).
+    The order the rows are printed in plays no part, and neither does any
+    other date on the pages.
+    """
+    place: dict[tuple[int, int], int] = {}
+    for pair in parts:
+        if pair is None or pair in place:
+            continue
+        try:
+            place[pair] = date(_WHOLE_YEAR, pair[0], pair[1]).toordinal()
+        except ValueError:  # 02/30: no day of any year
+            continue
+    if not place:
+        return None
+    ordered = sorted(place)
+    last = ordered[0]
+    if len(ordered) > 1:
+        gaps = [
+            (place[ordered[(i + 1) % len(ordered)]] - place[pair]) % _WHOLE_YEAR_DAYS
+            for i, pair in enumerate(ordered)
+        ]
+        widest = max(gaps)
+        if gaps.count(widest) > 1 or _WHOLE_YEAR_DAYS - widest > ASSUMED_SPAN_DAYS:
+            return None
+        last = ordered[gaps.index(widest)]
+    year = ceiling.year if last <= (ceiling.month, ceiling.day) else ceiling.year - 1
+    dated: dict[tuple[int, int], date] = {}
+    for pair in ordered:
+        try:
+            dated[pair] = date(year - 1 if pair > last else year, pair[0], pair[1])
+        except ValueError:  # 29 February of a year without one
+            continue
+    return [dated.get(pair) if pair is not None else None for pair in parts]
 
 
 def month_before(day: date) -> date:

@@ -34,11 +34,18 @@ read under it (a section that does not add up holds the statement and names
 its rows; it never vouches for one), totals of the year are no section's
 total, and a statement printed newest first is read oldest first, so its
 running balances agree.
+
+And the period, and rows that print no year: more labels (``Statement
+For``), the classifier's period, a range printed once on page 1, and, when
+nothing says when the statement is from, a year assumed from the day the
+file was made or arrived (:func:`assume_years`): the rows are kept, each
+waiting on its date, never split around a date printed in a notice.
 """
 
 from __future__ import annotations
 
 from collections.abc import Callable
+from dataclasses import replace
 from datetime import date
 from decimal import Decimal
 
@@ -53,6 +60,7 @@ from app.ingestion.parsers.table_statement import (
     CardStatementParser,
     SectionRule,
     TableStatementParser,
+    assume_years,
 )
 from app.ingestion.sandbox.protocol import ExtractOptions, ExtractResult, Statement
 from tests.fixtures import synth_bank_layouts as synth
@@ -2067,3 +2075,328 @@ def test_two_rows_or_one_day_show_no_order() -> None:
         ]
     )
     assert "rows_newest_first" not in outcome.warnings
+
+
+# -- the period, and a year for rows that print none ----------------------------
+
+MARCH_END = date(2026, 3, 31)
+
+
+def _pairs(days: list[date]) -> list[tuple[int, int] | None]:
+    return [(day.month, day.day) for day in days]
+
+
+def test_assume_years_one_month() -> None:
+    days = [date(2026, 3, d) for d in (2, 5, 9, 12, 17, 20, 24, 27)]
+    assert assume_years(_pairs(days), MARCH_END) == days
+    assert assume_years(_pairs(days), date(2026, 3, 10)) == [d.replace(year=2025) for d in days]
+
+
+def test_assume_years_over_new_year() -> None:
+    days = [date(2025, 12, 27), date(2025, 12, 31), date(2026, 1, 2), date(2026, 1, 6)]
+    assert assume_years(_pairs(days), date(2026, 1, 20)) == days
+
+
+def test_assume_years_refuses_a_long_span() -> None:
+    assert assume_years([(1, 10), (5, 10), (9, 10)], date(2026, 12, 31)) is None
+
+
+def test_assume_years_leap_day() -> None:
+    assert assume_years([(2, 28), (2, 29), (3, 1)], date(2026, 3, 15)) == [
+        date(2026, 2, 28),
+        None,
+        date(2026, 3, 1),
+    ]
+    # In a leap year the day is real.
+    assert assume_years([(2, 28), (2, 29), (3, 1)], date(2024, 3, 15)) == [
+        date(2024, 2, 28),
+        date(2024, 2, 29),
+        date(2024, 3, 1),
+    ]
+
+
+def test_assume_years_ignores_printed_order() -> None:
+    days = [date(2025, 12, 27), date(2025, 12, 31), date(2026, 1, 2), date(2026, 1, 6)]
+    assert assume_years(_pairs(days[::-1]), date(2026, 1, 20)) == days[::-1]
+
+
+def test_assume_years_keeps_the_place_of_rows_without_a_pair() -> None:
+    assert assume_years([None, (3, 2), None, (3, 2)], MARCH_END) == [
+        None,
+        date(2026, 3, 2),
+        None,
+        date(2026, 3, 2),
+    ]
+    assert assume_years([None, None], MARCH_END) is None
+    assert assume_years([], MARCH_END) is None
+
+
+def test_assume_years_refuses_two_days_half_a_year_apart() -> None:
+    # Nothing says which of the two comes first.
+    assert assume_years([(1, 1), (7, 2)], date(2026, 12, 31)) is None
+    # A day nearer, the shorter way round is the statement.
+    assert assume_years([(1, 1), (7, 1)], date(2026, 12, 31)) == [
+        date(2026, 1, 1),
+        date(2026, 7, 1),
+    ]
+
+
+def _read_with(
+    data: bytes,
+    *,
+    not_after: date | None = None,
+    period: tuple[date, date, float] | None = None,
+) -> ExtractResult:
+    result = extract_pdf(data, OPTIONS, "pdf")
+    assert result.ok, result.error
+    return parse_extraction(result, kind="statement", period=period, not_after=not_after)
+
+
+def _low(statement: Statement, field: str) -> list[bool]:
+    return [field in t.low_confidence for t in statement.transactions]
+
+
+def test_yearless_rows_without_a_period_keep_their_rows() -> None:
+    result = _read_with(synth.yearless_no_period(), not_after=MARCH_END)
+    statement = _only(result)
+    assert _rows(statement) == synth.EXPECTED_ROWS["yearless_no_period"]
+    # One run of the calendar: none in the notice's 2031, none a year apart.
+    assert {(t.posted.year, t.posted.month) for t in statement.transactions} == {(2026, 3)}
+    assert all(_low(statement, "posted_date"))
+    assert _warnings(result).count("year_assumed:2026") == 1
+    assert _skipped(result) == 0
+    assert _status(statement) == "ok"
+    # The rows' span, and no stated period.
+    assert (statement.period_start, statement.period_end) == (date(2026, 3, 2), date(2026, 3, 27))
+    assert statement.confidence["period"] < 0.85
+
+
+def test_rows_over_new_year_take_two_years() -> None:
+    result = _read_with(synth.yearless_over_new_year(), not_after=date(2026, 1, 20))
+    statement = _only(result)
+    assert _rows(statement) == synth.EXPECTED_ROWS["yearless_over_new_year"]
+    assert all(_low(statement, "posted_date"))
+    assert "year_assumed:2026" in _warnings(result)
+    assert _skipped(result) == 0
+    assert _status(statement) == "ok"
+
+
+def test_unlabelled_range_on_page_one_is_the_period() -> None:
+    result = _read_with(synth.unlabelled_period_once(), not_after=MARCH_END)
+    statement = _only(result)
+    assert (statement.period_start, statement.period_end) == synth.ONCE_PERIOD
+    assert statement.confidence["period"] == 0.75
+    assert _rows(statement) == synth.EXPECTED_ROWS["unlabelled_period_once"]
+    assert not any(_low(statement, "posted_date"))
+    warnings = _warnings(result)
+    assert "period_unlabelled" in warnings
+    assert not any(w.startswith("year_assumed") for w in warnings)
+    assert _status(statement) == "ok"
+
+
+def test_two_different_ranges_are_no_period() -> None:
+    result = _read_with(synth.two_ranges_on_page_one(), not_after=MARCH_END)
+    statement = _only(result)
+    warnings = _warnings(result)
+    assert "period_unlabelled" not in warnings
+    assert "year_assumed:2025" in warnings
+    assert _rows(statement) == synth.EXPECTED_ROWS["two_ranges_on_page_one"]
+    assert all(_low(statement, "posted_date"))
+    assert _skipped(result) == 0
+
+
+def test_statement_for_is_a_period_label() -> None:
+    result = _read_with(synth.statement_for_period(), not_after=date(2026, 7, 4))
+    statement = _only(result)
+    assert (statement.period_start, statement.period_end) == synth.FOR_PERIOD
+    assert statement.confidence["period"] == 0.95
+    assert _rows(statement) == synth.EXPECTED_ROWS["statement_for_period"]
+    assert not any(_low(statement, "posted_date"))
+    assert not any(w.startswith("year_assumed") for w in _warnings(result))
+
+
+def test_the_classifiers_period_dates_the_rows() -> None:
+    hint = (date(2026, 3, 1), date(2026, 3, 31), 0.9)
+    result = _read_with(synth.yearless_no_period(), not_after=date(2027, 5, 1), period=hint)
+    statement = _only(result)
+    assert _rows(statement) == synth.EXPECTED_ROWS["yearless_no_period"]
+    assert (statement.period_start, statement.period_end) == hint[:2]
+    assert statement.confidence["period"] == 0.9
+    warnings = _warnings(result)
+    assert "period_from_classifier" in warnings
+    assert not any(w.startswith("year_assumed") for w in warnings)
+    assert not any(_low(statement, "posted_date"))
+
+
+def test_a_labelled_period_beats_the_classifiers() -> None:
+    hint = (date(2025, 6, 1), date(2025, 6, 30), 0.9)
+    result = _read_with(synth.statement_for_period(), period=hint)
+    statement = _only(result)
+    assert (statement.period_start, statement.period_end) == synth.FOR_PERIOD
+    assert statement.confidence["period"] == 0.95
+    assert "period_from_classifier" not in _warnings(result)
+    assert _rows(statement) == synth.EXPECTED_ROWS["statement_for_period"]
+
+
+def test_without_a_ceiling_the_year_is_not_assumed() -> None:
+    result = extract_pdf(synth.yearless_no_period(), OPTIONS, "pdf")
+    assert result.ok, result.error
+    view = DocumentView.from_result(result)
+    bare = DocumentView(
+        lines=view.lines,
+        source_format=view.source_format,
+        truncated=view.truncated,
+        page_count=view.page_count,
+    )
+    assert bare.ceiling is None
+    outcome = TableStatementParser().parse(bare, threshold=0.85)
+    assert not outcome.statements or not outcome.statements[0].transactions
+    assert outcome.skipped_lines == len(synth.EXPECTED_ROWS["yearless_no_period"])
+    assert not any(w.startswith("year_assumed") for w in outcome.warnings)
+
+
+def test_rows_with_and_without_a_year_are_not_given_one() -> None:
+    view = replace(
+        _view(
+            [
+                HEADER,
+                [("03/02/2026", 62.0), ("Wren Lane Grocer", 150.0), ("-12.00", 500.0)],
+                [("03/05", 62.0), ("Oxbow Hardware", 150.0), ("-8.00", 500.0)],
+            ]
+        ),
+        created=MARCH_END,
+    )
+    outcome = TableStatementParser().parse(view, threshold=0.85)
+    (statement,) = outcome.statements
+    assert [t.posted for t in statement.transactions] == [date(2026, 3, 2)]
+    assert outcome.skipped_lines == 1
+    assert not any(w.startswith("year_assumed") for w in outcome.warnings)
+
+
+def test_month_named_rows_take_an_assumed_year_too() -> None:
+    view = replace(
+        _view(
+            [
+                HEADER,
+                [("December 30", 62.0), ("Wren Lane Grocer", 150.0), ("-12.00", 500.0)],
+                [("January 4", 62.0), ("Oxbow Hardware", 150.0), ("-8.00", 500.0)],
+            ]
+        ),
+        created=date(2026, 1, 9),
+    )
+    outcome = TableStatementParser().parse(view, threshold=0.85)
+    (statement,) = outcome.statements
+    assert [t.posted for t in statement.transactions] == [date(2025, 12, 30), date(2026, 1, 4)]
+    assert all("posted_date" in t.low_confidence for t in statement.transactions)
+    assert "year_assumed:2026" in outcome.warnings
+    assert outcome.skipped_lines == 0
+
+
+def test_rows_spread_over_the_year_are_counted_not_dated() -> None:
+    view = replace(
+        _view(
+            [
+                HEADER,
+                [("01/10", 62.0), ("Wren Lane Grocer", 150.0), ("-12.00", 500.0)],
+                [("05/10", 62.0), ("Oxbow Hardware", 150.0), ("-8.00", 500.0)],
+                [("09/10", 62.0), ("Dovecote Cafe", 150.0), ("-3.00", 500.0)],
+            ]
+        ),
+        created=date(2026, 12, 1),
+    )
+    outcome = TableStatementParser().parse(view, threshold=0.85)
+    assert not outcome.statements or not outcome.statements[0].transactions
+    assert outcome.skipped_lines == 3
+    assert not any(w.startswith("year_assumed") for w in outcome.warnings)
+
+
+def test_a_statement_date_still_dates_yearless_rows() -> None:
+    view = replace(
+        _view(
+            [
+                [("Statement Ending 03/31/2024", 62.0)],
+                HEADER,
+                [("03/14", 62.0), ("Wren Lane Grocer", 150.0), ("-12.00", 500.0)],
+                [("03/25", 62.0), ("Oxbow Hardware", 150.0), ("-8.00", 500.0)],
+            ]
+        ),
+        created=date(2026, 5, 1),
+    )
+    outcome = TableStatementParser().parse(view, threshold=0.85)
+    (statement,) = outcome.statements
+    assert [t.posted for t in statement.transactions] == [date(2024, 3, 14), date(2024, 3, 25)]
+    assert statement.period_end == date(2024, 3, 31)
+    assert not any("posted_date" in t.low_confidence for t in statement.transactions)
+    assert not any(w.startswith("year_assumed") for w in outcome.warnings)
+
+
+@pytest.mark.parametrize(
+    "line",
+    [
+        "Billing Cycle: 03/01/2026 - 03/31/2026",
+        "Period Covered 03/01/2026 to 03/31/2026",
+        "This statement covers 03/01/2026 through 03/31/2026",
+        "Activity from 03/01/2026 to 03/31/2026",
+        "Account activity for March 1, 2026 - March 31, 2026",
+    ],
+)
+def test_more_period_labels(line: str) -> None:
+    outcome = _parse(
+        [
+            [(line, 62.0)],
+            HEADER,
+            [("03/02", 62.0), ("Wren Lane Grocer", 150.0), ("-12.00", 500.0)],
+        ]
+    )
+    (statement,) = outcome.statements
+    assert (statement.period_start, statement.period_end) == (date(2026, 3, 1), date(2026, 3, 31))
+    assert statement.confidence["period"] == 0.95
+    assert [t.posted for t in statement.transactions] == [date(2026, 3, 2)]
+
+
+@pytest.mark.parametrize("label", ["Statement Issued", "Statement Ending", "Statement End Date"])
+def test_more_statement_date_labels(label: str) -> None:
+    outcome = _parse(
+        [
+            [(f"{label}: 03/31/2026", 62.0)],
+            HEADER,
+            [("03/02", 62.0), ("Wren Lane Grocer", 150.0), ("-12.00", 500.0)],
+        ]
+    )
+    (statement,) = outcome.statements
+    assert statement.period_end == date(2026, 3, 31)
+    assert [t.posted for t in statement.transactions] == [date(2026, 3, 2)]
+
+
+@pytest.mark.parametrize("label", ["Created on", "Generated"])
+def test_a_creation_date_is_no_statement_date(label: str) -> None:
+    outcome = _parse(
+        [
+            [(f"{label} 04/02/2026", 62.0)],
+            HEADER,
+            [("03/02", 62.0), ("Wren Lane Grocer", 150.0), ("-12.00", 500.0)],
+        ]
+    )
+    # No ceiling on a hand-built view: counted, not dated.
+    assert not outcome.statements or not outcome.statements[0].transactions
+    assert outcome.skipped_lines == 1
+
+
+def test_a_range_inside_a_sentence_on_page_one_is_no_period() -> None:
+    view = replace(
+        _view(
+            [
+                # Under the header band (the top eight lines), in a sentence.
+                *([[("Hazelgrove Community Bank", 62.0)]] * 8),
+                [("Rates were lower from January 5, 2021 through February 14, 2021.", 62.0)],
+                HEADER,
+                [("03/02", 62.0), ("Wren Lane Grocer", 150.0), ("-12.00", 500.0)],
+            ]
+        ),
+        created=MARCH_END,
+    )
+    outcome = TableStatementParser().parse(view, threshold=0.85)
+    (statement,) = outcome.statements
+    assert "period_unlabelled" not in outcome.warnings
+    assert [t.posted for t in statement.transactions] == [date(2026, 3, 2)]
+    assert "year_assumed:2026" in outcome.warnings

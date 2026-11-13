@@ -72,6 +72,20 @@ And statements whose lines a reader may drop without a word, or take for rows:
   lines of date, text and figure with no header (counted, never read), then
   ``WITHDRAWALS`` over a ``Date | Description | Amount`` table of 4 rows.
 
+And statements whose rows print ``MM/DD`` and whose period is hard to find
+or not printed at all (drawn with today's creation date, as a bank's own
+file has: the day a file was made bounds the year its rows can be in):
+
+* :func:`yearless_no_period`: rows from 03/02 to 03/27 with their running
+  balance, no period, no statement date, and a notice dated years later.
+* :func:`yearless_over_new_year`: rows from 12/27 to 01/06, nothing else
+  dated.
+* :func:`unlabelled_period_once`: ``November 30, 2025 through December 31,
+  2025`` alone as line 10 of page 1 (under the header band), two pages.
+* :func:`two_ranges_on_page_one`: the same plus a promotion line that
+  starts with another range.
+* :func:`statement_for_period`: ``Statement For: 06/01/2026 - 06/30/2026``.
+
 :data:`EXPECTED_ROWS` gives, per builder, the rows a correct reading returns
 (``(posted, amount, payee)``, money out negative); :data:`EXPECTED_BALANCES`
 the opening and closing balance of the builders that are about balances.
@@ -1091,6 +1105,189 @@ def year_to_date_totals() -> bytes:
     return buf.getvalue()
 
 
+# -- rows without a year --------------------------------------------------------
+
+_YEARLESS_OPENING: Final = _d("2,318.40")
+#: As read with a ceiling on or after 27 March 2026 and before 27 March 2027.
+_YEARLESS_ROWS: Final[tuple[ExpectedRow, ...]] = (
+    (date(2026, 3, 2), _d("1,940.00"), "Payroll Deposit Larkmere Joinery"),
+    (date(2026, 3, 5), _d("-1,150.00"), "Rent Hollin Bank Cottages"),
+    (date(2026, 3, 9), _d("-74.36"), "Card Purchase Wren Lane Grocer"),
+    (date(2026, 3, 12), _d("-48.20"), "Brindle Water Direct Debit"),
+    (date(2026, 3, 17), _d("-80.00"), "ATM Withdrawal Mill Road"),
+    (date(2026, 3, 20), _d("-31.75"), "Card Purchase Oxbow Hardware"),
+    (date(2026, 3, 24), _d("200.00"), "Transfer From Savings"),
+    (date(2026, 3, 27), _d("-6.00"), "Monthly Service Charge"),
+)
+#: The notice of :func:`yearless_no_period`: its date is no row's year.
+YEARLESS_NOTICE: Final = "Effective June 1, 2031, the monthly fee changes."
+
+_NEW_YEAR_OPENING: Final = _d("905.10")
+#: As read with a ceiling from 6 January 2026 to 26 December 2026.
+_NEW_YEAR_ROWS: Final[tuple[ExpectedRow, ...]] = (
+    (date(2025, 12, 27), _d("-42.18"), "Card Purchase Thistle Row Bakery"),
+    (date(2025, 12, 29), _d("1,610.00"), "Payroll Deposit Larkmere Joinery"),
+    (date(2025, 12, 31), _d("-12.50"), "Card Purchase Ferry Lane Kiosk"),
+    (date(2026, 1, 2), _d("-975.00"), "Rent Hollin Bank Cottages"),
+    (date(2026, 1, 5), _d("-58.90"), "Card Purchase Wren Lane Grocer"),
+    (date(2026, 1, 6), _d("120.00"), "Mobile Deposit"),
+)
+
+_ONCE_OPENING: Final = _d("3,204.75")
+_ONCE_ROWS: Final[tuple[ExpectedRow, ...]] = (
+    (date(2025, 12, 1), _d("-1,205.00"), "Rent Sedgeway Court"),
+    (date(2025, 12, 3), _d("-66.12"), "Card Purchase Quarry Hill Market"),
+    (date(2025, 12, 5), _d("2,480.00"), "Payroll Deposit Umberfield Press"),
+    (date(2025, 12, 9), _d("-39.99"), "Marlpit Broadband"),
+    (date(2025, 12, 12), _d("-140.00"), "ATM Withdrawal Station Approach"),
+    (date(2025, 12, 16), _d("-84.27"), "Card Purchase Yarrow Garden Supply"),
+    (date(2025, 12, 19), _d("2,480.00"), "Payroll Deposit Umberfield Press"),
+    (date(2025, 12, 22), _d("-212.40"), "Card Purchase Kestrel Toys"),
+    (date(2025, 12, 23), _d("-57.03"), "Card Purchase Quarry Hill Market"),
+    (date(2025, 12, 27), _d("-18.60"), "Card Purchase Dovecote Cafe"),
+    (date(2025, 12, 29), _d("-300.00"), "Transfer To Savings"),
+    (date(2025, 12, 30), _d("-91.45"), "Vale Power Direct Debit"),
+)
+#: The range :func:`unlabelled_period_once` prints once, and what it reads as.
+ONCE_RANGE: Final = "November 30, 2025 through December 31, 2025"
+ONCE_PERIOD: Final = (date(2025, 11, 30), date(2025, 12, 31))
+#: The promotion line of :func:`two_ranges_on_page_one`: another range.
+PROMOTION_RANGE: Final = "January 5, 2026 - February 14, 2026: a bonus rate on new certificates."
+
+_FOR_OPENING: Final = _d("640.00")
+_FOR_ROWS: Final[tuple[ExpectedRow, ...]] = (
+    (date(2026, 6, 2), _d("1,875.00"), "Payroll Deposit Elmhay Nurseries"),
+    (date(2026, 6, 8), _d("-52.30"), "Card Purchase Tolgate Pharmacy"),
+    (date(2026, 6, 15), _d("-890.00"), "Rent Coppice View"),
+    (date(2026, 6, 23), _d("-23.75"), "Card Purchase Rushmere Cinema"),
+    (date(2026, 6, 29), _d("-110.00"), "Transfer To Savings"),
+)
+FOR_PERIOD: Final = (date(2026, 6, 1), date(2026, 6, 30))
+
+_YEARLESS_HEADER: Final = [(40, "Date"), (110, "Description"), (-470, "Amount"), (-550, "Balance")]
+
+
+def _yearless_rows(
+    c: canvas.Canvas, y: float, rows: Sequence[ExpectedRow], balances: Sequence[Decimal]
+) -> float:
+    """The header at ``y`` and ``rows`` under it, dated ``MM/DD``, each with its balance."""
+    _line(c, y, _YEARLESS_HEADER, size=8)
+    return _rows(
+        c,
+        y - 14,
+        [
+            [
+                (40, posted.strftime("%m/%d")),
+                (110, payee),
+                (-470, f"{amount:,.2f}"),
+                (-550, _money(balance)),
+            ]
+            for (posted, amount, payee), balance in zip(rows, balances, strict=True)
+        ],
+    )
+
+
+def _yearless_page(
+    bank: str,
+    last4: str,
+    opening: Decimal,
+    rows: Sequence[ExpectedRow],
+    above: Sequence[str] = (),
+) -> bytes:
+    """One page: who, which account, the two balances, ``above`` (lines), the rows."""
+    buf = io.BytesIO()
+    # Not invariant: the file says it was made today, as a bank's own file does.
+    c = canvas.Canvas(buf, pagesize=letter, invariant=0)
+    balances = _running(opening, rows)
+    _line(c, 750, [(40, bank)], size=14, bold=True)
+    _line(c, 750, [(380, f"Account Number: ******{last4}")])
+    _line(c, 60, [(40, _FOOTER)], size=7)
+    y = _rows(
+        c,
+        720,
+        [
+            [(40, "Beginning Balance"), (-300, f"${_money(opening)}")],
+            [(40, "Ending Balance"), (-300, f"${_money(balances[-1])}")],
+            *([(40, text)] for text in above),
+        ],
+    )
+    _yearless_rows(c, y - 12, rows, balances)
+    c.save()
+    return buf.getvalue()
+
+
+def yearless_no_period() -> bytes:
+    """``MM/DD`` rows of one March, no period, no statement date, a notice of 2031."""
+    return _yearless_page(
+        "Hazelgrove Community Bank",
+        "5127",
+        _YEARLESS_OPENING,
+        _YEARLESS_ROWS,
+        above=[YEARLESS_NOTICE],
+    )
+
+
+def yearless_over_new_year() -> bytes:
+    """``MM/DD`` rows from 27 December to 6 January; nothing else is dated."""
+    return _yearless_page("Otterburn Vale Bank", "6603", _NEW_YEAR_OPENING, _NEW_YEAR_ROWS)
+
+
+def _period_printed_once(*, promotion: bool) -> bytes:
+    buf = io.BytesIO()
+    c = canvas.Canvas(buf, pagesize=letter, invariant=0)
+    balances = _running(_ONCE_OPENING, _ONCE_ROWS)
+    _line(c, 750, [(40, "Wainstones Savings Bank")], size=14, bold=True)
+    _line(c, 750, [(380, "Account Number: ******3391")])
+    _line(c, 60, [(40, _FOOTER)], size=7)
+    # Lines 2 to 10 of page 1: the range is the tenth, under the header band.
+    y = _rows(
+        c,
+        732,
+        [
+            [(40, "Everyday Checking")],
+            [(40, "Imogen Tarrowby")],
+            [(40, "14 Sallowfield Lane")],
+            [(40, "Brackenholt")],
+            [(40, "Beginning Balance"), (-300, f"${_money(_ONCE_OPENING)}")],
+            [(40, "Ending Balance"), (-300, f"${_money(balances[-1])}")],
+            [(40, "Questions? Ask at any branch.")],
+            [(40, "Thank you for banking with us.")],
+            [(40, ONCE_RANGE)],
+            *([[(40, PROMOTION_RANGE)]] if promotion else []),
+        ],
+    )
+    first = 8
+    _yearless_rows(c, y - 12, _ONCE_ROWS[:first], balances[:first])
+    c.showPage()
+    _line(c, 750, [(40, "Wainstones Savings Bank")], size=14, bold=True)
+    _line(c, 750, [(380, "Page 2 of 2")])
+    _line(c, 60, [(40, _FOOTER)], size=7)
+    _yearless_rows(c, 720, _ONCE_ROWS[first:], balances[first:])
+    c.save()
+    return buf.getvalue()
+
+
+def unlabelled_period_once() -> bytes:
+    """The period printed once, without a label, as line 10 of page 1 of 2."""
+    return _period_printed_once(promotion=False)
+
+
+def two_ranges_on_page_one() -> bytes:
+    """The same with a promotion line starting with another range: which is the period?"""
+    return _period_printed_once(promotion=True)
+
+
+def statement_for_period() -> bytes:
+    """``Statement For: 06/01/2026 - 06/30/2026`` over ``MM/DD`` rows."""
+    return _yearless_page(
+        "Pikeshaw Mutual Bank",
+        "9084",
+        _FOR_OPENING,
+        _FOR_ROWS,
+        above=["Statement For: 06/01/2026 - 06/30/2026"],
+    )
+
+
 EXPECTED_ROWS: Final[dict[str, list[ExpectedRow]]] = {
     "left_heading_right_figures": list(_LEFT_ROWS),
     "tight_date_checking": list(_TIGHT_ROWS),
@@ -1112,6 +1309,11 @@ EXPECTED_ROWS: Final[dict[str, list[ExpectedRow]]] = {
     "section_total_off": [row for row in _SECTION_ROWS if row != SECTION_ROW_OFF],
     "newest_first_checking": list(_NEWEST_ROWS),
     "year_to_date_totals": list(_YTD_ROWS),
+    "yearless_no_period": list(_YEARLESS_ROWS),
+    "yearless_over_new_year": list(_NEW_YEAR_ROWS),
+    "unlabelled_period_once": list(_ONCE_ROWS),
+    "two_ranges_on_page_one": list(_ONCE_ROWS),
+    "statement_for_period": list(_FOR_ROWS),
 }
 
 #: ``(opening, closing)`` of the builders that are about balances.

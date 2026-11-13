@@ -82,6 +82,7 @@ Every outcome is audited (``document.ingest``) and emits ``document.updated``.
 
 from __future__ import annotations
 
+import re
 import uuid
 from collections.abc import Callable, Iterable, Sequence
 from dataclasses import dataclass, field
@@ -348,6 +349,10 @@ def _extract(
         warnings = [warning, *(w for w in result.warnings if w != warning)][:WARNINGS_MAX]
         return result.model_copy(update={"warnings": warnings})
     raise first
+
+
+#: The parse warning of rows placed in an assumed year (``year_assumed:2026``).
+_YEAR_ASSUMED: Final = re.compile(r"year_assumed:(\d{4})")
 
 
 def _review(db: Session, document: Document, kind: ReviewKind, payload: dict[str, Any]) -> None:
@@ -779,6 +784,26 @@ def _parse_document(
                     {"page": r.page, "bbox": [round(v, 2) for v in r.bbox]}
                     for r in info.skipped_regions
                 ],
+            },
+        )
+    assumed = [
+        int(found[1]) for w in info.warnings if (found := _YEAR_ASSUMED.fullmatch(w)) is not None
+    ]
+    if assumed:
+        # Rows that print no year, on a statement that prints no period: the
+        # parser placed them in a year (``table_statement.assume_years``).
+        # One question per document names it; the rows themselves wait under
+        # the importer's ``low_confidence`` item (``posted_date``).
+        _review(
+            db,
+            document,
+            ReviewKind.LOW_CONFIDENCE_FIELD,
+            {
+                "reason": "year_assumed",
+                "field": "posted_date",
+                # The latest, when the statements of the document differ.
+                "year": max(assumed),
+                "parser": info.parser.name,
             },
         )
     if info.unread_accounts:

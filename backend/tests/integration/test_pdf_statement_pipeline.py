@@ -16,6 +16,9 @@ institutions, invented numbers).
 * A payslip is kept on the document; one that does not add up waits in review.
 * The stored extraction carries the parser output, so choosing an account
   later re-imports without a new upload or extraction.
+* A statement whose rows print no year and that prints no period keeps its
+  rows, each pending on its date, with one question naming the assumed year
+  (``tests/fixtures/synth_bank_layouts.py``).
 * A card "Statement of Account" with only a statement date
   (``tests/fixtures/synth_card_statement.py``) imports into its credit card
   account with no review item.
@@ -58,6 +61,7 @@ from app.domain.transactions.models import ReviewState, Transaction
 from app.ingestion.intake.upload import receive_upload
 from app.ingestion.sandbox.protocol import ExtractResult
 from app.workers.handlers import ingest
+from tests.fixtures import synth_bank_layouts as layouts
 from tests.fixtures import synth_card_statement as card
 from tests.fixtures import synth_pdf_statements as synth
 from tests.fixtures.factories import Factories, UserRecord
@@ -371,6 +375,41 @@ def test_low_confidence_fields_are_imported_pending(env: Env) -> None:
     }
     # The statement itself reconciled: its closing balance is recorded.
     assert len(env.snapshots(account)) == 1
+
+
+def test_yearless_statement_without_a_period_waits_with_a_year_question(env: Env) -> None:
+    account = env.ledger.account(
+        env.household_id, number_last4="5127", type="checking", currency="USD"
+    )
+    document_id = env.ingest(layouts.yearless_no_period())
+
+    # The latest year in which the last row (27 March) is not after today.
+    today = date.today()
+    year = today.year if (today.month, today.day) >= (3, 27) else today.year - 1
+    expected = [
+        (posted.replace(year=year), amount.quantize(Decimal("0.000001")), payee)
+        for posted, amount, payee in layouts.EXPECTED_ROWS["yearless_no_period"]
+    ]
+    rows = env.transactions(account)
+    assert _rows(rows) == sorted(expected)
+    assert {row.review_state for row in rows} == {ReviewState.PENDING}
+
+    document = env.document(document_id)
+    assert document.status is DocumentStatus.NEEDS_REVIEW
+    assert document.account_id == account.id
+    items = env.open_reviews(document_id)
+    reasons = [item.payload.get("reason") for item in items]
+    assert reasons.count("year_assumed") == 1, reasons
+    (question,) = [item for item in items if item.payload.get("reason") == "year_assumed"]
+    assert question.kind is ReviewKind.LOW_CONFIDENCE_FIELD
+    assert question.payload["year"] == year
+    assert question.payload["field"] == "posted_date"
+    assert question.payload["parser"]
+    # The rows wait under the item that names the field.
+    (low,) = [item for item in items if item.payload.get("reason") == "low_confidence"]
+    assert "posted_date" in low.payload["fields"]
+    # An assumed year is no stated period.
+    assert (document.period_start, document.period_end) == (None, None)
 
 
 def test_unknown_account_is_chosen_later_from_the_stored_extraction(env: Env) -> None:

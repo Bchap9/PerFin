@@ -472,6 +472,17 @@ const COPY: Readonly<Record<string, Copy>> = {
     steps: ["Try “Process again”."],
   }),
   // -- low_confidence_field --------------------------------------------------
+  "low_confidence_field:year_assumed": (item) => {
+    const year = payloadNumber(item, "year");
+    return {
+      title: "Which year?",
+      what: `The dates on this statement print no year and PerFin found no statement period, so it placed the rows in ${year === null ? "the most recent year that fits" : String(year)}.`,
+      steps: [
+        "Check the year against the statement.",
+        "If it is right, confirm the rows. If it is not, correct their dates.",
+      ],
+    };
+  },
   "low_confidence_field:lines_skipped": (item) => {
     const examples = Array.isArray(item.payload["unknown_actions"])
       ? (item.payload["unknown_actions"] as unknown[])
