@@ -428,7 +428,7 @@ def test_blocks_with_the_same_title_are_still_two_statements() -> None:
         ("Margin balance 1,234.00", (None, None)),
         ("Prices delayed 20 minutes", (None, None)),
         ("Prices are delayed ...", (None, None)),
-        ("Questions? Call 800-555-0100", (None, None)),
+        ("Questions? Call 800-555-0142", (None, None)),
         ("Synthetic Brokerage is not a real company and its fund SGRX is 1234", (None, None)),
     ],
 )

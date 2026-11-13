@@ -19,6 +19,7 @@ import pytest
 
 from app.domain.imports.service import activity_table
 from app.ingestion.extract.registry import builtin_extractors
+from app.ingestion.parsers import brokerage_table
 from app.ingestion.parsers import confidence as conf
 from app.ingestion.parsers.brokerage_table import (
     PARSER_NAME,
@@ -1141,6 +1142,12 @@ def test_a_buy_to_close_never_leaves_the_option_held() -> None:
     )
     assert [a.type for a in found.statements[0].activity] == ["sell", "buy"]
     assert (found.rows, found.skipped) == (2, 1)
+
+
+def test_reinvest_counts_only_among_an_actions_first_five_words() -> None:
+    # Counted after the action is normalised and expanded: the fifth word, then the sixth.
+    assert brokerage_table._says_reinvest("Dividend Cash Paid On Reinvested Units")
+    assert not brokerage_table._says_reinvest("Dividend Received Cash Paid For Reinvested")
 
 
 def test_a_dividend_of_a_fund_named_reinvestment_stays_a_dividend() -> None:

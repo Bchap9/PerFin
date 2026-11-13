@@ -135,6 +135,25 @@ def test_option_trade_without_a_catalogue_uses_its_own_contract_size() -> None:
     assert trade.unit_price == Decimal("185.00")
 
 
+def test_option_sale_without_a_catalogue_uses_its_own_contract_size() -> None:
+    # The same for a SELLOPT: ten shares a contract, said by the trade itself.
+    data = (
+        synth.ofx_option_trades()
+        .replace(b"BUYOPT>", b"SELLOPT>")
+        .replace(b"INVBUY>", b"INVSELL>")
+        .replace(
+            b"<OPTBUYTYPE>BUYTOOPEN</OPTBUYTYPE>",
+            b"<OPTSELLTYPE>SELLTOCLOSE</OPTSELLTYPE><SHPERCTRCT>10</SHPERCTRCT>",
+        )
+        .replace(b"<UNITS>2<", b"<UNITS>-2<")
+        .replace(b"<TOTAL>-370.65", b"<TOTAL>36.35")
+    )
+    (trade,) = _only(data).activity
+    assert trade.type == "sell"
+    assert trade.unit_price == Decimal("18.50")
+    assert trade.amount == Decimal("36.35")
+
+
 def _debt_trade(verb: str, price: bytes, total: bytes) -> bytes:
     inner = "INVBUY" if verb == "BUY" else "INVSELL"
     return (
