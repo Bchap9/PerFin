@@ -23,6 +23,10 @@ so a test runs it through the real delimited extractor or the upload path.
   reconciles.
 * :func:`checking_signed_no_balance` - signed amounts, mostly money out, and
   nothing that proves the sign.
+* :func:`checking_only_spending` - signed amounts, every one money out, and
+  nothing else that says so.
+* :func:`savings_with_type_words_and_balance` - mostly deposits, beside a
+  column of ``Credit``/``Debit`` words and a running balance.
 * :func:`aggregator_two_accounts` - an aggregator's export of two accounts
   told apart by an ``Account`` column of names.
 * :func:`export_with_unique_account_cells` - an ``Account`` column whose
@@ -260,6 +264,47 @@ def checking_signed_no_balance() -> bytes:
         ("2026-08-27", "Brightwater Utilities", "-63.80"),
     ]
     return _file(("Date", "Description", "Amount"), rows)
+
+
+def checking_only_spending(header: Row = ("Date", "Description", "Amount")) -> bytes:
+    """Five rows under ``header``, every amount negative: a week without a deposit.
+
+    A fourth header cell gets the same invented name on every row.
+    """
+    rows: list[Row] = [
+        ("2026-10-02", "Harbor Lane Grocery", "-58.12"),
+        ("2026-10-03", "Tin Roof Diner", "-24.60"),
+        ("2026-10-05", "Northgate Fuel Stop", "-41.85"),
+        ("2026-10-06", "Paper Kite Books", "-17.30"),
+        ("2026-10-08", "Brightwater Utilities", "-61.44"),
+    ]
+    if len(header) == 4:
+        rows = [(day, text, "R. EXAMPLE", amount) for day, text, amount in rows]
+    return _file(header, rows)
+
+
+def savings_with_type_words_and_balance(*, card: bool = False) -> bytes:
+    """``Date,Description,Type,Amount,Balance``: five deposits, two withdrawals.
+
+    The amounts are signed, ``Credit`` stands beside each deposit and
+    ``Debit`` beside each withdrawal, and the balance is the sum so far.
+    ``card`` names the description column ``Merchant``.
+    """
+    balance = Decimal("2500.00")
+    rows = []
+    for day, text, amount in (
+        ("2026-06-01", "Marlow Design Payroll Split", "300.00"),
+        ("2026-06-05", "Transfer From Everyday Checking", "150.00"),
+        ("2026-06-09", "Transfer To Everyday Checking", "-220.00"),
+        ("2026-06-15", "Marlow Design Payroll Split", "300.00"),
+        ("2026-06-19", "Transfer From Everyday Checking", "75.00"),
+        ("2026-06-24", "Copper Pine Hardware", "-48.35"),
+        ("2026-06-30", "Interest Paid", "4.18"),
+    ):
+        balance += Decimal(amount)
+        kind = "Debit" if amount.startswith("-") else "Credit"
+        rows.append((day, text, kind, amount, str(balance)))
+    return _file(("Date", "Merchant" if card else "Description", "Type", "Amount", "Balance"), rows)
 
 
 def card_unsigned_with_direction_words(words: tuple[str, str] = ("DR", "CR")) -> bytes:

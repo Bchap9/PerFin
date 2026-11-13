@@ -734,7 +734,6 @@ def test_card_like_table_without_evidence_is_not_confident() -> None:
     ("header", "amounts"),
     [
         (["Date", "Description", "Amount"], ["12.50", "40.00", "9.99"]),  # every row positive
-        (["Date", "Description", "Amount"], ["-12.50", "-40.00", "-9.99"]),  # every row negative
         (["Date", "Merchant", "Amount"], ["-12.50", "-40.00", "900.00"]),
         (["Date", "Description", "Card No.", "Amount"], ["-12.50", "-40.00", "900.00"]),
         (
@@ -742,10 +741,22 @@ def test_card_like_table_without_evidence_is_not_confident() -> None:
             ["-12.50", "-40.00", "900.00"],
         ),
         (["Date", "Description", "Amount", "Statement Balance"], ["-12.50", "-40.00", "900.00"]),
+        (["Date", "Description", "Name on Card", "Amount"], ["-12.50", "-40.00", "900.00"]),
+        (["Date", "Description", "Amount"], ["0.00", "0.00", "0.00"]),  # nothing moved
+        (["Date", "Merchant", "Amount"], ["-12.50", "-40.00", "-9.99"]),
     ],
-    ids=["all-positive", "all-negative", "merchant", "card-no", "post-date", "statement-balance"],
+    ids=[
+        "all-positive",
+        "merchant",
+        "card-no",
+        "post-date",
+        "statement-balance",
+        "name-on-card",
+        "all-zero",
+        "all-negative-card",
+    ],
 )
-def test_one_signed_tables_and_card_headers_wait_for_a_person(
+def test_positive_tables_and_card_headers_wait_for_a_person(
     header: list[str], amounts: list[str]
 ) -> None:
     rows = [header]
@@ -762,6 +773,44 @@ def test_one_signed_tables_and_card_headers_wait_for_a_person(
     assert suggestion.sign_evidence is None
     assert "sign_unverified" in suggestion.doubts
     assert not suggestion.confident
+
+
+def test_a_table_of_money_out_alone_is_read_as_spending() -> None:
+    """Every amount negative, no card word: no export prints money in that way."""
+    table = _extracted(layouts.checking_only_spending())
+    suggestion = _suggested(table)
+    # Still on trust: a mapping saved from it never writes into a liability account.
+    assert (suggestion.confident, suggestion.sign_evidence, suggestion.doubts) == (True, None, ())
+    assert suggestion.spec.sign is Sign.INFLOW_POSITIVE
+    assert all(amount < 0 for amount in _read(table, suggestion.spec))
+    # One row is as plain as five.
+    one = _suggested(_table([["Date", "Description", "Amount"], ["2026-10-02", "X", "-58.12"]]))
+    assert one.doubts == ()
+    # Under a header that names a card the same rows wait.
+    card = _suggested(
+        _extracted(
+            layouts.checking_only_spending(("Date", "Description", "Name on Card", "Amount"))
+        )
+    )
+    assert (card.sign_evidence, card.doubts) == (None, ("sign_unverified",))
+
+
+def test_words_that_go_with_the_signs_stand_whatever_the_balance_looks_like() -> None:
+    """Mostly deposits and a balance that grows: the ``Credit``/``Debit`` words settle it."""
+    table = _extracted(layouts.savings_with_type_words_and_balance())
+    suggestion = _suggested(table)
+    assert suggestion.confident, suggestion.doubts
+    assert suggestion.sign_evidence == "balance"
+    assert suggestion.spec.sign is Sign.INFLOW_POSITIVE
+    amounts = _read(table, suggestion.spec)
+    assert (amounts[0], amounts[2]) == (Decimal("300.00"), Decimal("-220.00"))
+    # The words prove the sign under a card header without a balance; with one too.
+    card = _suggested(_extracted(layouts.savings_with_type_words_and_balance(card=True)))
+    assert card.confident, card.doubts
+    # Without the words the balance alone is the shape of what is owed on a card.
+    rows = [[c for i, c in enumerate(row) if i != 2] for row in table.rows]
+    bare = _suggested(_table(rows))
+    assert (bare.sign_evidence, bare.doubts) == ("balance", ("sign_unverified",))
 
 
 def test_type_words_prove_purchases_positive() -> None:

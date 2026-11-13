@@ -28,7 +28,7 @@ The flow (INGESTION.md "Parse", "Match and deduplicate", "Commit"):
      sign of a file is proven or the file waits: signed amounts read on
      trust (no debit/credit columns, no indicator, no running balance that
      agrees, no direction words that go with the signs) are not confident
-     when the header names a card, every amount has one sign or more rows
+     when the header names a card, no amount is money out or more rows
      are money in than money out (the suggestion's ``sign_unverified``
      doubt; ``auto_import: sign_unverified`` when it is the only one), and
      a sign on trust is never used to write into a liability account (a
@@ -1433,8 +1433,8 @@ def _sign_held(on_trust: bool, targets: list[_Target], doubted: bool = False) ->
     after a person picks a liability account is held here again.
 
     ``doubted``: the suggestion for this very table doubts the sign
-    (``sign_unverified``: a card-like header, amounts of one sign, more
-    money in than out). A mapping still on trust is not used for such a
+    (``sign_unverified``: a card-like header, no money out, more money
+    in than out). A mapping still on trust is not used for such a
     file whatever the account, which also stops a mapping saved from a card
     export before those doubts existed.
     """

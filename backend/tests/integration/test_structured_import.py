@@ -1636,6 +1636,25 @@ def test_card_export_is_held_not_imported_as_income(env: Env) -> None:
     assert sum(1 for amount in amounts if amount < 0) == len(layouts.CARD_ROWS) - 1
 
 
+def test_a_file_of_money_out_alone_imports_as_spending_but_never_into_a_card(env: Env) -> None:
+    """Every amount negative: spending in a checking account, a question on a card."""
+    data = layouts.checking_only_spending()
+    checking = env.ledger.account(env.household_id, type=AccountType.CHECKING)
+    env.ingest(data, account=checking, name="week.csv")
+    amounts = [t.amount for t in env.transactions(checking)]
+    assert len(amounts) == 5
+    assert all(amount < 0 for amount in amounts)
+    (mapping,) = _mappings(env)
+    assert mapping.sign_unverified is True  # on trust: it stops at a liability account
+    # The same layout to a card: its negative rows may be payments, so it waits.
+    card = env.ledger.account(env.household_id, type=AccountType.CREDIT_CARD)
+    document_id = env.ingest(data.replace(b"2026-10", b"2026-11"), account=card, name="card.csv")
+    assert env.transactions(card) == []
+    (held,) = env.open_reviews(document_id)
+    assert held.payload["reason"] == "mapping_required"
+    assert held.payload["auto_import"] == "sign_unverified"
+
+
 def test_proposed_account_type_is_not_checking_when_sign_unproven(env: Env) -> None:
     # Signed amounts nothing proves: the mapping is saved on trust, the
     # account is asked for, and the proposal does not say what kind it is.

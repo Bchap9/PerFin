@@ -1708,13 +1708,20 @@ same database transaction.
   under a card header; the spec's `sign` is set to what they prove). With
   no evidence, signed amounts are read as "positive is money in" on
   trust, and that is the doubt `sign_unverified` when the header names a
-  card (`names_card`: `Card No.`, `Member Name`, `Merchant`, `Statement
-  Balance`, a `Post Date` beside a `Transaction Date`...), every amount
-  has one sign, or more rows are money in than money out: a card export
-  lists purchases as positive, and read the other way every purchase
-  would be income. A running balance is no proof under a card header or
+  card (`names_card`: `Card No.`, `Name on Card`, `Member Name`,
+  `Merchant`, `Statement Balance`, a `Post Date` beside a `Transaction
+  Date`...), more rows are money in than money out (every row among
+  them), or every amount is zero: a card export lists purchases as
+  positive, and read the other way every purchase would be income. An
+  amount column whose cells are all negative is read as money out with no
+  doubt: no export prints money in that way save a card export of
+  payments alone, and a sign on trust is never written into a liability
+  account (below). A lone `Inflow` or credit column of negatives stays a
+  doubt. A running balance is no proof under a card header or
   when it has most rows as money in (what is owed on a card adds up with
-  purchases read as money in), nor is a debit or credit column that mixes
+  purchases read as money in), unless direction words go with the signs
+  the same way (a savings export with `Credit`/`Debit` beside its signed
+  amounts); nor is a debit or credit column that mixes
   signs, most of them negative. Words that go against the signs, or with
   them against a reconciling balance, are the doubt
   `indicator_contradicts_sign`. A header naming a security, a quantity

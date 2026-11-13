@@ -69,8 +69,10 @@ What remains (details in docs/ROADMAP.md):
 - **A file's sign is proven or the file waits** (INGESTION.md "The sign is
   proven or the file waits"). A table whose signed amounts are read as
   "positive is money in" on trust is no longer imported on its own when
-  its header names a card, every amount has one sign, or more rows are
-  money in than money out: it waits as `mapping_required` with the doubt
+  its header names a card (`Name on Card` is such a word too), every
+  amount is positive or zero, or more rows are money in than money out
+  (a table of negative amounts alone is still read as spending, and as
+  before never into a card or loan account on its own): it waits as `mapping_required` with the doubt
   `sign_unverified` (card exports list purchases as positive; read the
   other way every purchase was income). Direction and transaction-type
   words that go with the signs now prove the convention
@@ -78,7 +80,8 @@ What remains (details in docs/ROADMAP.md):
   are the doubt `indicator_contradicts_sign`; a table with a security, a
   quantity and a price column is `investment_columns` and is never read
   as a cash ledger on its own. A running balance is no proof under a card
-  header or when it has most rows as money in. A saved mapping still on
+  header or when it has most rows as money in, unless direction words go
+  with the signs as well. A saved mapping still on
   trust is not used for a file whose own suggestion doubts the sign.
   Files that were imported without a question before may now wait for
   one answer in the mapping editor; the answer is saved with the mapping.

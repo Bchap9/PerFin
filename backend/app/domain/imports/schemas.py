@@ -543,8 +543,8 @@ class MappingSuggestionOut(_Output):
     ``date_order_guessed``, ``no_rows``, ``indicator_values_unknown`` (an
     indicator cell that is no direction word, or a signed amount beside
     it), ``sign_unverified`` (nothing proves the sign and the table looks
-    like a card export, or its amounts say nothing: one sign only, or more
-    rows of money in than of money out), ``indicator_contradicts_sign``
+    like a card export, or its amounts say nothing: none is money out, or
+    more rows are money in than money out), ``indicator_contradicts_sign``
     (direction words and the amounts' signs disagree) and
     ``investment_columns`` (a security, a quantity and a price column:
     trades, not a cash ledger) and ``no_header`` (the table has no header

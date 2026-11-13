@@ -57,8 +57,9 @@ original file.
   own (``app.domain.imports.service``). The sign convention is proven
   (debit/credit columns, an indicator, a reconciling running balance,
   direction words that go with the amounts' signs) or, taken on trust, it
-  is a doubt for a table that looks like a card export or whose amounts say
-  nothing (``sign_unverified``); a table of securities trades is never a
+  is a doubt for a table that looks like a card export (a card word in the
+  header, or no more rows of money out than of money in:
+  ``sign_unverified``); a table of securities trades is never a
   confident cash ledger (``investment_columns``). A table without a header
   row is read from the shapes of its columns (:func:`_headerless`): the
   suggestion fills the mapping editor and is a doubt (``no_header``) unless
@@ -1253,7 +1254,7 @@ def _bounded(words: str) -> re.Pattern[str]:
 
 #: Header words only a card export uses.
 _CARD_HEADER: Final = _bounded(
-    r"card no|card number|card used|member name|merchant|statement balance"
+    r"card no|card number|card used|name on card|member name|merchant|statement balance"
 )
 _POST_DATE_HEADER: Final = _bounded(r"post(?:ed)? date")
 _TRANSACTION_DATE_HEADER: Final = _bounded(r"trans(?:action|\.)? date")
@@ -1344,12 +1345,14 @@ class MappingSuggestion:
     or transaction-type words that go with the signs of the amounts) or is
     None when signed amounts are read as "positive is money in" on trust.
     A sign on trust is the doubt ``sign_unverified`` when the header names
-    a card export (:func:`names_card`), when every amount has the same
-    sign, or when more rows are money in than money out (a card export
-    lists purchases as positive); a running balance is no proof either under a header that names
-    a card or when it has most rows as money in (a card's balance is what
-    is owed, which adds up with purchases read as money in); nor is a debit
-    or credit column that mixes signs, most of them negative
+    a card export (:func:`names_card`), when more rows are money in than
+    money out, every row among them (a card export lists purchases as
+    positive), or when every amount is zero; amounts that are all negative
+    are read as money out. A running balance is no proof either under a
+    header that names a card or when it has most rows as money in (a
+    card's balance is what is owed, which adds up with purchases read as
+    money in), unless direction words go with the signs as well; nor is a
+    debit or credit column that mixes signs, most of them negative
     (:func:`_notation_unsettled`).
     ``indicator_contradicts_sign``: direction
     words and signs disagree row to row (plain ``debit``/``credit`` words
@@ -1787,10 +1790,10 @@ def _data_rows(rows: Sequence[Sequence[str]], width: int = 0) -> list[Sequence[s
 def names_card(header: Sequence[str]) -> bool:
     """Whether a header row has words only a card export uses.
 
-    ``Card No.``, ``Card Number``, ``Card Used``, ``Member Name``,
-    ``Merchant``, ``Statement Balance``, or a ``Post Date`` beside a
-    ``Transaction Date``. Such a file may list purchases as positive
-    amounts, so its sign is never taken on trust.
+    ``Card No.``, ``Card Number``, ``Card Used``, ``Name on Card``,
+    ``Member Name``, ``Merchant``, ``Statement Balance``, or a ``Post Date``
+    beside a ``Transaction Date``. Such a file may list purchases as
+    positive amounts, so its sign is never taken on trust.
     """
     names = [_header_cell(cell) for cell in header]
     if any(_CARD_HEADER.search(name) for name in names):
@@ -2261,11 +2264,14 @@ def _mostly_inflow(amounts: Iterable[Decimal]) -> bool:
 def _sign_says_nothing(amounts: Sequence[Decimal]) -> bool:
     """Whether amounts read as "positive is money in" look as likely the other way round.
 
-    Every amount of one sign says nothing about which way the money went,
-    and more rows of money in than of money out is the shape of a card
-    export (:func:`_mostly_inflow`).
+    More rows of money in than of money out, every row among them, is the
+    shape of a card export or a list of expenses (:func:`_mostly_inflow`),
+    and amounts that are all zero say nothing at all. Amounts that are all
+    negative do say something: no export prints money in that way, save a
+    card export of payments alone, and a sign on trust is never written
+    into a liability account (``app.domain.imports.service``).
     """
-    return not any(amount > 0 for amount in amounts) or _mostly_inflow(amounts)
+    return not any(amounts) or _mostly_inflow(amounts)
 
 
 def _balances_agree(statements: list[ParsedStatement]) -> bool:
@@ -2420,9 +2426,17 @@ def suggest_mapping(table: Table, *, today: date | None = None) -> MappingSugges
         doubts.append("indicator_values_unknown")
     if against_balance or (correlation.contradicts and (correlation.strong or not balance_agrees)):
         doubts.append("indicator_contradicts_sign")
-    one_sided = _sign_says_nothing(amounts)
+    # Direction words that go with the signs as the balance has them
+    # prove the sign whatever the balance looks like.
+    worded = correlation.sign is spec.sign
+    # A lone debit or credit column whose cells are all read as money out
+    # against its header (an ``Inflow`` column of negatives) is no amount
+    # column: which of the header and the signs is right stays a question.
+    unsettled = _sign_says_nothing(amounts) or (
+        spec.amount_column is None and not any(a > 0 for a in amounts)
+    )
     if rows and (
-        (evidence is None and (card or one_sided))
+        (evidence is None and (card or unsettled))
         # A card's running balance is what is owed: it adds up with
         # purchases read as money in, so it proves nothing about a card.
         # Not every card export has a header word that says "card": a
@@ -2431,7 +2445,12 @@ def suggest_mapping(table: Table, *, today: date | None = None) -> MappingSugges
         # one sign).
         or (
             evidence == "balance"
-            and (card or _mostly_inflow(amounts) or (one_sided and not spec.has_header))
+            and not worded
+            and (
+                card
+                or _mostly_inflow(amounts)
+                or (not spec.has_header and not any(a > 0 for a in amounts))
+            )
         )
         # A debit or credit column that mixes signs, most of them negative.
         or _notation_unsettled(table, spec)
