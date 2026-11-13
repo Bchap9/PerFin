@@ -100,6 +100,17 @@ def test_led_row_whose_last_cell_ends_with_the_amount() -> None:
     assert row.amount.value == Decimal("-45.10")
 
 
+def _between(word: str) -> list[tuple[str, float]]:
+    """A row with ``word`` in a cell of its own between an amount and a balance."""
+    return [
+        ("04/02", 62.0),
+        ("PAYMENT", 150.0),
+        ("45.10", 400.0),
+        (word, 460.0),
+        ("1,307.40", 500.0),
+    ]
+
+
 @pytest.mark.parametrize(
     "cells",
     [
@@ -130,6 +141,23 @@ def test_led_row_whose_last_cell_ends_with_the_amount() -> None:
         [("04/02 PAYMENT 45.10 USD 1,307.40", 62.0)],
         [("04/02 PAYMENT 45.10 - $ 1,307.40", 62.0)],
         [("04/02", 62.0), ("PURCHASE 12.00 EUR", 150.0), ("13.05", 500.0)],
+        # Cents printed without their zero are a figure too.
+        [("04/02", 62.0), ("FEE", 150.0), (".50", 420.0), ("1,307.40", 500.0)],
+        [("04/02 FEE .50 1,307.40", 62.0)],
+        [("04/02", 62.0), ("FEE", 150.0), ("$.50", 420.0), ("1,307.40", 500.0)],
+        # Whatever one word stands between the two figures.
+        [("04/02", 62.0), ("PAYMENT", 150.0), ("45.10 OD", 400.0), ("1,307.40", 500.0)],
+        _between("Balance:"),
+        _between("bal"),
+        _between("US$"),
+        _between("C$"),
+        _between("usd"),
+        _between("\u20b9"),
+        _between("\u00a5"),
+        _between("/"),
+        [("04/02", 62.0), ("PAYMENT 45.10", 150.0), ("Balance 1,307.40", 460.0)],
+        [("04/02", 62.0), ("PAYMENT", 150.0), ("$ 45.10", 400.0), ("bal", 460.0), ("9.00", 500.0)],
+        [("04/02", 62.0), ("PAYMENT", 150.0), ("45.10 USD $", 400.0), ("1,307.40", 500.0)],
     ],
     ids=[
         "cells",
@@ -145,6 +173,21 @@ def test_led_row_whose_last_cell_ends_with_the_amount() -> None:
         "code-in-text",
         "sign-and-symbol",
         "figure-and-code",
+        "bare-cents",
+        "bare-cents-one-cell",
+        "bare-cents-symbol",
+        "overdrawn",
+        "label",
+        "word",
+        "letters-symbol",
+        "letter-symbol",
+        "code-lower",
+        "rupee",
+        "yen",
+        "slash",
+        "label-in-cell",
+        "symbol-figure-word",
+        "code-and-symbol",
     ],
 )
 def test_two_trailing_figures_are_no_led_row(cells: list[tuple[str, float]]) -> None:
@@ -157,6 +200,111 @@ def test_a_currency_code_after_words_is_still_a_led_row() -> None:
     assert row is not None
     assert row.description == ("WIRE OUT USD",)
     assert row.amount.value == Decimal("45.10")
+
+
+def test_a_figure_deep_in_the_text_is_still_a_led_row() -> None:
+    # Two words or more after it, and no date: a figure of the description.
+    row = led_row(
+        _line([("04/02", 62.0), ("REFUND 12.00 OF ORDER", 150.0), ("4.50", 500.0)]), _date_shaped
+    )
+    assert row is not None
+    assert row.description == ("REFUND 12.00 OF ORDER",)
+    assert row.amount.value == Decimal("4.50")
+
+
+def test_cents_without_a_zero_are_not_the_amount_of_a_led_row() -> None:
+    # Only a figure before another is read this way: alone, the line is counted.
+    assert led_row(_line([("04/02 FEE .50", 62.0)]), _date_shaped) is None
+    assert led_row(_line([("04/02", 62.0), ("FEE", 150.0), (".50", 500.0)]), _date_shaped) is None
+
+
+@pytest.mark.parametrize(
+    "cells",
+    [
+        [("04/02 CHECK 1042 250.00 04/03 CHECK 1043 75.00", 62.0)],
+        [
+            ("04/02", 62.0),
+            ("Deposit", 110.0),
+            ("250.00", 200.0),
+            ("04/03", 300.0),
+            ("Deposit", 350.0),
+            ("75.00", 500.0),
+        ],
+        [("04/02 FEE .50 04/03 FEE 2.00", 62.0)],
+        # Balances by day printed across, with named months.
+        [
+            ("Apr 02", 62.0),
+            ("1,200.00", 110.0),
+            ("Apr 09", 200.0),
+            ("1,300.00", 250.0),
+            ("Apr 16", 350.0),
+            ("900.00", 500.0),
+        ],
+        [("Apr 02 1,200.00 Apr 09 1,300.00", 62.0)],
+        # The letters of a date are no description.
+        [("Apr 02", 62.0), ("Apr 09", 200.0), ("Apr 16", 350.0), ("900.00", 500.0)],
+        [("04/02 MAY 12 4.50", 62.0)],
+    ],
+    ids=[
+        "checks-one-cell",
+        "cells",
+        "bare-cents",
+        "balances-named",
+        "balances-one-cell",
+        "dates-only",
+        "date-written-another-way",
+    ],
+)
+def test_two_entries_side_by_side_are_no_led_row(cells: list[tuple[str, float]]) -> None:
+    assert led_row(_line(cells), _date_shaped) is None
+
+
+@pytest.mark.parametrize(
+    "cells",
+    [
+        [("04/02", 62.0), ("PAYMENT", 150.0), ("CR", 460.0), ("45.10", 500.0)],
+        [("04/02", 62.0), ("PAYMENT", 150.0), ("DR", 460.0), ("45.10", 500.0)],
+        [("04/02", 62.0), ("PAYMENT", 150.0), ("db", 460.0), ("45.10", 500.0)],
+        [("04/02", 62.0), ("PAYMENT", 150.0), ("CR 45.10", 460.0)],
+        # After the figure in a cell of its own: no amount ends the line.
+        [("04/02", 62.0), ("PAYMENT", 150.0), ("45.10", 460.0), ("CR", 500.0)],
+    ],
+    ids=["credit", "debit", "lower", "leads-the-cell", "after"],
+)
+def test_a_marker_apart_from_its_figure_is_no_led_row(cells: list[tuple[str, float]]) -> None:
+    # A printed marker beats any direction a caller infers: the row is not
+    # made without it.
+    assert led_row(_line(cells), _date_shaped) is None
+
+
+def test_a_marker_s_letters_inside_the_text_are_words() -> None:
+    row = led_row(_line([("04/02", 62.0), ("12 MILL DR", 150.0), ("45.10", 500.0)]), _date_shaped)
+    assert row is not None
+    assert row.description == ("12 MILL DR",)
+    assert row.amount.credit is None
+
+
+def test_led_row_with_the_table_reader_s_own_dates() -> None:
+    from app.ingestion.parsers.table_statement import TableStatementParser
+
+    reader = TableStatementParser.__new__(TableStatementParser)
+    shaped = reader._date_shaped
+    row = led_row(_line([("04/02", 62.0), ("Dn", 150.0), ("107.40", 500.0)]), shaped)
+    assert row is not None
+    assert (row.date, row.description, row.amount.value) == ("04/02", ("Dn",), Decimal("107.40"))
+    assert (
+        led_row(_line([("04/02 CHECK 1042 250.00 04/03 CHECK 1043 75.00", 62.0)]), shaped) is None
+    )
+    assert (
+        led_row(_line([("04/02", 62.0), ("FEE", 150.0), (".50", 420.0), ("9.40", 500.0)]), shaped)
+        is None
+    )
+    # A limit: a word of the text shaped like a date, right after the date
+    # and written the same way, is taken for the posting date. The date and
+    # the amount are right; the description is shorter by that word.
+    row = led_row(_line([("04/02", 62.0), ("7/11 STORE", 150.0), ("4.50", 500.0)]), shaped)
+    assert row is not None
+    assert (row.date, row.description, row.amount.value) == ("04/02", ("STORE",), Decimal("4.50"))
 
 
 @pytest.mark.parametrize(
@@ -264,8 +412,18 @@ def test_figures_without_words_are_no_led_row(cells: list[tuple[str, float]]) ->
         [("04/02", 62.0), ("CARD PAYMENT", 150.0), ("7711", 500.0)],  # a number, no amount
         [("04/02", 62.0)],
         [("45.10", 62.0)],
+        # The date is in the first cell, whole.
+        [("Apr", 62.0), ("02", 90.0), ("STORE", 150.0), ("4.50", 500.0)],
     ],
-    ids=["no-date", "date-inside", "no-amount", "integer", "date-alone", "amount-alone"],
+    ids=[
+        "no-date",
+        "date-inside",
+        "no-amount",
+        "integer",
+        "date-alone",
+        "amount-alone",
+        "date-in-two-cells",
+    ],
 )
 def test_other_lines_are_no_led_row(cells: list[tuple[str, float]]) -> None:
     assert led_row(_line(cells), _date_shaped) is None
@@ -610,3 +768,22 @@ def test_the_title_is_looked_for_on_the_opening_line_s_page() -> None:
     first = [*_FIRST, "Thank you for banking with us"]
     lines = _page(first) + _page(["Beginning Balance 18,300.00", "Ending Balance 18,304.75"], 2)
     assert _starts(lines, _FIRST_TABLE) == [2, 11]
+
+
+def test_a_summary_printed_again_after_another_account_s_is_a_start() -> None:
+    # A limit, pinned: an opening figure is compared with the last start's
+    # only (two accounts may open with the same figure, 0.00 often), so the
+    # first summary printed again after the second one's is a third start.
+    # The caller tells it by its equal opening and closing figures.
+    again = ["CHEQUING SUMMARY", "Beginning Balance 2,410.00", "Ending Balance 2,623.15"]
+    lines = _page(_FIRST) + _page(_SECOND, page=2) + _page(again, page=3)
+    assert _starts(lines, _FIRST_TABLE) == [2, 10, 14]
+
+
+def test_any_line_of_letters_above_the_opening_line_is_taken_for_its_title() -> None:
+    # A limit, pinned: the function knows no titles. A sentence printed
+    # under the closing line of the account above is the start; whether the
+    # start line is a title is the caller's to ask.
+    lines = _page([*_FIRST, "Thank you for banking with us", "Beginning Balance 18,300.00"])
+    assert _starts(lines, _FIRST_TABLE) == [2, 10]
+    assert lines[10].text == "Thank you for banking with us"

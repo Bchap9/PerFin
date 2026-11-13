@@ -36,16 +36,25 @@ row is made of it:
 
 * two figures at the end of the line (an amount with a balance beside it:
   which of the two is the row's cannot be told without a header), also
-  when a currency symbol, a sign or a currency code stands between them
-  (``45.10 | $ | 1,307.40``, ``45.10 USD 1,307.40``);
+  when one word, whatever it is, stands between them (``45.10 | $ |
+  1,307.40``, ``45.10 USD 1,307.40``, ``45.10 OD | 1,307.40``, ``45.10 |
+  Balance 1,307.40``). Here cents printed without their zero are a figure
+  (``.50 | 1,307.40``); as the amount that ends the line they are not read
+  (``04/02 FEE .50`` is no row), so the caller counts that line too;
+* a figure in the text with a date somewhere after it (two entries printed
+  side by side, ``04/02 CHECK 1042 250.00 04/03 CHECK 1043 75.00``; a table
+  of balances by day printed across);
+* a ``CR``, ``DR`` or ``DB`` that leads its cell right before the amount
+  (``PAYMENT | CR | 45.10``): the marker is the figure's, and no row is
+  made without it. After words of a cell it is a word (``12 MILL DR``);
 * a dash or a plus standing alone before the amount, in a cell of its own
   or as a word of the text (``PAYMENT | - | 45.10``): a minus, a separator
   or an empty column, no telling. A sign in the amount's own cell
   (``- 45.10``) or on its symbol (``-$ | 45.10``) is the amount's;
 * a range of dates at the start (``04/01 through 04/30 interest 1.20``: a
   line about a period, not a transaction of a day);
-* nothing but digits between the date and the amount (a date and a
-  balance, a line of a table of balances by day);
+* no letter between the date and the amount but those of more dates (a
+  date and a balance, a line of a table of balances by day);
 * more than :data:`MAX_LED_WORDS` words (a sentence that starts with a
   date and ends with a figure).
 
@@ -53,6 +62,18 @@ What :func:`led_row` does not refuse, because it judges a shape and knows
 no label: a dated line of a summary (``04/30 | Ending Balance | 1,200.00``,
 ``04/30 Total 1,200.00``, ``12/31 Total fees charged 45.10``). The caller
 tests the labels of balance and total lines before it asks.
+
+Limits a caller should know. A word of the text shaped like a date, right
+after the date and written the same way (``04/02 | 7/11 STORE | 4.50``
+where the caller's ``date_shaped`` knows ``7/11``), is taken for the
+posting date and dropped: date and amount are right, the description is
+shorter by that word. :func:`summary_starts` compares an opening figure
+with the last start's only, so the first account's summary printed again
+after the second account's is a third start (equal opening and closing
+figures tell it); and it knows no titles, so any line of letters within
+:data:`TITLE_LINES_ABOVE` lines above an opening line is the start (a
+sentence under the closing line of the account above): whether a start
+line is a title is the caller's to ask.
 
 Patterns are anchored and free of nested quantifiers, and every text is
 cut to the limits of :mod:`app.ingestion.parsers.text` before one runs.
@@ -66,7 +87,6 @@ from dataclasses import dataclass
 from typing import Final
 
 from app.ingestion.parsers.base import ViewLine
-from app.ingestion.parsers.currency import known_currency
 from app.ingestion.parsers.text import MAX_LINE, Amount, find_amounts, read_amount
 
 #: A line of more words is a sentence, whatever it starts and ends with.
@@ -140,26 +160,41 @@ def _trailing_amount(words: Sequence[str]) -> tuple[Amount, int] | None:
     return None if amount is None else (amount, end - start)
 
 
-def _between_figures(word: str) -> bool:
-    """A word that may stand between an amount and the balance beside it:
-    a currency symbol, a sign, a currency code printed in capitals."""
-    if _LONE_SYMBOL.fullmatch(word) or word in _LONE_SIGNS:
-        return True
-    return word.isupper() and known_currency(word) is not None
+def _figure(word: str) -> bool:
+    """A word of the text that reads as an amount, cents without a zero too."""
+    return read_amount(word, bare_cents=True) is not None
 
 
 def _ends_with_amount(words: Sequence[str]) -> bool:
-    """The last word, or the last two (``$ 45.10``, ``45.10 CR``), read as an
-    amount, whatever symbols, signs and currency codes are printed after it."""
+    """One of the last two words reads as an amount (``45.10``, ``.50``,
+    ``45.10 CR``, ``45.10 Balance:``), or the last two together do, whatever
+    symbols and signs are printed alone after them (``45.10 - $``)."""
     end = len(words)
-    while end and _between_figures(words[end - 1]):
+    while end and (_LONE_SYMBOL.fullmatch(words[end - 1]) or words[end - 1] in _LONE_SIGNS):
         end -= 1
-    words = words[:end]
-    if not words:
-        return False
-    if read_amount(words[-1]) is not None:
-        return True
-    return len(words) >= 2 and read_amount(" ".join(words[-2:])) is not None
+    last = words[max(end - 2, 0) : end]
+    return any(_figure(word) for word in last) or _figure(" ".join(last))
+
+
+def _figure_then_date(words: Sequence[str], date_shaped: Callable[[str], bool]) -> bool:
+    """A figure with a date somewhere after it: two entries on one line."""
+    for at, word in enumerate(words):
+        if _figure(word):
+            return any(
+                _date_words(words[after:], date_shaped) for after in range(at + 1, len(words))
+            )
+    return False
+
+
+def _lettered(words: Sequence[str], date_shaped: Callable[[str], bool]) -> bool:
+    """A word that is no part of a date holds a letter."""
+    at = 0
+    while at < len(words):
+        dated = _date_words(words[at:], date_shaped)
+        if not dated and any(ch.isalpha() for ch in words[at]):
+            return True
+        at += dated or 1
+    return False
 
 
 def led_row(line: ViewLine, date_shaped: Callable[[str], bool]) -> LedRow | None:
@@ -172,7 +207,7 @@ def led_row(line: ViewLine, date_shaped: Callable[[str], bool]) -> LedRow | None
     that cell is an amount, else the last word of the last cell; a currency
     symbol standing alone before it, with or without its sign, in the cell
     before or as a word (``-$ | 45.10``, ``$ 45.10``), is part of it. What
-    stands between holds a letter.
+    stands between holds a letter that is not a date's.
     """
     cells = [cell.text.split() for cell in line.cells]
     cells = [words for words in cells if words]
@@ -207,6 +242,12 @@ def led_row(line: ViewLine, date_shaped: Callable[[str], bool]) -> LedRow | None
         amount = joined
     elif before >= dated and between[before][0] in _LONE_SIGNS:
         return None
+    elif (
+        before >= dated
+        and between[before][0].upper() in _MARKERS
+        and between[before - 1][1] != between[before][1]
+    ):
+        return None  # a marker leading its cell is the figure's: no row without it
     between = between[dated : count - taken]
     words = [word for word, _ in between]
     if not words:
@@ -217,9 +258,9 @@ def led_row(line: ViewLine, date_shaped: Callable[[str], bool]) -> LedRow | None
     second = _date_words(words, date_shaped)
     if second and _named(" ".join(words[:second])) == _named(date_text):
         between, words = between[second:], words[second:]
-    if _ends_with_amount(words):
+    if _ends_with_amount(words) or _figure_then_date(words, date_shaped):
         return None
-    if not any(ch.isalpha() for word in words for ch in word):
+    if not _lettered(words, date_shaped):
         return None
 
     description: list[list[str]] = []
