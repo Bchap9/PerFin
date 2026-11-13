@@ -90,7 +90,7 @@ from app.ingestion.sandbox.protocol import (
 
 SCHEMA_VERSION: Final = 1
 PARSER_NAME: Final = "layout_template"
-PARSER_VERSION: Final = "2"
+PARSER_VERSION: Final = "3"
 TEMPLATE_REF: Final = ParserRef(name=PARSER_NAME, version=PARSER_VERSION, kind="statement")
 
 MAX_LABEL: Final = 120

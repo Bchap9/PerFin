@@ -89,7 +89,7 @@ if TYPE_CHECKING:
     # Type only: parsing goes through defusedxml.
     from xml.etree.ElementTree import Element  # nosec B405
 
-VERSION: Final = "ofx/2"
+VERSION: Final = "ofx/3"
 MAX_DEPTH: Final = 64
 MAX_ELEMENTS: Final = 2_000_000
 

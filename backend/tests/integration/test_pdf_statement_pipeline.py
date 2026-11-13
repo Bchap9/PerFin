@@ -223,7 +223,7 @@ def test_pdf_statement_is_classified_parsed_reconciled_and_committed(env: Env, l
     assert document.institution_id == account.institution_id
     assert (document.period_start, document.period_end) == (stmt.start, stmt.end)
     assert document.parser_version is not None
-    assert document.parser_version.endswith("/5")
+    assert document.parser_version.endswith("/6")
     assert document.confidence is not None
     assert document.confidence["parse"]["reconciliation"] == ["ok"]
 
@@ -306,7 +306,7 @@ def test_card_statement_of_account_imports_into_its_card_account(env: Env) -> No
         stmt.period_start,
         stmt.statement_date,
     )
-    assert document.parser_version == "card_statement_generic/7"
+    assert document.parser_version == "card_statement_generic/8"
     assert document.confidence is not None
     assert document.confidence["parse"]["reconciliation"] == ["ok"]
 
@@ -374,7 +374,7 @@ def test_low_confidence_fields_are_imported_pending(env: Env) -> None:
     low = [i for i in items if i.kind is ReviewKind.LOW_CONFIDENCE_FIELD]
     assert [i.payload["reason"] for i in low] == ["low_confidence"]
     assert low[0].payload["fields"] == ["posted_date"]
-    assert low[0].payload["parser"] == "statement_generic/7"
+    assert low[0].payload["parser"] == "statement_generic/8"
     assert {t["transaction_id"] for t in low[0].payload["transactions"]} == {
         str(r.id) for r in rows
     }
