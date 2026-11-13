@@ -20,6 +20,17 @@ heading); only the **header** is unusual:
   titled ``DAILY ENDING BALANCE`` whose header is ``Date | Amount | Date |
   Amount Date | Amount`` over lines of date and balance pairs. Those lines
   are balances: none of them is a transaction.
+* :func:`reworded_headings_checking`: ``Txn Date | Narration | Withdrawals
+  / Debits | Deposits / Credits | Ending Daily Balance``, every heading in
+  words a plainer statement does not use.
+* :func:`amount_with_unit`: ``Date | Details | Amount (CAD) | Balance
+  (CAD)``, the currency printed after each money heading.
+* :func:`unknown_description_heading`: ``Date | Memo Text | Amount``; the
+  one heading nobody knows stands where the description is.
+* :func:`date_balance_pairs_with_title`: no transactions at all, and a line
+  ``Date | DAILY ENDING BALANCE | Amount`` over lines of a date and a
+  balance. The words between the date and the amount are a title, not a
+  description heading: nothing on the page is a transaction.
 
 ``*_ROWS`` give what a correct reading returns: ``(payee, signed amount)``.
 """
@@ -269,4 +280,144 @@ def daily_balance_after_rows() -> bytes:
             cells += [(date_x, day), (-amount_x, balance)]
         lines.append(cells)
     _rows(c, y - 30, lines)
+    return _done(buf, c)
+
+
+def _signed(amount: str) -> Decimal:
+    return Decimal(amount.replace(",", ""))
+
+
+#: ``(date, description, withdrawal, deposit, balance)``.
+_REWORDED: Final[tuple[tuple[str, str, str, str, str], ...]] = (
+    ("07/01/2026", "Fernhill Mills Payroll", "", "1,350.00", "2,250.00"),
+    ("07/03/2026", "Orchard Lane Rent", "800.00", "", "1,450.00"),
+    ("07/08/2026", "Tallow Street Market", "67.35", "", "1,382.65"),
+    ("07/14/2026", "Brindle Water Utility", "49.80", "", "1,332.85"),
+    ("07/20/2026", "Mobile Deposit", "", "175.00", "1,507.85"),
+    ("07/28/2026", "Lantern Fuel Stop", "38.60", "", "1,469.25"),
+)
+REWORDED_ROWS: Final[Expected] = tuple(
+    (text, _signed(paid_in) if paid_in else -_signed(out)) for _, text, out, paid_in, _ in _REWORDED
+)
+
+
+def reworded_headings_checking() -> bytes:
+    """Every heading is a longer wording; the figures stand under their own."""
+    buf, c = _page(
+        "Harrowgate Community Bank",
+        "Neighbour Checking",
+        "6630",
+        "July 1, 2026 to July 31, 2026",
+        "900.00",
+        "1,469.25",
+    )
+    _table(
+        c,
+        [
+            (40, "Txn Date"),
+            (110, "Narration"),
+            (280, "Withdrawals / Debits"),
+            (385, "Deposits / Credits"),
+            (485, "Ending Daily Balance"),
+        ],
+        [
+            [
+                (40, day),
+                (110, text),
+                *([(280, out)] if out else [(385, paid_in)]),
+                (485, balance),
+            ]
+            for day, text, out, paid_in, balance in _REWORDED
+        ],
+    )
+    return _done(buf, c)
+
+
+#: ``(date, description, amount, balance)``.
+_UNIT: Final[tuple[tuple[str, str, str, str], ...]] = (
+    ("08/03/2026", "Fernhill Mills Payroll", "1,200.00", "1,700.00"),
+    ("08/05/2026", "Juniper Hollow Grocer", "-72.15", "1,627.85"),
+    ("08/11/2026", "Slate River Transit", "-30.00", "1,597.85"),
+    ("08/17/2026", "Cobalt Corner Pharmacy", "-22.40", "1,575.45"),
+    ("08/24/2026", "Mobile Deposit", "60.00", "1,635.45"),
+    ("08/29/2026", "Wren Street Cinema", "-28.50", "1,606.95"),
+)
+UNIT_ROWS: Final[Expected] = tuple((text, _signed(amount)) for _, text, amount, _ in _UNIT)
+
+
+def amount_with_unit() -> bytes:
+    """The currency stands in brackets after each money heading."""
+    buf, c = _page(
+        "Tamarack Shore Bank",
+        "Chequing Account",
+        "2957",
+        "August 1, 2026 to August 31, 2026",
+        "500.00",
+        "1,606.95",
+    )
+    _table(
+        c,
+        [(40, "Date"), (110, "Details"), (330, "Amount (CAD)"), (440, "Balance (CAD)")],
+        [
+            [(40, day), (110, text), (330, amount), (440, balance)]
+            for day, text, amount, balance in _UNIT
+        ],
+    )
+    return _done(buf, c)
+
+
+#: ``(date, description, amount)``.
+_MEMO: Final[tuple[tuple[str, str, str], ...]] = (
+    ("09/02/2026", "Fernhill Mills Payroll", "1,410.00"),
+    ("09/04/2026", "Orchard Lane Rent", "-925.00"),
+    ("09/09/2026", "Kettle and Crumb Bakery", "-14.75"),
+    ("09/15/2026", "Marrow and Pine Hardware", "-88.20"),
+    ("09/21/2026", "Mobile Deposit", "95.00"),
+    ("09/27/2026", "Lantern Fuel Stop", "-9.60"),
+)
+MEMO_ROWS: Final[Expected] = tuple((text, _signed(amount)) for _, text, amount in _MEMO)
+
+
+def unknown_description_heading() -> bytes:
+    """``Memo Text`` is no heading anyone knows; it stands where the description is."""
+    buf, c = _page(
+        "Sorrel Bridge Bank",
+        "Basic Checking",
+        "8145",
+        "September 1, 2026 to September 30, 2026",
+        "1,050.00",
+        "1,517.45",
+    )
+    _table(
+        c,
+        [(40, "Date"), (110, "Memo Text"), (-430, "Amount")],
+        [[(40, day), (110, text), (-430, amount)] for day, text, amount in _MEMO],
+    )
+    return _done(buf, c)
+
+
+#: ``(day, balance)`` of the only block the page prints.
+_PAIRS_ONLY: Final[tuple[tuple[str, str], ...]] = (
+    ("10/01/2026", "1,880.00"),
+    ("10/09/2026", "1,955.60"),
+    ("10/20/2026", "2,040.10"),
+)
+PAIR_BALANCES: Final = tuple(_signed(balance) for _, balance in _PAIRS_ONLY)
+
+
+def date_balance_pairs_with_title() -> bytes:
+    """A title printed between ``Date`` and ``Amount`` heads balances, not a table of rows."""
+    buf, c = _page(
+        "Elmwater Savings Bank",
+        "Reserve Savings",
+        "4478",
+        "October 1, 2026 to October 31, 2026",
+        "1,880.00",
+        "2,040.10",
+    )
+    _table(
+        c,
+        [(40, "Date"), (150, "DAILY ENDING BALANCE"), (-430, "Amount")],
+        [[(40, day), (-430, balance)] for day, balance in _PAIRS_ONLY],
+    )
     return _done(buf, c)
