@@ -15,6 +15,8 @@ Statements come from ``tests/fixtures/synth_loans.py`` (an invented lender).
 * Matching respects grants (F3): a member's statement does not reach a loan
   on an account they cannot edit; no loan at all is ``loan_unmatched``.
 * A printed rate that differs from the loan's raises ``loan_rate_differs``.
+* A periodic statement (next payment, last month, year to date) records last
+  month's payment on the day its activity row says, never another column.
 """
 
 from __future__ import annotations
@@ -125,9 +127,9 @@ class Env:
             assert found is not None
             return balance_as_of(db, found, on)
 
-    def loan(self, **kwargs: Any) -> tuple[Account, Loan]:
+    def loan(self, *, last4: str = synth.LAST4, **kwargs: Any) -> tuple[Account, Loan]:
         account = self.ledger.account(
-            self.household_id, type=AccountType.MORTGAGE, number_last4=synth.LAST4, name="Home"
+            self.household_id, type=AccountType.MORTGAGE, number_last4=last4, name="Home"
         )
         terms = synth.TERMS
         fields: dict[str, Any] = {
@@ -245,3 +247,37 @@ def test_rate_that_differs_is_flagged(env: Env) -> None:
     assert document.status is DocumentStatus.NEEDS_REVIEW
     assert env.reasons(document) == {"loan_rate_differs"}
     assert len(env.payments(loan)) == 1
+
+
+def test_periodic_statement_records_last_months_payment(env: Env) -> None:
+    account, loan = env.loan(
+        last4=synth.PERIODIC_LAST4,
+        principal_original="200000.00",
+        rate="0.05",
+        origination_date=date(2021, 6, 1),
+        payment_amount="1172.25",
+        escrow_amount="301.50",
+    )
+    document = env.ingest(synth.periodic_statement_pdf(), "mortgage-2026-03.pdf")
+    assert env.reasons(document) == set()
+    assert document.status is DocumentStatus.PROCESSED
+    assert document.account_id == account.id
+    [payment] = env.payments(loan)
+    assert (payment.paid_on, payment.principal, payment.interest, payment.escrow, payment.fees) == (
+        date(2026, 3, 2),
+        Decimal("410.37"),
+        Decimal("761.88"),
+        Decimal("301.50"),
+        Decimal("0.00"),
+    )
+    assert payment.source_document_id == document.id
+    assert env.balance(account, date(2026, 3, 2)) == Decimal("-182440.17")
+    statement: list[BalanceSnapshot] = env.query(
+        select(BalanceSnapshot).where(
+            BalanceSnapshot.account_id == account.id,
+            BalanceSnapshot.source == BalanceSource.STATEMENT,
+        )
+    )
+    assert [(s.as_of_date, s.balance) for s in statement] == [
+        (date(2026, 3, 2), Decimal("-182440.17"))
+    ]

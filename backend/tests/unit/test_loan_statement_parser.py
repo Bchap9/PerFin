@@ -17,7 +17,7 @@ import pytest
 
 from app.ingestion.extract.pdf import extract_pdf
 from app.ingestion.parsers import confidence
-from app.ingestion.parsers.base import DocumentView
+from app.ingestion.parsers.base import Cell, DocumentView, ViewLine
 from app.ingestion.parsers.loan_statement import (
     MONEY_FIELDS,
     LoanStatementParser,
@@ -153,3 +153,78 @@ def test_tampered_scan_scales_its_figures_by_their_cells() -> None:
     loan = LoanStatementParser().parse(view, threshold=confidence.DEFAULT_THRESHOLD).loan
     assert loan is not None
     assert loan.confidence["principal"] == pytest.approx(confidence.UNRECONCILED * 0.96)
+
+
+def _text_view(*texts: str) -> DocumentView:
+    """A one-page text view of whole lines (one cell each)."""
+    lines = tuple(
+        ViewLine(1, at, (Cell(text, 72.0, 40.0 + 16 * at, 400.0, 50.0 + 16 * at),), text, 10.0)
+        for at, text in enumerate(texts)
+    )
+    return DocumentView(lines=lines, source_format="pdf", truncated=False, page_count=1)
+
+
+_RECEIPT_LINES = (
+    "Placeholder Home Lending",
+    "Mortgage Statement",
+    "Payment received 04/01/2024",
+    "Principal 243.00",
+    "Interest 1,276.03",
+    "Total payment received 1,519.03",
+)
+
+
+@pytest.mark.parametrize(
+    ("printed", "rate"),
+    [
+        ("Interest rate 4, 75%", None),
+        ("Interest rate 4,75%", None),
+        ("Interest rate 4. 75%", None),
+        ("Interest rate 4.75%", Decimal("0.0475")),
+        ("Interest rate 6.125 %", Decimal("0.06125")),
+        ("Interest rate: 7%", Decimal("0.07")),
+    ],
+)
+def test_split_percentage_is_not_a_rate(printed: str, rate: Decimal | None) -> None:
+    view = _text_view(*_RECEIPT_LINES, printed)
+    loan = LoanStatementParser().parse(view, threshold=confidence.DEFAULT_THRESHOLD).loan
+    assert loan is not None
+    assert loan.principal == Decimal("243.00")
+    assert loan.rate == rate
+
+
+@pytest.mark.parametrize(
+    ("printed", "lender"),
+    [
+        ("Lender: Example Lending Co", "Example Lending Co"),
+        ("Lender paid expenses 0.00", "Placeholder Home Lending"),
+        ("Lender Example Lending Co", "Placeholder Home Lending"),
+    ],
+)
+def test_a_lender_line_needs_its_colon(printed: str, lender: str) -> None:
+    view = _text_view(*_RECEIPT_LINES, printed)
+    loan = LoanStatementParser().parse(view, threshold=confidence.DEFAULT_THRESHOLD).loan
+    assert loan is not None
+    assert loan.lender == lender
+
+
+@pytest.mark.parametrize(
+    ("printed", "last4"),
+    [
+        ("Loan number XXXXXX4821", "4821"),
+        ("Loan number 0004417755", "7755"),
+        ("Loan No. 00-0441-7755", "7755"),
+        ("Account number: 000 441 7755", "7755"),
+        ("Account no 0004417755 Statement date 04/15/2024", "7755"),
+        # Too short to be a loan number, or run into the figure after it: not read.
+        ("Loan number 7755", None),
+        ("Loan number 0004417755 03/20/2026", None),
+        ("Reference 0004417755", None),
+    ],
+)
+def test_last_four_of_a_number_printed_in_full(printed: str, last4: str | None) -> None:
+    view = _text_view(*_RECEIPT_LINES, printed)
+    loan = LoanStatementParser().parse(view, threshold=confidence.DEFAULT_THRESHOLD).loan
+    assert loan is not None
+    assert loan.last4 == last4
+    assert "0004417755" not in loan.model_dump_json()
