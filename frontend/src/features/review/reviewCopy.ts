@@ -487,7 +487,10 @@ const COPY: Readonly<Record<string, Copy>> = {
       // amount, a kind of investment activity it does not read).
       return {
         title: "Some records were not read",
-        what: `${count(item, "count")} records of this file could not be read and were not imported.`,
+        what:
+          payloadNumber(item, "count") === 1
+            ? "1 record of this file could not be read and was not imported."
+            : `${count(item, "count")} records of this file could not be read and were not imported.`,
         why: "The file holds more records than PerFin imported: a record had no date or amount it could make out, or is of a kind it does not read. PerFin never guesses a record; everything else in the file was imported.",
         steps: [
           "Compare the imported rows with the file or your statement to find what is missing.",

@@ -283,9 +283,16 @@ if TYPE_CHECKING:
 IDS_MAX: Final = 50
 #: Review kinds a re-run answers (resolved when the re-run goes through).
 RERUN_ANSWERS: Final = frozenset({ReviewKind.UNPARSED, ReviewKind.UNKNOWN_ACCOUNT})
+#: ``unparsed`` reasons a re-run does not answer: the pipeline raised them
+#: about the reading itself (scanned pages OCR never read), the importer
+#: never raises them again, and only the person or reading the document
+#: again through the pipeline settles them.
+PIPELINE_REASONS: Final = frozenset({"ocr_failed"})
 #: An extractor's count of the records of one statement it could not read
 #: (``app.ingestion.extract.ofx.skipped_warnings``; OFX, QFX and QIF).
-_SKIPPED_WARNING: Final = re.compile(r"transaction_skipped:(\d+)")
+#: Extraction output is untrusted: ASCII digits only, and no count longer
+#: than a file could hold (anything else is not a count and is ignored).
+_SKIPPED_WARNING: Final = re.compile(r"transaction_skipped:([0-9]{1,9})")
 #: Statuses whose stored extraction may be (re-)imported.
 IMPORTABLE_STATUSES: Final = frozenset({DocumentStatus.NEEDS_REVIEW, DocumentStatus.PROCESSED})
 #: Extraction kinds whose table may be imported with a confident suggestion
@@ -2288,7 +2295,11 @@ def run_apply_job(
         result = _importable(document)
     except ProblemError:
         return None
-    answered = repo.open_review_items(db, household_id, document.id, RERUN_ANSWERS)
+    answered = [
+        item
+        for item in repo.open_review_items(db, household_id, document.id, RERUN_ANSWERS)
+        if (item.payload or {}).get("reason") not in PIPELINE_REASONS
+    ]
     started = clock.utcnow()
     outcome = import_extraction(
         db,

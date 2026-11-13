@@ -70,6 +70,12 @@ _DATE_LIKE: Final = re.compile(
     r"|\d{1,2}\.?[\s-]*[^\W\d_]{3,}"
     r"|[^\W\d_]{3,}\.?[\s-]*\d{1,2}"
 )
+#: A cell that is nothing but a day and a month with a dot between (no year,
+#: no closing dot). Told from a decimal amount by its two-digit second group
+#: and by both groups being in range (:func:`_dated`).
+_DAY_MONTH: Final = re.compile(r"(\d{1,2})\.(\d{2})")
+#: A cell that is nothing but six digits (a date written ``YYMMDD`` or ``DDMMYY``).
+_SIX_DIGITS: Final = re.compile(r"\d{6}")
 
 
 def stored_result(extraction: dict[str, Any] | None) -> ExtractResult | None:
@@ -134,19 +140,31 @@ def layout_import_tables(pages: Sequence[Page]) -> list[Table]:
 
 
 def _dated(cell: str) -> bool:
-    return _DATE_LIKE.search(cell) is not None
+    if _DATE_LIKE.search(cell) is not None:
+        return True
+    alone = cell.strip()
+    if _SIX_DIGITS.fullmatch(alone):
+        return True
+    pair = _DAY_MONTH.fullmatch(alone)
+    if pair is None:
+        return False
+    first, second = int(pair.group(1)), int(pair.group(2))
+    return (1 <= first <= 31 and 1 <= second <= 12) or (1 <= first <= 12 and 1 <= second <= 31)
 
 
 def has_dated_rows(table: Table) -> bool:
-    """Whether a row under the header could be a transaction: a date and another figure.
+    """Whether a row could be a transaction: a date and another figure.
 
     Deliberately wide (any date shape, with or without a year, alone in its
     cell or before a description; any second cell with a digit): a table
     that passes may still be unmappable, and is offered as before. One that
     fails has no row a column mapping could read: a summary box of labels
     and totals, a ``Payment due`` line whose only figure is the date.
+
+    The first row counts too: a page table is not known to have a header
+    row, and column names never pass (no date beside a second figure).
     """
-    for row in table.rows[1:]:
+    for row in table.rows:
         figures = [cell for cell in row if _DIGIT.search(cell)]
         if len(figures) >= 2 and any(_dated(cell) for cell in figures):
             return True

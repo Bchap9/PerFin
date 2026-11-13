@@ -217,6 +217,13 @@ describe("review explanations", () => {
     );
   });
 
+  it("says one unread record in the singular", () => {
+    const found = explain(
+      item("low_confidence_field", { reason: "lines_skipped", count: 1, source: "extraction" }),
+    );
+    expect(found.what).toBe("1 record of this file could not be read and was not imported.");
+  });
+
   it("names both periods of an overlapping statement", () => {
     const found = explain(
       item("possible_duplicate", {
