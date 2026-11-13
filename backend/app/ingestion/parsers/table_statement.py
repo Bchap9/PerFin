@@ -49,7 +49,24 @@ are read the same way:
    Section headings set the row type (fees, interest) or start a *pending*
    section whose rows are counted but not imported (they are not posted and
    not part of the balances). Totals, page footers and "continued" lines are
-   skipped. A dated line without a readable amount is counted as skipped.
+   skipped.
+   **Direction from the title.** A section title (:data:`SECTION_TITLES`:
+   ``Deposits and additions``, ``Electronic withdrawals``, ``Checks paid``,
+   ``Payments and credits``, ``Purchases``, ``Fees``...) also says which way
+   the money of its rows went, for a bank account, a card or both
+   (:class:`SectionRule`). It is read between the rows of a table and
+   **above a header**: the nearest of the two lines before it, on its page,
+   that has letters and no amount. Only an amount of the ``Amount`` column
+   printed with no sign at all takes that direction: a minus, a plus,
+   brackets, ``CR``/``DR``/``DB`` and a debit or credit column always say
+   more than a title. A title naming both sides (``Deposits and
+   withdrawals``) gives none; a line with an amount, of more than
+   :data:`SECTION_TITLE_WORDS` words, or with one of
+   :data:`NOT_TITLE_WORDS` (``Interest summary``) is no title. A header
+   without a title, on a later page than the last row and with the columns
+   of the table being read, is that table's header **printed again**: the
+   direction and the type carry on. Any other header without a title starts
+   a table with neither. A dated line without a readable amount is counted as skipped.
    A **payment stub** is left out before anything is read
    (:meth:`TableStatementParser.without_stubs`): from a line saying to
    detach it (``Please detach here``, ``Return this portion``..., without
@@ -153,7 +170,7 @@ from dataclasses import dataclass, field, replace
 from datetime import date, timedelta
 from decimal import Decimal
 from functools import lru_cache
-from typing import ClassVar, Final, Literal
+from typing import ClassVar, Final, Literal, NamedTuple
 
 from app.ingestion.classify.dates import HEADER_BAND_LINES as BAND_LINES
 from app.ingestion.classify.dates import (
@@ -463,6 +480,117 @@ def read_period(
 BBox = tuple[float, float, float, float]
 
 
+#: Which way the money of a row went: into the account or out of it.
+Direction = Literal["in", "out"]
+
+
+class SectionRule(NamedTuple):
+    """What a section title says about the rows under it."""
+
+    #: The direction of an unsigned amount on a bank account's statement...
+    bank: Direction | None
+    #: ...and on a card's (``Payments`` is money in there and says nothing
+    #: on a bank account; ``Deposits`` the other way round).
+    card: Direction | None
+    #: The transaction type of the rows (``fee``, ``int``), if the title names one.
+    kind: str | None
+
+
+def _titles(
+    keys: str, bank: Direction | None, card: Direction | None, kind: str | None = None
+) -> dict[str, SectionRule]:
+    return {key.strip(): SectionRule(bank, card, kind) for key in keys.split(",")}
+
+
+#: Section titles (normalised) and what each says. A title matches a key
+#: when, a trailing ``continued`` or ``cont`` dropped, it is the key or
+#: starts with the key and a space; the longest key wins (:func:`section_title`).
+SECTION_TITLES: Final[Mapping[str, SectionRule]] = {
+    **_titles(
+        "deposits and additions, deposits and other additions, deposits and other credits,"
+        " deposits and credits, deposits credits, deposits, additions, electronic deposits,"
+        " electronic credits",
+        "in",
+        None,
+    ),
+    **_titles("other credits, credits", "in", "in"),
+    **_titles(
+        "withdrawals and other debits, withdrawals and other subtractions,"
+        " withdrawals and debits, withdrawals and subtractions, withdrawals debits,"
+        " withdrawals, other withdrawals, electronic withdrawals, electronic debits,"
+        " atm and debit card withdrawals, atm debit card withdrawals, subtractions,"
+        " checks paid, checks cleared, checks",
+        "out",
+        None,
+    ),
+    **_titles("other debits, debits, purchases and adjustments, purchases", "out", "out"),
+    **_titles(
+        "payments and other credits, payments and credits, payments credits, payments",
+        None,
+        "in",
+    ),
+    **_titles("new charges, cash advances, balance transfers", None, "out"),
+    **_titles("fees charged, service fees, service charges, fees", "out", "out", "fee"),
+    **_titles("interest charged", "out", "out", "int"),
+    **_titles("interest paid, interest earned", "in", None, "int"),
+    **_titles("interest", None, "out", "int"),
+    **_titles("transactions", None, None),
+}
+#: The most words a section title has: a longer line is a sentence.
+SECTION_TITLE_WORDS: Final = 8
+#: A word of these makes a line something else than the title of rows
+#: (``Interest summary``, ``Interest rate``, ``Fees information``).
+NOT_TITLE_WORDS: Final = frozenset({"summary", "calculation", "rate", "information"})
+#: Printed after the title of a section that runs on from the page before.
+_CONTINUED_WORDS: Final = frozenset({"continued", "cont"})
+#: Words after a title's key that name the other side (``Deposits and
+#: withdrawals``, ``Withdrawals and deposits``): the title has no direction.
+_OUT_WORDS: Final = frozenset(
+    {"withdrawals", "debits", "subtractions", "checks", "fees", "charges", "purchases"}
+)
+_IN_WORDS: Final = frozenset({"deposits", "credits", "additions", "payments"})
+#: Lines above a header searched for its section's title.
+TITLE_LINES_ABOVE: Final = 2
+
+
+class SectionTitle(NamedTuple):
+    """A section title as :func:`section_title` read it."""
+
+    #: The key of the titles' table it matched.
+    key: str
+    rule: SectionRule
+    #: ``continued`` or ``cont`` was printed after it.
+    continued: bool
+
+
+def section_title(
+    norm: str, titles: Mapping[str, SectionRule] = SECTION_TITLES
+) -> SectionTitle | None:
+    """The section title ``norm`` (a normalised line) is, or None.
+
+    The caller checks that the line holds no amount (the normalised text
+    cannot tell ``12.00`` from two numbers).
+    """
+    words = norm.split()
+    if len(words) > SECTION_TITLE_WORDS or not NOT_TITLE_WORDS.isdisjoint(words):
+        return None
+    continued = len(words) > 1 and words[-1] in _CONTINUED_WORDS
+    text = " ".join(words[:-1] if continued else words)
+    key = max(
+        (key for key in titles if text == key or text.startswith(f"{key} ")),
+        key=len,
+        default=None,
+    )
+    if key is None:
+        return None
+    rule = titles[key]
+    side = rule.bank or rule.card
+    other = _OUT_WORDS if side == "in" else _IN_WORDS if side == "out" else frozenset()
+    if not other.isdisjoint(text[len(key) :].split()):
+        rule = SectionRule(None, None, rule.kind)
+    return SectionTitle(key, rule, continued)
+
+
 @dataclass
 class _Row:
     page: int
@@ -480,6 +608,12 @@ class _Row:
     check: bool = False
     #: An informational foreign amount and its currency (``360.00``, ``US Dollar``).
     foreign: list[str] = field(default_factory=list)
+    #: Which way the row's section says its money went, for this parser's
+    #: kind of account (None: no title, or one that does not say).
+    direction: Direction | None = None
+    #: The number of the row's section: it goes up each time a section starts
+    #: or ends at a header, and stays over a page break the section runs across.
+    section: int = 0
 
 
 @dataclass
@@ -644,19 +778,8 @@ class TableStatementParser(DocumentParser):
     )
     stub_markers: ClassVar[tuple[str, ...]] = STUB_MARKERS
     pending_markers: ClassVar[tuple[str, ...]] = ("pending",)
-    #: Section headings (normalised prefix) -> transaction type (None: plain).
-    sections: ClassVar[Mapping[str, str | None]] = {
-        "fees charged": "fee",
-        "fees": "fee",
-        "interest charged": "int",
-        "interest": "int",
-        "purchases": None,
-        "payments and other credits": None,
-        "payments and credits": None,
-        "deposits and other credits": None,
-        "withdrawals and other debits": None,
-        "transactions": None,
-    }
+    #: Section titles and what each says of its rows (direction, type).
+    section_titles: ClassVar[Mapping[str, SectionRule]] = SECTION_TITLES
     skip_prefixes: ClassVar[tuple[str, ...]] = ("total", "subtotal", "page ", "continued")
     #: Words in a description that type a row when its section does not.
     type_keywords: ClassVar[tuple[tuple[str, str], ...]] = (
@@ -1063,14 +1186,32 @@ class TableStatementParser(DocumentParser):
         elif name == "charges" and summary.charges_total is None:
             summary.charges_total = amounts[0]
 
-    def _section(self, norm: str) -> tuple[bool, str | None] | None:
-        """``(pending, type)`` when ``norm`` is a section heading."""
+    def _section(self, norm: str) -> tuple[bool, SectionRule | None] | None:
+        """``(pending, rule)`` when ``norm`` is a section heading
+        (:func:`section_title`; a pending section has no rule)."""
         for marker in self.pending_markers:
             if norm.startswith(marker):
                 return True, None
-        for heading, kind in self.sections.items():
-            if norm == heading or norm.startswith(f"{heading} "):
-                return False, kind
+        title = section_title(norm, self.section_titles)
+        return (False, title.rule) if title is not None else None
+
+    def _title(self, line: ViewLine) -> SectionTitle | None:
+        """The section title ``line`` is: no amount on it (``Fees 12.00`` is
+        the summary's figure, not a title)."""
+        if find_amounts(line.text):
+            return None
+        return section_title(line.norm, self.section_titles)
+
+    def _title_above(self, lines: Sequence[ViewLine], index: int) -> SectionTitle | None:
+        """The title of the header at ``lines[index]``: the nearest of the
+        :data:`TITLE_LINES_ABOVE` lines before it on its page that has
+        letters and no amount, when that line is a title."""
+        header = lines[index]
+        for above in reversed(lines[max(0, index - TITLE_LINES_ABOVE) : index]):
+            if above.page != header.page:
+                break
+            if any(ch.isalpha() for ch in above.text) and not find_amounts(above.text):
+                return self._title(above)
         return None
 
     def _collect(self, lines: Sequence[ViewLine]) -> tuple[list[_Row], _Summary, int, int, bool]:
@@ -1079,13 +1220,42 @@ class TableStatementParser(DocumentParser):
         pending_items = skipped = 0
         columns: list[Column] | None = None
         pending = False
-        section_type: str | None = None
+        # The section being read: its title (None: untitled), its number and
+        # the page of the last row read.
+        title: SectionTitle | None = None
+        section = 0
+        row_page: int | None = None
         last: _Row | None = None
         found_header = False
-        for line in lines:
+
+        def runs_on(found: SectionTitle, page: int) -> bool:
+            """``found`` names the section being read once more: marked
+            ``continued``, or printed again on a later page."""
+            return (
+                title is not None
+                and (found.key, found.rule) == (title.key, title.rule)
+                and (found.continued or (row_page is not None and page > row_page))
+            )
+
+        for index, line in enumerate(lines):
             header = self.columns(line)
             if header is not None:
-                columns, pending, section_type, last = header, False, None, None
+                above = self._title_above(lines, index)
+                if above is not None:
+                    if not runs_on(above, line.page):
+                        section += 1
+                    title = above
+                elif not (
+                    columns is not None
+                    and row_page is not None
+                    and line.page > row_page
+                    and [c.role for c in header] == [c.role for c in columns]
+                ):
+                    # No title, and not the header of the table being read
+                    # printed again on a later page: a table of its own.
+                    title = None
+                    section += 1
+                columns, pending, last = header, False, None
                 found_header = True
                 continue
             norm = line.norm
@@ -1101,9 +1271,15 @@ class TableStatementParser(DocumentParser):
             date_text = " ".join(c.text for c in cells.get("date", [])).strip(_DATE_MARKS)
             if not date_text or not self._date_shaped(date_text):
                 last = self._not_a_row(line, norm, cells, summary, last)
-                section = self._section(norm) if last is None else None
-                if section is not None:
-                    pending, section_type = section
+                if last is not None:
+                    continue
+                if any(norm.startswith(marker) for marker in self.pending_markers):
+                    pending, title = True, None
+                    section += 1
+                elif (found := self._title(line)) is not None:
+                    if not runs_on(found, line.page):
+                        section += 1
+                    pending, title = False, found
                 continue
             description = [c.text for c in cells.get("description", [])]
             number = " ".join(c.text for c in cells.get("check", [])).strip(" *")
@@ -1132,10 +1308,12 @@ class TableStatementParser(DocumentParser):
                 summary.skipped_boxes.append((line.page, line.bbox))
                 last = None
                 continue
+            row_page = line.page
             if pending:
                 pending_items += 1
                 last = None
                 continue
+            rule = title.rule if title is not None else None
             used = [c for role_cells in cells.values() for c in role_cells]
             last = _Row(
                 page=line.page,
@@ -1147,9 +1325,11 @@ class TableStatementParser(DocumentParser):
                 balance=balance,
                 ocr=_min(*(c.conf for c in used)),
                 bbox=line.bbox,
-                section_type=section_type,
+                section_type=rule.kind if rule is not None else None,
                 check=is_check,
                 foreign=[c.text for c in cells.get("foreign", [])],
+                direction=self._direction(rule),
+                section=section,
             )
             rows.append(last)
         self._adjacent_balances(lines, summary)
@@ -1283,6 +1463,12 @@ class TableStatementParser(DocumentParser):
             return None
         return read_amount(" ".join(c.text for c in cells))
 
+    def _direction(self, rule: SectionRule | None) -> Direction | None:
+        """What ``rule`` says for this parser's kind of account."""
+        if rule is None:
+            return None
+        return rule.card if self.sign == "card" else rule.bank
+
     def _signed(self, row: _Row) -> Decimal | None:
         if row.check and row.amount is not None and row.amount.credit is None:
             return -abs(row.amount.value)  # a check paid takes money out
@@ -1292,6 +1478,9 @@ class TableStatementParser(DocumentParser):
                 return abs(value.value)
             if value.credit is False:
                 return -abs(value.value)
+            if row.direction is not None and not (value.negative_marked or value.positive_marked):
+                # Printed with no sign at all: its section's title says which way.
+                return abs(value.value) if row.direction == "in" else -abs(value.value)
             if self.sign == "card":
                 return abs(value.value) if value.negative_marked else -abs(value.value)
             return value.value

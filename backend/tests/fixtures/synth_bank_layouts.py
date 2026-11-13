@@ -43,6 +43,20 @@ And statements that print words another reader listens for:
   written for, which prints ``Card ending in 4410`` (likewise one of Demo
   Card Services' two phrases).
 
+And statements whose amounts print no sign, in tables a title gives the
+direction of:
+
+* :func:`sectioned_unsigned_checking`: ``DEPOSITS AND ADDITIONS``,
+  ``ELECTRONIC WITHDRAWALS`` and ``FEES``, each over its own ``Date |
+  Description | Amount`` table of positive figures with a total line; the
+  withdrawals run on to page 2 under the header printed again and the
+  title ``ELECTRONIC WITHDRAWALS (continued)``.
+* :func:`sectioned_repeat_without_title`: the same, page 2 printing only
+  the header again.
+* :func:`card_unsigned_payments`: a card statement whose ``Payments and
+  Credits`` table prints the payment without a sign and whose
+  ``Purchases`` table prints one refund with a minus.
+
 :data:`EXPECTED_ROWS` gives, per builder, the rows a correct reading returns
 (``(posted, amount, payee)``, money out negative); :data:`EXPECTED_BALANCES`
 the opening and closing balance of the builders that are about balances.
@@ -625,6 +639,165 @@ def other_card_ending_in() -> bytes:
     return buf.getvalue()
 
 
+# -- unsigned amounts under a title that says which way the money went ----------
+
+_SECTION_OPENING: Final = _d("2,640.18")
+_SECTION_DEPOSITS: Final[tuple[ExpectedRow, ...]] = (
+    (date(2026, 4, 3), _d("1,875.00"), "Payroll Thistleyard Joinery"),
+    (date(2026, 4, 14), _d("220.00"), "Mobile Deposit"),
+    (date(2026, 4, 24), _d("64.50"), "Refund Corbel Lane Cycles"),
+)
+_SECTION_WITHDRAWALS: Final[tuple[ExpectedRow, ...]] = (
+    (date(2026, 4, 2), _d("-980.00"), "Rent Sorrelgate Lettings"),
+    (date(2026, 4, 7), _d("-71.36"), "Card Purchase Greenfinch Market"),
+    (date(2026, 4, 12), _d("-118.02"), "Bill Pay Eastmere Power"),
+    (date(2026, 4, 19), _d("-45.00"), "ATM Cash Mill Lane"),
+    (date(2026, 4, 27), _d("-203.77"), "Card Purchase Hazelbank Tools"),
+)
+#: No word of it types the row: the ``FEES`` title does.
+_SECTION_FEES: Final[tuple[ExpectedRow, ...]] = (
+    (date(2026, 4, 30), _d("-12.00"), "Monthly Maintenance Charge"),
+)
+_SECTION_ROWS: Final = (*_SECTION_DEPOSITS, *_SECTION_WITHDRAWALS, *_SECTION_FEES)
+#: Withdrawals printed on page 1; the rest are on page 2.
+_SECTION_SPLIT: Final = 3
+_UNSIGNED_HEADER: Final = [(40, "Date"), (110, "Description"), (-560, "Amount")]
+
+
+def _total(rows: Sequence[ExpectedRow]) -> Decimal:
+    return abs(sum((amount for _, amount, _ in rows), Decimal(0)))
+
+
+def _unsigned_table(
+    c: canvas.Canvas, y: float, title: str | None, rows: Sequence[ExpectedRow]
+) -> float:
+    """``title`` (when given), the header and ``rows`` with positive figures; the next y."""
+    if title is not None:
+        _line(c, y, [(40, title)], size=10, bold=True)
+        y -= 16
+    _line(c, y, _UNSIGNED_HEADER, size=8)
+    return _rows(
+        c,
+        y - 13,
+        [
+            [(40, posted.strftime("%m/%d/%Y")), (110, payee), (-560, _money(amount))]
+            for posted, amount, payee in rows
+        ],
+    )
+
+
+def _total_line(c: canvas.Canvas, y: float, label: str, rows: Sequence[ExpectedRow]) -> float:
+    _line(c, y, [(40, label), (-560, f"${_money(_total(rows))}")], bold=True)
+    return y - 26
+
+
+def _sectioned_unsigned(*, continued_title: bool) -> bytes:
+    buf = io.BytesIO()
+    c = canvas.Canvas(buf, pagesize=letter)
+    closing = _running(_SECTION_OPENING, _SECTION_ROWS)[-1]
+    bank = "Wexcombe River Bank"
+    _head(c, bank, "7318", "04/01/2026 - 04/30/2026", _SECTION_OPENING, closing)
+    y = _rows(
+        c,
+        674,
+        [
+            [(40, "Deposits and Additions"), (-300, _money(_total(_SECTION_DEPOSITS)))],
+            [(40, "Electronic Withdrawals"), (-300, _money(_total(_SECTION_WITHDRAWALS)))],
+            [(40, "Fees"), (-300, _money(_total(_SECTION_FEES)))],
+        ],
+    )
+    y = _unsigned_table(c, y - 15, "DEPOSITS AND ADDITIONS", _SECTION_DEPOSITS)
+    y = _total_line(c, y, "Total Deposits and Additions", _SECTION_DEPOSITS)
+    _unsigned_table(c, y, "ELECTRONIC WITHDRAWALS", _SECTION_WITHDRAWALS[:_SECTION_SPLIT])
+    c.showPage()
+    _line(c, 750, [(40, bank)], size=14, bold=True)
+    _line(c, 750, [(380, "Page 2 of 2")])
+    _line(c, 60, [(40, _FOOTER)], size=7)
+    y = _unsigned_table(
+        c,
+        716,
+        "ELECTRONIC WITHDRAWALS (continued)" if continued_title else None,
+        _SECTION_WITHDRAWALS[_SECTION_SPLIT:],
+    )
+    y = _total_line(c, y, "Total Electronic Withdrawals", _SECTION_WITHDRAWALS)
+    y = _unsigned_table(c, y, "FEES", _SECTION_FEES)
+    _total_line(c, y, "Total Fees", _SECTION_FEES)
+    c.save()
+    return buf.getvalue()
+
+
+def sectioned_unsigned_checking() -> bytes:
+    """Three titled tables of positive figures; the second continues, titled, on page 2."""
+    return _sectioned_unsigned(continued_title=True)
+
+
+def sectioned_repeat_without_title() -> bytes:
+    """The same; page 2 starts with the header alone."""
+    return _sectioned_unsigned(continued_title=False)
+
+
+#: As the ledger keeps them: a purchase is money out, the payment and the refund money in.
+_UNSIGNED_CARD_PAYMENTS: Final[tuple[ExpectedRow, ...]] = (
+    (date(2026, 6, 5), _d("640.25"), "PAYMENT RECEIVED - THANK YOU"),
+)
+_UNSIGNED_CARD_PURCHASES: Final[tuple[ExpectedRow, ...]] = (
+    (date(2026, 6, 3), _d("-58.20"), "LINDENWALK STATIONERS"),
+    (date(2026, 6, 9), _d("-34.75"), "COPPERGATE BISTRO"),
+    (date(2026, 6, 15), _d("19.99"), "RETURN LINDENWALK STATIONERS"),
+    (date(2026, 6, 22), _d("-47.10"), "MOORSIDE FUEL STOP"),
+)
+_UNSIGNED_CARD_ROWS: Final = (*_UNSIGNED_CARD_PAYMENTS, *_UNSIGNED_CARD_PURCHASES)
+_UNSIGNED_CARD_PREVIOUS: Final = _d("640.25")
+
+
+def card_unsigned_payments() -> bytes:
+    """A card: the payment printed without a sign under ``Payments and Credits``."""
+    buf = io.BytesIO()
+    c = canvas.Canvas(buf, pagesize=letter)
+    charges = -sum((a for _, a, _ in _UNSIGNED_CARD_ROWS if a < 0), Decimal(0))
+    credits = sum((a for _, a, _ in _UNSIGNED_CARD_ROWS if a > 0), Decimal(0))
+    owed = _UNSIGNED_CARD_PREVIOUS - credits + charges
+    _line(c, 750, [(40, "Pellwick Rewards Visa")], size=14, bold=True)
+    _line(c, 750, [(380, "Account Number: ******6093")])
+    _line(c, 736, [(380, "Billing Period: 06/01/2026 - 06/30/2026")])
+    _line(c, 60, [(40, _FOOTER)], size=7)
+    y = _rows(
+        c,
+        700,
+        [
+            [(40, "Previous Balance"), (-300, f"${_money(_UNSIGNED_CARD_PREVIOUS)}")],
+            [(40, "Payments and Credits"), (-300, f"-${_money(credits)}")],
+            [(40, "New Charges"), (-300, f"+${_money(charges)}")],
+            [(40, "New Balance"), (-300, f"${_money(owed)}")],
+            [(40, "Minimum Payment Due"), (-300, "$25.00")],
+            [(40, "Credit Limit"), (-300, "$4,000.00")],
+        ],
+    )
+    y -= 15
+    for title, rows in (
+        ("Payments and Credits", _UNSIGNED_CARD_PAYMENTS),
+        ("Purchases", _UNSIGNED_CARD_PURCHASES),
+    ):
+        _line(c, y, [(40, title)], size=10, bold=True)
+        _line(c, y - 16, _UNSIGNED_HEADER, size=8)
+        y = _rows(
+            c,
+            y - 29,
+            [
+                [
+                    (40, posted.strftime("%m/%d/%y")),
+                    (110, payee),
+                    # A purchase and the payment print no sign; the refund a minus.
+                    (-560, f"-${_money(amount)}" if payee.startswith("RETURN") else _money(amount)),
+                ]
+                for posted, amount, payee in rows
+            ],
+        )
+        y -= 13
+    c.save()
+    return buf.getvalue()
+
+
 EXPECTED_ROWS: Final[dict[str, list[ExpectedRow]]] = {
     "left_heading_right_figures": list(_LEFT_ROWS),
     "tight_date_checking": list(_TIGHT_ROWS),
@@ -636,6 +809,9 @@ EXPECTED_ROWS: Final[dict[str, list[ExpectedRow]]] = {
     "checking_with_card_note": list(_NOTE_ROWS),
     "other_current_account": list(_CURRENT_ROWS),
     "other_card_ending_in": list(_CARD_ROWS),
+    "sectioned_unsigned_checking": list(_SECTION_ROWS),
+    "sectioned_repeat_without_title": list(_SECTION_ROWS),
+    "card_unsigned_payments": list(_UNSIGNED_CARD_ROWS),
 }
 
 #: ``(opening, closing)`` of the builders that are about balances.
@@ -645,6 +821,10 @@ EXPECTED_BALANCES: Final[dict[str, tuple[Decimal, Decimal]]] = {
     "previous_statement_balance_first": (
         _PREVIOUS_OPENING,
         _running(_PREVIOUS_OPENING, _PREVIOUS_ROWS)[-1],
+    ),
+    "sectioned_unsigned_checking": (
+        _SECTION_OPENING,
+        _running(_SECTION_OPENING, _SECTION_ROWS)[-1],
     ),
 }
 

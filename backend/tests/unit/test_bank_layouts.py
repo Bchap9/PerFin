@@ -16,6 +16,12 @@ Balance`` opens the statement, it does not close it.
 And which reader reads a statement: card words in a sentence do not make a
 checking statement a card statement, and a parser written for one
 institution claims nothing on one of its two phrases.
+
+And the direction of amounts printed without a sign: the title of their
+section gives it (``Deposits and additions``, ``Electronic withdrawals``,
+``Payments and credits`` on a card), across a page break under the header
+printed again; a printed sign, ``CR`` or a debit or credit column always
+says more than a title, and a table without a title has no direction.
 """
 
 from __future__ import annotations
@@ -30,7 +36,12 @@ from app.ingestion.extract.pdf import extract_pdf
 from app.ingestion.parsers.base import Cell, DocumentView, ParseOutcome, ViewLine
 from app.ingestion.parsers.institutions import MockSavingsParser
 from app.ingestion.parsers.registry import parse_extraction
-from app.ingestion.parsers.table_statement import TableStatementParser
+from app.ingestion.parsers.table_statement import (
+    SECTION_TITLES,
+    CardStatementParser,
+    SectionRule,
+    TableStatementParser,
+)
 from app.ingestion.sandbox.protocol import ExtractOptions, ExtractResult, Statement
 from tests.fixtures import synth_bank_layouts as synth
 from tests.fixtures import synth_card_statement, synth_pdf_statements, synth_unseen_layouts
@@ -590,3 +601,409 @@ def test_a_payee_that_mentions_a_balance_is_still_a_row() -> None:
     )
     statement = _one(outcome)
     assert [t.amount for t in statement.transactions] == [Decimal("-5.00"), Decimal("-20.00")]
+
+
+# -- section titles and the direction of unsigned amounts -----------------------
+
+IN = SectionRule("in", None, None)
+OUT = SectionRule("out", None, None)
+PLAIN = SectionRule(None, None, None)
+
+
+@pytest.mark.parametrize(
+    ("title", "expected"),
+    [
+        # One of each group of the table.
+        ("Deposits and additions", IN),
+        ("DEPOSITS AND OTHER CREDITS", IN),
+        ("Electronic Deposits", IN),
+        ("Other credits", SectionRule("in", "in", None)),
+        ("Credits", SectionRule("in", "in", None)),
+        ("Electronic withdrawals", OUT),
+        ("Withdrawals / Debits", OUT),
+        ("ATM & Debit Card Withdrawals", OUT),
+        ("Checks paid", OUT),
+        ("Other debits", SectionRule("out", "out", None)),
+        ("Purchases and adjustments", SectionRule("out", "out", None)),
+        ("Payments and other credits", SectionRule(None, "in", None)),
+        ("Payments", SectionRule(None, "in", None)),
+        ("New charges", SectionRule(None, "out", None)),
+        ("Cash advances", SectionRule(None, "out", None)),
+        ("Fees charged", SectionRule("out", "out", "fee")),
+        ("Service fees", SectionRule("out", "out", "fee")),
+        ("Interest charged", SectionRule("out", "out", "int")),
+        ("Interest earned", SectionRule("in", None, "int")),
+        ("Interest", SectionRule(None, "out", "int")),
+        ("Transactions", PLAIN),
+        # The longest key, then anything after it.
+        ("Deposits and other additions this period", IN),
+        ("Checks paid in number order", OUT),
+        # ``continued`` after the title.
+        ("ELECTRONIC WITHDRAWALS (continued)", OUT),
+        ("Deposits and Additions - continued", IN),
+        ("Checks paid (cont.)", OUT),
+        # Both sides named: a title, and no direction.
+        ("Deposits and withdrawals", PLAIN),
+        ("Withdrawals and deposits", PLAIN),
+        ("Credits and debits", PLAIN),
+        ("Payments and purchases", PLAIN),
+        ("Deposits and fees", PLAIN),
+        ("Fees and credits", SectionRule(None, None, "fee")),
+    ],
+)
+def test_section_title_matching(title: str, expected: SectionRule) -> None:
+    line = _view([[(title, 62.0)]]).lines[0]
+    assert TableStatementParser()._section(line.norm) == (False, expected)
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "Interest summary",
+        "Fees summary",
+        "Interest rate",
+        "Interest calculation",
+        "Deposits information",
+        "Deposit",
+        "Deposited items",
+        "Feesable",
+        "Account activity",
+        # Nine words: a sentence.
+        "Deposits made after the daily cutoff post next day",
+    ],
+)
+def test_lines_that_are_no_section_title(text: str) -> None:
+    line = _view([[(text, 62.0)]]).lines[0]
+    assert TableStatementParser()._section(line.norm) is None
+
+
+def test_a_pending_heading_is_still_a_pending_section() -> None:
+    assert TableStatementParser()._section("pending transactions") == (True, None)
+
+
+def test_every_section_key_is_normalised_and_one_sided() -> None:
+    for key, rule in SECTION_TITLES.items():
+        assert _view([[(key, 62.0)]]).lines[0].norm == key
+        assert {rule.bank, rule.card} - {None} in (set(), {"in"}, {"out"})
+
+
+def test_unsigned_amounts_take_the_direction_of_their_section() -> None:
+    result = _read(synth.sectioned_unsigned_checking())
+    statement = _only(result)
+    expected = synth.EXPECTED_ROWS["sectioned_unsigned_checking"]
+    assert [t.amount > 0 for t in statement.transactions] == [True] * 3 + [False] * 6
+    assert _rows(statement) == expected
+    assert [t.type for t in statement.transactions] == [None] * 8 + ["fee"]
+    assert _balances(statement) == synth.EXPECTED_BALANCES["sectioned_unsigned_checking"]
+    assert _status(statement) == "ok"
+    assert _skipped(result) == 0
+    assert _parser(statement) == "statement_generic"
+
+
+@pytest.mark.parametrize(
+    "builder",
+    ["sectioned_unsigned_checking", "sectioned_repeat_without_title"],
+    ids=["with-title", "header-only"],
+)
+def test_direction_survives_a_repeated_page_header(builder: str) -> None:
+    result = _read(getattr(synth, builder)())
+    statement = _only(result)
+    second = [t for t in statement.transactions if t.page == 2 and t.type is None]
+    assert [(t.payee, t.amount) for t in second] == [
+        ("ATM Cash Mill Lane", Decimal("-45.00")),
+        ("Card Purchase Hazelbank Tools", Decimal("-203.77")),
+    ]
+    assert _rows(statement) == synth.EXPECTED_ROWS[builder]
+    assert _status(statement) == "ok"
+    assert _skipped(result) == 0
+
+
+@pytest.mark.parametrize(
+    "builder", ["sectioned_unsigned_checking", "sectioned_repeat_without_title"]
+)
+def test_a_section_continued_on_the_next_page_is_one_section(builder: str) -> None:
+    result = extract_pdf(getattr(synth, builder)(), OPTIONS, "pdf")
+    parser = TableStatementParser()
+    view = DocumentView.from_result(result)
+    rows = parser._collect(parser.prepare(view.lines))[0]
+    assert [row.direction for row in rows] == ["in"] * 3 + ["out"] * 6
+    numbers = [row.section for row in rows]
+    # Three sections, in order: the withdrawals of both pages are one.
+    assert len(set(numbers)) == 3
+    assert numbers == sorted(numbers)
+    assert len(set(numbers[:3])) == len(set(numbers[3:8])) == 1
+
+
+def test_card_payment_without_a_sign_is_a_credit() -> None:
+    for result in (
+        _unhinted(synth.card_unsigned_payments()),
+        _read(synth.card_unsigned_payments()),
+    ):
+        statement = _only(result)
+        assert _parser(statement) == "card_statement_generic"
+        assert _rows(statement) == synth.EXPECTED_ROWS["card_unsigned_payments"]
+        # The payment and the refund are money in, the purchases money out.
+        assert [t.amount > 0 for t in statement.transactions] == [True, False, False, True, False]
+        assert _balances(statement) == (Decimal("-640.25"), Decimal("-120.06"))
+        assert _status(statement) == "ok"
+        assert _skipped(result) == 0
+
+
+def test_signed_sectioned_statement_is_unchanged() -> None:
+    statement = _only(_read(synth_unseen_layouts.sectioned_checking()))
+    assert [t.amount for t in statement.transactions] == [
+        Decimal("1240.00"),
+        Decimal("1240.00"),
+        Decimal("-950.00"),
+        Decimal("-88.12"),
+        Decimal("-43.28"),
+        Decimal("-130.00"),
+        Decimal("-100.00"),
+        Decimal("-250.00"),
+    ]
+    assert _status(statement) == "ok"
+
+
+def _pages(pages: list[list[list[tuple[str, float]]]]) -> DocumentView:
+    """Like :func:`_view`, one list of lines per page."""
+    lines = []
+    for number, rows in enumerate(pages, start=1):
+        for index, cells in enumerate(rows):
+            y = 100.0 + 14.0 * index
+            built = tuple(Cell(text, x0, y, x0 + 5.0 * len(text), y + 9.0) for text, x0 in cells)
+            lines.append(
+                ViewLine(
+                    page=number,
+                    index=index,
+                    cells=built,
+                    text=" ".join(t for t, _ in cells),
+                    height=9.0,
+                )
+            )
+    return DocumentView(
+        lines=tuple(lines), source_format="pdf", truncated=False, page_count=len(pages)
+    )
+
+
+def _amounts(outcome: ParseOutcome) -> list[Decimal]:
+    return [t.amount for t in _one(outcome).transactions]
+
+
+def _row(day: int, payee: str, amount: str) -> list[tuple[str, float]]:
+    return [(f"01/{day:02d}/2026", 62.0), (payee, 150.0), (amount, 500.0)]
+
+
+def test_a_title_above_the_header_gives_the_direction() -> None:
+    outcome = _parse(
+        [
+            [("Withdrawals", 62.0)],
+            HEADER,
+            _row(5, "Rent", "700.00"),
+            [("Deposits", 62.0)],
+            HEADER,
+            _row(9, "Salary", "900.00"),
+        ]
+    )
+    assert _amounts(outcome) == [Decimal("-700.00"), Decimal("900.00")]
+
+
+def test_a_title_two_lines_above_the_header_counts_when_a_figure_line_is_between() -> None:
+    outcome = _parse(
+        [[("Withdrawals", 62.0)], [("3 items 745.00", 62.0)], HEADER, _row(5, "Rent", "700.00")]
+    )
+    assert _amounts(outcome) == [Decimal("-700.00")]
+
+
+def test_only_the_nearest_line_of_words_above_a_header_may_be_its_title() -> None:
+    # ``Withdrawals`` is two lines up, and a line of words lies between.
+    outcome = _parse(
+        [
+            [("Withdrawals", 62.0)],
+            [("Account activity", 62.0)],
+            HEADER,
+            _row(5, "Salary", "900.00"),
+        ]
+    )
+    assert _amounts(outcome) == [Decimal("900.00")]
+    # Three lines up is too far.
+    outcome = _parse(
+        [
+            [("Withdrawals", 62.0)],
+            [("745.00", 300.0)],
+            [("12.00", 300.0)],
+            HEADER,
+            _row(5, "Salary", "900.00"),
+        ]
+    )
+    assert _amounts(outcome) == [Decimal("900.00")]
+
+
+def test_a_title_on_the_page_before_is_not_the_headers() -> None:
+    view = _pages([[[("Withdrawals", 62.0)]], [HEADER, _row(5, "Salary", "900.00")]])
+    outcome = TableStatementParser().parse(view, threshold=0.85)
+    assert _amounts(outcome) == [Decimal("900.00")]
+
+
+def test_a_summary_line_with_a_figure_is_no_title() -> None:
+    # ``Withdrawals 700.00`` is the summary's total, not a title.
+    outcome = _parse([[("Withdrawals 700.00", 62.0)], HEADER, _row(5, "Salary", "900.00")])
+    assert _amounts(outcome) == [Decimal("900.00")]
+    # Between rows too.
+    outcome = _parse(
+        [
+            HEADER,
+            _row(5, "Salary", "900.00"),
+            [("Withdrawals 700.00", 62.0)],
+            _row(9, "Bonus", "50.00"),
+        ]
+    )
+    assert _amounts(outcome) == [Decimal("900.00"), Decimal("50.00")]
+
+
+def test_a_title_between_rows_gives_the_direction() -> None:
+    outcome = _parse(
+        [
+            HEADER,
+            [("Deposits", 62.0)],
+            _row(5, "Salary", "900.00"),
+            [("Checks paid", 62.0)],
+            _row(9, "Rent", "700.00"),
+            [("Deposits and withdrawals", 62.0)],
+            _row(12, "Bonus", "50.00"),
+        ]
+    )
+    assert _amounts(outcome) == [Decimal("900.00"), Decimal("-700.00"), Decimal("50.00")]
+
+
+def test_a_new_table_without_a_title_has_no_direction() -> None:
+    outcome = _parse(
+        [
+            [("Withdrawals", 62.0)],
+            HEADER,
+            _row(5, "Rent", "700.00"),
+            # The same page, the same header, no title: another table.
+            HEADER,
+            _row(9, "Salary", "900.00"),
+        ]
+    )
+    assert _amounts(outcome) == [Decimal("-700.00"), Decimal("900.00")]
+
+
+def test_a_repeated_header_on_the_next_page_keeps_the_direction_and_the_type() -> None:
+    view = _pages(
+        [
+            [[("Fees", 62.0)], HEADER, _row(5, "Paper statements", "3.00")],
+            [[("Page 2", 62.0)], HEADER, _row(9, "Wire, outgoing", "25.00")],
+        ]
+    )
+    statement = _one(TableStatementParser().parse(view, threshold=0.85))
+    assert [(t.amount, t.type) for t in statement.transactions] == [
+        (Decimal("-3.00"), "fee"),
+        (Decimal("-25.00"), "fee"),
+    ]
+
+
+def test_a_different_header_on_the_next_page_is_a_new_table() -> None:
+    other = [("Date", 62.0), ("Description", 150.0), ("Amount", 440.0), ("Balance", 520.0)]
+    view = _pages(
+        [
+            [[("Withdrawals", 62.0)], HEADER, _row(5, "Rent", "700.00")],
+            [
+                other,
+                [("01/09/2026", 62.0), ("Salary", 150.0), ("900.00", 440.0), ("1,100.00", 520.0)],
+            ],
+        ]
+    )
+    outcome = TableStatementParser().parse(view, threshold=0.85)
+    assert _amounts(outcome) == [Decimal("-700.00"), Decimal("900.00")]
+
+
+def test_a_header_after_an_unread_table_is_no_repeat() -> None:
+    # A ``Date | Balance`` table ended ours: the header on page 2 starts anew.
+    view = _pages(
+        [
+            [
+                [("Withdrawals", 62.0)],
+                HEADER,
+                _row(5, "Rent", "700.00"),
+                [("Date", 62.0), ("Balance", 500.0)],
+            ],
+            [HEADER, _row(9, "Salary", "900.00")],
+        ]
+    )
+    outcome = TableStatementParser().parse(view, threshold=0.85)
+    assert _amounts(outcome) == [Decimal("-700.00"), Decimal("900.00")]
+
+
+def test_a_printed_sign_beats_the_section() -> None:
+    outcome = _parse(
+        [
+            [("Deposits", 62.0)],
+            HEADER,
+            _row(5, "Reversal", "-25.00"),
+            _row(6, "Returned item", "(40.00)"),
+            _row(7, "Salary", "900.00"),
+            [("Withdrawals", 62.0)],
+            HEADER,
+            _row(9, "Refund", "30.00 CR"),
+            _row(10, "Correction", "+15.00"),
+            _row(11, "Rent", "700.00"),
+            _row(12, "Card", "8.00 DR"),
+        ]
+    )
+    assert _amounts(outcome) == [
+        Decimal("-25.00"),
+        Decimal("-40.00"),
+        Decimal("900.00"),
+        Decimal("30.00"),
+        Decimal("15.00"),
+        Decimal("-700.00"),
+        Decimal("-8.00"),
+    ]
+
+
+def test_a_debit_or_credit_column_beats_the_section() -> None:
+    outcome = _parse(
+        [
+            [("Deposits", 62.0)],
+            TWO_SIDED,
+            [("01/05/2026", 62.0), ("Coffee", 150.0), ("4.50", 380.0), ("95.50", 520.0)],
+            [("01/06/2026", 62.0), ("Salary", 150.0), ("900.00", 450.0), ("995.50", 520.0)],
+        ]
+    )
+    assert _amounts(outcome) == [Decimal("-4.50"), Decimal("900.00")]
+
+
+def _card(rows: list[list[tuple[str, float]]]) -> list[Decimal]:
+    outcome = CardStatementParser().parse(_view(rows), threshold=0.85)
+    return _amounts(outcome)
+
+
+def test_card_sections_follow_the_card_column() -> None:
+    assert _card(
+        [
+            [("Payments", 62.0)],
+            HEADER,
+            _row(5, "Payment received", "200.00"),
+            [("Purchases", 62.0)],
+            HEADER,
+            _row(9, "Bookshop", "18.00"),
+            _row(10, "Bookshop return", "-18.00"),
+            [("Interest", 62.0)],
+            HEADER,
+            _row(28, "On purchases", "2.10"),
+        ]
+    ) == [Decimal("200.00"), Decimal("-18.00"), Decimal("18.00"), Decimal("-2.10")]
+
+
+def test_a_bank_title_gives_a_card_no_direction() -> None:
+    # ``Deposits`` says nothing on a card: an unsigned figure is a charge, as always.
+    assert _card([[("Deposits", 62.0)], HEADER, _row(5, "Bookshop", "18.00")]) == [
+        Decimal("-18.00")
+    ]
+
+
+def test_a_card_title_gives_a_bank_statement_no_direction() -> None:
+    # ``Payments`` is money in on a card and says nothing on a bank account.
+    outcome = _parse([[("Payments", 62.0)], HEADER, _row(5, "Loan payment", "120.00")])
+    assert _amounts(outcome) == [Decimal("120.00")]
