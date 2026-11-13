@@ -404,6 +404,23 @@ are read the same way:
    own number when that has four digits or more, never the member number
    printed once for all of them (warning ``accounts_by_balance``).
    Otherwise the whole document is one statement.
+8. **Accounts by their summaries.** Two accounts printed under one masked
+   number (a checking and a savings account of one customer) have nothing
+   that names them apart but their summaries: ``CHECKING SUMMARY`` with an
+   opening and a closing balance, its tables, then ``SAVINGS SUMMARY`` with
+   other balances. :meth:`TableStatementParser.summary_sections` finds
+   where each starts
+   (:func:`app.ingestion.parsers.statement_lines.summary_starts`): a line
+   outside a table that prints an opening balance, after a closing balance
+   was printed, with a figure that is not the opening balance of the
+   account above. The same summary printed again (the head of the next
+   page, or after another account's) is the same account, and so is a
+   balance brought forward that equals the one carried forward before it.
+   Tried after 6 and 7, and only when two of the accounts hold a table.
+   Each is one statement (warning ``accounts_by_summary``) named by its
+   summary's title when that names a kind of account (``SAVINGS``), with no
+   last four digits: the number printed is every account's. An account
+   whose summary has no table is no statement (``account_without_tables``).
 
 Institution parsers (:mod:`app.ingestion.parsers.institutions`) subclass it
 and pin what the generic one has to guess: date format, sign convention,
@@ -471,6 +488,7 @@ from app.ingestion.parsers.statement_lines import (
     LedRow,
     items_total,
     led_row,
+    summary_starts,
     titled_total,
 )
 from app.ingestion.parsers.text import (
@@ -1066,6 +1084,25 @@ TITLE_MAX: Final = 200
 #: (normalised; True: money in). The same words ``read_amount`` reads after
 #: a figure.
 OWN_COLUMN_MARKERS: Final[Mapping[str, bool]] = {"cr": True, "dr": False, "db": False}
+
+
+#: Words the title of an account's summary may have (``PREMIER SAVINGS ACCOUNT SUMMARY``).
+SUMMARY_TITLE_WORDS: Final = 6
+#: The word that makes a title the title of a summary, not the account's name.
+_SUMMARY_WORD: Final = re.compile(r"\s*\bsummary\s*$", re.IGNORECASE)
+
+
+@dataclass
+class _SummarySection:
+    """One account found by its summary (:meth:`TableStatementParser.summary_sections`)."""
+
+    lines: list[ViewLine]
+    #: The account its title line names (None: no title, or none we know).
+    title: str | None
+    #: The opening figure of its summary.
+    opened: Decimal | None
+    #: The closing figures printed outside its tables, in order.
+    closings: list[Decimal]
 
 
 def section_name(title: str | None) -> tuple[str | None, str | None]:
@@ -3262,6 +3299,16 @@ class TableStatementParser(DocumentParser):
             return self._parse_sections(
                 view, *sections, threshold=threshold, date_order=date_order, prepared=True
             )
+        sections = self.summary_sections(lines)
+        if sections is not None:
+            return self._parse_sections(
+                view,
+                *sections,
+                threshold=threshold,
+                date_order=date_order,
+                prepared=True,
+                warning="accounts_by_summary",
+            )
         read = self.read_statement(
             view, lines, threshold=threshold, date_order=date_order, prepared=True
         )
@@ -3446,6 +3493,138 @@ class TableStatementParser(DocumentParser):
             sections.append(BalanceSection(body, titles[position]))
         return list(lines[: bounds[0]]), sections
 
+    # -- accounts told apart by their summaries -----------------------------------
+
+    def _dated_by(self, line: ViewLine, columns: list[Column], head: ViewLine) -> bool:
+        """``line`` has a date in the date column of the table under ``head``."""
+        cells = self._assign(line, columns)
+        cells.pop("across", None)
+        self._split_lead(cells)
+        self._split_fused_date(cells, columns)
+        self._drop_posting_date(cells, columns, line)
+        self._split_fused_amount(cells, columns, head)
+        date_text = " ".join(c.text for c in cells.get("date", [])).strip(_DATE_MARKS)
+        return bool(date_text) and self._date_shaped(date_text)
+
+    def _table_lines(self, lines: Sequence[ViewLine]) -> set[int]:
+        """The indexes of the lines of a table: from each header we read to
+        the last dated line under it, before the next header (read or not).
+        What follows a table's last dated line (its total, an undated
+        closing line, the next account's summary) is outside it; an undated
+        balance line between a header and a dated row is inside."""
+        inside: set[int] = set()
+        columns: list[Column] | None = None
+        head: int | None = None
+        last: int | None = None
+        for index, line in enumerate(lines):
+            found = self.columns(line)
+            if found is not None or (columns is not None and self._header_like(line)):
+                if head is not None:
+                    inside.update(range(head, (head if last is None else last) + 1))
+                columns, head, last = found, (index if found is not None else None), None
+            elif (
+                columns is not None
+                and head is not None
+                and self._dated_by(line, columns, lines[head])
+            ):
+                last = index
+        if head is not None:
+            inside.update(range(head, (head if last is None else last) + 1))
+        return inside
+
+    def _summary_title(self, line: ViewLine) -> str | None:
+        """The account a summary's title line names (``SAVINGS SUMMARY``:
+        ``SAVINGS``), or None when the line is no such title: more than
+        :data:`SUMMARY_TITLE_WORDS` words, or no kind of account in it (a
+        footer sentence stands over a summary as well as a title does)."""
+        text = self._title_cell(line)
+        if text is None or len(line.text.split()) > SUMMARY_TITLE_WORDS:
+            return None
+        name = _SUMMARY_WORD.sub("", text[:TITLE_MAX]).strip(" -\u2013:")
+        if not name or account_kind(name)[0] is None:
+            return None
+        return name
+
+    def summary_sections(
+        self, lines: Sequence[ViewLine]
+    ) -> tuple[list[ViewLine], list[BalanceSection]] | None:
+        """``(preamble, sections)`` when the document prints a summary per
+        account (module doc, 8), else None.
+
+        The starts are those of
+        :func:`~app.ingestion.parsers.statement_lines.summary_starts` over
+        the lines outside a table (:meth:`_table_lines`); a line that starts
+        with a date is no opening line of a summary. Two kinds of
+        start are no account of their own, and their lines go to the
+        account they belong to: one whose opening figure is the closing
+        figure last printed for the account before it (a balance carried
+        over the page), and one whose opening and closing figures are an
+        earlier account's (its summary printed again after another
+        account's). Two accounts or more must remain, and two of them hold
+        a table.
+        """
+        inside = self._table_lines(lines)
+
+        def opening(line: ViewLine) -> Amount | None:
+            if self._starts_with_date(line.text):
+                return None
+            return self._label_amount(line, self.opening_labels)
+
+        def closing(line: ViewLine) -> Amount | None:
+            return self._label_amount(
+                line, self.closing_labels, inside=self.opening_labels, earlier=True
+            )
+
+        starts = summary_starts(lines, opening, closing, inside.__contains__)
+        if len(starts) < _MIN_SECTIONS:
+            return None
+        found: list[_SummarySection] = []
+        for position, start in enumerate(starts):
+            end = starts[position + 1] if position + 1 < len(starts) else len(lines)
+            opened: Decimal | None = None
+            closings: list[Decimal] = []
+            for index in range(start, end):
+                if index in inside:
+                    continue
+                figure = opening(lines[index])
+                if figure is not None:
+                    if opened is None:
+                        opened = figure.value
+                    continue
+                figure = closing(lines[index]) if opened is not None else None
+                if figure is not None:
+                    closings.append(figure.value)
+            body = list(lines[start:end])
+            before = found[-1] if found else None
+            if before is not None and before.closings and opened == before.closings[-1]:
+                # Brought forward what the account above carried forward.
+                before.lines.extend(body)
+                before.closings.extend(closings)
+                continue
+            twin = next(
+                (
+                    other
+                    for other in found
+                    if closings
+                    and other.opened == opened
+                    and other.closings
+                    and closings[0] in (other.closings[0], other.closings[-1])
+                ),
+                None,
+            )
+            if twin is not None:
+                # An earlier account's summary printed once more.
+                twin.lines.extend(body)
+                continue
+            found.append(_SummarySection(body, self._summary_title(lines[start]), opened, closings))
+        if len(found) < _MIN_SECTIONS:
+            return None
+        if sum(1 for section in found if self.lines_have_table(section.lines)) < _MIN_SECTIONS:
+            return None
+        return list(lines[: starts[0]]), [
+            BalanceSection(section.lines, section.title) for section in found
+        ]
+
     def _parse_sections(
         self,
         view: DocumentView,
@@ -3455,8 +3634,12 @@ class TableStatementParser(DocumentParser):
         threshold: float,
         date_order: str | None,
         prepared: bool = False,
+        warning: str = "accounts_by_balance",
     ) -> ParseOutcome:
-        """One statement per section (module doc, 7)."""
+        """One statement per section (module doc, 7 and 8); ``warning`` says
+        how the sections were found. A section with no table (a summary of
+        an account that prints no transactions) is no statement
+        (``account_without_tables``)."""
         outcome = ParseOutcome()
         rows, preamble, pending, skipped, _ = self._collect(preamble_lines)
         outcome.pending_items += pending
@@ -3464,7 +3647,7 @@ class TableStatementParser(DocumentParser):
         outcome.skipped_lines += skipped + len(rows)
         outcome.skipped_regions.extend(preamble.skipped_boxes)
         outcome.skipped_regions.extend((row.page, row.bbox) for row in rows)
-        warnings: list[str] = ["accounts_by_balance"]
+        warnings: list[str] = [warning]
         if rows:
             warnings.append("rows_outside_account")
         if preamble.headerless:
@@ -3472,6 +3655,9 @@ class TableStatementParser(DocumentParser):
         if preamble.across:
             warnings.append(f"table_across_unread:{preamble.across}")
         for section in sections:
+            if not self.lines_have_table(section.lines):
+                warnings.append("account_without_tables")
+                continue
             read = self.read_statement(
                 view,
                 section.lines,

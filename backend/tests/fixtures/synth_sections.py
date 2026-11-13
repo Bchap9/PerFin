@@ -41,6 +41,18 @@ Tables printed across the page, and titles printed with their totals:
 * :func:`titles_with_totals_one_missing`: the same with one withdrawal left
   off the page; the title's total and the balances still count it.
 
+Accounts told apart by their summaries only:
+
+* :func:`two_accounts_one_number`: a checking and a savings account that
+  both print ``Account Number: ******0000``. Page 1 has an overview table
+  of the two, ``CHECKING SUMMARY`` with its balances and totals and two
+  titled tables of unsigned figures; page 2 has ``SAVINGS SUMMARY`` with
+  its own balances over ``Date | Description | Amount | Balance``, whose
+  first and last lines are undated ``Beginning Balance`` and ``Ending
+  Balance``. Each account adds up by itself (:data:`EXPECTED_ACCOUNTS`).
+* :func:`summary_printed_twice`: one account whose summary is printed again
+  at the head of page 2, with the same figures, over the rest of its rows.
+
 :data:`EXPECTED_ROWS` gives, per builder, the rows a correct reading returns
 (``(posted, amount, payee)``, money out negative).
 """
@@ -65,7 +77,9 @@ from tests.fixtures.synth_bank_layouts import (
     _signed_rows,
     _top,
     _total,
+    _unsigned_table,
 )
+from tests.fixtures.synth_bank_layouts import _total_line as _dollar_total_line
 from tests.fixtures.synth_unseen_layouts import _line, _rows
 
 # -- a checking statement with no header anywhere --------------------------------
@@ -463,6 +477,159 @@ def titles_with_totals_one_missing() -> bytes:
     return _titled(omit=TITLED_OMITTED)
 
 
+# -- two accounts under one masked number ----------------------------------------
+
+_PAIR_BANK: Final = "Thistlebeck Mutual Bank"
+_PAIR_PERIOD: Final = "11/01/2026 - 11/30/2026"
+_PAIR_CHECKING_OPENING: Final = _d("3,412.60")
+_PAIR_DEPOSITS: Final[tuple[ExpectedRow, ...]] = (
+    (date(2026, 11, 3), _d("1,640.00"), "Payroll Garsdale Joinery"),
+    (date(2026, 11, 10), _d("85.00"), "Mobile Deposit"),
+    (date(2026, 11, 17), _d("1,640.00"), "Payroll Garsdale Joinery"),
+    (date(2026, 11, 24), _d("31.45"), "Refund Lowther Street Books"),
+)
+_PAIR_WITHDRAWALS: Final[tuple[ExpectedRow, ...]] = (
+    (date(2026, 11, 2), _d("-1,180.00"), "Rent Skelwith Court"),
+    (date(2026, 11, 5), _d("-400.00"), "Transfer To Savings"),
+    (date(2026, 11, 9), _d("-96.32"), "Bill Pay Brantfell Electric"),
+    (date(2026, 11, 18), _d("-58.76"), "Card Purchase Yewdale Grocer"),
+    (date(2026, 11, 27), _d("-22.50"), "Card Purchase Nab Scar Cafe"),
+)
+_PAIR_CHECKING_ROWS: Final = (*_PAIR_DEPOSITS, *_PAIR_WITHDRAWALS)
+_PAIR_SAVINGS_OPENING: Final = _d("18,250.00")
+_PAIR_SAVINGS_ROWS: Final[tuple[ExpectedRow, ...]] = (
+    (date(2026, 11, 5), _d("400.00"), "Transfer From Checking"),
+    (date(2026, 11, 17), _d("-150.00"), "Withdrawal Branch Teller"),
+    (date(2026, 11, 28), _d("3.18"), "Interest Paid"),
+)
+#: Per account of :func:`two_accounts_one_number`: opening, closing, its rows.
+EXPECTED_ACCOUNTS: Final[tuple[tuple[Decimal, Decimal, list[ExpectedRow]], ...]] = (
+    (
+        _PAIR_CHECKING_OPENING,
+        _running(_PAIR_CHECKING_OPENING, _PAIR_CHECKING_ROWS)[-1],
+        list(_PAIR_CHECKING_ROWS),
+    ),
+    (
+        _PAIR_SAVINGS_OPENING,
+        _running(_PAIR_SAVINGS_OPENING, _PAIR_SAVINGS_ROWS)[-1],
+        list(_PAIR_SAVINGS_ROWS),
+    ),
+)
+
+
+def two_accounts_one_number() -> bytes:
+    """A checking and a savings account, each with its summary, one masked number."""
+    buf = io.BytesIO()
+    c = canvas.Canvas(buf, pagesize=letter)
+    (checking_open, checking_close, _), (savings_open, savings_close, _) = EXPECTED_ACCOUNTS
+    _top(c, _PAIR_BANK, "0000", _PAIR_PERIOD)
+    _line(c, 712, [(40, "Your accounts at a glance")], size=10, bold=True)
+    _line(c, 698, [(40, "Account"), (-420, "Beginning Balance"), (-560, "Ending Balance")], size=8)
+    _rows(
+        c,
+        685,
+        [
+            [
+                (40, "Everyday Checking"),
+                (-420, _money(checking_open)),
+                (-560, _money(checking_close)),
+            ],
+            [(40, "Premier Savings"), (-420, _money(savings_open)), (-560, _money(savings_close))],
+        ],
+    )
+    _line(c, 640, [(40, "CHECKING SUMMARY")], size=10, bold=True)
+    y = _rows(
+        c,
+        626,
+        [
+            [(40, "Beginning Balance"), (-300, f"${_money(checking_open)}")],
+            [(40, "Deposits and Additions"), (-300, _money(_total(_PAIR_DEPOSITS)))],
+            [(40, "Electronic Withdrawals"), (-300, _money(_total(_PAIR_WITHDRAWALS)))],
+            [(40, "Ending Balance"), (-300, f"${_money(checking_close)}")],
+        ],
+    )
+    y = _unsigned_table(c, y - 15, "DEPOSITS AND ADDITIONS", _PAIR_DEPOSITS)
+    y = _dollar_total_line(c, y, "Total Deposits and Additions", _PAIR_DEPOSITS)
+    y = _unsigned_table(c, y, "ELECTRONIC WITHDRAWALS", _PAIR_WITHDRAWALS)
+    _dollar_total_line(c, y, "Total Electronic Withdrawals", _PAIR_WITHDRAWALS)
+    c.showPage()
+    _top(c, _PAIR_BANK, "0000", _PAIR_PERIOD)
+    _line(c, 700, [(40, "SAVINGS SUMMARY")], size=10, bold=True)
+    _rows(
+        c,
+        686,
+        [
+            [(40, "Beginning Balance"), (-300, f"${_money(savings_open)}")],
+            [(40, "Ending Balance"), (-300, f"${_money(savings_close)}")],
+        ],
+    )
+    _line(
+        c,
+        640,
+        [(40, "Date"), (110, "Description"), (-460, "Amount"), (-560, "Balance")],
+        size=8,
+    )
+    balances = _running(savings_open, _PAIR_SAVINGS_ROWS)
+    _rows(
+        c,
+        626,
+        [
+            [(110, "Beginning Balance"), (-560, _money(savings_open))],
+            *(
+                [
+                    (40, posted.strftime("%m/%d/%Y")),
+                    (110, payee),
+                    (-460, f"{amount:,.2f}"),
+                    (-560, _money(balance)),
+                ]
+                for (posted, amount, payee), balance in zip(
+                    _PAIR_SAVINGS_ROWS, balances, strict=True
+                )
+            ),
+            [(110, "Ending Balance"), (-560, _money(savings_close))],
+        ],
+    )
+    c.save()
+    return buf.getvalue()
+
+
+_TWICE_OPENING: Final = _d("1,905.40")
+_TWICE_ROWS: Final[tuple[ExpectedRow, ...]] = (
+    (date(2026, 12, 1), _d("-725.00"), "Rent Holmrook Gardens"),
+    (date(2026, 12, 4), _d("1,310.00"), "Payroll Eskmeals Pottery"),
+    (date(2026, 12, 8), _d("-48.90"), "Card Purchase Ravenglass Grocer"),
+    (date(2026, 12, 11), _d("-112.35"), "Bill Pay Muncaster Water"),
+    (date(2026, 12, 18), _d("1,310.00"), "Payroll Eskmeals Pottery"),
+    (date(2026, 12, 22), _d("-80.00"), "ATM Cash Drigg Road"),
+    (date(2026, 12, 29), _d("-19.75"), "Card Purchase Seascale Cafe"),
+)
+#: The rows printed on page 1; the rest stand under the summary printed again.
+_TWICE_FIRST_PAGE: Final = 4
+
+
+def summary_printed_twice() -> bytes:
+    """One account; page 2 starts with its summary once more, the same figures."""
+    buf = io.BytesIO()
+    c = canvas.Canvas(buf, pagesize=letter)
+    closing = _running(_TWICE_OPENING, _TWICE_ROWS)[-1]
+    for page, rows in enumerate((_TWICE_ROWS[:_TWICE_FIRST_PAGE], _TWICE_ROWS[_TWICE_FIRST_PAGE:])):
+        if page:
+            c.showPage()
+        _top(c, "Calderbridge Savings Bank", "5127", "12/01/2026 - 12/31/2026")
+        _line(c, 712, [(40, "CHECKING SUMMARY")], size=10, bold=True)
+        _rows(
+            c,
+            698,
+            [
+                [(40, "Beginning Balance"), (-300, f"${_money(_TWICE_OPENING)}")],
+                [(40, "Ending Balance"), (-300, f"${_money(closing)}")],
+            ],
+        )
+        _signed_rows(c, 650, rows)
+    c.save()
+    return buf.getvalue()
+
+
 EXPECTED_ROWS: Final[dict[str, list[ExpectedRow]]] = {
     "headerless_sections_checking": [*_CHECKING_DEPOSITS, *_CHECKING_WITHDRAWALS],
     "headerless_total_off": list(_CHECKING_WITHDRAWALS),
@@ -476,4 +643,5 @@ EXPECTED_ROWS: Final[dict[str, list[ExpectedRow]]] = {
         *(row for row in _TITLED_WITHDRAWALS if row != TITLED_OMITTED),
         *_TITLED_CHECK_ROWS,
     ],
+    "summary_printed_twice": list(_TWICE_ROWS),
 }

@@ -743,3 +743,164 @@ def test_a_title_with_its_total_is_no_row_of_the_table_above() -> None:
     ]
     assert outcome.skipped_lines == 0
     assert "section_total_mismatch" not in outcome.warnings
+
+
+# -- two accounts told apart by their summaries ----------------------------------
+
+
+def _balances(statement: Statement) -> tuple[Decimal | None, Decimal | None]:
+    assert statement.reconciliation is not None
+    assert statement.ledger_balance is not None
+    return statement.reconciliation.opening, statement.ledger_balance.amount
+
+
+def test_two_accounts_by_their_summaries() -> None:
+    result = _read(synth.two_accounts_one_number())
+    assert len(result.statements) == 2, [len(s.transactions) for s in result.statements]
+    assert [len(s.transactions) for s in result.statements] == [9, 3]
+    for statement, (opening, closing, rows) in zip(
+        result.statements, synth.EXPECTED_ACCOUNTS, strict=True
+    ):
+        assert _rows(statement) == rows
+        assert _balances(statement) == (opening, closing)
+        assert _status(statement) == "ok"
+    warnings = _warnings(result)
+    assert "accounts_by_summary" in warnings
+    assert "accounts_by_balance" not in warnings
+    assert "rows_outside_account" not in warnings
+    assert _skipped(result) == 0
+    # Named by their summaries; the one masked number tells neither apart.
+    assert [(s.account.name, s.account.last4) for s in result.statements] == [
+        ("CHECKING", None),
+        ("SAVINGS", None),
+    ]
+    assert [s.account.account_type for s in result.statements] == ["checking", "savings"]
+    assert [(s.first_page, s.last_page) for s in result.statements] == [(1, 2), (2, 2)]
+
+
+def test_a_summary_repeated_on_page_two_is_one_account() -> None:
+    result = _read(synth.summary_printed_twice())
+    statement = _only(result)
+    assert _rows(statement) == synth.EXPECTED_ROWS["summary_printed_twice"]
+    assert _status(statement) == "ok"
+    assert _skipped(result) == 0
+    assert "accounts_by_summary" not in _warnings(result)
+
+
+BALANCED = [("Date", 62.0), ("Description", 150.0), ("Amount", 400.0), ("Balance", 500.0)]
+
+
+def _summary(title: str | None, opening: str, closing: str) -> list[list[tuple[str, float]]]:
+    """A summary block: its title (when given) and its two balance lines."""
+    head = [[(title, 62.0)]] if title is not None else []
+    return [
+        *head,
+        [("Beginning Balance", 62.0), (opening, 300.0)],
+        [("Ending Balance", 62.0), (closing, 300.0)],
+    ]
+
+
+def _dated(day: int, text: str, amount: str) -> list[tuple[str, float]]:
+    return [(f"01/{day:02d}/2026", 62.0), (text, 150.0), (amount, 500.0)]
+
+
+CHECKING_PAGE = [
+    *_summary("CHECKING SUMMARY", "100.00", "130.00"),
+    HEADER,
+    _dated(5, "Deposit", "50.00"),
+    _dated(9, "Coffee", "-20.00"),
+]
+SAVINGS_PAGE = [
+    *_summary("SAVINGS SUMMARY", "900.00", "950.00"),
+    HEADER,
+    _dated(12, "Deposit", "60.00"),
+    _dated(20, "Fee", "-10.00"),
+]
+
+
+def _statuses(outcome: ParseOutcome) -> list[str]:
+    return [_status(statement) for statement in outcome.statements]
+
+
+def test_hand_built_summaries_are_two_accounts() -> None:
+    outcome = _parse(CHECKING_PAGE, SAVINGS_PAGE)
+    assert [len(s.transactions) for s in outcome.statements] == [2, 2]
+    assert _statuses(outcome) == ["ok", "ok"]
+    assert "accounts_by_summary" in outcome.warnings
+    assert [s.account.name for s in outcome.statements] == ["CHECKING", "SAVINGS"]
+
+
+def test_the_first_summary_printed_a_third_time_is_no_third_account() -> None:
+    # Checking, savings, then the checking summary once more with no table.
+    again = _summary("CHECKING SUMMARY", "100.00", "130.00")
+    outcome = _parse(CHECKING_PAGE, SAVINGS_PAGE, again)
+    assert [len(s.transactions) for s in outcome.statements] == [2, 2]
+    assert _statuses(outcome) == ["ok", "ok"]
+    assert "accounts_by_summary" in outcome.warnings
+    assert "no_table_header" not in outcome.warnings
+    assert "account_without_tables" not in outcome.warnings
+
+
+def test_a_summary_with_no_table_is_no_statement() -> None:
+    # A third account prints its balances and no transactions.
+    third = _summary("MONEY MARKET SUMMARY", "5,000.00", "5,004.00")
+    outcome = _parse(CHECKING_PAGE, SAVINGS_PAGE, third)
+    assert [len(s.transactions) for s in outcome.statements] == [2, 2]
+    assert _statuses(outcome) == ["ok", "ok"]
+    assert "account_without_tables" in outcome.warnings
+
+
+def test_one_summary_with_a_table_is_one_statement() -> None:
+    # Two summaries, one table: nothing says the rows are the first's only.
+    outcome = _parse(CHECKING_PAGE, _summary("SAVINGS SUMMARY", "900.00", "950.00"))
+    assert len(outcome.statements) == 1
+    assert "accounts_by_summary" not in outcome.warnings
+
+
+def test_a_balance_carried_over_the_page_is_one_account() -> None:
+    # The figure carried forward at the foot of page 1 is brought forward
+    # above the header of page 2: the same account goes on.
+    first = [
+        *_summary("CHECKING SUMMARY", "100.00", "190.00"),
+        HEADER,
+        _dated(5, "Deposit", "50.00"),
+        _dated(9, "Coffee", "-20.00"),
+        [("Balance Carried Forward", 62.0), ("130.00", 500.0)],
+    ]
+    second = [
+        [("Balance Brought Forward", 62.0), ("130.00", 500.0)],
+        HEADER,
+        _dated(12, "Deposit", "60.00"),
+    ]
+    outcome = _parse(first, second)
+    assert len(outcome.statements) == 1
+    assert len(_one(outcome).transactions) == 3
+    assert "accounts_by_summary" not in outcome.warnings
+
+
+def test_balance_lines_of_a_table_start_no_account() -> None:
+    # Undated balance lines inside a table with a running balance, the
+    # table's header printed again on page 2: one account.
+    first = [
+        *_summary("CHECKING SUMMARY", "100.00", "190.00"),
+        BALANCED,
+        [("01/05/2026", 62.0), ("Deposit", 150.0), ("50.00", 400.0), ("150.00", 500.0)],
+        [("Ending Balance", 150.0), ("150.00", 500.0)],
+    ]
+    second = [
+        BALANCED,
+        [("Beginning Balance", 150.0), ("150.00", 500.0)],
+        [("01/12/2026", 62.0), ("Deposit", 150.0), ("40.00", 400.0), ("190.00", 500.0)],
+    ]
+    outcome = _parse(first, second)
+    assert len(outcome.statements) == 1
+    assert "accounts_by_summary" not in outcome.warnings
+
+
+def test_a_sentence_over_a_summary_names_no_account() -> None:
+    # The line above the second summary is a footer sentence, not a title.
+    second = [NOTE, *SAVINGS_PAGE[1:]]
+    outcome = _parse(CHECKING_PAGE, second)
+    assert _statuses(outcome) == ["ok", "ok"]
+    assert [s.account.name for s in outcome.statements] == ["CHECKING", None]
+    assert [s.account.account_type for s in outcome.statements] == ["checking", None]
