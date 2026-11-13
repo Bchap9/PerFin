@@ -21,6 +21,21 @@ are read the same way:
    *Original Currency*...) column is informational: it goes to the memo
    (``Goods or Services; foreign amount 360.00 US Dollar``), never into the
    amount.
+   **Headings as statements print them**
+   (:mod:`app.ingestion.parsers.statement_header`, whose module doc has
+   the rules and their limits): two headings printed so close that they
+   are one cell (``Date Transaction Description``, ``WITHDRAWAL BALANCE``)
+   are read as the fewest known headings that use every word of the cell;
+   a second date heading is the posting date; a heading we do not know
+   right of the money (``Category``, ``Reference``) is a column whose
+   cells are claimed and not read; the one unknown cell between the date
+   and the money is the description (``Memo Text``), unless it names
+   figures (``DAILY ENDING BALANCE``); a money heading may carry its unit
+   (``Amount (SGD)``); a scanned one-word heading may be one letter off
+   (``ithdrawal``); and a header printed over two or three lines is one
+   header when the lines together name more columns than any of them
+   alone. All of this is for a line of headings only: a line with an
+   amount is read by whole cells, so a row or a total is no header.
 2. **Rows.** Every later line is split into cells; each cell goes to the
    column it overlaps most. A line with a date in the date column and an
    amount is a transaction; a dated line whose description starts with an
@@ -190,10 +205,15 @@ are read the same way:
    more than :data:`ASSUMED_SPAN_DAYS` days, the year-less rows are counted
    as skipped, as before.
 4. **Signs.** ``bank``: a signed amount as printed, *Debit* negative and
-   *Credit* positive, ``CR``/``DR`` markers honoured. ``card``: charges are
-   printed positive and credits negative or with ``CR``; both the amounts and
-   the printed balances (amounts owed) are turned into the ledger convention
-   (a purchase is negative, the balance owed is negative).
+   *Credit* positive, ``CR``/``DR``/``DB`` markers honoured. ``card``:
+   charges are printed positive and credits negative or with ``CR``; both
+   the amounts and the printed balances (amounts owed) are turned into the
+   ledger convention (a purchase is negative, the balance owed is
+   negative). An amount of the ``Amount`` column printed with no sign at
+   all takes the direction of its section's title, when the title gives
+   one ("Direction from the title" above); anything printed (a sign,
+   brackets, a marker, a debit or credit column) decides before a title
+   does.
 5. **Checks and confidence.** The running balance and the totals are
    reconciled (:mod:`app.ingestion.reconcile`) and every field is scored
    (:mod:`app.ingestion.parsers.confidence`). A summary printed as a whole
@@ -869,7 +889,7 @@ class TableStatementParser(DocumentParser):
     """Generic: any statement with a recognisable transaction table (module doc)."""
 
     name: ClassVar[str] = "statement_generic"
-    version: ClassVar[str] = "6"
+    version: ClassVar[str] = "7"
     kind: ClassVar[Literal["statement", "payslip"]] = "statement"
     #: The institution's name as accounts know it (account matching).
     display_name: ClassVar[str | None] = None

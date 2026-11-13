@@ -48,17 +48,38 @@ adding a layout. The design is in [INGESTION.md](INGESTION.md) ("Parse",
    | `version` | bump whenever output for the same pages may change |
    | `institution` | the fingerprint `key` (the classifier's hint) |
    | `display_name` | the institution name accounts carry (account matching) |
-   | `fingerprints` | phrases of page 1 for detection without a classification |
+   | `fingerprints` | phrases of page 1 for detection without a classification; **every** phrase must be there (see below) |
    | `date_styles`, `period_styles` | `mdy`, `dmy`, `ymd`, `d_mon_y`, `mon_d_y`, `md`, `dm`, `mon_d` (`December 16`), `d_mon` (`16 Dec`) |
    | `sign` | `bank` or `card` |
    | `default_currency`, `account_type` | when the statement does not print them |
-   | `headers`, `opening_labels`, `closing_labels`, `period_labels`, `sections`, `pending_markers`, `skip_prefixes` | extend the generic vocabularies when the layout uses other words |
+   | `headers`, `opening_labels`, `closing_labels`, `period_labels`, `section_titles`, `pending_markers`, `skip_prefixes` | extend the generic vocabularies when the layout uses other words |
    | `statement_date_labels`, `previous_date_labels`, `credit_total_labels`, `charge_total_labels`, `stub_markers` | a statement date instead of a period, the summary's own totals (an equation summary) and the words that start a payment stub |
    | `base` | 1.0 for an institution parser (its format is declared) |
 
    Add the class to `INSTITUTION_PARSERS`. Write code (override
    `_collect`, `_signed`, ...) only when the layout really needs it, and
    keep it in the subclass.
+
+   **A fingerprinted parser needs every phrase.** A parser that declares
+   `fingerprints` scores above 0 only when all of its phrases are on page
+   1 (1.0 with a transaction table, 0.54 without). One phrase alone
+   (`current account statement`, `card ending in`) is what any bank or
+   issuer prints, and a statement that matches only that is read by a
+   generic parser. So list phrases that are on **every** statement of the
+   layout, the institution's name among them, and none that only some
+   pages or products print.
+
+   **`section_titles` replaces `sections`.** The old `sections` map gave
+   a section heading a row type. `section_titles` maps a normalised title
+   to a `SectionRule(bank, card, kind)`: the direction its rows' money
+   went on a bank account and on a card (`"in"`, `"out"`, or `None` when
+   the title does not say) and the row type (`fee`, `int`, or `None`).
+   Start from the generic map and add to it (`{**SECTION_TITLES, "club
+   dues": SectionRule("out", None, "fee")}`). The direction applies only to an amount of the
+   `Amount` column printed with no sign at all; a printed sign, brackets,
+   `CR`/`DR`/`DB` and a debit or credit column always decide first. Give
+   a direction only to a title whose rows all go one way, and add a
+   fixture in which a signed row under that title keeps its printed sign.
 4. **Tests**: add the layout to `LAYOUTS` in
    `backend/tests/unit/test_statement_parsers.py`. The shared tests then
    require exact rows, balances, period, last four digits, currency, full
