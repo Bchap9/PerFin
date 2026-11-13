@@ -25,7 +25,8 @@ every pattern runs on single lines cut to :data:`MAX_LINE` characters.
   subtotal or tax is derived from the others (:data:`conf.DERIVED`).
 * **Date**: every date format of :mod:`app.ingestion.classify.dates` plus
   ``14-MAR-26``; a labelled date ("Date", "Order date") or one printed next
-  to a time wins over others, expiry and return-by dates are ignored.
+  to a time wins over others; a date whose own lead-in says expiry, return
+  by or the like is ignored, and the purchase date printed beside it is kept.
   Numeric dates whose day/month order is not visible follow the receipt's
   currency (GBP/EUR day first, USD/CAD month first) at the threshold, or
   are a guess (:data:`conf.GUESSED`) without one.
@@ -577,38 +578,69 @@ def _order_hint(currency: str | None) -> date_rules.DateOrder | None:
     return None
 
 
-def _dates_in(
-    text: str, order: date_rules.DateOrder | None
-) -> list[tuple[date, DateKind, Literal["ymd", "mdy", "dmy", "named", "guessed"]]]:
-    found: list[tuple[date, DateKind, Literal["ymd", "mdy", "dmy", "named", "guessed"]]] = []
+_DateRead = tuple[date, DateKind, Literal["ymd", "mdy", "dmy", "named", "guessed"]]
+
+
+def _dated_spans(text: str, order: date_rules.DateOrder | None) -> list[tuple[int, int, _DateRead]]:
+    """Every date of a line with where it starts and ends, in reading order."""
+    found: list[tuple[int, int, _DateRead]] = []
     for hit in date_rules.find_dates(text, order=order):
         value = hit.value
         if value is None:
             continue
         piece = text[hit.start : hit.end]
         if re.match(r"\d{4}", piece):
-            found.append((value, "ymd", "ymd"))
+            found.append((hit.start, hit.end, (value, "ymd", "ymd")))
         elif any(ch.isalpha() for ch in piece):
-            found.append((value, "named", "named"))
+            found.append((hit.start, hit.end, (value, "named", "named")))
         else:
             first = int(re.match(r"\d+", piece)[0])  # type: ignore[index]
             read: Literal["mdy", "dmy"] = "mdy" if first == hit.month else "dmy"
             if hit.ambiguous or (hit.day <= 12 and hit.day != hit.month and order is None):
-                found.append((value, "guessed", "guessed"))
+                found.append((hit.start, hit.end, (value, "guessed", "guessed")))
             elif hit.day <= 12 and hit.day != hit.month:
-                found.append((value, "hinted", read))
+                found.append((hit.start, hit.end, (value, "hinted", read)))
             else:
-                found.append((value, "visible", read))
+                found.append((hit.start, hit.end, (value, "visible", read)))
     if not found:
         for m in _SHORT_NAMED.finditer(text[:MAX_LINE]):
             month = _MONTHS.get(m[2].lower())
             if month is None:
                 continue
             try:
-                found.append((date(2000 + int(m[3]), month, int(m[1])), "named", "named"))
+                value = date(2000 + int(m[3]), month, int(m[1]))
             except ValueError:
                 continue
+            found.append((m.start(), m.end(), (value, "named", "named")))
     return found
+
+
+def _dates_in(text: str, order: date_rules.DateOrder | None) -> list[_DateRead]:
+    return [read for _, _, read in _dated_spans(text, order)]
+
+
+def _purchase_dates(text: str, order: date_rules.DateOrder | None) -> list[_DateRead]:
+    """The dates of a line that may be the day of the purchase.
+
+    A date is left out when its own lead-in (the words between the previous
+    date, or the line start, and the date) says it is something else:
+    ``EXPIRES 06/12/26``, ``Return by ...`` (:data:`_NOT_PURCHASE_DATE`). So
+    ``03/14/2026 11:42 AM  EXPIRES 06/12/26`` keeps its first date. When such
+    a word is on the line and in front of none of its dates (``06/12/26
+    EXPIRY``) nothing says which date it speaks of, and none is kept.
+    """
+    kept: list[_DateRead] = []
+    dropped = False
+    previous_end = 0
+    for start, end, read in _dated_spans(text, order):
+        if _NOT_PURCHASE_DATE.search(fold(text[previous_end:start])):
+            dropped = True
+        else:
+            kept.append(read)
+        previous_end = max(previous_end, end)
+    if not dropped and _NOT_PURCHASE_DATE.search(fold(text)):
+        return []
+    return kept
 
 
 def _find_date(
@@ -621,11 +653,9 @@ def _find_date(
     for index, entry in enumerate(typed):
         text = entry.line.text
         label = fold(text)
-        if _NOT_PURCHASE_DATE.search(label):
-            continue
         time_match = _TIME.search(text)
         labelled = bool(_DATE_LABEL.search(label))
-        for value, kind, read in _dates_in(text, order):
+        for value, kind, read in _purchase_dates(text, order):
             score = (3 if labelled else 0) + (2 if time_match else 0)
             score += 1 if index < count * 0.5 else 0
             score -= 1 if kind == "guessed" else 0

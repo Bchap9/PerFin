@@ -208,6 +208,49 @@ def test_labelled_date_wins_and_expiry_dates_are_ignored() -> None:
     assert receipt.time == "10:15"
 
 
+def test_purchase_date_survives_an_expiry_on_its_line() -> None:
+    # A coupon or points expiry printed on the date line (R2).
+    receipt = _read("SHOP\n03/14/2026 11:42 AM   EXPIRES 06/12/26\nTOTAL 5.00\n")
+    assert receipt.purchase_date == date(2026, 3, 14)
+    assert receipt.time == "11:42"
+    assert receipt.confidence["date"] == 1.0
+    assert "date" not in receipt.low_confidence
+
+
+@pytest.mark.parametrize(
+    "line",
+    [
+        "EXPIRES 06/12/26",
+        "Return by 04/13/2026",
+        # The word after its date: nothing says which side it belongs to.
+        "06/12/26 EXPIRY",
+        "04/13/2026 06/12/26 last day to return",
+    ],
+)
+def test_a_lone_expiry_or_return_date_is_still_ignored(line: str) -> None:
+    receipt = _read(f"SHOP\n{line}\nTOTAL 5.00\n")
+    assert receipt.purchase_date is None
+    assert rp._purchase_dates(line, "mdy") == []
+
+
+def test_expiry_and_return_lines_beside_no_other_date() -> None:
+    receipt = _read("SHOP\nEXPIRES 06/12/26\nReturn by 04/13/2026\nTOTAL 5.00\n")
+    assert receipt.purchase_date is None
+
+
+def test_expiry_first_then_purchase_date() -> None:
+    receipt = _read("SHOP\nEXP 06/12/26  DATE 03/14/2026\nTOTAL 5.00\n")
+    assert receipt.purchase_date == date(2026, 3, 14)
+
+
+def test_purchase_dates_drops_only_the_date_its_lead_in_disowns() -> None:
+    line = "03/14/2026 11:42 AM   EXPIRES 06/12/26"
+    assert [d for d, _, _ in rp._dates_in(line, "mdy")] == [date(2026, 3, 14), date(2026, 6, 12)]
+    assert [d for d, _, _ in rp._purchase_dates(line, "mdy")] == [date(2026, 3, 14)]
+    plain = "Date: 2026-02-03 10:15"
+    assert rp._purchase_dates(plain, None) == rp._dates_in(plain, None)
+
+
 def test_mail_date_header_when_the_body_has_none() -> None:
     receipt = _read("SHOP\nTOTAL 5.00\n", source="email_body", sent=date(2026, 5, 6))
     assert receipt.purchase_date == date(2026, 5, 6)
