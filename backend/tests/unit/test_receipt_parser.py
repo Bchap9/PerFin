@@ -137,6 +137,54 @@ def test_tip_and_discount_take_part_in_the_check() -> None:
     assert receipt.adds_up is True
 
 
+def test_a_savings_line_the_sum_did_not_use_is_not_added_back_as_tax() -> None:
+    """Subtotal = total holds without the "you saved" line, so the tax is nil."""
+    receipt = _read("PINE PANTRY\n2026-06-01\nSUBTOTAL 61.40\nYOU SAVED 20.98\nTOTAL 61.40\n")
+    assert receipt.adds_up is True
+    assert (receipt.subtotal, receipt.total) == (Decimal("61.40"), Decimal("61.40"))
+    assert receipt.tax == Decimal("0.00")
+
+
+def test_a_savings_line_the_sum_did_not_use_is_not_added_back_as_subtotal() -> None:
+    """Items + tax = total holds without the savings line: the subtotal is the items."""
+    receipt = _read(
+        "PINE PANTRY\n2026-06-01\nOAT FLOUR 12.00\nLENTILS 8.00\n"
+        "TAX 1.60\nYOU SAVED 3.00\nTOTAL 21.60\n"
+    )
+    assert receipt.adds_up is True
+    assert receipt.subtotal == Decimal("20.00")
+
+
+def test_a_discount_and_tip_the_sum_used_stay_in_a_derived_tax() -> None:
+    """The reverse: subtotal + tip - discount = total used both, so the tax is nil too."""
+    receipt = _read(
+        "HARBOR CAFE\n2026-06-01\nSUBTOTAL 40.00\nDISCOUNT -5.00\nTIP 6.00\nTOTAL 41.00\n"
+    )
+    assert receipt.adds_up is True
+    assert receipt.tax == Decimal("0.00")
+
+
+def test_a_tax_derived_through_an_unchecked_savings_line_is_in_doubt() -> None:
+    """Nothing adds up, so whether the saving is in the total is a guess: flagged."""
+    receipt = _read("PINE PANTRY\n2026-06-01\nSUBTOTAL 50.00\nYOU SAVED 5.00\nTOTAL 55.00\n")
+    assert receipt.adds_up is not True
+    assert receipt.tax == Decimal("10.00")
+    assert "tax" in receipt.low_confidence
+    # Without a tip or a discount the rest of the total is the tax, as before.
+    plain = _read("PINE PANTRY\n2026-06-01\nSUBTOTAL 50.00\nTOTAL 55.00\n")
+    assert plain.tax == Decimal("5.00")
+    assert "tax" not in plain.low_confidence
+
+
+def test_a_subtotal_derived_through_an_unchecked_tip_is_in_doubt() -> None:
+    receipt = _read("HARBOR CAFE\n2026-06-01\nTAX 3.20\nTIP 6.00\nTOTAL 49.20\n")
+    assert receipt.subtotal == Decimal("40.00")
+    assert "subtotal" in receipt.low_confidence
+    plain = _read("HARBOR CAFE\n2026-06-01\nTAX 3.20\nTOTAL 43.20\n")
+    assert plain.subtotal == Decimal("40.00")
+    assert "subtotal" not in plain.low_confidence
+
+
 def test_an_inconsistent_receipt_is_kept_with_low_confidence() -> None:
     receipt = _read("SHOP\n2026-06-01\nSUBTOTAL 10.00\nTAX 1.00\nTOTAL 12.00\n")
     assert receipt.total == Decimal("12.00")

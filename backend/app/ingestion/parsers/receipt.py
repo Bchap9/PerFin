@@ -22,7 +22,12 @@ every pattern runs on single lines cut to :data:`MAX_LINE` characters.
   lines add up, or the card payment equals it. A consistent total scores
   1.0; a labelled one that cannot be checked :data:`conf.UNCHECKED`; one
   that contradicts the other figures :data:`conf.GUESSED`. A missing
-  subtotal or tax is derived from the others (:data:`conf.DERIVED`).
+  subtotal or tax is derived from the others (:data:`conf.DERIVED`), with
+  the tip and the discount the set that added up used: a "you saved" line
+  the sum did not need is a note and is not added back. With no set that
+  adds up, every printed tip and discount is allowed for and a figure
+  derived through one is scored :data:`conf.UNCHECKED`: whether it was in
+  the total is a guess.
   A label whose amount OCR put on a line of its own takes the amount-only
   line below it; when that reading finds no labelled total, is
   contradicted, or paired no label at all, the nearest such line (above or
@@ -514,6 +519,8 @@ class _Totals:
     adds_up: bool | None = None
     confirmed_by_tender: bool = False
     derived: set[str] = field(default_factory=set)
+    #: A derived figure allowed for a tip or a discount no sum vouched for.
+    derived_unchecked: bool = False
     total_labelled: bool = False
 
 
@@ -557,36 +564,43 @@ def _solve(typed: Sequence[_Line], items: Sequence[ReceiptLine]) -> _Totals:
         for variant in _variants(sub.amount.value)
     ]
 
-    def consistent(value: Decimal) -> tuple[bool, Money | None]:
+    def consistent(value: Decimal) -> tuple[Money | None, Decimal, Decimal] | None:
+        """The subtotal, tip and discount of the first set that adds up to ``value``."""
         extras = {Decimal(0), tip or Decimal(0)}
         cuts = {Decimal(0), discount or Decimal(0)}
         for sub_value, money in sub_values:
             for extra in extras:
                 for cut in cuts:
                     if _close(sub_value + (tax or 0) + extra - cut, value):
-                        return True, Money(sub_value, money.currency, money.conf)
+                        return Money(sub_value, money.currency, money.conf), extra, cut
                     if tax is not None and _close(sub_value + extra - cut, value):
                         # VAT-inclusive totals: the tax is part of the subtotal.
-                        return True, Money(sub_value, money.currency, money.conf)
+                        return Money(sub_value, money.currency, money.conf), extra, cut
         if item_sum is not None:
             for extra in extras:
                 for cut in cuts:
                     if _close(item_sum + (tax or Decimal(0)) + extra - cut, value) or (
                         tax is not None and _close(item_sum + extra - cut, value)
                     ):
-                        return True, None
-        return False, None
+                        return None, extra, cut
+        return None
 
     # Labelled totals (strong labels first, then the later line), then card payments.
     ranked = [t for _, t in sorted(enumerate(totals), key=lambda it: (not it[1].strong, -it[0]))]
+    # The tip and the discount a derived figure allows for: the ones the set
+    # that added up used (a "you saved" line the sum did not need is a note,
+    # not a term); every printed one when nothing added up.
+    used_tip, used_cut = tip or Decimal(0), discount or Decimal(0)
+    out.derived_unchecked = bool(used_tip or used_cut)
     for line in [*ranked, *cards]:
         if line.amount is None:  # pragma: no cover - _first keeps lines with an amount
             continue
         for value in _variants(line.amount.value):
-            ok, sub = consistent(value)
-            if ok:
+            found = consistent(value)
+            if found is not None:
                 out.total = Money(value, line.amount.currency, line.amount.conf)
-                out.subtotal = sub
+                out.subtotal, used_tip, used_cut = found
+                out.derived_unchecked = False
                 out.adds_up = True
                 out.total_labelled = line.kind == "total"
                 break
@@ -614,12 +628,12 @@ def _solve(typed: Sequence[_Line], items: Sequence[ReceiptLine]) -> _Totals:
         )
         out.subtotal = Money(abs(nearest.value), nearest.currency, nearest.conf)
     if out.subtotal is None and tax is not None:
-        derived = total.value - tax - (tip or 0) + (discount or 0)
+        derived = total.value - tax - used_tip + used_cut
         if derived >= 0:
             out.subtotal = Money(derived, None, total.conf)
             out.derived.add("subtotal")
     if out.tax is None and out.subtotal is not None:
-        rest = total.value - abs(out.subtotal.value) - (tip or 0) + (discount or 0)
+        rest = total.value - abs(out.subtotal.value) - used_tip + used_cut
         if rest >= 0:
             out.tax = rest
             out.tax_conf = total.conf
@@ -1109,7 +1123,7 @@ def read_receipt(
             else conf.UNCHECKED
         )
         if "subtotal" in totals.derived:
-            base = conf.DERIVED
+            base = conf.UNCHECKED if totals.derived_unchecked else conf.DERIVED
         scores["subtotal"] = (
             1.0 if totals.adds_up and base == 1.0 else _scale(base, totals.subtotal.conf)
         )
@@ -1122,7 +1136,7 @@ def read_receipt(
             else conf.UNCHECKED
         )
         if "tax" in totals.derived:
-            base = conf.DERIVED
+            base = conf.UNCHECKED if totals.derived_unchecked else conf.DERIVED
         scores["tax"] = 1.0 if totals.adds_up and base == 1.0 else _scale(base, totals.tax_conf)
     if currency is not None:
         # No currency printed: the account's currency applies (not a doubt).
