@@ -75,6 +75,7 @@ const REASONS: readonly [ReviewItem["kind"], string][] = [
   ["low_confidence_field", "loan_currency_mismatch"],
   ["low_confidence_field", "loan_rate_differs"],
   ["low_confidence_field", "investment_date_out_of_range"],
+  ["low_confidence_field", "year_assumed"],
 ];
 
 describe("review explanations", () => {
@@ -459,6 +460,24 @@ describe("review explanations", () => {
         }),
       ).title,
     ).toBe("Dates may be wrong");
+  });
+
+  it("names the assumed year", () => {
+    const found = explain(
+      item("low_confidence_field", { reason: "year_assumed", year: 2026 }),
+    );
+    expect(found.title).toBe("Which year?");
+    expect(found.what).toBe(
+      "The dates on this statement print no year and PerFin found no statement period, so it placed the rows in 2026.",
+    );
+    expect(found.steps).toEqual([
+      "Check the year against the statement.",
+      "If it is right, confirm the rows. If it is not, correct their dates.",
+    ]);
+    // Without the year in the payload the sentence still reads.
+    expect(
+      explain(item("low_confidence_field", { reason: "year_assumed" })).what,
+    ).toContain("placed the rows in the most recent year that fits.");
   });
 
   it("falls back to the kind's own words for an unknown reason", () => {

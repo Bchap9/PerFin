@@ -8,9 +8,18 @@ quantifiers, so a crafted page cannot make matching expensive.
 
 * :func:`read_amount`: ``1,234.56``, ``-1,234.56``, ``$1,234.56``,
   ``-$1,234.56``, ``+$25.00``, ``(12.00)``, ``12.00-``, ``500.00 CR`` /
-  ``DR``. Two decimals are required (statements print cents); a bare
+  ``DR`` / ``DB``. A sign or a currency symbol may stand one space from
+  what follows it (``- $310.00``, ``$ 1,480.25``), a gap may precede a
+  separator (``7,310 .00``) and one footnote mark may follow the figure
+  (``642.18*``). Two decimals are required (statements print cents); a bare
   integer is not an amount, so dates and reference numbers are never read
-  as money.
+  as money. :func:`find_amounts` joins a lone symbol to the figure after it
+  and a lone sign to a symbol, never to bare digits (``900.00 - 150.00`` is
+  two positive figures). :attr:`Amount.sign_detached` says the sign stood a
+  space away: on a summary line it may be the separator after a label
+  (``Ending Balance - $992.50``), which only the reader of that line can
+  tell (:func:`separator_sign`; :func:`after_label` for a reader that
+  cannot check the sign against anything).
 * :func:`read_date` for one :data:`DateStyle`; :func:`guess_numeric_style`
   tells ``DD/MM`` from ``MM/DD`` from the values themselves (a day above 12)
   and says when it cannot. Yearless styles (``MM/DD``, ``DD/MM``,
@@ -25,7 +34,7 @@ from __future__ import annotations
 
 import re
 from collections.abc import Iterable
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import date, timedelta
 from decimal import Decimal, InvalidOperation
 from typing import Final, Literal
@@ -64,12 +73,26 @@ _MONTHS: Final = {
 }
 
 _AMOUNT: Final = re.compile(
-    r"(?P<open>\()?(?P<sign>[-+\u2212])?(?P<cur>[$\u00a3\u20ac])?(?P<sign2>[-+\u2212])?"
+    r"(?P<open>\()?(?:(?P<sign>[-+\u2212])(?P<gap>\s)?)?"
+    r"(?:(?P<cur>[$\u00a3\u20ac])(?P<gap2>\s)?)?(?P<sign2>[-+\u2212])?"
     r"(?P<int>\d{1,3}(?:,\d{3})+|\d+)\.(?P<dec>\d{2})"
-    r"(?P<close>\))?(?P<trail>-)?(?:\s?(?P<mark>CR|DR|Cr|Dr|cr|dr))?"
+    r"(?P<close>\))?(?P<trail>-)?(?:\s?(?P<mark>CR|DR|DB|Cr|Dr|Db|cr|dr|db))?"
 )
+#: Whitespace between a digit and a separator that a digit follows (``7,310 .00``).
+_SEPARATOR_GAP: Final = re.compile(r"(?<=\d)\s+(?=[.,]\d)")
+#: One of these may follow a figure (a pointer to a note under the table).
+_FOOTNOTE_MARKS: Final = frozenset("*\u2020\u2021\u00a7\u00b9\u00b2\u00b3")
+_SIGNS: Final = frozenset("-+\u2212")
+#: Markers printed after a figure: credit, debit, debit.
+_MARKERS: Final = ("CR", "DR", "DB")
 _NUMERIC_DATE: Final = re.compile(r"(\d{1,4})[/.-](\d{1,2})(?:[/.-](\d{2,4}))?")
 _D_MON_Y: Final = re.compile(r"(\d{1,2})[\s-]([A-Za-z]{3,9})\.?[\s-](\d{4})")
+#: ``03-Nov-25`` / ``03/Nov/2025``: joined parts, so a two-digit year is a year
+#: (``16 Dec 20`` may be a day, a month and a count).
+#: The separator is printed twice (``03-Nov/25`` is not a date).
+_D_MON_Y_JOINED: Final = re.compile(
+    r"(?P<day>\d{1,2})(?P<sep>[-/])(?P<month>[A-Za-z]{3,9})(?P=sep)(?P<year>\d{4}|\d{2})"
+)
 _MON_D_Y: Final = re.compile(r"([A-Za-z]{3,9})\.?\s(\d{1,2}),?\s(\d{4})")
 _MON_D: Final = re.compile(r"([A-Za-z]{3,9})\.?\s(\d{1,2})")
 _D_MON: Final = re.compile(r"(\d{1,2})[\s-]([A-Za-z]{3,9})\.?")
@@ -79,13 +102,17 @@ _CURRENCY_SYMBOLS: Final = {"$": "USD", "£": "GBP", "€": "EUR"}
 @dataclass(frozen=True)
 class Amount:
     value: Decimal
-    #: ``CR``/``DR`` printed after the figure (None: no marker).
+    #: ``CR`` (True) or ``DR``/``DB`` (False) printed after the figure (None: no marker).
     credit: bool | None = None
     #: A minus sign, a trailing minus or parentheses were printed.
     negative_marked: bool = False
     #: A plus sign was printed.
     positive_marked: bool = False
     symbol: str | None = None
+    #: The sign stood one space from the symbol or figure after it (``- $12.00``,
+    #: ``- 12.00``). Printed as a sign it is one; after a label on a line of
+    #: text it may be a separator (``Ending Balance - $992.50``).
+    sign_detached: bool = False
 
     @property
     def currency(self) -> str | None:
@@ -95,9 +122,16 @@ class Amount:
 def read_amount(text: str) -> Amount | None:
     """The amount ``text`` is (the whole cell), or None."""
     text = text.strip()[:MAX_TOKEN]
+    if text and text[-1] in _FOOTNOTE_MARKS:
+        text = text[:-1]
+        if text.endswith(" "):
+            text = text[:-1]
+    text = _SEPARATOR_GAP.sub("", text)
     match = _AMOUNT.fullmatch(text)
     if match is None:
         return None
+    if match["sign"] and match["sign2"] and (match["gap"] or match["gap2"]):
+        return None  # ``- -5.00``: two signs are one figure only when printed as one
     if bool(match["open"]) != bool(match["close"]):
         return None
     sign = match["sign"] or match["sign2"]
@@ -111,10 +145,11 @@ def read_amount(text: str) -> Amount | None:
     mark = (match["mark"] or "").upper()
     return Amount(
         value=-value if negative else value,
-        credit=True if mark == "CR" else (False if mark == "DR" else None),
+        credit=True if mark == "CR" else (False if mark in ("DR", "DB") else None),
         negative_marked=negative,
         positive_marked=sign == "+",
         symbol=match["cur"],
+        sign_detached=bool(match["sign"] and match["gap"]),
     )
 
 
@@ -146,26 +181,85 @@ def symbol_currency(texts: Iterable[str]) -> str | None:
     return _SURE_SYMBOLS.get(symbol) if count >= MIN_SYMBOL_AMOUNTS else None
 
 
+def _figure(tokens: list[str], index: int) -> tuple[str, int]:
+    """The text of the figure starting at ``tokens[index]`` and the tokens it takes.
+
+    A lone currency symbol, with or without its sign (``$``, ``-$``), takes
+    the token after it; a lone sign takes the
+    token after it when that starts with a currency symbol (and the one
+    after that when the symbol stands alone too). A sign before bare digits
+    is an operator of the line (``900.00 - 150.00``) and takes nothing.
+    """
+    token = tokens[index]
+    following = tokens[index + 1] if index + 1 < len(tokens) else ""
+    if token in _CURRENCY_SYMBOLS and following:
+        return f"{token} {following}", 2
+    if len(token) == 2 and token[0] in _SIGNS and token[1] in _CURRENCY_SYMBOLS and following:
+        return f"{token} {following}", 2
+    if token in _SIGNS and following[:1] in _CURRENCY_SYMBOLS:
+        if following not in _CURRENCY_SYMBOLS:
+            return f"{token} {following}", 2
+        if index + 2 < len(tokens):
+            return f"{token} {following} {tokens[index + 2]}", 3
+    return token, 1
+
+
 def find_amounts(text: str) -> list[Amount]:
     """Every amount in a line, left to right (whitespace-separated tokens)."""
     out: list[Amount] = []
     tokens = text[:MAX_LINE].split()
-    skip = False
-    for index, token in enumerate(tokens):
-        if skip:
-            skip = False
-            continue
-        following = tokens[index + 1] if index + 1 < len(tokens) else ""
-        if following.upper() in ("CR", "DR"):
-            amount = read_amount(f"{token} {following}")
-            if amount is not None:
-                out.append(amount)
-                skip = True
-                continue
-        amount = read_amount(token.rstrip(".,;:"))
+    index = 0
+    while index < len(tokens):
+        figure, used = _figure(tokens, index)
+        following = tokens[index + used] if index + used < len(tokens) else ""
+        amount = read_amount(f"{figure} {following}") if following.upper() in _MARKERS else None
         if amount is not None:
-            out.append(amount)
+            used += 1
+        else:
+            amount = read_amount(figure.rstrip(".,;:"))
+        if amount is None:
+            # A symbol or sign that led nowhere: the next token is read on its own.
+            index += 1
+            continue
+        out.append(amount)
+        index += used
     return out
+
+
+#: A minus printed as a token of its own.
+_LONE_MINUS: Final = frozenset({"-", "\u2212"})
+
+
+def separator_sign(amount: Amount, cells: Iterable[str]) -> bool:
+    """The minus of ``amount``, read after a label on a line of ``cells``
+    (their texts), may be a separator and no sign: it stood apart from the
+    figure (``Ending Balance - $992.50``) and not in the figure's own cell
+    (a cell reading ``- $20.00`` prints a sign). ``CR``, ``DR`` or ``DB``
+    after the figure says the direction whatever the dash is."""
+    if not (amount.sign_detached and amount.negative_marked) or amount.credit is not None:
+        return False
+    for text in cells:
+        alone = read_amount(text)
+        if alone is not None and alone.sign_detached and alone.value == amount.value:
+            return False
+    return True
+
+
+def after_label(text: str, cells: Iterable[str]) -> list[Amount]:
+    """:func:`find_amounts` of ``text``, what a line of ``cells`` prints after
+    a label, for a reader with nothing to check a sign against: a dash that
+    starts ``text`` and stands apart from the first figure
+    (:func:`separator_sign`) is the label's separator, and the figure is
+    read without it (``Net Pay - $1,840.25`` is pay, not a debt). A reader
+    that can check the sign asks :func:`separator_sign` and decides."""
+    amounts = find_amounts(text)
+    tokens = text[:MAX_LINE].split()
+    if amounts and tokens and tokens[0] in _LONE_MINUS and separator_sign(amounts[0], cells):
+        first = amounts[0]
+        amounts[0] = replace(
+            first, value=abs(first.value), negative_marked=False, sign_detached=False
+        )
+    return amounts
 
 
 def _year(text: str) -> int | None:
@@ -268,9 +362,16 @@ def read_date(
         return _make(int(match[1]), int(match[2]), int(match[3])) if match else None
     if style == "d_mon_y":
         match = _D_MON_Y.fullmatch(text)
-        if match is None or match[2].lower() not in _MONTHS:
+        if match is not None:
+            day_text, name, year_text = match[1], match[2], match[3]
+        elif (match := _D_MON_Y_JOINED.fullmatch(text)) is not None:
+            day_text, name, year_text = match["day"], match["month"], match["year"]
+        else:
             return None
-        return _make(int(match[3]), _MONTHS[match[2].lower()], int(match[1]))
+        if name.lower() not in _MONTHS:
+            return None
+        year = int(year_text) if len(year_text) == 4 else _year(year_text)
+        return _make(year, _MONTHS[name.lower()], int(day_text))
     match = _MON_D_Y.fullmatch(text)
     if match is None or match[1].lower() not in _MONTHS:
         return None

@@ -82,10 +82,11 @@ Every outcome is audited (``document.ingest``) and emits ``document.updated``.
 
 from __future__ import annotations
 
+import re
 import uuid
 from collections.abc import Callable, Iterable, Sequence
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import date, datetime
 from typing import Any, Final, Protocol
 
 from sqlalchemy import func, select
@@ -120,7 +121,7 @@ from app.domain.loans.statement_import import import_loan_statement
 from app.domain.tax.ingest import import_tax_forms
 from app.ingestion.children import document_depth, receive_children
 from app.ingestion.classify.fingerprints import builtin_fingerprints
-from app.ingestion.classify.service import classify_document
+from app.ingestion.classify.service import FIELD_THRESHOLD, classify_document
 from app.ingestion.intake.sniff import SNIFF_BYTES, FileType, sniff
 from app.ingestion.match.accounts import importable_account_ids, match_account
 from app.ingestion.match.receipts import apply_receipt
@@ -350,6 +351,10 @@ def _extract(
     raise first
 
 
+#: The parse warning of rows placed in an assumed year (``year_assumed:2026``).
+_YEAR_ASSUMED: Final = re.compile(r"year_assumed:(\d{4})")
+
+
 def _review(db: Session, document: Document, kind: ReviewKind, payload: dict[str, Any]) -> None:
     repo.add_review_item(db, document.household_id, kind, payload, document_id=document.id)
 
@@ -468,6 +473,38 @@ def _parse_hints(document: Document) -> dict[str, str | None]:
             spec = next((f.spec for f in builtin_fingerprints() if f.key == key), None)
             hints["date_order"] = spec.date_order if spec is not None else None
     return hints
+
+
+def _period_hint(document: Document) -> tuple[date, date, float] | None:
+    """The period the classifier read from a printed label, with its confidence.
+
+    None for a period inferred from row or line dates (the parsers read
+    those themselves), for one below the classifier's field threshold, and
+    for anything that is not two ISO days in order.
+    """
+    facts = document.confidence
+    if not isinstance(facts, dict):
+        return None
+    period, fields = facts.get("period"), facts.get("fields")
+    if not isinstance(period, dict) or not isinstance(fields, dict):
+        return None
+    if period.get("inferred") is not False:
+        return None
+    confidence = fields.get("period")
+    if isinstance(confidence, bool) or not isinstance(confidence, (int, float)):
+        return None
+    if confidence < FIELD_THRESHOLD:
+        return None
+    start, end = period.get("start"), period.get("end")
+    if not isinstance(start, str) or not isinstance(end, str):
+        return None
+    try:
+        first, last = date.fromisoformat(start), date.fromisoformat(end)
+    except ValueError:
+        return None
+    if first > last:
+        return None
+    return first, last, float(confidence)
 
 
 def _unlink_classified_account(document: Document) -> None:
@@ -592,6 +629,8 @@ def _parse_document(
     With nothing learned and no answer the document is read as without a model.
     """
     hints = _parse_hints(document)
+    period = _period_hint(document)
+    received = document.created_at.date() if document.created_at is not None else None
     template = _learned_template(db, document)
     pages = result
 
@@ -605,6 +644,8 @@ def _parse_document(
             date_order=hints.get("date_order"),
             template=template,
             vocabulary=words,
+            period=period,
+            not_after=received,
         )
 
     result = parse_with(None)
@@ -743,6 +784,26 @@ def _parse_document(
                     {"page": r.page, "bbox": [round(v, 2) for v in r.bbox]}
                     for r in info.skipped_regions
                 ],
+            },
+        )
+    assumed = [
+        int(found[1]) for w in info.warnings if (found := _YEAR_ASSUMED.fullmatch(w)) is not None
+    ]
+    if assumed:
+        # Rows that print no year, on a statement that prints no period: the
+        # parser placed them in a year (``table_statement.assume_years``).
+        # One question per document names it; the rows themselves wait under
+        # the importer's ``low_confidence`` item (``posted_date``).
+        _review(
+            db,
+            document,
+            ReviewKind.LOW_CONFIDENCE_FIELD,
+            {
+                "reason": "year_assumed",
+                "field": "posted_date",
+                # The latest, when the statements of the document differ.
+                "year": max(assumed),
+                "parser": info.parser.name,
             },
         )
     if info.unread_accounts:

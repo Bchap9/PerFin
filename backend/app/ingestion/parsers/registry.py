@@ -11,6 +11,16 @@ one extraction (:func:`parse_extraction`):
    payslip (receipt, tax form) parser for a ``payslip`` (``receipt``,
    ``tax_form``) kind. The fingerprint's ``date_order``
    is handed to a generic parser.
+   **A statement is never a receipt.** Before any choice, the receipt
+   parser's score is set to 0 for a document the classifier calls a
+   statement, and for one with a transaction table header on its pages
+   (``statement_generic`` above 0) that the classifier does not call a
+   receipt (:func:`_without_receipt`): a page of activity that ends in
+   "Total" lines is not a purchase. So the receipt parser is neither
+   chosen nor tried as a fallback there, and ``ParseInfo.scores`` shows 0.
+   With no classifier kind the table decides, also for a receipt whose
+   items sit under such a header: its rows then wait for a person, where
+   a statement read as a receipt would lose its rows behind one total.
 2. Otherwise every parser scores the pages (``detect``); the best score of
    at least :data:`MIN_SCORE` wins (ties: the order of :data:`PARSERS`, so
    an institution parser beats the generic one).
@@ -26,6 +36,10 @@ one extraction (:func:`parse_extraction`):
    its anchors fill the period, the account's last four digits and the
    balances (:func:`_with_template`).
 
+**Hints on the view.** The period the classifier read from a printed label
+and the day the file arrived are put on the view every parser reads
+(``DocumentView.hints``), so ``DocumentParser.parse`` keeps its signature.
+
 The chosen parser's statements (and brokerage ``investments``) replace any
 an earlier parser run left in the result (``source_format`` ``pdf``/``image``);
 structured statements from the sandbox (OFX, QFX, QIF) are never touched. What happened
@@ -37,9 +51,11 @@ pages with no new upload or extraction (:func:`reparse`).
 
 from __future__ import annotations
 
+from dataclasses import replace
+from datetime import date
 from typing import Final
 
-from app.ingestion.parsers.base import DocumentParser, DocumentView, ParseOutcome
+from app.ingestion.parsers.base import DocumentParser, DocumentView, ParseOutcome, ViewHints
 from app.ingestion.parsers.brokerage import BROKERAGE_PARSERS
 from app.ingestion.parsers.confidence import DEFAULT_THRESHOLD
 from app.ingestion.parsers.institutions import INSTITUTION_PARSERS
@@ -92,6 +108,22 @@ def _ref(parser: DocumentParser) -> ParserRef:
     return ParserRef(
         name=parser.name, version=parser.version, institution=parser.institution, kind=parser.kind
     )
+
+
+def _without_receipt(scores: dict[str, float], kind: str | None) -> dict[str, float]:
+    """``scores`` with the receipt parsers at 0 where the document is a statement.
+
+    That is: the classifier says ``statement``, or a transaction table header
+    is on the pages (the generic statement parser scores above 0) and the
+    classifier does not say ``receipt``. A document classified as a receipt
+    keeps its receipt parser, table or not.
+    """
+    if kind == "receipt":
+        return scores
+    if kind != "statement" and scores.get(TableStatementParser.name, 0.0) <= 0:
+        return scores
+    receipts = {p.name for p in PARSERS if p.kind == "receipt"}
+    return {name: 0.0 if name in receipts else score for name, score in scores.items()}
 
 
 def _hinted(
@@ -180,16 +212,30 @@ def parse_extraction(
     date_order: str | None = None,
     template: LayoutTemplate | None = None,
     vocabulary: Vocabulary | None = None,
+    period: tuple[date, date, float] | None = None,
+    not_after: date | None = None,
 ) -> ExtractResult:
     """``result`` with the document parsers' statements and :class:`ParseInfo`.
+
+    ``period`` (first day, last day, confidence) is the statement period the
+    classifier read from a printed label and ``not_after`` the day the file
+    arrived; both reach every parser on the view
+    (:class:`~app.ingestion.parsers.base.ViewHints`).
 
     ``vocabulary``: the local model's suggested kinds for words a brokerage
     parser could not type on an earlier run (:mod:`app.ingestion.parsers.vocabulary`,
     ADR-0010); the words still untyped are in ``ParseInfo.unknown_actions``
     / ``unknown_headings``.
     """
-    view = DocumentView.from_result(result)
-    scores = {p.name: p.detect(view) for p in PARSERS}
+    view = replace(
+        DocumentView.from_result(result),
+        hints=ViewHints(
+            period=period[:2] if period is not None else None,
+            period_confidence=period[2] if period is not None else 0.0,
+            not_after=not_after,
+        ),
+    )
+    scores = _without_receipt({p.name: p.detect(view) for p in PARSERS}, kind)
     chosen = _hinted(scores, parser_name=parser_name, institution=institution, kind=kind)
     if chosen is None:
         best = max(PARSERS, key=lambda p: scores[p.name])
@@ -245,11 +291,27 @@ def parse_extraction(
     )
 
 
-def reparse(result: ExtractResult, *, threshold: float = DEFAULT_THRESHOLD) -> ExtractResult:
-    """Run the parsers again on a stored extraction, keeping the earlier choice as a hint."""
+def reparse(
+    result: ExtractResult,
+    *,
+    threshold: float = DEFAULT_THRESHOLD,
+    period: tuple[date, date, float] | None = None,
+    not_after: date | None = None,
+) -> ExtractResult:
+    """Run the parsers again on a stored extraction, keeping the earlier choice as a hint.
+
+    A document a receipt parser read is read again as a receipt (``kind``),
+    so its item table does not turn it into a statement
+    (:func:`_without_receipt`). ``period`` and ``not_after`` are those of
+    :func:`parse_extraction`: a caller that has them hands them on, so both
+    runs read the same hints.
+    """
     previous = result.parse.parser if result.parse is not None else None
     return parse_extraction(
         result,
         threshold=threshold,
         parser_name=previous.name if previous is not None else None,
+        kind="receipt" if previous is not None and previous.kind == "receipt" else None,
+        period=period,
+        not_after=not_after,
     )

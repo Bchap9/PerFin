@@ -566,7 +566,16 @@ a child answering with parser output is `bad_output`.
   every parser scores the pages (`detect`) and the best at or above 0.35
   wins. All scores are recorded. When the chosen parser reads nothing
   usable, the next-best parsers at or above 0.35 are tried in turn
-  (warning `parser_fallback:<name>`).
+  (warning `parser_fallback:<name>`). **A statement is never a receipt**:
+  before any of this the receipt parser's score is set to 0 for a document
+  the classifier calls a statement, and for one with a transaction table
+  header on its pages that the classifier does not call a receipt (a page
+  of activity that ends in "Total" lines is not a purchase). A document
+  classified as a receipt keeps its parser. The period the classifier read
+  from a printed label (at or above its field threshold) and the day the
+  file arrived are handed to the parsers on the view (`view.hints`), with
+  the day the PDF says it was made (`view.created`); "Period and year"
+  below says what the statement reader does with them.
 - **Generic table statement parser** (`table_statement.py`): a header line
   naming date, description and amount (or debit/credit style) columns, with
   optional balance and posting date, starts or continues the table (repeated
@@ -604,8 +613,157 @@ a child answering with parser output is `bad_output`.
   account's `CARDMEMBER SERV WEB PYMT` or `CREDIT CARD PAYMENT` row is
   no cue): one of "card ending", "credit card", "card statement",
   "minimum payment", "credit limit", "corporate card", "charge card", or
-  two of the weaker "new charges" and "cardmember"/"card member".
+  two of the weaker "new charges" and "cardmember"/"card member"
+  ("Parser choice" below has the limits).
   Numeric rows with and without a year in one table are both read.
+- **Bank and card statement layouts** (`table_statement.py` version 7,
+  `statement_header.py`; the two module docs have every rule and its
+  limits). What the reader does with the ways statements are printed:
+  - *Headers* (`statement_header.read_header`). Two headings printed so
+    close that they are one cell (`Date Transaction Description`,
+    `WITHDRAWAL BALANCE`) are read as the fewest known headings that use
+    every word of the cell (a cell with a word left over is not split:
+    `Amount Enclosed`). A second date heading is the posting date. A
+    heading PerFin does not know right of the money (`Category`,
+    `Reference`) is a column whose cells are claimed and not read. When a
+    line names a date and a money column and leaves exactly one cell
+    unknown between them, that cell is the description (`Memo Text`),
+    unless it names figures (`DAILY ENDING BALANCE`). A money heading may
+    carry a unit (`Amount (SGD)`); on a scanned page a one-word heading
+    may be one letter off (`ithdrawal`). A header printed over two or
+    three lines is one header when the lines together name more columns
+    than any of them alone (`stack_headers`). These rules apply to a line
+    of headings only: a line with an amount is no header. A line of
+    heading words that heads a table PerFin does not read (`Date |
+    Balance | Date | Balance`) ends the table above it; a title or a
+    row's wrapped text made of heading words does not.
+  - *Rows off their columns.* A figure under no heading goes to the
+    numeric column that starts left of it when that column has none on
+    the line; a date printed so close to the description that both are
+    one cell is split off it, on a line with a figure. With a figure in
+    both the debit and the credit column a zero counts as none; two
+    amounts say nothing and the row is counted as skipped. Amounts are
+    read with a `DB` marker, a sign or a currency symbol a space away
+    from the figure (`-$ 12.00`) and one footnote mark after it.
+  - *Sections* (`SECTION_TITLES`). A section title (`Deposits and
+    additions`, `Electronic withdrawals`, `Checks paid`, `Payments and
+    credits`, `Purchases`, `Fees`, ...) types its rows as before and now
+    also says which way their money went, for a bank account, a card or
+    both. It is read between the rows of a table and above a header. Only
+    an amount of the `Amount` column printed with **no sign at all** takes
+    that direction: a minus, a plus, brackets, `CR`/`DR`/`DB` and a debit
+    or credit column always decide first. A title naming both sides
+    (`Deposits and withdrawals`) gives none. A header without a title on a
+    later page, with the columns of the table being read, is that table's
+    header printed again, and direction and type carry on, unless the line
+    over it speaks of a section. A `Total ...` line after a section's rows
+    is that section's total: a section whose rows do not add up to it
+    holds a statement that would otherwise reconcile (warning
+    `section_total_mismatch`), and when what it lacks is the whole
+    difference only its rows are left in doubt. A total with more dated
+    rows of its section after it is a subtotal (one per cardholder): the
+    total after the last row is checked, against all the section's rows or
+    those since the last subtotal. A total under rows that each agree
+    with their printed running balance, on a statement that reconciles,
+    is the total of something else and holds nothing. A total says how
+    much, never which way: one that agrees vouches for no row.
+  - *A date printed once per day.* An undated line with description text
+    and one figure in a money column, close under the row above it, takes
+    that row's date when a dated row follows in the same table (or, at the
+    table's end, when the statement already has two such rows); otherwise
+    it stays what it was, a summary line. Its date scores at most 0.9
+    (warning `dates_carried`).
+  - *Newest first.* Rows printed from the latest day back are read in the
+    order they happened, so the running balances agree (warning
+    `rows_newest_first`); only when a running balance is printed or every
+    row stands in one section.
+  - *Titles.* The line printed over a header, and the title of a block
+    (`Account summary`), is never the second line of the row above it.
+  - *Balances.* A dated line whose description starts with an opening or
+    closing label is a balance, whatever column its figure is in, and
+    never a transaction (a payee that starts with a label, `New Balance
+    Outlet 114`, is a row). `Previous statement balance`, `Balance last
+    statement` and `Prior balance` open a statement; the longest label on
+    a line is the one printed, and a closing label after `previous`,
+    `last` or `prior` closes nothing. A label printed without its figure
+    takes the figure printed alone on the line next to it (confidence
+    0.9). A dash standing apart between a label and its figure (`Ending
+    Balance - $992.50`) is a minus or only a separator: the reading the
+    rows agree with is taken (the other balance and the rows' total, or
+    the running balance beside the first or last row), and a balance
+    nothing settles is not given at all, so the statement is held
+    unreconciled instead of recorded with the wrong sign. `-$992.50`, and
+    `- $992.50` in a cell of its own, are negative as printed.
+  - *Period and year.* The period is looked for in this order, each step
+    only when those before it found nothing: (1) a labelled period (also
+    `Statement For`, `Billing Cycle`, `Period Covered`, `Statement
+    Covers`, `Activity From`, `Activity For`) or the header band; (2) the
+    period the classifier read (warning `period_from_classifier`); (3) a
+    statement date (also `Statement Issued`, `Statement Ending`,
+    `Statement End Date`); (4) one range with a year printed once on page
+    1 above the first table without a label, of at most 100 days, with
+    half the rows or more dated inside it (warning
+    `period_unlabelled`; believed at 0.75, so it dates the rows and is no
+    stated period for the duplicate guard); (5) an **assumed year**. Rows
+    that print a month and a day and no year, on a statement with none of
+    the above, used to be skipped. They are now placed in the latest run
+    of the calendar that ends on or before the earlier of the day the PDF
+    says it was made and the day the file arrived (`view.ceiling`):
+    December rows before January rows, never split around a date printed
+    in a notice. Every such date scores 0.6, so each row is written
+    pending, and the warning `year_assumed:<YYYY>` raises one review item
+    that names the year ("Review queue" below). Such a statement gives no
+    closing balance (it is still reconciled with the printed figures), so
+    no balance snapshot is written for a day nobody confirmed. Without
+    that day, with
+    rows that mix dates with and without a year, or with rows spread over
+    more than 184 days, the year-less rows are counted as skipped as
+    before.
+  - *Parser choice.* A parser written for one institution scores above 0
+    only when **every** phrase of its fingerprint is on page 1 (1.0 with
+    a table, 0.54 without): one phrase alone (`card ending in`) is what
+    any issuer prints. The generic card reader (0.45 with a table, above
+    `statement_generic` at 0.4) counts its card words only on page-1
+    lines outside the rows of at most eight words, so a fee note that
+    mentions a credit card chooses nothing; and such a line that names a
+    deposit account (`checking`, `savings`, `deposits`, `withdrawals` as
+    one of the first two of at most three words: `Business Checking`,
+    `Total Deposits`) rules the card reader out. A line that only
+    mentions one (`AutoPay from Checking ending 7731`) does not.
+  - *What is counted.* A line that is found and not imported is counted
+    in `skipped_lines`, with its box in `skipped_regions`, and raises the
+    `lines_skipped` item, so the document waits instead of ending
+    `processed` with fewer rows than it prints: a dated line without a
+    readable amount; an undated line with a figure in a money column that
+    a dated row follows and that is no carried-date row; rows above the
+    first account or share (`rows_outside_account`); date-led lines
+    ending in an amount under a section title and no header
+    (`rows_without_header:<n>`; a titled section without a header is not
+    read), and the same lines with words on them after a header of
+    heading words that ended the table without being one PerFin reads
+    (`Date | Balance`; figures by day under it have no words and are not
+    counted); and each dated entry right of the left group of a table
+    printed two or three times across the page (`Number | Date Paid |
+    Amount` three times: the left group is read, the others are counted,
+    `table_across_unread:<n>`, and the statement cannot add up and is
+    held). `Date | Amount` pairs printed across are balances by day: not
+    read and not counted.
+  - *Credit-union shares.* The shares of a member statement are named by
+    the title over each table, also when the title carries a figure
+    (`PRIMARY SHARE ID 0000 | Dividends Paid YTD: | 4.12`) or starts with
+    the number (`ID 0040 - SHARE DRAFT`).
+  - *Not read* (counted or held, never guessed): titled sections without
+    a header row, one field per line, decimal commas and month names
+    other than English, two accounts with the same masked number,
+    description lines printed above their dated line, and loan
+    sub-accounts of a member statement.
+
+  Parser versions are part of `document.parser_version`
+  (`statement_generic/7`, `card_statement_generic/7`, the institution
+  parsers `/5`). A document stored by an earlier version keeps its rows
+  until it is read again; "Process again" reads it with the current
+  rules, which can change its rows, its period and whether it waits in
+  review.
 - **Card statements of account** (`table_statement.py`, version 4, any
   institution): the layout of a charge or corporate card statement that
   prints a **statement date** and no period.
@@ -655,7 +813,8 @@ a child answering with parser output is `bad_output`.
   institutions of the shipped fingerprints (Sample National Bank checking,
   Example Federal Credit Union, Demo Card Services, Mock Savings and Loan)
   that pin the date formats, sign convention, currency and institution name,
-  so values read in their declared format score 1.0.
+  so values read in their declared format score 1.0. Each claims a
+  document only when every phrase of its fingerprint is on page 1.
 - **Payslip parser** (`payslip.py`, basic): employer, pay period, pay date,
   earnings and deduction lines, gross, total deductions, net; checked
   `gross - deductions = net`. Kept in `extraction.parse.payslip`
@@ -693,7 +852,9 @@ a child answering with parser output is `bad_output`.
   statement, 0.4 for an amount the running balance contradicts; OCR scales
   by the lowest Tesseract word confidence of the cell. Fields below
   `PERFIN_INGEST_CONFIDENCE_THRESHOLD` (default 0.85, at least 0.5) are
-  listed per row (`low_confidence`).
+  listed per row (`low_confidence`). A date carried from the row above
+  and a balance read beside its label score at most 0.9; a date in an
+  assumed year scores 0.6.
 - **Stored output**: parsed statements are `extraction.statements` with
   `source_format` `pdf`/`image`, each row with its `confidence`,
   `low_confidence`, `page` and `bbox` (region highlight), the statement with
@@ -2140,6 +2301,16 @@ Phases 3-4 implementation (`app/domain/review/assist.py`, `actions.py`,
   documents the person may change whose stored layout the fingerprint
   matches are reprocessed (of the 500 newest scanned; the scan stops when
   its 2 s matching budget is spent).
+- **Which year?** A statement whose rows print no year and that prints
+  no period, statement date or range has its rows placed in an assumed
+  year ("Parse", "Period and year"). The pipeline raises one
+  `low_confidence_field` item per document with the reason
+  `year_assumed` (payload: `field` `posted_date`, `year`, the latest
+  when the statements of the document differ, and `parser`), beside the
+  importer's `low_confidence` item under which the rows wait pending.
+  The review copy (`reviewCopy.ts`, "Which year?") names the year and
+  asks the person to check it against the statement, then to confirm the
+  rows or correct their dates.
 - **Create a rule from this.** `GET /review/{id}/rule-draft` returns a rule
   pre-filled from one of the item's rows (payee text, account and sign;
   the row's category, else payee, else a review flag), validated by the
@@ -2589,8 +2760,9 @@ The steps, the parser contract and the review checklist are in
    subclass that only declares facts: `name`, `version`, `institution` (the
    fingerprint key), `display_name`, `fingerprints`, `date_styles`,
    `period_styles`, `sign`, `default_currency`, `account_type`, extra
-   `headers`/labels/`sections`. Code only when the layout needs it. Listed
-   in `INSTITUTION_PARSERS`.
+   `headers`/labels/`section_titles`. Every phrase of `fingerprints` must
+   be on page 1 for the parser to claim a document. Code only when the
+   layout needs it. Listed in `INSTITUTION_PARSERS`.
 4. **Version.** Bump `version` whenever the output for the same pages may
    change; the stored `parser` reference says which version read a
    statement, and `reparse` re-runs from the stored pages.

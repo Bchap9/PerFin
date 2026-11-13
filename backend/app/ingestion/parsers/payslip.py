@@ -31,6 +31,7 @@ from app.ingestion.parsers.table_statement import label_end
 from app.ingestion.parsers.text import (
     FULL_STYLES,
     DateStyle,
+    after_label,
     find_amounts,
     find_dates,
     guess_numeric_style,
@@ -49,7 +50,7 @@ def _amount(line: ViewLine, label: str) -> Decimal | None:
     end = label_end(line.text, label)
     if end is None:
         return None
-    amounts = find_amounts(line.text[end:])
+    amounts = after_label(line.text[end:], [cell.text for cell in line.cells])
     return amounts[0].value if amounts else None
 
 

@@ -16,6 +16,13 @@ institutions, invented numbers).
 * A payslip is kept on the document; one that does not add up waits in review.
 * The stored extraction carries the parser output, so choosing an account
   later re-imports without a new upload or extraction.
+* A statement whose rows print no year and that prints no period keeps its
+  rows, each pending on its date, with one question naming the assumed year
+  (``tests/fixtures/synth_bank_layouts.py``).
+* A statement of unsigned amounts under section titles, and one whose header
+  takes two lines, import clean; checks printed three across the page hold
+  the document with one ``lines_skipped`` item counting those not read
+  (``synth_bank_layouts``, ``synth_statement_headers``).
 * A card "Statement of Account" with only a statement date
   (``tests/fixtures/synth_card_statement.py``) imports into its credit card
   account with no review item.
@@ -58,8 +65,10 @@ from app.domain.transactions.models import ReviewState, Transaction
 from app.ingestion.intake.upload import receive_upload
 from app.ingestion.sandbox.protocol import ExtractResult
 from app.workers.handlers import ingest
+from tests.fixtures import synth_bank_layouts as layouts
 from tests.fixtures import synth_card_statement as card
 from tests.fixtures import synth_pdf_statements as synth
+from tests.fixtures import synth_statement_headers as headers
 from tests.fixtures.factories import Factories, UserRecord
 from tests.fixtures.imports import run_jobs
 from tests.fixtures.ledger import LedgerFactories
@@ -214,7 +223,7 @@ def test_pdf_statement_is_classified_parsed_reconciled_and_committed(env: Env, l
     assert document.institution_id == account.institution_id
     assert (document.period_start, document.period_end) == (stmt.start, stmt.end)
     assert document.parser_version is not None
-    assert document.parser_version.endswith("/4")
+    assert document.parser_version.endswith("/5")
     assert document.confidence is not None
     assert document.confidence["parse"]["reconciliation"] == ["ok"]
 
@@ -297,7 +306,7 @@ def test_card_statement_of_account_imports_into_its_card_account(env: Env) -> No
         stmt.period_start,
         stmt.statement_date,
     )
-    assert document.parser_version == "card_statement_generic/6"
+    assert document.parser_version == "card_statement_generic/7"
     assert document.confidence is not None
     assert document.confidence["parse"]["reconciliation"] == ["ok"]
 
@@ -365,12 +374,113 @@ def test_low_confidence_fields_are_imported_pending(env: Env) -> None:
     low = [i for i in items if i.kind is ReviewKind.LOW_CONFIDENCE_FIELD]
     assert [i.payload["reason"] for i in low] == ["low_confidence"]
     assert low[0].payload["fields"] == ["posted_date"]
-    assert low[0].payload["parser"] == "statement_generic/6"
+    assert low[0].payload["parser"] == "statement_generic/7"
     assert {t["transaction_id"] for t in low[0].payload["transactions"]} == {
         str(r.id) for r in rows
     }
     # The statement itself reconciled: its closing balance is recorded.
     assert len(env.snapshots(account)) == 1
+
+
+def test_yearless_statement_without_a_period_waits_with_a_year_question(env: Env) -> None:
+    account = env.ledger.account(
+        env.household_id, number_last4="5127", type="checking", currency="USD"
+    )
+    document_id = env.ingest(layouts.yearless_no_period())
+
+    # The latest year in which the last row (27 March) is not after today.
+    today = date.today()
+    year = today.year if (today.month, today.day) >= (3, 27) else today.year - 1
+    expected = [
+        (posted.replace(year=year), amount.quantize(Decimal("0.000001")), payee)
+        for posted, amount, payee in layouts.EXPECTED_ROWS["yearless_no_period"]
+    ]
+    rows = env.transactions(account)
+    assert _rows(rows) == sorted(expected)
+    assert {row.review_state for row in rows} == {ReviewState.PENDING}
+
+    document = env.document(document_id)
+    assert document.status is DocumentStatus.NEEDS_REVIEW
+    assert document.account_id == account.id
+    items = env.open_reviews(document_id)
+    reasons = [item.payload.get("reason") for item in items]
+    assert reasons.count("year_assumed") == 1, reasons
+    (question,) = [item for item in items if item.payload.get("reason") == "year_assumed"]
+    assert question.kind is ReviewKind.LOW_CONFIDENCE_FIELD
+    assert question.payload["year"] == year
+    assert question.payload["field"] == "posted_date"
+    assert question.payload["parser"]
+    # The rows wait under the item that names the field.
+    (low,) = [item for item in items if item.payload.get("reason") == "low_confidence"]
+    assert "posted_date" in low.payload["fields"]
+    # An assumed year is no stated period.
+    assert (document.period_start, document.period_end) == (None, None)
+    # Nor a day a balance can be recorded on: no snapshot dated by a guess.
+    assert env.snapshots(account) == []
+
+
+def _money6(amount: Decimal) -> Decimal:
+    return amount.quantize(Decimal("0.000001"))
+
+
+def test_sectioned_unsigned_statement_imports_clean(env: Env) -> None:
+    account = env.ledger.account(
+        env.household_id, number_last4="7318", type="checking", currency="USD"
+    )
+    document_id = env.ingest(layouts.sectioned_unsigned_checking())
+
+    document = env.document(document_id)
+    assert document.status is DocumentStatus.PROCESSED, env.open_reviews(document_id)
+    assert env.open_reviews(document_id) == []
+    assert document.account_id == account.id
+    rows = env.transactions(account)
+    assert len(rows) == 9
+    assert _rows(rows) == sorted(
+        (posted, _money6(amount), payee)
+        for posted, amount, payee in layouts.EXPECTED_ROWS["sectioned_unsigned_checking"]
+    )
+    assert all(r.review_state is ReviewState.NONE for r in rows)
+    # Five withdrawals and a fee are money out, on both pages.
+    assert sum(1 for r in rows if r.amount < 0) == 6
+    _, closing = layouts.EXPECTED_BALANCES["sectioned_unsigned_checking"]
+    assert [s.balance for s in env.snapshots(account)] == [closing]
+
+
+def test_stacked_header_statement_imports_clean(env: Env) -> None:
+    account = env.ledger.account(
+        env.household_id, number_last4="3871", type="checking", currency="USD"
+    )
+    document_id = env.ingest(headers.stacked_header_checking())
+
+    document = env.document(document_id)
+    assert document.status is DocumentStatus.PROCESSED, env.open_reviews(document_id)
+    assert env.open_reviews(document_id) == []
+    assert document.account_id == account.id
+    rows = env.transactions(account)
+    assert sorted((r.raw_payee or "", r.amount) for r in rows) == sorted(
+        (payee, _money6(amount)) for payee, amount in headers.STACKED_ROWS
+    )
+    assert all(r.review_state is ReviewState.NONE for r in rows)
+    assert len(env.snapshots(account)) == 1
+
+
+def test_checks_across_the_page_raise_lines_skipped(env: Env) -> None:
+    account = env.ledger.account(
+        env.household_id, number_last4="5127", type="checking", currency="USD"
+    )
+    document_id = env.ingest(layouts.checks_three_across())
+
+    document = env.document(document_id)
+    assert document.status is DocumentStatus.NEEDS_REVIEW
+    assert document.account_id == account.id
+    items = env.open_reviews(document_id)
+    skipped = [item for item in items if item.payload.get("reason") == "lines_skipped"]
+    assert len(skipped) == 1, [item.payload for item in items]
+    assert skipped[0].payload["count"] == 7
+    # The checks beside the left group were not read: nothing vouches for the
+    # closing balance, so none is recorded.
+    assert len(env.transactions(account)) == 9
+    assert env.snapshots(account) == []
 
 
 def test_unknown_account_is_chosen_later_from_the_stored_extraction(env: Env) -> None:

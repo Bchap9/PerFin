@@ -250,6 +250,7 @@ from app.ingestion.parsers.text import (
     NUMERIC_DM,
     Amount,
     DateStyle,
+    after_label,
     find_amounts,
     find_dates,
     guess_numeric_style,
@@ -2438,7 +2439,8 @@ class BrokerageStatementParser(DocumentParser):
             end = label_end(line.text, label)
             if end is None:
                 continue
-            amounts = find_amounts(line.text[end:])
+            # ``Ending cash balance - $2,310.40``: the dash is the label's.
+            amounts = after_label(line.text[end:], [cell.text for cell in line.cells])
             if slot == "cash":
                 self._cash_line(amounts, summary, line.text[end:])
             elif slot != "ignore" and amounts and getattr(summary, slot) is None:

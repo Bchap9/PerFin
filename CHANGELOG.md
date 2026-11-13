@@ -117,6 +117,49 @@ What remains (details in docs/ROADMAP.md):
   document already stored gets the new type when it is extracted again.
 - The upload list links "Map columns" only for a file with an open
   review item the mapping editor answers.
+- **Bank and card PDF statements are read by new rules** (INGESTION.md
+  "Parse", "Bank and card statement layouts"; `statement_generic` and
+  `card_statement_generic` are version 7, the institution parsers
+  version 5). The entries below and under "Fixed" say what changed. A
+  document already stored keeps the rows it was imported with; "Process
+  again" reads it with the current rules, so its rows, its period and
+  whether it waits in review may differ from the first reading.
+- **A statement is never filed as a receipt.** A document the classifier
+  calls a statement, or one with a transaction table header on its pages
+  that the classifier does not call a receipt, is no longer offered to
+  the receipt parser, neither as first choice nor as a fallback (a page
+  of activity ending in "Total" lines was read as one purchase). A
+  document classified as a receipt is read as one, as before.
+- **A parser written for one institution needs every phrase of its
+  fingerprint** on page 1 to claim a document; one phrase that any bank
+  prints used to be enough. The generic card reader counts card words
+  only on short lines outside the rows (a fee note that mentions a
+  credit card chose it for a checking statement, and every withdrawal
+  was read as income), and a short line naming a deposit account rules
+  it out (CONTRIBUTING-parsers.md).
+- **Rows that print no year are imported with an assumed year and a
+  question.** On a statement that prints no period, no statement date
+  and no range, rows dated `MM/DD` were counted as skipped. They are now
+  placed in the latest run of the calendar that ends on or before the
+  day the file was made or arrived, all written pending, and the
+  document waits with one "Which year?" item (`low_confidence_field`,
+  reason `year_assumed`) that names the year. No closing balance is
+  recorded on the account from such a statement. Rows that mix dates with
+  and without a year, or that span more than 184 days, are counted as
+  skipped as before.
+- **Section totals are checked.** A statement whose rows under a section
+  title do not add up to the `Total` printed for that section waits in
+  review (`section_total_mismatch`), also when its opening and closing
+  balances agree. A total that agrees proves no row's direction. A
+  subtotal with more rows of its section after it (one per cardholder or
+  branch) is not the section's total, and a total under rows that each
+  agree with their printed running balance is not checked against them.
+- The classifier's printed period and the day a file arrived are handed
+  to the document parsers (`DocumentView.hints`, `created`, `ceiling`);
+  the sandbox protocol is unchanged.
+- For parser authors: `section_titles` (a title's direction per account
+  kind and its row type, `SectionRule`) replaces the `sections` type map
+  of `TableStatementParser`.
 
 ### Fixed
 
@@ -191,6 +234,69 @@ What remains (details in docs/ROADMAP.md):
 - The MCP leak test no longer fails about one run in 175: the item id in
   its fixture is a constant, so its digits cannot contain a string the
   test asserts absent.
+- **Statement headers printed in more ways** (INGESTION.md "Bank and
+  card statement layouts"). Two headings in one cell (`Date Transaction
+  Description`, `WITHDRAWAL BALANCE`), a header over two or three lines,
+  longer wordings (`Txn Date`, `Narration`, `Withdrawals / Debits`), a
+  unit after a money heading (`Amount (SGD)`), a description heading in
+  words PerFin does not know, and a scanned heading one letter off are
+  read. A second date heading is the posting date, and a column PerFin
+  does not know right of the money is left out instead of being joined
+  to an amount. A title or a wrapped line made of heading words no
+  longer ends the table.
+- **Amounts in the shapes statements print.** A `DB` debit marker, a
+  sign or a currency symbol a space away from its figure (`-$ 12.00`,
+  `$ 1,204.00`), a gap before the decimal separator and a footnote mark
+  after the figure are read. The operators of an equation line stay
+  operators.
+- **Rows whose cells sit off their columns.** A figure right-aligned
+  beyond its heading goes to its column, and a date printed against the
+  description is split from it. With both a debit and a credit printed,
+  a zero is no figure; two amounts are counted as skipped, not guessed.
+- **A balance line is never a transaction.** A dated `Beginning
+  Balance` or `Ending Balance` line is a balance whatever column its
+  figure is in (a credit union's opening rows under `Deposit` were
+  imported as deposits). `Previous statement balance`, `Balance last
+  statement` and `Prior balance` open a statement, and a label printed
+  over or beside its figure is read. A payee that starts with such a
+  label is still a row.
+- **Unsigned amounts under a section title go the right way.** On a
+  statement that prints positive figures under `Deposits and additions`
+  and `Electronic withdrawals`, the title says which way the money went,
+  also on a later page under the header printed again. A printed sign,
+  brackets, `CR`/`DR`/`DB` and a debit or credit column always decide
+  before a title does.
+- **A date printed once per day.** Rows printed without a date under
+  the first row of their day take that date (`dates_carried`) instead of
+  being lost.
+- **Statements printed newest first reconcile.** Their rows are put in
+  the order they happened before the running balance is checked
+  (`rows_newest_first`).
+- **More ways to find the statement period**: `Statement For`, `Billing
+  Cycle`, `Period Covered`, `Statement Covers`, `Activity From`,
+  `Activity For`; the statement dates `Statement Issued`, `Statement
+  Ending`, `Statement End Date`; the period the classifier read
+  (`period_from_classifier`); and one range printed without a label
+  above the first table (`period_unlabelled`, which dates the rows and
+  is no stated period), when half the rows or more are dated inside it.
+- **No statement line disappears without a count.** Undated lines with
+  a figure between dated rows, rows above the first account of a member
+  statement, dated lines under a section title that has no header row
+  (`rows_without_header:<n>`), lines of a date, words and a figure after
+  a header of heading words that ended the table, and the entries of a
+  table printed two or three times across the page beyond its left group
+  (`table_across_unread:<n>`) are counted and raise the `lines_skipped`
+  item, so the document waits instead of ending `processed` with fewer
+  rows than it prints.
+- **A dash after a balance label is not taken for a minus unread.**
+  `Ending Balance - $992.50` is read as the rows say (positive when they
+  add up to it, an overdraft when they end below zero); when nothing
+  settles it no balance is recorded and the statement waits. The title
+  of the next table is no longer added to the memo of the row above it.
+- **Credit-union shares are named by their titles** when the title
+  carries a figure (`Dividends Paid YTD: 4.12`) or starts with the
+  share's number (`ID 0040 - SHARE DRAFT`); a member statement of three
+  shares is read as three accounts.
 
 ## [1.0.0-rc.8] - 2026-11-12
 

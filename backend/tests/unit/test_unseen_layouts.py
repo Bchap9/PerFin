@@ -82,6 +82,14 @@ def test_a_balance_brought_forward_continues_its_account() -> None:
         ("Regular Shares Share 01", ("Regular Shares", None)),  # too short to name an account
         ("MONEY MARKET #100482", ("MONEY MARKET", "0482")),
         ("Holiday Club", ("Holiday Club", None)),
+        # The number first, then the name.
+        ("ID 0001 - SECONDARY SHARE", ("SECONDARY SHARE", "0001")),
+        ("ID 0040 \u2013 SHARE DRAFT", ("SHARE DRAFT", "0040")),
+        ("Share 02: HOLIDAY CLUB", ("HOLIDAY CLUB", None)),
+        ("#100482 - MONEY MARKET", ("MONEY MARKET", "0482")),
+        # No separator after the number: the number-last reading, as before.
+        ("Share 01 Regular Shares", ("Share 01 Regular Shares", None)),
+        ("Shares 02: HOLIDAY CLUB", ("Shares 02: HOLIDAY CLUB", None)),
         (None, (None, None)),
     ],
 )

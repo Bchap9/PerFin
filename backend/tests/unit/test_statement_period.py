@@ -297,10 +297,33 @@ def test_bank_statement_label_alone_on_its_line() -> None:
     assert len(statement.transactions) == 2
 
 
-def test_without_a_period_yearless_rows_are_not_guessed() -> None:
+def test_without_a_period_yearless_rows_take_an_assumed_year() -> None:
     result = _extract(_pdf(_bank_pages(None)))
-    outcome = TableStatementParser().parse(DocumentView.from_result(result), threshold=0.85)
+    view = DocumentView.from_result(result)
+    # The file says when it was made: no row is later than that day.
+    assert view.ceiling is not None
+    outcome = TableStatementParser().parse(view, threshold=0.85)
+    (statement,) = outcome.statements
+    assert [(t.posted.month, t.posted.day) for t in statement.transactions] == [(7, 2), (7, 15)]
+    year = (
+        view.ceiling.year
+        if (view.ceiling.month, view.ceiling.day) >= (7, 15)
+        else (view.ceiling.year - 1)
+    )
+    assert {t.posted.year for t in statement.transactions} == {year}
+    assert all("posted_date" in t.low_confidence for t in statement.transactions)
+    assert outcome.warnings.count(f"year_assumed:{year}") == 1
+    assert outcome.skipped_lines == 0
+
+
+def test_without_a_ceiling_yearless_rows_are_not_guessed() -> None:
+    result = _extract(_pdf(_bank_pages(None)))
+    view = replace(DocumentView.from_result(result), created=None)
+    assert view.ceiling is None
+    outcome = TableStatementParser().parse(view, threshold=0.85)
     assert outcome.statements == [] or not outcome.statements[0].transactions
+    assert outcome.skipped_lines == 2
+    assert not any(w.startswith("year_assumed") for w in outcome.warnings)
 
 
 def test_generic_brokerage_parser_reads_yearless_activity_through_the_period() -> None:
