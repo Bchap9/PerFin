@@ -107,11 +107,123 @@ def test_led_row_whose_last_cell_ends_with_the_amount() -> None:
         [("04/02 CARD PAYMENT 45.10 1,307.40", 62.0)],
         [("04/02", 62.0), ("CARD PAYMENT $ 45.10", 150.0), ("1,307.40", 500.0)],
         [("04/02", 62.0), ("CARD PAYMENT", 150.0), ("45.10 CR", 420.0), ("1,307.40", 500.0)],
+        # A symbol, a sign or a currency code in a cell of its own between the two.
+        [("04/02", 62.0), ("PAYMENT", 150.0), ("45.10", 400.0), ("$", 460.0), ("1,307.40", 500.0)],
+        [
+            ("04/02", 62.0),
+            ("PAYMENT", 150.0),
+            ("$", 380.0),
+            ("45.10", 400.0),
+            ("$", 460.0),
+            ("1,307.40", 500.0),
+        ],
+        [("04/02", 62.0), ("PAYMENT", 150.0), ("45.10", 400.0), ("-", 460.0), ("1,307.40", 500.0)],
+        [("04/02", 62.0), ("PAYMENT", 150.0), ("45.10", 400.0), ("+", 460.0), ("1,307.40", 500.0)],
+        [
+            ("04/02", 62.0),
+            ("PAYMENT", 150.0),
+            ("45.10", 400.0),
+            ("USD", 460.0),
+            ("1,307.40", 500.0),
+        ],
+        [("04/02", 62.0), ("PAYMENT 45.10 $", 150.0), ("1,307.40", 500.0)],
+        [("04/02 PAYMENT 45.10 USD 1,307.40", 62.0)],
+        [("04/02 PAYMENT 45.10 - $ 1,307.40", 62.0)],
+        [("04/02", 62.0), ("PURCHASE 12.00 EUR", 150.0), ("13.05", 500.0)],
     ],
-    ids=["cells", "one-cell", "symbol-apart", "marker"],
+    ids=[
+        "cells",
+        "one-cell",
+        "symbol-apart",
+        "marker",
+        "symbol-cell",
+        "two-symbol-cells",
+        "minus-cell",
+        "plus-cell",
+        "code-cell",
+        "symbol-in-text",
+        "code-in-text",
+        "sign-and-symbol",
+        "figure-and-code",
+    ],
 )
 def test_two_trailing_figures_are_no_led_row(cells: list[tuple[str, float]]) -> None:
     assert led_row(_line(cells), _date_shaped) is None
+
+
+def test_a_currency_code_after_words_is_still_a_led_row() -> None:
+    # Only a figure before the code makes two figures of the line.
+    row = led_row(_line([("04/02", 62.0), ("WIRE OUT USD", 150.0), ("45.10", 500.0)]), _date_shaped)
+    assert row is not None
+    assert row.description == ("WIRE OUT USD",)
+    assert row.amount.value == Decimal("45.10")
+
+
+@pytest.mark.parametrize(
+    ("cells", "value"),
+    [
+        ([("04/02", 62.0), ("PAYMENT", 150.0), ("-$", 480.0), ("45.10", 500.0)], "-45.10"),
+        ([("04/02", 62.0), ("PAYMENT", 150.0), ("$", 480.0), ("45.10", 500.0)], "45.10"),
+        ([("04/02", 62.0), ("PAYMENT -$", 150.0), ("45.10", 500.0)], "-45.10"),
+        ([("04/02 PAYMENT -$ 45.10", 62.0)], "-45.10"),
+        ([("04/02 PAYMENT $ 45.10", 62.0)], "45.10"),
+        ([("04/02", 62.0), ("PAYMENT", 150.0), ("- 45.10", 500.0)], "-45.10"),
+    ],
+    ids=["minus-symbol-cell", "symbol-cell", "symbol-ends-text", "one-cell", "plain", "sign-cell"],
+)
+def test_a_symbol_apart_from_its_figure_is_the_figure_s(
+    cells: list[tuple[str, float]], value: str
+) -> None:
+    row = led_row(_line(cells), _date_shaped)
+    assert row is not None
+    assert row.description == ("PAYMENT",)
+    assert row.amount.value == Decimal(value)
+    assert row.amount.negative_marked is (value[0] == "-")
+    assert row.amount.symbol in ("$", None)
+
+
+@pytest.mark.parametrize(
+    "cells",
+    [
+        # A dash alone before the figure: a minus or a separator, no telling.
+        [("04/02", 62.0), ("PAYMENT", 150.0), ("-", 480.0), ("45.10", 500.0)],
+        [("04/02", 62.0), ("PAYMENT", 150.0), ("\u2212", 480.0), ("45.10", 500.0)],
+        [("04/02", 62.0), ("PAYMENT -", 150.0), ("45.10", 500.0)],
+        [("04/02 PAYMENT - 45.10", 62.0)],
+        [("04/02 PAYMENT - 45.10 CR", 62.0)],
+        # Two signs, two symbols: not one figure.
+        [("04/02", 62.0), ("PAYMENT", 150.0), ("-$", 480.0), ("-45.10", 500.0)],
+        [("04/02", 62.0), ("PAYMENT", 150.0), ("$", 480.0), ("$45.10", 500.0)],
+        # Nothing but the symbol between the date and the figure.
+        [("04/02", 62.0), ("$", 480.0), ("45.10", 500.0)],
+    ],
+    ids=["minus", "minus-sign", "ends-text", "one-cell", "marker", "signs", "symbols", "no-text"],
+)
+def test_a_sign_that_cannot_be_told_is_no_led_row(cells: list[tuple[str, float]]) -> None:
+    assert led_row(_line(cells), _date_shaped) is None
+
+
+def test_a_second_date_written_another_way_stays_in_the_text() -> None:
+    row = led_row(_line([("04/02 MAY 12 STORE 4.50", 62.0)]), _date_shaped)
+    assert row is not None
+    assert row.date == "04/02"
+    assert row.description == ("MAY 12 STORE",)
+    assert row.amount.value == Decimal("4.50")
+
+
+def test_led_row_in_one_cell_with_a_marker() -> None:
+    row = led_row(_line([("04/02 PAYMENT 45.10 CR", 62.0)]), _date_shaped)
+    assert row is not None
+    assert row.description == ("PAYMENT",)
+    assert row.amount.value == Decimal("45.10")
+    assert row.amount.credit is True
+
+
+def test_a_range_word_without_a_date_after_it_is_text() -> None:
+    row = led_row(_line([("04/02 TO GO PIZZA 12.00", 62.0)]), _date_shaped)
+    assert row is not None
+    assert row.description == ("TO GO PIZZA",)
+    assert row.amount.value == Decimal("12.00")
 
 
 @pytest.mark.parametrize(
@@ -188,8 +300,10 @@ def test_titled_total() -> None:
         [("Checks", 62.0), ("8 item(s)", 300.0), ("totaling", 380.0), ("$3,500.00", 500.0)],
         [("Checks", 62.0), ("(8 checks) total $ 3,500.00", 300.0)],
         [("Checks", 62.0), ("3,500.00", 500.0)],
+        [("Checks", 62.0), ("8 items totaling", 300.0), ("3,500.00 DR", 500.0)],
+        [("Checks", 62.0), ("8 items totaling", 300.0), ("3,500.00", 500.0), ("DR", 560.0)],
     ],
-    ids=["item(s)", "cells", "brackets", "figure-only"],
+    ids=["item(s)", "cells", "brackets", "figure-only", "marker", "marker-cell"],
 )
 def test_titled_total_shapes(cells: list[tuple[str, float]]) -> None:
     found = titled_total(_line(cells))
@@ -216,8 +330,10 @@ def test_a_label_with_two_figures_is_no_titled_total(cells: list[tuple[str, floa
         [("Fees", 62.0), ("charged this period were 12.00 in all", 300.0)],
         [("Deposits", 62.0), ("5 items posted 912.40", 300.0)],
         [("Deposits", 62.0), ("5 of 7 items totaling 912.40", 300.0)],
+        [("Deposits", 62.0), ("5 7 items totaling 912.40", 300.0)],
+        [("Deposits", 62.0), ("5 items DR totaling 912.40", 300.0)],
     ],
-    ids=["sentence", "other-word", "two-counts"],
+    ids=["sentence", "other-word", "of", "two-counts", "marker-before-figure"],
 )
 def test_a_sentence_with_a_figure_is_no_titled_total(cells: list[tuple[str, float]]) -> None:
     assert titled_total(_line(cells)) is None
@@ -399,6 +515,27 @@ def test_the_same_summary_printed_again_is_no_start() -> None:
     # The account after it still starts: its opening figure is another one.
     lines = _page(_FIRST) + _page(again, page=2) + _page(_SECOND, page=3)
     assert _starts(lines, _FIRST_TABLE) == [2, 13]
+
+
+def test_a_repeat_of_the_opening_line_alone_keeps_what_was_closed() -> None:
+    # The head of the next page prints the opening line again and no closing
+    # one: the account met after it still starts.
+    again = ["CHEQUING SUMMARY", "Beginning Balance 2,410.00"]
+    lines = _page(_FIRST) + _page(again, page=2) + _page(_SECOND, page=3)
+    assert _starts(lines, _FIRST_TABLE) == [2, 12]
+
+
+def test_an_opening_line_is_not_a_closing_line_too() -> None:
+    # A caller's closing reader that also knows the opening line: the line
+    # opens, it closes nothing.
+    texts = [
+        "CHEQUING SUMMARY",
+        "Beginning Balance 2,410.00",
+        "RESERVE SUMMARY",
+        "Beginning Balance 18,300.00",
+    ]
+    either = _labelled("beginning balance")
+    assert summary_starts(_page(texts), _OPENING, either, lambda index: False) == []
 
 
 def test_an_opening_without_a_closing_before_it_is_no_start() -> None:

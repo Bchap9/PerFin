@@ -15,8 +15,12 @@ Testable on hand-built lines without a PDF.
 * :func:`titled_total`: a title with its count and total printed beside it
   (``Withdrawals / Debits | 5 items totaling $912.40``). The function does
   not know titles: any label with one figure beside it has this shape
-  (``Ending balance | 1,200.00``), and the caller asks only about a first
-  cell it knows as a title.
+  (``Ending balance | 1,200.00``, ``Check | 1042 | 250.00``), and the
+  caller asks only about a first cell it knows as a title. The title is the
+  first cell as the cells break: a count that fell into it
+  (``Withdrawals / Debits 5 items | totaling $912.40``) stays in the text
+  returned, which a caller's titles will not know, and the line is then
+  what it was without this function.
 * :func:`items_total`: a line that is a count and a total and nothing else
   (``8 item(s) totaling $3,500.00``), the total of the rows above it.
 * :func:`amount_only`: a line that is one amount.
@@ -31,13 +35,24 @@ What :func:`led_row` refuses, so that the caller counts the line and no
 row is made of it:
 
 * two figures at the end of the line (an amount with a balance beside it:
-  which of the two is the row's cannot be told without a header);
+  which of the two is the row's cannot be told without a header), also
+  when a currency symbol, a sign or a currency code stands between them
+  (``45.10 | $ | 1,307.40``, ``45.10 USD 1,307.40``);
+* a dash or a plus standing alone before the amount, in a cell of its own
+  or as a word of the text (``PAYMENT | - | 45.10``): a minus, a separator
+  or an empty column, no telling. A sign in the amount's own cell
+  (``- 45.10``) or on its symbol (``-$ | 45.10``) is the amount's;
 * a range of dates at the start (``04/01 through 04/30 interest 1.20``: a
   line about a period, not a transaction of a day);
 * nothing but digits between the date and the amount (a date and a
   balance, a line of a table of balances by day);
 * more than :data:`MAX_LED_WORDS` words (a sentence that starts with a
   date and ends with a figure).
+
+What :func:`led_row` does not refuse, because it judges a shape and knows
+no label: a dated line of a summary (``04/30 | Ending Balance | 1,200.00``,
+``04/30 Total 1,200.00``, ``12/31 Total fees charged 45.10``). The caller
+tests the labels of balance and total lines before it asks.
 
 Patterns are anchored and free of nested quantifiers, and every text is
 cut to the limits of :mod:`app.ingestion.parsers.text` before one runs.
@@ -51,6 +66,7 @@ from dataclasses import dataclass
 from typing import Final
 
 from app.ingestion.parsers.base import ViewLine
+from app.ingestion.parsers.currency import known_currency
 from app.ingestion.parsers.text import MAX_LINE, Amount, find_amounts, read_amount
 
 #: A line of more words is a sentence, whatever it starts and ends with.
@@ -81,6 +97,8 @@ _RANGE_WORDS: Final = frozenset({"through", "thru", "to", "until", "-", "\u2013"
 _MARKERS: Final = frozenset({"CR", "DR", "DB"})
 #: A currency symbol printed as a word of its own, with or without its sign.
 _LONE_SYMBOL: Final = re.compile(r"[-+\u2212]?[$\u00a3\u20ac]")
+#: A sign or a dash printed as a word of its own.
+_LONE_SIGNS: Final = frozenset({"-", "+", "\u2212", "\u2013", "\u2014"})
 #: Punctuation around a word of a title's total (``(8``, ``checks)``, ``total:``).
 _WRAPPING: Final = "()[]:,.;"
 _ITEMS_TOTAL: Final = re.compile(
@@ -111,23 +129,32 @@ def _date_words(words: Sequence[str], date_shaped: Callable[[str], bool]) -> int
 def _trailing_amount(words: Sequence[str]) -> tuple[Amount, int] | None:
     """The amount ``words`` end with and the words it takes.
 
-    One word, with a marker after it (``45.10 CR``) and a currency symbol
-    standing alone before it (``$ 45.10``). A lone dash before the figure is
-    not taken: after words it may be a separator.
+    One word, or one word with a marker after it (``45.10 CR``).
     """
     end = len(words)
     marked = end >= 2 and words[-1].upper() in _MARKERS
     start = end - 2 if marked else end - 1
     if start < 0:
         return None
-    if start >= 1 and _LONE_SYMBOL.fullmatch(words[start - 1]):
-        start -= 1
     amount = read_amount(" ".join(words[start:end]))
     return None if amount is None else (amount, end - start)
 
 
+def _between_figures(word: str) -> bool:
+    """A word that may stand between an amount and the balance beside it:
+    a currency symbol, a sign, a currency code printed in capitals."""
+    if _LONE_SYMBOL.fullmatch(word) or word in _LONE_SIGNS:
+        return True
+    return word.isupper() and known_currency(word) is not None
+
+
 def _ends_with_amount(words: Sequence[str]) -> bool:
-    """The last word, or the last two (``$ 45.10``, ``45.10 CR``), read as an amount."""
+    """The last word, or the last two (``$ 45.10``, ``45.10 CR``), read as an
+    amount, whatever symbols, signs and currency codes are printed after it."""
+    end = len(words)
+    while end and _between_figures(words[end - 1]):
+        end -= 1
+    words = words[:end]
     if not words:
         return False
     if read_amount(words[-1]) is not None:
@@ -142,8 +169,10 @@ def led_row(line: ViewLine, date_shaped: Callable[[str], bool]) -> LedRow | None
     (``date_shaped`` says what a date looks like to the caller). A second
     date right after it, written the same way (digits, or a month's name),
     is the posting date and is dropped. The amount is the last cell when
-    that cell is an amount, else the last word of the last cell. What stands
-    between holds a letter.
+    that cell is an amount, else the last word of the last cell; a currency
+    symbol standing alone before it, with or without its sign, in the cell
+    before or as a word (``-$ | 45.10``, ``$ 45.10``), is part of it. What
+    stands between holds a letter.
     """
     cells = [cell.text.split() for cell in line.cells]
     cells = [words for words in cells if words]
@@ -166,8 +195,18 @@ def led_row(line: ViewLine, date_shaped: Callable[[str], bool]) -> LedRow | None
     if dated + taken > count:
         return None
 
-    # The words between the date and the amount, each with its cell.
+    # Every word of the line with its cell; then those between the date and
+    # the amount.
     between = [(word, index) for index, words in enumerate(cells) for word in words]
+    before = count - taken - 1
+    if before >= dated and _LONE_SYMBOL.fullmatch(between[before][0]):
+        taken += 1
+        joined = read_amount(" ".join(word for word, _ in between[before:]))
+        if joined is None:
+            return None  # two signs, two symbols: not one figure
+        amount = joined
+    elif before >= dated and between[before][0] in _LONE_SIGNS:
+        return None
     between = between[dated : count - taken]
     words = [word for word, _ in between]
     if not words:
