@@ -33,6 +33,7 @@ from app.ingestion.sandbox.protocol import (
     Table,
 )
 from tests.fixtures.synth_activity_csv import (
+    BROKER_HEADER,
     DISCLAIMERS,
     HEADER,
     LEDGER_HEADER,
@@ -40,6 +41,8 @@ from tests.fixtures.synth_activity_csv import (
     activity_accounts,
     activity_csv_bytes,
     activity_rows,
+    broker_activity_csv,
+    broker_money,
     investment_rows,
 )
 from tests.fixtures.synth_statements import LAYOUTS, csv_bytes, layout_statement, sample_statement
@@ -506,3 +509,163 @@ def test_names_and_memos_stay_formula_guarded() -> None:
     assert found is not None
     assert found.skipped == 1
     assert found.statements == []
+
+
+# ---------------------------------------------------------------------------
+# The second broker shape: "Fees & Comm", reinvested dividends, "as of", totals
+# ---------------------------------------------------------------------------
+
+
+def _broker(
+    action: str,
+    *,
+    symbol: str = "SGRX",
+    quantity: str = "",
+    price: str = "",
+    fees: str = "",
+    amount: str = "",
+    day: str = "10/14/2026",
+) -> list[str]:
+    """One row of :data:`BROKER_HEADER`."""
+    name = "SYNTHETIC GROWTH INDEX ETF" if symbol else ""
+    return [day, action, symbol, name, quantity, price, fees, amount]
+
+
+_BUY = _broker("Buy", quantity="10", price="$25.00", fees="$4.95", amount="-$254.95")
+
+
+def _broker_table(*rows: list[str], total: str | None = None) -> Table:
+    return _extract(broker_activity_csv(rows, total=total))
+
+
+def test_the_broker_fixture_is_written_as_documented() -> None:
+    assert broker_money(Decimal("-1234.5")) == "-$1,234.50"
+    lines = broker_activity_csv([_BUY], total="-$254.95").decode().split("\r\n")
+    assert lines[1] == ",".join(f'"{cell}"' for cell in BROKER_HEADER)
+    assert lines[2].endswith('"$25.00","$4.95","-$254.95"')
+    assert lines[3] == '"Transactions Total","","","","","","","-$254.95"'
+    assert broker_activity_csv([_BUY], title=False).decode().startswith('"Date",')
+    with pytest.raises(ValueError, match="one cell per header cell"):
+        broker_activity_csv([["10/14/2026", "Buy"]])
+
+
+def test_fees_and_comm_column_is_read() -> None:
+    (statement,) = _read(_broker_table(_BUY))
+    (activity,) = statement.activity
+    assert activity.type == "buy"
+    assert activity.fees == Decimal("4.95")
+    assert (activity.quantity, activity.unit_price, activity.amount) == (
+        Decimal(10),
+        Decimal("25.00"),
+        Decimal("-254.95"),
+    )
+
+
+@pytest.mark.parametrize(
+    "heading",
+    [
+        "Fees and Comm",
+        "Fees & Commissions",
+        "Fees and Commissions",
+        "Commission/Fees",
+        "Commissions/Fees",
+        "Commissions and Fees",
+    ],
+)
+def test_the_other_wordings_of_the_fees_column_are_read(heading: str) -> None:
+    header = [heading if cell == "Fees & Comm" else cell for cell in BROKER_HEADER]
+    (statement,) = _read(_table([header, _BUY]))
+    assert statement.activity[0].fees == Decimal("4.95")
+
+
+def test_cash_leg_of_a_reinvestment_is_a_dividend() -> None:
+    found = read_activity_table(
+        _broker_table(
+            _broker("Reinvest Dividend", amount="$18.40"),
+            _broker("Reinvest Shares", quantity="0.736", price="$25.00", amount="-$18.40"),
+        )
+    )
+    assert found is not None
+    (statement,) = found.statements
+    assert [(a.type, a.amount, a.quantity) for a in statement.activity] == [
+        ("dividend", Decimal("18.40"), None),
+        ("reinvest", Decimal("-18.40"), Decimal("0.736")),
+    ]
+    # The income leg keeps the fund that paid it.
+    assert [a.security.symbol for a in statement.activity if a.security] == ["SGRX", "SGRX"]
+    assert (found.skipped, found.unknown_activity, found.warnings) == (0, 0, [])
+
+
+@pytest.mark.parametrize("amount", ["-$18.40", "$0.00"])
+def test_reinvest_without_units_and_without_income_is_still_skipped(amount: str) -> None:
+    found = read_activity_table(_broker_table(_BUY, _broker("Reinvest Shares", amount=amount)))
+    assert found is not None
+    assert (found.rows, found.skipped) == (1, 1)
+    assert [a.type for a in found.statements[0].activity] == ["buy"]
+    assert "rows_unreadable" in found.warnings
+
+
+def test_as_of_date_keeps_the_first_date() -> None:
+    found = read_activity_table(
+        _broker_table(
+            _broker("Buy", quantity="2", price="$25.00", amount="-$50.00", day="10/09/2026"),
+            _broker("Cash Dividend", amount="$3.10", day="10/14/2026 as of 10/10/2026"),
+            _broker("Cash Dividend", amount="$3.20", day="10/15/2026 AS OF 10/12/2026"),
+        )
+    )
+    assert found is not None
+    assert [a.trade_date for a in found.statements[0].activity] == [
+        date(2026, 10, 9),
+        date(2026, 10, 14),
+        date(2026, 10, 15),
+    ]
+    assert (found.skipped, found.warnings) == (0, [])
+
+
+def test_the_day_month_order_is_decided_on_the_first_dates_only() -> None:
+    # Only the dates after "as of" show a day above 12: they are dropped, so
+    # they do not settle the order of the dates that are kept.
+    found = read_activity_table(
+        _broker_table(
+            _broker("Cash Dividend", amount="$3.10", day="10/03/2026 as of 09/28/2026"),
+            _broker("Cash Dividend", amount="$3.20", day="11/04/2026 as of 10/30/2026"),
+        )
+    )
+    assert found is not None
+    assert found.rows == 2
+    assert "date_order_guessed" in found.warnings
+    assert all(a.low_confidence == ["trade_date"] for a in found.statements[0].activity)
+
+
+def test_total_line_is_a_note() -> None:
+    found = read_activity_table(_broker_table(_BUY, total="-$254.95"))
+    assert found is not None
+    # The title line above the header is not a row; the total line is the one note.
+    assert (found.rows, found.notes, found.skipped, found.unknown_activity) == (1, 1, 0, 0)
+    assert found.warnings == []
+
+
+def test_a_total_line_does_not_count_against_the_typed_share() -> None:
+    # One typed row, one unknown: half are typed. The total line is no third row.
+    rows = [_BUY, _broker("Synthetic Unknown Item", symbol="", amount="-$1.00")]
+    found = read_activity_table(_broker_table(*rows, total="-$255.95"))
+    assert found is not None
+    assert (found.rows, found.unknown_activity, found.notes) == (1, 1, 1)
+
+
+@pytest.mark.parametrize(
+    "row",
+    [
+        _broker("Total Return Swap Fee", amount="-$1.00"),
+        # No date either: the first filled cell starts with "total", the symbol is text.
+        _broker("Total Return Swap Fee", amount="-$1.00", day=""),
+        # A total line prints figures only: a second label beside it is a row.
+        ["Total", "Buy", "", "", "", "", "", "-$1.00"],
+    ],
+    ids=["dated", "undated", "labelled"],
+)
+def test_a_row_named_total_with_text_is_not_a_total_line(row: list[str]) -> None:
+    found = read_activity_table(_broker_table(_BUY, _BUY, row))
+    assert found is not None
+    assert found.notes == 0
+    assert found.unknown_activity + found.skipped == 1
