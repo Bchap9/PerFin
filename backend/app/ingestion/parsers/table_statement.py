@@ -55,7 +55,20 @@ are read the same way:
    **Cells off their columns.** A figure that overlaps no heading and lies
    near none (figures right-aligned in a wide column under a heading
    printed at its left) goes to the numeric column that starts left of it,
-   when that column has no figure of its own on the line. A date printed
+   when that column has no figure of its own on the line. A cell of
+   **words** (a letter, no amount, no ``CR``/``DR``/``DB``) that stands
+   under a numeric heading and under another one goes to the other: a
+   category printed left of its heading is no part of the amount. Of **two
+   dates** in the date column (two cells, or one cell of two halves) the
+   first is the row's and the second, its posting date, is dropped
+   (:meth:`TableStatementParser._drop_posting_date`); a date beside a word
+   or a third date is not read, and such a line takes no date from the
+   line above either: it is counted. An **amount printed in one cell with
+   the description** (``Amount Description`` over ``-$47.30 Card
+   Purchase``) is split off it on a dated line of a table with one money
+   column that got no cell
+   (:meth:`TableStatementParser._split_fused_amount`): the word at the
+   money heading's end of the cell, never the one at the other end. A date printed
    so close to the description that the two are one cell is split off it
    (:meth:`TableStatementParser._split_fused_date`), on a line with a
    figure only: a wrapped line that starts with a date stays a wrap, and
@@ -307,6 +320,7 @@ claims a document only when every one of its phrases is on page 1
 
 from __future__ import annotations
 
+import math
 import re
 from calendar import monthrange
 from collections.abc import Callable, Iterable, Mapping, Sequence
@@ -1091,10 +1105,24 @@ class TableStatementParser(DocumentParser):
                 continue
             best: Column | None = None
             best_overlap = 0.0
+            worded: Column | None = None
+            worded_overlap = 0.0
             for column in columns:
                 overlap = cell.overlap(column.x0, column.x1)
                 if overlap > best_overlap:
                     best, best_overlap = column, overlap
+                if column.role not in NUMERIC_ROLES and overlap > worded_overlap:
+                    worded, worded_overlap = column, overlap
+            if (
+                best is not None
+                and best.role in NUMERIC_ROLES
+                and worded is not None
+                and self._worded_cell(cell)
+            ):
+                # Words are no figure: a category printed left of its heading
+                # or a description that reaches under ``Amount`` belongs to
+                # the text column it stands under as well.
+                best = worded
             if best is None:
                 nearest = min(
                     columns, key=lambda c: abs((c.x0 + c.x1) / 2 - cell.centre), default=None
@@ -1118,6 +1146,16 @@ class TableStatementParser(DocumentParser):
             if home.role in NUMERIC_ROLES and home.role not in out:
                 out[home.role] = [cell]
         return out
+
+    @staticmethod
+    def _worded_cell(cell: Cell) -> bool:
+        """``cell`` holds words: a letter, no amount and no ``CR``/``DR``/``DB``
+        (a marker under an amount is the amount's)."""
+        return (
+            any(ch.isalpha() for ch in cell.text)
+            and read_amount(cell.text) is None
+            and normalise(cell.text) not in OWN_COLUMN_MARKERS
+        )
 
     def _date_shaped(self, text: str) -> bool:
         parts = numeric_parts(text)
@@ -1216,6 +1254,105 @@ class TableStatementParser(DocumentParser):
         cells.clear()
         cells.update(split)
 
+    def _dated(self, cells: Mapping[Role, list[Cell]]) -> bool:
+        """The date column of the line holds a date and nothing else."""
+        text = " ".join(c.text for c in cells.get("date", [])).strip(_DATE_MARKS)
+        return bool(text) and self._date_shaped(text)
+
+    def _date_words(self, cells: Mapping[Role, list[Cell]]) -> list[Cell]:
+        """The words printed in the date column, left to right."""
+        found = sorted(cells.get("date", []), key=lambda c: c.x0)
+        return [word for cell in found for word in cell.word_cells()]
+
+    def _stray_date(self, cells: Mapping[Role, list[Cell]]) -> bool:
+        """The date column holds a date among other words (``01/06/2026
+        Hold``, ``Est. 01/07/2026``, three dates): the line prints a date of
+        its own that is not read, so it takes none from the line above."""
+        words = [word.text for word in self._date_words(cells)]
+        return any(
+            self._date_shaped(" ".join(words[at : at + size]).strip(_DATE_MARKS))
+            for at in range(len(words))
+            for size in range(1, min(LEAD_DATE_WORDS, len(words) - at) + 1)
+        )
+
+    def _drop_posting_date(
+        self, cells: dict[Role, list[Cell]], columns: Sequence[Column], line: ViewLine
+    ) -> None:
+        """Two dates in the date column: the first is the row's, the second
+        its posting date and dropped (two cells under one heading, or one
+        cell of two halves). Only when the two are all the column holds and
+        each is shaped like a date; a date and a word, a word and a date, and
+        a third date printed before the description stay what they are, and
+        no row is dated by guessing."""
+        words = self._date_words(cells)
+        if len(words) < 2 or self._dated(cells):
+            return
+        for size in range(1, min(LEAD_DATE_WORDS, len(words) - 1) + 1):
+            head = " ".join(w.text for w in words[:size]).strip(_DATE_MARKS)
+            tail = " ".join(w.text for w in words[size:]).strip(_DATE_MARKS)
+            if (
+                len(words) - size <= LEAD_DATE_WORDS
+                and self._date_shaped(head)
+                and self._date_shaped(tail)
+            ):
+                break
+        else:
+            return
+        placed = {id(cell) for found in cells.values() for cell in found}
+        described = next((c.x0 for c in columns if c.role == "description"), math.inf)
+        if any(
+            id(cell) not in placed
+            and cell.x0 < described
+            and self._date_shaped(cell.text.strip(_DATE_MARKS))
+            for cell in line.cells
+        ):
+            return
+        cells["date"] = [join_cells(words[:size])]
+
+    def _split_fused_amount(self, cells: dict[Role, list[Cell]], columns: Sequence[Column]) -> None:
+        """An amount printed so close to the description that the two are one
+        cell (``Date | Amount Description`` over ``06/08 | -$47.30 Card
+        Purchase``).
+
+        Only on a dated line of a table with exactly one money column that
+        got no cell: the one description cell that stands under both the
+        money heading and the description heading loses its first word (the
+        money column is left of the description) or its last (right of it)
+        when that word reads as an amount; the word becomes the money cell
+        and the rest stays the description. The word at the other end is
+        never taken, whatever it reads as, and an undated line is a row's
+        second line as before.
+        """
+        money = [c for c in columns if c.role in MONEY_ROLES]
+        described = next((c for c in columns if c.role == "description"), None)
+        if len(money) != 1 or described is None or cells.get(money[0].role):
+            return
+        if not self._dated(cells):
+            return
+        column = money[0]
+        fused = [
+            cell
+            for cell in cells.get("description", [])
+            if cell.overlap(column.x0, column.x1) > 0
+            and cell.overlap(described.x0, described.x1) > 0
+        ]
+        if len(fused) != 1:
+            return
+        words = fused[0].word_cells()
+        if len(words) < 2:
+            return
+        first = column.x0 < described.x0
+        figure = words[0] if first else words[-1]
+        rest = words[1:] if first else words[:-1]
+        if read_amount(figure.text) is None:
+            return
+        if not any(ch.isalpha() for word in rest for ch in word.text):
+            return
+        cells[column.role] = [figure]
+        cells["description"] = [
+            join_cells(rest) if cell is fused[0] else cell for cell in cells["description"]
+        ]
+
     def _range_led(self, text: str) -> bool:
         """``text`` starts with a range of dates: a date (its first one to
         :data:`LEAD_DATE_WORDS` words), a range word (:data:`RANGE_WORDS`)
@@ -1274,6 +1411,8 @@ class TableStatementParser(DocumentParser):
             cells = self._assign(line, columns)
             self._split_lead(cells)
             self._split_fused_date(cells, columns)
+            self._drop_posting_date(cells, columns, line)
+            self._split_fused_amount(cells, columns)
             date_text = " ".join(c.text for c in cells.get("date", [])).strip(_DATE_MARKS)
             if date_text and self._date_shaped(date_text):
                 continue
@@ -1647,10 +1786,17 @@ class TableStatementParser(DocumentParser):
             across = cells.pop("across", [])
             self._split_lead(cells)
             self._split_fused_date(cells, columns)
+            self._drop_posting_date(cells, columns, line)
+            self._split_fused_amount(cells, columns)
             date_text = " ".join(c.text for c in cells.get("date", [])).strip(_DATE_MARKS)
             if not date_text or not self._date_shaped(date_text):
                 figures = 0 if pending else self._undated_figures(line, norm, cells)
-                if figures == 1 and self._carries(line, cells, anchor) and anchor is not None:
+                if (
+                    figures == 1
+                    and self._carries(line, cells, anchor)
+                    and anchor is not None
+                    and not self._stray_date(cells)
+                ):
                     candidate = self._row(
                         line, cells, anchor.date_text, title, section, carried=True
                     )
@@ -2481,6 +2627,8 @@ class TableStatementParser(DocumentParser):
             cells = self._assign(line, columns)
             self._split_lead(cells)
             self._split_fused_date(cells, columns)
+            self._drop_posting_date(cells, columns, line)
+            self._split_fused_amount(cells, columns)
             opening = self._opening_row(cells)
             if opening is not None:
                 if balance is None or opening.value != balance:

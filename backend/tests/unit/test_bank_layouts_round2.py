@@ -13,6 +13,13 @@ Lines between two balance lines: a summary block printed under a header
 while the undated rows under a dated ``Balance brought forward`` line still
 take its date once a dated row follows them. A table that reads no row at
 all counts its lines with a figure.
+
+Cells that sit in two columns, or in the wrong one: an amount printed in one
+cell with the description under ``Amount Description`` is split off it; of
+two dates in the date column the first is the row's; a category word that
+reaches under ``Amount`` is no part of the amount. Beside them what must
+stay as it was: ``CR`` alone under an amount, a fused cell with no amount
+word, a date with a word after it.
 """
 
 from __future__ import annotations
@@ -310,3 +317,230 @@ def test_candidates_under_a_balance_line_wait_for_a_dated_row() -> None:
         ("Toner", Decimal("-7.00")),
     ]
     assert outcome.skipped_lines == 0
+
+
+# -- cells that sit in two columns, or in the wrong one -------------------------
+
+
+def test_an_amount_fused_with_the_description_is_split() -> None:
+    result = _read(synth.amount_before_description_fused())
+    statement = _only(result)
+    assert len(statement.transactions) == 7
+    assert _rows(statement) == synth.EXPECTED_ROWS["amount_before_description_fused"]
+    assert statement.reconciliation is not None
+    assert statement.reconciliation.status == "ok"
+    assert result.parse is not None
+    assert result.parse.skipped_lines == 0
+
+
+def test_two_dates_under_one_heading_cell() -> None:
+    result = _read(synth.two_dates_left_aligned())
+    statement = _only(result)
+    assert len(statement.transactions) == 7
+    # Each row is dated with the first of its two dates.
+    assert _rows(statement) == synth.EXPECTED_ROWS["two_dates_left_aligned"]
+    for transaction in statement.transactions:
+        text = f"{transaction.payee} {transaction.memo or ''}"
+        assert not [word for word in synth.CATEGORY_WORDS if word in text]
+    assert statement.reconciliation is not None
+    assert statement.reconciliation.status == "ok"
+    assert result.parse is not None
+    assert result.parse.skipped_lines == 0
+
+
+#: ``Transaction Amount`` spans 380 to 470, ``Category`` 480 to 520.
+CATEGORISED = [
+    ("Date", 62.0),
+    ("Description", 150.0),
+    ("Transaction Amount", 380.0),
+    ("Category", 480.0),
+]
+
+
+def test_a_worded_cell_is_not_put_in_a_money_column() -> None:
+    outcome = _parse(
+        [
+            CATEGORISED,
+            # ``Restaurants`` spans 440 to 495: 30 points under the amount
+            # heading, 15 under its own.
+            [("01/05/2026", 62.0), ("Coffee", 150.0), ("4.50", 380.0), ("Restaurants", 440.0)],
+            [("01/06/2026", 62.0), ("Refund", 150.0), ("-9.25", 380.0), ("Restaurants", 440.0)],
+            # Under its own heading, as before.
+            [("01/07/2026", 62.0), ("Bakery", 150.0), ("3.00", 380.0), ("Groceries", 480.0)],
+        ]
+    )
+    assert _amounts(outcome) == [
+        ("Coffee", Decimal("4.50")),
+        ("Refund", Decimal("-9.25")),
+        ("Bakery", Decimal("3.00")),
+    ]
+    assert outcome.skipped_lines == 0
+    parser = TableStatementParser()
+    view = _view(
+        [
+            CATEGORISED,
+            [("01/05/2026", 62.0), ("Coffee", 150.0), ("4.50", 380.0), ("Restaurants", 440.0)],
+            # Words under the amount heading and under no other: they stay
+            # where they are printed, and the line reads no amount.
+            [("01/08/2026", 62.0), ("Tea", 150.0), ("2.00", 380.0), ("see note", 420.0)],
+            # A figure is no worded cell, wherever it reaches.
+            [("01/09/2026", 62.0), ("Toner", 150.0), ("7.00", 440.0)],
+        ]
+    )
+    columns = parser.columns(view.lines[0])
+    assert columns is not None
+    texts = [
+        {role: [c.text for c in found] for role, found in parser._assign(line, columns).items()}
+        for line in view.lines[1:]
+    ]
+    assert texts == [
+        {
+            "date": ["01/05/2026"],
+            "description": ["Coffee"],
+            "amount": ["4.50"],
+            "other": ["Restaurants"],
+        },
+        {"date": ["01/08/2026"], "description": ["Tea"], "amount": ["2.00", "see note"]},
+        {"date": ["01/09/2026"], "description": ["Toner"], "amount": ["7.00"]},
+    ]
+
+
+def test_a_marker_cell_still_reaches_the_amount() -> None:
+    outcome = _parse(
+        [
+            HEADER,
+            [("01/05/2026", 62.0), ("Coffee", 150.0), ("4.50", 500.0)],
+            # ``CR`` alone under the amount marks the row above it.
+            [("CR", 500.0)],
+            [("01/06/2026", 62.0), ("Bakery", 150.0), ("3.00", 500.0)],
+            [("DR", 500.0)],
+        ]
+    )
+    assert _amounts(outcome) == [("Coffee", Decimal("4.50")), ("Bakery", Decimal("-3.00"))]
+    assert outcome.skipped_lines == 0
+    # A marker that reaches under another heading as well stays the amount's.
+    parser = TableStatementParser()
+    view = _view(
+        [
+            CATEGORISED,
+            [("01/05/2026", 62.0), ("Coffee", 150.0), ("4.50", 380.0), ("CR", 465.0)],
+            [("01/06/2026", 62.0), ("Bakery", 150.0), ("3.00", 380.0), ("DB", 465.0)],
+        ]
+    )
+    columns = parser.columns(view.lines[0])
+    assert columns is not None
+    for line, marker in zip(view.lines[1:], ("CR", "DB"), strict=True):
+        assert [c.text for c in parser._assign(line, columns)["amount"]] == [
+            line.cells[2].text,
+            marker,
+        ]
+    outcome = parser.parse(view, threshold=0.85)
+    assert _amounts(outcome) == [("Coffee", Decimal("4.50")), ("Bakery", Decimal("-3.00"))]
+
+
+#: ``Amount`` spans 120 to 150 and ``Description`` 155 to 210: one cell of
+#: two headings, as :func:`synth.amount_before_description_fused` prints them.
+AMOUNT_FIRST = [("Date", 62.0), ("Amount Description", 120.0)]
+#: The same two columns the other way round (150 to 205 and 210 to 240).
+AMOUNT_LAST = [("Date", 62.0), ("Description Amount", 150.0)]
+
+
+def test_a_fused_cell_is_split_at_its_amount_word() -> None:
+    outcome = _parse(
+        [
+            AMOUNT_FIRST,
+            [("01/05/2026", 62.0), ("$4.50 Coffee house", 120.0)],
+            [("01/06/2026", 62.0), ("-$9.25 Stamps", 120.0)],
+        ]
+    )
+    assert _amounts(outcome) == [
+        ("Coffee house", Decimal("4.50")),
+        ("Stamps", Decimal("-9.25")),
+    ]
+    assert outcome.skipped_lines == 0
+    # The money column right of the description: the last word.
+    outcome = _parse([AMOUNT_LAST, [("01/05/2026", 62.0), ("Coffee house 4.50", 150.0)]])
+    assert _amounts(outcome) == [("Coffee house", Decimal("4.50"))]
+
+
+def test_a_fused_cell_without_an_amount_word_is_left_alone() -> None:
+    outcome = _parse(
+        [
+            AMOUNT_FIRST,
+            [("01/05/2026", 62.0), ("$4.50 Coffee house", 120.0)],
+            # No amount where the amount is printed: the word at the other
+            # end is none either, whatever it reads as.
+            [("01/06/2026", 62.0), ("Stamps 9.25", 120.0)],
+            [("01/07/2026", 62.0), ("Bakery order 7719", 120.0)],
+            # An undated line is a row's second line, never a row.
+            [("12.00 off next order", 120.0)],
+        ]
+    )
+    assert _amounts(outcome) == [("Coffee house", Decimal("4.50"))]
+    assert outcome.skipped_lines == 2
+    (statement,) = outcome.statements
+    assert "12.00" not in {str(abs(t.amount)) for t in statement.transactions}
+    # A table with two money columns says nothing of which one a word is for.
+    outcome = _parse(
+        [
+            [("Date", 62.0), ("Description Debit", 150.0), ("Credit", 300.0)],
+            [("01/05/2026", 62.0), ("Coffee house 4.50", 150.0)],
+        ]
+    )
+    assert [t for s in outcome.statements for t in s.transactions] == []
+    assert outcome.skipped_lines == 1
+    # And a line whose amount is read where it stands keeps its words.
+    outcome = _parse(
+        [
+            [("Date", 62.0), ("Description", 150.0), ("Amount", 215.0)],
+            [("01/05/2026", 62.0), ("Platform 9.75 cafe", 150.0), ("4.50", 260.0)],
+        ]
+    )
+    assert _amounts(outcome) == [("Platform 9.75 cafe", Decimal("4.50"))]
+
+
+def test_two_dates_in_the_date_column_are_the_date_and_a_posting_date() -> None:
+    wide = [("Transaction Date", 62.0), ("Description", 200.0), ("Amount", 500.0)]
+    outcome = _parse(
+        [
+            wide,
+            # Two cells under the one heading.
+            [("01/05/2026", 62.0), ("01/06/2026", 120.0), ("Coffee", 200.0), ("-4.50", 500.0)],
+            # One cell of two halves.
+            [("01/07/2026 01/09/2026", 62.0), ("Bakery", 200.0), ("-3.00", 500.0)],
+        ]
+    )
+    (statement,) = outcome.statements
+    assert [(t.posted, t.payee, t.amount) for t in statement.transactions] == [
+        (date(2026, 1, 5), "Coffee", Decimal("-4.50")),
+        (date(2026, 1, 7), "Bakery", Decimal("-3.00")),
+    ]
+    assert outcome.skipped_lines == 0
+
+
+def test_a_date_and_a_word_in_the_date_column_are_no_two_dates() -> None:
+    wide = [("Transaction Date", 62.0), ("Description", 200.0), ("Amount", 500.0)]
+    outcome = _parse(
+        [
+            wide,
+            [("01/05/2026", 62.0), ("Coffee", 200.0), ("-4.50", 500.0)],
+            # A date and a word, a word and a date, three dates: no row is
+            # dated by guessing which of them is its date.
+            [("01/06/2026", 62.0), ("Hold", 120.0), ("Bakery", 200.0), ("-3.00", 500.0)],
+            [("Est.", 62.0), ("01/07/2026", 90.0), ("Tea", 200.0), ("-2.00", 500.0)],
+            [
+                ("01/08/2026 01/09/2026", 62.0),
+                ("01/10", 175.0),
+                ("Toner", 200.0),
+                ("-7.00", 500.0),
+            ],
+            [("01/12/2026", 62.0), ("Refund", 200.0), ("9.25", 500.0)],
+        ]
+    )
+    (statement,) = outcome.statements
+    assert [(t.posted, t.payee, t.amount) for t in statement.transactions] == [
+        (date(2026, 1, 5), "Coffee", Decimal("-4.50")),
+        (date(2026, 1, 12), "Refund", Decimal("9.25")),
+    ]
+    # Found and not imported: each of the three is counted.
+    assert outcome.skipped_lines == 3

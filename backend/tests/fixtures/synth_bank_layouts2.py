@@ -20,6 +20,17 @@ and rows that reconcile:
   over four days with the date printed once per day (the first day's date
   is the one on the brought-forward line), and a dated ``Balance carried
   forward`` line under the last of them.
+* :func:`amount_before_description_fused`: ``Date | Amount Description``, the
+  two headings a word space apart, and under them rows whose amount and
+  description are one cell (``$47.30 Card Purchase Mossgiel Dairy``): the
+  cell sits in both columns. Money out is printed with a minus.
+* :func:`two_dates_left_aligned`: a card. ``Trans. Date Post Date |
+  Description | Amount | Category``: the two dates of a row stand 22 points
+  apart under the one heading cell, so the second reaches under ``Trans.
+  Date`` more than under ``Post Date``; the category is printed left of its
+  heading and, on the rows with a short one, overlaps ``Amount`` more than
+  ``Category``. Charges are printed without a sign, the one payment with a
+  minus.
 
 :data:`EXPECTED_ROWS` gives, per builder, the rows a correct reading returns
 (``(posted, amount, payee)``, money out negative).
@@ -29,12 +40,15 @@ from __future__ import annotations
 
 import io
 from datetime import date
+from decimal import Decimal
 from typing import Final
 
 from reportlab.lib.pagesizes import letter
+from reportlab.pdfbase.pdfmetrics import stringWidth
 from reportlab.pdfgen import canvas
 
 from tests.fixtures.synth_bank_layouts import (
+    _FOOTER,
     ExpectedRow,
     _d,
     _head,
@@ -233,8 +247,135 @@ def brought_forward_dated_once() -> bytes:
     return buf.getvalue()
 
 
+# -- the amount and the description of a row printed as one cell ----------------
+
+_AMOUNT_FIRST_OPENING: Final = _d("1,912.40")
+_AMOUNT_FIRST_ROWS: Final[tuple[ExpectedRow, ...]] = (
+    (date(2026, 6, 2), _d("1,640.00"), "Payroll Deposit Lapwing Foundry"),
+    (date(2026, 6, 4), _d("-925.00"), "Rent Tolliver Yard"),
+    (date(2026, 6, 8), _d("-47.30"), "Card Purchase Mossgiel Dairy"),
+    (date(2026, 6, 12), _d("210.00"), "Mobile Deposit"),
+    (date(2026, 6, 17), _d("-132.85"), "Bill Pay Cinderford Gas"),
+    (date(2026, 6, 23), _d("-80.00"), "ATM Withdrawal Quarry Road"),
+    (date(2026, 6, 29), _d("0.38"), "Interest Paid"),
+)
+
+
+def amount_before_description_fused() -> bytes:
+    """Seven rows ``MM/DD | $NNN.NN Words``: amount and description one cell."""
+    buf = io.BytesIO()
+    c = canvas.Canvas(buf, pagesize=letter)
+    closing = _running(_AMOUNT_FIRST_OPENING, _AMOUNT_FIRST_ROWS)[-1]
+    _head(
+        c,
+        "Pennywhistle Mutual Bank",
+        "5527",
+        "06/01/2026 - 06/30/2026",
+        _AMOUNT_FIRST_OPENING,
+        closing,
+    )
+    _line(c, 650, [(40, "Date"), (110, "Amount Description")], size=8)
+    _rows(
+        c,
+        636,
+        [
+            [
+                (40, posted.strftime("%m/%d")),
+                (110, f"{'-' if amount < 0 else ''}${_money(amount)} {payee}"),
+            ]
+            for posted, amount, payee in _AMOUNT_FIRST_ROWS
+        ],
+    )
+    c.save()
+    return buf.getvalue()
+
+
+# -- a card: two dates under one heading cell, a category left of its heading ---
+
+_TWO_DATES_PREVIOUS: Final = _d("95.00")
+#: ``(row, category)``; the posting date printed is the day after the row's.
+_TWO_DATES_ROWS: Final[tuple[tuple[ExpectedRow, str], ...]] = (
+    ((date(2026, 7, 3), _d("-15.49"), "FERNHILL STREAMING"), "Services"),
+    ((date(2026, 7, 6), _d("-62.10"), "OSPREY LANE GROCER"), "Groceries"),
+    ((date(2026, 7, 9), _d("95.00"), "PAYMENT RECEIVED - THANK YOU"), "Payments"),
+    ((date(2026, 7, 13), _d("-38.75"), "COBBLEGATE DINER"), "Restaurants"),
+    ((date(2026, 7, 18), _d("-71.20"), "WINDLESHAM RAIL"), "Transport"),
+    ((date(2026, 7, 22), _d("-27.90"), "MARLPIT PHARMACY"), "Healthcare"),
+    ((date(2026, 7, 27), _d("-84.16"), "DUNLIN HARDWARE"), "Merchandise"),
+)
+#: The words printed under ``Category``: none of them is part of a payee.
+CATEGORY_WORDS: Final = tuple(category for _, category in _TWO_DATES_ROWS)
+#: Points between the end of a row's first date and the start of its second.
+_DATE_GAP: Final = 22.0
+_ROW_SIZE: Final = 8
+_HEADING_SIZE: Final = 12
+_AMOUNT_X: Final = 390.0
+#: The categories start here, under the last letters of ``Amount``; their
+#: heading starts 30 points on.
+_CATEGORY_X: Final = 428.0
+_CATEGORY_HEADING_X: Final = 458.0
+
+
+def two_dates_left_aligned() -> bytes:
+    """Seven card rows, each with its transaction and its posting date."""
+    buf = io.BytesIO()
+    c = canvas.Canvas(buf, pagesize=letter)
+    rows = [row for row, _ in _TWO_DATES_ROWS]
+    charges = -sum((a for _, a, _ in rows if a < 0), Decimal(0))
+    credits = sum((a for _, a, _ in rows if a > 0), Decimal(0))
+    owed = _TWO_DATES_PREVIOUS - credits + charges
+    _line(c, 750, [(40, "Tarnbeck Rewards Mastercard")], size=14, bold=True)
+    _line(c, 734, [(40, "Card ending in 3306")])
+    _line(c, 750, [(380, "Billing Period: 07/01/2026 - 07/31/2026")])
+    _line(c, 60, [(40, _FOOTER)], size=7)
+    _rows(
+        c,
+        700,
+        [
+            [(40, "Previous Balance"), (-300, f"${_money(_TWO_DATES_PREVIOUS)}")],
+            [(40, "Payments and Credits"), (-300, f"-${_money(credits)}")],
+            [(40, "New Charges"), (-300, f"+${_money(charges)}")],
+            [(40, "New Balance"), (-300, f"${_money(owed)}")],
+            [(40, "Minimum Payment Due"), (-300, "$25.00")],
+        ],
+    )
+    _line(
+        c,
+        618,
+        [
+            (40, "Trans. Date Post Date"),
+            (175, "Description"),
+            (_AMOUNT_X, "Amount"),
+            (_CATEGORY_HEADING_X, "Category"),
+        ],
+        size=_HEADING_SIZE,
+        bold=True,
+    )
+    y = 602.0
+    for (posted, amount, payee), category in _TWO_DATES_ROWS:
+        first = posted.strftime("%m/%d")
+        second = posted.replace(day=posted.day + 1).strftime("%m/%d")
+        _line(
+            c,
+            y,
+            [
+                (40, first),
+                (40 + stringWidth(first, "Helvetica", _ROW_SIZE) + _DATE_GAP, second),
+                (175, payee),
+                (_AMOUNT_X, f"${_money(amount)}" if amount < 0 else f"-${_money(amount)}"),
+                (_CATEGORY_X, category),
+            ],
+            size=_ROW_SIZE,
+        )
+        y -= 13
+    c.save()
+    return buf.getvalue()
+
+
 EXPECTED_ROWS: Final[dict[str, list[ExpectedRow]]] = {
     "marker_column_checking": [row for row, _ in _MARKER_ROWS],
     "summary_grid_with_counts": list(_GRID_ROWS),
     "brought_forward_dated_once": list(_FORWARD_ROWS),
+    "amount_before_description_fused": list(_AMOUNT_FIRST_ROWS),
+    "two_dates_left_aligned": [row for row, _ in _TWO_DATES_ROWS],
 }
