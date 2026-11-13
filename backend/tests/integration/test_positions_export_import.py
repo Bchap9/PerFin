@@ -18,6 +18,9 @@ file is the synthetic export of ``tests/fixtures/synth_positions_csv.py``
 * A position with lots of its own (bought through an activity export) keeps
   them; only its units follow the export.
 * Exports and activity out of order are held, not applied.
+* An export with no account column, one block per account under a line
+  naming it, with a cash row and an ``Account Total`` row per block, lands
+  on each account with the printed total as its value.
 * A file whose figures do not add up (a value that is not quantity x price)
   waits for "import as read"; accounts the file names without digits are
   created from its proposals.
@@ -65,10 +68,14 @@ from tests.fixtures.imports import run_jobs
 from tests.fixtures.synth_activity_csv import ActivityAccount, ActivityRow, activity_csv_bytes
 from tests.fixtures.synth_positions_csv import (
     BOND,
+    BROKER_DAY,
+    BROKER_INDIVIDUAL,
+    BROKER_ROTH,
     GROWTH,
     HEADER,
     VALUE,
     PositionsAccount,
+    broker_all_accounts_positions_csv,
     positions_csv_bytes,
     two_accounts,
 )
@@ -153,7 +160,7 @@ def test_positions_export_lands_as_holdings_with_cost_basis_on_each_account(env:
     assert document.status is DocumentStatus.PROCESSED, _items(env, document_id)
     assert document.account_id is None  # two accounts: linked to neither
     assert (document.period_start, document.period_end) == (DAY, DAY)
-    assert document.parser_version == "brokerage_positions_table/1"
+    assert document.parser_version == "brokerage_positions_table/2"
     for account, mine in ((taxable, synthetic[0]), (roth, synthetic[1])):
         assert _held(env, account) == _printed(mine), mine.name
         # The account's value: its holdings and the core position's cash.
@@ -188,6 +195,43 @@ def test_positions_export_lands_as_holdings_with_cost_basis_on_each_account(env:
     assert (_rows(env, taxable), _rows(env, roth)) == before
     assert env.parse_logs(document_id)[-1]["investments"]["opening_positions"] == 0
     assert env.document(document_id).status is DocumentStatus.PROCESSED
+
+
+@pytest.mark.parametrize("one_header", [False, True], ids=["header-per-block", "one-header"])
+def test_all_accounts_export_lands_on_each_account(env: Env, one_header: bool) -> None:
+    blocks = (BROKER_INDIVIDUAL, BROKER_ROTH)
+    kinds = (AccountType.BROKERAGE, AccountType.RETIREMENT)
+    accounts = [
+        env.ledger.account(
+            env.household_id, type=kind, number_last4=block.last4, currency="USD", name=block.name
+        )
+        for block, kind in zip(blocks, kinds, strict=True)
+    ]
+    # With the header printed once, only the lines naming the accounts keep them apart.
+    document_id = env.ingest(
+        broker_all_accounts_positions_csv(one_header=one_header), "All-Accounts-Positions.csv"
+    )
+
+    document = env.document(document_id)
+    assert document.status is DocumentStatus.PROCESSED, _items(env, document_id)
+    assert _items(env, document_id) == []
+    assert (document.period_start, document.period_end) == (BROKER_DAY, BROKER_DAY)
+    for account, block in zip(accounts, blocks, strict=True):
+        assert _held(env, account) == sorted(
+            (h.symbol, h.quantity, h.cost or Decimal(0)) for h in block.holdings
+        ), block.name
+        # The block's printed ``Account Total``: its holdings and its cash row.
+        assert _snapshots(env, account) == [(BROKER_DAY, block.total, BalanceSource.STATEMENT)]
+    (log,) = env.parse_logs(document_id)
+    assert log["positions_table"]["statements"] == 2
+    assert log["positions_table"]["positions"] == 4
+    assert log["positions_table"]["cash_rows"] == 2
+    assert log["positions_table"]["total_rows"] == 2
+    assert log["positions_table"]["skipped"] == 0
+    assert log["positions_table"]["as_of"] == BROKER_DAY.isoformat()
+    assert log["positions_table"]["as_of_assumed"] is False
+    assert log["investments"]["opening_positions"] == 4
+    assert log["investments"]["snapshots"] == 2
 
 
 def test_a_later_export_brings_the_holdings_to_what_it_lists(env: Env) -> None:

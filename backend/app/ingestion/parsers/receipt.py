@@ -22,10 +22,23 @@ every pattern runs on single lines cut to :data:`MAX_LINE` characters.
   lines add up, or the card payment equals it. A consistent total scores
   1.0; a labelled one that cannot be checked :data:`conf.UNCHECKED`; one
   that contradicts the other figures :data:`conf.GUESSED`. A missing
-  subtotal or tax is derived from the others (:data:`conf.DERIVED`).
+  subtotal or tax is derived from the others (:data:`conf.DERIVED`), with
+  the tip and the discount the set that added up used: a "you saved" line
+  the sum did not need is a note and is not added back. With no set that
+  adds up, every printed tip and discount is allowed for and a figure
+  derived through one is scored :data:`conf.UNCHECKED`: whether it was in
+  the total is a guess.
+  A label whose amount OCR put on a line of its own takes the amount-only
+  line below it; when that reading finds no labelled total, is
+  contradicted, or paired no label at all, the nearest such line (above or
+  below) and then the line above are tried, and the first set that adds up
+  is kept (:func:`_best_reading`). The amount under an unpriced item line
+  is that item's price and is never taken from above.
 * **Date**: every date format of :mod:`app.ingestion.classify.dates` plus
   ``14-MAR-26``; a labelled date ("Date", "Order date") or one printed next
-  to a time wins over others, expiry and return-by dates are ignored.
+  to a time wins over others; a line that says expiry, valid, return by or
+  the like gives a date only where a date label or a time marks it as the
+  purchase date (:func:`_purchase_dates`).
   Numeric dates whose day/month order is not visible follow the receipt's
   currency (GBP/EUR day first, USD/CAD month first) at the threshold, or
   are a guess (:data:`conf.GUESSED`) without one.
@@ -78,11 +91,23 @@ from app.ingestion.sandbox.protocol import (
 )
 
 PARSER_NAME: Final = "receipt_basic"
-PARSER_VERSION: Final = "1"
+PARSER_VERSION: Final = "2"
 #: Receipts are short; a longer document is not read as one.
 MAX_RECEIPT_LINES: Final = 400
+#: A receipt is one page, sometimes two; a longer document is a statement, a
+#: bill or a contract however many "Total" lines it prints.
+MAX_RECEIPT_PAGES: Final = 2
+#: The most a two-page document with none of ``_RECEIPT_WORDS`` scores: below
+#: ``registry.MIN_SCORE``, so it is a receipt only when the classifier says so.
+UNWORDED_TWO_PAGE_SCORE: Final = 0.3
 #: Header lines the merchant is looked for in.
 HEADER_LINES: Final = 8
+#: How a keyword line without an amount is paired with an amount-only line,
+#: in the order :func:`read_receipt` tries them.
+Pairing = Literal["below", "nearest", "above"]
+_PAIRINGS: tuple[Pairing, ...] = ("below", "nearest", "above")
+#: The farthest amount-only line the ``nearest`` pairing takes, in line heights.
+PAIRING_REACH: Final = 1.5
 MAX_CANDIDATES: Final = 5
 MAX_ITEMS: Final = 200
 #: Score of an email body's detection needed to read it as a receipt.
@@ -218,6 +243,33 @@ _RECEIPT_WORDS: Final = (
     "order date",
     "auth",
 )
+#: What a loan bill, a mortgage statement or an investment statement prints
+#: beside its "Total" or "Amount due" and no till or order confirmation does
+#: (whole words of the folded text). "year to date", "ytd", "due date" and
+#: "account number" are left out on purpose: loyalty totals, invoices and
+#: store accounts print them on real receipts.
+_BILL_WORDS: Final = (
+    "principal balance",
+    "outstanding principal",
+    "principal paid",
+    "interest paid",
+    "interest rate",
+    "escrow",
+    "payoff",
+    "loan number",
+    "loan seq",
+    "payment due date",
+    "past due",
+    "amount past due",
+    "payment coupon",
+    "payment allocation",
+    "account statement",
+    "activity statement",
+    "starting cash",
+    "ending cash",
+    "net asset value",
+    "vested balance",
+)
 _QTY_ONLY: Final = re.compile(r"^(\d{1,4})\s?[@xX]\s?(\S{0,20})$")
 _QTY_IN: Final = re.compile(r"\b(\d{1,4})\s?[@x]\s?$")
 _HEADER_QTY: Final = re.compile(r"\bqty\b|\bquantity\b")
@@ -316,6 +368,8 @@ class _Line:
     strong: bool = False
     #: The label without OCR corrections ("TAX8" stays "tax8", not "taxb").
     plain: str = ""
+    #: The amounts come from an adjacent amount-only line (:func:`_typed`).
+    paired: bool = False
 
     @property
     def amount(self) -> Money | None:
@@ -347,7 +401,64 @@ def _kind(label: str, has_money: bool, plain: str = "") -> tuple[Kind, bool]:
     return ("item" if sum(ch.isalpha() for ch in label) >= 2 else "other"), False
 
 
-def _typed(lines: Iterable[ViewLine]) -> list[_Line]:
+def _amount_only(entry: _Line) -> bool:
+    return bool(entry.money) and sum(ch.isalpha() for ch in entry.label) < 2
+
+
+def _apart(a: ViewLine, b: ViewLine) -> float | None:
+    """The vertical distance between the centres of two lines (None: no cells)."""
+    if not a.cells or not b.cells:
+        return None
+    (_, a0, _, a1), (_, b0, _, b1) = a.bbox, b.bbox
+    return abs((a0 + a1) / 2 - (b0 + b1) / 2)
+
+
+def _unpriced_item(entry: _Line, below: _Line) -> bool:
+    """``entry`` is an item's name without a price and ``below`` the line
+    under it on the same page: an amount-only line there is that item's
+    price ("APPLES" / "2.50"), not the amount of the label that follows."""
+    if entry.money or entry.paired or entry.line.page != below.line.page:
+        return False
+    return _kind(entry.label, True, entry.plain)[0] == "item"
+
+
+def _amount_line(out: Sequence[_Line], index: int, pairing: Pairing) -> _Line | None:
+    """The amount-only line the amountless keyword line ``out[index]`` takes."""
+    entry = out[index]
+    after = out[index + 1] if index + 1 < len(out) else None
+    if pairing == "below":
+        return after if after is not None and _amount_only(after) else None
+    before = out[index - 1] if index else None
+    if before is not None and index >= 2 and _unpriced_item(out[index - 2], before):
+        before = None
+    # The line below first: it keeps a tie.
+    near = [
+        other
+        for other in (after, before)
+        if other is not None and _amount_only(other) and other.line.page == entry.line.page
+    ]
+    if pairing == "above":
+        return before if before in near else None
+    reach = PAIRING_REACH * entry.line.height
+    best: tuple[float, _Line] | None = None
+    for other in near:
+        gap = _apart(entry.line, other.line)
+        if gap is not None and gap <= reach and (best is None or gap < best[0]):
+            best = (gap, other)
+    return best[1] if best is not None else None
+
+
+def _typed(lines: Iterable[ViewLine], *, pairing: Pairing = "below") -> list[_Line]:
+    """The lines with their amounts and kinds.
+
+    A keyword whose amount OCR put on a line of its own ("Subtotal" /
+    "107.65") takes the amounts of an adjacent amount-only line: the line
+    ``below`` it, the line ``above`` it on the same page, or the ``nearest``
+    of the two (by the distance between line centres, the line below on a
+    tie, none farther than :data:`PAIRING_REACH` line heights). An amount
+    line is given to one label only, and the line above is never taken when
+    it sits under an item's name that has no price (:func:`_unpriced_item`).
+    """
     out: list[_Line] = []
     for line in lines:
         money = _money_in(line.cells)
@@ -359,16 +470,18 @@ def _typed(lines: Iterable[ViewLine]) -> list[_Line]:
                 money = implied
                 kind, strong = _kind(label, True, plain)
         out.append(_Line(line, label, money, kind, strong, plain))
-    # A keyword whose amount OCR put on the next line ("Subtotal" / "107.65").
-    for index in range(len(out) - 1):
-        entry, following = out[index], out[index + 1]
-        if entry.money or not following.money or sum(ch.isalpha() for ch in following.label) >= 2:
+    for index, entry in enumerate(out):
+        if entry.money:
             continue
         kind, strong = _kind(entry.label, True, entry.plain)
         if kind in ("item", "other"):
             continue
-        entry.money, entry.kind, entry.strong = following.money, kind, strong
-        following.money, following.kind = [], "other"
+        source = _amount_line(out, index, pairing)
+        if source is None:
+            continue
+        entry.money, entry.kind, entry.strong = source.money, kind, strong
+        entry.paired = True
+        source.money, source.kind = [], "other"
     return out
 
 
@@ -406,6 +519,8 @@ class _Totals:
     adds_up: bool | None = None
     confirmed_by_tender: bool = False
     derived: set[str] = field(default_factory=set)
+    #: A derived figure allowed for a tip or a discount no sum vouched for.
+    derived_unchecked: bool = False
     total_labelled: bool = False
 
 
@@ -449,36 +564,43 @@ def _solve(typed: Sequence[_Line], items: Sequence[ReceiptLine]) -> _Totals:
         for variant in _variants(sub.amount.value)
     ]
 
-    def consistent(value: Decimal) -> tuple[bool, Money | None]:
+    def consistent(value: Decimal) -> tuple[Money | None, Decimal, Decimal] | None:
+        """The subtotal, tip and discount of the first set that adds up to ``value``."""
         extras = {Decimal(0), tip or Decimal(0)}
         cuts = {Decimal(0), discount or Decimal(0)}
         for sub_value, money in sub_values:
             for extra in extras:
                 for cut in cuts:
                     if _close(sub_value + (tax or 0) + extra - cut, value):
-                        return True, Money(sub_value, money.currency, money.conf)
+                        return Money(sub_value, money.currency, money.conf), extra, cut
                     if tax is not None and _close(sub_value + extra - cut, value):
                         # VAT-inclusive totals: the tax is part of the subtotal.
-                        return True, Money(sub_value, money.currency, money.conf)
+                        return Money(sub_value, money.currency, money.conf), extra, cut
         if item_sum is not None:
             for extra in extras:
                 for cut in cuts:
                     if _close(item_sum + (tax or Decimal(0)) + extra - cut, value) or (
                         tax is not None and _close(item_sum + extra - cut, value)
                     ):
-                        return True, None
-        return False, None
+                        return None, extra, cut
+        return None
 
     # Labelled totals (strong labels first, then the later line), then card payments.
     ranked = [t for _, t in sorted(enumerate(totals), key=lambda it: (not it[1].strong, -it[0]))]
+    # The tip and the discount a derived figure allows for: the ones the set
+    # that added up used (a "you saved" line the sum did not need is a note,
+    # not a term); every printed one when nothing added up.
+    used_tip, used_cut = tip or Decimal(0), discount or Decimal(0)
+    out.derived_unchecked = bool(used_tip or used_cut)
     for line in [*ranked, *cards]:
         if line.amount is None:  # pragma: no cover - _first keeps lines with an amount
             continue
         for value in _variants(line.amount.value):
-            ok, sub = consistent(value)
-            if ok:
+            found = consistent(value)
+            if found is not None:
                 out.total = Money(value, line.amount.currency, line.amount.conf)
-                out.subtotal = sub
+                out.subtotal, used_tip, used_cut = found
+                out.derived_unchecked = False
                 out.adds_up = True
                 out.total_labelled = line.kind == "total"
                 break
@@ -506,12 +628,12 @@ def _solve(typed: Sequence[_Line], items: Sequence[ReceiptLine]) -> _Totals:
         )
         out.subtotal = Money(abs(nearest.value), nearest.currency, nearest.conf)
     if out.subtotal is None and tax is not None:
-        derived = total.value - tax - (tip or 0) + (discount or 0)
+        derived = total.value - tax - used_tip + used_cut
         if derived >= 0:
             out.subtotal = Money(derived, None, total.conf)
             out.derived.add("subtotal")
     if out.tax is None and out.subtotal is not None:
-        rest = total.value - abs(out.subtotal.value) - (tip or 0) + (discount or 0)
+        rest = total.value - abs(out.subtotal.value) - used_tip + used_cut
         if rest >= 0:
             out.tax = rest
             out.tax_conf = total.conf
@@ -544,38 +666,95 @@ def _order_hint(currency: str | None) -> date_rules.DateOrder | None:
     return None
 
 
-def _dates_in(
-    text: str, order: date_rules.DateOrder | None
-) -> list[tuple[date, DateKind, Literal["ymd", "mdy", "dmy", "named", "guessed"]]]:
-    found: list[tuple[date, DateKind, Literal["ymd", "mdy", "dmy", "named", "guessed"]]] = []
+_DateRead = tuple[date, DateKind, Literal["ymd", "mdy", "dmy", "named", "guessed"]]
+
+
+def _dated_spans(text: str, order: date_rules.DateOrder | None) -> list[tuple[int, int, _DateRead]]:
+    """Every date of a line with where it starts and ends, in reading order."""
+    found: list[tuple[int, int, _DateRead]] = []
     for hit in date_rules.find_dates(text, order=order):
         value = hit.value
         if value is None:
             continue
         piece = text[hit.start : hit.end]
         if re.match(r"\d{4}", piece):
-            found.append((value, "ymd", "ymd"))
+            found.append((hit.start, hit.end, (value, "ymd", "ymd")))
         elif any(ch.isalpha() for ch in piece):
-            found.append((value, "named", "named"))
+            found.append((hit.start, hit.end, (value, "named", "named")))
         else:
             first = int(re.match(r"\d+", piece)[0])  # type: ignore[index]
             read: Literal["mdy", "dmy"] = "mdy" if first == hit.month else "dmy"
             if hit.ambiguous or (hit.day <= 12 and hit.day != hit.month and order is None):
-                found.append((value, "guessed", "guessed"))
+                found.append((hit.start, hit.end, (value, "guessed", "guessed")))
             elif hit.day <= 12 and hit.day != hit.month:
-                found.append((value, "hinted", read))
+                found.append((hit.start, hit.end, (value, "hinted", read)))
             else:
-                found.append((value, "visible", read))
+                found.append((hit.start, hit.end, (value, "visible", read)))
     if not found:
         for m in _SHORT_NAMED.finditer(text[:MAX_LINE]):
             month = _MONTHS.get(m[2].lower())
             if month is None:
                 continue
             try:
-                found.append((date(2000 + int(m[3]), month, int(m[1])), "named", "named"))
+                value = date(2000 + int(m[3]), month, int(m[1]))
             except ValueError:
                 continue
+            found.append((m.start(), m.end(), (value, "named", "named")))
     return found
+
+
+def _dates_in(text: str, order: date_rules.DateOrder | None) -> list[_DateRead]:
+    return [read for _, _, read in _dated_spans(text, order)]
+
+
+def _beside_time(text: str, start: int, end: int, floor: int) -> bool:
+    """A time of day is printed directly after the date at ``text[start:end]``,
+    or directly before it and after ``floor`` (the end of the previous date)."""
+    after = _TIME.search(text, end)
+    if after is not None and text[end : after.start()].strip(" ,@-").lower() in ("", "at"):
+        return True
+    return any(
+        not text[match.end() : start].strip(" ,-") for match in _TIME.finditer(text, floor, start)
+    )
+
+
+def _purchase_dates(text: str, order: date_rules.DateOrder | None) -> list[_DateRead]:
+    """The dates of a line that may be the day of the purchase.
+
+    A line without an expiry, validity or return word
+    (:data:`_NOT_PURCHASE_DATE`) gives all its dates. On a line with one, a
+    date is kept only on positive evidence that it is the purchase date:
+
+    * its own lead-in (the words between the previous date, or the line
+      start, and the date) holds a date label and no such word:
+      ``EXP 06/12/26  DATE 03/14/2026`` keeps its second date;
+    * or it stands in front of the first disowned date with a time of day
+      beside it: ``03/14/2026 11:42 AM  EXPIRES 06/12/26`` keeps its first.
+
+    So the second date of a range (``valid 03/15/2026 - 03/29/2026``,
+    ``Return by ... or exchange until ...``) and an unmarked date in front of
+    the word (``Member since 01/02/2019 EXP 01/02/2027``) are left out. When
+    the word is in front of none of the dates (``06/12/26 EXPIRY``) nothing
+    says which date it speaks of, and none is kept.
+    """
+    spans = _dated_spans(text, order)
+    kept: list[_DateRead] = []
+    disowned = False
+    previous_end = 0
+    for start, end, read in spans:
+        lead = fold(text[previous_end:start])
+        if _NOT_PURCHASE_DATE.search(lead):
+            disowned = True
+        elif _DATE_LABEL.search(lead) or (
+            not disowned and _beside_time(text, start, end, previous_end)
+        ):
+            kept.append(read)
+        previous_end = max(previous_end, end)
+    if disowned:
+        return kept
+    if _NOT_PURCHASE_DATE.search(fold(text)):
+        return []
+    return [read for _, _, read in spans]
 
 
 def _find_date(
@@ -588,11 +767,9 @@ def _find_date(
     for index, entry in enumerate(typed):
         text = entry.line.text
         label = fold(text)
-        if _NOT_PURCHASE_DATE.search(label):
-            continue
         time_match = _TIME.search(text)
         labelled = bool(_DATE_LABEL.search(label))
-        for value, kind, read in _dates_in(text, order):
+        for value, kind, read in _purchase_dates(text, order):
             score = (3 if labelled else 0) + (2 if time_match else 0)
             score += 1 if index < count * 0.5 else 0
             score -= 1 if kind == "guessed" else 0
@@ -777,11 +954,15 @@ def _items(typed: Sequence[_Line], start: int) -> list[ReceiptLine]:
 # -- the parser ----------------------------------------------------------------------
 
 
-def _scores(view_lines: Sequence[ViewLine]) -> float:
+def _scores(view_lines: Sequence[ViewLine], *, pages: int = 1) -> float:
+    """How much the lines read as a receipt (0 to 0.95); ``pages`` is the
+    page count of the document they come from (a mail body is one page)."""
     if not view_lines or len(view_lines) > MAX_RECEIPT_LINES:
         return 0.0
     text = " " + " ".join(fold(line.text) for line in view_lines) + " "
     if any(f" {word} " in text for word in _STATEMENT_WORDS):
+        return 0.0
+    if any(f" {word} " in text for word in _BILL_WORDS):
         return 0.0
     typed = _typed(view_lines)
     # Keywords count even where OCR lost the amount next to them.
@@ -795,15 +976,83 @@ def _scores(view_lines: Sequence[ViewLine]) -> float:
     score += 0.15 if "subtotal" in kinds else 0.0
     score += 0.1 if "tax" in kinds else 0.0
     score += 0.1 if ("tender" in kinds or "change" in kinds) else 0.0
-    score += 0.1 if any(f" {word} " in text for word in _RECEIPT_WORDS) else 0.0
+    worded = any(f" {word} " in text for word in _RECEIPT_WORDS)
+    score += 0.1 if worded else 0.0
     score += 0.05 if "item" in kinds else 0.0
     if " invoice " in text and " receipt " not in text:
         score = min(score, 0.3)
+    if pages == MAX_RECEIPT_PAGES and not worded:
+        score = min(score, UNWORDED_TWO_PAGE_SCORE)
     return round(min(score, 0.95), 4)
 
 
 def _scale(value: float, ocr: float | None) -> float:
     return conf.scaled(value, ocr)
+
+
+@dataclass
+class _Reading:
+    """What one pairing of labels and amount lines reads (:func:`_typed`)."""
+
+    typed: list[_Line]
+    currency: str | None
+    currency_conf: float
+    header: list[tuple[str, float | None]]
+    found_date: _DateFound | None
+    time: str | None
+    items: list[ReceiptLine]
+    totals: _Totals
+
+
+def _reading(view_lines: Sequence[ViewLine], pairing: Pairing) -> _Reading:
+    typed = _typed(view_lines, pairing=pairing)
+    money = [m for t in typed for m in t.money]
+    currency, currency_conf = _find_currency(typed, money)
+    header = _merchant_lines(typed)
+    found_date, time = _find_date(typed, currency)
+    date_index = next(
+        (i for i, t in enumerate(typed) if found_date and _dates_in(t.line.text, None)), 0
+    )
+    start = max(date_index + 1, 1 if header else 0)
+    items = _items(typed, start)
+    totals = _solve(typed, items)
+    return _Reading(typed, currency, currency_conf, header, found_date, time, items, totals)
+
+
+def _settled(reading: _Reading) -> bool:
+    """A labelled total that nothing contradicts, in a reading that paired at
+    least one label with the amount below it: another pairing "adding up" is
+    then no evidence, since it can do so by moving an amount to the wrong
+    label (an unlabelled price read as the tax)."""
+    totals = reading.totals
+    return (
+        totals.total_labelled
+        and totals.adds_up is None
+        and any(entry.paired for entry in reading.typed)
+    )
+
+
+def _best_reading(view_lines: Sequence[ViewLine]) -> _Reading:
+    """The first pairing whose figures add up; the first pairing when none does.
+
+    Amounts below their labels are tried first, so a receipt that adds up
+    that way reads as it always did; a pairing that does not add up is never
+    preferred to it. The other pairings are tried only when the first found
+    no labelled total, is contradicted by its own figures, or paired no
+    label at all (:func:`_settled`).
+    """
+    first: _Reading | None = None
+    for pairing in _PAIRINGS:
+        reading = _reading(view_lines, pairing)
+        if reading.totals.adds_up:
+            return reading
+        if first is None:
+            first = reading
+            if _settled(reading):
+                break
+    if first is None:  # pragma: no cover - _PAIRINGS is never empty
+        return _reading(view_lines, "below")
+    return first
 
 
 def read_receipt(
@@ -815,17 +1064,10 @@ def read_receipt(
     sent: date | None = None,
 ) -> Receipt | None:
     """The receipt on ``view_lines`` (None: no total found)."""
-    typed = _typed(view_lines[:MAX_RECEIPT_LINES])
-    money = [m for t in typed for m in t.money]
-    currency, currency_conf = _find_currency(typed, money)
-    header = _merchant_lines(typed)
-    found_date, time = _find_date(typed, currency)
-    date_index = next(
-        (i for i, t in enumerate(typed) if found_date and _dates_in(t.line.text, None)), 0
-    )
-    start = max(date_index + 1, 1 if header else 0)
-    items = _items(typed, start)
-    totals = _solve(typed, items)
+    reading = _best_reading(view_lines[:MAX_RECEIPT_LINES])
+    typed, items, totals = reading.typed, reading.items, reading.totals
+    currency, currency_conf = reading.currency, reading.currency_conf
+    header, found_date, time = reading.header, reading.found_date, reading.time
     if totals.total is None:
         return None
     payment, last4_conf = _find_payment(typed)
@@ -881,7 +1123,7 @@ def read_receipt(
             else conf.UNCHECKED
         )
         if "subtotal" in totals.derived:
-            base = conf.DERIVED
+            base = conf.UNCHECKED if totals.derived_unchecked else conf.DERIVED
         scores["subtotal"] = (
             1.0 if totals.adds_up and base == 1.0 else _scale(base, totals.subtotal.conf)
         )
@@ -894,7 +1136,7 @@ def read_receipt(
             else conf.UNCHECKED
         )
         if "tax" in totals.derived:
-            base = conf.DERIVED
+            base = conf.UNCHECKED if totals.derived_unchecked else conf.DERIVED
         scores["tax"] = 1.0 if totals.adds_up and base == 1.0 else _scale(base, totals.tax_conf)
     if currency is not None:
         # No currency printed: the account's currency applies (not a doubt).
@@ -934,13 +1176,16 @@ class ReceiptParser(DocumentParser):
     kind: ClassVar[Literal["statement", "payslip", "receipt"]] = "receipt"
 
     def detect(self, view: DocumentView) -> float:
-        return _scores([line for line in view.lines if line.page <= 2])
+        if view.page_count > MAX_RECEIPT_PAGES:
+            return 0.0
+        lines = [line for line in view.lines if line.page <= MAX_RECEIPT_PAGES]
+        return _scores(lines, pages=view.page_count)
 
     def parse(
         self, view: DocumentView, *, threshold: float, date_order: str | None = None
     ) -> ParseOutcome:
         outcome = ParseOutcome()
-        lines = [line for line in view.lines if line.page <= 2]
+        lines = [line for line in view.lines if line.page <= MAX_RECEIPT_PAGES]
         receipt = read_receipt(lines, threshold=threshold)
         if receipt is None:
             outcome.warnings.append("no_receipt_total")

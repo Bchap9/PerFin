@@ -74,7 +74,11 @@ from app.domain.investments.models import (
     Price,
     Security,
 )
-from app.domain.investments.statement_import import LINES_HELD, OPENING_MEMO
+from app.domain.investments.statement_import import (
+    LINES_HELD,
+    OPENING_MEMO,
+    acceptable_as_read,
+)
 from app.domain.investments.statement_import import RECONCILIATION_FAILED as RECONCILIATION
 from app.domain.review import service as review_service
 from app.domain.review.schemas import (
@@ -91,6 +95,8 @@ from app.workers.handlers import ingest
 from tests.fixtures import synth_brokerage as synth
 from tests.fixtures import synth_fidelity as fid
 from tests.fixtures import synth_fidelity_report as fidr
+from tests.fixtures import synth_parser_choice as choice
+from tests.fixtures import synth_plan_statement as plan
 from tests.fixtures.factories import Factories, UserRecord
 from tests.fixtures.imports import run_jobs
 from tests.fixtures.ledger import LedgerFactories
@@ -125,7 +131,12 @@ class Env:
         )
 
     def ingest(
-        self, data: bytes, filename: str, *, uploader: UserRecord | None = None
+        self,
+        data: bytes,
+        filename: str,
+        *,
+        uploader: UserRecord | None = None,
+        account_id: uuid.UUID | None = None,
     ) -> uuid.UUID:
         principal = self.principal(uploader)
         with self.factories.transaction() as db:
@@ -138,7 +149,7 @@ class Env:
                 chunks=iter([data]),
                 max_bytes=MAX,
                 filename=filename,
-                account_id=None,
+                account_id=account_id,
             )
         assert run_jobs(self.factories, self.household_id, INGEST_JOB_TYPE, done=self.done)
         return received.document_id
@@ -299,7 +310,7 @@ def test_brokerage_statement_is_parsed_reconciled_and_committed(env: Env, fmt: s
     stored = ExtractResult.model_validate(document.extraction)
     assert len(stored.investments) == 1
     if fmt == "pdf":
-        assert document.parser_version == "placeholder_brokerage/6"
+        assert document.parser_version == "placeholder_brokerage/7"
         assert document.confidence is not None
         assert document.confidence["parse"]["investment_reconciliation"] == ["ok"]
 
@@ -788,7 +799,7 @@ def test_each_account_of_a_multi_account_pdf_lands_on_its_own_account(env: Env) 
     document = env.document(document_id)
     assert document.status is DocumentStatus.PROCESSED, env.open_reviews(document_id)
     assert document.kind is DocumentKind.STATEMENT
-    assert document.parser_version == "fidelity_investments_statement/7"
+    assert document.parser_version == "fidelity_investments_statement/8"
     # The document spans three accounts: it is linked to none of them.
     assert document.account_id is None
     assert (document.period_start, document.period_end) == (stmt.start, stmt.end)
@@ -1987,3 +1998,350 @@ def test_an_unknown_cost_basis_and_a_short_position_are_said(env: Env) -> None:
     stored = ExtractResult.model_validate(env.document(document_id).extraction)
     assert stored.investments[0].total_value is not None
     assert snapshot.balance == stored.investments[0].total_value.amount
+
+
+# ---------------------------------------------------------------------------
+# OFX: written options, prices that are not one unit's, values cut to the cent
+# ---------------------------------------------------------------------------
+
+
+def _small_account(env: Env) -> Account:
+    """The account of the small OFX files of ``synth_brokerage``."""
+    institution = env.ledger.institution(env.household_id, name=synth.INSTITUTION)
+    return env.ledger.account(
+        env.household_id,
+        type=AccountType.BROKERAGE,
+        number_last4=synth.SMALL_ACCOUNT[-4:],
+        currency="USD",
+        institution_id=institution.id,
+        name="Brokerage",
+    )
+
+
+def _option_rows(env: Env, account: Account) -> list[InvestmentTxn]:
+    options = {s.id for s in env.securities().values() if str(s.asset_class) == "option"}
+    return [t for t in env.txns(account) if t.security_id in options]
+
+
+def test_written_options_are_left_out_and_the_rest_imports(env: Env) -> None:
+    """A sale of an option the account never held opens no lot; the rest is imported."""
+    account = _small_account(env)
+    document_id = env.ingest(synth.ofx_written_options(), "activity.ofx")
+
+    stock = synth.BY_SYMBOL["PBXB"].cusip
+    assert env.holdings(account) == [(stock, Decimal(5))]
+    assert _option_rows(env, account) == []
+    assert sorted(str(t.type) for t in env.txns(account)) == ["buy", "dividend"]
+    assert [t.amount for t in env.cash_rows(account)] == [Decimal("500.00")]
+    (item,) = env.open_reviews(document_id)
+    assert item.payload["reason"] == "investment_short_position"
+    assert item.payload["from_activity"] is True
+    assert item.payload["lines_left_out"] == 2
+    (written,) = item.payload["positions"]
+    assert written["symbol"] is None
+    assert Decimal(written["quantity"]) == Decimal(-1)
+    assert (written["market_value"], written["page"]) == (None, None)
+
+    # The same file again leaves the same out and adds nothing.
+    _rerun(env, document_id)
+    assert env.holdings(account) == [(stock, Decimal(5))]
+    assert _option_rows(env, account) == []
+    assert env.reasons(document_id) == {"investment_short_position"}
+
+
+def test_an_option_sold_from_a_listed_account_was_held_before(env: Env) -> None:
+    """With a position list the statement says what was held: the sale closes a long option."""
+    account = _small_account(env)
+    document_id = env.ingest(synth.ofx_option_sold_with_positions(), "statement.ofx")
+
+    assert env.reasons(document_id) <= {"investment_opening_basis_unknown"}
+    assert sorted((str(t.type), t.quantity) for t in _option_rows(env, account)) == [
+        ("sell", Decimal(1)),
+        ("transfer_in", Decimal(1)),
+    ]
+    assert env.holdings(account) == [(synth.BY_SYMBOL["PBXD"].cusip, Decimal(12))]
+
+
+def test_ofx_with_truncated_cent_values_imports(env: Env) -> None:
+    """A market value cut (not rounded) to the cent is still quantity x price."""
+    account = _small_account(env)
+    document_id = env.ingest(synth.ofx_truncated_values(), "positions.ofx")
+
+    assert "investment_reconciliation_failed" not in env.reasons(document_id)
+    assert env.holdings(account) == [
+        (synth.BY_SYMBOL["PBXB"].cusip, Decimal("41.263")),
+        (synth.BY_SYMBOL["PBXD"].cusip, Decimal(12)),
+    ]
+
+
+def test_ofx_bond_position_price_is_one_units(env: Env) -> None:
+    """A bond priced per 100 of face value is stored at the price of one unit."""
+    account = _small_account(env)
+    document_id = env.ingest(synth.ofx_debt_position(), "bond.ofx")
+
+    assert env.reasons(document_id) <= {"investment_opening_basis_unknown"}
+    assert env.holdings(account) == [(synth.DEBT_CUSIP, Decimal(25000))]
+    (price,) = env.query(select(Price))
+    assert price.close == Decimal("0.98750")
+
+
+# -- 401(k) plan statements: the balance and nothing else ------------------------
+
+
+def _plan_account(env: Env) -> Account:
+    institution = env.ledger.institution(env.household_id, name=plan.INSTITUTION)
+    return env.ledger.account(
+        env.household_id,
+        type=AccountType.RETIREMENT,
+        currency="USD",
+        institution_id=institution.id,
+        name="Workplace plan",
+    )
+
+
+def _nothing_but_balances(env: Env, account: Account) -> None:
+    assert env.holdings(account) == []
+    assert env.txns(account) == []
+    assert env.cash_rows(account) == []
+    assert env.query(select(Lot).where(Lot.account_id == account.id)) == []
+
+
+def test_plan_statement_records_the_balance_and_no_holdings(env: Env) -> None:
+    """A roll-forward statement prints dollars per fund: the plan's balance is what it gives."""
+    account = _plan_account(env)
+    document_id = env.ingest(plan.plan_statement_pdf(), "plan.pdf", account_id=account.id)
+
+    document = env.document(document_id)
+    assert document.status is DocumentStatus.PROCESSED, env.open_reviews(document_id)
+    assert document.kind is DocumentKind.STATEMENT
+    assert document.parser_version == "retirement_plan_statement/1"
+    assert (document.period_start, document.period_end) == plan.PERIOD
+    assert document.account_id == account.id
+    snapshots = env.snapshots(account)
+    assert {s.as_of_date: s.balance for s in snapshots} == {
+        date(2026, 3, 31): plan.CLOSING,
+        date(2025, 12, 31): plan.OPENING,
+    }
+    assert {(s.source, s.source_document_id) for s in snapshots} == {
+        (BalanceSource.STATEMENT, document_id)
+    }
+    _nothing_but_balances(env, account)
+    (record,) = env.query(select(StatementRecord).where(StatementRecord.document_id == document_id))
+    assert (record.kind, record.outcome, record.total_value) == (
+        "investment",
+        "imported",
+        plan.CLOSING,
+    )
+    (audited,) = _audits(env, "investment.import")
+    assert audited["balance_only"] is True
+    assert (audited["activity"], audited["positions"]) == (0, 0)
+
+    # Again from the stored pages: the same two days, nothing added.
+    _rerun(env, document_id)
+    assert env.document(document_id).status is DocumentStatus.PROCESSED
+    assert len(env.snapshots(account)) == 2
+    _nothing_but_balances(env, account)
+
+
+def test_plan_statement_with_group_totals_records_the_plans_total(env: Env) -> None:
+    """A ``Total`` under a group of funds is not the plan's: the last total row is."""
+    account = _plan_account(env)
+    document_id = env.ingest(
+        plan.plan_statement_pdf(grouped=True), "plan.pdf", account_id=account.id
+    )
+
+    assert env.document(document_id).status is DocumentStatus.PROCESSED, env.open_reviews(
+        document_id
+    )
+    assert {s.as_of_date: s.balance for s in env.snapshots(account)} == {
+        date(2026, 3, 31): plan.CLOSING,
+        date(2025, 12, 31): plan.OPENING,
+    }
+
+
+def test_plan_statement_with_a_year_to_date_table_records_no_opening_balance(env: Env) -> None:
+    """Two tables that begin differently: neither beginning total is the day before the period."""
+    account = _plan_account(env)
+    document_id = env.ingest(
+        plan.plan_statement_pdf(year_to_date=True, period="04/01/2026 - 06/30/2026"),
+        "plan.pdf",
+        account_id=account.id,
+    )
+
+    assert env.document(document_id).status is DocumentStatus.PROCESSED, env.open_reviews(
+        document_id
+    )
+    assert {s.as_of_date: s.balance for s in env.snapshots(account)} == {
+        date(2026, 6, 30): plan.CLOSING
+    }
+    _nothing_but_balances(env, account)
+
+
+def test_cash_statement_with_a_roll_forward_summary_imports_its_transactions(env: Env) -> None:
+    """A summary row over dated transactions is a bank statement, whatever its header says."""
+    account = env.ledger.account(
+        env.household_id, type=AccountType.CHECKING, currency="USD", name="Health savings"
+    )
+    document_id = env.ingest(plan.cash_summary_pdf(), "cash.pdf", account_id=account.id)
+
+    document = env.document(document_id)
+    assert document.parser_version is not None
+    assert document.parser_version.startswith("statement_generic/")
+    assert "account_type_mismatch" not in env.reasons(document_id)
+    rows = env.query(select(Transaction).where(Transaction.account_id == account.id))
+    assert sorted((t.posted_date, t.amount) for t in rows) == [
+        (date(2026, 1, 15), Decimal("200.00")),
+        (date(2026, 2, 3), Decimal("-50.00")),
+        (date(2026, 3, 31), Decimal("0.50")),
+    ]
+
+
+def test_plan_statement_asks_for_its_account_and_lands_on_the_one_chosen(env: Env) -> None:
+    """A plan statement prints no account digits: a person says which account it is."""
+    account = _plan_account(env)
+    document_id = env.ingest(plan.plan_statement_pdf(), "plan.pdf")
+
+    (item,) = env.open_reviews(document_id)
+    assert (item.payload["reason"], item.payload["account_type"]) == (
+        "account_not_found",
+        "retirement",
+    )
+    assert env.snapshots(account) == []
+
+    _choose(env, document_id, account)
+    assert env.document(document_id).status is DocumentStatus.PROCESSED, env.open_reviews(
+        document_id
+    )
+    assert {s.as_of_date: s.balance for s in env.snapshots(account)} == {
+        date(2026, 3, 31): plan.CLOSING,
+        date(2025, 12, 31): plan.OPENING,
+    }
+    _nothing_but_balances(env, account)
+
+
+def test_the_same_quarter_from_another_file_is_held_as_the_same_statement(env: Env) -> None:
+    """The statement guard covers a plan statement like any other."""
+    account = _plan_account(env)
+    env.ingest(plan.plan_statement_pdf(), "plan.pdf", account_id=account.id)
+    again = env.ingest(
+        plan.plan_statement_pdf(by_source=False), "plan-again.pdf", account_id=account.id
+    )
+
+    assert env.reasons(again) == {"statement_overlap"}
+    assert len(env.snapshots(account)) == 2
+
+
+def test_plan_statement_that_does_not_add_up_records_nothing(env: Env) -> None:
+    """The total row's own figures disagree: no balance, and no way to import it as read."""
+    account = _plan_account(env)
+    document_id = env.ingest(
+        plan.plan_statement_pdf(tamper=True), "plan.pdf", account_id=account.id
+    )
+
+    assert env.document(document_id).status is DocumentStatus.NEEDS_REVIEW
+    (item,) = env.open_reviews(document_id)
+    assert item.kind is ReviewKind.LOW_CONFIDENCE_FIELD
+    payload = item.payload
+    assert payload["reason"] == "plan_statement_does_not_add_up"
+    assert (payload["account_id"], payload["currency"]) == (str(account.id), "USD")
+    assert (payload["status"], payload["failed"]) == ("mismatch", ["roll_forward"])
+    assert Decimal(payload["printed"]) == plan.CLOSING
+    assert Decimal(payload["computed"]) == plan.CLOSING + Decimal("100.00")
+    assert Decimal(payload["difference"]) == Decimal("100.00")
+    assert acceptable_as_read(payload) is False
+    assert env.snapshots(account) == []
+    _nothing_but_balances(env, account)
+    assert (
+        env.query(select(StatementRecord).where(StatementRecord.document_id == document_id)) == []
+    )
+    assert _audits(env, "investment.import") == []
+
+
+def test_plan_statement_with_a_period_in_doubt_records_nothing(env: Env) -> None:
+    """The figures add up; the day they are for reads two ways: no balance is dated by a guess."""
+    account = _plan_account(env)
+    document_id = env.ingest(
+        plan.plan_statement_pdf(period="01/02/2026 - 03/04/2026"),
+        "plan.pdf",
+        account_id=account.id,
+    )
+
+    (item,) = env.open_reviews(document_id)
+    payload = item.payload
+    assert payload["reason"] == "plan_statement_does_not_add_up"
+    assert (payload["status"], payload["failed"]) == ("ok", [])
+    assert payload["period_stated"] is False
+    assert env.snapshots(account) == []
+    _nothing_but_balances(env, account)
+
+
+def test_plan_statement_of_two_plans_records_nothing(env: Env) -> None:
+    """Two plans in one document: which balance is whose is not guessed."""
+    account = _plan_account(env)
+    document_id = env.ingest(
+        plan.plan_statement_pdf(second_plan=True), "plans.pdf", account_id=account.id
+    )
+
+    assert env.document(document_id).status is DocumentStatus.NEEDS_REVIEW
+    assert env.snapshots(account) == []
+    _nothing_but_balances(env, account)
+    (log,) = env.parse_logs(document_id)
+    assert "plan_statement_several_accounts" in json.dumps(log)
+
+
+def _one_holding_account(env: Env) -> Account:
+    return env.ledger.account(
+        env.household_id,
+        type=AccountType.BROKERAGE,
+        currency="USD",
+        number_last4=choice.HOLDING_LAST4,
+        name="One fund",
+    )
+
+
+def test_a_holding_on_a_tax_form_explainer_is_held_for_a_person(env: Env) -> None:
+    """One fund in a table, no period, no figure about the account: nothing is written.
+
+    The household has an account with the digits the page prints, so the
+    only thing between the page and a holding is the statement's own check.
+    """
+    account = _one_holding_account(env)
+    document_id = env.ingest(choice.tax_form_explainer_with_a_holding(), "year-end.pdf")
+
+    document = env.document(document_id)
+    assert document.status is DocumentStatus.NEEDS_REVIEW
+    assert document.parser_version is not None
+    assert document.parser_version.startswith("brokerage_statement_generic/")
+    (item,) = env.open_reviews(document_id)
+    assert item.kind is ReviewKind.LOW_CONFIDENCE_FIELD
+    assert (item.payload["reason"], item.payload["reconciliation"]) == (
+        "investment_low_confidence",
+        "unavailable",
+    )
+    assert item.payload["fields"] == ["reconciliation"]
+    # A person who knows the page may still take the row as printed.
+    assert acceptable_as_read(item.payload)
+    assert env.txns(account) == []
+    assert env.holdings(account) == []
+    assert env.securities() == {}
+    assert env.snapshots(account) == []
+
+    # Said by a person, the row is imported as printed; no value is taken from it.
+    resolution = _import_as_read(env, item)
+    assert resolution["import_as_read"] is True
+    assert env.document(document_id).status is DocumentStatus.PROCESSED
+    name, shares, _, _ = choice.HOLDING
+    assert env.holdings(account) == [(name, Decimal(shares))]
+    assert env.snapshots(account) == []
+
+
+def test_a_one_holding_statement_with_a_period_and_totals_imports(env: Env) -> None:
+    account = _one_holding_account(env)
+    document_id = env.ingest(choice.one_holding_statement(), "statement.pdf")
+
+    assert env.document(document_id).status is DocumentStatus.PROCESSED, env.reasons(document_id)
+    assert env.open_reviews(document_id) == []
+    name, shares, _, _ = choice.HOLDING
+    assert env.holdings(account) == [(name, Decimal(shares))]
+    (snapshot,) = env.snapshots(account)
+    assert snapshot.balance == choice.HOLDING_VALUE + choice.HOLDING_CASH

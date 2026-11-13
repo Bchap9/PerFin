@@ -156,6 +156,30 @@ statements"). Per statement:
    ``investment_opening_basis_unknown`` item asking for the cost basis. A
    history the engine still refuses (selling units never held) rolls the
    statement back (savepoint) with an ``investment_lot_conflict`` item.
+   A **written option** never reaches the engine (:func:`_written_options`):
+   an option (``asset_class`` ``option`` on any of its rows) whose running
+   units over the statement's own rows fall below zero was sold without
+   being held. The lines that move it while it is short are left out, as
+   a printed short position's are: from the sale that takes the count
+   below zero through the purchase that brings it back to zero. Its lines
+   before and after (a long position closed before the option is written,
+   one bought afterwards) go to the engine like any other. One line that
+   takes the count from above zero to below it, or back, closes and opens
+   at once and cannot be split: then every unit line of the option is left
+   out (units of it the account already holds from another document stay
+   as they are). Everything else of the statement is imported, and the
+   ``investment_short_position`` item says so (``from_activity`` when no
+   printed position is negative; one ``positions`` entry per such option
+   with its lowest running units). The count starts from the units the
+   statement itself implies when it lists positions (the listed units less
+   what its rows add), else from the units the account's history from
+   other documents holds. Only options: a share that would go negative
+   keeps the paths above. The rule sees one statement: an OFX file that
+   only closes a short opened in an earlier period (a ``BUYOPT`` with
+   nothing short on record) is read as a purchase, because OFX activity
+   reaches the importer with no open/close marker; and a file without a
+   position list that sells an option bought before its first row reads
+   as writing it (left out and said, never a made-up opening).
    A **positions export** (``app.ingestion.parsers.positions_table``: what
    every account holds on the day of the download, no activity) is a
    *snapshot*: its positions are the whole account on ``as_of``
@@ -209,6 +233,27 @@ statements"). Per statement:
    (:func:`opening_value`: only from an account-value summary that adds up
    to the closing value recorded), so an account's history starts with its
    first statement's opening value rather than its closing one.
+
+**A balance and nothing else** (a statement of one of
+:data:`~app.ingestion.parsers.base.BALANCE_ONLY_PARSERS` with no positions
+and no activity: a 401(k) plan statement in the roll-forward layout,
+``app.ingestion.parsers.plan_statement``). Steps 1 and 2 apply (the
+account, the overlap guard); none of steps 3 to 8 does, because there is
+nothing to write but the balance (:func:`_commit_balance`). When the
+statement's own check held (``roll_forward``, ``roll_forward_rows``), its
+period is stated (``statement_records.period_stated``) and its dates are
+in range, the printed ending total is the account's ``statement`` balance
+snapshot on the period's last day, the opening balance is recorded under
+step 9's rule, the statement is recorded for the overlap guard and the
+audit row (``investment.import``) carries ``"balance_only": true``. No
+security, holding, lot, price, investment transaction or ledger row is
+written. Otherwise nothing is written and one ``low_confidence_field``
+item (:data:`PLAN_DOES_NOT_ADD_UP`) names the account, its currency, the
+check's ``status`` and ``failed`` list, and the ``printed`` ending total,
+what the statement's figures come to (``computed``) and their
+``difference`` where known. It cannot be imported as read
+(:func:`acceptable_as_read`): a balance that its own statement does not
+vouch for is entered by hand.
 """
 
 from __future__ import annotations
@@ -236,6 +281,7 @@ from app.domain.accounts.models import Account, AccountType, BalanceSource
 from app.domain.documents.models import Document, ReviewKind
 from app.domain.imports.statement_answers import StatementAnswers, statement_key
 from app.domain.imports.statement_records import (
+    StatementFacts,
     check_overlap,
     investment_facts,
     record_statement,
@@ -253,6 +299,7 @@ from app.domain.investments.models import (
 )
 from app.domain.investments.service import cost_method, replay_position
 from app.ingestion.match.accounts import match_account
+from app.ingestion.parsers.base import BALANCE_ONLY_PARSERS
 from app.ingestion.parsers.brokerage import position_value, reconcile_investment
 from app.ingestion.parsers.positions_table import is_positions_snapshot
 from app.ingestion.parsers.vocabulary import SUGGESTED_DOUBT
@@ -358,6 +405,11 @@ class InvestmentImport:
 
 def _text(value: Decimal | None) -> str | None:
     return f"{value:f}" if value is not None else None
+
+
+def _plain(value: Decimal) -> Decimal:
+    """``value`` without trailing zeros (``-1``, not ``-1.0000000000``), never an exponent."""
+    return value.quantize(Decimal(1)) if value == value.to_integral_value() else value.normalize()
 
 
 def _units(value: Decimal) -> str:
@@ -1848,6 +1900,95 @@ def _shortfall_openings(
     return openings
 
 
+#: What a statement row does to the units held (``OPENING_TYPES`` and
+#: ``CLOSING_TYPES`` in the parser's words); any other row moves none.
+_UNIT_SIGNS: Final = {"buy": 1, "reinvest": 1, "transfer_in": 1, "sell": -1, "transfer_out": -1}
+
+
+def _history_units(ctx: _Context, account: Account, ref: SecurityRef) -> Decimal:
+    """Units of ``ref`` the account's rows from other documents add up to.
+
+    This document's own rows are left out: on a re-run they are the rows
+    being read again, and counting them twice would turn a sale of units
+    bought in an earlier statement into a sale of units never held.
+    """
+    security = _find_security(ctx, ref, account)
+    if security is None:
+        return Decimal(0)
+    rows = ctx.db.execute(
+        select(InvestmentTxn).where(
+            InvestmentTxn.household_id == ctx.household_id,
+            InvestmentTxn.account_id == account.id,
+            InvestmentTxn.security_id == security.id,
+            InvestmentTxn.source_document_id.is_distinct_from(ctx.document.id),
+        )
+    ).scalars()
+    return _units_after(Decimal(0), list(rows))
+
+
+def _written_options(
+    ctx: _Context,
+    account: Account,
+    statement: InvestmentStatement,
+    reported: Sequence[InvestmentPosition] = (),
+) -> list[tuple[SecurityRef, Decimal, list[InvestmentActivity]]]:
+    """Options the statement sells without holding them: ``(security, lowest
+    running units, the lines left out)``.
+
+    Module doc, step 7. Per security with an option row: the running units
+    over the statement's unit rows, in the lot engine's order. They start
+    from what the statement implies when it lists positions (``reported``,
+    else its own: the units listed for the security, none when it is not
+    listed, less what the rows add), else from the account's history
+    (:func:`_history_units`). A security with a split among its rows is left
+    to the engine, as :func:`_shortfall_openings` leaves it. The lines left
+    out are those moving the option while it is short; every one of its
+    lines when a single line crosses zero.
+    """
+    groups: list[tuple[set[tuple[str, str]], list[tuple[int, InvestmentActivity]]]] = []
+    for index, row in enumerate(statement.activity):
+        if row.type not in UNIT_TYPES or row.security is None:
+            continue
+        keys = _ref_keys(row.security)
+        for known, rows in groups:
+            if known & keys:
+                known |= keys
+                rows.append((index, row))
+                break
+        else:
+            if keys:
+                groups.append((keys, [(index, row)]))
+    listed = reported or statement.positions
+    written: list[tuple[SecurityRef, Decimal, list[InvestmentActivity]]] = []
+    for keys, rows in groups:
+        refs = [row.security for _, row in rows if row.security is not None]
+        if not any(ref.asset_class == "option" for ref in refs):
+            continue
+        if any(row.type == "split" for _, row in rows):
+            continue
+        rows.sort(key=lambda r: (r[1].trade_date, _DAY_RANK.get(r[1].type, 2), r[0]))
+        moves = [(row.quantity or Decimal(0)) * _UNIT_SIGNS.get(row.type, 0) for _, row in rows]
+        if listed:
+            closing = sum((p.quantity for p in listed if keys & _ref_keys(p.security)), Decimal(0))
+            units = closing - sum(moves, Decimal(0))
+        else:
+            units = _history_units(ctx, account, refs[0])
+        lowest = units
+        short: list[InvestmentActivity] = []
+        crossed = False
+        for (_, row), move in zip(rows, moves, strict=True):
+            before = units
+            units += move
+            lowest = min(lowest, units)
+            if before < -UNIT_TOLERANCE or units < -UNIT_TOLERANCE:
+                short.append(row)
+                # Part of the line closes (or opens) a long position.
+                crossed = crossed or max(before, units) > UNIT_TOLERANCE
+        if lowest < -UNIT_TOLERANCE:
+            written.append((refs[0], lowest, [row for _, row in rows] if crossed else short))
+    return written
+
+
 def _cash_statement(
     statement: InvestmentStatement, rows: Iterable[InvestmentActivity]
 ) -> Statement:
@@ -2074,13 +2215,24 @@ def _commit(
     # still counts it (the snapshot below is taken from every position).
     shorts = [p for p in statement.positions if p.quantity < 0]
     shorted = {key for p in shorts for key in _ref_keys(p.security)}
+    # A written option is short without a printed position saying so: the
+    # statement sells it and never held it (module doc, step 7). Kept out
+    # the same way; one a printed short position already names is that one.
+    options = [
+        (ref, lowest, lines)
+        for ref, lowest, lines in _written_options(ctx, account, statement, reported)
+        if not shorted & _ref_keys(ref)
+    ]
+    # Only the lines that move a written option while it is short.
+    option_lines = {id(line) for _, _, lines in options for line in lines}
     writable = statement
     short_lines = 0
-    if shorts:
+    if shorted or options:
         activity = [
             a
             for a in statement.activity
-            if not (
+            if id(a) not in option_lines
+            and not (
                 a.type in UNIT_TYPES and a.security is not None and shorted & _ref_keys(a.security)
             )
         ]
@@ -2168,9 +2320,10 @@ def _commit(
     # doc, step 9): the account's value is not taken from them. Cash activity
     # that does not add up leaves the value alone when the statement's own
     # holdings and closing cash are its printed account value.
-    if shorts:
+    if shorted or options:
         # In the statement's value (and the snapshot below), not among the
-        # holdings shown; its trades were left out with it.
+        # holdings shown; its trades were left out with it. A written
+        # option has no printed position: its lowest running units stand in.
         ctx.review(
             ReviewKind.LOW_CONFIDENCE_FIELD,
             {
@@ -2181,16 +2334,30 @@ def _commit(
                 "as_of": on.isoformat() if on is not None else None,
                 # Lines moving the shorted securities' units, left out with them.
                 "lines_left_out": short_lines,
+                # Nothing printed is negative: the statement's own trades say so.
+                **({"from_activity": True} if not shorts else {}),
                 "positions": [
-                    {
-                        "symbol": p.security.symbol,
-                        "name": p.security.name,
-                        "quantity": _text(p.quantity),
-                        "market_value": _text(position_value(p)),
-                        "page": p.page,
-                    }
-                    for p in shorts[:IDS_MAX]
-                ],
+                    *(
+                        {
+                            "symbol": p.security.symbol,
+                            "name": p.security.name,
+                            "quantity": _text(p.quantity),
+                            "market_value": _text(position_value(p)),
+                            "page": p.page,
+                        }
+                        for p in shorts
+                    ),
+                    *(
+                        {
+                            "symbol": ref.symbol,
+                            "name": ref.name,
+                            "quantity": _text(_plain(lowest)),
+                            "market_value": None,
+                            "page": None,
+                        }
+                        for ref, lowest, _ in options
+                    ),
+                ][:IDS_MAX],
             },
         )
     if (
@@ -2308,6 +2475,112 @@ def opening_value(
         if abs(first + sum(between, Decimal(0)) - last) > tolerance:
             return None
     return statement.period_start - timedelta(days=1), first
+
+
+#: A balance-only statement (a 401(k) plan statement) whose own figures do
+#: not vouch for its ending balance; nothing was recorded. Not answerable
+#: "import as read".
+PLAN_DOES_NOT_ADD_UP: Final = "plan_statement_does_not_add_up"
+
+
+def _balance_only(statement: InvestmentStatement) -> bool:
+    """A statement that is an account's balance and nothing else (module doc)."""
+    return (
+        statement.parser is not None
+        and statement.parser.name in BALANCE_ONLY_PARSERS
+        and not statement.positions
+        and not statement.activity
+    )
+
+
+def _commit_balance(
+    ctx: _Context,
+    statement: InvestmentStatement,
+    account: Account,
+    check: InvestmentReconciliation,
+    *,
+    index: int,
+    facts: StatementFacts,
+) -> bool:
+    """Record the balance a balance-only statement prints; False: nothing was written.
+
+    Written only when the statement's own check held, its period is stated
+    and its dates are in range (module doc). Otherwise one item says that
+    no balance was recorded.
+    """
+    db = ctx.db
+    printed = statement.total_value.amount if statement.total_value is not None else None
+    on = statement.as_of
+    dated = all(d is None or in_business_range(d) for d in _statement_dates(statement))
+    if printed is None or on is None or check.status != "ok" or not facts.stated or not dated:
+        computed = check.total_value
+        ctx.review(
+            ReviewKind.LOW_CONFIDENCE_FIELD,
+            {
+                "reason": PLAN_DOES_NOT_ADD_UP,
+                "field": "reconciliation",
+                "account_id": str(account.id),
+                "currency": account.currency,
+                "statement": index,
+                "parser": _parser(statement),
+                "status": check.status,
+                "failed": list(check.failed),
+                "period_stated": facts.stated and dated,
+                "printed": _money_text(printed) if printed is not None else None,
+                "computed": _money_text(computed) if computed is not None else None,
+                "difference": (
+                    _money_text(computed - printed)
+                    if computed is not None and printed is not None
+                    else None
+                ),
+            },
+        )
+        return False
+    accounts_repo.upsert_snapshot(
+        db,
+        account,
+        on,
+        to_storage(printed),
+        BalanceSource.STATEMENT,
+        source_document_id=ctx.document.id,
+    )
+    ctx.result.snapshots += 1
+    before = opening_value(statement, printed, check.tolerance)
+    if before is not None and all(
+        # As for a brokerage statement (step 9): only where nothing else is
+        # known of the days from the one before the period to its end.
+        s.as_of_date == before[0]
+        and s.source is BalanceSource.STATEMENT
+        and s.source_document_id == ctx.document.id
+        for s in accounts_repo.list_snapshots(db, account, before[0], on - timedelta(days=1))
+    ):
+        accounts_repo.upsert_snapshot(
+            db,
+            account,
+            before[0],
+            to_storage(before[1]),
+            BalanceSource.STATEMENT,
+            source_document_id=ctx.document.id,
+        )
+        ctx.result.snapshots += 1
+    emit(db, ctx.household_id, "balance.updated", {"account_id": str(account.id)})
+    audit(
+        db,
+        action="investment.import",
+        target_type="document",
+        target_id=ctx.document.id,
+        after={
+            "account_id": str(account.id),
+            "balance_only": True,
+            "activity": 0,
+            "opening_positions": 0,
+            "positions": 0,
+            "transaction_ids": [],
+        },
+        household_id=ctx.household_id,
+        user_id=ctx.user_id,
+    )
+    return True
 
 
 def _value_holds(check: InvestmentReconciliation, *, accepted: bool) -> bool:
@@ -2450,6 +2723,14 @@ def import_investment_statements(
             ctx.result.overlaps += 1
             continue
         check = statement.reconciliation or reconcile_investment(statement)
+        if _balance_only(statement):
+            # A plan statement: the balance or nothing (module doc).
+            if _commit_balance(ctx, statement, account, check, index=index, facts=facts):
+                ctx.result.statements += 1
+                record_statement(db, document, account, facts)
+            else:
+                ctx.result.held += 1
+            continue
         accepted = answered.as_read("investment", key, account.id)
         kept = _held(
             ctx,

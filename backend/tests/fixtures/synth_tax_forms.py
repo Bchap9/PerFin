@@ -3,8 +3,8 @@
 
 Every form of the ``US`` form set (``app.domain.tax.forms.us``) can be drawn
 in an IRS-like layout: a heading (``Form W-2``, the title, the year), an
-identity block (payer/employer, TINs, recipient name and address, account
-and control numbers, state ids) and a grid of numbered boxes, each with its
+identity block (payer/employer, TINs, recipient name and address, account,
+control and claim numbers, state ids) and a grid of numbered boxes, each with its
 label on top and its amount below. Special parts:
 
 * W-2: box 12a-d (code and amount) and box 14 "Other" (labelled lines,
@@ -16,15 +16,21 @@ label on top and its amount below. Special parts:
 
 **Identity data is fake and obvious** (:data:`FAKE_SSN` ``000-00-0000``,
 :data:`FAKE_EIN` ``00-0000000``, an invented name and address, account,
-control, policy and state id numbers): :data:`IDENTITY_TOKENS` lists the
+control, policy, claim and state id numbers): :data:`IDENTITY_TOKENS` lists the
 strings tests look for to prove none of it is stored or served. The issuer
 (payer/employer/lender) **name** is not identity data: it is kept as
-``tax_form_data.issuer_name``.
+``tax_form_data.issuer_name``. An SSA-1099 has no issuer box (its numbered
+boxes 1, 2, 7 and 8 are the beneficiary's name, number, address and claim
+number), so its issuer is ``None``.
 
 :func:`synth_form` builds a form with seeded amounts; :func:`expected_boxes`
 is what a parser must return for it (stored box keys, ``Decimal``);
 :func:`form_pdf` / :func:`forms_pdf` draw one or several forms (one per
-page, as in a consolidated 1099).
+page, as in a consolidated 1099). :func:`composite_1099_pdf` is a broker's
+composite statement as clearing firms print it: a cover page that names
+its forms in a sentence and a contents block, then forms side by side under
+headings that start with the year (``2025 1099-DIV ...``, no word "Form"),
+each box one string of label, dot leaders and amount.
 """
 
 from __future__ import annotations
@@ -58,6 +64,7 @@ ACCOUNT: Final = "ACCT0000111122"
 CONTROL: Final = "CTRL0000099"
 STATE_ID: Final = "ZZ STATEID0000"
 POLICY: Final = "POLICY0000777"
+CLAIM: Final = "CLAIM0000444"
 BIRTH: Final = "01/01/1900"
 RTN: Final = "000000000"
 
@@ -77,6 +84,7 @@ IDENTITY_TOKENS: Final = (
     "ctrl0000099",
     "stateid0000",
     "policy0000777",
+    "claim0000444",
     "01/01/1900",
 )
 
@@ -103,8 +111,9 @@ def identity_tokens_in(text: str) -> list[str]:
     return found
 
 
-#: A fictional issuer per form type (kept as the issuer name).
-ISSUERS: Final = {
+#: A fictional issuer per form type (kept as the issuer name). ``None``: the
+#: form has no issuer box (an SSA-1099 has one payer, the administration).
+ISSUERS: Final[dict[str, str | None]] = {
     "W-2": "Fictional Widgets Inc",
     "1099-INT": "Sample National Bank",
     "1099-DIV": "Placeholder Brokerage",
@@ -114,6 +123,7 @@ ISSUERS: Final = {
     "1099-R": "Mock Retirement Trust",
     "1099-G": "Department of Example Revenue",
     "1099-SA": "Pretend HSA Bank",
+    "SSA-1099": None,
     "1098": "Placeholder Home Lending",
     "1098-E": "Sample Student Loans",
     "1098-T": "University of Nowhere Real",
@@ -149,6 +159,7 @@ KEY_BOXES: Final[dict[str, tuple[str, ...]]] = {
     "1099-R": ("1", "2a", "4"),
     "1099-G": ("1", "2", "4"),
     "1099-SA": ("1",),
+    "SSA-1099": ("3", "5", "6"),
     "1098": ("1", "2", "5", "6"),
     "1098-E": ("1",),
     "1098-T": ("1", "5"),
@@ -163,7 +174,8 @@ FORM_TYPES: Final = tuple(KEY_BOXES)
 class SynthTaxForm:
     form_type: str
     tax_year: int
-    issuer: str
+    #: None when the form has no issuer box (:data:`ISSUERS`).
+    issuer: str | None
     #: Plain amount boxes (box id -> amount).
     amounts: dict[str, Decimal] = field(default_factory=dict)
     #: W-2 box 12 (code, amount), at most four.
@@ -257,8 +269,9 @@ def _fmt(value: Decimal) -> str:
 def _identity_values(form: SynthTaxForm, box: BoxDef) -> list[str]:
     """Fake values for an identity box (module doc)."""
     label = box.label.lower()
+    issuer = form.issuer or ""
     if box.id == form_def("US", form.form_type).issuer_box_id:
-        return [form.issuer, ISSUER_STREET, ISSUER_CITY, PHONE]
+        return [issuer, ISSUER_STREET, ISSUER_CITY, PHONE]
     if box.id == "rtn":
         return [RTN]
     if box.id == "covered":
@@ -266,7 +279,7 @@ def _identity_values(form: SynthTaxForm, box: BoxDef) -> list[str]:
     if box.id in ("responsible", "employee"):
         return [RECIPIENT, FAKE_SSN, RECIPIENT_STREET, RECIPIENT_CITY]
     if box.id in ("employer", "issuer"):
-        return [form.issuer, FAKE_EIN, ISSUER_STREET, ISSUER_CITY]
+        return [issuer, FAKE_EIN, ISSUER_STREET, ISSUER_CITY]
     if "state" in label and ("id" in label or "no." in label or "number" in label):
         return [STATE_ID]
     if "tin" in label or "social security" in label or "ssn" in label or "identification" in label:
@@ -281,6 +294,8 @@ def _identity_values(form: SynthTaxForm, box: BoxDef) -> list[str]:
         return [BIRTH]
     if "control" in label:
         return [CONTROL]
+    if "claim" in label:
+        return [CLAIM]
     if "account" in label or "acct" in label:
         return [ACCOUNT]
     if "zip" in label and "address" not in label:
@@ -521,6 +536,75 @@ def forms_pdf(forms: Iterable[SynthTaxForm]) -> bytes:
 
 def form_pdf(form: SynthTaxForm) -> bytes:
     return forms_pdf([form])
+
+
+#: What a parser must return for :func:`composite_1099_pdf` (form type -> boxes).
+COMPOSITE_BOXES: Final[dict[str, dict[str, Decimal]]] = {
+    "1099-DIV": {
+        "1a": Decimal("1840.25"),
+        "1b": Decimal("1210.40"),
+        "2a": Decimal("96.15"),
+        "3": Decimal("12.00"),
+        "4": Decimal("184.02"),
+    },
+    "1099-INT": {"1": Decimal("311.08"), "4": Decimal("31.10")},
+}
+
+
+def composite_1099_pdf(tax_year: int = 2025) -> bytes:
+    """A broker's composite 1099 statement of two pages (module doc).
+
+    Page 1 only mentions forms (a sentence, a contents block with page
+    numbers). Page 2 prints a 1099-B summary (no box ids) beside the
+    1099-DIV, whose first box id stands apart from its label, and the
+    1099-INT below them; both print a box 4.
+    """
+    buf = io.BytesIO()
+    c = canvas.Canvas(buf, pagesize=letter)
+    left, right = 36.0, 310.0
+
+    def put(x: float, y: float, value: str, *, bold: bool = False) -> None:
+        c.setFont(BOLD if bold else FONT, 8)
+        c.drawString(x, y, value)
+
+    put(left, 750, ISSUERS["1099-DIV"] or "", bold=True)
+    put(left, 736, f"Year-End Statement for {tax_year}", bold=True)
+    put(left, 708, "This statement includes IRS Form 1099-B, 1099-DIV, 1099-INT and 1099-MISC.")
+    put(left, 680, "Contents", bold=True)
+    put(left, 666, "Form 1099-DIV Dividends and Distributions ........ 2")
+    put(left, 652, "Details of dividends (Form 1099-DIV) ........ 4")
+    put(left, 40, "Synthetic test document. Every name and number on it is invented.")
+    c.showPage()
+
+    y = 740.0
+    put(left, y, "Summary of Form 1099-B", bold=True)
+    put(
+        right,
+        y,
+        f"{tax_year} 1099-DIV Dividends and Distributions OMB No. 0000-0000",
+        bold=True,
+    )
+    y -= 16
+    put(left, y, "Gross proceeds......................9,412.77")
+    put(right, y, "1a")  # the id drawn apart from its label
+    put(right + 30, y, "Total ordinary dividends......................1,840.25")
+    for row in (
+        "1b Qualified dividends......1,210.40",
+        "2a Total capital gain distributions......96.15",
+        "3 Nondividend distributions......12.00",
+        "4 Federal income tax withheld......184.02",
+    ):
+        y -= 14
+        put(right, y, row)
+    y -= 60
+    put(left, y, f"{tax_year} 1099-INT Interest Income", bold=True)
+    for row in ("1 Interest income......311.08", "4 Federal income tax withheld......31.10"):
+        y -= 14
+        put(left, y, row)
+    put(left, 40, "Synthetic test document. Every name and number on it is invented.")
+    c.showPage()
+    c.save()
+    return buf.getvalue()
 
 
 def all_forms(seed: int = 0, tax_year: int = 2025) -> list[SynthTaxForm]:

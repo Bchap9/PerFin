@@ -19,12 +19,15 @@ import pytest
 
 from app.domain.imports.service import activity_table
 from app.ingestion.extract.registry import builtin_extractors
+from app.ingestion.parsers import brokerage_table
 from app.ingestion.parsers import confidence as conf
 from app.ingestion.parsers.brokerage_table import (
     PARSER_NAME,
     PARSER_VERSION,
+    ActivityTable,
     find_header,
     read_activity_table,
+    suggest_activity_mapping,
 )
 from app.ingestion.sandbox.protocol import (
     ExtractOptions,
@@ -33,6 +36,7 @@ from app.ingestion.sandbox.protocol import (
     Table,
 )
 from tests.fixtures.synth_activity_csv import (
+    BROKER_HEADER,
     DISCLAIMERS,
     HEADER,
     LEDGER_HEADER,
@@ -40,6 +44,8 @@ from tests.fixtures.synth_activity_csv import (
     activity_accounts,
     activity_csv_bytes,
     activity_rows,
+    broker_activity_csv,
+    broker_money,
     investment_rows,
 )
 from tests.fixtures.synth_statements import LAYOUTS, csv_bytes, layout_statement, sample_statement
@@ -276,6 +282,7 @@ def test_unknown_actions_are_skipped_and_counted_never_guessed() -> None:
         _row("DIVIDEND RECEIVED SYNTHETIC GROWTH INDEX ETF (SGRX)", amount="n/a"),
         _row("DIVIDEND RECEIVED SYNTHETIC GROWTH INDEX ETF (SGRX)", amount="1", run="soon"),
         _row("DIVIDEND RECEIVED SYNTHETIC GROWTH INDEX ETF (SGRX)", amount="1", currency="US$"),
+        _row("DIVIDEND RECEIVED SYNTHETIC GROWTH INDEX ETF (SGRX)", amount="1", currency="ABC"),
         _row("STOCK SPLIT SYNTHETIC GROWTH INDEX ETF (SGRX)", amount="0", quantity="5"),
     ],
     ids=[
@@ -285,6 +292,7 @@ def test_unknown_actions_are_skipped_and_counted_never_guessed() -> None:
         "bad-amount",
         "bad-date",
         "bad-currency",
+        "unknown-currency",
         "split-without-ratio",
     ],
 )
@@ -365,6 +373,25 @@ def test_a_guessed_date_order_marks_every_row_low_confidence() -> None:
     for activity in found.statements[0].activity:
         assert activity.low_confidence == ["trade_date"]
         assert activity.confidence == conf.GUESSED
+
+
+def test_a_currency_cell_that_is_no_known_code_makes_the_row_unreadable() -> None:
+    # Three capital letters are not enough: the cell must be a currency
+    # PerFin knows, or the row is skipped and counted like any malformed cell.
+    found = read_activity_table(
+        _with(
+            _row("DIVIDEND RECEIVED SYNTHETIC (SGRX)", amount="2.00", currency="ABC"),
+            _row("DIVIDEND RECEIVED SYNTHETIC (SGRX)", amount="3.00", currency="ABC"),
+            _row("DIVIDEND RECEIVED SYNTHETIC (SGRX)", amount="4.00", currency="usd"),
+        )
+    )
+    assert found is not None
+    assert (found.rows, found.skipped) == (1, 2)
+    assert "rows_unreadable" in found.warnings
+    assert "currency_mixed" not in found.warnings
+    (statement,) = found.statements
+    assert statement.account.currency == "USD"
+    assert [a.amount for a in statement.activity] == [Decimal("4.00")]
 
 
 def test_a_row_in_another_currency_than_its_account_is_skipped() -> None:
@@ -506,3 +533,707 @@ def test_names_and_memos_stay_formula_guarded() -> None:
     assert found is not None
     assert found.skipped == 1
     assert found.statements == []
+
+
+# ---------------------------------------------------------------------------
+# The second broker shape: "Fees & Comm", reinvested dividends, "as of", totals
+# ---------------------------------------------------------------------------
+
+
+def _broker(
+    action: str,
+    *,
+    symbol: str = "SGRX",
+    quantity: str = "",
+    price: str = "",
+    fees: str = "",
+    amount: str = "",
+    day: str = "10/14/2026",
+) -> list[str]:
+    """One row of :data:`BROKER_HEADER`."""
+    name = "SYNTHETIC GROWTH INDEX ETF" if symbol else ""
+    return [day, action, symbol, name, quantity, price, fees, amount]
+
+
+_BUY = _broker("Buy", quantity="10", price="$25.00", fees="$4.95", amount="-$254.95")
+
+
+def _broker_table(*rows: list[str], total: str | None = None) -> Table:
+    return _extract(broker_activity_csv(rows, total=total))
+
+
+def test_the_broker_fixture_is_written_as_documented() -> None:
+    assert broker_money(Decimal("-1234.5")) == "-$1,234.50"
+    lines = broker_activity_csv([_BUY], total="-$254.95").decode().split("\r\n")
+    assert lines[1] == ",".join(f'"{cell}"' for cell in BROKER_HEADER)
+    assert lines[2].endswith('"$25.00","$4.95","-$254.95"')
+    assert lines[3] == '"Transactions Total","","","","","","","-$254.95"'
+    assert broker_activity_csv([_BUY], title=False).decode().startswith('"Date",')
+    with pytest.raises(ValueError, match="one cell per header cell"):
+        broker_activity_csv([["10/14/2026", "Buy"]])
+
+
+def test_fees_and_comm_column_is_read() -> None:
+    (statement,) = _read(_broker_table(_BUY))
+    (activity,) = statement.activity
+    assert activity.type == "buy"
+    assert activity.fees == Decimal("4.95")
+    assert (activity.quantity, activity.unit_price, activity.amount) == (
+        Decimal(10),
+        Decimal("25.00"),
+        Decimal("-254.95"),
+    )
+
+
+@pytest.mark.parametrize(
+    "heading",
+    [
+        "Fees and Comm",
+        "Fees & Commissions",
+        "Fees and Commissions",
+        "Commission/Fees",
+        "Commissions/Fees",
+        "Commissions and Fees",
+    ],
+)
+def test_the_other_wordings_of_the_fees_column_are_read(heading: str) -> None:
+    header = [heading if cell == "Fees & Comm" else cell for cell in BROKER_HEADER]
+    (statement,) = _read(_table([header, _BUY]))
+    assert statement.activity[0].fees == Decimal("4.95")
+
+
+def test_cash_leg_of_a_reinvestment_is_a_dividend() -> None:
+    found = read_activity_table(
+        _broker_table(
+            _broker("Reinvest Dividend", amount="$18.40"),
+            _broker("Reinvest Shares", quantity="0.736", price="$25.00", amount="-$18.40"),
+        )
+    )
+    assert found is not None
+    (statement,) = found.statements
+    assert [(a.type, a.amount, a.quantity) for a in statement.activity] == [
+        ("dividend", Decimal("18.40"), None),
+        ("reinvest", Decimal("-18.40"), Decimal("0.736")),
+    ]
+    # The income leg keeps the fund that paid it.
+    assert [a.security.symbol for a in statement.activity if a.security] == ["SGRX", "SGRX"]
+    assert (found.skipped, found.unknown_activity, found.warnings) == (0, 0, [])
+
+
+@pytest.mark.parametrize("amount", ["-$18.40", "$0.00"])
+def test_reinvest_without_units_and_without_income_is_still_skipped(amount: str) -> None:
+    found = read_activity_table(_broker_table(_BUY, _broker("Reinvest Shares", amount=amount)))
+    assert found is not None
+    assert (found.rows, found.skipped) == (1, 1)
+    assert [a.type for a in found.statements[0].activity] == ["buy"]
+    assert "rows_unreadable" in found.warnings
+
+
+def test_as_of_date_keeps_the_first_date() -> None:
+    found = read_activity_table(
+        _broker_table(
+            _broker("Buy", quantity="2", price="$25.00", amount="-$50.00", day="10/09/2026"),
+            _broker("Cash Dividend", amount="$3.10", day="10/14/2026 as of 10/10/2026"),
+            _broker("Cash Dividend", amount="$3.20", day="10/15/2026 AS OF 10/12/2026"),
+        )
+    )
+    assert found is not None
+    assert [a.trade_date for a in found.statements[0].activity] == [
+        date(2026, 10, 9),
+        date(2026, 10, 14),
+        date(2026, 10, 15),
+    ]
+    assert (found.skipped, found.warnings) == (0, [])
+
+
+def test_the_day_month_order_is_decided_on_the_first_dates_only() -> None:
+    # Only the dates after "as of" show a day above 12: they are dropped, so
+    # they do not settle the order of the dates that are kept.
+    found = read_activity_table(
+        _broker_table(
+            _broker("Cash Dividend", amount="$3.10", day="10/03/2026 as of 09/28/2026"),
+            _broker("Cash Dividend", amount="$3.20", day="11/04/2026 as of 10/30/2026"),
+        )
+    )
+    assert found is not None
+    assert found.rows == 2
+    assert "date_order_guessed" in found.warnings
+    assert all(a.low_confidence == ["trade_date"] for a in found.statements[0].activity)
+
+
+def test_total_line_is_a_note() -> None:
+    found = read_activity_table(_broker_table(_BUY, total="-$254.95"))
+    assert found is not None
+    # The title line above the header is not a row; the total line is the one note.
+    assert (found.rows, found.notes, found.skipped, found.unknown_activity) == (1, 1, 0, 0)
+    assert found.warnings == []
+
+
+def test_a_total_line_does_not_count_against_the_typed_share() -> None:
+    # One typed row, one unknown: half are typed. The total line is no third row.
+    rows = [_BUY, _broker("Synthetic Unknown Item", symbol="", amount="-$1.00")]
+    found = read_activity_table(_broker_table(*rows, total="-$255.95"))
+    assert found is not None
+    assert (found.rows, found.unknown_activity, found.notes) == (1, 1, 1)
+
+
+@pytest.mark.parametrize(
+    "row",
+    [
+        _broker("Total Return Swap Fee", amount="-$1.00"),
+        # No date either: the first filled cell starts with "total", the symbol is text.
+        _broker("Total Return Swap Fee", amount="-$1.00", day=""),
+        # A total line prints figures only: a second label beside it is a row.
+        ["Total", "Buy", "", "", "", "", "", "-$1.00"],
+    ],
+    ids=["dated", "undated", "labelled"],
+)
+def test_a_row_named_total_with_text_is_not_a_total_line(row: list[str]) -> None:
+    found = read_activity_table(_broker_table(_BUY, _BUY, row))
+    assert found is not None
+    assert found.notes == 0
+    assert found.unknown_activity + found.skipped == 1
+
+
+# ---------------------------------------------------------------------------
+# A day/month tie on a known US broker layout
+# ---------------------------------------------------------------------------
+
+#: Every day and month is 12 or less and neither part is constant: the dates
+#: alone cannot say which comes first.
+_TIED_DAYS = ("04/02/2021", "04/05/2021", "09/03/2020", "08/08/2020", "08/01/2020", "05/06/2017")
+
+
+def _tied_rows(amount: str = "-$254.95") -> list[list[str]]:
+    return [
+        _broker("Buy", quantity="10", price="$25.00", fees="$4.95", amount=amount, day=day)
+        for day in _TIED_DAYS
+    ]
+
+
+def test_tied_dates_on_a_known_us_layout_read_month_first() -> None:
+    found = read_activity_table(_broker_table(*_tied_rows()))
+    assert found is not None
+    assert "date_order_guessed" not in found.warnings
+    (statement,) = found.statements
+    assert statement.account.institution == "Charles Schwab"
+    assert len(statement.activity) == len(_TIED_DAYS)
+    assert max(a.trade_date for a in statement.activity) == date(2021, 4, 5)
+    by_day = sorted(a.trade_date for a in statement.activity)
+    assert by_day[-2] == date(2021, 4, 2)  # the first row of the file, month first
+    assert all(a.low_confidence == [] for a in statement.activity)
+    suggestion = suggest_activity_mapping(_broker_table(*_tied_rows()))
+    assert suggestion is not None
+    assert (suggestion.confident, suggestion.spec.date_format) == (True, "MM/DD/YYYY")
+
+
+def test_tied_dates_with_price_before_quantity_read_month_first() -> None:
+    header = [*BROKER_HEADER]
+    header[4], header[5] = header[5], header[4]
+    rows = [[*r[:4], r[5], r[4], *r[6:]] for r in _tied_rows()]
+    found = read_activity_table(_table([header, *rows]))
+    assert found is not None
+    assert "date_order_guessed" not in found.warnings
+    assert found.statements[0].account.institution == "Charles Schwab"
+    assert found.statements[0].activity[0].quantity == Decimal(10)
+
+
+def test_tied_dates_without_dollar_amounts_stay_a_guess() -> None:
+    found = read_activity_table(_broker_table(*_tied_rows("-254.95")))
+    assert found is not None
+    assert "date_order_guessed" in found.warnings
+    assert all(a.low_confidence == ["trade_date"] for a in found.statements[0].activity)
+
+
+def test_tied_dates_on_an_unknown_layout_stay_a_guess() -> None:
+    header = [cell for cell in BROKER_HEADER if cell != "Fees & Comm"]
+    rows = [[*r[:6], r[7]] for r in _tied_rows()]
+    found = read_activity_table(_table([header, *rows]))
+    assert found is not None
+    assert found.rows == len(_TIED_DAYS)
+    assert "date_order_guessed" in found.warnings
+    assert found.statements[0].account.institution is None
+
+
+def test_tied_dates_with_too_few_dollar_amounts_stay_a_guess() -> None:
+    # Three amounts are not enough to say how the file writes money.
+    found = read_activity_table(_broker_table(*_tied_rows()[:3]))
+    assert found is not None
+    assert "date_order_guessed" in found.warnings
+
+
+def test_tied_dates_with_a_tenth_of_bare_amounts_stay_a_guess() -> None:
+    rows = _tied_rows()
+    rows[0][7] = "-254.95"  # five of six start with the symbol: under nine in ten
+    found = read_activity_table(_broker_table(*rows))
+    assert found is not None
+    assert "date_order_guessed" in found.warnings
+
+
+@pytest.mark.parametrize("amount", ["-$254.95", "+$254.95", "($254.95)", "$254.95"])
+def test_a_sign_or_bracket_before_the_dollar_is_still_dollar_first(amount: str) -> None:
+    found = read_activity_table(_broker_table(*_tied_rows(amount)))
+    assert found is not None
+    assert "date_order_guessed" not in found.warnings
+
+
+def test_tied_dashed_dates_on_a_known_layout_stay_a_guess() -> None:
+    # Only the slash forms are settled: a US export does not write dashes.
+    rows = _tied_rows()
+    for row in rows:
+        row[0] = row[0].replace("/", "-")
+    found = read_activity_table(_broker_table(*rows))
+    assert found is not None
+    assert "date_order_guessed" in found.warnings
+
+
+# ---------------------------------------------------------------------------
+# Option symbols, expiries and assignments
+# ---------------------------------------------------------------------------
+
+_CALL = "ZZOP 03/20/2026 45.00 C"
+_CALL_OCC = "ZZOP260320C00045000"
+
+
+def _option(
+    action: str,
+    *,
+    symbol: str = _CALL,
+    quantity: str = "1",
+    price: str = "",
+    fees: str = "",
+    amount: str = "",
+    day: str = "10/14/2026",
+    name: str = "CALL SYNTHETIC OPTION CO $45 EXP 03/20/26",
+) -> list[str]:
+    """One option row of :data:`BROKER_HEADER`."""
+    return [day, action, symbol, name, quantity, price, fees, amount]
+
+
+def _option_table(*rows: list[str]) -> ActivityTable:
+    found = read_activity_table(_broker_table(*rows))
+    assert found is not None
+    return found
+
+
+def test_long_option_trades_read() -> None:
+    found = _option_table(
+        _option("Buy to Open", quantity="2", price="$1.85", fees="$0.65", amount="-$370.65"),
+        _option(
+            "Sell to Close",
+            quantity="2",
+            price="$2.40",
+            fees="$0.65",
+            amount="$479.35",
+            day="10/21/2026",
+        ),
+    )
+    (statement,) = found.statements
+    bought, sold = statement.activity
+    assert (bought.type, sold.type) == ("buy", "sell")
+    for activity in (bought, sold):
+        assert activity.security is not None
+        assert activity.security.symbol == _CALL_OCC
+        assert activity.security.asset_class == "option"
+        assert activity.security.name == "CALL SYNTHETIC OPTION CO $45 EXP 03/20/26"
+        assert activity.quantity == Decimal(2)
+        assert activity.fees == Decimal("0.65")
+    # One contract is 100 shares: the price is stored per contract.
+    assert (bought.unit_price, sold.unit_price) == (Decimal(185), Decimal(240))
+    assert (bought.amount, sold.amount) == (Decimal("-370.65"), Decimal("479.35"))
+    assert (found.rows, found.skipped, found.unknown_activity, found.warnings) == (2, 0, 0, [])
+
+
+@pytest.mark.parametrize("symbol", ["ZZOP 260320C00045000", "ZZOP260320C00045000"])
+def test_the_occ_form_names_the_same_option(symbol: str) -> None:
+    found = _option_table(
+        _option("Buy to Open", symbol=symbol, price="$1.85", amount="-$185.65", name="")
+    )
+    (activity,) = found.statements[0].activity
+    assert activity.security is not None
+    # Without a description the printed symbol is the security's name.
+    assert (activity.security.symbol, activity.security.name) == (_CALL_OCC, symbol)
+    assert activity.security.asset_class == "option"
+
+
+def test_an_option_price_printed_per_contract_is_kept() -> None:
+    found = _option_table(_option("Buy to Open", quantity="2", price="$185.00", amount="-$370.65"))
+    assert found.statements[0].activity[0].unit_price == Decimal(185)
+
+
+def test_a_share_price_is_never_multiplied() -> None:
+    # The amount is a hundred times quantity x price, but the row names a
+    # share, not an option: its price is kept as printed.
+    found = _option_table(_broker("Buy", quantity="1", price="$1.85", amount="-$185.00"))
+    assert found.statements[0].activity[0].unit_price == Decimal("1.85")
+
+
+@pytest.mark.parametrize("quantity", ["1", "-1"])
+@pytest.mark.parametrize("word", ["Expired", "EXPIRED CALL (ZZOP)", "Assigned"])
+def test_expiry_closes_what_is_open(word: str, quantity: str) -> None:
+    found = _option_table(
+        _option("Buy to Open", price="$1.85", fees="$0.65", amount="-$185.65"),
+        _option(word, quantity=quantity, day="03/20/2027"),
+    )
+    (statement,) = found.statements
+    assert [(a.type, a.quantity, a.amount) for a in statement.activity] == [
+        ("buy", Decimal(1), Decimal("-185.65")),
+        ("sell", Decimal(1), Decimal(0)),
+    ]
+    assert statement.activity[1].unit_price is None
+    assert (found.rows, found.skipped, found.unknown_activity, found.warnings) == (2, 0, 0, [])
+
+
+@pytest.mark.parametrize("quantity", ["1", "-1"])
+def test_expiry_of_a_written_option_buys_it_back(quantity: str) -> None:
+    found = _option_table(
+        _option("Sell to Open", price="$1.10", fees="$0.65", amount="$109.35"),
+        _option("Expired", quantity=quantity, day="03/20/2027"),
+    )
+    assert [(a.type, a.amount) for a in found.statements[0].activity] == [
+        ("sell", Decimal("109.35")),
+        ("buy", Decimal(0)),
+    ]
+    assert found.skipped == 0
+
+
+def test_expiry_is_placed_by_date_not_by_file_order() -> None:
+    # Newest first, as many exports are written.
+    found = _option_table(
+        _option("Expired", day="03/20/2027"),
+        _option("Buy to Open", price="$1.85", amount="-$185.00"),
+    )
+    assert [a.type for a in found.statements[0].activity] == ["buy", "sell"]
+    assert found.skipped == 0
+
+
+def test_expiry_with_nothing_open_is_counted() -> None:
+    found = _option_table(_option("Expired"))
+    assert (found.rows, found.skipped, found.unknown_activity) == (0, 1, 0)
+    assert found.statements == []
+    assert found.warnings == ["rows_unreadable"]
+
+
+def test_expiry_larger_than_what_is_open_is_counted() -> None:
+    found = _option_table(
+        _option("Buy to Open", price="$1.85", amount="-$185.00"),
+        _option("Expired", quantity="2", day="03/20/2027"),
+    )
+    assert [a.type for a in found.statements[0].activity] == ["buy"]
+    assert (found.rows, found.skipped) == (1, 1)
+    assert "rows_unreadable" in found.warnings
+
+
+def test_expiry_without_a_quantity_or_with_an_unreadable_amount_is_counted() -> None:
+    found = _option_table(
+        _option("Buy to Open", quantity="2", price="$1.85", amount="-$370.00"),
+        _option("Expired", quantity="", day="03/20/2027"),
+        _option("Expired", amount="n/a", day="03/20/2027"),
+    )
+    assert [a.type for a in found.statements[0].activity] == ["buy"]
+    assert (found.rows, found.skipped, found.unknown_activity) == (1, 2, 0)
+
+
+def test_expiry_of_one_option_does_not_close_another() -> None:
+    found = _option_table(
+        _option("Buy to Open", price="$1.85", amount="-$185.00"),
+        _option("Expired", symbol="ZZOP 06/19/2026 7.50 P", day="06/19/2027"),
+    )
+    assert [a.type for a in found.statements[0].activity] == ["buy"]
+    assert (found.rows, found.skipped) == (1, 1)
+
+
+def test_expired_on_a_share_row_keeps_its_own_sign() -> None:
+    # Not an option: the row is typed by its quantity's sign, as before.
+    found = _option_table(_BUY, _broker("Expired", quantity="-3", amount="$0.00"))
+    assert [a.type for a in found.statements[0].activity] == ["buy", "sell"]
+    assert found.skipped == 0
+
+
+def test_buy_to_close_with_no_short_open_is_counted() -> None:
+    found = _option_table(_option("Buy to Close", price="$0.40", fees="$0.65", amount="-$40.65"))
+    assert (found.rows, found.skipped, found.unknown_activity) == (0, 1, 0)
+    assert found.statements == []
+    assert found.warnings == ["rows_unreadable"]
+
+
+def test_buy_to_cover_of_a_long_option_is_counted_not_bought() -> None:
+    found = _option_table(
+        _option("Buy to Open", price="$1.85", amount="-$185.00"),
+        _option("Buy to Cover", price="$0.40", amount="-$40.00", day="10/21/2026"),
+    )
+    assert [(a.type, a.amount) for a in found.statements[0].activity] == [
+        ("buy", Decimal("-185.00"))
+    ]
+    assert (found.rows, found.skipped) == (1, 1)
+
+
+def test_written_option_rows_read_as_sell_then_buy() -> None:
+    found = _option_table(
+        _option("Sell to Open", price="$1.10", fees="$0.65", amount="$109.35"),
+        _option("Buy to Close", price="$0.40", fees="$0.65", amount="-$40.65", day="10/21/2026"),
+    )
+    (statement,) = found.statements
+    assert [(a.type, a.quantity, a.unit_price, a.amount) for a in statement.activity] == [
+        ("sell", Decimal(1), Decimal(110), Decimal("109.35")),
+        ("buy", Decimal(1), Decimal(40), Decimal("-40.65")),
+    ]
+    assert all(
+        a.security is not None and a.security.asset_class == "option" for a in statement.activity
+    )
+    assert (found.rows, found.skipped, found.warnings) == (2, 0, [])
+
+
+def test_a_written_option_opened_and_closed_on_one_day_reads_newest_first() -> None:
+    found = _option_table(
+        _option("Buy to Close", price="$0.40", amount="-$40.00"),
+        _option("Sell to Open", price="$1.10", amount="$110.00"),
+    )
+    assert sorted(a.type for a in found.statements[0].activity) == ["buy", "sell"]
+    assert (found.rows, found.skipped) == (2, 0)
+
+
+def test_closings_are_settled_per_account() -> None:
+    header = [*BROKER_HEADER, "Account Number"]
+    rows = [
+        [*_option("Buy to Open", price="$1.85", amount="-$185.00"), "X0001111"],
+        [*_option("Expired", day="03/20/2027"), "X0002222"],
+    ]
+    found = read_activity_table(_table([header, *rows]))
+    assert found is not None
+    # The option was bought in one account: the other's expiry closes nothing.
+    assert [(s.account.last4, [a.type for a in s.activity]) for s in found.statements] == [
+        ("1111", ["buy"])
+    ]
+    assert (found.rows, found.skipped) == (1, 1)
+
+
+# ---------------------------------------------------------------------------
+# Review findings: what a closing proves, reinvestment legs, penny options, whole headers
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("expired", ["1", "-1"])
+@pytest.mark.parametrize("word", ["Sell to Close", "YOU SOLD CLOSING TRANSACTION", "Sold to Close"])
+def test_a_closing_sale_never_opens_a_short(word: str, expired: str) -> None:
+    # Three contracts were bought before the export's first row: two are
+    # sold here and one expires. The sale closes, by its own words, so it
+    # leaves nothing written and the expiry is no purchase.
+    found = _option_table(
+        _BUY,
+        _option(word, quantity="2", price="$2.40", fees="$1.30", amount="$478.70"),
+        _option("Expired", quantity=expired, day="03/20/2027"),
+    )
+    assert [(a.type, a.quantity) for a in found.statements[0].activity] == [
+        ("buy", Decimal(10)),
+        ("sell", Decimal(2)),
+    ]
+    assert (found.rows, found.skipped, found.unknown_activity) == (2, 1, 0)
+    assert "rows_unreadable" in found.warnings
+
+
+@pytest.mark.parametrize("word", ["Sell", "YOU SOLD", "Sold"])
+def test_a_plain_sale_of_an_option_proves_no_short(word: str) -> None:
+    # "Sell" with nothing open may write the option or sell contracts bought
+    # before the export: the expiry after it is counted, not given a direction.
+    found = _option_table(
+        _option(word, quantity="2", price="$2.40", fees="$1.30", amount="$478.70"),
+        _option("Expired", day="03/20/2027"),
+    )
+    assert [(a.type, a.quantity) for a in found.statements[0].activity] == [("sell", Decimal(2))]
+    assert (found.rows, found.skipped) == (1, 1)
+
+
+def test_a_plain_sale_beyond_what_was_bought_proves_no_short() -> None:
+    found = _option_table(
+        _option("Buy to Open", price="$1.85", amount="-$185.00"),
+        _option("Sell", quantity="2", price="$2.40", amount="$480.00", day="10/21/2026"),
+        _option("Expired", day="03/20/2027"),
+    )
+    assert [a.type for a in found.statements[0].activity] == ["buy", "sell"]
+    assert (found.rows, found.skipped) == (2, 1)
+
+
+@pytest.mark.parametrize("word", ["Sell to Open", "YOU SOLD OPENING TRANSACTION", "Sell Short"])
+def test_a_sale_that_opens_by_its_own_words_is_a_short_the_expiry_buys_back(word: str) -> None:
+    found = _option_table(
+        _option(word, quantity="2", price="$1.10", fees="$1.30", amount="$218.70"),
+        # Written by its own words: a plain sale after it adds to the short.
+        _option("Sell", price="$1.00", amount="$100.00", day="10/21/2026"),
+        _option("Expired", quantity="3", day="03/20/2027"),
+    )
+    assert [(a.type, a.quantity, a.amount) for a in found.statements[0].activity] == [
+        ("sell", Decimal(2), Decimal("218.70")),
+        ("sell", Decimal(1), Decimal("100.00")),
+        ("buy", Decimal(3), Decimal(0)),
+    ]
+    assert (found.rows, found.skipped, found.warnings) == (3, 0, [])
+
+
+def test_a_closing_sale_of_contracts_bought_in_the_file_leaves_the_rest_to_expire() -> None:
+    found = _option_table(
+        _option("Buy to Open", quantity="3", price="$1.85", amount="-$555.00"),
+        _option("Sell to Close", quantity="2", price="$2.40", amount="$480.00", day="10/21/2026"),
+        _option("Expired", day="03/20/2027"),
+    )
+    assert [(a.type, a.quantity) for a in found.statements[0].activity] == [
+        ("buy", Decimal(3)),
+        ("sell", Decimal(2)),
+        ("sell", Decimal(1)),
+    ]
+    assert (found.rows, found.skipped, found.warnings) == (3, 0, [])
+
+
+def test_a_closing_sale_on_the_day_of_its_opening_reads_newest_first() -> None:
+    found = _option_table(
+        _option("Expired", day="03/20/2027"),
+        _option("Sell to Close", price="$2.40", amount="$240.00"),
+        _option("Buy to Open", quantity="2", price="$1.85", amount="-$370.00"),
+    )
+    assert sorted(a.type for a in found.statements[0].activity) == ["buy", "sell", "sell"]
+    assert (found.rows, found.skipped) == (3, 0)
+
+
+@pytest.mark.parametrize(
+    "action", ["Div Reinvest", "Qual Div Reinvest", "Dividend Reinvest", "Pr Yr Div Reinvest"]
+)
+def test_a_dividend_reinvest_row_with_units_is_the_purchase(action: str) -> None:
+    # A broker that prints the reinvestment as one row: units in, cash out.
+    found = read_activity_table(
+        _broker_table(_BUY, _broker(action, quantity="0.736", price="$25.00", amount="-$18.40"))
+    )
+    assert found is not None
+    assert [(a.type, a.quantity, a.amount) for a in found.statements[0].activity] == [
+        ("buy", Decimal(10), Decimal("-254.95")),
+        ("reinvest", Decimal("0.736"), Decimal("-18.40")),
+    ]
+    assert (found.skipped, found.unknown_activity, found.warnings) == (0, 0, [])
+
+
+@pytest.mark.parametrize("quantity", ["", "0"])
+def test_a_dividend_reinvest_row_without_units_is_still_the_income(quantity: str) -> None:
+    # The two-row shape: the income leg, cash in and no units.
+    found = read_activity_table(
+        _broker_table(_BUY, _broker("Qual Div Reinvest", quantity=quantity, amount="$18.40"))
+    )
+    assert found is not None
+    assert [(a.type, a.quantity, a.amount) for a in found.statements[0].activity] == [
+        ("buy", Decimal(10), Decimal("-254.95")),
+        ("dividend", None, Decimal("18.40")),
+    ]
+    assert (found.rows, found.skipped, found.unknown_activity) == (2, 0, 0)
+
+
+def test_a_dividend_reinvest_row_with_units_and_no_security_is_counted() -> None:
+    row = _broker("Div Reinvest", symbol="", quantity="0.736", price="$25.00", amount="-$18.40")
+    found = read_activity_table(_broker_table(_BUY, row))
+    assert found is not None
+    assert [a.type for a in found.statements[0].activity] == ["buy"]
+    assert (found.rows, found.skipped) == (1, 1)
+
+
+def test_a_buy_to_close_never_leaves_the_option_held() -> None:
+    # One written here, two bought back: the second closes a short opened
+    # before the export, so nothing is held for the expiry to sell.
+    found = _option_table(
+        _option("Sell to Open", price="$1.10", amount="$110.00"),
+        _option("Buy to Close", quantity="2", price="$0.40", amount="-$80.00", day="10/21/2026"),
+        _option("Expired", day="03/20/2027"),
+    )
+    assert [a.type for a in found.statements[0].activity] == ["sell", "buy"]
+    assert (found.rows, found.skipped) == (2, 1)
+
+
+def test_reinvest_counts_only_among_an_actions_first_five_words() -> None:
+    # Counted after the action is normalised and expanded: the fifth word, then the sixth.
+    assert brokerage_table._says_reinvest("Dividend Cash Paid On Reinvested Units")
+    assert not brokerage_table._says_reinvest("Dividend Received Cash Paid For Reinvested")
+
+
+def test_a_dividend_of_a_fund_named_reinvestment_stays_a_dividend() -> None:
+    # The word stands in the security's name, far from the action's first words.
+    action = "DIVIDEND RECEIVED SYNTHETIC GROWTH INDEX AUTOMATIC REINVESTMENT CLASS (SGRX) (Cash)"
+    found = read_activity_table(_broker_table(_BUY, _broker(action, amount="-$1.20")))
+    assert found is not None
+    assert [(a.type, a.amount) for a in found.statements[0].activity][1] == (
+        "dividend",
+        Decimal("-1.20"),
+    )
+
+
+@pytest.mark.parametrize("action", ["Int Charged", "Interest Charged", "Int On Debit Balance"])
+def test_interest_charged_is_a_fee_not_income(action: str) -> None:
+    found = read_activity_table(_broker_table(_BUY, _broker(action, symbol="", amount="-$3.10")))
+    assert found is not None
+    assert [(a.type, a.amount) for a in found.statements[0].activity][1] == (
+        "fee",
+        Decimal("-3.10"),
+    )
+    assert (found.skipped, found.unknown_activity) == (0, 0)
+
+
+@pytest.mark.parametrize(
+    ("action", "quantity"),
+    [("Reinvest Shares", "n/a"), ("Reinvestment", "0"), ("Reinvest Dividend", "0.000")],
+)
+def test_reinvest_with_a_quantity_that_cannot_be_read_is_not_income(
+    action: str, quantity: str
+) -> None:
+    # The income leg has an empty quantity cell. A filled one that gives no
+    # units may be the purchase on an export that prints amounts unsigned.
+    found = read_activity_table(
+        _broker_table(_BUY, _broker(action, quantity=quantity, price="$25.00", amount="$18.40"))
+    )
+    assert found is not None
+    assert [a.type for a in found.statements[0].activity] == ["buy"]
+    assert (found.rows, found.skipped) == (1, 1)
+
+
+def test_a_penny_option_sold_for_less_than_its_fee_is_priced_per_contract() -> None:
+    found = _option_table(
+        _option("Buy to Open", price="$1.10", fees="$0.65", amount="-$110.65"),
+        _option("Sell to Close", price="$0.01", fees="$0.65", amount="$0.35", day="10/21/2026"),
+    )
+    assert [(a.type, a.unit_price, a.amount, a.fees) for a in found.statements[0].activity] == [
+        ("buy", Decimal(110), Decimal("-110.65"), Decimal("0.65")),
+        ("sell", Decimal(1), Decimal("0.35"), Decimal("0.65")),
+    ]
+
+
+def test_a_penny_option_bought_back_with_a_fee_is_priced_per_contract() -> None:
+    found = _option_table(
+        _option("Sell to Open", price="$1.10", fees="$0.65", amount="$109.35"),
+        _option("Buy to Close", price="$0.01", fees="$0.65", amount="-$1.65", day="10/21/2026"),
+    )
+    assert [a.unit_price for a in found.statements[0].activity] == [Decimal(110), Decimal(1)]
+
+
+def test_an_option_price_per_contract_is_kept_whatever_the_fee() -> None:
+    found = _option_table(
+        _option("Sell to Close", price="$1.00", fees="$0.65", amount="$0.35"),
+    )
+    assert found.statements[0].activity[0].unit_price == Decimal(1)
+
+
+def test_tied_dates_under_a_known_header_with_one_more_column_stay_a_guess() -> None:
+    # The eight known cells and a ninth: not the whole known header.
+    header = [*BROKER_HEADER, "Currency"]
+    rows = [[*row, "CAD"] for row in _tied_rows()]
+    found = read_activity_table(_table([header, *rows]))
+    assert found is not None
+    assert found.rows == len(_TIED_DAYS)
+    assert "date_order_guessed" in found.warnings
+    assert all(a.low_confidence == ["trade_date"] for a in found.statements[0].activity)
+
+
+def test_tied_dates_on_a_layout_known_by_its_first_cells_stay_a_guess() -> None:
+    # The Fidelity-style layout is known by its first cells only, never as a whole header.
+    rows = [
+        _row("YOU BOUGHT", quantity="1", price="25.00", amount="-$25.00", run=day)
+        for day in _TIED_DAYS
+    ]
+    found = read_activity_table(_table([list(HEADER), *rows]))
+    assert found is not None
+    assert found.rows == len(_TIED_DAYS)
+    assert found.statements[0].account.institution == "Fidelity Investments"
+    assert "date_order_guessed" in found.warnings

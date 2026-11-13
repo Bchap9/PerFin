@@ -442,6 +442,24 @@ F1095_C = FormDef(
     ),
 )
 
+#: No issuer box: the Social Security Administration is the only payer, and
+#: boxes 1, 2, 7 and 8 identify the beneficiary.
+FSSA_1099 = FormDef(
+    "SSA-1099",
+    "Social Security Benefit Statement",
+    "payer",
+    (
+        ident("1", "Name"),
+        ident("2", "Beneficiary's social security number"),
+        amt("3", "Benefits paid"),
+        amt("4", "Benefits repaid to SSA"),
+        amt("5", "Net benefits"),
+        amt("6", "Voluntary federal income tax withheld"),
+        ident("7", "Address"),
+        ident("8", "Claim number"),
+    ),
+)
+
 US_FORMS: Final = StaticFormSet.of(
     "US",
     "United States (federal)",
@@ -456,6 +474,7 @@ US_FORMS: Final = StaticFormSet.of(
         F1099_R,
         F1099_G,
         F1099_SA,
+        FSSA_1099,
         F1098,
         F1098_E,
         F1098_T,

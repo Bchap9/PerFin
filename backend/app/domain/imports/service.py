@@ -58,6 +58,14 @@ The flow (INGESTION.md "Parse", "Match and deduplicate", "Commit"):
      page tables hold no dated row (``app.domain.review.layout``), have
      nothing to map: they wait as ``unparsed``/``no_rows`` (``source``:
      ``table`` or ``pages``), which the mapping editor is not offered for.
+     Before either, a PDF or image whose pages the receipt, payslip,
+     tax-form or loan parser was chosen for and read nothing from
+     (``app.domain.review.layout.unread_kind``) waits as ``unparsed`` with
+     ``receipt_unreadable``, ``payslip_unreadable``, ``tax_form_unreadable``
+     or ``loan_unreadable`` (``parser``, and the parse ``warnings``, which
+     say why: ``loan_bill_several_loans`` for a bill listing several
+     loans, ``loan_document_too_long`` for a guide or report of many
+     pages). Its page tables are never offered to the mapping editor.
    * **Brokerage activity tables** come first: when table 0 of a CSV, TSV
      or XLSX is a brokerage "Activity" export
      (``app.ingestion.parsers.brokerage_table``: a date, an action that
@@ -236,7 +244,7 @@ from app.domain.imports.statement_records import (
 )
 from app.domain.investments.statement_import import import_investment_statements
 from app.domain.review import repo as review_repo
-from app.domain.review.layout import pages_without_rows, with_layout_tables
+from app.domain.review.layout import pages_without_rows, unread_kind, with_layout_tables
 from app.domain.rules.service import apply_rules_to
 from app.domain.transactions import repo as transactions_repo
 from app.domain.transactions.import_hash import HashInput
@@ -2022,6 +2030,9 @@ def import_extraction(
     # A PDF/image no parser read: its page table goes through the saved
     # column mappings like a CSV (app.domain.review.layout), unless no
     # table on its pages has a dated row.
+    # A receipt, payslip, tax form or loan document its own parser could
+    # not read is neither: it says what it is (module doc).
+    unread = unread_kind(result)
     no_rows = "pages" if pages_without_rows(result) else None
     result = with_layout_tables(result)
     if result.tables and not (result.statements or result.investments):
@@ -2036,7 +2047,16 @@ def import_extraction(
         answers=document_answers(db, document),
     )
     statements: Sequence[InvestmentStatement] = result.investments
-    if no_rows is not None:
+    if unread is not None and result.parse is not None and result.parse.parser is not None:
+        run.review(
+            ReviewKind.UNPARSED,
+            {
+                "reason": f"{unread}_unreadable",
+                "parser": result.parse.parser.name,
+                "warnings": list(result.parse.warnings),
+            },
+        )
+    elif no_rows is not None:
         # Nothing to import and nothing to map: said as such, whatever
         # mapping fits the header (module doc).
         run.review(

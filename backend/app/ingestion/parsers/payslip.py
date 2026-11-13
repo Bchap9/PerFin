@@ -2,17 +2,49 @@
 """A basic payslip parser: employer, period, pay date, gross, deductions, net.
 
 Recognised by its vocabulary (``payslip``, ``pay slip``, ``pay stub``,
-``earnings statement`` and the gross/net pay labels). Reads labelled lines
-("Gross pay 4,250.00"); the lines between a *Deductions* heading and the
-total (or the net pay) are the deduction lines, those between *Earnings* and
-the gross pay the earnings. The employer is the first line of the first
-page unless an ``Employer:`` line names it. Dates: the ``Pay period`` range
-and the ``Pay date``, numeric (order from the values, else ``MM/DD``) or
-with month names.
+``earnings statement``) or three of its labels. Page 1 only. What it reads,
+in the wordings payroll services print:
+
+* **Labelled figures** (``Gross pay 4,250.00``): gross (:data:`GROSS_LABELS`),
+  net (:data:`NET_LABELS`) and the deductions total (:data:`TOTAL_LABELS`,
+  or the word ``Deductions`` with an amount after it). A label naming the
+  year so far (``YTD gross pay``) is never read.
+* **Current and year-to-date columns**: under a header line naming them
+  (``Current | YTD``, ``This Period | YTD``, in either order) a figure is
+  the one in the period's column, never the year-to-date one
+  (:mod:`app.ingestion.parsers.labelled_cells`); a label whose figures all
+  stand outside the period's column is left unread, a single figure
+  included (a block under a lone ``Year to Date`` header gives nothing).
+  With no header naming the columns the first figure after the label is
+  taken, as before. A figure standing under another header of that line
+  (``Hours``, ``Rate``) is no figure of either column. The first reading of
+  gross, net and the deductions total stands.
+* **Sections**: the lines under a *Deductions* (*Taxes*, *Withholdings*)
+  heading are the deduction lines, those under *Earnings* (*Payments*,
+  *Pay*) the earnings, down to the labelled total. A heading may be one
+  cell of a wider line (``PAY | Hours | Rate | Current | YTD | DEDUCTIONS |
+  Current | YTD``): the lines under it are split into blocks at each
+  heading. A line starting with ``Total`` is never a line item. With no
+  printed total the deductions total is the sum of the deduction lines.
+* **Labels over values**: a line of two or more labels with no amount takes
+  each value from the cell under its label. A row naming the year so far
+  (``YTD 9,600.00 ...``) is never that line: it is skipped, and the row
+  after it is taken only when it names the period (``Current``).
+* **Period**: ``Pay period <date> - <date>``, else a start and an end label
+  (:data:`PERIOD_LABELS`), each with its date after it; one without the
+  other is no period. **Pay date**: after ``Pay date``. Dates are numeric
+  (order from the values, else ``MM/DD``) or with month names.
+* **Employer**: the cell under an ``EMPLOYER`` heading, else what follows
+  the word on its line when the word is a cell of its own or a colon
+  follows it (never another label: ``EMPLOYER | PAY PERIOD``; never the
+  rest of a heading: ``Employer Paid Benefits``), else the first line of
+  the page.
 
 Checks: ``gross - total deductions = net`` (and the deduction lines add up
 to their total) within the reconciliation tolerance; a payslip that does not
-add up has every amount field below the threshold. Payslips are kept on the
+add up has every amount field below the threshold. On a scan each field is
+scaled by the OCR confidence of the cells it was read from; gross,
+deductions and net that add up keep full confidence. Payslips are kept on the
 document (``extraction.parse.payslip``, ``kind = payslip``, period); they
 create no ledger rows (the salary arrives as the bank statement's deposit).
 """
@@ -20,13 +52,32 @@ create no ledger rows (the salary arrives as the bank statement's deposit).
 from __future__ import annotations
 
 import re
+from dataclasses import dataclass
 from datetime import date
 from decimal import Decimal
 from typing import ClassVar, Final, Literal
 
 from app.core.money import sum_amounts
 from app.ingestion.parsers import confidence as conf
-from app.ingestion.parsers.base import DocumentParser, DocumentView, ParseOutcome, ViewLine
+from app.ingestion.parsers.base import (
+    Cell,
+    DocumentParser,
+    DocumentView,
+    ParseOutcome,
+    ViewLine,
+)
+from app.ingestion.parsers.currency import stated_currency
+from app.ingestion.parsers.labelled_cells import (
+    LabelPair,
+    PeriodColumn,
+    amount_of,
+    current_cells,
+    has_letters,
+    is_year_to_date,
+    label_pairs,
+    period_columns,
+    value_under,
+)
 from app.ingestion.parsers.table_statement import label_end
 from app.ingestion.parsers.text import (
     FULL_STYLES,
@@ -35,15 +86,81 @@ from app.ingestion.parsers.text import (
     find_amounts,
     find_dates,
     guess_numeric_style,
+    normalise,
     numeric_parts,
+    separator_sign,
 )
 from app.ingestion.reconcile import TOLERANCE
 from app.ingestion.sandbox.protocol import ParserRef, Payslip, PayslipLine
 
 VOCABULARY: Final = ("payslip", "pay slip", "pay stub", "earnings statement", "pay advice")
-LABELS: Final = ("gross pay", "net pay", "total deductions", "pay period", "pay date")
+#: Labels counted by :meth:`PayslipParser.detect` (three of them make a payslip).
+LABELS: Final = (
+    "gross pay",
+    "net pay",
+    "total deductions",
+    "pay period",
+    "pay date",
+    "gross earnings",
+    "total earnings",
+    "period ending",
+    "taxes and deductions",
+)
+GROSS_LABELS: Final = (
+    "gross pay",
+    "total pay",
+    "gross earnings",
+    "total gross",
+    "total earnings",
+    "gross wages",
+)
+NET_LABELS: Final = ("net pay", "net amount", "take home pay")
+#: The deductions total; the bare word ``deductions`` counts only as a whole
+#: label with an amount after it (:func:`_slot`).
+TOTAL_LABELS: Final = ("total deductions", "total taxes and deductions", "taxes and deductions")
+#: A cell that is one of these, on a line without amounts, starts a section.
+DEDUCTION_HEADINGS: Final = frozenset(
+    {"deductions", "taxes", "taxes deductions", "taxes and deductions", "withholdings"}
+)
+EARNING_HEADINGS: Final = frozenset({"earnings", "payments", "pay"})
+#: The first and the last day of the period, each under its own label.
+PERIOD_LABELS: Final = (
+    ("period beginning", "period ending"),
+    ("period start", "period end"),
+    ("pay begin date", "pay end date"),
+    ("pay period start", "pay period end"),
+)
+#: Text starting with one of these is a label or a heading, never an employer's name.
+_NOT_A_NAME: Final = (
+    "employer",
+    "employee",
+    "pay period",
+    "pay date",
+    "period",
+    "pay begin date",
+    "pay end date",
+    *GROSS_LABELS,
+    *NET_LABELS,
+    *TOTAL_LABELS,
+    *DEDUCTION_HEADINGS,
+    *EARNING_HEADINGS,
+)
+#: A row label naming the period (the values row under a line of labels).
+_CURRENT_ROWS: Final = frozenset({"current", "this period", "current period", "this pay period"})
 _DATE_TOKEN: Final = re.compile(r"\d{1,4}[/.-]\d{1,2}[/.-]\d{2,4}")
-_CURRENCY: Final = re.compile(r"\bcurrency\s*:?\s*([A-Z]{3})\b", re.IGNORECASE)
+_EVERYWHERE: Final = float("inf")
+
+Slot = Literal["gross", "net", "deductions"]
+Section = Literal["earnings", "deductions"]
+
+
+#: The labelled figures and their wordings, the total first (``total taxes and
+#: deductions`` is no gross).
+_SLOT_LABELS: Final[tuple[tuple[Slot, tuple[str, ...]], ...]] = (
+    ("deductions", TOTAL_LABELS),
+    ("gross", GROSS_LABELS),
+    ("net", NET_LABELS),
+)
 
 
 def _amount(line: ViewLine, label: str) -> Decimal | None:
@@ -54,9 +171,184 @@ def _amount(line: ViewLine, label: str) -> Decimal | None:
     return amounts[0].value if amounts else None
 
 
+def _slot(text: str, *, bare: bool) -> Slot | None:
+    """The figure the label ``text`` names, else None.
+
+    ``bare``: the word ``Deductions`` alone names the total (an amount
+    follows it, or stands under it). A label of the year so far names
+    nothing a payslip keeps.
+    """
+    if is_year_to_date(text):
+        return None
+    if any(label_end(text, label) is not None for label in TOTAL_LABELS):
+        return "deductions"
+    if bare and normalise(text) == "deductions":
+        return "deductions"
+    if any(label_end(text, label) is not None for label in GROSS_LABELS):
+        return "gross"
+    if any(label_end(text, label) is not None for label in NET_LABELS):
+        return "net"
+    return None
+
+
+def _is_name(text: str) -> bool:
+    """``text`` may be an employer's name: words, and no label or heading."""
+    norm = normalise(text)
+    if not has_letters(text) or find_amounts(text):
+        return False
+    return not any(norm == label or norm.startswith(f"{label} ") for label in _NOT_A_NAME)
+
+
+@dataclass
+class _Block:
+    """The part of the page under one heading cell: its section and its columns."""
+
+    x0: float
+    x1: float
+    section: Section | None
+    columns: list[PeriodColumn]
+    #: The other headers of the columns' line (``Hours``, ``Rate``): their x-ranges.
+    others: tuple[tuple[float, float], ...] = ()
+
+    @property
+    def whole(self) -> bool:
+        return self.x0 == -_EVERYWHERE and self.x1 == _EVERYWHERE
+
+    def holds(self, cell: Cell) -> bool:
+        return self.x0 <= cell.x0 < self.x1
+
+    def set_columns(self, line: ViewLine, columns: list[PeriodColumn]) -> None:
+        """Take the columns ``line`` heads inside this block, and its other headers."""
+        self.columns = [c for c in columns if self.x0 <= c.x0 < self.x1]
+        self.others = tuple(
+            (cell.x0, cell.x1)
+            for cell in line.cells
+            if self.holds(cell)
+            and has_letters(cell.text)
+            and normalise(cell.text) not in DEDUCTION_HEADINGS | EARNING_HEADINGS
+            and not any(cell.overlap(c.x0, c.x1) > 0 for c in columns)
+        )
+
+    def in_a_period_column(self, cell: Cell) -> bool:
+        """``cell`` stands nearer a period or year-to-date column than another header."""
+
+        def distance(x0: float, x1: float) -> tuple[float, float]:
+            gap = max(0.0, max(cell.x0, x0) - min(cell.x1, x1))
+            return gap, abs(cell.centre - (x0 + x1) / 2)
+
+        if not self.others or not self.columns:
+            return True
+        return min(distance(c.x0, c.x1) for c in self.columns) <= min(
+            distance(x0, x1) for x0, x1 in self.others
+        )
+
+
+def _values_row(lines: list[ViewLine], at: int) -> int | None:
+    """The line holding the values under the labels of ``lines[at]``, else None.
+
+    The next line; when that one names the year so far, the line after it if
+    it names the period (``Current``), else none: a year-to-date figure is
+    never the period's.
+    """
+    row = at + 1
+    if row >= len(lines):
+        return None
+    if not any(is_year_to_date(cell.text) for cell in lines[row].cells):
+        return row
+    row += 1
+    names_period = (
+        row < len(lines)
+        and lines[row].page == lines[at].page
+        and any(normalise(cell.text) in _CURRENT_ROWS for cell in lines[row].cells)
+    )
+    return row if names_period else None
+
+
+def _blocks(line: ViewLine, columns: list[PeriodColumn]) -> list[_Block]:
+    """The blocks a heading line starts: one per heading cell, split at its left edge."""
+    headings: list[tuple[Cell, Section]] = []
+    for cell in line.cells:
+        norm = normalise(cell.text)
+        if norm in DEDUCTION_HEADINGS:
+            headings.append((cell, "deductions"))
+        elif norm in EARNING_HEADINGS:
+            headings.append((cell, "earnings"))
+    headings.sort(key=lambda found: found[0].x0)
+    blocks: list[_Block] = []
+    for at, (cell, section) in enumerate(headings):
+        x0 = -_EVERYWHERE if at == 0 else cell.x0
+        x1 = headings[at + 1][0].x0 if at + 1 < len(headings) else _EVERYWHERE
+        block = _Block(x0, x1, section, [])
+        block.set_columns(line, columns)
+        blocks.append(block)
+    return blocks
+
+
+def _close(blocks: list[_Block], slot: Slot) -> None:
+    """A labelled figure ends the section it totals (net pay ends every one)."""
+    ends = {"gross": "earnings", "deductions": "deductions"}.get(slot)
+    for block in blocks:
+        if slot == "net" or block.whole or block.section == ends:
+            block.section = None
+
+
+def _figure(pair: LabelPair, line: ViewLine, blocks: list[_Block]) -> tuple[Cell, Decimal] | None:
+    """The period's figure of a labelled pair: its cell and its value.
+
+    Under a header naming the columns: the amount in the period's column,
+    or nothing (a single figure under a year-to-date header is the year's).
+    No header: the first. A dash between the label and the first figure is the label's separator
+    (:func:`app.ingestion.parsers.text.separator_sign`).
+    """
+    if not pair.amounts:
+        return None
+    columns = next((b.columns for b in blocks if b.holds(pair.label)), [])
+    chosen = pair.amounts[0]
+    if columns:
+        current = current_cells(pair.amounts, columns)
+        if not current:
+            return None
+        chosen = current[0]
+    amount = amount_of(chosen)
+    if amount is None:  # pragma: no cover - label_pairs only pairs amounts
+        return None
+    value = amount.value
+    if chosen is pair.amounts[0] and separator_sign(amount, [c.text for c in line.cells]):
+        value = abs(value)
+    return chosen, value
+
+
+def _item(line: ViewLine, block: _Block) -> tuple[str, Decimal, list[Cell]] | None:
+    """The line item ``line`` prints inside ``block``: label, amount, the cells read."""
+    inside = tuple(cell for cell in line.cells if block.holds(cell))
+    if not inside:
+        return None
+    part = ViewLine(line.page, line.index, inside, " ".join(c.text for c in inside), line.height)
+    if part.norm.split()[:1] == ["total"] or is_year_to_date(part.text):
+        return None
+    pairs = label_pairs(part)
+    amounts = [cell for pair in pairs for cell in pair.amounts]
+    if not pairs or not amounts:
+        return None
+    if block.columns:
+        current = current_cells(
+            [cell for cell in amounts if block.in_a_period_column(cell)], block.columns
+        )
+        if not current:
+            return None
+        chosen, label = current[0], pairs[0].label.text
+    else:
+        chosen, label = amounts[-1], " ".join(pair.label.text for pair in pairs)
+    amount = amount_of(chosen)
+    label = label.strip()
+    if amount is None or not label:
+        return None
+    return label[:200], abs(amount.value), [pairs[0].label, chosen]
+
+
 class PayslipParser(DocumentParser):
     name: ClassVar[str] = "payslip_basic"
-    version: ClassVar[str] = "1"
+    version: ClassVar[str] = "2"
     kind: ClassVar[Literal["statement", "payslip"]] = "payslip"
 
     def detect(self, view: DocumentView) -> float:
@@ -86,60 +378,143 @@ class PayslipParser(DocumentParser):
     ) -> ParseOutcome:
         styles = self._styles(view)
         employer: str | None = None
-        gross = net = total = None
+        figures: dict[Slot, Decimal] = {}
         period: tuple[date, date] | None = None
+        first_day: tuple[date, list[Cell]] | None = None
+        last_day: tuple[date, list[Cell]] | None = None
         pay_date: date | None = None
         currency: str | None = None
         earnings: list[PayslipLine] = []
         deductions: list[PayslipLine] = []
-        section: str | None = None
-        for line in view.lines:
-            if line.page > 1:
-                break
+        blocks: list[_Block] = []
+        #: Per field, the cells its label and value were read from.
+        cells: dict[str, list[Cell]] = {}
+        deduction_cells: list[Cell] = []
+        lines = [line for line in view.lines if line.page <= 1]
+        values: set[int] = set()  # lines read as the values under a line of labels
+
+        def keep(slot: Slot, value: Decimal, read: list[Cell]) -> None:
+            """A labelled figure; the first reading stands (a later one is the year's)."""
+            if slot not in figures:
+                figures[slot] = abs(value) if slot == "deductions" else value
+                cells[slot] = read
+            _close(blocks, slot)
+
+        for at, line in enumerate(lines):
+            if at in values:
+                continue
             norm = line.norm
-            if employer is None and line.index == 0 and not any(w in norm for w in VOCABULARY):
-                employer = line.text.strip()[:200] or None
+            heading = next((c for c in line.cells if normalise(c.text) == "employer"), None)
             end = label_end(line.text, "employer")
-            if end is not None and line.text[end:].strip(" :"):
-                employer = line.text[end:].strip(" :")[:200]
-            match = _CURRENCY.search(line.text)
-            if match is not None and currency is None:
-                currency = match[1].upper()
+            if heading is None and end is not None and line.text[end:].lstrip()[:1] != ":":
+                end = None  # a heading that starts with the word (``Employer Paid Benefits``)
+            if heading is not None or end is not None:
+                beside = line.text[end:].strip(" :") if end is not None else ""
+                under = value_under(lines, at, heading, text=True) if heading is not None else None
+                below = under.text.strip() if under is not None else ""
+                # ``Employer: <name>`` names it on the line; a heading over a column, under it.
+                colon = heading is not None and heading.text.rstrip().endswith(":")
+                tries = [(beside, None), (below, under)]
+                for text, cell in tries if colon or heading is None else reversed(tries):
+                    if _is_name(text):
+                        employer = text[:200]
+                        cells["employer"] = (
+                            [heading, cell] if heading and cell else list(line.cells)
+                        )
+                        break
+            elif employer is None and line.index == 0 and not any(w in norm for w in VOCABULARY):
+                employer = line.text.strip()[:200] or None
+                cells["employer"] = list(line.cells)
+            if currency is None:
+                currency = stated_currency(line.text)
             end = label_end(line.text, "pay period")
             if end is not None and period is None:
                 found = find_dates(line.text[end:], styles)
                 if len(found) >= 2 and found[0] <= found[1]:
                     period = (found[0], found[1])
+                    cells["period"] = list(line.cells)
+            for start_label, end_label in PERIOD_LABELS:
+                end = label_end(line.text, start_label)
+                found = find_dates(line.text[end:], styles) if end is not None else []
+                if found and first_day is None:
+                    first_day = (found[0], list(line.cells))
+                end = label_end(line.text, end_label)
+                found = find_dates(line.text[end:], styles) if end is not None else []
+                if found and last_day is None:
+                    last_day = (found[0], list(line.cells))
             end = label_end(line.text, "pay date")
             if end is not None and pay_date is None:
                 found = find_dates(line.text[end:], styles)
                 pay_date = found[0] if found else None
-            for label, slot in (("gross pay", "gross"), ("net pay", "net")):
-                value = _amount(line, label)
-                if value is not None:
-                    if slot == "gross":
-                        gross = value
-                    else:
-                        net = value
-                    section = None
-            value = _amount(line, "total deductions")
-            if value is not None:
-                total, section = value, None
+                if pay_date is not None:
+                    cells["pay_date"] = list(line.cells)
+            columns = period_columns(line)
+            if not find_amounts(line.text):
+                labels = [cell for cell in line.cells if has_letters(cell.text)]
+                over = False
+                row = _values_row(lines, at) if len(labels) >= 2 and not columns else None
+                if row is not None:
+                    for cell in labels:
+                        slot = _slot(cell.text, bare=True)
+                        under = value_under(lines, row - 1, cell) if slot is not None else None
+                        amount = amount_of(under) if under is not None else None
+                        if slot is None or under is None or amount is None:
+                            continue
+                        keep(slot, amount.value, [cell, under])
+                        over = True
+                if over and row is not None:
+                    values.update(range(at + 1, row + 1))
+                    continue
+                started = _blocks(line, columns)
+                if started:
+                    blocks = started
+                elif columns:
+                    blocks = blocks or [_Block(-_EVERYWHERE, _EVERYWHERE, None, [])]
+                    for block in blocks:
+                        block.set_columns(line, columns)
                 continue
-            if norm in ("earnings", "payments"):
-                section = "earnings"
+            matched = False
+            for pair in label_pairs(line):
+                slot = _slot(pair.label.text, bare=bool(pair.amounts))
+                figure = _figure(pair, line, blocks) if slot is not None else None
+                if slot is None or figure is None:
+                    continue
+                keep(slot, figure[1], [pair.label, figure[0]])
+                matched = True
+            if not matched and not any(block.columns for block in blocks):
+                # A word between the label and its figure (``Gross pay USD 4,250.00``).
+                for slot, wordings in _SLOT_LABELS:
+                    if is_year_to_date(line.text):
+                        break
+                    value = next(
+                        (v for v in (_amount(line, label) for label in wordings) if v is not None),
+                        None,
+                    )
+                    if value is not None:
+                        keep(slot, value, list(line.cells))
+                        matched = True
+            if matched:
                 continue
-            if norm == "deductions":
-                section = "deductions"
-                continue
-            if section is not None and len(line.cells) >= 2:
-                amounts = find_amounts(line.cells[-1].text)
-                label = " ".join(c.text for c in line.cells[:-1]).strip()
-                if amounts and label:
-                    target = earnings if section == "earnings" else deductions
-                    target.append(PayslipLine(label=label[:200], amount=abs(amounts[0].value)))
+            for block in blocks:
+                item = _item(line, block) if block.section is not None else None
+                if item is None:
+                    continue
+                target = earnings if block.section == "earnings" else deductions
+                target.append(PayslipLine(label=item[0], amount=item[1]))
+                if block.section == "deductions":
+                    deduction_cells.extend(item[2])
+        if (
+            period is None
+            and first_day is not None
+            and last_day is not None
+            and first_day[0] <= last_day[0]
+        ):
+            period = (first_day[0], last_day[0])
+            cells["period"] = [*first_day[1], *last_day[1]]
+        gross, net, total = figures.get("gross"), figures.get("net"), figures.get("deductions")
         if total is None and deductions:
             total = sum_amounts(d.amount for d in deductions)
+            cells["deductions"] = deduction_cells
         adds_up: bool | None = None
         if gross is not None and net is not None and total is not None:
             adds_up = abs(gross - total - net) <= TOLERANCE
@@ -160,9 +535,11 @@ class PayslipParser(DocumentParser):
             "net": money if net is not None else conf.MISSING,
             "deductions": money if total is not None else conf.MISSING,
         }
-        ocr = [c for line in view.lines for c in [line.conf] if c is not None]
-        if ocr:
-            scores = {k: conf.scaled(v, min(ocr)) for k, v in scores.items()}
+        scores = conf.scaled_fields(
+            scores,
+            {name: [c.conf for c in read] for name, read in cells.items()},
+            confirmed=("gross", "net", "deductions") if adds_up else (),
+        )
         outcome.payslip = Payslip(
             employer=employer,
             period_start=period[0] if period else None,

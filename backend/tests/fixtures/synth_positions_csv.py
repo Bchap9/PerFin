@@ -16,6 +16,12 @@ person appears, and nothing is read from outside this module.
 * :class:`Holding` / :class:`PositionsAccount` - what an account holds.
 * :func:`positions_csv_bytes` - the file itself (CRLF, UTF-8).
 * :func:`two_accounts` - a taxable account and a Roth IRA with a few funds.
+* :func:`broker_positions_csv` / :func:`broker_all_accounts_positions_csv` -
+  another broker's shape: a title line naming the account and the moment of
+  the download, no account column, a ``Cash & Cash Investments`` row, an
+  ``Account Total`` row and a trailing comma on every line; the second prints
+  one such block per account, each under a line naming it (``one_header``:
+  the header row once, above the first block only).
 """
 
 from __future__ import annotations
@@ -203,3 +209,119 @@ def two_accounts() -> tuple[PositionsAccount, PositionsAccount]:
         PositionsAccount("Z40001111", "Individual", (GROWTH, BOND), Decimal("1000.75")),
         PositionsAccount("240002222", "ROTH IRA", (VALUE,), Decimal("25.00")),
     )
+
+
+# ---------------------------------------------------------------------------
+# Another broker's shape: a title, no account column, cash and total rows
+# ---------------------------------------------------------------------------
+
+BROKER_HEADER: Final = ("Symbol", "Description", "Quantity", "Price", "Market Value", "Cost Basis")
+BROKER_CASH: Final = "Cash & Cash Investments"
+BROKER_TOTAL: Final = "Account Total"
+BROKER_DAY: Final = date(2026, 11, 6)
+_BROKER_MOMENT: Final = "09:30 AM ET, 11/06/2026"
+
+
+@dataclass(frozen=True)
+class BrokerBlock:
+    """One account of the export: the line naming it, its holdings, cash and printed total."""
+
+    name: str
+    last4: str
+    holdings: tuple[Holding, ...]
+    cash: Decimal
+    #: The ``Account Total`` the export prints (None: holdings plus cash).
+    printed_total: Decimal | None = None
+
+    @property
+    def title(self) -> str:
+        return f"{self.name} ...{self.last4}"
+
+    @property
+    def total(self) -> Decimal:
+        if self.printed_total is not None:
+            return self.printed_total
+        return sum((h.value for h in self.holdings), self.cash)
+
+
+BROKER_INDIVIDUAL: Final = BrokerBlock(
+    "Individual",
+    "4417",
+    (
+        Holding(
+            "SGRX",
+            "SYNTHETIC GROWTH INDEX FUND",
+            Decimal("10"),
+            Decimal("52.10"),
+            Decimal("480.00"),
+        ),
+        Holding(
+            "SBND", "SYNTHETIC TOTAL BOND FUND", Decimal("20"), Decimal("24.05"), Decimal("470.00")
+        ),
+    ),
+    Decimal("298.00"),
+)
+BROKER_ROTH: Final = BrokerBlock(
+    "Roth IRA",
+    "8820",
+    (
+        Holding(
+            "SVAL", "SYNTHETIC VALUE INDEX ETF", Decimal("5"), Decimal("80.00"), Decimal("360.00")
+        ),
+        Holding(
+            "SGRX", "SYNTHETIC GROWTH INDEX FUND", Decimal("4"), Decimal("52.10"), Decimal("200.00")
+        ),
+    ),
+    Decimal("41.60"),
+)
+
+
+def _broker_rows(block: BrokerBlock, *, header: bool = True) -> list[list[str]]:
+    """The header, the holdings, the cash row and the total row of one block."""
+    rows = [list(BROKER_HEADER)] if header else []
+    rows += [
+        [
+            h.symbol,
+            h.name,
+            f"{h.quantity:f}",
+            money(h.price),
+            money(h.value),
+            money(h.cost) if h.cost is not None else "--",
+        ]
+        for h in block.holdings
+    ]
+    rows.append([BROKER_CASH, "--", "--", "--", money(block.cash), "--"])
+    rows.append([BROKER_TOTAL, "--", "--", "--", money(block.total), "--"])
+    return rows
+
+
+def _broker_bytes(lines: Sequence[Sequence[str]]) -> bytes:
+    """CRLF lines, every one ending in a comma (as the export writes them)."""
+    text = "".join(",".join(_quote(c) for c in line) + ",\r\n" for line in lines)
+    return text.encode("utf-8")
+
+
+def broker_positions_csv(*, total: Decimal | None = None) -> bytes:
+    """One account: its title line, then its block (``total``: the printed total)."""
+    block = BROKER_INDIVIDUAL
+    if total is not None:
+        block = BrokerBlock(block.name, block.last4, block.holdings, block.cash, total)
+    title = f"Positions for account {block.title} as of {_BROKER_MOMENT}"
+    return _broker_bytes([[title], [], *_broker_rows(block)])
+
+
+def broker_all_accounts_positions_csv(
+    blocks: Sequence[BrokerBlock] = (BROKER_INDIVIDUAL, BROKER_ROTH),
+    *,
+    one_header: bool = False,
+) -> bytes:
+    """Every account: a title, then per account a line naming it and its block.
+
+    ``one_header``: the header row is printed under the first account's line
+    only, so nothing but the lines naming the accounts keeps them apart.
+    """
+    lines: list[Sequence[str]] = [[f"Positions for All-Accounts as of {_BROKER_MOMENT}"], []]
+    for index, block in enumerate(blocks):
+        rows = _broker_rows(block, header=index == 0 or not one_header)
+        lines += [[block.title], *rows, []]
+    return _broker_bytes(lines)

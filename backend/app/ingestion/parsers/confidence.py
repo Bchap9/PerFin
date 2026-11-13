@@ -19,7 +19,10 @@ knows about how it read the value:
 * an amount confirmed by the running balance: 1.0 whatever the other
   factors; contradicted by it: :data:`CONTRADICTED`;
 * OCR: multiplied by the lowest Tesseract word confidence of the cell
-  (0..100 scaled to 0..1);
+  (0..100 scaled to 0..1). A field of a labelled document (a payslip, a
+  loan statement) is scaled by the cells its label and value were read
+  from, never by a word elsewhere on the page, and a figure a passing
+  check confirmed keeps its score (:func:`scaled_fields`);
 * a statement that does not reconcile: every row capped at
   :data:`UNRECONCILED`; one that cannot be checked: :data:`UNCHECKED`.
 * a row whose kind the optional local model suggested
@@ -29,7 +32,7 @@ knows about how it read the value:
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Collection, Iterable, Mapping
 from typing import Final
 
 DEFAULT_THRESHOLD: Final = 0.85
@@ -50,6 +53,26 @@ def scaled(base: float, ocr: float | None) -> float:
     """``base`` lowered by an OCR confidence (0..1), rounded to 4 places."""
     value = base if ocr is None else base * max(0.0, min(1.0, ocr))
     return round(max(0.0, min(1.0, value)), 4)
+
+
+def scaled_fields(
+    scores: Mapping[str, float],
+    ocr: Mapping[str, Iterable[float | None]],
+    *,
+    confirmed: Collection[str] = (),
+) -> dict[str, float]:
+    """``scores`` with each field lowered by the OCR confidence of its own cells.
+
+    ``ocr`` gives, per field, the confidences (0..1) of the cells its label
+    and value were read from; the lowest one scales the field. A field in
+    ``confirmed`` (a check proved its value) keeps its score. A field with
+    no entry, or only ``None`` values (a text layer), is unchanged.
+    """
+    out: dict[str, float] = {}
+    for name, score in scores.items():
+        known = [] if name in confirmed else [c for c in ocr.get(name, ()) if c is not None]
+        out[name] = scaled(score, min(known)) if known else score
+    return out
 
 
 def low_fields(fields: Mapping[str, float], threshold: float) -> list[str]:

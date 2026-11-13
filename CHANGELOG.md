@@ -64,6 +64,33 @@ What remains (details in docs/ROADMAP.md):
   remembered for the document, so they can be answered one after the
   other. A payee or category column never splits a file.
 
+- **A 401(k) plan statement records the plan's balance** (INGESTION.md
+  "Retirement plan statements"). A quarterly plan statement in the
+  roll-forward layout (one row of dollars per fund under `Beginning
+  Balance`, the period's changes and `Ending Balance`, with a `Total` row)
+  had no reader. It now gives the retirement account its ending balance on
+  the period's last day, and its beginning balance on the day before the
+  period, when beginning plus the changes is ending on the total row and on
+  every fund row. It writes no holdings and no transactions: the statement
+  prints dollars, not units. One that does not add up, prints no period or
+  prints one that reads two ways records nothing and waits in review
+  (`plan_statement_does_not_add_up`); a document of several plans is not
+  read. Where funds are printed in groups, the plan's total is the last
+  total row, not a group's. A statement that also prints a year-to-date
+  table records its ending balance and no beginning balance. A cash
+  account's statement with the same summary header over dated
+  transactions is still read as a statement of transactions.
+- **The SSA-1099 is read** (INGESTION.md "Composite statements and the
+  SSA-1099"). The US form set gains the Social Security benefit
+  statement: boxes 3 to 6 are stored for the tax year; boxes 1, 2, 7 and
+  8 identify the beneficiary and are never read, and the form has no
+  issuer name.
+- **Options in brokerage activity exports.** A symbol cell that names an
+  option (`ROOT MM/DD/YYYY STRIKE C|P`, or the OCC form) is read as that
+  option, priced per contract. An `Expired` or `Assigned` row closes what
+  the account's other rows leave open; one that closes nothing the export
+  opened is counted as unread, never read as a trade.
+
 ### Changed
 
 - **A file's sign is proven or the file waits** (INGESTION.md "The sign is
@@ -119,8 +146,9 @@ What remains (details in docs/ROADMAP.md):
   review item the mapping editor answers.
 - **Bank and card PDF statements are read by new rules** (INGESTION.md
   "Parse", "Bank and card statement layouts"; `statement_generic` and
-  `card_statement_generic` are version 7, the institution parsers
-  version 5). The entries below and under "Fixed" say what changed. A
+  `card_statement_generic` were version 7 with these rules, the
+  institution parsers version 5; see "Parser versions" below for the
+  current ones). The entries below and under "Fixed" say what changed. A
   document already stored keeps the rows it was imported with; "Process
   again" reads it with the current rules, so its rows, its period and
   whether it waits in review may differ from the first reading.
@@ -160,6 +188,67 @@ What remains (details in docs/ROADMAP.md):
 - For parser authors: `section_titles` (a title's direction per account
   kind and its row type, `SectionRule`) replaces the `sections` type map
   of `TableStatementParser`.
+- **A bill or a long document is never a receipt** (INGESTION.md
+  "Receipts"). A two-page auto-loan bill with "Total amount due" and a
+  four-page statement with "Total" lines were filed as receipts. The
+  receipt parser now scores nothing for a document of more than two pages
+  or one that prints a loan, mortgage or investment-statement phrase, and
+  a two-page document with no receipt word is a receipt only when the
+  classifier says so.
+- **A holding nothing vouches for waits** (INGESTION.md "Brokerage
+  statements"). With the receipt parser out of the way, a year-end tax
+  form explainer that shows an account's one fund in a table was read by
+  the generic brokerage parser and imported as a holding: quantity x
+  price = value held, and that was the only check. On a PDF or image that
+  prints no statement period, that check, and a holdings total under a
+  single position, no longer make a statement `ok`. It is `unavailable`,
+  its rows wait under `investment_low_confidence`, and a person may
+  import them as read. A statement with a printed period, or with cash,
+  an account value or the total of several positions that agrees, is
+  read as before; OFX and CSV exports are not affected. No parser
+  version moves beyond those listed under "Parser versions".
+- **Loan bills are loan documents, and a statement with no payment is
+  filed.** An auto or personal loan bill is recognised by its labels over
+  all pages (one of them about the principal); its `Payment Allocation`
+  block is the payment. A statement that reports no payment in its
+  period and whose amount due adds up is filed with its balance on the
+  statement date instead of waiting in review. A bill that lists several
+  loans is recognised and not read. Nor is a document of more than six
+  pages (a servicing guide, a report with sample statements): a sample
+  that adds up could have been recorded as a payment on a matching loan.
+  It waits as `loan_unreadable` (warning `loan_document_too_long`).
+- **A written option stays out of the holdings.** An export or OFX file
+  that sells an option the account did not hold (sold to open) is not a
+  sale of units the lot engine can book. Everything else of the
+  statement now imports; the option's lines while it is short are left
+  out and a review item says which ("Written option left out"). The sale
+  that closes a long option bought earlier is kept. A plain sale of
+  shares bought before the export's first row still opens at an unknown
+  cost basis.
+- **A receipt, payslip, tax form or loan document that could not be read
+  says so** (INGESTION.md "Review queue"). Such a document used to wait
+  as "no records", "no rows" or with the column mapper offered for a box
+  of labels. It now waits with its own reason (`receipt_unreadable`,
+  `payslip_unreadable`, `tax_form_unreadable`, `loan_unreadable`) and
+  copy that says what to do, and its page tables are never offered for
+  column mapping.
+- **Parser versions.** The rules below change what the same pages read
+  as, so `document.parser_version` moves: `receipt_basic/2`,
+  `tax_forms/2`, `payslip_basic/2`, `loan_statement_generic/2`,
+  `brokerage_activity_table/2`, `brokerage_positions_table/2`,
+  `brokerage_statement_generic/9`, `placeholder_brokerage/7`,
+  `fidelity_investments_statement/8`, `layout_template/3` (a taught
+  layout), `statement_generic/8`, `card_statement_generic/8`, the
+  institution parsers `/6` and the OFX extractor `ofx/3`. Two causes
+  reach further than the entries that name them. The amount reader all
+  PDF and image parsers share now also reads a `DB` marker and a
+  currency symbol or sign printed apart from its figure, so a payslip,
+  loan statement, receipt, tax form, brokerage statement or taught
+  layout can read an amount it used to miss. And a currency is taken
+  from the page only when it is an ISO code PerFin knows, bank and card
+  statements included. A stored document of any of these kinds keeps
+  what it read; "Process again" reads it with the current rules, which
+  can change its figures, its rows and whether it waits in review.
 
 ### Fixed
 
@@ -297,6 +386,88 @@ What remains (details in docs/ROADMAP.md):
   carries a figure (`Dividends Paid YTD: 4.12`) or starts with the
   share's number (`ID 0040 - SHARE DRAFT`); a member statement of three
   shares is read as three accounts.
+- **Brokers' action words type their rows** (INGESTION.md "Brokerage
+  statements"). Abbreviations are written out (`Qual Div`, `Pr Yr Cash
+  Div`, `ADR Mgmt Fee`, `Bank Int`), more fee, interest, dividend and
+  corporate-action phrases are known, and bank and wire movements
+  (`MoneyLink`, `Wire Sent`, `Funds Received`) are deposits or
+  withdrawals by the row's sign, never by a guess. Interest the account
+  pays is a fee. What is left of `Int'l` in a fund's name is not
+  interest, and a non-dividend distribution is not a dividend.
+- **Reinvested dividends, "as of" dates, total lines and the fees column
+  of activity exports.** A reinvestment printed as two rows gives a
+  dividend and a purchase; one printed as a dividend row with units is
+  the purchase. A date cell `10/14/2026 as of 10/10/2026` is its first
+  date. The export's total line is a note, not an unread row. `Fees &
+  Comm` is the fees column.
+- **Month-first dates on a known US broker export are not a guess.** A
+  date column whose days and months are all 12 or less held the file.
+  Under a whole known US broker header, with amounts written dollar-sign
+  first, it is read month first; anything less stays a question.
+- **A cent of slack on quantity times price.** A feed that cuts a
+  holding's value to the cent instead of rounding it failed the position
+  check by a fraction of a cent and held the statement. The check allows
+  one cent on that product; every sum of printed amounts keeps its
+  half-cent tolerance, and a position off by more is still held.
+- **OFX bonds and options.** A bond's price is a percentage of par and an
+  option's is per share of a contract; both were multiplied by the units
+  as they stood, so the position check failed. A debt position or trade
+  is read per 100 and an option per contract (`SHPERCTRCT`, 100 by
+  default) when that reading is nearer to the value the file prints. No
+  other kind of security is rescaled.
+- **Positions exports with cash rows, total rows and one block per
+  account** (INGESTION.md "Brokerage positions exports"). A symbol cell
+  that starts with "Cash" is the account's cash; a total row is the
+  account's printed total and is checked against holdings plus cash, not
+  read as a holding; without an account-number column each repeated
+  header or account line starts a new account. Where the file does not
+  say whose rows are whose, the statement names no account and the
+  importer asks.
+- **A scanned payslip or loan statement is scored field by field.** One
+  garbled word elsewhere on the page lowered every field to its
+  confidence. Each field is now scaled by the cells it was read from, and
+  figures a check proved keep their score.
+- **Payslips with current and year-to-date columns** (INGESTION.md
+  "Parse"). Gross, deductions and net come from the period's column,
+  never the year-to-date one; pay and deductions printed side by side,
+  labels printed over their values, `Period Beginning` / `Period Ending`
+  and the name under an `EMPLOYER` heading are read, and a deductions
+  total that is not printed is the sum of its lines.
+- **Mortgage statements never record a year-to-date figure as a payment**
+  (INGESTION.md "Loan statements"). A monthly statement prints the split
+  for the next payment, for last month and for the year so far, and the
+  last figure on the line was taken. It is now read by section and by
+  column: the payment is last month's, dated by its row of the activity
+  table; the balance is the printed outstanding principal; the next
+  payment's split is only checked; a column that cannot be told is left
+  unread and the statement waits.
+- **Composite 1099 statements.** Forms headed by the year and the type
+  with no word "Form", two forms printed side by side, a box id printed
+  apart from its label and labels joined to their amounts by dot leaders
+  are read; a contents line or a sentence naming forms heads nothing, and
+  a box marked `NONE` takes no amount from the line below.
+- **A receipt's date beside an expiry date is kept.** A line that also
+  printed an expiry or return-by date gave no date. The purchase date is
+  kept where a date label or a time marks it; a date nothing marks is
+  still left out.
+- **Receipt labels take the nearest amount line.** On a receipt whose
+  amounts were read half a line above their labels, the subtotal was
+  stored as the tax. A label without an amount now tries the line below,
+  the nearest amount-only line and the line above, and keeps the first
+  reading whose figures add up; an item's price is never taken for a tax
+  or a total.
+- **A savings line is not added back into a derived tax or subtotal.**
+  A receipt that printed "you saved 20.98" under a subtotal equal to its
+  total got a tax of 20.98, and one whose items and tax added up to the
+  total got a subtotal raised by the saving. A derived figure now allows
+  for the tip and the discount only when the sum that added up used
+  them; when nothing adds up, a figure derived through a tip or a
+  discount is marked low confidence.
+- **A currency is an ISO code PerFin knows.** The word after "currency"
+  was taken as the currency whatever it was (`currency for the period`
+  gave `FOR`). It is read only when printed as three capital letters that
+  are an active ISO 4217 code; in activity and positions exports a filled
+  currency cell that is not one makes its row unreadable.
 
 ## [1.0.0-rc.8] - 2026-11-12
 

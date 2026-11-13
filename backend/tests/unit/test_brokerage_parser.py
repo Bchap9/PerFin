@@ -9,6 +9,7 @@ parsed with the classifier's hint, as the worker does.
 
 from __future__ import annotations
 
+from dataclasses import replace
 from datetime import date
 from decimal import Decimal
 
@@ -19,8 +20,13 @@ from app.ingestion.extract.common import ExtractFailure
 from app.ingestion.extract.ofx import extract_ofx
 from app.ingestion.extract.pdf import extract_pdf
 from app.ingestion.parsers import confidence
+from app.ingestion.parsers.base import Cell, DocumentView, ViewLine
 from app.ingestion.parsers.brokerage import (
+    ACTIVITY_TYPES,
+    BrokerageStatementParser,
     activity_type,
+    expand_action,
+    option_symbol,
     read_number,
     reconcile_investment,
     split_ratio,
@@ -163,6 +169,32 @@ def test_unknown_broker_is_read_by_the_generic_parser() -> None:
     for row in statement.activity:
         assert row.confidence == confidence.GENERIC
         assert row.low_confidence == []
+
+
+@pytest.mark.parametrize(
+    "added",
+    ["Currency Forward Contracts", "currency for the period", "Currency: XQZ", "Currency: usd"],
+)
+def test_a_word_after_currency_is_not_the_accounts_currency(added: str) -> None:
+    extracted = extract_pdf(synth.placeholder_pdf(synth.brokerage_statement()), OPTIONS, "pdf")
+    view = DocumentView.from_result(extracted)
+    parser = BrokerageStatementParser()
+    alone = parser.parse(view, threshold=0.85).investments
+    assert [s.account.currency for s in alone] == [None]  # the pages print no currency
+
+    # The same pages with one more line above the rest.
+    top = min(line.bbox[1] for line in view.lines if line.page == 1)
+    extra = ViewLine(
+        page=1,
+        index=0,
+        cells=(Cell(added, 40.0, top - 20.0, 40.0 + 6.0 * len(added), top - 10.0),),
+        text=added,
+        height=10.0,
+    )
+    lines = (extra, *(replace(line, index=line.index + 1) for line in view.lines))
+    found = parser.parse(replace(view, lines=lines), threshold=0.85).investments
+    assert [s.account.currency for s in found] == [None]
+    assert [len(s.activity) for s in found] == [len(s.activity) for s in alone]
 
 
 @pytest.mark.parametrize(
@@ -375,6 +407,71 @@ def test_position_tolerance_follows_the_printed_price_precision() -> None:
     assert check.position_mismatches == [0]
 
 
+def test_a_value_cut_to_the_cent_agrees() -> None:
+    # 41.263 x 19.87 = 819.89581: a feed that cuts the value to the cent prints 819.89.
+    cut = InvestmentStatement(
+        source_format="ofx", positions=[_position("41.263", "19.8700000", "819.89")]
+    )
+    check = reconcile_investment(cut)
+    assert check.status == "ok"
+    assert check.position_mismatches == []
+
+
+def test_more_than_a_cent_is_still_a_mismatch() -> None:
+    off = InvestmentStatement(
+        source_format="ofx", positions=[_position("41.263", "19.8700000", "819.87")]
+    )
+    check = reconcile_investment(off)
+    assert check.status == "mismatch"
+    assert check.position_mismatches == [0]
+
+
+@pytest.mark.parametrize(
+    ("value", "status"),
+    [
+        # 10 x 1.2349900 = 12.3499: 0.99 of a cent under it agrees, 1.99 cents does not.
+        ("12.34", "ok"),
+        ("12.33", "mismatch"),
+        # Over it: 1.01 cents agrees with nothing either.
+        ("12.37", "mismatch"),
+        # 41.263 x 19.87 = 819.89581: 1.58 cents under it.
+        ("819.88", "mismatch"),
+    ],
+)
+def test_the_slack_on_quantity_times_price_is_one_cent(value: str, status: str) -> None:
+    position = (
+        _position("41.263", "19.8700000", value)
+        if value.startswith("8")
+        else _position("10", "1.2349900", value)
+    )
+    check = reconcile_investment(InvestmentStatement(source_format="ofx", positions=[position]))
+    assert check.status == status
+
+
+@pytest.mark.parametrize(
+    "text",
+    ["Int Charged", "Interest Charged", "Int On Debit Balance", "Interest on Debit Balance"],
+)
+def test_interest_the_account_is_charged_is_a_fee(text: str) -> None:
+    assert activity_type(text) == "fee"
+
+
+@pytest.mark.parametrize(
+    ("text", "kind"),
+    [
+        ("Int", "interest"),
+        ("Div", "dividend"),
+        ("Int Adj", "interest"),
+        ("Int Income", "interest"),
+        ("Div Adjustment", "dividend"),
+        ("Div Reinvest", "dividend"),
+        ("Div Received", "dividend"),
+    ],
+)
+def test_a_leading_abbreviation_before_an_action_word_is_expanded(text: str, kind: str) -> None:
+    assert activity_type(text) == kind
+
+
 def test_nothing_to_check_is_unavailable() -> None:
     statement = InvestmentStatement(
         source_format="ofx",
@@ -431,3 +528,104 @@ def test_activity_words_and_split_ratios() -> None:
     assert split_ratio("PBXB 3-for-1 stock split") == (Decimal(3), Decimal(1))
     assert split_ratio("reverse split 1:10") == (Decimal(1), Decimal(10))
     assert split_ratio("split") is None
+
+
+@pytest.mark.parametrize(
+    ("text", "kind"),
+    [
+        ("Pr Yr Cash Div", "dividend"),
+        ("Special Non Qual Div", "dividend"),
+        ("Non-Qualified Div", "dividend"),
+        ("Qual Div Reinvest", "dividend"),
+        ("MUNI EXEMPT INT EXAMPLE CITY BONDS", "interest"),
+        ("Long Term Cap Gain", "dividend"),
+        ("ADR Mgmt Fee", "fee"),
+        ("Service Fee", "fee"),
+        ("NRA Withholding", "fee"),
+        ("Bank Interest", "interest"),
+        ("Payment in Lieu", "dividend"),
+        ("Spin-off", "corporate_action"),
+    ],
+)
+def test_abbreviated_actions_are_expanded(text: str, kind: str) -> None:
+    assert activity_type(text) == kind
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "MoneyLink Transfer",
+        "MoneyLink Deposit",
+        "Wire Sent",
+        "Wire Received",
+        "Internal Transfer",
+        "Funds Received",
+    ],
+)
+def test_cash_movements_take_their_direction_from_the_amount(text: str) -> None:
+    assert activity_type(text, cash_sign=1) == "deposit"
+    assert activity_type(text, cash_sign=-1) == "withdrawal"
+    assert activity_type(text, cash_sign=0) is None
+
+
+def test_security_transfer_moves_units_by_sign() -> None:
+    assert activity_type("Security Transfer", moves_security=True, units_sign=-1) == "transfer_out"
+    assert activity_type("Security Transfer", moves_security=True, units_sign=1) == "transfer_in"
+
+
+def test_expansion_leaves_known_phrases_alone() -> None:
+    for key, kind in ACTIVITY_TYPES.items():
+        assert activity_type(key) == kind, key
+    assert activity_type("REINVESTMENT EXAMPLE FUND (EXMPL) (Cash)") == "reinvest"
+    assert expand_action("interest earned") == "interest earned"
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        # A fund's name standing in the action column names no action.
+        "Int'l Example Equity Fund",
+        "Example Mid Cap Fund",
+        # Not income: a distribution that is no dividend is not typed as one.
+        "Non Dividend Distribution",
+        # A qualifier with no dividend after it drops nothing.
+        "Prior Year Adjustment",
+        "Pr Example Holdings",
+        "Special Example Fund",
+        # A name that starts with what could be an abbreviation is still a name.
+        "Int Business Example Corp",
+        "Div Example Fund",
+        "Divs Example Holdings",
+    ],
+)
+def test_expansion_types_nothing_it_cannot_name(text: str) -> None:
+    assert activity_type(text) is None
+
+
+@pytest.mark.parametrize(
+    ("text", "symbol"),
+    [
+        ("ZZOP 03/20/2026 45.00 C", "ZZOP260320C00045000"),
+        ("ZZOP 260320C00045000", "ZZOP260320C00045000"),
+        ("ZZOP260320C00045000", "ZZOP260320C00045000"),
+        ("ZZOP 06/19/2026 7.50 P", "ZZOP260619P00007500"),
+        ("zzop 3/20/2026 45 c", "ZZOP260320C00045000"),
+        ("ZZOP 03/20/2026 0.125 P", "ZZOP260320P00000125"),
+        # A date that does not exist, a plain ticker, a name: no option.
+        ("ZZOP 02/30/2026 45.00 C", None),
+        ("ZZOP 261320C00045000", None),
+        ("ZZOP 03/20/2026 45.0001 C", None),
+        ("ZZOP 03/20/2026 0 C", None),
+        ("ZZOPQRS 03/20/2026 45.00 C", None),
+        ("ZZOP 03/20/2026 45.00 X", None),
+        ("SGRX", None),
+        ("SYNTHETIC GROWTH FUND", None),
+        ("", None),
+    ],
+)
+def test_option_symbol_forms(text: str, symbol: str | None) -> None:
+    assert option_symbol(text) == symbol
+    if symbol is not None:
+        # The OCC form always fits the statement's symbol field.
+        assert SecurityRef(symbol=symbol, asset_class="option").symbol == symbol
+        assert len(symbol) <= 21

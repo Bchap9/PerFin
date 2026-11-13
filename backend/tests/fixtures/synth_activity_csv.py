@@ -35,6 +35,12 @@ Two uses:
 * :func:`activity_accounts` - the synthetic accounts of a seed.
 * :func:`activity_rows` / :func:`investment_rows` - the rows (dataclasses).
 * :func:`activity_csv_bytes` - the file itself (CRLF, UTF-8).
+* :func:`broker_activity_csv` - a second broker's shape (:data:`BROKER_HEADER`):
+  one account per file under a one-cell title line, every cell quoted, money
+  written ``$1,234.56`` / ``-$1,234.56`` (:func:`broker_money`), fees and
+  commission in one ``Fees & Comm`` column and a ``Transactions Total`` line
+  after the rows. Its rows are given cell by cell, so a test writes exactly
+  the wording it pins (``Reinvest Dividend``, ``10/14/2026 as of 10/10/2026``).
 """
 
 from __future__ import annotations
@@ -498,4 +504,50 @@ def activity_csv_bytes(
     lines += [",".join(_quote(c) for c in _cells(row)) for row in rows]
     lines += ["", *(_quote(text) for text in DISCLAIMERS), ""]
     lines.append(_quote(f"Date downloaded {downloaded.strftime('%m/%d/%Y')} 10:04 am"))
+    return ("\r\n".join(lines) + "\r\n").encode("utf-8")
+
+
+#: The header of the second broker shape (one account per file, no account column).
+BROKER_HEADER: Final = (
+    "Date",
+    "Action",
+    "Symbol",
+    "Description",
+    "Quantity",
+    "Price",
+    "Fees & Comm",
+    "Amount",
+)
+#: The one-cell line such an export prints above its header (invented).
+BROKER_TITLE: Final = (
+    "Transactions for account Synthetic Taxable ...4821 as of 11/02/2026 10:04:00 ET"
+)
+
+
+def broker_money(value: Decimal) -> str:
+    """``$1,234.56`` / ``-$1,234.56``: how the second broker shape writes money."""
+    return f"{'-' if value < 0 else ''}${abs(value):,.2f}"
+
+
+def _quoted(cells: Sequence[str]) -> str:
+    return ",".join('"' + cell.replace('"', '""') + '"' for cell in cells)
+
+
+def broker_activity_csv(
+    rows: Sequence[Sequence[str]], *, title: bool = True, total: str | None = None
+) -> bytes:
+    """The export of :data:`BROKER_HEADER`: title line, header, ``rows``, the total line.
+
+    Every cell is quoted and written as given (a caller writes money with
+    :func:`broker_money`). ``total`` adds the last line such an export
+    prints: ``Transactions Total`` and the sum under ``Amount``.
+    """
+    for row in rows:
+        if len(row) != len(BROKER_HEADER):
+            raise ValueError("a broker activity row has one cell per header cell")
+    lines = [_quoted([BROKER_TITLE])] if title else []
+    lines.append(_quoted(BROKER_HEADER))
+    lines += [_quoted(row) for row in rows]
+    if total is not None:
+        lines.append(_quoted(["Transactions Total", *[""] * (len(BROKER_HEADER) - 2), total]))
     return ("\r\n".join(lines) + "\r\n").encode("utf-8")

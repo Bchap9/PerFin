@@ -471,6 +471,60 @@ const COPY: Readonly<Record<string, Copy>> = {
     what: "This file is waiting to be imported.",
     steps: ["Try “Process again”."],
   }),
+  "unparsed:receipt_unreadable": () => ({
+    title: "Receipt could not be read",
+    what: "This looks like a receipt, but PerFin could not read its total.",
+    why: "A faded print, a cut-off photo or a fold over the figures leaves the words and loses the amounts. PerFin never guesses an amount, so nothing was recorded or matched.",
+    steps: [
+      "Open the document (its name above) and look at it.",
+      "If the purchase is already in your transactions, use “Attach to…” on the document's page to keep the receipt with it.",
+      "If you can take a clearer picture (flat, well lit, the whole receipt), upload that one.",
+      "Dismiss this item to keep the document as it is.",
+    ],
+  }),
+  "unparsed:payslip_unreadable": () => ({
+    title: "Payslip could not be read",
+    what: "This looks like a payslip, but PerFin could not read its pay figures.",
+    why: "It found the words of a payslip and no gross or net pay it could trust. PerFin never guesses a figure, so nothing was recorded from it.",
+    steps: [
+      "Open the document (its name above) and look at it.",
+      "If it is a scan or a photo and your payroll service offers the payslip as a PDF download, upload that instead.",
+      "Dismiss this item to keep the document as it is. The pay itself still shows in the account it was paid into once that account's statement is imported.",
+    ],
+  }),
+  "unparsed:tax_form_unreadable": () => ({
+    title: "Tax form could not be read",
+    what: "This looks like a tax form, but PerFin could not read any amount in its boxes.",
+    why: "The form may be blank, a page of instructions, or a scan whose figures did not come through. PerFin never guesses a box, so no amounts were stored for the tax year.",
+    steps: [
+      "Open the document (its name above) and look at it.",
+      "If it is a blank form or instructions, dismiss this item.",
+      "If it is a scan or a photo and the issuer offers the form as a PDF download, upload that instead.",
+      "Otherwise dismiss this item to keep the document as it is. Its amounts are not in PerFin, so read them from the document itself when you file.",
+    ],
+  }),
+  "unparsed:loan_unreadable": (item) =>
+    payloadIds(item, "warnings").includes("loan_bill_several_loans")
+      ? {
+          title: "A bill for several loans",
+          what: "This is a loan bill that lists several loans. PerFin does not read bills like this yet, so nothing was recorded from it.",
+          why: "The bill prints one payment for all its loans together, and PerFin cannot tell which part went to which loan.",
+          steps: [
+            "Open the document (its name above) and look at what was paid on each loan.",
+            "For each loan you track, open it under Loans, go to Payments and use “Record a payment”.",
+            "Dismiss this item once you are done.",
+          ],
+        }
+      : {
+          title: "Loan document could not be read",
+          what: "This looks like a loan statement or bill, but PerFin could not read a payment or a balance from it.",
+          why: "PerFin never guesses a payment's split or a balance, so nothing was recorded from it.",
+          steps: [
+            "Open the document (its name above) and look at it.",
+            "If it reports a payment, open the loan under Loans, go to Payments and use “Record a payment”.",
+            "Dismiss this item once you are done, or if it is a notice with no payment on it.",
+          ],
+        },
   // -- low_confidence_field --------------------------------------------------
   "low_confidence_field:year_assumed": (item) => {
     const year = payloadNumber(item, "year");
@@ -693,6 +747,23 @@ const COPY: Readonly<Record<string, Copy>> = {
       left === 0
         ? ""
         : ` ${left === 1 ? "The 1 trade" : `The ${String(left)} trades`} in ${one ? "that security" : "those securities"} on this statement ${left === 1 ? "was" : "were"} left out with ${one ? "it" : "them"}.`;
+    if (item.payload["from_activity"] === true) {
+      // No position is printed short: the statement's own trades sell an
+      // option the account never held.
+      const lines =
+        left === 0
+          ? "nothing of it was imported"
+          : `${one ? "its" : "their"} ${left === 1 ? "1 trade was" : `${String(left)} trades were`} left out`;
+      return {
+        title: one ? "Written option left out" : "Written options left out",
+        what: `This statement sells ${one ? "an option" : `${String(count)} options`} the account did not hold (${one ? "a written option" : "written options"}). PerFin does not track written options yet, so ${lines}.`,
+        why: "Selling an option that is not held opens a short position, and the list of holdings holds none.",
+        steps: [
+          "The statement's other holdings and activity were imported.",
+          "Dismiss this item once you have seen it.",
+        ],
+      };
+    }
     return {
       title: "Short position not shown",
       what: `This statement lists ${one ? "a short position" : `${String(count)} short positions`} (a negative quantity). PerFin does not track short positions yet, so ${one ? "it is" : "they are"} not among the holdings shown for the account.${trades}`,
@@ -884,6 +955,28 @@ const COPY: Readonly<Record<string, Copy>> = {
       "Check for a missing sale or transfer in the account's activity and add it.",
     ],
   }),
+  "low_confidence_field:plan_statement_does_not_add_up": (item) => {
+    const currency = payloadString(item, "currency");
+    const printed = payloadString(item, "printed");
+    const computed = payloadString(item, "computed");
+    const figures =
+      printed !== null && computed !== null
+        ? ` It prints an ending balance of ${money(printed, currency)}; its figures come to ${money(computed, currency)}.`
+        : "";
+    const checked = payloadString(item, "status") === "mismatch";
+    return {
+      title: "Plan statement not recorded",
+      what: checked
+        ? `This plan statement's beginning balance plus the period's changes is not its ending balance, so no balance was recorded.${figures}`
+        : "This plan statement's ending balance could not be checked against its beginning balance, the period's changes and its dates, so no balance was recorded.",
+      why: "PerFin records a plan's balance only when the statement's own figures confirm it.",
+      steps: [
+        "Compare the totals with the statement (“Show document”).",
+        "Enter the balance on the account yourself if the statement is right.",
+        "Dismiss this item.",
+      ],
+    };
+  },
 };
 
 /** The explanation of an item (falls back to the kind's own words). */

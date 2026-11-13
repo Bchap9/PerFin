@@ -30,12 +30,14 @@ from decimal import ROUND_HALF_UP, Decimal
 from email.message import EmailMessage
 from email.policy import default as default_policy
 from html import escape
-from typing import Final
+from typing import Final, Literal
 
 import numpy as np
 from PIL import Image, ImageDraw, ImageFilter, ImageFont
 from reportlab.lib.pagesizes import A4, letter
 from reportlab.pdfgen import canvas
+
+from app.ingestion.parsers.base import Cell, ViewLine
 
 CENT: Final = Decimal("0.01")
 
@@ -280,6 +282,34 @@ def receipt_text(spec: ReceiptSpec, width: int = 40) -> str:
     return "\n".join(out)
 
 
+def unchecked_receipt_text(spec: ReceiptSpec, width: int = 40) -> str:
+    """The receipt as OCR reads a drifted print, with nothing to check it by.
+
+    No subtotal line; the last item's price and the tax amount are each on
+    the line below their label. The items read no longer add up to anything,
+    so the total is labelled and unchecked, and the amount-only line above
+    the tax label is the last item's price, not the tax.
+    """
+    last_item = max(
+        i for i, row in enumerate(receipt_rows(spec)) if row.left == spec.items[-1].name
+    )
+    out: list[str] = []
+    for index, row in enumerate(receipt_rows(spec)):
+        if row.left == spec.labels["subtotal"]:
+            continue
+        if row.centre:
+            out.append(row.left.center(width).rstrip())
+        elif row.right and (index == last_item or row.left.startswith(spec.labels["tax"])):
+            out += [row.left, row.right.rjust(width)]
+        elif row.right:
+            out.append(
+                f"{row.left}{' ' * max(2, width - len(row.left) - len(row.right))}{row.right}"
+            )
+        else:
+            out.append(row.left)
+    return "\n".join(out)
+
+
 # -- thermal image -------------------------------------------------------------
 
 
@@ -499,3 +529,99 @@ def receipt_html_email(
         maintype, subtype = ctype.split("/", 1)
         msg.add_attachment(data, maintype=maintype, subtype=subtype, filename=name)
     return msg.as_bytes()
+
+
+# -- documents that are not receipts -------------------------------------------
+
+BillKind = Literal["auto_loan", "student_loan", "activity_statement"]
+
+_BILLS: Final[dict[str, str]] = {
+    "auto_loan": """NORTHGATE AUTO CREDIT
+Loan Number ****4417
+Payment Due Date 04/18/2026
+Principal Balance      12,480.55
+Regular payment           412.30
+Late charge                 6.00
+Amount Past Due             0.00
+Total amount due          418.30
+Detach the payment coupon and return it with your payment
+""",
+    "student_loan": """CEDARBROOK EDUCATION LOANS
+Interest bill
+Loan Seq 0003
+Interest Rate 5.25%
+Outstanding Principal    8,930.00
+Interest accrued            38.42
+Total                       38.42
+Thank you for your payment
+""",
+    "activity_statement": """HARBORLIGHT SECURITIES
+Activity Statement
+March 1, 2026 to March 31, 2026
+Starting Cash       1,250.00
+Deposits              400.00
+Commissions             3.50
+Ending Cash         1,646.50
+Net Asset Value    18,204.75
+Total              18,204.75
+""",
+}
+
+
+def bill_text(kind: BillKind) -> str:
+    """A short bill or statement that prints a total and is not a receipt.
+
+    Each has a ``Total`` or ``Total amount due`` line (what the receipt
+    parser looks for) and two or three phrases no till prints (a loan
+    number, a principal balance, starting and ending cash). Lenders, numbers
+    and figures are invented.
+    """
+    return _BILLS[kind]
+
+
+# -- receipts whose amounts OCR put on their own lines -------------------------
+
+LINE_HEIGHT: Final = 10.0
+LINE_PITCH: Final = 20.0
+
+
+def placed_line(index: int, top: float, *texts: str, page: int = 1) -> ViewLine:
+    """One parser line of height :data:`LINE_HEIGHT` whose top edge is at ``top``."""
+    cells = tuple(
+        Cell(
+            text=text,
+            x0=150.0 * position,
+            y0=top,
+            x1=150.0 * position + 80.0,
+            y1=top + LINE_HEIGHT,
+        )
+        for position, text in enumerate(texts)
+    )
+    return ViewLine(page=page, index=index, cells=cells, text=" ".join(texts), height=LINE_HEIGHT)
+
+
+def amounts_above_labels_lines(*, lift: float = 0.5) -> list[ViewLine]:
+    """A receipt whose totals block prints each amount on its own line above its label.
+
+    Curled thermal paper does this to OCR: ``41.20`` sits ``lift`` line
+    heights above ``SUBTOTAL``, ``3.30`` above ``TAX`` and ``44.50`` above
+    ``TOTAL``, the labels :data:`LINE_PITCH` apart. With the default each
+    amount is nearer the label below it (half a line height) than the label
+    above it (one and a half); ``lift=1.0`` puts every amount exactly midway
+    between two labels. The shop and the figures are invented, and the three
+    items add up to the subtotal.
+    """
+    rows: list[tuple[float, tuple[str, ...]]] = [
+        (0.0, ("ALDERWICK PANTRY",)),
+        (LINE_PITCH, ("2026-03-14",)),
+        (2 * LINE_PITCH, ("COFFEE BEANS", "18.40")),
+        (3 * LINE_PITCH, ("OAT MILK", "4.80")),
+        (4 * LINE_PITCH, ("BREAD", "18.00")),
+    ]
+    first_label = 6 * LINE_PITCH
+    totals = (("SUBTOTAL", "41.20"), ("TAX", "3.30"), ("TOTAL", "44.50"))
+    for position, (label, amount) in enumerate(totals):
+        top = first_label + position * LINE_PITCH
+        rows.append((top - lift * LINE_HEIGHT, (amount,)))
+        rows.append((top, (label,)))
+    return [placed_line(index, top, *texts) for index, (top, texts) in enumerate(rows)]

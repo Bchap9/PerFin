@@ -802,10 +802,16 @@ Notes on structured imports (`app/domain/imports/`, Phase 2):
   `investment_figures_differ` (a statement imported whole whose own totals
   disagree: `failed`, `differences`, `sections`; a notice, it does not keep
   the document in `needs_review`),
+  `plan_statement_does_not_add_up` (a 401(k) plan statement whose balance
+  was not recorded: `status`, `failed`, `period_stated`, `printed`,
+  `computed`, `difference`, `currency`; never importable as read),
   `investment_opening_basis_unknown` (`securities`; `costed_at: "price"`
   for a statement's holding opened at its price),
-  `investment_short_position` (`positions`: symbol, name, quantity, value;
-  `lines_left_out`),
+  `investment_short_position` (`positions`: `symbol`, `name`, `quantity`,
+  `market_value`, `page`; `lines_left_out`; `from_activity: true` when no
+  printed position is negative and the statement's own trades write an
+  option, whose `positions` entry then carries its lowest running units
+  with `market_value` and `page` null),
   `position_mismatch` (`securities`: `history`/`reported` units),
   `investment_lot_conflict` (`code`), `investment_out_of_order`
   (`rows`), `investment_same_name_securities` (`names`) and
@@ -840,7 +846,7 @@ household-consistent references):
   `FormDef` per form type; each form lists its boxes (`id`, `label`,
   `kind`: `amount`, `coded_amount`, `text`, `checkbox` or `identity`). `US`
   ships W-2, 1099-INT, 1099-DIV, 1099-B, 1099-MISC, 1099-NEC, 1099-R,
-  1099-G, 1099-SA, 1098, 1098-E, 1098-T and 1095-A/B/C. A new jurisdiction
+  1099-G, 1099-SA, SSA-1099, 1098, 1098-E, 1098-T and 1095-A/B/C. A new jurisdiction
   is a module in that package listed in its `_BUILTIN` (or `register(...)`).
   The service validates `jurisdiction`, `filing_status`, `expected_form` and
   `form_type` against the registry; the database checks their format only.

@@ -15,6 +15,17 @@ Statements come from ``tests/fixtures/synth_loans.py`` (an invented lender).
 * Matching respects grants (F3): a member's statement does not reach a loan
   on an account they cannot edit; no loan at all is ``loan_unmatched``.
 * A printed rate that differs from the loan's raises ``loan_rate_differs``.
+* A periodic statement (next payment, last month, year to date) records last
+  month's payment on the day its activity row says, never another column.
+* A periodic statement that reports no payment in its period is filed: no
+  payment, no review item, its balance kept on the statement date (none when
+  that date is before the loan began). One whose amount due does not add up
+  is still held.
+* A loan bill is a loan document, never a receipt: an auto-loan bill records
+  its payment; a bill listing several loans, which the parser does not read,
+  waits as ``unparsed``/``loan_unreadable`` with the parser's warning.
+* A long document about loan statements (a guide with a sample inside) is
+  not a statement: nothing is recorded on a loan its sample's digits match.
 """
 
 from __future__ import annotations
@@ -44,6 +55,7 @@ from app.domain.documents.models import (
     DocumentStatus,
     ReviewItem,
     ReviewItemState,
+    ReviewKind,
 )
 from app.domain.documents.schemas import INGEST_JOB_TYPE
 from app.domain.loans.models import Loan, LoanPayment
@@ -125,9 +137,9 @@ class Env:
             assert found is not None
             return balance_as_of(db, found, on)
 
-    def loan(self, **kwargs: Any) -> tuple[Account, Loan]:
+    def loan(self, *, last4: str = synth.LAST4, **kwargs: Any) -> tuple[Account, Loan]:
         account = self.ledger.account(
-            self.household_id, type=AccountType.MORTGAGE, number_last4=synth.LAST4, name="Home"
+            self.household_id, type=AccountType.MORTGAGE, number_last4=last4, name="Home"
         )
         terms = synth.TERMS
         fields: dict[str, Any] = {
@@ -245,3 +257,155 @@ def test_rate_that_differs_is_flagged(env: Env) -> None:
     assert document.status is DocumentStatus.NEEDS_REVIEW
     assert env.reasons(document) == {"loan_rate_differs"}
     assert len(env.payments(loan)) == 1
+
+
+def test_periodic_statement_records_last_months_payment(env: Env) -> None:
+    account, loan = env.loan(
+        last4=synth.PERIODIC_LAST4,
+        principal_original="200000.00",
+        rate="0.05",
+        origination_date=date(2021, 6, 1),
+        payment_amount="1172.25",
+        escrow_amount="301.50",
+    )
+    document = env.ingest(synth.periodic_statement_pdf(), "mortgage-2026-03.pdf")
+    assert env.reasons(document) == set()
+    assert document.status is DocumentStatus.PROCESSED
+    assert document.account_id == account.id
+    [payment] = env.payments(loan)
+    assert (payment.paid_on, payment.principal, payment.interest, payment.escrow, payment.fees) == (
+        date(2026, 3, 2),
+        Decimal("410.37"),
+        Decimal("761.88"),
+        Decimal("301.50"),
+        Decimal("0.00"),
+    )
+    assert payment.source_document_id == document.id
+    assert env.balance(account, date(2026, 3, 2)) == Decimal("-182440.17")
+    statement: list[BalanceSnapshot] = env.query(
+        select(BalanceSnapshot).where(
+            BalanceSnapshot.account_id == account.id,
+            BalanceSnapshot.source == BalanceSource.STATEMENT,
+        )
+    )
+    assert [(s.as_of_date, s.balance) for s in statement] == [
+        (date(2026, 3, 2), Decimal("-182440.17"))
+    ]
+
+
+def _periodic_loan(env: Env) -> tuple[Account, Loan]:
+    return env.loan(
+        last4=synth.PERIODIC_LAST4,
+        principal_original="200000.00",
+        rate="0.05",
+        origination_date=date(2021, 6, 1),
+        payment_amount="1172.25",
+        escrow_amount="301.50",
+    )
+
+
+def _statement_snapshots(env: Env, account: Account) -> list[tuple[date, Decimal]]:
+    found: list[BalanceSnapshot] = env.query(
+        select(BalanceSnapshot).where(
+            BalanceSnapshot.account_id == account.id,
+            BalanceSnapshot.source == BalanceSource.STATEMENT,
+        )
+    )
+    return [(s.as_of_date, s.balance) for s in found]
+
+
+def test_statement_without_a_payment_files_the_balance(env: Env) -> None:
+    account, loan = _periodic_loan(env)
+    document = env.ingest(synth.periodic_statement_pdf(variant="no_payment"), "no-payment.pdf")
+    assert env.reasons(document) == set()
+    assert document.status is DocumentStatus.PROCESSED
+    assert document.kind is DocumentKind.STATEMENT
+    assert document.account_id == account.id
+    assert env.payments(loan) == []
+    assert _statement_snapshots(env, account) == [(date(2026, 3, 20), Decimal("-182440.17"))]
+    assert env.balance(account, date(2026, 3, 20)) == Decimal("-182440.17")
+
+
+def test_statement_without_a_payment_that_does_not_add_up_is_held(env: Env) -> None:
+    account, loan = _periodic_loan(env)
+    data = synth.periodic_statement_pdf(variant="no_payment", tamper="due")
+    document = env.ingest(data, "no-payment-tampered.pdf")
+    assert document.status is DocumentStatus.NEEDS_REVIEW
+    assert env.reasons(document) == {"loan_reconciliation_failed"}
+    assert env.payments(loan) == []
+    assert _statement_snapshots(env, account) == []
+
+
+def test_statement_without_a_payment_dated_before_the_loan_keeps_no_balance(env: Env) -> None:
+    # The statement is dated 2026-03-20; a loan that began later has no balance on that day.
+    account, loan = env.loan(
+        last4=synth.PERIODIC_LAST4,
+        principal_original="200000.00",
+        rate="0.05",
+        origination_date=date(2026, 6, 1),
+        payment_amount="1172.25",
+        escrow_amount="301.50",
+    )
+    document = env.ingest(synth.periodic_statement_pdf(variant="no_payment"), "before-loan.pdf")
+    assert env.reasons(document) == set()
+    assert document.status is DocumentStatus.PROCESSED
+    assert document.account_id == account.id
+    assert env.payments(loan) == []
+    assert _statement_snapshots(env, account) == []
+
+
+def _open_items(env: Env, document: Document) -> list[ReviewItem]:
+    items: list[ReviewItem] = env.query(
+        select(ReviewItem).where(ReviewItem.document_id == document.id)
+    )
+    return [item for item in items if item.state is ReviewItemState.OPEN]
+
+
+def test_bill_of_several_loans_says_so(env: Env) -> None:
+    document = env.ingest(synth.student_loan_bill_pdf(), "student-bill.pdf")
+    assert document.status is DocumentStatus.NEEDS_REVIEW
+    [item] = _open_items(env, document)
+    assert item.kind is ReviewKind.UNPARSED
+    assert item.payload["reason"] == "loan_unreadable"
+    assert item.payload["parser"] == "loan_statement_generic"
+    assert "loan_bill_several_loans" in item.payload["warnings"]
+    assert env.query(select(LoanPayment)) == []
+
+
+def test_a_guide_with_a_sample_statement_records_nothing_on_a_matching_loan(env: Env) -> None:
+    """Twelve pages about mortgage statements, one a sample with the loan's own digits."""
+    account, loan = env.loan()
+    (sample,) = synth.loan_series(1)
+    document = env.ingest(synth.loan_guide_pdf(sample, pages=12), "guide.pdf")
+    assert document.status is DocumentStatus.NEEDS_REVIEW
+    [item] = _open_items(env, document)
+    assert item.kind is ReviewKind.UNPARSED
+    assert item.payload["reason"] == "loan_unreadable"
+    assert "loan_document_too_long" in item.payload["warnings"]
+    assert env.payments(loan) == []
+    assert _statement_snapshots(env, account) == []
+
+
+def test_auto_loan_bill_is_a_loan_document_not_a_receipt(env: Env) -> None:
+    account, loan = env.loan(
+        last4=synth.AUTO_LAST4,
+        principal_original="24000.00",
+        rate="0.0549",
+        term_months=60,
+        origination_date=date(2024, 9, 15),
+        payment_amount="455.20",
+        payment_day=15,
+        escrow_amount=None,
+    )
+    document = env.ingest(synth.auto_loan_bill_pdf(), "auto-bill.pdf")
+    assert (document.parser_version or "").startswith("loan_statement_generic/")
+    assert document.kind is DocumentKind.STATEMENT
+    assert document.account_id == account.id
+    [payment] = env.payments(loan)
+    assert (payment.paid_on, payment.principal, payment.interest) == (
+        date(2026, 3, 14),
+        Decimal("371.85"),
+        Decimal("83.35"),
+    )
+    assert all(item.kind is not ReviewKind.RECEIPT_MATCH for item in _open_items(env, document))
+    assert (document.extraction or {}).get("parse", {}).get("receipt") is None

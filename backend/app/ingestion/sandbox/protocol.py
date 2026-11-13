@@ -548,8 +548,16 @@ class InvestmentReconciliation(_Strict):
     holdings + closing cash = the reported account value; ``index_value``
     (a document of several accounts): the account value printed on the
     account's own pages = the one the document's account index prints for
-    it. ``checks`` lists those that could run, ``failed`` those that did not
-    hold.
+    it. A retirement plan statement
+    (``app.ingestion.parsers.plan_statement``) has two of its own:
+    ``roll_forward``: on the total row, beginning balance + the movement
+    columns = ending balance; ``roll_forward_rows``: every fund row adds up
+    the same way and the rows' ending balances add up to the total's.
+    ``checks`` lists those that could run, ``failed`` those that did not
+    hold. ``unavailable``: none could run, or (a document that prints no
+    period) only ``positions`` and a ``holdings_total`` of one position
+    did, which say nothing about the account
+    (``brokerage.vouches_for_account``).
     """
 
     status: Literal["ok", "mismatch", "unavailable"]
@@ -837,7 +845,10 @@ class LoanReconciliation(_Strict):
     """The loan statement checks (SECURITY.md C12; ``app.ingestion.parsers.loan_statement``).
 
     ``parts``: principal + interest + escrow + fees = the total paid;
-    ``balance``: previous principal balance - principal = new balance.
+    ``balance``: previous principal balance - principal = new balance;
+    ``amount_due``: on a periodic statement, the next payment's principal +
+    interest + escrow = the regular payment, and with the fees = the total
+    amount due (the next payment is checked, not kept).
     ``checks`` lists those that could run, ``failed`` those that did not hold.
     """
 

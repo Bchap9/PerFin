@@ -15,6 +15,9 @@ nothing opens or parses the original file (ADR-0006/0009).
   could read offers that table to ``GET /imports/{id}/preview``, the
   mapping editor and the importer; a saved mapping's header fingerprint
   then matches the next PDF of the same layout (a reusable fingerprint).
+  A receipt, payslip, tax form or loan document whose own parser read
+  nothing (:func:`unread_kind`) is not offered: a box of labels on a blank
+  form is no ledger table.
 * **"Remember this layout".** :func:`derive_match` builds the
   :class:`~app.ingestion.classify.fingerprints.MatchSpec` of a household
   fingerprint from the document's header lines and table header: the
@@ -33,7 +36,7 @@ from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
 from datetime import date
 from decimal import Decimal
-from typing import Any, Final
+from typing import Any, Final, Literal
 
 from pydantic import ValidationError
 
@@ -171,10 +174,43 @@ def has_dated_rows(table: Table) -> bool:
     return False
 
 
+UnreadKind = Literal["receipt", "payslip", "tax_form", "loan"]
+#: Parsers of documents that are no ledger statement, by what they read.
+_DOCUMENT_PARSERS: Final[dict[str, UnreadKind]] = {
+    "receipt_basic": "receipt",
+    "payslip_basic": "payslip",
+    "tax_forms": "tax_form",
+    "loan_statement_generic": "loan",
+}
+
+
+def unread_kind(result: ExtractResult) -> UnreadKind | None:
+    """What ``result`` is when its own parser was chosen and read nothing from it.
+
+    The registry chose the receipt, payslip, tax-form or loan parser (it saw
+    that kind of document on the pages) and the parse holds no receipt,
+    payslip, loan or tax form, and the result no statement of any kind: a
+    faded receipt, a blank form, a bill of several loans. None for
+    everything else, also when another parser read the pages after all
+    (the registry's fallback names that one).
+    """
+    info = result.parse
+    if info is None or info.parser is None:
+        return None
+    kind = _DOCUMENT_PARSERS.get(info.parser.name)
+    if kind is None or result.statements or result.investments:
+        return None
+    if info.receipt is not None or info.payslip is not None or info.loan is not None:
+        return None
+    return None if info.tax_forms else kind
+
+
 def _page_tables(result: ExtractResult) -> list[Table] | None:
     """The page tables of a document no parser read (None: it is not such a document)."""
     if result.statements or result.investments or result.tables or not result.pages:
         return None
+    if unread_kind(result) is not None:
+        return None  # a known kind of document, unread: its boxes are no ledger table
     if result.parse is not None and (
         result.parse.receipt is not None or result.parse.payslip is not None
     ):
@@ -187,7 +223,9 @@ def with_layout_tables(result: ExtractResult) -> ExtractResult:
 
     Only for documents with pages (PDF, images) whose parsers produced no
     statement and that carry no structured table; anything else is
-    returned unchanged. A page table without a dated row
+    returned unchanged, and so is a receipt, payslip, tax form or loan
+    document its parser could not read (:func:`unread_kind`). A page table
+    without a dated row
     (:func:`has_dated_rows`) is never offered: there is nothing in it to
     map (:func:`pages_without_rows`).
     """

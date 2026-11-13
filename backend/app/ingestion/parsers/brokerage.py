@@ -8,7 +8,9 @@ Two halves (INGESTION.md "Brokerage statements", SECURITY.md C12):
 
   - **positions**: quantity x unit price = market value for every position
     that prints all three, within half a unit of the price's last printed
-    decimal times the quantity, plus :data:`~app.ingestion.reconcile.TOLERANCE`;
+    decimal times the quantity, plus :data:`PRODUCT_SLACK` (one cent: a feed
+    may cut the product to the cent instead of rounding it). Every sum of
+    printed amounts below keeps :data:`~app.ingestion.reconcile.TOLERANCE`;
   - **holdings_total**: the positions' market values add up to the
     holdings total the statement prints;
   - **cash**: opening cash + the activity's cash effects = closing cash
@@ -25,6 +27,19 @@ Two halves (INGESTION.md "Brokerage statements", SECURITY.md C12):
 
   Status ``mismatch`` when any check fails, ``unavailable`` when none could
   run, else ``ok``.
+
+  **A check that vouches for the account** (:func:`vouches_for_account`;
+  documents only). ``positions`` multiplies each row out on its own, and a
+  ``holdings_total`` over a single position repeats that row: both hold on
+  any table of a quantity, a price and a value, whatever page it is on (a
+  year-end tax form that shows the account's one fund). A page read by
+  :class:`BrokerageStatementParser` that prints no statement period and
+  on which no other check could run is therefore ``unavailable``, not
+  ``ok``: its rows carry the ``reconciliation`` doubt and wait for a person
+  like those of any document with nothing to check against. A printed
+  period, or any figure about the account as a whole that agrees (the
+  holdings total of several positions, the cash, the account value), keeps
+  it ``ok`` as before.
 
 * :func:`section_checks` and :func:`localise` say **where** a failed check
   comes from, from what the statement prints about itself: the ``Total
@@ -235,6 +250,7 @@ from app.ingestion.parsers.base import (
     join_cells,
 )
 from app.ingestion.parsers.blocks import unfold_blocks
+from app.ingestion.parsers.currency import stated_currency
 from app.ingestion.parsers.table_statement import (
     PeriodCandidates,
     PeriodRead,
@@ -301,6 +317,11 @@ from app.ingestion.sandbox.protocol import (
 # ---------------------------------------------------------------------------
 
 
+#: What a printed market value may differ from quantity x price by, beyond the
+#: price's own rounding: a value cut (not rounded) to the cent is up to a cent off.
+PRODUCT_SLACK: Final = Decimal("0.01")
+
+
 def _price_unit(price: Decimal) -> Decimal:
     """Half a unit of the last decimal the price was given with."""
     exponent = price.as_tuple().exponent
@@ -321,7 +342,7 @@ def position_value(position: InvestmentPosition) -> Decimal | None:
 def _position_agrees(quantity: Decimal, price: Decimal, value: Decimal, scale: int) -> bool:
     """quantity x price / ``scale`` = value, within the price's rounding (module doc)."""
     expected = quantity * price / scale
-    allowed = TOLERANCE + abs(quantity) * _price_unit(price) / scale
+    allowed = PRODUCT_SLACK + abs(quantity) * _price_unit(price) / scale
     return abs(expected - value) <= allowed
 
 
@@ -427,7 +448,6 @@ _SYMBOL: Final = re.compile(r"[A-Z][A-Z0-9.]{0,9}")
 _PAREN_SYMBOL: Final = re.compile(r"\(([A-Z][A-Z0-9.]{0,9})\)")
 _CUSIP: Final = re.compile(r"[0-9A-Z]{8}[0-9]")
 _RATIO: Final = re.compile(r"\b(\d{1,6})(?:\s?-?\s?for\s?-?\s?|\s?:\s?)(\d{1,6})\b", re.IGNORECASE)
-_CURRENCY: Final = re.compile(r"\bcurrency\s*:?\s*([A-Z]{3})\b", re.IGNORECASE)
 #: A date at the end of a (normalised) header cell: ``ending market value oct 31 2026``.
 _TRAILING_DATE: Final = re.compile(
     r"(?:\sas\sof)?\s(?:[a-z]{3,9}\s\d{1,2}\s\d{4}|\d{1,2}\s\d{1,2}\s\d{2,4}|\d{4}\s\d{1,2}\s\d{1,2})$"
@@ -461,6 +481,47 @@ def is_cusip(text: str) -> bool:
             value *= 2
         total += value // 10 + value % 10
     return (10 - total % 10) % 10 == int(text[8])
+
+
+#: ``ROOT MM/DD/YYYY STRIKE C|P``: how a broker's export writes an option.
+_OPTION_PRINTED: Final = re.compile(
+    r"(?P<root>[A-Z]{1,6}) (?P<month>\d{1,2})/(?P<day>\d{1,2})/(?P<year>\d{4}) "
+    r"(?P<strike>\d{1,5}(?:\.\d{1,3})?) (?P<right>[CP])"
+)
+#: The OCC form: root, ``YYMMDD``, ``C``/``P``, the strike x 1000 as 8 digits
+#: (with or without the space(s) that pad the root).
+_OPTION_OCC: Final = re.compile(
+    r"(?P<root>[A-Z]{1,6}) ?(?P<year>\d{2})(?P<month>\d{2})(?P<day>\d{2})"
+    r"(?P<right>[CP])(?P<strike>\d{8})"
+)
+
+
+def option_symbol(text: str) -> str | None:
+    """The OCC symbol of an option named in a symbol cell, or None (not an option).
+
+    Reads ``ROOT MM/DD/YYYY STRIKE C|P`` (``ZZOP 03/20/2026 45.00 C``; the
+    strike with up to three decimals) and the OCC form itself, printed with
+    or without a space after the root (``ZZOP 260320C00045000``). The answer
+    is the OCC form without spaces: the root (1 to 6 letters), the expiry as
+    ``YYMMDD``, ``C`` or ``P``, and the strike times 1000 as 8 digits; at
+    most 21 letters and digits, so it always fits ``SecurityRef.symbol``.
+    An expiry that is no date of the calendar, or a strike of zero, names
+    no option.
+    """
+    folded = " ".join(text[:MAX_TOKEN].upper().split())
+    printed = _OPTION_PRINTED.fullmatch(folded)
+    match = printed or _OPTION_OCC.fullmatch(folded)
+    if match is None:
+        return None
+    year = int(match["year"]) + (0 if printed else 2000)
+    try:
+        expiry = date(year, int(match["month"]), int(match["day"]))
+    except ValueError:
+        return None
+    strike = Decimal(match["strike"]) * 1000 if printed else Decimal(match["strike"])
+    if strike <= 0 or not 2000 <= expiry.year <= 2099:
+        return None
+    return f"{match['root']}{expiry:%y%m%d}{match['right']}{int(strike):08d}"
 
 
 #: Normalised activity word -> type (the first word(s) of the activity cell).
@@ -533,6 +594,9 @@ ACTIVITY_TYPES: Final[Mapping[str, InvestmentActivityType]] = {
     "credit interest": "interest",
     "margin interest": "fee",
     "margin interest paid": "fee",
+    # Interest the account pays, not earns (a debit balance, a margin loan).
+    "interest charged": "fee",
+    "interest on debit": "fee",
     "advisory fee": "fee",
     "advisor fee": "fee",
     "management fee": "fee",
@@ -547,6 +611,14 @@ ACTIVITY_TYPES: Final[Mapping[str, InvestmentActivityType]] = {
     "nonresident tax": "fee",
     "non resident tax": "fee",
     "foreign tax": "fee",
+    # Brokers' own action words (activity exports and statements).
+    "service fee": "fee",
+    "adr management fee": "fee",
+    "nra withholding": "fee",
+    "tax withholding": "fee",
+    "bank interest": "interest",
+    "payment in lieu": "dividend",
+    "spin off": "corporate_action",
 }
 #: Phrases naming a transfer whose type depends on what moved: ``(type when a
 #: security and a quantity are present, type for cash)``.
@@ -578,7 +650,58 @@ SIGNED_TYPES: Final[Mapping[str, tuple[InvestmentActivityType, InvestmentActivit
     "you exchanged": ("buy", "sell"),
     "assigned": ("buy", "sell"),
     "expired": ("buy", "sell"),
+    # Cash or units between this account and a bank or another account: the
+    # words name the movement, only the row's sign names its direction.
+    "moneylink": ("transfer_in", "transfer_out"),
+    "wire sent": ("transfer_in", "transfer_out"),
+    "wire received": ("transfer_in", "transfer_out"),
+    "wire funds": ("transfer_in", "transfer_out"),
+    "internal transfer": ("transfer_in", "transfer_out"),
+    "bank transfer": ("transfer_in", "transfer_out"),
+    "funds paid": ("transfer_in", "transfer_out"),
+    "funds received": ("transfer_in", "transfer_out"),
+    "security transfer": ("transfer_in", "transfer_out"),
 }
+#: Brokers' abbreviations in an action text, as whole tokens, written out
+#: (:func:`expand_action`). ``pr`` is ``prior`` only before ``yr``/``year``.
+ACTION_ABBREVIATIONS: Final[Mapping[str, str]] = {
+    "div": "dividend",
+    "divs": "dividend",
+    "int": "interest",
+    "mgmt": "management",
+    "qual": "qualified",
+    "cap": "capital",
+    "yr": "year",
+}
+#: What may follow ``Int``/``Div``/``Divs`` at the start of an action for it to be
+#: an abbreviation. Before any other word it is the start of a name (``Int
+#: Business Example Corp``) and stays as printed (:func:`expand_action`).
+ABBREVIATION_FOLLOWERS: Final = frozenset(
+    {
+        "adj",
+        "adjustment",
+        "charged",
+        "credit",
+        "credited",
+        "distribution",
+        "earned",
+        "income",
+        "on",
+        "paid",
+        "payment",
+        "received",
+        "reinvest",
+        "reinvested",
+        "reinvestment",
+        "reversal",
+    }
+)
+_LEADING_ABBREVIATIONS: Final = frozenset({"int", "div", "divs"})
+#: Words a broker puts before ``dividend``/``cash dividend`` that do not change
+#: what the row is (``Pr Yr Cash Div``, ``Special Non Qual Div``).
+DIVIDEND_QUALIFIERS: Final = frozenset(
+    {"special", "prior", "year", "qualified", "non", "nonqualified", "ordinary"}
+)
 #: Account types an investment statement may take from the document (``account_kind``).
 INVESTMENT_KINDS: Final = frozenset({"brokerage", "retirement"})
 #: Types whose cash effect is an outflow when the amount is printed unsigned.
@@ -603,6 +726,52 @@ def split_ratio(text: str) -> tuple[Decimal, Decimal] | None:
     return new, old
 
 
+def expand_action(norm: str) -> str:
+    """A normalised action with abbreviations written out and dividend qualifiers dropped.
+
+    ``pr yr cash div`` -> ``cash dividend``; ``adr mgmt fee`` -> ``adr
+    management fee``; ``special non qual div`` -> ``dividend``. A token of
+    :data:`ACTION_ABBREVIATIONS` is replaced only as a whole token; ``pr`` is
+    ``prior`` only before ``yr``/``year``; ``int`` before a lone ``l`` is
+    what is left of ``Int'l`` (a fund's name) and stays, and so does ``int``,
+    ``div`` or ``divs`` as the first word before a word that is not one of
+    :data:`ABBREVIATION_FOLLOWERS` (a security's name standing where an
+    action would: ``Div Example Fund``). Leading
+    :data:`DIVIDEND_QUALIFIERS` are dropped only when ``dividend`` or ``cash
+    dividend`` follows them, and ``non`` only as part of ``non qualified``
+    (``Non Dividend Distribution`` is no dividend). Anything else is
+    returned as it came.
+    """
+
+    def names(word: str, following: str) -> bool:
+        # The first word of a security's name, not an abbreviation.
+        return (
+            word in _LEADING_ABBREVIATIONS
+            and bool(following)
+            and following not in ABBREVIATION_FOLLOWERS
+        )
+
+    tokens = norm.split()
+    for index, word in enumerate(tokens):
+        following = tokens[index + 1] if index + 1 < len(tokens) else ""
+        if word == "pr":
+            if following in ("yr", "year"):
+                tokens[index] = "prior"
+        elif word == "int" and following == "l":
+            continue
+        elif word in ACTION_ABBREVIATIONS and not (index == 0 and names(word, following)):
+            tokens[index] = ACTION_ABBREVIATIONS[word]
+    lead = 0
+    while lead < len(tokens) and tokens[lead] in DIVIDEND_QUALIFIERS:
+        if tokens[lead] == "non" and tokens[lead + 1 : lead + 2] != ["qualified"]:
+            break
+        lead += 1
+    rest = tokens[lead:]
+    if lead and (rest[:1] == ["dividend"] or rest[:2] == ["cash", "dividend"]):
+        tokens = rest
+    return " ".join(tokens)
+
+
 def activity_type(
     text: str,
     *,
@@ -616,7 +785,8 @@ def activity_type(
     ignored, so a broker's action text with the security and a trailing
     ``(Cash)``/``(Margin)`` is typed by its leading words
     (``REINVESTMENT EXAMPLE FUND (EXMPL) (Cash)`` -> ``reinvest``). It reads
-    a PDF's activity cell or a CSV's action column alike.
+    a PDF's activity cell or a CSV's action column alike. Brokers'
+    abbreviations are written out first (:func:`expand_action`).
 
     ``Transferred from``/``Transferred to`` (:data:`TRANSFER_TYPES`) is a
     ``transfer_in``/``transfer_out`` of units when ``moves_security`` (the
@@ -630,7 +800,7 @@ def activity_type(
     cash leaves: ``withdrawal``, else ``deposit``). Without a sign it is
     None: the direction is never guessed.
     """
-    norm = normalise(text)
+    norm = expand_action(normalise(text))
     best: InvestmentActivityType | None = None
     best_len = 0
 
@@ -1804,6 +1974,19 @@ def _flow_rows(key: str, activity: Sequence[InvestmentActivity]) -> list[int]:
     return out
 
 
+def vouches_for_account(check: InvestmentReconciliation, positions: int) -> bool:
+    """Whether a check that ran compares a figure about the account as a whole.
+
+    Not ``positions`` (each row against itself), and not ``holdings_total``
+    when the statement has one position or none (the total of one row is
+    that row): module doc, "a check that vouches for the account".
+    """
+    ran = set(check.checks) - {"positions"}
+    if positions < 2:
+        ran.discard("holdings_total")
+    return bool(ran)
+
+
 def localise(
     statement: InvestmentStatement,
     check: InvestmentReconciliation,
@@ -2018,7 +2201,7 @@ class BrokerageStatementParser(DocumentParser):
     """
 
     name: ClassVar[str] = "brokerage_statement_generic"
-    version: ClassVar[str] = "8"
+    version: ClassVar[str] = "9"
     kind: ClassVar[Literal["statement", "payslip", "receipt"]] = "statement"
     display_name: ClassVar[str | None] = None
     #: Phrases on the first page that identify the institution (its name first).
@@ -2454,9 +2637,7 @@ class BrokerageStatementParser(DocumentParser):
         if summary.last4 is None:
             summary.last4 = summary_last4(line.text, masked_digits=False)
         if summary.currency is None:
-            match = _CURRENCY.search(line.text)
-            if match is not None:
-                summary.currency = match[1].upper()
+            summary.currency = stated_currency(line.text)
 
     @staticmethod
     def _cash_line(amounts: Sequence[Amount], summary: _Summary, rest: str = "") -> None:
@@ -3661,6 +3842,10 @@ class BrokerageStatementParser(DocumentParser):
             reconcile_investment(statement, indexed),
             section_checks(activity, activity_rows, collected.totals),
         )
+        if check.status == "ok" and read is None and not vouches_for_account(check, len(positions)):
+            # No period printed and nothing about the account agrees: rows
+            # that only multiply out are not a checked statement (module doc).
+            check = check.model_copy(update={"status": "unavailable"})
         for index in check.position_mismatches:
             position_scores[index]["market_value"] = conf.CONTRADICTED
         cap = {"mismatch": conf.UNRECONCILED, "unavailable": conf.UNCHECKED}.get(check.status)
@@ -4204,7 +4389,7 @@ class PlaceholderBrokerageParser(BrokerageStatementParser):
     """Placeholder Brokerage (fictional): ``MM/DD/YYYY``, USD, signed amounts."""
 
     name: ClassVar[str] = "placeholder_brokerage"
-    version: ClassVar[str] = "6"
+    version: ClassVar[str] = "7"
     institution: ClassVar[str | None] = "placeholder-brokerage-account"
     display_name: ClassVar[str | None] = "Placeholder Brokerage"
     fingerprints: ClassVar[tuple[str, ...]] = (
@@ -4260,7 +4445,7 @@ class FidelityStatementParser(BrokerageStatementParser):
     """
 
     name: ClassVar[str] = "fidelity_investments_statement"
-    version: ClassVar[str] = "7"
+    version: ClassVar[str] = "8"
     institution: ClassVar[str | None] = "fidelity-investments-statement"
     display_name: ClassVar[str | None] = "Fidelity Investments"
     fingerprints: ClassVar[tuple[str, ...]] = ("fidelity investments", "investment report")

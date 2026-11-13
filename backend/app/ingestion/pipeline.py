@@ -125,6 +125,7 @@ from app.ingestion.classify.service import FIELD_THRESHOLD, classify_document
 from app.ingestion.intake.sniff import SNIFF_BYTES, FileType, sniff
 from app.ingestion.match.accounts import importable_account_ids, match_account
 from app.ingestion.match.receipts import apply_receipt
+from app.ingestion.parsers.base import balance_read
 from app.ingestion.parsers.confidence import DEFAULT_THRESHOLD
 from app.ingestion.parsers.receipt import PARSER_NAME as RECEIPT_PARSER
 from app.ingestion.parsers.receipt import PARSER_VERSION as RECEIPT_PARSER_VERSION
@@ -735,7 +736,7 @@ def _parse_document(
         _unlink_classified_account(document)
     read: list[Statement | InvestmentStatement] = [
         *(s for s in parsed if s.transactions),
-        *(i for i in brokerage if i.positions or i.activity),
+        *(i for i in brokerage if i.positions or i.activity or balance_read(i)),
     ]
     if read:
         document.kind = DocumentKind.STATEMENT
