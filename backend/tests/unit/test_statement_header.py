@@ -15,7 +15,7 @@ import pytest
 
 from app.ingestion.extract.pdf import extract_pdf
 from app.ingestion.parsers import statement_header, table_statement
-from app.ingestion.parsers.base import Cell, ViewLine
+from app.ingestion.parsers.base import Cell, DocumentView, ViewLine
 from app.ingestion.parsers.registry import parse_extraction
 from app.ingestion.parsers.statement_header import (
     Column,
@@ -633,3 +633,284 @@ def test_title_between_date_and_amount_makes_no_table() -> None:
     assert parsed.parse is not None
     assert all(not s.transactions for s in parsed.statements)
     assert parsed.parse.skipped_lines == 0
+
+
+# -- headers printed over two or three lines --------------------------------------
+
+_STACK_TOP: list[tuple[str, float]] = [
+    ("Check", 95.0),
+    ("Deposits/", 330.0),
+    ("Withdrawals/", 410.0),
+    ("Ending daily", 490.0),
+]
+_STACK_BOTTOM: list[tuple[str, float]] = [
+    ("Date", 40.0),
+    ("Number Description", 95.0),
+    ("Credits", 330.0),
+    ("Debits", 410.0),
+    ("balance", 490.0),
+]
+_PLAIN_HEADER: list[tuple[str, float]] = [
+    ("Date", 62.0),
+    ("Description", 150.0),
+    ("Amount", 420.0),
+]
+
+
+def _at(cells: list[tuple[str, float]], top: float, index: int = 0) -> ViewLine:
+    """As :func:`_line`, with the line's top at ``top``."""
+    built = tuple(Cell(text, x0, top, x0 + 5.0 * len(text), top + 9.0) for text, x0 in cells)
+    return ViewLine(
+        page=1, index=index, cells=built, text=" ".join(t for t, _ in cells), height=9.0
+    )
+
+
+def _unchanged(lines: list[ViewLine]) -> bool:
+    stacked = stack_headers(lines)
+    return len(stacked) == len(lines) and all(a is b for a, b in zip(stacked, lines, strict=True))
+
+
+def _roles(line: ViewLine) -> list[Role]:
+    return [c.role for c in read_header(line) or []]
+
+
+def test_two_line_header_is_one_header() -> None:
+    before = _line([("Account activity", 40.0)], 0)
+    top, bottom = _line(_STACK_TOP, 1), _line(_STACK_BOTTOM, 2)
+    after = _line([("1/2", 40.0), ("Payroll", 130.0), ("1,500.00", 330.0)], 3)
+    stacked = stack_headers([before, top, bottom, after])
+    assert len(stacked) == 3
+    assert stacked[0] is before
+    assert stacked[2] is after
+    header = stacked[1]
+    assert (header.page, header.index, header.height) == (1, 2, 9.0)
+    assert read_header(header) == [
+        Column("date", 40.0, 60.0),
+        Column("check", 95.0, 125.0),  # ``Check`` over ``Number``
+        Column("description", 130.0, 185.0),
+        Column("credit", 330.0, 375.0),  # as wide as ``Deposits/``, the longer of the two
+        Column("debit", 410.0, 470.0),
+        Column("balance", 490.0, 550.0),
+    ]
+    # A cell of both lines keeps the box of all its words.
+    credit = next(c for c in header.cells if c.text == "Deposits/ Credits")
+    assert (credit.y0, credit.y1) == (top.cells[0].y0, bottom.cells[0].y1)
+    # Alone, the second line reads ``Number Description`` as its description.
+    assert _roles(bottom) == ["date", "description", "credit", "debit", "balance"]
+
+
+def test_three_line_header_with_a_single_cell_line() -> None:
+    lines = [
+        _line(
+            [
+                ("POSTING", 40.0),
+                ("DEPOSITS & OTHER", 300.0),
+                ("WITHDRAWALS &", 400.0),
+                ("DAILY", 500.0),
+            ],
+            0,
+        ),
+        _line([("TRANSACTION DESCRIPTION", 110.0)], 1),
+        _line(
+            [
+                ("DATE", 40.0),
+                ("CREDITS (+)", 300.0),
+                ("OTHER DEBITS (-)", 400.0),
+                ("BALANCE", 500.0),
+            ],
+            2,
+        ),
+    ]
+    assert all(read_header(line) is None for line in lines)
+    stacked = stack_headers(lines)
+    assert len(stacked) == 1
+    assert stacked[0].index == 2
+    assert _roles(stacked[0]) == ["date", "description", "credit", "debit", "balance"]
+    assert [c.text for c in stacked[0].cells] == [
+        "POSTING DATE",
+        "TRANSACTION DESCRIPTION",
+        "DEPOSITS & OTHER CREDITS (+)",
+        "WITHDRAWALS & OTHER DEBITS (-)",
+        "DAILY BALANCE",
+    ]
+
+
+def _view_lines(data: bytes) -> list[ViewLine]:
+    result = extract_pdf(data, ExtractOptions(previews=False, ocr=False), "pdf")
+    assert result.ok, result.error
+    return list(DocumentView.from_result(result).lines)
+
+
+def test_a_title_over_a_header_is_not_stacked() -> None:
+    lines = _view_lines(synth.title_over_header())
+    stacked = stack_headers(lines)
+    assert len(stacked) == len(lines)
+    assert all(a is b for a, b in zip(stacked, lines, strict=True))
+    texts = [line.text for line in stacked]
+    assert texts.count(synth.TITLED_HEADER) == 2
+    for title in synth.TITLES:
+        # The title is still a line of its own, right over a header.
+        at = texts.index(title)
+        assert texts[at + 1] == synth.TITLED_HEADER
+        assert _roles(stacked[at + 1]) == ["date", "description", "amount"]
+        gap = stacked[at + 1].bbox[1] - stacked[at].bbox[1]
+        assert gap <= 2.2 * stacked[at].height, "the fixture must print the title close by"
+    # Hand-built, the same two: a left-hand title, and a right-hand one over no heading.
+    assert _unchanged([_line([("Deposits and other credits", 62.0)], 0), _line(_PLAIN_HEADER, 1)])
+    assert _unchanged([_line([("Balance", 500.0)], 0), _line(_PLAIN_HEADER, 1)])
+    assert _unchanged(
+        [
+            _line([("Deposits and other credits", 62.0), ("Balance", 500.0)], 0),
+            _line(_PLAIN_HEADER, 1),
+        ]
+    )
+
+
+def test_a_title_over_header_statement_reads_both_tables() -> None:
+    statement, info = _read(synth.title_over_header())
+    assert sorted(_rows(statement), key=str) == sorted(synth.TITLED_ROWS, key=str)
+    assert info.skipped_lines == 0
+    assert statement.reconciliation is not None
+    assert statement.reconciliation.status == "ok"
+
+
+def test_a_title_over_the_amount_heading_is_no_second_column() -> None:
+    # Right-aligned over ``Amount``: headings one above the other are one
+    # phrase or nothing, never a debit column beside the amount.
+    assert _unchanged([_line([("Withdrawals", 395.0)], 0), _line(_PLAIN_HEADER, 1)])
+    assert _unchanged([_line([("Balance", 415.0)], 0), _line(_PLAIN_HEADER, 1)])
+    # Nor may the title be split off a heading it shares a cell with.
+    assert _unchanged(
+        [
+            _line([("Posting", 62.0), ("Withdrawals", 395.0)], 0),
+            _line([("Date", 62.0), ("Details", 150.0), ("Amount", 420.0)], 1),
+        ]
+    )
+
+
+def test_a_header_that_reads_alone_wins_a_tie() -> None:
+    # ``Posting Date`` and ``Withdrawal Amount`` are headings, and the line
+    # under them names as many columns alone: it stays as it reads today.
+    assert _unchanged([_line([("Posting", 62.0)], 0), _line(_PLAIN_HEADER, 1)])
+    assert _unchanged([_line([("Withdrawal", 400.0)], 0), _line(_PLAIN_HEADER, 1)])
+    assert _unchanged(
+        [_line([("Posting", 62.0), ("Withdrawal", 400.0)], 0), _line(_PLAIN_HEADER, 1)]
+    )
+
+
+def test_lines_far_apart_are_not_stacked() -> None:
+    near = [_at(_STACK_TOP, 100.0, 0), _at(_STACK_BOTTOM, 119.0, 1)]
+    assert len(stack_headers(near)) == 1
+    far = [_at(_STACK_TOP, 100.0, 0), _at(_STACK_BOTTOM, 127.0, 1)]  # three line heights
+    assert _unchanged(far)
+    # Nor across a page break.
+    other_page = _line(_STACK_BOTTOM, 1)
+    other_page = ViewLine(2, 1, other_page.cells, other_page.text, other_page.height)
+    assert _unchanged([_line(_STACK_TOP, 0), other_page])
+
+
+def test_a_line_with_an_amount_is_never_part_of_a_header() -> None:
+    top = [*_STACK_TOP[:3], ("Ending daily 1,250.00", 490.0)]
+    assert _unchanged([_line(top, 0), _line(_STACK_BOTTOM, 1)])
+    bottom = [*_STACK_BOTTOM[:4], ("balance 1,250.00", 490.0)]
+    assert _unchanged([_line(_STACK_TOP, 0), _line(bottom, 1)])
+    # A line too long to be headings is none either.
+    long = [("Check", 95.0), ("Deposits/ " + "and more words " * 9, 330.0)]
+    assert _unchanged([_line(long, 0), _line(_STACK_BOTTOM, 1)])
+
+
+def test_stacking_stops_at_three_lines() -> None:
+    last = [("Date", 62.0), ("Credit", 150.0), ("Amount", 420.0)]
+    three = [
+        _line([("Description of", 150.0)], 0),
+        _line([("Transaction or", 150.0)], 1),
+        _line(last, 2),
+    ]
+    stacked = stack_headers(three)
+    assert len(stacked) == 1
+    assert _roles(stacked[0]) == ["date", "description", "amount"]
+    four = [
+        _line([("Description", 150.0)], 0),
+        _line([("of Transaction", 150.0)], 1),
+        _line([("or", 150.0)], 2),
+        _line(last, 3),
+    ]
+    assert _unchanged(four)
+    assert all(read_header(line) is None for line in four)
+
+
+def test_a_section_title_under_a_stacked_header_is_not_part_of_it() -> None:
+    # ``Deposits`` is a heading word, printed close under the two header
+    # lines and under none of their cells: three lines name no more columns
+    # than two, so the title stays a line and the credit column where it is.
+    title = _line([("Deposits", 250.0)], 2)
+    stacked = stack_headers([_line(_STACK_TOP, 0), _line(_STACK_BOTTOM, 1), title])
+    assert len(stacked) == 2
+    assert stacked[1] is title
+    assert Column("credit", 330.0, 375.0) in (read_header(stacked[0]) or [])
+    # Under ``Date`` it would be a second heading over another: no part either.
+    under = _line([("Deposits", 40.0)], 2)
+    stacked = stack_headers([_line(_STACK_TOP, 0), _line(_STACK_BOTTOM, 1), under])
+    assert len(stacked) == 2
+    assert stacked[1] is under
+
+
+def test_an_unknown_heading_on_a_line_of_its_own_is_no_stacked_description() -> None:
+    # ``Memo`` over ``text`` beside known headings of both lines: the description.
+    both = [
+        _line([("Posting", 62.0), ("Memo", 150.0), ("Paid", 420.0)], 0),
+        _line([("Date", 62.0), ("text", 150.0), ("out", 420.0)], 1),
+    ]
+    stacked = stack_headers(both)
+    assert len(stacked) == 1
+    assert _roles(stacked[0]) == ["date", "description", "debit"]
+    # The same words on a line that holds no heading: a title, not a header part.
+    alone = [
+        _line([("Posting", 62.0), ("Paid", 420.0)], 0),
+        _line([("Memo text", 150.0)], 1),
+        _line([("Date", 62.0), ("out", 420.0)], 2),
+    ]
+    assert _unchanged(alone)
+
+
+def test_stacked_header_statement_reads_and_reconciles() -> None:
+    statement, info = _read(synth.stacked_header_checking())
+    assert _rows(statement) == list(synth.STACKED_ROWS)
+    assert len(statement.transactions) == 10
+    # By column: the two figures under ``Deposits/ Credits`` are money in.
+    assert [t.amount > 0 for t in statement.transactions] == [
+        amount > 0 for _, amount in synth.STACKED_ROWS
+    ]
+    assert sum(1 for t in statement.transactions if t.amount > 0) == 2
+    checks = [t.payee for t in statement.transactions if (t.payee or "").startswith("CHECK")]
+    assert checks == ["CHECK 1041", "CHECK 1042"]
+    assert statement.reconciliation is not None
+    assert statement.reconciliation.status == "ok"
+    assert statement.ledger_balance is not None
+    assert str(statement.ledger_balance.amount) == "2287.15"
+    assert {(t.posted.year, t.posted.month) for t in statement.transactions} == {(2026, 1)}
+    assert info.skipped_lines == 0
+
+
+def test_description_on_its_own_line_statement() -> None:
+    statement, info = _read(synth.description_on_its_own_line())
+    assert _rows(statement) == list(synth.OWN_LINE_ROWS)
+    assert statement.reconciliation is not None
+    assert statement.reconciliation.status == "ok"
+    assert statement.ledger_balance is not None
+    assert str(statement.ledger_balance.amount) == "1204.55"
+    assert info.skipped_lines == 0
+
+
+def test_card_long_heading_is_read_as_a_card() -> None:
+    statement, info = _read(synth.card_long_heading())
+    assert info.parser is not None
+    assert info.parser.name == "card_statement_generic"
+    assert _rows(statement) == list(synth.CARD_ROWS)
+    purchases = [t.amount for t in statement.transactions[1:]]
+    assert len(purchases) == 4
+    assert all(amount < 0 for amount in purchases)
+    assert statement.transactions[0].amount > 0  # the payment, printed with its minus
+    assert statement.reconciliation is not None
+    assert statement.reconciliation.status == "ok"
+    assert info.skipped_lines == 0

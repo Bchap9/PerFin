@@ -31,6 +31,25 @@ heading); only the **header** is unusual:
   ``Date | DAILY ENDING BALANCE | Amount`` over lines of a date and a
   balance. The words between the date and the amount are a title, not a
   description heading: nothing on the page is a transaction.
+* :func:`stacked_header_checking`: the header is printed over two lines,
+  ``Check | Deposits/ | Withdrawals/ | Ending daily`` nine points over
+  ``Date | Number Description | Credits | Debits | balance`` (``Number``
+  and ``Description`` six points apart and so one cell). Rows are dated
+  ``M/D``, their figures unsigned under their columns, the balance printed
+  on the last row of each day only; two of the ten rows print a check
+  number and no description.
+* :func:`description_on_its_own_line`: a header of three lines, the middle
+  one holding only ``TRANSACTION DESCRIPTION``, between ``POSTING |
+  DEPOSITS & OTHER | WITHDRAWALS & | DAILY`` and ``DATE | CREDITS (+) |
+  OTHER DEBITS (-) | BALANCE``.
+* :func:`card_long_heading`: a card statement (``Minimum Payment Due``)
+  whose header is ``Date of`` over ``Transaction | Merchant Name or
+  Transaction Description | $ Amount``.
+* :func:`title_over_header`: two plain tables, each with a title fourteen
+  points over its one-line header: a bold ``Deposits and other credits``
+  at the left of the first, a ``Balance`` at the right of the second, over
+  no heading (the table has no balance column). A title is no header
+  part: both headers read as they are printed.
 
 ``*_ROWS`` give what a correct reading returns: ``(payee, signed amount)``.
 """
@@ -419,5 +438,213 @@ def date_balance_pairs_with_title() -> bytes:
         c,
         [(40, "Date"), (150, "DAILY ENDING BALANCE"), (-430, "Amount")],
         [[(40, day), (-430, balance)] for day, balance in _PAIRS_ONLY],
+    )
+    return _done(buf, c)
+
+
+#: A header line is printed this far under the one before it.
+_STACK: Final = 9.0
+
+#: ``(date, check number, description, deposit, withdrawal, balance)``; the
+#: balance is printed on the last row of each day only.
+_STACKED: Final[tuple[tuple[str, str, str, str, str, str], ...]] = (
+    ("1/2", "", "Fernhill Mills Payroll", "1,500.00", "", "3,500.00"),
+    ("1/5", "1041", "", "", "250.00", ""),
+    ("1/5", "", "Tallow Street Market", "", "62.30", "3,187.70"),
+    ("1/9", "", "Brindle Water Utility", "", "48.90", "3,138.80"),
+    ("1/12", "", "Mobile Deposit", "300.00", "", ""),
+    ("1/12", "", "Lantern Fuel Stop", "", "41.20", "3,397.60"),
+    ("1/16", "1042", "", "", "120.00", "3,277.60"),
+    ("1/20", "", "Orchard Lane Rent", "", "950.00", ""),
+    ("1/20", "", "Kettle and Crumb Bakery", "", "16.45", "2,311.15"),
+    ("1/27", "", "Slate River Transit", "", "24.00", "2,287.15"),
+)
+STACKED_ROWS: Final[Expected] = tuple(
+    (text or f"CHECK {number}", _signed(paid_in) if paid_in else -_signed(out))
+    for _, number, text, paid_in, out, _ in _STACKED
+)
+
+
+def stacked_header_checking() -> bytes:
+    """The header takes two lines; ``Check`` stands over ``Number``."""
+    buf, c = _page(
+        "Thistledown Federal Bank",
+        "Household Checking",
+        "3871",
+        "January 1, 2026 to January 31, 2026",
+        "2,000.00",
+        "2,287.15",
+    )
+    description_x = _after(95, "Number", 6.0)
+    _line(
+        c,
+        590,
+        [(95, "Check"), (330, "Deposits/"), (410, "Withdrawals/"), (490, "Ending daily")],
+        size=_HEAD_SIZE,
+        bold=True,
+    )
+    _table(
+        c,
+        [
+            (40, "Date"),
+            (95, "Number"),
+            (description_x, "Description"),
+            (330, "Credits"),
+            (410, "Debits"),
+            (490, "balance"),
+        ],
+        [
+            [
+                (40, day),
+                *([(95, number)] if number else [(description_x, text)]),
+                *([(330, paid_in)] if paid_in else [(410, out)]),
+                *([(490, balance)] if balance else []),
+            ]
+            for day, number, text, paid_in, out, balance in _STACKED
+        ],
+        y=590 - _STACK,
+    )
+    return _done(buf, c)
+
+
+#: ``(date, description, deposit, withdrawal, balance)``.
+_OWN_LINE: Final[tuple[tuple[str, str, str, str, str], ...]] = (
+    ("02/02/2026", "Fernhill Mills Payroll", "1,280.00", "", "2,030.00"),
+    ("02/04/2026", "Orchard Lane Rent", "", "875.00", "1,155.00"),
+    ("02/10/2026", "Juniper Hollow Grocer", "", "54.60", "1,100.40"),
+    ("02/13/2026", "Cobalt Corner Pharmacy", "", "19.85", "1,080.55"),
+    ("02/19/2026", "Mobile Deposit", "150.00", "", "1,230.55"),
+    ("02/25/2026", "Wren Street Cinema", "", "26.00", "1,204.55"),
+)
+OWN_LINE_ROWS: Final[Expected] = tuple(
+    (text, _signed(paid_in) if paid_in else -_signed(out)) for _, text, paid_in, out, _ in _OWN_LINE
+)
+
+
+def description_on_its_own_line() -> bytes:
+    """Three header lines; the description heading has the middle one to itself."""
+    buf, c = _page(
+        "Saltmarsh Community Bank",
+        "Free Checking",
+        "5069",
+        "February 1, 2026 to February 28, 2026",
+        "750.00",
+        "1,204.55",
+    )
+    _line(
+        c,
+        590,
+        [(40, "POSTING"), (300, "DEPOSITS & OTHER"), (400, "WITHDRAWALS &"), (500, "DAILY")],
+        size=_HEAD_SIZE,
+        bold=True,
+    )
+    _line(c, 590 - _STACK, [(110, "TRANSACTION DESCRIPTION")], size=_HEAD_SIZE, bold=True)
+    _table(
+        c,
+        [(40, "DATE"), (300, "CREDITS (+)"), (400, "OTHER DEBITS (-)"), (500, "BALANCE")],
+        [
+            [
+                (40, day),
+                (110, text),
+                *([(300, paid_in)] if paid_in else [(400, out)]),
+                (500, balance),
+            ]
+            for day, text, paid_in, out, balance in _OWN_LINE
+        ],
+        y=590 - 2 * _STACK,
+    )
+    return _done(buf, c)
+
+
+#: ``(date, description, amount as a card prints it)``: charges positive.
+_CARD: Final[tuple[tuple[str, str, str], ...]] = (
+    ("12/03/25", "PAYMENT RECEIVED - THANK YOU", "-$400.00"),
+    ("12/05/25", "JUNIPER HOLLOW GROCER", "$58.40"),
+    ("12/11/25", "SLATE RIVER TRANSIT", "$126.10"),
+    ("12/17/25", "COBALT CORNER PHARMACY", "$22.75"),
+    ("12/22/25", "MARROW AND PINE HARDWARE", "$56.50"),
+)
+#: In the ledger convention: a purchase is money out.
+CARD_ROWS: Final[Expected] = tuple(
+    (text, -_signed(amount.replace("$", ""))) for _, text, amount in _CARD
+)
+
+
+def card_long_heading() -> bytes:
+    """A card statement; ``Date of`` is printed over ``Transaction``."""
+    buf = io.BytesIO()
+    c = canvas.Canvas(buf, pagesize=letter)
+    _line(c, 750, [(40, "Alderbrook Card Services")], size=14, bold=True)
+    _line(c, 730, [(40, "Everyday Rewards Card"), (360, "Account number: XXXX XXXX XXXX 2265")])
+    _line(c, 716, [(40, "Billing period: December 1, 2025 to December 31, 2025")])
+    _rows(
+        c,
+        690,
+        [
+            [(40, "Previous Balance"), (-300, "$500.00")],
+            [(40, "Payments/Credits"), (-300, "-$400.00")],
+            [(40, "New Charges"), (-300, "+$263.75")],
+            [(40, "New Balance"), (-300, "$363.75")],
+            [(40, "Minimum Payment Due"), (-300, "$25.00")],
+        ],
+    )
+    _line(c, 590, [(40, "Date of")], size=_HEAD_SIZE, bold=True)
+    _table(
+        c,
+        [
+            (40, "Transaction"),
+            (110, "Merchant Name or Transaction Description"),
+            (-560, "$ Amount"),
+        ],
+        [[(40, day), (110, text), (-560, amount)] for day, text, amount in _CARD],
+        y=590 - _STACK,
+    )
+    _line(c, 60, [(40, "Synthetic test document from the PerFin test suite.")], size=7)
+    return _done(buf, c)
+
+
+#: ``(date, description, amount)`` of the two tables.
+_TITLED_IN: Final[tuple[tuple[str, str, str], ...]] = (
+    ("11/03/2025", "Fernhill Mills Payroll", "1,320.00"),
+    ("11/14/2025", "Mobile Deposit", "85.00"),
+    ("11/24/2025", "Interest Paid", "0.42"),
+)
+_TITLED_OUT: Final[tuple[tuple[str, str, str], ...]] = (
+    ("11/05/2025", "Orchard Lane Rent", "-900.00"),
+    ("11/12/2025", "Tallow Street Market", "-71.30"),
+    ("11/21/2025", "Lantern Fuel Stop", "-36.12"),
+)
+TITLED_ROWS: Final[Expected] = tuple(
+    (text, _signed(amount)) for _, text, amount in (*_TITLED_IN, *_TITLED_OUT)
+)
+#: The titles, each fourteen points over a header it is no part of.
+TITLES: Final = ("Deposits and other credits", "Balance")
+#: The header both tables print, as one line of text.
+TITLED_HEADER: Final = "Date Description Amount"
+_TITLE_GAP: Final = 14.0
+
+
+def title_over_header() -> bytes:
+    """A title over each table's header: at its left, and at its right over nothing."""
+    buf, c = _page(
+        "Wickerfield Savings Bank",
+        "Plain Checking",
+        "6402",
+        "November 1, 2025 to November 30, 2025",
+        "1,400.00",
+        "1,798.00",
+    )
+    header: Line = [(40, "Date"), (110, "Description"), (-430, "Amount")]
+    _line(c, 590 + _TITLE_GAP, [(40, TITLES[0])], size=11, bold=True)
+    y = _table(
+        c, header, [[(40, day), (110, text), (-430, amount)] for day, text, amount in _TITLED_IN]
+    )
+    y -= 30
+    _line(c, y + _TITLE_GAP, [(480, TITLES[1])], size=11, bold=True)
+    _table(
+        c,
+        header,
+        [[(40, day), (110, text), (-430, amount)] for day, text, amount in _TITLED_OUT],
+        y=y,
     )
     return _done(buf, c)

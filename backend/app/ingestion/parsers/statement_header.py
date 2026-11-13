@@ -22,8 +22,8 @@ without a PDF.
 * :func:`header_like` says a line is made of heading words only: the header
   of a table the reader does **not** read (a daily-balance table), which
   ends the transaction table above it.
-* :func:`stack_headers` is where a header printed over several lines becomes
-  one line; today it returns the lines as they are.
+* :func:`stack_headers` makes a header printed over two or three lines one
+  line ("Stacked headers" below).
 
 How :func:`read_header` works on a line:
 
@@ -59,6 +59,46 @@ a total or a sentence that happens to say "date", "description" and
 
 The vocabulary (:data:`HEADERS`) maps a normalised heading to its
 :data:`Role`; a parser may pass its own.
+
+Stacked headers
+---------------
+
+``Check | Deposits/ | Withdrawals/ | Ending daily`` printed over ``Date |
+Number Description | Credits | Debits | balance`` is one header. For three
+consecutive lines, then for two, :func:`stack_headers` puts one line in
+their place when all of this holds (at most :data:`MAX_STACK_LINES` lines
+are ever one header):
+
+1. The lines are on one page, none holds an amount and none is longer than
+   :data:`MAX_STACK_CHARS` characters.
+2. Each line's top is under the one before it, at most
+   :data:`STACK_PITCH` heights of the first line away (a height of at
+   least :data:`MIN_STACK_HEIGHT`).
+3. The **merged** line is a header by :func:`read_header` (with a date
+   heading: never a headless one). Cells of the lines whose horizontal
+   spans overlap (by :data:`MIN_STACK_OVERLAP` or more) are one cell: its
+   text runs top to bottom, then left to right, and it keeps its words.
+   When such a cell is no heading as a whole and
+   :func:`split_heading_cell` reads several in it, they are its headings
+   only when they stand **side by side** (``Check`` over ``Number
+   Description`` is ``Check Number`` beside ``Description``). Headings one
+   above the other are one phrase or the lines are no header: a title
+   ``Withdrawals`` printed over ``Amount`` is no second column.
+4. The merged header names **more** columns than any line of the group
+   names as a header by itself, and three lines more than two of them
+   that stack do. A tie keeps the shorter reading, so a header that reads
+   today reads the same, and a section title printed close under a header
+   (``Deposits``) is no part of it.
+5. Every cell of the first line overlaps a cell of a later line (a title
+   that stands over nothing is no header part), and every line gives a
+   cell to a merged cell that holds a known heading. So the one unknown
+   cell (step 5 above) is a stacked header's description only when each
+   line it comes from also holds a known heading: words alone on a line
+   between ``Date`` and ``Amount`` are a title.
+
+The merged line has the last line's ``page``, ``index`` and ``height``; its
+cells keep the boxes of their own words. It reads the same header through
+:func:`read_header` afterwards, which is how the reader meets it.
 """
 
 from __future__ import annotations
@@ -66,6 +106,7 @@ from __future__ import annotations
 import re
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
+from itertools import combinations, pairwise
 from typing import Final, Literal
 
 from app.ingestion.parsers.base import Cell, ViewLine, join_cells
@@ -213,6 +254,17 @@ UNKNOWN_CELL_SLACK: Final = 1.0
 #: A scanned heading is repaired only when it, and the heading it is read
 #: as, have this many letters: one wrong letter in a short word is another word.
 MIN_REPAIR_LETTERS: Final = 6
+#: A header is printed over at most this many lines.
+MAX_STACK_LINES: Final = 3
+#: A line of a stacked header is at most this long.
+MAX_STACK_CHARS: Final = 130
+#: The lines of a stacked header are at most this many heights of the
+#: first line apart, top to top; a line is at least ``MIN_STACK_HEIGHT`` high.
+STACK_PITCH: Final = 2.2
+MIN_STACK_HEIGHT: Final = 6.0
+#: Cells of two header lines are one heading when their horizontal spans
+#: share this much; headings that share less stand side by side.
+MIN_STACK_OVERLAP: Final = 1.0
 
 
 @dataclass(frozen=True)
@@ -441,12 +493,123 @@ def header_like(line: ViewLine, headers: Mapping[str, Role] = HEADERS) -> bool:
     return len(line.cells) >= 2 or any(role in _DATE_ROLES for role, _ in headings)
 
 
+def _stackable(group: Sequence[ViewLine]) -> bool:
+    """The lines may be one header by where and what they are (module doc, 1, 2 and 5)."""
+    first = group[0]
+    if any(not line.cells or line.page != first.page for line in group):
+        return False
+    reach = STACK_PITCH * max(first.height, MIN_STACK_HEIGHT)
+    if any(not 0 < low.bbox[1] - high.bbox[1] <= reach for high, low in pairwise(group)):
+        return False
+    below = [cell for line in group[1:] for cell in line.cells]
+    if any(
+        all(cell.overlap(other.x0, other.x1) < MIN_STACK_OVERLAP for other in below)
+        for cell in first.cells
+    ):
+        return False  # a title over nothing
+    return all(len(line.text) <= MAX_STACK_CHARS and not find_amounts(line.text) for line in group)
+
+
+def _merge(
+    group: Sequence[ViewLine], headers: Mapping[str, Role]
+) -> tuple[ViewLine, list[frozenset[int]]] | None:
+    """``group`` as one line, and per cell of it the lines (by place in
+    ``group``) its words come from; None when headings printed one above
+    the other are no one phrase (module doc, 3)."""
+    stacks: list[list[tuple[int, Cell]]] = []
+    for place, line in enumerate(group):
+        for cell in line.cells:
+            joined = [(place, cell)]
+            apart: list[list[tuple[int, Cell]]] = []
+            for stack in stacks:
+                if any(cell.overlap(c.x0, c.x1) >= MIN_STACK_OVERLAP for _, c in stack):
+                    joined += stack
+                else:
+                    apart.append(stack)
+            stacks = [*apart, joined]
+    cells: list[tuple[Cell, frozenset[int]]] = []
+    for stack in stacks:
+        if len(stack) == 1:
+            cells.append((stack[0][1], frozenset({stack[0][0]})))
+            continue
+        stack.sort(key=lambda item: (item[0], item[1].x0))
+        words = [(place, word) for place, cell in stack for word in cell.word_cells()]
+        whole = join_cells([word for _, word in words])
+        parts = None if heading_role(whole.text, headers) else split_heading_cell(whole, headers)
+        if parts is None:
+            cells.append((whole, frozenset(place for place, _ in words)))
+            continue
+        pieces = [piece for _, piece in parts]
+        if any(a.overlap(b.x0, b.x1) >= MIN_STACK_OVERLAP for a, b in combinations(pieces, 2)):
+            return None  # one over the other and no phrase
+        start = 0
+        for piece in pieces:
+            end = start + len(piece.words)
+            cells.append((piece, frozenset(place for place, _ in words[start:end])))
+            start = end
+    cells.sort(key=lambda item: item[0].x0)
+    last = group[-1]
+    line = ViewLine(
+        page=last.page,
+        index=last.index,
+        cells=tuple(cell for cell, _ in cells),
+        text=" ".join(cell.text for cell, _ in cells),
+        height=last.height,
+    )
+    return line, [origin for _, origin in cells]
+
+
+def _stacked(
+    lines: Sequence[ViewLine], at: int, size: int, headers: Mapping[str, Role]
+) -> tuple[ViewLine, int] | None:
+    """The ``size`` lines from ``at`` as one header line and how many columns
+    it names, or None when they are no stacked header (module doc)."""
+    group = lines[at : at + size]
+    if len(group) < size or not _stackable(group):
+        return None
+    merged = _merge(group, headers)
+    if merged is None:
+        return None
+    line, origins = merged
+    columns = read_header(line, headers)
+    if columns is None or all(column.role != "date" for column in columns):
+        return None
+    if any(len(read_header(single, headers) or ()) >= len(columns) for single in group):
+        return None
+    headings, _ = _headings(line, headers, _plain(line))
+    named: set[int] = set()
+    for cell, origin in zip(line.cells, origins, strict=True):
+        if any(cell.x0 <= h.x0 and h.x1 <= cell.x1 for _, h in headings):
+            named |= origin
+    if len(named) < size:
+        return None  # a line that gives the header no known heading
+    for shorter in range(2, size):
+        for start in range(at, at + size - shorter + 1):
+            inner = _stacked(lines, start, shorter, headers)
+            if inner is not None and inner[1] >= len(columns):
+                return None
+    return line, len(columns)
+
+
 def stack_headers(
     lines: Sequence[ViewLine],
     headers: Mapping[str, Role] = HEADERS,
 ) -> list[ViewLine]:
-    """``lines`` with a header printed over several lines made one line.
+    """``lines`` with a header printed over two or three lines made one line.
 
-    No header is stacked yet: the lines are returned as they are.
+    Three lines are tried before two (module doc, "Stacked headers"); a
+    line that is part of no stacked header is returned as it is.
     """
-    return list(lines)
+    out: list[ViewLine] = []
+    at = 0
+    while at < len(lines):
+        for size in range(MAX_STACK_LINES, 1, -1):
+            stacked = _stacked(lines, at, size, headers)
+            if stacked is not None:
+                out.append(stacked[0])
+                at += size
+                break
+        else:
+            out.append(lines[at])
+            at += 1
+    return out
