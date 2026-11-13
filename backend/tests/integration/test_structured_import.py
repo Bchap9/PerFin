@@ -1615,3 +1615,79 @@ def test_rows_take_the_payee_they_name_and_its_default_category(env: Env) -> Non
     assert (rows[24].payee_id, rows[24].category_id) == (None, None)
     # The description is kept as printed.
     assert rows[2].raw_payee == "OAKFIELD RENTALS DES:RENT ID:88123 INDN:JORDAN SAMPLE"
+
+
+# ---------------------------------------------------------------------------
+# An account column of names splits the file
+# ---------------------------------------------------------------------------
+
+
+def _named_rows(name: str) -> list[tuple[date, Decimal]]:
+    return sorted(
+        (date.fromisoformat(row[0]), Decimal(row[3]))
+        for row in layouts.TWO_ACCOUNT_ROWS
+        if row[1] == name
+    )
+
+
+def test_aggregator_export_asks_for_each_account(env: Env) -> None:
+    """A checking account and a card in one ``Account`` column: split, never merged."""
+    document_id = env.ingest(layouts.aggregator_two_accounts(), name="all-accounts.csv")
+    assert env.document(document_id).status is DocumentStatus.NEEDS_REVIEW
+    assert _ledger_rows(env) == 0  # nothing lands before each account is answered
+    items = sorted(env.open_reviews(document_id), key=lambda item: item.payload["group"])
+    assert [item.kind for item in items] == [ReviewKind.UNKNOWN_ACCOUNT] * 2
+    assert [item.payload["reason"] for item in items] == ["account_not_found"] * 2
+    assert [item.payload["group"] for item in items] == [0, 1]
+    assert [item.payload["transactions"] for item in items] == [5, 4]
+    (mapping,) = _mappings(env)
+    assert mapping.spec["account_column"] == 1
+    # The names stay in the file: neither the items nor the trail carry them.
+    assert "Everyday" not in str([item.payload for item in items])
+    assert "Everyday" not in _trail(env)
+    assert "Rewards" not in _trail(env)
+    # The detected accounts tell the two questions apart.
+    detected = _detected(env, document_id)
+    assert [(found.target, found.index, found.status) for found in detected] == [
+        ("group", 0, "new"),
+        ("group", 1, "new"),
+    ]
+    assert [found.last4 for found in detected] == [None, None]
+    assert [found.name for found in detected] == ["Everyday Checking", "Rewards Card"]
+    assert [found.proposal.name for found in detected if found.proposal is not None] == [
+        "Everyday Checking",
+        "Rewards Card",
+    ]
+    assert [found.review_item_id for found in detected] == [item.id for item in items]
+    # Both proposals accepted: each name's rows land on its own account.
+    created = _accept_proposals(env, document_id)
+    assert len(created) == 2
+    for db in env.db():
+        accounts = {
+            account.name: account
+            for account in db.execute(select(Account).where(Account.id.in_(created))).scalars()
+        }
+        db.expunge_all()
+    assert sorted(accounts) == ["Everyday Checking", "Rewards Card"]
+    for name, account in accounts.items():
+        assert _amounts(env.transactions(account)) == _named_rows(name)
+    assert _ledger_rows(env) == len(layouts.TWO_ACCOUNT_ROWS)
+    assert env.open_reviews(document_id) == []
+    assert env.document(document_id).status is DocumentStatus.PROCESSED
+
+
+def test_an_account_chosen_for_one_name_takes_only_that_names_rows(env: Env) -> None:
+    document_id = env.ingest(layouts.aggregator_two_accounts("Source Account"), name="all.csv")
+    items = {item.payload["group"]: item for item in env.open_reviews(document_id)}
+    assert sorted(items) == [0, 1]
+    checking = env.ledger.account(env.household_id, type=AccountType.CHECKING)
+    resolved = _resolve(env, items[0], checking, remember=False)
+    assert resolved.status_code == 200, resolved.text
+    env.run(APPLY_MAPPING_JOB_TYPE)
+    assert _amounts(env.transactions(checking)) == _named_rows("Everyday Checking")
+    assert _ledger_rows(env) == 5
+    # The other name still waits for its own choice.
+    (left,) = env.open_reviews(document_id)
+    assert left.kind is ReviewKind.UNKNOWN_ACCOUNT
+    assert (left.payload["group"], left.payload["transactions"]) == (1, 4)
+    assert env.document(document_id).status is DocumentStatus.NEEDS_REVIEW

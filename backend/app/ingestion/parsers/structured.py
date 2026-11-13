@@ -30,8 +30,11 @@ original file.
 * :func:`from_table_grouped`: a multi-account table (``account_column``)
   as one statement per account, each carrying only the **last four digits**
   of its account cell (:func:`cell_last4`), so the importer matches it like
-  an OFX statement. The cell text is used for grouping in memory and never
-  kept.
+  an OFX statement. The text of a number cell is used for grouping in
+  memory and never kept. A column of account *names* (``Everyday
+  Checking``, ``Rewards Card``: an aggregator's export) groups the same
+  way, by the folded name; such a statement carries its ``account_name``
+  and no last four, so the importer asks which account each one is.
 * :func:`header_fingerprint`: the identity of a table layout, so a saved
   mapping is found again for the next file with the same header.
 * :func:`suggest_mapping`: a deterministic guess at the mapping (no model of
@@ -54,6 +57,7 @@ from __future__ import annotations
 
 import hashlib
 import re
+from collections import Counter
 from collections.abc import Iterable, Sequence
 from dataclasses import dataclass, field
 from datetime import date
@@ -123,6 +127,9 @@ class ParsedStatement:
     source_format: str
     transactions: list[ParsedTransaction] = field(default_factory=list)
     last4: str | None = None
+    #: The account's name in a table grouped by a column of names
+    #: (:func:`from_table_grouped`); never an account number.
+    account_name: str | None = None
     institution: str | None = None
     account_type: str | None = None
     currency: str | None = None
@@ -483,11 +490,35 @@ def cell_last4(text: str | None) -> str | None:
     return digits[-4:] if len(digits) >= 4 else None
 
 
-def _account_key(row: Sequence[str], column: int) -> str:
-    """How rows are grouped by account: the last four digits, else the folded text."""
+#: An account name is kept up to this many characters.
+ACCOUNT_NAME_MAX: Final = 80
+
+
+def _account_key(row: Sequence[str], column: int) -> tuple[str | None, str]:
+    """How rows are grouped by account: (the last four digits, "") else (None, the folded text).
+
+    The folded text is the cell case-folded with its blanks collapsed, so
+    ``Everyday Checking`` and ``everyday  checking`` are one account.
+    """
     value = _cell(row, column) or ""
     found = cell_last4(value)
-    return f"#{found}" if found is not None else _header_cell(value)
+    return (found, "") if found is not None else (None, _header_cell(value))
+
+
+def _account_name(text: str | None) -> str | None:
+    """An account cell as the account's name (None: a number, a masked number, nothing).
+
+    A name has fewer than four digits (else the cell is a number and only
+    its last four are kept), is not shaped like a masked number
+    (``Z2xxxxxxxx``) and has letters. Blanks are collapsed and a leading
+    formula guard dropped.
+    """
+    value = _SPACE.sub(" ", (text or "").strip().removeprefix("'")).strip()
+    if not value or cell_last4(value) is not None or _looks_like_account(value):
+        return None
+    if sum(1 for c in value if c.isalpha() and c not in "xX") < 2:
+        return None
+    return value[:ACCOUNT_NAME_MAX]
 
 
 def _body_rows(table: Table, spec: MappingSpec) -> range:
@@ -611,17 +642,20 @@ def from_table_grouped(table: Table, spec: MappingSpec) -> list[ParsedStatement]
     fewer digits by their folded text, so two unnamed accounts stay apart),
     in the order the accounts first appear among the readable rows; each
     group is read like :func:`from_table` and carries only ``last4`` (the
-    cell text is never kept). Unreadable rows are reported in their
-    account's group; those of no group with a readable row (footers, totals)
-    in the first group, like the note rows. Without an ``account_column``: the one
-    statement of :func:`from_table`. A table without any readable row gives
-    one empty statement listing the skipped rows.
+    text of a number cell is never kept). A group of cells that are a name,
+    not a number, carries ``account_name`` (the cell of its first readable
+    row, :func:`_account_name`) and no ``last4``. Unreadable rows are
+    reported in their account's group; those of no group with a readable row
+    (footers, totals) in the first group, like the note rows. Without an
+    ``account_column``: the one statement of :func:`from_table`. A table
+    without any readable row gives one empty statement listing the skipped
+    rows.
     """
     if spec.account_column is None:
         return [from_table(table, spec)]
     column = spec.account_column
     printed_negative = _printed_negative(table, spec)
-    rows: dict[str, list[int]] = {}
+    rows: dict[tuple[str | None, str], list[int]] = {}
     for index in _body_rows(table, spec):
         row = table.rows[index]
         if any(cell.strip() for cell in row):
@@ -635,8 +669,10 @@ def from_table_grouped(table: Table, spec: MappingSpec) -> list[ParsedStatement]
             orphans.extend(parsed.skipped_rows)
             notes.extend(parsed.note_rows)
             continue
-        parsed.last4 = key[1:] if key.startswith("#") else None
+        parsed.last4 = key[0]
         first = parsed.transactions[0].row
+        if parsed.last4 is None and first is not None:
+            parsed.account_name = _account_name(_cell(table.rows[first], column))
         groups.append((first if first is not None else 0, parsed))
     groups.sort(key=lambda pair: pair[0])
     statements = [parsed for _, parsed in groups]
@@ -788,6 +824,8 @@ ROLE_WORDS: Final[dict[str, tuple[str, ...]]] = {
         "acct no",
         "acct #",
         "account",
+        "account name",
+        "source account",
         *("kontonummer", "konto", "iban", "numéro de compte", "numero de compte", "compte"),
         *("número de cuenta", "numero de cuenta", "cuenta", "rekeningnummer", "rekening"),
         *("numero conto", "conto", "número da conta", "numero da conta", "conta"),
@@ -862,6 +900,16 @@ _SECURITY_HEADER: Final = _bounded(r"symbol|ticker|cusip|isin|fund|security")
 _QUANTITY_HEADER: Final = _bounded(r"quantity|qty|shares|units")
 _PRICE_HEADER: Final = _bounded(r"price|nav")
 _ACCOUNT_CELL: Final = re.compile(r"[A-Za-z0-9*#.\- ]{4,34}")
+#: The only headers under which a column of names (not numbers) is the
+#: account column: any other text column (a payee, a category, an account
+#: *type*) must never split a file.
+ACCOUNT_NAME_HEADERS: Final = frozenset({"account", "account name", "source account"})
+#: A column of names is an account column when it holds this many distinct
+#: names, each on at least :data:`ACCOUNT_NAME_REPEATS` rows: one person's
+#: accounts are few and each has several rows; payees are many or seen once.
+ACCOUNT_NAMES_MIN: Final = 2
+ACCOUNT_NAMES_MAX: Final = 20
+ACCOUNT_NAME_REPEATS: Final = 2
 _SETTLEMENT_DATE: Final = re.compile(
     r"settle|value|effective|due|valut|wertstell|valeur|valor|rente"
 )
@@ -1008,8 +1056,28 @@ def _is_money(text: str) -> bool:
     return parse_cell_amount(text, ".") is not None or parse_cell_amount(text, ",") is not None
 
 
-def _role_fit(role: str, values: list[str]) -> float:
-    """Share of the non-empty ``values`` that fit ``role`` (0: the role is out)."""
+def _names_accounts(cells: Sequence[str]) -> bool:
+    """Whether the non-empty ``cells`` are a few account names, each on several rows.
+
+    Between :data:`ACCOUNT_NAMES_MIN` and :data:`ACCOUNT_NAMES_MAX` distinct
+    values (case-folded, blanks collapsed, as :func:`from_table_grouped`
+    groups them), every one on at least :data:`ACCOUNT_NAME_REPEATS` rows.
+    """
+    counts = Counter(_header_cell(cell) for cell in cells)
+    return ACCOUNT_NAMES_MIN <= len(counts) <= ACCOUNT_NAMES_MAX and all(
+        count >= ACCOUNT_NAME_REPEATS for count in counts.values()
+    )
+
+
+def _role_fit(role: str, values: list[str], header: str = "") -> float:
+    """Share of the non-empty ``values`` that fit ``role`` (0: the role is out).
+
+    ``header`` is the column's folded header: the account role is also
+    fitted by a column of names, but only under a header that is exactly an
+    account's (:data:`ACCOUNT_NAME_HEADERS`, :func:`_names_accounts`).
+    :func:`_assign` leaves it out when the table has a column of account
+    numbers.
+    """
     cells = [v.strip() for v in values if v.strip()]
     if not cells:
         return 0.0
@@ -1028,7 +1096,10 @@ def _role_fit(role: str, values: list[str]) -> float:
     if role == "account":
         if len({_header_cell(c) for c in cells}) < 2:
             return 0.0
-        return sum(1 for c in cells if _looks_like_account(c)) / len(cells)
+        numbers = sum(1 for c in cells if _looks_like_account(c)) / len(cells)
+        if numbers < ROLE_FIT_MIN and header in ACCOUNT_NAME_HEADERS and _names_accounts(cells):
+            return 1.0
+        return numbers
     # payee / memo: text, not a column of numbers or dates.
     return sum(1 for c in cells if _shape(c) == "t") / len(cells)
 
@@ -1047,6 +1118,15 @@ def _assign(header: Sequence[str], body: Sequence[Sequence[str]]) -> dict[str, _
     def column_values(column: int) -> list[str]:
         return [row[column] for row in body if column < len(row)]
 
+    # A column of account numbers is the account column whenever there is
+    # one: a column of names beside it is the accounts' nicknames, and only
+    # digits match an account without a person.
+    numbered = any(
+        name
+        and _match_level(name, ROLE_WORDS["account"])
+        and _role_fit("account", column_values(column)) >= ROLE_FIT_MIN
+        for column, name in enumerate(names)
+    )
     pairs: list[tuple[float, int, int, str, float]] = []
     memo_candidates: list[tuple[float, int, int, float]] = []
     for column, name in enumerate(names):
@@ -1057,7 +1137,7 @@ def _assign(header: Sequence[str], body: Sequence[Sequence[str]]) -> dict[str, _
             level = _match_level(name, words)
             if not level:
                 continue
-            fit = _role_fit(role, values)
+            fit = _role_fit(role, values, "" if numbered else name)
             if fit < ROLE_FIT_MIN:
                 continue
             score = level + _preference(role, name)
@@ -1381,7 +1461,9 @@ def suggest_mapping(table: Table) -> MappingSuggestion | None:
     assigned globally, best first, one role per column. A column only takes
     a role when its body cells fit (dates parse, amounts parse, currencies
     are three-letter codes, an indicator holds direction words such as
-    ``DR``/``CR``, an account column several account-number-like values);
+    ``DR``/``CR``, an account column several account-number-like values
+    or, under a header that is exactly ``Account``, ``Account Name`` or
+    ``Source Account``, a few names that each repeat: :func:`_role_fit`);
     an empty column never takes one. A column of direction words is also
     found by its cells alone (:func:`_direction_column`). Beside unsigned
     amounts it is the indicator that signs each row; beside amounts that

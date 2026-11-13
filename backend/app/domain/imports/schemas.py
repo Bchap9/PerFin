@@ -35,7 +35,12 @@ an Individual, a Roth IRA and an HSA account). The rows are grouped by that
 column and each group is imported as its own statement, matched to an
 account by the **last four digits** of the cell like an OFX statement
 (``app.ingestion.match.accounts``); the cell text itself is never stored or
-logged. Mappings saved before the field existed have no ``account_column``
+logged. A column of account names (an aggregator's ``Account`` column of
+``Everyday Checking`` / ``Rewards Card``) groups the same way, by the
+folded name: such a statement has no digits to match, so each one asks for
+its account, and the name is read again from the stored table to tell the
+questions apart (never written to a review item or the audit trail).
+Mappings saved before the field existed have no ``account_column``
 and read exactly as before.
 
 ``mode`` is ``cash`` (the default; everything above) or ``activity``: the

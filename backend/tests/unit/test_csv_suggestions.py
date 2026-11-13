@@ -956,3 +956,149 @@ def test_balance_proven_checking_stays_confident() -> None:
     assert suggestion.spec.sign is Sign.INFLOW_POSITIVE
     amounts = _read(table, suggestion.spec)
     assert (amounts[0], amounts[3]) == (Decimal("-1210.00"), Decimal("2840.00"))
+
+
+# ---------------------------------------------------------------------------
+# An account column of names splits the file
+# ---------------------------------------------------------------------------
+
+
+def _groups(table: Table) -> list[tuple[str | None, str | None, int]]:
+    """(name, last four, rows) of each statement the suggested mapping reads."""
+    statements = from_table_grouped(table, _suggested(table).spec)
+    return [(s.account_name, s.last4, len(s.transactions)) for s in statements]
+
+
+@pytest.mark.parametrize("header", ["Account", "Account Name", "Source Account", "ACCOUNT  name"])
+def test_account_name_column_groups_rows(header: str) -> None:
+    table = _extracted(layouts.aggregator_two_accounts(header))
+    suggestion = _suggested(table)
+    statements = from_table_grouped(table, suggestion.spec)
+    assert [len(s.transactions) for s in statements] == [5, 4]
+    assert suggestion.spec.account_column == 1
+    assert suggestion.accounts == 2
+    assert suggestion.confident, suggestion.doubts
+    (reason,) = [r for r in suggestion.reasons if r.role == "account"]
+    assert (reason.column, reason.match, reason.fit) == (1, "exact", 1.0)
+    # Each statement carries its account's name as printed and no last four.
+    assert _groups(table) == [("Everyday Checking", None, 5), ("Rewards Card", None, 4)]
+    checking, card = statements
+    assert [t.raw_payee for t in card.transactions] == [
+        row[2] for row in layouts.TWO_ACCOUNT_ROWS if row[1] == "Rewards Card"
+    ]
+    assert sum(t.amount for t in checking.transactions) == Decimal("1491.75")
+    assert [group_last4(table, suggestion.spec, group) for group in (0, 1)] == [None, None]
+
+
+def test_account_names_are_grouped_folded_and_whitespace_collapsed() -> None:
+    rows = [["Date", "Account", "Description", "Amount"]]
+    cells = ["Everyday Checking", "REWARDS CARD", "everyday  checking", " Rewards Card "]
+    for index, cell in enumerate(cells * 2):
+        rows.append([f"2026-09-{index + 1:02d}", cell, f"SYNTHETIC PAYEE {index}", "-10.00"])
+    rows.append(["2026-09-20", "Everyday Checking", "SYNTHETIC PAYROLL", "900.00"])
+    table = _table(rows)
+    # The name is the first cell of the group, its blanks collapsed.
+    assert _groups(table) == [("Everyday Checking", None, 5), ("REWARDS CARD", None, 4)]
+
+
+def test_a_name_that_starts_with_a_number_sign_is_a_name() -> None:
+    table = _table(
+        [
+            ["Date", "Account", "Amount"],
+            ["2026-01-02", "#1 Joint", "-1.00"],
+            ["2026-01-03", "#2 Solo", "-2.00"],
+            ["2026-01-04", "#1 Joint", "3.00"],
+            ["2026-01-05", "#2 Solo", "-4.00"],
+        ]
+    )
+    assert _groups(table) == [("#1 Joint", None, 2), ("#2 Solo", None, 2)]
+
+
+def test_a_masked_number_is_never_kept_as_a_name() -> None:
+    table = _table(
+        [
+            ["Date", "Account Number", "Amount"],
+            ["2026-01-02", "Z2xxxxxxxx", "1.00"],  # too few digits for a last four
+            ["2026-01-03", "****1234", "2.00"],
+            ["2026-01-04", "Joint", "3.00"],
+        ]
+    )
+    spec = MappingSpec(date_column=0, date_format="YYYY-MM-DD", amount_column=2, account_column=1)
+    statements = from_table_grouped(table, spec)
+    assert [(s.account_name, s.last4) for s in statements] == [
+        (None, None),
+        (None, "1234"),
+        ("Joint", None),
+    ]
+    assert "Z2" not in repr(statements)
+
+
+def test_unique_account_cells_do_not_split() -> None:
+    table = _extracted(layouts.export_with_unique_account_cells())
+    suggestion = _suggested(table)
+    assert "account" not in {r.role for r in suggestion.reasons}
+    assert suggestion.spec.account_column is None
+    assert suggestion.accounts == 1
+    assert _groups(table) == [(None, None, 6)]
+
+
+@pytest.mark.parametrize(
+    ("accounts", "repeats", "split"),
+    [
+        (2, 2, True),
+        (20, 2, True),
+        (21, 2, False),  # too many to be one person's accounts
+        (1, 6, False),  # one account: nothing to group
+        (3, 1, False),  # no value repeats
+    ],
+)
+def test_a_name_column_needs_a_few_values_that_each_repeat(
+    accounts: int, repeats: int, split: bool
+) -> None:
+    rows = [["Date", "Account", "Description", "Amount"]]
+    for index in range(accounts * repeats):
+        name = f"Synthetic Pot {chr(65 + index % accounts)}"
+        rows.append(["2026-03-05", name, f"SYNTHETIC PAYEE {index}", "-10.00"])
+    rows.append(["2026-03-06", "Synthetic Pot A", "SYNTHETIC PAYROLL", "900.00"])
+    table = _table(rows)
+    assert ("account" in _roles(table)) is split
+    assert len(_groups(table)) == (accounts if split else 1)
+    # One value seen once among values that repeat: not a column of accounts.
+    if split:
+        rows.append(["2026-03-07", "Synthetic Payee Once", "SYNTHETIC PAYEE", "-1.00"])
+        assert "account" not in _roles(_table(rows))
+
+
+def test_payee_column_is_never_an_account_column() -> None:
+    table = _extracted(layouts.export_with_payee_and_category())
+    suggestion = _suggested(table)
+    assert "account" not in {r.role for r in suggestion.reasons}
+    assert suggestion.spec.account_column is None
+    assert _groups(table) == [(None, None, 8)]
+    roles = _roles(table)
+    assert (roles["payee"], roles["memo"]) == (1, 2)
+
+
+@pytest.mark.parametrize(
+    "header",
+    ["Payee", "Category", "Account Type", "From Account", "Account Owner", "Counterparty", "Name"],
+)
+def test_only_an_exact_account_header_names_a_column_of_names(header: str) -> None:
+    # The very rows that split under "Account" stay together under any other header.
+    table = _extracted(layouts.aggregator_two_accounts(header))
+    suggestion = _suggested(table)
+    assert suggestion.spec.account_column is None
+    assert _groups(table) == [(None, None, 9)]
+
+
+def test_a_number_column_wins_over_a_name_column() -> None:
+    rows = [["Date", "Account", "Account Number", "Description", "Amount"]]
+    for index, (name, number) in enumerate(
+        [("Synthetic Joint", "****4410"), ("Synthetic Solo", "****9026")] * 3
+    ):
+        rows.append([f"2026-04-{index + 1:02d}", name, number, f"SYNTHETIC PAYEE {index}", "-5.00"])
+    rows.append(["2026-04-09", "Synthetic Joint", "****4410", "SYNTHETIC PAYROLL", "700.00"])
+    table = _table(rows)
+    assert _roles(table)["account"] == 2
+    # Matched by their digits like any numbered statement; the nickname is not read.
+    assert _groups(table) == [(None, "4410", 4), (None, "9026", 3)]

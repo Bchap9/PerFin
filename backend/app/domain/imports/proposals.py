@@ -245,7 +245,9 @@ def _parsed(target: AssignmentTarget, index: int, parsed: Any) -> _Found:
         target=target,
         index=index,
         last4=parsed.last4,
-        name=None,
+        # A table grouped by a column of account names: the name tells the
+        # groups apart (a number column gives last fours instead).
+        name=parsed.account_name,
         institution=parsed.institution,
         account_type=parsed.account_type,
         currency=parsed.currency,

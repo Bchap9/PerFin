@@ -23,6 +23,12 @@ so a test runs it through the real delimited extractor or the upload path.
   reconciles.
 * :func:`checking_signed_no_balance` - signed amounts, mostly money out, and
   nothing that proves the sign.
+* :func:`aggregator_two_accounts` - an aggregator's export of two accounts
+  told apart by an ``Account`` column of names.
+* :func:`export_with_unique_account_cells` - an ``Account`` column whose
+  cells differ on every row (who the money went to, not whose it is).
+* :func:`export_with_payee_and_category` - no account column; a ``Payee``
+  and a ``Category`` column of a few repeated values.
 """
 
 from __future__ import annotations
@@ -58,6 +64,21 @@ AGGREGATOR_ROWS: Final[tuple[tuple[str, str, str, str], ...]] = (
     ("2026-05-23", "Harbor Lane Grocery", "73.18", "debit"),
     ("2026-05-27", "Copper Pine Hardware", "15.60", "debit"),
     ("2026-05-29", "Refund Paper Kite Books", "-22.95", "credit"),
+)
+
+#: (date, account, description, amount as printed): a checking account (five
+#: rows) and a card (four rows), interleaved, each from its own point of
+#: view (money out negative).
+TWO_ACCOUNT_ROWS: Final[tuple[tuple[str, str, str, str], ...]] = (
+    ("2026-09-01", "Everyday Checking", "Willow Court Rent", "-1210.00"),
+    ("2026-09-02", "Rewards Card", "Harbor Lane Grocery", "-62.47"),
+    ("2026-09-04", "Everyday Checking", "Brightwater Utilities", "-58.90"),
+    ("2026-09-08", "Everyday Checking", "Marlow Design Payroll", "2840.00"),
+    ("2026-09-09", "Rewards Card", "Tin Roof Diner", "-27.35"),
+    ("2026-09-12", "Everyday Checking", "Northgate Fuel Stop", "-43.15"),
+    ("2026-09-15", "Rewards Card", "Paper Kite Books", "-19.80"),
+    ("2026-09-19", "Everyday Checking", "Copper Pine Hardware", "-36.20"),
+    ("2026-09-23", "Rewards Card", "Payment Received Thank You", "109.62"),
 )
 
 
@@ -161,3 +182,39 @@ def checking_signed_no_balance() -> bytes:
         ("2026-08-27", "Brightwater Utilities", "-63.80"),
     ]
     return _file(("Date", "Description", "Amount"), rows)
+
+
+def aggregator_two_accounts(header: str = "Account") -> bytes:
+    """``Date,Account,Description,Amount``: ``Everyday Checking`` and ``Rewards Card`` rows.
+
+    ``header`` renames the account column (``Account Name``, ``Source Account``).
+    """
+    return _file(("Date", header, "Description", "Amount"), TWO_ACCOUNT_ROWS)
+
+
+def export_with_unique_account_cells() -> bytes:
+    """``Date,Account,Description,Amount``: a different ``Account`` cell on every row."""
+    rows = [
+        ("2026-10-01", "Willow Court Lettings", "Rent October", "-1210.00"),
+        ("2026-10-03", "Harbor Lane Grocery", "Weekly shop", "-71.25"),
+        ("2026-10-06", "Brightwater Utilities", "Water and power", "-60.40"),
+        ("2026-10-10", "Marlow Design", "Payroll", "2840.00"),
+        ("2026-10-14", "Northgate Fuel Stop", "Fuel", "-46.85"),
+        ("2026-10-21", "Tin Roof Diner", "Dinner", "-34.10"),
+    ]
+    return _file(("Date", "Account", "Description", "Amount"), rows)
+
+
+def export_with_payee_and_category() -> bytes:
+    """``Date,Payee,Category,Amount``: three payees and three categories, each repeated."""
+    rows = [
+        ("2026-11-02", "Harbor Lane Grocery", "Groceries", "-58.30"),
+        ("2026-11-04", "Northgate Fuel Stop", "Transport", "-41.90"),
+        ("2026-11-06", "Marlow Design", "Income", "1420.00"),
+        ("2026-11-09", "Harbor Lane Grocery", "Groceries", "-63.75"),
+        ("2026-11-13", "Northgate Fuel Stop", "Transport", "-39.20"),
+        ("2026-11-16", "Harbor Lane Grocery", "Groceries", "-22.10"),
+        ("2026-11-20", "Marlow Design", "Income", "1420.00"),
+        ("2026-11-24", "Northgate Fuel Stop", "Transport", "-44.65"),
+    ]
+    return _file(("Date", "Payee", "Category", "Amount"), rows)
