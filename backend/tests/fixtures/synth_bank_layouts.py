@@ -77,7 +77,7 @@ And statements with a table printed two or three times across the page:
 * :func:`checks_three_across`: a signed ``Date | Description | Amount``
   table of 5 rows, then ``Checks Paid`` over ``Number | Date Paid | Amount``
   printed three times side by side: 4 lines holding 11 checks, one number
-  marked ``*``. The left group is read; the 7 checks beside it are counted.
+  marked ``*``. Every group is read: eleven checks, each a row.
 * :func:`daily_balances_three_across`: the same first table, then ``Daily
   Balance Summary`` over ``Date | Amount`` printed three times with 3 lines
   of balances: no rows, and nothing to count.
@@ -1038,10 +1038,10 @@ _ACROSS_CHECKS: Final[tuple[tuple[str, date, Decimal], ...]] = (
 #: Per group of the checks table: where the number and the date start and
 #: where the amount ends.
 _ACROSS_GROUPS: Final = ((40.0, 95.0, 215.0), (240.0, 295.0, 415.0), (440.0, 495.0, 575.0))
-#: The checks of the left group: the ones a reader of one group returns.
+#: Every check, line by line and left to right: what a reader of all three
+#: groups returns.
 ACROSS_CHECKS_READ: Final[tuple[ExpectedRow, ...]] = tuple(
-    (paid, -amount, f"CHECK {number.rstrip('*')}")
-    for number, paid, amount in _ACROSS_CHECKS[:: len(_ACROSS_GROUPS)]
+    (paid, -amount, f"CHECK {number.rstrip('*')}") for number, paid, amount in _ACROSS_CHECKS
 )
 #: ``(day, balance)`` of the daily-balance table, three to a line.
 _ACROSS_DAILY: Final[tuple[tuple[str, str], ...]] = (

@@ -20,8 +20,8 @@ institutions, invented numbers).
   rows, each pending on its date, with one question naming the assumed year
   (``tests/fixtures/synth_bank_layouts.py``).
 * A statement of unsigned amounts under section titles, and one whose header
-  takes two lines, import clean; checks printed three across the page hold
-  the document with one ``lines_skipped`` item counting those not read
+  takes two lines, import clean; so do checks printed three across the
+  page, every one of them a row
   (``synth_bank_layouts``, ``synth_statement_headers``).
 * A card "Statement of Account" with only a statement date
   (``tests/fixtures/synth_card_statement.py``) imports into its credit card
@@ -464,23 +464,26 @@ def test_stacked_header_statement_imports_clean(env: Env) -> None:
     assert len(env.snapshots(account)) == 1
 
 
-def test_checks_across_the_page_raise_lines_skipped(env: Env) -> None:
+def test_checks_across_the_page_import_clean(env: Env) -> None:
     account = env.ledger.account(
         env.household_id, number_last4="5127", type="checking", currency="USD"
     )
     document_id = env.ingest(layouts.checks_three_across())
 
     document = env.document(document_id)
-    assert document.status is DocumentStatus.NEEDS_REVIEW
+    assert document.status is DocumentStatus.PROCESSED, env.open_reviews(document_id)
+    assert env.open_reviews(document_id) == []
     assert document.account_id == account.id
-    items = env.open_reviews(document_id)
-    skipped = [item for item in items if item.payload.get("reason") == "lines_skipped"]
-    assert len(skipped) == 1, [item.payload for item in items]
-    assert skipped[0].payload["count"] == 7
-    # The checks beside the left group were not read: nothing vouches for the
-    # closing balance, so none is recorded.
-    assert len(env.transactions(account)) == 9
-    assert env.snapshots(account) == []
+    # Every check of every group is a row: the statement adds up, and its
+    # closing balance is recorded.
+    rows = env.transactions(account)
+    assert len(rows) == 16
+    assert sorted((r.raw_payee or "", r.amount) for r in rows) == sorted(
+        (payee or "", _money6(amount))
+        for _, amount, payee in layouts.EXPECTED_ROWS["checks_three_across"]
+    )
+    assert all(r.review_state is ReviewState.NONE for r in rows)
+    assert len(env.snapshots(account)) == 1
 
 
 def test_unknown_account_is_chosen_later_from_the_stored_extraction(env: Env) -> None:

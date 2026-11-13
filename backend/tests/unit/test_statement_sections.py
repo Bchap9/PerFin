@@ -380,3 +380,366 @@ def test_a_dated_balance_line_under_an_unread_header_is_not_counted() -> None:
         [HEADER, ROW, grid, [("01/06/2026", 62.0), ("New Balance Outlet", 150.0), ("9.00", 500.0)]]
     )
     assert outcome.skipped_lines == 1
+
+
+# -- tables printed across the page; a second listing ----------------------------
+
+
+def test_a_second_listing_of_checks_is_not_read_twice() -> None:
+    result = _read(synth.checks_listed_twice())
+    statement = _only(result)
+    assert _rows(statement) == synth.EXPECTED_ROWS["checks_listed_twice"]
+    assert len(statement.transactions) == 12
+    assert _status(statement) == "ok"
+    assert "checks_listed_twice" in _warnings(result)
+    assert _skipped(result) == 0
+    assert not any(w.startswith("table_across_unread") for w in _warnings(result))
+    assert not any((t.payee or "").startswith("CHECK ") for t in statement.transactions)
+
+
+def test_checks_only_in_their_table_are_rows() -> None:
+    result = _read(synth.checks_only_across())
+    statement = _only(result)
+    assert _rows(statement) == synth.EXPECTED_ROWS["checks_only_across"]
+    assert len(statement.transactions) == 12
+    assert [t.payee for t in statement.transactions[8:]] == [
+        payee for _, _, payee in synth.LISTED_CHECKS
+    ]
+    assert all(t.amount < 0 for t in statement.transactions[8:])
+    assert _status(statement) == "ok"
+    assert _skipped(result) == 0
+    assert "checks_listed_twice" not in _warnings(result)
+    assert not any(w.startswith("table_across_unread") for w in _warnings(result))
+
+
+CHECKS_HEADER = [
+    ("Number", 62.0),
+    ("Date Paid", 110.0),
+    ("Amount", 200.0),
+    ("Number", 260.0),
+    ("Date Paid", 310.0),
+    ("Amount", 400.0),
+]
+SUMMARY_OF_CHECKS = [("Summary of checks", 62.0)]
+
+
+def _check_pair(
+    first: tuple[str, int, str], second: tuple[str, int, str] | None = None
+) -> list[tuple[str, float]]:
+    """One line of a checks table two across: ``(number, day, amount)`` per group."""
+    cells: list[tuple[str, float]] = []
+    for check, (number_x, date_x, amount_x) in zip(
+        (first, second), ((62.0, 110.0, 200.0), (260.0, 310.0, 400.0)), strict=True
+    ):
+        if check is None:
+            continue
+        number, day, amount = check
+        if number:
+            cells.append((number, number_x))
+        cells += [(f"01/{day:02d}/2026", date_x), (amount, amount_x)]
+    return cells
+
+
+def _listing(closing: str, *main: list[tuple[str, float]]) -> ParseOutcome:
+    """A signed table of ``main`` rows, then four checks listed two across."""
+    return _parse(
+        [
+            [("Beginning Balance 1,000.00", 62.0)],
+            [(f"Ending Balance {closing}", 62.0)],
+            HEADER,
+            *main,
+            SUMMARY_OF_CHECKS,
+            CHECKS_HEADER,
+            _check_pair(("3101", 5, "20.00"), ("3102", 6, "31.00")),
+            _check_pair(("3103", 7, "7.50"), ("3104", 8, "12.25")),
+        ]
+    )
+
+
+_MAIN_CHECKS = [
+    _led(5, "Check 3101", "-20.00"),
+    _led(6, "Check 3102", "-31.00"),
+    _led(7, "Check 3103", "-7.50"),
+    _led(8, "Check 3104", "-12.25"),
+]
+
+
+def test_one_unmatched_check_keeps_the_whole_table() -> None:
+    coffee = _led(4, "Coffee", "-4.50")
+    # Three of the four listed checks are rows of the first table: the
+    # fourth is nowhere else, so the listing is no second listing.
+    outcome = _listing("924.75", coffee, *_MAIN_CHECKS[:3])
+    statement = _one(outcome)
+    assert len(statement.transactions) == 4 + 4
+    assert [t.payee for t in statement.transactions[4:]] == [
+        "CHECK 3101",
+        "CHECK 3102",
+        "CHECK 3103",
+        "CHECK 3104",
+    ]
+    assert statement.reconciliation is not None
+    assert statement.reconciliation.status == "mismatch"
+    assert "checks_listed_twice" not in outcome.warnings
+    assert outcome.skipped_lines == 0
+    # All four are there: listed twice, read once, nothing counted.
+    outcome = _listing("924.75", coffee, *_MAIN_CHECKS)
+    statement = _one(outcome)
+    assert [t.payee for t in statement.transactions] == [
+        "Coffee",
+        "Check 3101",
+        "Check 3102",
+        "Check 3103",
+        "Check 3104",
+    ]
+    assert statement.reconciliation is not None
+    assert statement.reconciliation.status == "ok"
+    assert "checks_listed_twice" in outcome.warnings
+    assert outcome.skipped_lines == 0
+    assert not any(w.startswith("table_across_unread") for w in outcome.warnings)
+
+
+def test_a_partner_vouches_for_one_listed_check_only() -> None:
+    # Two listed checks of one day and amount, one such row in the first
+    # table: the second of them has no partner, and the listing stays.
+    outcome = _parse(
+        [
+            HEADER,
+            _led(5, "Check 3101", "-20.00"),
+            SUMMARY_OF_CHECKS,
+            CHECKS_HEADER,
+            _check_pair(("3101", 5, "20.00"), ("3102", 5, "20.00")),
+        ]
+    )
+    assert len(_one(outcome).transactions) == 3
+    assert "checks_listed_twice" not in outcome.warnings
+    # Another day is no partner either.
+    outcome = _parse(
+        [
+            HEADER,
+            _led(5, "Check 3101", "-20.00"),
+            SUMMARY_OF_CHECKS,
+            CHECKS_HEADER,
+            _check_pair(("3101", 6, "20.00")),
+        ]
+    )
+    assert len(_one(outcome).transactions) == 2
+    assert "checks_listed_twice" not in outcome.warnings
+
+
+def test_a_group_that_reads_no_row_is_counted() -> None:
+    outcome = _parse(
+        [
+            CHECKS_HEADER,
+            _check_pair(("3101", 5, "20.00"), ("3102", 6, "31.00")),
+            # The second group prints a date and no figure: found, not read.
+            [("3103", 62.0), ("01/07/2026", 110.0), ("7.50", 200.0), ("01/08/2026", 310.0)],
+        ]
+    )
+    assert [(t.payee, t.amount) for t in _one(outcome).transactions] == [
+        ("CHECK 3101", Decimal("-20.00")),
+        ("CHECK 3102", Decimal("-31.00")),
+        ("CHECK 3103", Decimal("-7.50")),
+    ]
+    assert outcome.skipped_lines == 1
+    assert outcome.warnings.count("table_across_unread:1") == 1
+
+
+# -- titles printed with their totals ---------------------------------------------
+
+
+def test_title_with_its_total_gives_direction_and_a_check() -> None:
+    result = _read(synth.titles_with_totals())
+    statement = _only(result)
+    assert _rows(statement) == synth.EXPECTED_ROWS["titles_with_totals"]
+    amounts = [t.amount for t in statement.transactions]
+    assert sum(1 for amount in amounts if amount > 0) == 3
+    assert sum(1 for amount in amounts if amount < 0) == 9
+    assert _status(statement) == "ok"
+    assert _skipped(result) == 0
+    assert "section_total_mismatch" not in _warnings(result)
+    assert not any(w.startswith("table_across_unread") for w in _warnings(result))
+    assert "checks_listed_twice" not in _warnings(result)
+    # With one withdrawal off the page the title's total is not its rows'.
+    result = _read(synth.titles_with_totals_one_missing())
+    statement = _only(result)
+    assert _rows(statement) == synth.EXPECTED_ROWS["titles_with_totals_one_missing"]
+    assert "section_total_mismatch" in _warnings(result)
+    assert _status(statement) == "mismatch"
+
+
+def _titled(title: str, total: str) -> list[tuple[str, float]]:
+    return [(title, 62.0), (total, 300.0)]
+
+
+def test_a_printed_sign_beats_a_title_with_a_total() -> None:
+    outcome = _parse(
+        [
+            _titled("Deposits / Credits", "2 items totaling $38.00"),
+            HEADER,
+            _led(2, "Pay", "50.00"),
+            _led(3, "Pay returned", "-12.00"),
+        ]
+    )
+    assert _amounts(outcome) == [Decimal("50.00"), Decimal("-12.00")]
+    assert "section_total_mismatch" not in outcome.warnings
+    outcome = _parse(
+        [
+            _titled("Withdrawals / Debits", "2 items totaling $38.00"),
+            HEADER,
+            _led(2, "Rent", "50.00"),
+            _led(3, "Rent back", "+12.00"),
+        ]
+    )
+    assert _amounts(outcome) == [Decimal("-50.00"), Decimal("12.00")]
+    assert "section_total_mismatch" not in outcome.warnings
+    # The title's total is checked: another figure is not these rows' total.
+    outcome = _parse(
+        [
+            _titled("Withdrawals / Debits", "2 items totaling $99.00"),
+            HEADER,
+            _led(2, "Rent", "50.00"),
+            _led(3, "Rent back", "+12.00"),
+        ]
+    )
+    assert "section_total_mismatch" in outcome.warnings
+
+
+def test_a_title_s_total_is_kept_when_a_total_line_follows() -> None:
+    outcome = _parse(
+        [
+            _titled("Deposits / Credits", "2 items totaling $75.00"),
+            HEADER,
+            _led(2, "Pay", "50.00"),
+            _led(3, "Gift", "25.00"),
+            # Not the section's rows: the title's figure is the one checked.
+            [("Total deposits year to now", 62.0), ("900.00", 500.0)],
+        ]
+    )
+    assert _amounts(outcome) == [Decimal("50.00"), Decimal("25.00")]
+    assert "section_total_mismatch" not in outcome.warnings
+    assert outcome.skipped_lines == 0
+
+
+def test_a_check_without_its_number_is_a_check() -> None:
+    checks = [("Check No.", 62.0), ("Date", 150.0), ("Amount", 500.0)]
+    outcome = _parse(
+        [
+            checks,
+            [("3101", 62.0), ("01/05/2026", 150.0), ("20.00", 500.0)],
+            [("01/06/2026", 150.0), ("7.50", 500.0)],
+        ]
+    )
+    assert [(t.payee, t.amount) for t in _one(outcome).transactions] == [
+        ("CHECK 3101", Decimal("-20.00")),
+        ("CHECK", Decimal("-7.50")),
+    ]
+    assert outcome.skipped_lines == 0
+    # Across the page too, in every group.
+    outcome = _parse(
+        [
+            CHECKS_HEADER,
+            _check_pair(("", 5, "20.00"), ("", 6, "31.00")),
+        ]
+    )
+    assert [(t.payee, t.amount) for t in _one(outcome).transactions] == [
+        ("CHECK", Decimal("-20.00")),
+        ("CHECK", Decimal("-31.00")),
+    ]
+    # A table that names more than checks: a row with no number is as printed.
+    wide = [("Date", 62.0), ("Check No.", 130.0), ("Description", 220.0), ("Amount", 500.0)]
+    outcome = _parse(
+        [
+            wide,
+            [("01/05/2026", 62.0), ("Pay", 220.0), ("20.00", 500.0)],
+            [("01/06/2026", 62.0), ("20.00", 500.0)],
+        ]
+    )
+    assert [(t.payee, t.amount) for t in _one(outcome).transactions] == [
+        ("Pay", Decimal("20.00")),
+        (None, Decimal("20.00")),
+    ]
+
+
+def test_a_summary_line_with_a_figure_is_no_title() -> None:
+    summary = [("Deposits and additions", 62.0), ("900.00", 500.0)]
+    # In a summary box three lines over the header: not this table's title.
+    outcome = _parse(
+        [[("Withdrawals", 62.0), ("75.00", 500.0)], NOTE, NOTE, HEADER, _led(2, "Pay", "50.00")]
+    )
+    assert _amounts(outcome) == [Decimal("50.00")]
+    assert "section_total_mismatch" not in outcome.warnings
+    # Printed as one cell it is a sentence with a figure, wherever it stands.
+    outcome = _parse([[("Withdrawals 75.00", 62.0)], HEADER, _led(2, "Pay", "50.00")])
+    assert _amounts(outcome) == [Decimal("50.00")]
+    assert "section_total_mismatch" not in outcome.warnings
+    # Nor a title with a bare figure right over the header: nothing beside
+    # the figure says it is the total of the rows under it.
+    outcome = _parse([[("Withdrawals", 62.0), ("75.00", 500.0)], HEADER, _led(2, "Pay", "50.00")])
+    assert _amounts(outcome) == [Decimal("50.00")]
+    assert "section_total_mismatch" not in outcome.warnings
+    # A label that is no section title has no say, with a figure or without.
+    outcome = _parse([[("Ending balance", 62.0), ("75.00", 500.0)], HEADER, ROW])
+    assert _amounts(outcome) == [Decimal("-4.50")]
+    assert "section_total_mismatch" not in outcome.warnings
+    # Under a table, a title with a figure over the next header starts no
+    # row of the table above, whatever column its figure stands under.
+    outcome = _parse(
+        [
+            HEADER,
+            _led(2, "Pay", "50.00"),
+            _led(3, "Gift", "25.00"),
+            summary,
+            NOTE,
+            NOTE,
+            HEADER,
+            _led(4, "Tip", "15.00"),
+        ]
+    )
+    assert _amounts(outcome) == [Decimal("50.00"), Decimal("25.00"), Decimal("15.00")]
+
+
+def test_items_totaling_is_the_sections_total() -> None:
+    rows = [_led(2, "Pay", "50.00"), _led(3, "Gift", "25.00")]
+    for cells in (
+        [("2 items totaling $75.00", 150.0)],
+        [("2 item(s) totaling", 150.0), ("$75.00", 500.0)],
+    ):
+        outcome = _parse([DEPOSITS, HEADER, *rows, cells])
+        assert _amounts(outcome) == [Decimal("50.00"), Decimal("25.00")]
+        assert outcome.skipped_lines == 0
+        assert "section_total_mismatch" not in outcome.warnings
+    outcome = _parse([DEPOSITS, HEADER, *rows, [("2 items totaling", 150.0), ("$80.00", 500.0)]])
+    assert _amounts(outcome) == [Decimal("50.00"), Decimal("25.00")]
+    assert "section_total_mismatch" in outcome.warnings
+    # A sentence that says as much is no total.
+    outcome = _parse(
+        [DEPOSITS, HEADER, *rows, [("We counted 2 items totaling $80.00 for you", 150.0)]]
+    )
+    assert "section_total_mismatch" not in outcome.warnings
+
+
+def test_a_title_with_its_total_is_no_row_of_the_table_above() -> None:
+    # The dates are printed once per day, so an undated line with words and
+    # one figure under ``Amount`` is a row of the day above it. The title
+    # of the next table, its total under ``Amount``, is none.
+    outcome = _parse(
+        [
+            HEADER,
+            _led(2, "Pay", "50.00"),
+            [("Gift", 150.0), ("25.00", 500.0)],
+            [("Tip", 150.0), ("15.00", 500.0)],
+            _led(3, "Refund", "10.00"),
+            [("Withdrawals / Debits", 150.0), ("1 items totaling", 300.0), ("$30.00", 500.0)],
+            HEADER,
+            _led(4, "Rent", "30.00"),
+        ]
+    )
+    assert _amounts(outcome) == [
+        Decimal("50.00"),
+        Decimal("25.00"),
+        Decimal("15.00"),
+        Decimal("10.00"),
+        Decimal("-30.00"),
+    ]
+    assert outcome.skipped_lines == 0
+    assert "section_total_mismatch" not in outcome.warnings

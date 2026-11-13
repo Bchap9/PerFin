@@ -23,6 +23,24 @@ and, unless it says otherwise, rows that reconcile:
   words, then a headed table that reconciles. The blocks stand above the
   table: under it they would be lines of the table, read by its columns.
 
+Tables printed across the page, and titles printed with their totals:
+
+* :func:`checks_listed_twice`: ``Date | Check No. | Description | Amount``
+  over twelve signed rows, four of them checks; then ``Summary of checks``
+  over ``Number | Date | Amount`` printed twice across, listing the same
+  four once more.
+* :func:`checks_only_across`: the same without the four check rows in the
+  first table. The balances are unchanged, so the statement adds up only
+  with the four checks of the second table read.
+* :func:`titles_with_totals`: ``Deposits / Credits | 3 items totaling
+  $...``, ``Withdrawals / Debits | 5 items totaling $...`` and ``Checks |
+  4 checks totaling $...``, each over its header, every figure printed
+  without a sign. The withdrawals run on to page 2 under ``Withdrawals /
+  Debits - continued``; the checks are printed three across, one of them
+  with no number.
+* :func:`titles_with_totals_one_missing`: the same with one withdrawal left
+  off the page; the title's total and the balances still count it.
+
 :data:`EXPECTED_ROWS` gives, per builder, the rows a correct reading returns
 (``(posted, amount, payee)``, money out negative).
 """
@@ -32,6 +50,7 @@ from __future__ import annotations
 import io
 from collections.abc import Sequence
 from datetime import date
+from decimal import Decimal
 from typing import Final
 
 from reportlab.lib.pagesizes import letter
@@ -263,9 +282,198 @@ def dated_notices_under_a_title() -> bytes:
     return buf.getvalue()
 
 
+# -- a second listing of the checks, printed across the page ---------------------
+
+_LISTED_OPENING: Final = _d("3,512.08")
+#: ``(row, check number)``: the first table's rows, the checks with their number.
+_LISTED_ROWS: Final[tuple[tuple[ExpectedRow, str], ...]] = (
+    ((date(2026, 9, 1), _d("1,960.00"), "Payroll Withycombe Saddlery"), ""),
+    ((date(2026, 9, 2), _d("-1,125.00"), "Rent Hobbleton Mews"), ""),
+    ((date(2026, 9, 4), _d("-66.00"), "Check"), "4181"),
+    ((date(2026, 9, 8), _d("-43.27"), "Card Purchase Yarrowfield Grocer"), ""),
+    ((date(2026, 9, 9), _d("-249.00"), "Check"), "4182"),
+    ((date(2026, 9, 11), _d("-97.15"), "Bill Pay Brindlemoor Gas"), ""),
+    ((date(2026, 9, 15), _d("1,960.00"), "Payroll Withycombe Saddlery"), ""),
+    ((date(2026, 9, 16), _d("-80.00"), "ATM Cash Tolcarne Street"), ""),
+    ((date(2026, 9, 18), _d("-312.50"), "Check"), "4184"),
+    ((date(2026, 9, 22), _d("-28.90"), "Card Purchase Skelwith Bakery"), ""),
+    ((date(2026, 9, 25), _d("-75.25"), "Check"), "4185"),
+    ((date(2026, 9, 29), _d("0.36"), "Interest Credit"), ""),
+)
+#: The four checks as a reader of the second table alone returns them.
+LISTED_CHECKS: Final[tuple[ExpectedRow, ...]] = tuple(
+    (posted, amount, f"CHECK {number}") for (posted, amount, _), number in _LISTED_ROWS if number
+)
+#: Where the number and the date of each group start and where its amount ends.
+_LISTED_GROUPS: Final = ((40.0, 95.0, 215.0), (300.0, 355.0, 475.0))
+
+
+def _checks_across(
+    c: canvas.Canvas,
+    y: float,
+    checks: Sequence[tuple[str, date, Decimal]],
+    groups: Sequence[tuple[float, float, float]],
+) -> float:
+    """``Number | Date | Amount`` once per group and the checks under it,
+    one per group from the left, with no sign; the next y."""
+    header: list[tuple[float, str]] = []
+    for number_x, date_x, amount_x in groups:
+        header += [(number_x, "Number"), (date_x, "Date"), (-amount_x, "Amount")]
+    _line(c, y, header, size=8)
+    lines: list[list[tuple[float, str]]] = []
+    for start in range(0, len(checks), len(groups)):
+        cells: list[tuple[float, str]] = []
+        for (number, paid, amount), (number_x, date_x, amount_x) in zip(
+            checks[start : start + len(groups)], groups, strict=False
+        ):
+            if number:
+                cells.append((number_x, number))
+            cells += [(date_x, paid.strftime("%m/%d/%Y")), (-amount_x, _money(amount))]
+        lines.append(cells)
+    return _rows(c, y - 14, lines)
+
+
+def _listed(*, in_first_table: bool) -> bytes:
+    """``in_first_table``: the first table holds its four check rows."""
+    buf = io.BytesIO()
+    c = canvas.Canvas(buf, pagesize=letter)
+    closing = _running(_LISTED_OPENING, [row for row, _ in _LISTED_ROWS])[-1]
+    _head(c, "Quernmore Vale Bank", "6093", "09/01/2026 - 09/30/2026", _LISTED_OPENING, closing)
+    _line(
+        c,
+        650,
+        [(40, "Date"), (110, "Check No."), (180, "Description"), (-560, "Amount")],
+        size=8,
+    )
+    y = _rows(
+        c,
+        636,
+        [
+            [
+                (40, posted.strftime("%m/%d/%Y")),
+                (110, number),
+                (180, payee),
+                (-560, f"{amount:,.2f}"),
+            ]
+            for (posted, amount, payee), number in _LISTED_ROWS
+            if in_first_table or not number
+        ],
+    )
+    y -= 15
+    _line(c, y, [(40, "Summary of checks")], size=10, bold=True)
+    checks = [(number, posted, amount) for (posted, amount, _), number in _LISTED_ROWS if number]
+    _checks_across(c, y - 16, checks, _LISTED_GROUPS)
+    c.save()
+    return buf.getvalue()
+
+
+def checks_listed_twice() -> bytes:
+    """Twelve rows, four of them checks, and the four listed again two across."""
+    return _listed(in_first_table=True)
+
+
+def checks_only_across() -> bytes:
+    """Eight rows, and four checks that only their own table prints."""
+    return _listed(in_first_table=False)
+
+
+# -- titles printed with their count and total -----------------------------------
+
+_TITLED_OPENING: Final = _d("2,204.60")
+_TITLED_DEPOSITS: Final[tuple[ExpectedRow, ...]] = (
+    (date(2026, 7, 1), _d("1,250.00"), "Payroll Appletreewick Forge"),
+    (date(2026, 7, 14), _d("480.00"), "Transfer From Savings"),
+    (date(2026, 7, 28), _d("140.00"), "Mobile Deposit"),
+)
+_TITLED_WITHDRAWALS: Final[tuple[ExpectedRow, ...]] = (
+    (date(2026, 7, 2), _d("-610.00"), "Rent Cuddington Close"),
+    (date(2026, 7, 7), _d("-84.15"), "Card Purchase Mossgiel Grocer"),
+    (date(2026, 7, 13), _d("-126.00"), "Bill Pay Farleton Water"),
+    (date(2026, 7, 20), _d("-52.25"), "Card Purchase Tansley Hardware"),
+    (date(2026, 7, 27), _d("-40.00"), "ATM Cash Wetherlam Road"),
+)
+#: The withdrawals printed on page 1; the rest are under the title printed again.
+_TITLED_FIRST_PAGE: Final = 3
+#: ``(number, paid, amount)``: three to a line; the second has no number printed.
+_TITLED_CHECKS: Final[tuple[tuple[str, date, Decimal], ...]] = (
+    ("5207", date(2026, 7, 6), _d("215.00")),
+    ("", date(2026, 7, 9), _d("96.40")),
+    ("5209", date(2026, 7, 17), _d("180.60")),
+    ("5210", date(2026, 7, 24), _d("148.00")),
+)
+_TITLED_CHECK_ROWS: Final[tuple[ExpectedRow, ...]] = tuple(
+    (paid, -amount, f"CHECK {number}".strip()) for number, paid, amount in _TITLED_CHECKS
+)
+_TITLED_GROUPS: Final = ((40.0, 95.0, 215.0), (240.0, 295.0, 415.0), (440.0, 495.0, 575.0))
+_TITLED_BANK: Final = "Ellerbeck Trust Bank"
+_TITLED_PERIOD: Final = "07/01/2026 - 07/31/2026"
+#: The withdrawal :func:`titles_with_totals_one_missing` leaves off the page.
+TITLED_OMITTED: Final = _TITLED_WITHDRAWALS[1]
+
+
+def _titled_line(c: canvas.Canvas, y: float, title: str, count: str, total: Decimal) -> None:
+    """A title with its count and total beside it, as one line of two cells."""
+    _line(c, y, [(40, title), (230, f"{count} totaling ${_money(total)}")], size=10, bold=True)
+
+
+def _unsigned(c: canvas.Canvas, y: float, rows: Sequence[ExpectedRow]) -> float:
+    """``Date | Description | Amount`` and ``rows`` with no sign; the next y."""
+    _line(c, y, [(40, "Date"), (110, "Description"), (-560, "Amount")], size=8)
+    return _rows(
+        c,
+        y - 13,
+        [
+            [(40, posted.strftime("%m/%d/%Y")), (110, payee), (-560, _money(amount))]
+            for posted, amount, payee in rows
+        ],
+    )
+
+
+def _titled(*, omit: ExpectedRow | None = None) -> bytes:
+    """``omit`` is a withdrawal left off the page; totals and balances count it."""
+    buf = io.BytesIO()
+    c = canvas.Canvas(buf, pagesize=letter)
+    everything = (*_TITLED_DEPOSITS, *_TITLED_WITHDRAWALS, *_TITLED_CHECK_ROWS)
+    closing = _running(_TITLED_OPENING, everything)[-1]
+    _head(c, _TITLED_BANK, "3381", _TITLED_PERIOD, _TITLED_OPENING, closing)
+    _titled_line(c, 650, "Deposits / Credits", "3 items", _total(_TITLED_DEPOSITS))
+    y = _unsigned(c, 634, _TITLED_DEPOSITS)
+    y -= 17
+    _titled_line(c, y, "Withdrawals / Debits", "5 items", _total(_TITLED_WITHDRAWALS))
+    first = [row for row in _TITLED_WITHDRAWALS[:_TITLED_FIRST_PAGE] if row != omit]
+    _unsigned(c, y - 16, first)
+    c.showPage()
+    _top(c, _TITLED_BANK, "3381", _TITLED_PERIOD)
+    _line(c, 700, [(40, "Withdrawals / Debits - continued")], size=10, bold=True)
+    y = _unsigned(c, 684, _TITLED_WITHDRAWALS[_TITLED_FIRST_PAGE:])
+    y -= 17
+    _titled_line(c, y, "Checks", "4 checks", _total(_TITLED_CHECK_ROWS))
+    _checks_across(c, y - 16, _TITLED_CHECKS, _TITLED_GROUPS)
+    c.save()
+    return buf.getvalue()
+
+
+def titles_with_totals() -> bytes:
+    """Three deposits, five withdrawals and four checks under titles with totals."""
+    return _titled()
+
+
+def titles_with_totals_one_missing() -> bytes:
+    """One withdrawal is missing: the withdrawals are not their title's total."""
+    return _titled(omit=TITLED_OMITTED)
+
+
 EXPECTED_ROWS: Final[dict[str, list[ExpectedRow]]] = {
     "headerless_sections_checking": [*_CHECKING_DEPOSITS, *_CHECKING_WITHDRAWALS],
     "headerless_total_off": list(_CHECKING_WITHDRAWALS),
     "headerless_card": [_CARD_PAYMENT, *_CARD_PURCHASES],
     "dated_notices_under_a_title": list(_NOTICE_ROWS),
+    "checks_listed_twice": [row for row, _ in _LISTED_ROWS],
+    "checks_only_across": [*(row for row, number in _LISTED_ROWS if not number), *LISTED_CHECKS],
+    "titles_with_totals": [*_TITLED_DEPOSITS, *_TITLED_WITHDRAWALS, *_TITLED_CHECK_ROWS],
+    "titles_with_totals_one_missing": [
+        *_TITLED_DEPOSITS,
+        *(row for row in _TITLED_WITHDRAWALS if row != TITLED_OMITTED),
+        *_TITLED_CHECK_ROWS,
+    ],
 }

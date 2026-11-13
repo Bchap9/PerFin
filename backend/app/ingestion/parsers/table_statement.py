@@ -203,16 +203,41 @@ are read the same way:
    never the wrapped text of the row above them.
    **A table printed across the page.** ``Number | Date Paid | Amount``
    printed two or three times side by side
-   (:func:`~app.ingestion.parsers.statement_header.across_start`) is read as
-   far as its **left group**: the header gives the left group's columns and
-   one ``across`` column from the second group on, which takes every cell
-   that starts there before any other rule. On a line whose left group
-   prints a date, each date among the ``across`` cells (words shaped like
-   a date that are no figure: ``4.11`` under ``Amount`` is none) is one entry
-   found and not read: counted as skipped, the line's box once (warning
-   ``table_across_unread:<n>``). The statement then cannot add up and is
-   held. ``Date | Amount`` printed across (balances by day) is no table we
-   read: it ends the table above and nothing under it is counted.
+   (:func:`~app.ingestion.parsers.statement_header.across_groups`) is read
+   group by group. The header gives the left group's columns and one
+   ``across`` column from the second group on, which takes every cell
+   that starts there before any other rule; the left group is read as any
+   table is. On a line whose left group prints a date, the ``across``
+   cells are shared out among the other groups (a cell belongs to the
+   group its centre stands in, the groups parting halfway between the
+   last heading of one and the first of the next) and each group's cells
+   are read by that group's own columns: a date in its date column and an
+   amount that reads make a row, left to right after the left group's (a
+   date printed so close to its amount that the two are one cell is read
+   word by word). A group whose cells read no row is counted as skipped,
+   once per date printed in it (words shaped like a date that are no
+   figure: ``4.11`` under ``Amount`` is none), or once when it prints a
+   figure and no date; the line's box once (warning
+   ``table_across_unread:<n>``). A line whose left group prints no date
+   is read as before: nothing right of it is a row or a count. ``Date |
+   Amount`` printed across (balances by day) is no table we read: it ends
+   the table above and nothing under it is counted.
+   **Checks.** In a table whose header names a check number, a date and
+   an amount and nothing else, across the page or not, every row is a
+   check paid, its number printed or not (``CHECK 1042``; ``CHECK`` when
+   the number is blank): money out, as a row with a check number and no
+   description is in any table, unless it prints ``CR``.
+   **A second listing.** A table printed across the page whose **every**
+   row has a partner among the rows of the other tables, of the same day
+   and the same magnitude and each partner taken once, lists again what
+   the transaction table already holds (``Summary of checks`` under a
+   table with a ``Check No.`` column): its rows are dropped, none is
+   counted, its section's total goes with them, and the statement gets
+   the warning ``checks_listed_twice``
+   (:meth:`TableStatementParser._second_listings`, after the rows are
+   signed and dated). With one row that has no partner (or no date or
+   amount) the whole table stays: a statement that then does not add up
+   is held.
    A **payment stub** is left out before anything is read
    (:meth:`TableStatementParser.without_stubs`): from a line saying to
    detach it (``Please detach here``, ``Return this portion``..., without
@@ -322,8 +347,18 @@ are read the same way:
    **Section totals.** An undated line of a table that starts with
    ``total``, holds one amount and names no other span of time
    (:data:`OTHER_SPAN_WORDS`, a four-digit year: ``Total fees charged in
-   2026``) is the total of the section whose rows it follows: the first one
-   per section, never one of pending rows. It is still no row. A total
+   2026``), or that is a count and a total and nothing else (``8 item(s)
+   totaling $3,500.00``), is the total of the section whose rows it
+   follows: the first one per section, never one of pending rows. It is
+   still no row. A total printed **beside the section's title**
+   (``Withdrawals / Debits | 5 items totaling $912.40`` among the
+   :data:`TITLE_LINES_ABOVE` lines over the header: the first cell a title
+   we know, one figure, and beside it a word of
+   :data:`~app.ingestion.parsers.statement_lines.TOTAL_WORDS`) names the
+   section as the title alone would, and its figure is the section's
+   total whatever ``Total`` line follows the rows; ``Fees | 12.00`` with
+   no such word is a line of the summary and names nothing. Over a header
+   such a line is never a row of the table above it. A total
    with more dated rows of its section after it was a **subtotal** (a
    cardholder's, a branch's): it is dropped, and the first total after the
    section's last row is the one checked, against all the section's rows
@@ -387,6 +422,7 @@ from dataclasses import dataclass, field, replace
 from datetime import date, timedelta
 from decimal import Decimal
 from functools import lru_cache
+from itertools import pairwise
 from typing import ClassVar, Final, Literal, NamedTuple
 
 from app.ingestion.classify.dates import (
@@ -423,8 +459,20 @@ from app.ingestion.parsers.statement_header import NUMERIC_ROLES as NUMERIC_ROLE
 from app.ingestion.parsers.statement_header import TABLE_HEADING_WORDS as TABLE_HEADING_WORDS
 from app.ingestion.parsers.statement_header import Column as Column
 from app.ingestion.parsers.statement_header import Role as Role
-from app.ingestion.parsers.statement_header import header_like, read_header, stack_headers
-from app.ingestion.parsers.statement_lines import MAX_LED_WORDS, LedRow, items_total, led_row
+from app.ingestion.parsers.statement_header import (
+    across_groups,
+    header_like,
+    read_header,
+    stack_headers,
+)
+from app.ingestion.parsers.statement_lines import (
+    MAX_LED_WORDS,
+    TOTAL_WORDS,
+    LedRow,
+    items_total,
+    led_row,
+    titled_total,
+)
 from app.ingestion.parsers.text import (
     FULL_STYLES,
     MAX_LINE,
@@ -902,6 +950,10 @@ class _Row:
     #: A dated balance line (``Beginning Balance``: never a row itself), or a
     #: candidate whose chain of undated lines starts right under one.
     balance_line: bool = False
+    #: The number of the table printed across the page the row was read from
+    #: (0: none): its rows are dropped together when every one of them is a
+    #: row of another table too (module doc, "A second listing").
+    listing: int = 0
 
 
 @dataclass
@@ -943,8 +995,8 @@ class _Summary:
     #: The numbers of those of them that printed no total: nothing checked
     #: their rows but the statement's own balances.
     unchecked: set[int] = field(default_factory=set)
-    #: Entries right of the left group of a table printed across the page
-    #: (counted, not read).
+    #: Entries of a table printed across the page that were found right of
+    #: its left group and did not read as a row (counted).
     across: int = 0
     #: The total printed after a section's rows (``Total deposits``), by the
     #: section's number (:attr:`_Row.section`): the first one after the last
@@ -1773,16 +1825,44 @@ class TableStatementParser(DocumentParser):
             return None
         return section_title(line.norm, self.section_titles)
 
-    def _title_above(self, lines: Sequence[ViewLine], index: int) -> SectionTitle | None:
-        """The title of the header at ``lines[index]``: the nearest of the
-        :data:`TITLE_LINES_ABOVE` lines before it on its page that has
-        letters and no amount, when that line is a title."""
+    def _titled(self, line: ViewLine) -> tuple[SectionTitle, Amount] | None:
+        """The section title ``line`` prints with its total beside it, and
+        that total (``Withdrawals / Debits | 5 items totaling $912.40``;
+        :func:`~app.ingestion.parsers.statement_lines.titled_total`). The
+        first cell is a title we know, and a word beside the figure says it
+        is a total (:data:`~app.ingestion.parsers.statement_lines.TOTAL_WORDS`):
+        ``Fees | 12.00`` is a line of the summary."""
+        found = titled_total(line)
+        if found is None:
+            return None
+        text, total = found
+        beside = normalise(" ".join(cell.text for cell in line.cells[1:])[:MAX_LINE])
+        if TOTAL_WORDS.isdisjoint(beside.split()):
+            return None
+        title = section_title(normalise(text), self.section_titles)
+        return None if title is None else (title, total)
+
+    def _title_above(
+        self, lines: Sequence[ViewLine], index: int
+    ) -> tuple[SectionTitle, Amount | None] | None:
+        """The title of the header at ``lines[index]`` and the total printed
+        beside it, if any. The title is the nearest of the
+        :data:`TITLE_LINES_ABOVE` lines before the header on its page that
+        has letters and either no amount, when that line is a title, or its
+        section's total beside a title (:meth:`_titled`). Any other line
+        with an amount is passed over."""
         header = lines[index]
         for above in reversed(lines[max(0, index - TITLE_LINES_ABOVE) : index]):
             if above.page != header.page:
                 break
-            if any(ch.isalpha() for ch in above.text) and not find_amounts(above.text):
-                return self._title(above)
+            if not any(ch.isalpha() for ch in above.text):
+                continue
+            if not find_amounts(above.text):
+                found = self._title(above)
+                return None if found is None else (found, None)
+            titled = self._titled(above)
+            if titled is not None:
+                return titled
         return None
 
     def _section_line_above(self, lines: Sequence[ViewLine], index: int) -> bool:
@@ -1837,6 +1917,16 @@ class TableStatementParser(DocumentParser):
         head: ViewLine | None = None
         # The figure of the balance line the candidates held stand under.
         block_open: Amount | None = None
+        # A table printed across the page: the columns of each of its groups
+        # (None: the table being read is none), its number, and how many
+        # such tables were met.
+        groups: list[list[Column]] | None = None
+        listing = listings = 0
+        # The table being read names a check number, a date and an amount
+        # and nothing else: each of its rows is a check paid.
+        checks_only = False
+        # Sections whose total is the one printed beside their title.
+        titled: set[int] = set()
 
         def runs_on(found: SectionTitle, page: int) -> bool:
             """``found`` names the section being read once more: marked
@@ -1950,9 +2040,14 @@ class TableStatementParser(DocumentParser):
                 before = section
                 above = self._title_above(lines, index)
                 if above is not None:
-                    if not runs_on(above, line.page):
+                    if not runs_on(above[0], line.page):
                         section += 1
-                    title = above
+                    title = above[0]
+                    if above[1] is not None and section not in titled:
+                        # Printed with the title: the section's total,
+                        # whatever ``Total`` line follows its rows.
+                        summary.section_totals[section] = above[1]
+                        titled.add(section)
                 elif not (
                     columns is not None
                     and row_page is not None
@@ -1968,6 +2063,14 @@ class TableStatementParser(DocumentParser):
                     settle(dated=False, ended=True)
                 columns, pending, last, anchor = header, False, None, None
                 found_header, unread, head = True, None, line
+                across_header = any(c.role == "across" for c in header)
+                groups = across_groups(line, self.headers) if across_header else None
+                if not across_header:
+                    listing = 0
+                elif section != before or not listing:
+                    listings += 1
+                    listing = listings
+                checks_only = {c.role for c in header} - {"across"} == {"check", "date", "amount"}
                 continue
             norm = line.norm
             if columns is not None and self._header_like(line):
@@ -2050,7 +2153,17 @@ class TableStatementParser(DocumentParser):
             self._split_fused_amount(cells, columns, head)
             date_text = " ".join(c.text for c in cells.get("date", [])).strip(_DATE_MARKS)
             if not date_text or not self._date_shaped(date_text):
-                figures = 0 if pending else self._undated_figures(line, norm, cells)
+                following = lines[index + 1] if index + 1 < len(lines) else None
+                # The line over a header on its page is that table's title,
+                # wherever it is printed: no second line of the row above,
+                # and no row when its total stands beside it.
+                over_table = (
+                    following is not None
+                    and following.page == line.page
+                    and (self.columns(following) is not None or self._header_like(following))
+                )
+                titled_over = over_table and self._titled(line) is not None
+                figures = 0 if pending or titled_over else self._undated_figures(line, norm, cells)
                 if (
                     figures == 1
                     and self._carries(line, cells, anchor)
@@ -2086,14 +2199,6 @@ class TableStatementParser(DocumentParser):
                         summary.section_totals.setdefault(section, total)
                 if figures:
                     loose.append((line.page, line.bbox))
-                following = lines[index + 1] if index + 1 < len(lines) else None
-                # The line over a header on its page is that table's title,
-                # wherever it is printed: no second line of the row above.
-                over_table = (
-                    following is not None
-                    and following.page == line.page
-                    and (self.columns(following) is not None or self._header_like(following))
-                )
                 last = self._not_a_row(
                     line, norm, cells, summary, last, scan, columns, over_table=over_table
                 )
@@ -2111,14 +2216,33 @@ class TableStatementParser(DocumentParser):
                         section += 1
                     pending, title, anchor = False, found, None
                 continue
-            beside = self._across_entries(across, date_text)
-            if beside:
-                # Entries found beside the left group and not read: counted.
-                skipped += beside
-                summary.across += beside
-                summary.skipped_boxes.append((line.page, line.bbox))
-            row = self._row(line, cells, date_text, title, section)
+            # The other groups of a table printed across: a row each, left
+            # to right; one that reads no row is counted.
+            beside, unread_beside = self._across_rows(
+                line, across, groups, date_text, title, section, checks_only
+            )
+            row = self._row(line, cells, date_text, title, section, checks_only=checks_only)
             balance_row = self._balance_row(normalise(" ".join(row.description)), cells)
+            if balance_row is not None:
+                # Beside a balance line no entry is believed.
+                unread_beside += len(beside)
+                beside = []
+            if unread_beside:
+                skipped += unread_beside
+                summary.across += unread_beside
+                summary.skipped_boxes.append((line.page, line.bbox))
+            row.listing = listing
+            for other in beside:
+                other.listing = listing
+            placed = [cell for found in cells.values() for cell in found]
+            if across and placed:
+                # The row is its own group's cells, not the whole line.
+                row.bbox = (
+                    min(cell.x0 for cell in placed),
+                    min(cell.y0 for cell in placed),
+                    max(cell.x1 for cell in placed),
+                    max(cell.y1 for cell in placed),
+                )
             if balance_row is not None:
                 # A balance line, whatever column its figure is in: never a row.
                 kind, figure = balance_row
@@ -2142,11 +2266,13 @@ class TableStatementParser(DocumentParser):
                 continue
             if not pending:
                 dated_section = section
-                if summary.section_totals.pop(section, None) is not None:
+                if section not in titled and summary.section_totals.pop(section, None) is not None:
                     # More of the section after its "total": that was a
                     # subtotal (a cardholder's, a branch's), not the section's.
                     subtotals[section] = subtotals.get(section, 0) + 1
                 row.part = subtotals.get(section, 0)
+                for other in beside:
+                    other.part = row.part
             if row.amount is None and row.debit is None and row.credit is None:
                 if pending:
                     continue
@@ -2174,17 +2300,25 @@ class TableStatementParser(DocumentParser):
                 skipped += 1
                 summary.skipped_boxes.append((line.page, line.bbox))
                 last, anchor = None, row
+                if beside:
+                    row_page = line.page
+                    table_rows += len(beside)
+                    if pending:
+                        pending_items += len(beside)
+                    else:
+                        rows.extend(beside)
                 continue
             settle(dated=True)
             row_page = line.page
             if pending:
-                pending_items += 1
-                table_rows += 1
+                pending_items += 1 + len(beside)
+                table_rows += 1 + len(beside)
                 last = anchor = None
                 continue
             last = anchor = row
             rows.append(row)
-            table_rows += 1
+            rows.extend(beside)
+            table_rows += 1 + len(beside)
         close_headerless()
         settle(dated=False, ended=True)
         self._adjacent_balances(lines, summary)
@@ -2216,8 +2350,7 @@ class TableStatementParser(DocumentParser):
         """The total a section printed without a header ends at: a
         ``Total ...`` line (:meth:`_total_line`) or a count and a total
         (``8 item(s) totaling $3,500.00``)."""
-        total = self._total_line(line, norm)
-        return total if total is not None else items_total(line)
+        return self._total_line(line, norm)
 
     def _total_of(self, total: Amount, rows: Sequence[_Row]) -> bool:
         """``total`` is the total of ``rows``: the sum of their magnitudes,
@@ -2328,13 +2461,19 @@ class TableStatementParser(DocumentParser):
         section: int,
         *,
         carried: bool = False,
+        checks_only: bool = False,
     ) -> _Row:
-        """The row ``line`` is, its cells in their columns, under ``title``."""
+        """The row ``line`` is, its cells in their columns, under ``title``.
+
+        A row with a check number and no description is a check paid. In a
+        table that names nothing but checks (``checks_only``: a check
+        number, a date and an amount) every row is one, its number printed
+        or not."""
         description = [c.text for c in cells.get("description", [])]
         number = " ".join(c.text for c in cells.get("check", [])).strip(" *")
-        is_check = bool(number) and not description
+        is_check = (bool(number) or checks_only) and not description
         if is_check:
-            description = ["CHECK", number]
+            description = ["CHECK", number] if number else ["CHECK"]
         rule = title.rule if title is not None else None
         used = [c for role_cells in cells.values() for c in role_cells]
         amount = self._amount(cells.get("amount"))
@@ -2525,6 +2664,91 @@ class TableStatementParser(DocumentParser):
         after = lines[index + 2] if index + 2 < len(lines) else None
         return after is None or after.page != label.page or read_amount(after.text) is None
 
+    def _across_rows(
+        self,
+        line: ViewLine,
+        cells: Sequence[Cell],
+        groups: Sequence[Sequence[Column]] | None,
+        date_text: str,
+        title: SectionTitle | None,
+        section: int,
+        checks_only: bool,
+    ) -> tuple[list[_Row], int]:
+        """The rows of the groups right of the left one on ``line``, left to
+        right, and how many entries were found there and not read (module
+        doc, "A table printed across the page").
+
+        ``cells`` are the line's cells from the second group on, ``groups``
+        the columns of every group of the header, the left one first. A
+        cell belongs to the group its centre stands in, the groups parting
+        halfway between the last heading of one and the first of the next;
+        a cell that reaches over that line is parted into its words first.
+        A group whose cells read no row counts the dates printed in it
+        (:meth:`_across_entries`), or one when it prints a figure and no
+        date."""
+        if not cells:
+            return [], 0
+        if not groups or len(groups) < 2:
+            return [], self._across_entries(cells, date_text)
+        others = groups[1:]
+        bounds = [
+            (max(c.x1 for c in before) + min(c.x0 for c in after)) / 2
+            for before, after in pairwise(others)
+        ]
+        held: list[list[Cell]] = [[] for _ in others]
+        for cell in cells:
+            straddles = any(cell.x0 < bound < cell.x1 for bound in bounds)
+            for part in cell.word_cells() if straddles else (cell,):
+                held[sum(1 for bound in bounds if part.centre >= bound)].append(part)
+        rows: list[_Row] = []
+        unread = 0
+        for found, columns in zip(held, others, strict=True):
+            if not found:
+                continue
+            row = self._group_row(line, found, columns, title, section, checks_only)
+            if row is not None:
+                rows.append(row)
+                continue
+            entries = self._across_entries(found, date_text)
+            figure = any(read_amount(cell.text) is not None for cell in found)
+            unread += entries or int(figure)
+        return rows, unread
+
+    def _group_row(
+        self,
+        line: ViewLine,
+        found: Sequence[Cell],
+        columns: Sequence[Column],
+        title: SectionTitle | None,
+        section: int,
+        checks_only: bool,
+    ) -> _Row | None:
+        """The row the cells ``found`` of one group of a table printed
+        across are, read by that group's ``columns``: a date in its date
+        column and an amount that reads. The cells are tried as printed,
+        then word by word (a date printed so close to its amount that the
+        two are one cell). A balance line is no row."""
+        for by_word in (False, True):
+            parts = tuple(word for cell in found for word in cell.word_cells()) if by_word else ()
+            if by_word and len(parts) == len(found):
+                break
+            part = replace(
+                line,
+                cells=parts or tuple(found),
+                text=" ".join(cell.text for cell in parts or found),
+            )
+            cells = self._assign(part, columns)
+            date_text = " ".join(c.text for c in cells.get("date", [])).strip(_DATE_MARKS)
+            if not date_text or not self._date_shaped(date_text):
+                continue
+            row = self._row(part, cells, date_text, title, section, checks_only=checks_only)
+            if self._signed(row) is None:
+                continue
+            if self._balance_row(normalise(" ".join(row.description)), cells) is not None:
+                return None
+            return row
+        return None
+
     def _across_entries(self, cells: Sequence[Cell], date_text: str) -> int:
         """How many entries ``cells`` hold: the cells right of the left group
         of a table printed across the page, on a line whose left group is
@@ -2559,7 +2783,12 @@ class TableStatementParser(DocumentParser):
     def _total_line(line: ViewLine, norm: str) -> Amount | None:
         """The figure of a total line (module doc, "Section totals"): the
         line starts with ``total``, holds exactly one amount and names no
-        other span of time (:data:`OTHER_SPAN_WORDS`, a four-digit year)."""
+        other span of time (:data:`OTHER_SPAN_WORDS`, a four-digit year);
+        or the line is a count and a total and nothing else (``8 item(s)
+        totaling $3,500.00``)."""
+        counted = items_total(line)
+        if counted is not None:
+            return counted
         if not norm.startswith("total"):
             return None
         padded = f" {norm} "
@@ -2585,6 +2814,9 @@ class TableStatementParser(DocumentParser):
         if not figures:
             return 0
         if any(norm.startswith(prefix.strip()) for prefix in self.skip_prefixes):
+            return 0
+        if items_total(line) is not None:
+            # ``8 items totaling $3,500.00``: the section's total, no row.
             return 0
         if any(norm.startswith(marker) for marker in self.pending_markers):
             return 0
@@ -3284,6 +3516,37 @@ class TableStatementParser(DocumentParser):
 
     # -- one statement ----------------------------------------------------------
 
+    def _second_listings(self, rows: Sequence[_Row], dates: Sequence[date | None]) -> set[int]:
+        """The indexes of the rows of every table printed across the page
+        that is a second listing (module doc): **each** of its rows has a
+        partner of the same day and the same magnitude among the rows of
+        the other tables, no partner taken twice. A row without a date or
+        an amount has none, and one row without a partner keeps the whole
+        table. Tables are judged in the order printed; the rows of one
+        found to be a second listing are no partners for the next."""
+        keys: list[tuple[date, Decimal] | None] = []
+        for row, posted in zip(rows, dates, strict=True):
+            amount = self._signed(row)
+            keys.append(None if posted is None or amount is None else (posted, abs(amount)))
+        out: set[int] = set()
+        for listing in sorted({row.listing for row in rows if row.listing}):
+            own = [at for at, row in enumerate(rows) if row.listing == listing]
+            wanted: dict[tuple[date, Decimal], int] = {}
+            for at in own:
+                key = keys[at]
+                if key is None:
+                    break
+                wanted[key] = wanted.get(key, 0) + 1
+            else:
+                others = [
+                    keys[at]
+                    for at, row in enumerate(rows)
+                    if row.listing != listing and at not in out
+                ]
+                if all(others.count(key) >= count for key, count in wanted.items()):
+                    out.update(own)
+        return out
+
     def statement_account(
         self, summary_last4: str | None, currency: str | None, account: AccountSegment | None
     ) -> StatementAccount:
@@ -3399,6 +3662,16 @@ class TableStatementParser(DocumentParser):
             if guess is not None and years:
                 dates, assumed = guess, True
                 outcome.warnings.append(f"year_assumed:{max(years)}")
+        twice = self._second_listings(rows, dates)
+        if twice:
+            # A table across the page that lists again what the other tables
+            # hold: none of its entries is a row, and none is counted.
+            kept = [at for at in range(len(rows)) if at not in twice]
+            emptied = {rows[at].section for at in twice} - {rows[at].section for at in kept}
+            for section in emptied:
+                summary.section_totals.pop(section, None)
+            rows, dates = [rows[at] for at in kept], [dates[at] for at in kept]
+            outcome.warnings.append("checks_listed_twice")
         if newest_first(dates) and (
             any(row.balance is not None for row in rows) or len({row.section for row in rows}) == 1
         ):
