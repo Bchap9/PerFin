@@ -50,11 +50,18 @@ How :func:`read_header` works on a line:
    no digit, and none of :data:`NOT_A_DESCRIPTION` (a title such as
    ``DAILY ENDING BALANCE`` between ``Date`` and ``Amount`` heads a list
    of balances, not rows). Two unknown cells, and the line is no header.
-6. The line is a header when it names a date, a description or check
+6. A line that names the **description** twice, in two cells or in two
+   phrases of one cell that stand side by side (their spans do not
+   overlap), is no header: ``Date | Description | Amount | Description |
+   Amount`` heads a grid of labels and their values (an account summary),
+   and its lines are no rows. It is :func:`header_like`, so it ends the
+   table above it. A table printed across the page is found before this
+   and is not meant.
+7. The line is a header when it names a date, a description or check
    number, and a money column; else it may be a headless header
    (:func:`_headless`).
 
-Steps 2 to 5 are for a line of headings only: they are skipped on a line
+Steps 2 to 6 are for a line of headings only: they are skipped on a line
 that holds an amount or has more than :data:`MAX_HEADER_CELLS` cells, and a
 cell of more than :data:`MAX_SPLIT_WORDS` words is never split, so a row,
 a total or a sentence that happens to say "date", "description" and
@@ -259,8 +266,10 @@ MAX_SPLIT_WORDS: Final = 12
 MAX_HEADER_CELLS: Final = 12
 _DATE_ROLES: Final = frozenset({"date", "post_date"})
 #: A unit in brackets after a money heading, brackets included, is at most
-#: 12 characters (``(SGD)``, ``[in USD]``).
-_UNIT_BRACKETS: Final = re.compile(r"\s*(?:\([^()\[\]]{1,10}\)|\[[^()\[\]]{1,10}\])\s*$")
+#: 12 characters (``(SGD)``, ``[in USD]``). One ``|``, ``I``, ``l`` or ``!``
+#: printed directly behind the closing bracket is the column rule read as
+#: a character (``AMOUNT (EUR)I``) and goes with the unit.
+_UNIT_BRACKETS: Final = re.compile(r"\s*(?:\([^()\[\]]{1,10}\)|\[[^()\[\]]{1,10}\])[|Il!]?\s*$")
 #: A unit as a last word: three capital letters (``AMOUNT EUR``).
 _UNIT_WORD: Final = re.compile(r"\s+([A-Z]{3})\s*$")
 #: Three capital letters after a money heading that are a word, not a
@@ -311,10 +320,12 @@ def heading_role(text: str, headers: Mapping[str, Role] = HEADERS) -> Role | Non
 
     The role of the normalised text; else, for a **money** heading
     (:data:`NUMERIC_ROLES`), its role after dropping one unit printed after
-    it: a bracketed group of at most 12 characters (``Amount (SGD)``) or one
-    last word of three capital letters (``AMOUNT EUR``; not a word of
-    :data:`NOT_A_UNIT`). A text heading keeps its words: ``Description
-    (USD)`` is no heading.
+    it: a bracketed group of at most 12 characters (``Amount (SGD)``, with
+    one rule glyph ``|``, ``I``, ``l`` or ``!`` directly behind the bracket:
+    ``AMOUNT (EUR)I``) or one last word of three capital letters (``AMOUNT
+    EUR``; not a word of :data:`NOT_A_UNIT`). A text heading keeps its
+    words: ``Description (USD)`` is no heading, and neither are ``Amount I``
+    or ``Balance (EUR) due``.
     """
     role = headers.get(normalise(text))
     if role is not None:
@@ -485,6 +496,8 @@ def read_header(line: ViewLine, headers: Mapping[str, Role] = HEADERS) -> list[C
     A table printed across the page (:func:`across_start`) declares the
     columns of its first group and an ``across`` column from the second
     group on, when the first group is a header by itself; else it is none.
+    Any other line of headings that names the description twice, side by
+    side, is none either (module doc, 6).
     """
     across = _across(line, headers)
     if across is not None:
@@ -500,14 +513,19 @@ def read_header(line: ViewLine, headers: Mapping[str, Role] = HEADERS) -> list[C
     found: list[Column] = []
     roles: set[Role] = set()
     dates: list[Cell] = []
+    texts: list[Cell] = []
     for role, cell in headings:
         if role == "date":
             dates.append(cell)
+        elif role == "description":
+            texts.append(cell)
         if role in roles:
             continue
         roles.add(role)
         found.append(Column(role, cell.x0, cell.x1))
     if plain:
+        if any(a.overlap(b.x0, b.x1) <= 0 for a, b in combinations(texts, 2)):
+            return None  # a label beside its value, twice: a grid, no table
         if len(dates) > 1 and "post_date" not in roles:
             # Two date headings: the left one is the row's date, the next its posting date.
             first, second = sorted(dates, key=lambda c: c.x0)[:2]
