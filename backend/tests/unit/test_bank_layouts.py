@@ -2567,3 +2567,365 @@ def test_member_statement_with_a_damaged_heading_reads_its_withdrawals() -> None
     assert statement.reconciliation is not None
     assert statement.reconciliation.status == "ok"
     assert outcome.skipped_lines == 0
+
+
+# -- review findings of the final phase --------------------------------------------
+
+
+def test_an_assumed_year_dates_no_balance() -> None:
+    # The rows wait on their year; a closing balance dated by that guess would
+    # be written to the account's balance history with nobody asked about it.
+    result = _read_with(synth.yearless_no_period(), not_after=MARCH_END)
+    statement = _only(result)
+    assert "year_assumed:2026" in _warnings(result)
+    assert _status(statement) == "ok"
+    assert statement.ledger_balance is None
+    assert statement.opening_balance is not None
+    assert statement.opening_balance.as_of is None
+    # The figures the statement was checked with are still the printed ones.
+    assert statement.reconciliation is not None
+    assert statement.reconciliation.closing is not None
+    assert statement.confidence["closing_balance"] >= 0.85
+
+
+def test_a_period_from_elsewhere_still_dates_the_balance() -> None:
+    hint = (date(2026, 3, 1), date(2026, 3, 31), 0.9)
+    result = _read_with(synth.yearless_no_period(), not_after=date(2027, 5, 1), period=hint)
+    statement = _only(result)
+    assert statement.ledger_balance is not None
+    assert statement.ledger_balance.as_of == date(2026, 3, 31)
+
+
+def test_a_subtotal_before_more_rows_of_its_section_is_not_the_sections_total() -> None:
+    outcome = _parse(
+        [
+            *_BALANCES,
+            [("Deposits", 62.0)],
+            HEADER,
+            _row(5, "Salary", "900.00"),
+            _total("Total branch deposits", "900.00"),
+            _row(6, "Refund", "50.00"),
+            _total("Total deposits", "950.00"),
+            [("Withdrawals", 62.0)],
+            HEADER,
+            _row(7, "Rent", "700.00"),
+            _row(8, "Fuel", "100.00"),
+            _total("Total withdrawals", "800.00"),
+        ]
+    )
+    assert _amounts(outcome) == [Decimal("900.00"), Decimal("50.00"), -700, -100]
+    assert "section_total_mismatch" not in outcome.warnings
+    assert _reconciliation(outcome) == ("ok", [])
+
+
+def test_the_total_after_a_subtotal_is_still_checked() -> None:
+    # 960.00 is neither every deposit (950.00) nor the one since the subtotal (50.00).
+    outcome = _parse(
+        [
+            *_BALANCES,
+            [("Deposits", 62.0)],
+            HEADER,
+            _row(5, "Salary", "900.00"),
+            _total("Total branch deposits", "900.00"),
+            _row(6, "Refund", "50.00"),
+            _total("Total deposits", "960.00"),
+            [("Withdrawals", 62.0)],
+            HEADER,
+            _row(7, "Rent", "700.00"),
+            _row(8, "Fuel", "100.00"),
+        ]
+    )
+    assert outcome.warnings.count("section_total_mismatch") == 1
+    assert _reconciliation(outcome) == ("mismatch", [0, 1])
+
+
+_CARD_HEADER = [
+    ("Trans Date", 62.0),
+    ("Post Date", 120.0),
+    ("Description", 200.0),
+    ("Amount", 500.0),
+]
+
+
+def _card_row(day: int, payee: str, amount: str) -> list[tuple[str, float]]:
+    return [(f"Jan {day}", 62.0), (f"Jan {day}", 120.0), (payee, 200.0), (amount, 500.0)]
+
+
+def _cardholder_totals(second: str) -> ParseOutcome:
+    return CardStatementParser().parse(
+        _view(
+            [
+                [("Account ending in 4321", 62.0)],
+                [("Billing Cycle: Jan 01, 2026 - Jan 31, 2026", 62.0)],
+                [("Previous Balance", 62.0), ("$100.00", 300.0)],
+                [("New Balance", 62.0), ("$90.00", 300.0)],
+                [("Transactions", 62.0)],
+                _CARD_HEADER,
+                _card_row(5, "Sedgewick Grocer", "$40.00"),
+                _card_row(7, "Larkmere Fuel", "$20.00"),
+                [("Total for card ending 4321", 62.0), ("$60.00", 500.0)],
+                _card_row(9, "Thistledown Books", "$30.00"),
+                [("Total for card ending 9876", 62.0), (second, 500.0)],
+                [("Payments, Credits and Adjustments", 62.0)],
+                _CARD_HEADER,
+                _card_row(12, "Payment received", "-$100.00"),
+            ]
+        ),
+        threshold=0.85,
+    )
+
+
+def test_a_total_per_cardholder_is_the_total_of_the_rows_since_the_one_before() -> None:
+    outcome = _cardholder_totals("$30.00")
+    assert _amounts(outcome) == [-40, -20, -30, 100]
+    assert "section_total_mismatch" not in outcome.warnings
+    assert _reconciliation(outcome) == ("ok", [])
+
+
+def test_a_cardholders_total_that_is_off_still_holds_the_statement() -> None:
+    outcome = _cardholder_totals("$35.00")
+    assert outcome.warnings.count("section_total_mismatch") == 1
+    assert _reconciliation(outcome)[0] == "mismatch"
+
+
+_RUNNING = [
+    _BALANCE_HEADER,
+    _balance_row(5, "Salary", "900.00", "1,900.00"),
+    _balance_row(7, "Rent", "-700.00", "1,200.00"),
+    _balance_row(8, "Monthly fee", "-12.00", "1,188.00"),
+    _balance_row(9, "Fuel", "-38.00", "1,150.00"),
+]
+
+
+def test_a_total_under_rows_their_running_balance_confirms_is_no_section_check() -> None:
+    # ``Total fees`` is the total of one kind of row; every row of the table
+    # agrees with the balance printed beside it.
+    outcome = _parse(
+        [
+            *_BALANCES,
+            *_RUNNING,
+            [("Total fees for this period", 62.0), ("12.00", 430.0)],
+            [("Total interest paid this period", 62.0), ("0.00", 430.0)],
+        ]
+    )
+    assert "section_total_mismatch" not in outcome.warnings
+    assert _reconciliation(outcome) == ("ok", [])
+    assert len(_one(outcome).transactions) == 4
+
+
+def test_a_total_beside_running_balances_that_do_not_all_print_is_still_checked() -> None:
+    # One row prints no balance: the chain does not vouch for the section.
+    lines = [
+        *_BALANCES,
+        *_RUNNING[:3],
+        [("01/08/2026", 62.0), ("Monthly fee", 150.0), ("-12.00", 430.0)],
+        _RUNNING[4],
+        [("Total fees for this period", 62.0), ("12.00", 430.0)],
+    ]
+    outcome = _parse(lines)
+    assert outcome.warnings.count("section_total_mismatch") == 1
+    assert _reconciliation(outcome)[0] == "mismatch"
+
+
+# The unlabelled range's limits, one test each: under the header band (the top
+# eight lines), so only the unlabelled-range rule can read it.
+_FILLER = [[("Hazelgrove Community Bank", 62.0)]] * 8
+_MARCH_ROWS = [
+    [("03/02", 62.0), ("Wren Lane Grocer", 150.0), ("-12.00", 500.0)],
+    [("03/09", 62.0), ("Alderbrook Fuel", 150.0), ("-20.00", 500.0)],
+]
+
+
+def _no_range(outcome: ParseOutcome) -> None:
+    (statement,) = outcome.statements
+    assert "period_unlabelled" not in outcome.warnings
+    assert [t.posted for t in statement.transactions] == [date(2026, 3, 2), date(2026, 3, 9)]
+    assert "year_assumed:2026" in outcome.warnings
+
+
+def test_a_range_of_more_than_a_hundred_days_is_no_period() -> None:
+    view = replace(
+        _view(
+            [*_FILLER, [("December 1, 2025 through March 31, 2026", 62.0)], HEADER, *_MARCH_ROWS]
+        ),
+        created=MARCH_END,
+    )
+    _no_range(TableStatementParser().parse(view, threshold=0.85))
+
+
+def test_a_range_printed_on_page_two_only_is_no_period() -> None:
+    view = replace(
+        _pages(
+            [
+                [[("Hazelgrove Community Bank", 62.0)], [("Your statement is enclosed.", 62.0)]],
+                [*_FILLER, [("March 1, 2026 through March 31, 2026", 62.0)], HEADER, *_MARCH_ROWS],
+            ]
+        ),
+        created=MARCH_END,
+    )
+    _no_range(TableStatementParser().parse(view, threshold=0.85))
+
+
+def test_a_range_under_the_first_table_header_is_no_period() -> None:
+    view = replace(
+        _view(
+            [
+                *_FILLER,
+                HEADER,
+                *_MARCH_ROWS,
+                [("03/01/2026 - 03/31/2026 promotional rate applied", 62.0)],
+            ]
+        ),
+        created=MARCH_END,
+    )
+    _no_range(TableStatementParser().parse(view, threshold=0.85))
+
+
+def test_a_statement_date_beats_an_unlabelled_range() -> None:
+    view = replace(
+        _view(
+            [
+                *_FILLER,
+                [("February 27, 2026 through March 29, 2026", 62.0)],
+                [("Statement Date: 03/31/2026", 62.0)],
+                HEADER,
+                *_MARCH_ROWS,
+            ]
+        ),
+        created=MARCH_END,
+    )
+    outcome = TableStatementParser().parse(view, threshold=0.85)
+    (statement,) = outcome.statements
+    assert "period_unlabelled" not in outcome.warnings
+    assert not any(w.startswith("year_assumed") for w in outcome.warnings)
+    assert statement.period_end == date(2026, 3, 31)
+    assert statement.confidence["period"] != 0.75
+    assert [t.posted for t in statement.transactions] == [date(2026, 3, 2), date(2026, 3, 9)]
+
+
+_PROMOTION = [("01/15/2026 - 02/15/2026 bonus rate on new savings", 62.0)]
+
+
+def test_a_range_the_dated_rows_are_outside_of_is_not_their_period() -> None:
+    # One range-led line that is a promotion's: the rows print their year and
+    # none of them is in it. The period is the rows' span, as without the line.
+    rows = [
+        [("03/15/2026", 62.0), ("Salary", 150.0), ("900.00", 430.0), ("1,900.00", 520.0)],
+        [("03/17/2026", 62.0), ("Rent", 150.0), ("-700.00", 430.0), ("1,200.00", 520.0)],
+        [("03/19/2026", 62.0), ("Monthly fee", 150.0), ("-12.00", 430.0), ("1,188.00", 520.0)],
+    ]
+    outcome = _parse([*_FILLER, _PROMOTION, _BALANCE_HEADER, *rows])
+    statement = _one(outcome)
+    assert "period_unlabelled" not in outcome.warnings
+    assert (statement.period_start, statement.period_end) == (date(2026, 3, 15), date(2026, 3, 19))
+    assert not any(_low(statement, "posted_date"))
+    assert _reconciliation(outcome) == ("ok", [])
+
+
+def test_a_range_the_yearless_rows_cannot_be_in_is_not_their_period() -> None:
+    rows = [
+        [("03/05", 62.0), ("Salary", 150.0), ("900.00", 430.0), ("1,900.00", 520.0)],
+        [("03/07", 62.0), ("Rent", 150.0), ("-700.00", 430.0), ("1,200.00", 520.0)],
+        [("04/09", 62.0), ("Monthly fee", 150.0), ("-12.00", 430.0), ("1,188.00", 520.0)],
+    ]
+    view = replace(_view([*_FILLER, _PROMOTION, _BALANCE_HEADER, *rows]), created=date(2026, 4, 20))
+    outcome = TableStatementParser().parse(view, threshold=0.85)
+    statement = _one(outcome)
+    assert "period_unlabelled" not in outcome.warnings
+    assert "year_assumed:2026" in outcome.warnings
+    assert [t.posted for t in statement.transactions] == [
+        date(2026, 3, 5),
+        date(2026, 3, 7),
+        date(2026, 4, 9),
+    ]
+    assert outcome.skipped_lines == 0
+
+
+def test_a_range_most_dated_rows_are_in_is_their_period() -> None:
+    # A row posted a day before the range began does not undo it.
+    rows = [
+        [("02/28/2026", 62.0), ("Salary", 150.0), ("900.00", 430.0), ("1,900.00", 520.0)],
+        [("03/07/2026", 62.0), ("Rent", 150.0), ("-700.00", 430.0), ("1,200.00", 520.0)],
+        [("03/09/2026", 62.0), ("Monthly fee", 150.0), ("-12.00", 430.0), ("1,188.00", 520.0)],
+    ]
+    outcome = _parse([*_FILLER, [("03/01/2026 - 03/31/2026", 62.0)], _BALANCE_HEADER, *rows])
+    statement = _one(outcome)
+    assert "period_unlabelled" in outcome.warnings
+    assert (statement.period_start, statement.period_end) == (date(2026, 3, 1), date(2026, 3, 31))
+    assert statement.confidence["period"] == 0.75
+
+
+def _card_with_heading(word: str) -> ParseOutcome:
+    header = [
+        ("Date of Transaction", 62.0),
+        ("Merchant Name or Transaction Description", 180.0),
+        ("$ Amount", 500.0),
+    ]
+
+    def row(day: str, payee: str, amount: str) -> list[tuple[str, float]]:
+        return [(day, 62.0), (payee, 180.0), (amount, 500.0)]
+
+    return CardStatementParser().parse(
+        _view(
+            [
+                [("Account Number: XXXX XXXX XXXX 4321", 62.0)],
+                [("Opening/Closing Date 01/01/26 - 01/31/26", 62.0)],
+                [("Previous Balance", 62.0), ("$100.00", 300.0)],
+                [("New Balance", 62.0), ("$140.34", 300.0)],
+                [("ACCOUNT ACTIVITY", 62.0)],
+                header,
+                [("PAYMENTS AND OTHER CREDITS", 62.0)],
+                row("01/05", "Payment received", "-100.00"),
+                [(word, 62.0)],
+                row("01/07", "Sedgewick Grocer", "112.34"),
+                [("FEES CHARGED", 62.0)],
+                row("01/10", "Late fee", "25.00"),
+                [("INTEREST CHARGED", 62.0)],
+                row("01/15", "Interest on the balance", "3.00"),
+            ]
+        ),
+        threshold=0.85,
+    )
+
+
+@pytest.mark.parametrize("word", ["PURCHASE", "PURCHASES"])
+def test_a_purchase_heading_on_a_card_is_money_out(word: str) -> None:
+    outcome = _card_with_heading(word)
+    assert _amounts(outcome) == [Decimal("100.00"), Decimal("-112.34"), -25, -3]
+    assert _reconciliation(outcome) == ("ok", [])
+
+
+def test_a_wrapped_line_that_starts_with_purchase_is_no_title() -> None:
+    outcome = _parse(
+        [
+            [("Deposits", 62.0)],
+            HEADER,
+            _row(5, "Refund", "40.00"),
+            [("Purchase returned to the shop", 150.0)],
+            _row(6, "Salary", "900.00"),
+        ]
+    )
+    assert _amounts(outcome) == [Decimal("40.00"), Decimal("900.00")]
+    assert _one(outcome).transactions[0].memo == "Purchase returned to the shop"
+
+
+def test_checks_across_the_page_above_the_first_share_are_counted() -> None:
+    # The left group's check belongs to no share (a row outside every
+    # account); the one printed beside it is an entry found and not read.
+    checks = [
+        ACROSS_HEADER,
+        [
+            ("3101", 62.0),
+            ("03/03/2026", 110.0),
+            ("20.00", 200.0),
+            ("3102", 260.0),
+            ("03/04/2026", 310.0),
+            ("31.00", 400.0),
+        ],
+    ]
+    outcome = _parse(_two_shares(checks))
+    assert "accounts_by_balance" in outcome.warnings
+    assert len(outcome.statements) == 2
+    assert outcome.warnings.count("table_across_unread:1") == 1
+    assert "rows_outside_account" in outcome.warnings
+    assert outcome.skipped_lines == 2

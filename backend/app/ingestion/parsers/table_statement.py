@@ -186,10 +186,12 @@ are read the same way:
    (:meth:`TableStatementParser._unlabelled_range`): above the first table
    header, a cell that starts with a separated range with a year, of at
    most :data:`UNLABELLED_RANGE_DAYS` days, when exactly one distinct range
-   does (two different ranges say nothing). It is believed like a header
-   band on one page (0.75, 0.1 less when its day/month order is a guess):
-   it dates the rows and is no stated period (warning
-   ``period_unlabelled``); (5) an **assumed year**.
+   does (two different ranges say nothing) and half the rows or more are
+   dated inside it (:meth:`TableStatementParser._rows_within`: a
+   promotion's dates are no period of rows that are elsewhere). It is
+   believed like a header band on one page (0.75, 0.1 less when its
+   day/month order is a guess): it dates the rows and is no stated period
+   (warning ``period_unlabelled``); (5) an **assumed year**.
    **Assumed year.** With no period, no statement date and no such range,
    rows that print a month and a day and no year used to be skipped. When
    the latest day a row can be on is known (``view.ceiling``: the day the
@@ -200,7 +202,11 @@ are read the same way:
    printed in a notice. Every such date scores ``confidence.GUESSED``, so
    each row is written pending; the period is the rows' span, inferred;
    the warning ``year_assumed:<YYYY>`` (the year of the latest row) makes
-   the pipeline ask one question naming the year. Without a ceiling, with
+   the pipeline ask one question naming the year. No balance is dated by
+   that guess: the opening balance has no day and no closing balance is
+   given (the statement is still reconciled with the printed figures), so
+   no balance is recorded on the account for a day nobody confirmed.
+   Without a ceiling, with
    rows that mix dates with and without a year, or with rows spread over
    more than :data:`ASSUMED_SPAN_DAYS` days, the year-less rows are counted
    as skipped, as before.
@@ -226,9 +232,16 @@ are read the same way:
    ``total``, holds one amount and names no other span of time
    (:data:`OTHER_SPAN_WORDS`, a four-digit year: ``Total fees charged in
    2026``) is the total of the section whose rows it follows: the first one
-   per section, never one of pending rows. It is still no row. A section
+   per section, never one of pending rows. It is still no row. A total
+   with more dated rows of its section after it was a **subtotal** (a
+   cardholder's, a branch's): it is dropped, and the first total after the
+   section's last row is the one checked, against all the section's rows
+   or the rows since the last subtotal. A section
    whose rows do not add up to it (:func:`sections_off`) holds a statement
-   that would reconcile (warning ``section_total_mismatch``). On a
+   that would reconcile (warning ``section_total_mismatch``), unless the
+   statement reconciles and every row of the section prints its running
+   balance (:func:`balances_vouch`: ``Total fees for this period`` under a
+   table of everything is the total of something else). On a
    statement that does not reconcile and prints no running balance, only
    the rows of those sections are in doubt, when what they lack is the
    whole difference (:func:`rows_of_sections_in_doubt`). A total says how
@@ -671,7 +684,7 @@ SECTION_TITLES: Final[Mapping[str, SectionRule]] = {
         "out",
         None,
     ),
-    **_titles("other debits, debits, purchases and adjustments, purchases", "out", "out"),
+    **_titles("other debits, debits, purchases and adjustments, purchases, purchase", "out", "out"),
     **_titles(
         "payments and other credits, payments and credits, payments credits, payments",
         None,
@@ -774,6 +787,9 @@ class _Row:
     section: int = 0
     #: The line printed no date: ``date_text`` is the date of the row above.
     carried: bool = False
+    #: How many subtotals were printed in the row's section before it (a
+    #: ``Total ...`` line with more rows of the section after it).
+    part: int = 0
 
 
 @dataclass
@@ -809,7 +825,9 @@ class _Summary:
     #: (counted, not read).
     across: int = 0
     #: The total printed after a section's rows (``Total deposits``), by the
-    #: section's number (:attr:`_Row.section`): the first one per section.
+    #: section's number (:attr:`_Row.section`): the first one after the last
+    #: row of the section (one with rows of the section after it was a
+    #: subtotal, and is counted in :attr:`_Row.part`).
     section_totals: dict[int, Amount] = field(default_factory=dict)
 
 
@@ -1481,6 +1499,8 @@ class TableStatementParser(DocumentParser):
         titled: int | None = None
         # The section of the last dated line of a table that is not pending.
         dated_section: int | None = None
+        # Subtotals met in each section: totals with rows of it after them.
+        subtotals: dict[int, int] = {}
 
         def runs_on(found: SectionTitle, page: int) -> bool:
             """``found`` names the section being read once more: marked
@@ -1574,13 +1594,15 @@ class TableStatementParser(DocumentParser):
                     last = anchor = self._row(
                         line, cells, anchor.date_text, title, section, carried=True
                     )
+                    last.part = subtotals.get(section, 0)
                     held.append(last)
                     waiting.append((line, True))
                     continue
                 if not pending and dated_section == section:
                     total = self._total_line(line, norm)
                     if total is not None:
-                        # The first total after the section's rows is its total.
+                        # The first total after the section's rows is its
+                        # total (until a dated row of the section follows).
                         summary.section_totals.setdefault(section, total)
                 if figures:
                     loose.append((line.page, line.bbox))
@@ -1623,6 +1645,11 @@ class TableStatementParser(DocumentParser):
                 continue
             if not pending:
                 dated_section = section
+                if summary.section_totals.pop(section, None) is not None:
+                    # More of the section after its "total": that was a
+                    # subtotal (a cardholder's, a branch's), not the section's.
+                    subtotals[section] = subtotals.get(section, 0) + 1
+                row.part = subtotals.get(section, 0)
             if row.amount is None and row.debit is None and row.credit is None:
                 if pending:
                     continue
@@ -2118,6 +2145,25 @@ class TableStatementParser(DocumentParser):
         cap = ONE_PAGE_BAND_CONFIDENCE - (AMBIGUOUS_PENALTY if doubt else 0.0)
         return PeriodRead(start, end, "range", cap, proven)
 
+    def _rows_within(
+        self,
+        rows: Sequence[_Row],
+        styles: tuple[DateStyle, ...],
+        certain: bool,
+        read: PeriodRead,
+    ) -> bool:
+        """Half the rows or more are dated inside ``read`` (an unlabelled
+        range), with the year they print or the one the range gives them;
+        true without rows. A range the rows are not in is no period of theirs."""
+        if not certain and read.order is not None:
+            styles = follow_order(styles, read.order)
+        start, end = read.span
+        inside = 0
+        for row in rows:
+            posted = self._row_date(row, styles, read.span, False)
+            inside += posted is not None and start <= posted <= end
+        return 2 * inside >= len(rows)
+
     # -- the statement ----------------------------------------------------------
 
     def _type(self, row: _Row, description: str) -> str | None:
@@ -2468,6 +2514,10 @@ class TableStatementParser(DocumentParser):
         anchor = self._statement_date(summary, styles) if read is None else None
         if read is None and anchor is None:
             read = self._unlabelled_range(view, styles, order_known)
+            if read is not None and not self._rows_within(rows, styles, order_known, read):
+                # The one range on the page is not where the rows are (a
+                # promotion's dates): they are dated as without it.
+                read = None
             if read is not None:
                 outcome.warnings.append("period_unlabelled")
         if read is not None and not order_known and read.order is not None:
@@ -2512,8 +2562,10 @@ class TableStatementParser(DocumentParser):
         transactions: list[ExtractedTransaction] = []
         fields: list[dict[str, float]] = []
         ledger_rows: list[Row] = []
-        # The section of each ledger row: one list with ``ledger_rows``.
+        # The section of each ledger row, and how many subtotals of it were
+        # printed before the row: one list each with ``ledger_rows``.
         ledger_sections: list[int] = []
+        ledger_parts: list[int] = []
         for row, posted in zip(rows, dates, strict=True):
             amount = self._signed(row)
             if posted is None or amount is None:
@@ -2539,6 +2591,7 @@ class TableStatementParser(DocumentParser):
             fields.append(score)
             ledger_rows.append(Row(amount, self._ledger_balance(row.balance)))
             ledger_sections.append(row.section)
+            ledger_parts.append(row.part)
             transactions.append(
                 ExtractedTransaction(
                     posted=posted,
@@ -2569,7 +2622,16 @@ class TableStatementParser(DocumentParser):
             # The summary's own credits and charges do not match the rows'.
             result = result.model_copy(update={"status": "mismatch"})
             outcome.warnings.append("summary_totals_mismatch")
-        off = sections_off(ledger_rows, ledger_sections, summary.section_totals)
+        off = sections_off(ledger_rows, ledger_sections, summary.section_totals, ledger_parts)
+        if result.status == "ok":
+            # Rows that each agree with the balance printed beside them are
+            # read right, whatever a total under them is the total of
+            # (``Total fees for this period`` under a table of everything).
+            off = [
+                section
+                for section in off
+                if not balances_vouch(ledger_rows, ledger_sections, section)
+            ]
         if off:
             # A section's rows are not its printed total: never a clean read.
             outcome.warnings.append("section_total_mismatch")
@@ -2646,14 +2708,18 @@ class TableStatementParser(DocumentParser):
             account=self.statement_account(summary.last4, currency, account),
             period_start=period[0] if period else None,
             period_end=period[1] if period else None,
+            # With an assumed year no day is known for either balance: the
+            # opening one is dated by nothing, and no closing balance is
+            # given at all (one without a day takes the period's end, and
+            # would be recorded on the account under a year nobody confirmed).
             opening_balance=(
-                Balance(amount=opening, as_of=period[0] if period else None)
+                Balance(amount=opening, as_of=period[0] if period and not assumed else None)
                 if opening is not None
                 else None
             ),
             ledger_balance=(
                 Balance(amount=closing, as_of=period[1] if period else None)
-                if closing is not None
+                if closing is not None and not assumed
                 else None
             ),
             transactions=transactions,
@@ -2793,21 +2859,32 @@ def _section_sum(rows: Sequence[Row], sections: Sequence[int], section: int) -> 
 
 
 def sections_off(
-    rows: Sequence[Row], sections: Sequence[int], totals: Mapping[int, Amount]
+    rows: Sequence[Row],
+    sections: Sequence[int],
+    totals: Mapping[int, Amount],
+    parts: Sequence[int] = (),
 ) -> list[int]:
     """The sections whose rows do not add up to the total printed after them.
 
     :func:`app.ingestion.reconcile.section_mismatches` on the magnitudes of
-    the totals, less one case: a table of money in and money out whose first
+    the totals, less two cases. A table of money in and money out whose first
     total is the total of one side (``Total debits`` then ``Total credits``
-    under one table) agrees when that side adds up to it.
+    under one table) agrees when that side adds up to it. And a section with
+    subtotals (``parts[i]`` is how many were printed before ``rows[i]`` in
+    its section; none when empty) agrees when its total is the total of the
+    rows since the last subtotal (one total per cardholder), as when it is
+    the total of them all.
     """
     printed = {section: abs(total.value) for section, total in totals.items()}
     out: list[int] = []
     for section in section_mismatches(rows, sections, printed):
-        amounts = [
-            row.amount for row, owner in zip(rows, sections, strict=True) if owner == section
-        ]
+        owned = [index for index, owner in enumerate(sections) if owner == section]
+        amounts = [rows[index].amount for index in owned]
+        if parts and amounts:
+            latest = max(parts[index] for index in owned)
+            since = sum((rows[i].amount for i in owned if parts[i] == latest), Decimal(0))
+            if latest and abs(abs(since) - printed[section]) <= TOLERANCE:
+                continue
         money_in = sum((a for a in amounts if a > 0), Decimal(0))
         money_out = -sum((a for a in amounts if a < 0), Decimal(0))
         one_side = (
@@ -2818,6 +2895,18 @@ def sections_off(
         if not one_side:
             out.append(section)
     return out
+
+
+def balances_vouch(rows: Sequence[Row], sections: Sequence[int], section: int) -> bool:
+    """Every row of ``section`` prints its running balance, and there is one.
+
+    On a statement that reconciles, each such row agrees with the balance
+    beside it: a total under them that they do not add up to is the total of
+    something else. (A row missing from the page breaks the chain of
+    balances, and the statement does not reconcile.)
+    """
+    owned = [row for row, owner in zip(rows, sections, strict=True) if owner == section]
+    return bool(owned) and all(row.balance is not None for row in owned)
 
 
 def rows_of_sections_in_doubt(

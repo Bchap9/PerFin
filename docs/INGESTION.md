@@ -660,8 +660,13 @@ a child answering with parser output is `bad_output`.
     is that section's total: a section whose rows do not add up to it
     holds a statement that would otherwise reconcile (warning
     `section_total_mismatch`), and when what it lacks is the whole
-    difference only its rows are left in doubt. A total says how much,
-    never which way: one that agrees vouches for no row.
+    difference only its rows are left in doubt. A total with more dated
+    rows of its section after it is a subtotal (one per cardholder): the
+    total after the last row is checked, against all the section's rows or
+    those since the last subtotal. A total under rows that each agree
+    with their printed running balance, on a statement that reconciles,
+    is the total of something else and holds nothing. A total says how
+    much, never which way: one that agrees vouches for no row.
   - *A date printed once per day.* An undated line with description text
     and one figure in a money column, close under the row above it, takes
     that row's date when a dated row follows in the same table (or, at the
@@ -688,7 +693,8 @@ a child answering with parser output is `bad_output`.
     period the classifier read (warning `period_from_classifier`); (3) a
     statement date (also `Statement Issued`, `Statement Ending`,
     `Statement End Date`); (4) one range with a year printed once on page
-    1 above the first table without a label, of at most 100 days (warning
+    1 above the first table without a label, of at most 100 days, with
+    half the rows or more dated inside it (warning
     `period_unlabelled`; believed at 0.75, so it dates the rows and is no
     stated period for the duplicate guard); (5) an **assumed year**. Rows
     that print a month and a day and no year, on a statement with none of
@@ -698,7 +704,10 @@ a child answering with parser output is `bad_output`.
     December rows before January rows, never split around a date printed
     in a notice. Every such date scores 0.6, so each row is written
     pending, and the warning `year_assumed:<YYYY>` raises one review item
-    that names the year ("Review queue" below). Without that day, with
+    that names the year ("Review queue" below). Such a statement gives no
+    closing balance (it is still reconciled with the printed figures), so
+    no balance snapshot is written for a day nobody confirmed. Without
+    that day, with
     rows that mix dates with and without a year, or with rows spread over
     more than 184 days, the year-less rows are counted as skipped as
     before.

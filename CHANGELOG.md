@@ -143,13 +143,17 @@ What remains (details in docs/ROADMAP.md):
   placed in the latest run of the calendar that ends on or before the
   day the file was made or arrived, all written pending, and the
   document waits with one "Which year?" item (`low_confidence_field`,
-  reason `year_assumed`) that names the year. Rows that mix dates with
+  reason `year_assumed`) that names the year. No closing balance is
+  recorded on the account from such a statement. Rows that mix dates with
   and without a year, or that span more than 184 days, are counted as
   skipped as before.
 - **Section totals are checked.** A statement whose rows under a section
   title do not add up to the `Total` printed for that section waits in
   review (`section_total_mismatch`), also when its opening and closing
-  balances agree. A total that agrees proves no row's direction.
+  balances agree. A total that agrees proves no row's direction. A
+  subtotal with more rows of its section after it (one per cardholder or
+  branch) is not the section's total, and a total under rows that each
+  agree with their printed running balance is not checked against them.
 - The classifier's printed period and the day a file arrived are handed
   to the document parsers (`DocumentView.hints`, `created`, `ceiling`);
   the sandbox protocol is unchanged.
@@ -274,7 +278,7 @@ What remains (details in docs/ROADMAP.md):
   Ending`, `Statement End Date`; the period the classifier read
   (`period_from_classifier`); and one range printed without a label
   above the first table (`period_unlabelled`, which dates the rows and
-  is no stated period).
+  is no stated period), when half the rows or more are dated inside it.
 - **No statement line disappears without a count.** Undated lines with
   a figure between dated rows, rows above the first account of a member
   statement, dated lines under a section title that has no header row

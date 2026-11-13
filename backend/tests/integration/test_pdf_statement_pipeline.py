@@ -415,6 +415,8 @@ def test_yearless_statement_without_a_period_waits_with_a_year_question(env: Env
     assert "posted_date" in low.payload["fields"]
     # An assumed year is no stated period.
     assert (document.period_start, document.period_end) == (None, None)
+    # Nor a day a balance can be recorded on: no snapshot dated by a guess.
+    assert env.snapshots(account) == []
 
 
 def _money6(amount: Decimal) -> Decimal:
