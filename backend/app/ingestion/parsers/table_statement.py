@@ -157,6 +157,13 @@ from app.ingestion.parsers.base import (
     join_cells,
 )
 from app.ingestion.parsers.blocks import unfold_blocks
+from app.ingestion.parsers.statement_header import HEADERS as HEADERS
+from app.ingestion.parsers.statement_header import MONEY_ROLES as MONEY_ROLES
+from app.ingestion.parsers.statement_header import NUMERIC_ROLES as NUMERIC_ROLES
+from app.ingestion.parsers.statement_header import TABLE_HEADING_WORDS as TABLE_HEADING_WORDS
+from app.ingestion.parsers.statement_header import Column as Column
+from app.ingestion.parsers.statement_header import Role as Role
+from app.ingestion.parsers.statement_header import header_like, read_header, stack_headers
 from app.ingestion.parsers.text import (
     FULL_STYLES,
     MAX_LINE,
@@ -182,69 +189,6 @@ from app.ingestion.sandbox.protocol import (
     StatementAccount,
 )
 
-Role = Literal[
-    "date",
-    "post_date",
-    "description",
-    "amount",
-    "debit",
-    "credit",
-    "balance",
-    "check",
-    "foreign",
-    "lead",
-]
-NUMERIC_ROLES: Final = frozenset({"amount", "debit", "credit", "balance"})
-
-#: Normalised header cell text -> column role.
-HEADERS: Final[Mapping[str, Role]] = {
-    "date": "date",
-    "trans date": "date",
-    "transaction date": "date",
-    "posting date": "date",
-    "posted": "date",
-    "value date": "date",
-    "post date": "post_date",
-    "description": "description",
-    "details": "description",
-    "transaction": "description",
-    "transaction details": "description",
-    "transaction description": "description",
-    "payee": "description",
-    "particulars": "description",
-    "narrative": "description",
-    "merchant": "description",
-    "amount": "amount",
-    "amount usd": "amount",
-    "debit": "debit",
-    "debits": "debit",
-    "withdrawals": "debit",
-    "withdrawal": "debit",
-    "money out": "debit",
-    "paid out": "debit",
-    "credit": "credit",
-    "credits": "credit",
-    "deposits": "credit",
-    "deposit": "credit",
-    "money in": "credit",
-    "paid in": "credit",
-    "balance": "balance",
-    "running balance": "balance",
-    "date paid": "date",
-    "check no": "check",
-    "check number": "check",
-    "check num": "check",
-    "check": "check",
-    "chk no": "check",
-    "foreign spending": "foreign",
-    "foreign currency": "foreign",
-    "foreign amount": "foreign",
-    "foreign currency amount": "foreign",
-    "original currency": "foreign",
-    "original amount": "foreign",
-}
-#: Roles whose cells hold the transaction's money (a table needs one).
-MONEY_ROLES: Final = frozenset({"amount", "debit", "credit"})
 #: Titles of the blocks a bank or card statement prints side by side
 #: (normalised; :func:`block_title`). Deliberately few and plain: a line of
 #: two such titles, or one of two words or more alone at the right, splits
@@ -284,9 +228,6 @@ def block_title(norm: str) -> bool:
     return text in BLOCK_TITLES
 
 
-#: Words of a heading that names a transaction table without date or
-#: description headings (``New Transactions for JORDAN SAMPLE``).
-TABLE_HEADING_WORDS: Final = frozenset({"transactions", "activity"})
 #: Phrases that start a payment stub (a coupon to detach and send with a
 #: payment): the rest of the page is no part of the statement.
 STUB_MARKERS: Final = (
@@ -481,13 +422,6 @@ def read_period(
     if band is None:
         return None
     return PeriodRead(band.start, band.end, "header", band_confidence(band), band.order)
-
-
-@dataclass(frozen=True)
-class Column:
-    role: Role
-    x0: float
-    x1: float
 
 
 #: A box on a page in page units (``x0, y0, x1, y1``).
@@ -692,47 +626,19 @@ class TableStatementParser(DocumentParser):
 
     def columns(self, line: ViewLine) -> list[Column] | None:
         """The table columns ``line`` declares, or None when it is no header."""
-        found: list[Column] = []
-        roles: set[Role] = set()
-        for cell in line.cells:
-            role = self.headers.get(normalise(cell.text))
-            if role is None or role in roles:
-                continue
-            roles.add(role)
-            found.append(Column(role, cell.x0, cell.x1))
-        if "date" in roles and roles & {"description", "check"} and roles & MONEY_ROLES:
-            return sorted(found, key=lambda c: c.x0)
-        return self._headless(line, found, roles)
-
-    def _headless(
-        self, line: ViewLine, found: Sequence[Column], roles: set[Role]
-    ) -> list[Column] | None:
-        """A heading naming the table over money columns only (module doc, "Header").
-
-        ``New Transactions for JORDAN SAMPLE | Foreign Spending | Amount $``:
-        everything left of the first column heading is the **lead**, read
-        row by row as the date then the description.
-        """
-        if roles & {"date", "post_date", "description", "check"} or not roles & MONEY_ROLES:
-            return None
-        if len(line.cells) > 5 or find_amounts(line.text):
-            return None
-        first = min(c.x0 for c in found)
-        heading = [c for c in line.cells if c.x1 <= first]
-        if not any(TABLE_HEADING_WORDS & set(normalise(c.text).split()) for c in heading):
-            return None
-        return [Column("lead", 0.0, first), *sorted(found, key=lambda c: c.x0)]
+        return read_header(line, self.headers)
 
     def _header_like(self, line: ViewLine) -> bool:
         """Two or more cells, all header words, no amount: a table we do not read."""
-        return (
-            len(line.cells) >= 2
-            and not find_amounts(line.text)
-            and all(normalise(c.text) in self.headers for c in line.cells)
-        )
+        return header_like(line, self.headers)
+
+    def prepare(self, lines: Sequence[ViewLine]) -> list[ViewLine]:
+        """``lines`` as the reader wants them: stacked headers made one line
+        (:func:`~app.ingestion.parsers.statement_header.stack_headers`)."""
+        return stack_headers(lines, self.headers)
 
     def has_table(self, view: DocumentView) -> bool:
-        return self.lines_have_table(view.lines)
+        return self.lines_have_table(self.prepare(view.lines))
 
     def lines_have_table(self, lines: Iterable[ViewLine]) -> bool:
         return any(self.columns(line) is not None for line in lines)
@@ -1281,14 +1187,20 @@ class TableStatementParser(DocumentParser):
     def parse(
         self, view: DocumentView, *, threshold: float, date_order: str | None = None
     ) -> ParseOutcome:
-        lines = self.without_stubs(view.lines)
+        lines = self.without_stubs(self.prepare(view.lines))
         split = self._accounts(lines)
         if split is not None:
-            return self._parse_accounts(view, split, threshold=threshold, date_order=date_order)
+            return self._parse_accounts(
+                view, split, threshold=threshold, date_order=date_order, prepared=True
+            )
         sections = self.balance_sections(lines)
         if sections is not None:
-            return self._parse_sections(view, *sections, threshold=threshold, date_order=date_order)
-        read = self.read_statement(view, lines, threshold=threshold, date_order=date_order)
+            return self._parse_sections(
+                view, *sections, threshold=threshold, date_order=date_order, prepared=True
+            )
+        read = self.read_statement(
+            view, lines, threshold=threshold, date_order=date_order, prepared=True
+        )
         outcome = ParseOutcome(
             pending_items=read.pending_items,
             skipped_lines=read.skipped_lines,
@@ -1317,6 +1229,7 @@ class TableStatementParser(DocumentParser):
         *,
         threshold: float,
         date_order: str | None,
+        prepared: bool = False,
     ) -> ParseOutcome:
         """One statement per account (INGESTION.md "Several accounts")."""
         outcome = ParseOutcome()
@@ -1337,6 +1250,7 @@ class TableStatementParser(DocumentParser):
                 date_order=date_order,
                 period_texts=preamble.period.texts,
                 account=account,
+                prepared=prepared,
             )
             outcome.pending_items += read.pending_items
             outcome.skipped_lines += read.skipped_lines
@@ -1435,6 +1349,7 @@ class TableStatementParser(DocumentParser):
         *,
         threshold: float,
         date_order: str | None,
+        prepared: bool = False,
     ) -> ParseOutcome:
         """One statement per section (module doc, 7)."""
         outcome = ParseOutcome()
@@ -1450,6 +1365,7 @@ class TableStatementParser(DocumentParser):
                 threshold=threshold,
                 date_order=date_order,
                 period_texts=preamble.period.texts,
+                prepared=prepared,
             )
             outcome.pending_items += read.pending_items
             outcome.skipped_lines += read.skipped_lines
@@ -1512,6 +1428,7 @@ class TableStatementParser(DocumentParser):
         date_order: str | None = None,
         period_texts: Sequence[str] = (),
         account: AccountSegment | None = None,
+        prepared: bool = False,
     ) -> StatementRead:
         """The statement ``lines`` hold (all of ``view``'s, or one account's).
 
@@ -1519,7 +1436,11 @@ class TableStatementParser(DocumentParser):
         document's overview) tried after the lines' own; ``account`` is the
         account the lines belong to (:mod:`app.ingestion.parsers.accounts`).
         ``statement`` is None when no transaction table header is found.
+        ``prepared`` says the lines went through :meth:`prepare` already
+        (:meth:`parse` does it once for the whole document).
         """
+        if not prepared:
+            lines = self.prepare(lines)
         # A summary box printed beside the transaction table (or two boxes
         # side by side) is read block by block, so the table's header and
         # rows are whole lines again (:mod:`app.ingestion.parsers.blocks`).
@@ -1785,7 +1706,7 @@ class CardStatementParser(TableStatementParser):
     def detect(self, view: DocumentView) -> float:
         if self.fingerprints:
             return super().detect(view)
-        page_one = [line for line in view.lines if line.page <= 1]
+        page_one = self.prepare([line for line in view.lines if line.page <= 1])
         head = f" {' '.join(line.norm for line in self.summary_lines(page_one))} "
         strong = any(f" {word} " in head for word in CARD_VOCABULARY)
         # Each weak word once (``Card Member`` and ``Cardmember`` are one).
