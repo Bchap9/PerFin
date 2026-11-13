@@ -7,7 +7,10 @@ For every ``INVSTMTRS``:
 
 * the account: ``INVACCTFROM/ACCTID`` cut to its **last four digits** (the
   full number never leaves the child), the broker (``FI/ORG`` or
-  ``BROKERID``), ``CURDEF``;
+  ``BROKERID``), ``CURDEF``; a statement that carries ``INV401K`` or
+  ``INV401KBAL`` (only a 401(k) plan's does) is a ``retirement`` account of
+  subtype ``401k``, any other a ``brokerage`` account (nothing inside those
+  aggregates is read: the employer and the plan are not kept);
 * ``INVPOSLIST``: ``POSSTOCK``/``POSMF``/``POSDEBT``/``POSOPT``/``POSOTHER``
   with ``SECID``, ``UNITS`` (negative for ``POSTYPE`` ``SHORT``),
   ``UNITPRICE``, ``MKTVAL``, ``DTPRICEASOF``; ``DTASOF`` of the list (else
@@ -114,6 +117,10 @@ INVESTMENT_AGGREGATES: Final = frozenset(
         "STMTTRN",
     }
 )
+#: Aggregates of an ``INVSTMTRS`` that only a 401(k) plan's statement carries.
+#: Not in :data:`INVESTMENT_AGGREGATES`: found as a child of the statement
+#: whether or not the tokenizer nests them, and nothing inside them is read.
+_PLAN_401K: Final = ("INV401K", "INV401KBAL")
 _DATE: Final = re.compile(r"^\s*(\d{4})(\d{2})(\d{2})")
 
 
@@ -502,10 +509,12 @@ def _statement(
         if available is not None:
             cash = Balance(amount=available, as_of=as_of)
     currency = _currency(node.text("CURDEF"))
+    plan = any(node.child(name) is not None for name in _PLAN_401K)
     return InvestmentStatement(
         source_format="qfx" if kind == "qfx" else "ofx",
         account=StatementAccount(
-            account_type="brokerage",
+            account_type="retirement" if plan else "brokerage",
+            subtype="401k" if plan else None,
             last4=last4(number),
             currency=currency,
             institution=institution or clean_text(broker, limit=200),

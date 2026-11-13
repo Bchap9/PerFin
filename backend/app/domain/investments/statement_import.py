@@ -184,9 +184,14 @@ statements"). Per statement:
    activity first, then the positions.
 8. **Prices**: each position's unit price on ``as_of`` becomes a ``price``
    row (``source = statement``) unless one exists for that day from another
-   source; a price quoted per 100 of face value (a bond) is stored as one
-   unit's (``InvestmentPosition.price_per_unit``), and so is an activity
-   row's price (``InvestmentActivity.price_per_unit``: a bond trade's
+   source. A security has one price a day: when a document lists it more
+   than once for a day (a plan's position per contribution source, a
+   sub-account's), the first price printed is the day's, and a later one
+   that differs is left out and named in the run's summary
+   (``warnings``: :data:`DUPLICATE_PRICE_IGNORED`); the units of every
+   position still count. A price quoted per 100 of face value (a bond) is
+   stored as one unit's (``InvestmentPosition.price_per_unit``), and so is
+   an activity row's price (``InvestmentActivity.price_per_unit``: a bond trade's
    ``price`` is one unit's, never 100 times it). An opening position for
    units held before the period and gone by its end (transferred or sold
    out) is costed at the price its own rows print (one unit's).
@@ -264,6 +269,8 @@ from app.ingestion.sandbox.protocol import (
 
 HASH_VERSION: Final = "perfin-invest-v1"
 STATEMENT_PRICE_SOURCE: Final = "statement"
+#: Run warning: a security listed again for a day at another price (step 8).
+DUPLICATE_PRICE_IGNORED: Final = "duplicate_price_ignored"
 INVESTMENT_ACCOUNT_TYPES: Final = frozenset({AccountType.BROKERAGE, AccountType.RETIREMENT})
 #: Cash rows that are ledger transactions, not ``investment_txn`` rows.
 CASH_TYPES: Final = frozenset({"deposit", "withdrawal"})
@@ -322,6 +329,12 @@ class InvestmentImport:
     #: Activity lines of imported statements held back for a person (step 3).
     lines_held: int = 0
     accounts: list[uuid.UUID] = field(default_factory=list)
+    #: What the run read around rather than wrote (each code once).
+    warnings: list[str] = field(default_factory=list)
+
+    def warn(self, code: str) -> None:
+        if code not in self.warnings:
+            self.warnings.append(code)
 
     def summary(self) -> dict[str, Any]:
         return {
@@ -339,6 +352,7 @@ class InvestmentImport:
             "statement_overlaps": self.overlaps,
             "accepted_as_read": self.accepted_as_read,
             "lines_held": self.lines_held,
+            "warnings": list(self.warnings),
         }
 
 
@@ -391,6 +405,8 @@ class _Context:
     used_by: dict[uuid.UUID, set[uuid.UUID]] | None = None
     #: The household's accounts at each institution (loaded on first use).
     peers: dict[uuid.UUID, set[uuid.UUID]] = field(default_factory=dict)
+    #: The price each (security, day) took in this run: the first one printed.
+    prices: dict[tuple[uuid.UUID, date], Decimal] = field(default_factory=dict)
 
     def forget(self) -> None:
         """Drop what a rolled-back statement may have added to the caches."""
@@ -1190,6 +1206,14 @@ def _record_price(
     price = position.price_per_unit
     if day is None or price is None or price <= 0:
         return
+    first = ctx.prices.get((security.id, day))
+    if first is not None:
+        # Listed again for the day (module doc, step 8). The row of the first
+        # may not be flushed yet: looking it up would miss it and add another.
+        if first != price:
+            ctx.result.warn(DUPLICATE_PRICE_IGNORED)
+        return
+    ctx.prices[(security.id, day)] = price
     existing = ctx.db.execute(
         select(Price).where(
             Price.household_id == ctx.household_id,
