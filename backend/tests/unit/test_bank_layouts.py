@@ -12,10 +12,15 @@ And balances: a dated ``Beginning Balance`` or ``Ending Balance`` line is a
 balance whatever column its figure is in, never a transaction; a label takes
 the figure printed alone on the line next to it; ``Previous Statement
 Balance`` opens the statement, it does not close it.
+
+And which reader reads a statement: card words in a sentence do not make a
+checking statement a card statement, and a parser written for one
+institution claims nothing on one of its two phrases.
 """
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from datetime import date
 from decimal import Decimal
 
@@ -23,10 +28,12 @@ import pytest
 
 from app.ingestion.extract.pdf import extract_pdf
 from app.ingestion.parsers.base import Cell, DocumentView, ParseOutcome, ViewLine
+from app.ingestion.parsers.institutions import MockSavingsParser
 from app.ingestion.parsers.registry import parse_extraction
 from app.ingestion.parsers.table_statement import TableStatementParser
 from app.ingestion.sandbox.protocol import ExtractOptions, ExtractResult, Statement
 from tests.fixtures import synth_bank_layouts as synth
+from tests.fixtures import synth_card_statement, synth_pdf_statements, synth_unseen_layouts
 
 OPTIONS = ExtractOptions(previews=False, ocr=False)
 
@@ -163,6 +170,120 @@ def test_shares_with_opening_rows_in_the_amount_column_are_two_accounts() -> Non
         assert _rows(statement) == rows
         assert _status(statement) == "ok"
     assert _skipped(result) == 0
+
+
+# -- the right reader -----------------------------------------------------------
+
+
+def _unhinted(data: bytes) -> ExtractResult:
+    """Read with no word from the classifier: the parsers' own scores decide."""
+    result = extract_pdf(data, OPTIONS, "pdf")
+    assert result.ok, result.error
+    return parse_extraction(result)
+
+
+def _parser(statement: Statement) -> str:
+    assert statement.parser is not None
+    return statement.parser.name
+
+
+def _score(result: ExtractResult, parser: str) -> float:
+    assert result.parse is not None
+    (score,) = [s.score for s in result.parse.scores if s.name == parser]
+    return score
+
+
+def test_a_card_mentioned_in_a_note_does_not_make_a_card_statement() -> None:
+    # The note is on the page, one line of 22 words, outside the rows.
+    assert len(synth.CARD_NOTE.split()) == 22
+    assert "business credit card" in synth.CARD_NOTE
+    data = synth.checking_with_card_note()
+    for result in (_unhinted(data), _read(data)):
+        statement = _only(result)
+        assert _score(result, "card_statement_generic") == 0.0
+        assert _parser(statement) == "statement_generic"
+        assert statement.account.account_type != "creditcard"
+        # Signs as printed: a figure with a minus is money out.
+        assert _rows(statement) == synth.EXPECTED_ROWS["checking_with_card_note"]
+        assert _balances(statement) == (Decimal("4820.10"), Decimal("6474.84"))
+        assert _status(statement) == "ok"
+        assert _skipped(result) == 0
+
+
+@pytest.mark.parametrize(
+    ("claimant", "builder", "reader"),
+    [
+        ("mock_savings_and_loan", "other_current_account", "statement_generic"),
+        ("demo_card_services", "other_card_ending_in", "card_statement_generic"),
+    ],
+    ids=["mock_savings_and_loan", "demo_card_services"],
+)
+def test_one_fingerprint_phrase_is_not_the_institution(
+    claimant: str, builder: str, reader: str
+) -> None:
+    result = _unhinted(getattr(synth, builder)())
+    statement = _only(result)
+    assert _score(result, claimant) == 0.0
+    assert _parser(statement) == reader
+    # Nobody's name is put on an account its institution did not print.
+    assert statement.account.institution is None
+    assert _rows(statement) == synth.EXPECTED_ROWS[builder]
+    assert _status(statement) == "ok"
+    assert _skipped(result) == 0
+
+
+def test_a_statement_of_another_bank_keeps_its_own_currency_and_type() -> None:
+    statement = _only(_unhinted(synth.other_current_account()))
+    assert statement.account.currency == "GBP"
+    assert statement.account.last4 == "5527"
+    card = _only(_unhinted(synth.other_card_ending_in()))
+    assert card.account.account_type == "creditcard"
+    assert card.account.last4 == "4410"
+
+
+def _statement_of_account() -> bytes:
+    return synth_card_statement.card_pdf(synth_card_statement.card_statement())
+
+
+def _demo_card() -> bytes:
+    return synth_pdf_statements.demo_card_pdf(synth_pdf_statements.demo_card_statement())
+
+
+@pytest.mark.parametrize(
+    "fixture",
+    ["statement_of_account", "unseen_layout", "demo_card_services"],
+)
+def test_a_card_statement_is_still_a_card(fixture: str) -> None:
+    builders: dict[str, Callable[[], bytes]] = {
+        "statement_of_account": _statement_of_account,
+        "unseen_layout": synth_unseen_layouts.card_statement,
+        "demo_card_services": _demo_card,
+    }
+    data = builders[fixture]()
+    result = _unhinted(data)
+    statement = _only(result)
+    assert _parser(statement) == (
+        "demo_card_services" if fixture == "demo_card_services" else "card_statement_generic"
+    )
+    assert statement.account.account_type == "creditcard"
+    assert _status(statement) == "ok"
+    # Every phrase of its fingerprint, and a table: the institution's parser, in full.
+    assert _score(result, "demo_card_services") == (1.0 if fixture == "demo_card_services" else 0.0)
+
+
+def test_every_fingerprint_phrase_without_a_table_scores_low() -> None:
+    top = [[("Mock Savings and Loan", 62.0)], [("Current Account Statement", 62.0)]]
+    table = [
+        [("Date", 62.0), ("Details", 150.0), ("Paid out", 380.0), ("Paid in", 450.0)],
+        [("05/01/2026", 62.0), ("Coffee", 150.0), ("4.50", 380.0)],
+    ]
+    parser = MockSavingsParser()
+    assert parser.detect(_view([*top, *table])) == 1.0
+    assert parser.detect(_view(top)) == 0.54
+    # One phrase, table or not: nothing.
+    assert parser.detect(_view([top[1], *table])) == 0.0
+    assert parser.detect(_view([top[0], *table])) == 0.0
+    assert parser.detect(_view([top[0]])) == 0.0
 
 
 # -- hand-built lines -----------------------------------------------------------

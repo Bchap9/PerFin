@@ -32,6 +32,17 @@ something else:
 * :func:`shares_opening_under_deposit`: two shares of one credit union
   member, each ``Beginning Balance`` figure printed under ``Deposit``.
 
+And statements that print words another reader listens for:
+
+* :func:`checking_with_card_note`: a ``Business Checking`` statement whose
+  fee note, one sentence of 22 words, mentions a ``business credit card``.
+* :func:`other_current_account`: a sterling ``Current Account Statement``
+  of a bank no parser is written for (one of the two phrases the Mock
+  Savings and Loan parser knows its statements by, and not the other).
+* :func:`other_card_ending_in`: a card statement of an issuer no parser is
+  written for, which prints ``Card ending in 4410`` (likewise one of Demo
+  Card Services' two phrases).
+
 :data:`EXPECTED_ROWS` gives, per builder, the rows a correct reading returns
 (``(posted, amount, payee)``, money out negative); :data:`EXPECTED_BALANCES`
 the opening and closing balance of the builders that are about balances.
@@ -45,7 +56,7 @@ from datetime import date
 from decimal import Decimal
 from typing import Final
 
-from reportlab.lib.pagesizes import letter
+from reportlab.lib.pagesizes import A4, letter
 from reportlab.pdfbase.pdfmetrics import stringWidth
 from reportlab.pdfgen import canvas
 
@@ -458,6 +469,162 @@ def shares_opening_under_deposit() -> bytes:
     return buf.getvalue()
 
 
+# -- words another reader listens for --------------------------------------------
+
+_NOTE_OPENING: Final = _d("4,820.10")
+_NOTE_ROWS: Final[tuple[ExpectedRow, ...]] = (
+    (date(2026, 4, 2), _d("-1,450.00"), "Lease Payment Quarry Lane Units"),
+    (date(2026, 4, 6), _d("3,275.40"), "Merchant Settlement Batch 0418"),
+    (date(2026, 4, 9), _d("-312.66"), "ACH Debit Windrush Packaging"),
+    (date(2026, 4, 15), _d("-1,980.00"), "Payroll Transfer Out"),
+    (date(2026, 4, 21), _d("2,140.00"), "Invoice 2207 Elmstead Cafe"),
+    (date(2026, 4, 28), _d("-18.00"), "Monthly Service Charge"),
+)
+#: One sentence of 22 words, printed on one line above the table.
+CARD_NOTE: Final = (
+    "The monthly service charge is waived when you keep a Garnet Ridge business "
+    "credit card open and make one purchase each cycle."
+)
+
+
+def checking_with_card_note() -> bytes:
+    """A checking statement; its fee note says ``business credit card``."""
+    buf = io.BytesIO()
+    c = canvas.Canvas(buf, pagesize=letter)
+    balances = _running(_NOTE_OPENING, _NOTE_ROWS)
+    _head(c, "Garnet Ridge Bank", "6641", "04/01/2026 - 04/30/2026", _NOTE_OPENING, balances[-1])
+    _line(c, 722, [(40, "Business Checking")], size=11, bold=True)
+    _line(c, 668, [(40, CARD_NOTE)], size=8)
+    _line(
+        c,
+        650,
+        [(40, "Date"), (110, "Description"), (-430, "Amount"), (-520, "Balance")],
+        size=8,
+    )
+    _rows(
+        c,
+        636,
+        [
+            [
+                (40, posted.strftime("%m/%d/%Y")),
+                (110, payee),
+                (-430, f"{amount:,.2f}"),
+                (-520, _money(balance)),
+            ]
+            for (posted, amount, payee), balance in zip(_NOTE_ROWS, balances, strict=True)
+        ],
+    )
+    c.save()
+    return buf.getvalue()
+
+
+_CURRENT_OPENING: Final = _d("2,315.40")
+_CURRENT_ROWS: Final[tuple[ExpectedRow, ...]] = (
+    (date(2026, 2, 3), _d("-46.10"), "WATER RATES ELMBRIDGE"),
+    (date(2026, 2, 6), _d("-72.35"), "CORNMARKET GROCERS 118"),
+    (date(2026, 2, 13), _d("1,890.00"), "LOWFIELD ARCHIVES SALARY"),
+    (date(2026, 2, 17), _d("-825.00"), "RENT T ASHCOMBE"),
+    (date(2026, 2, 24), _d("-60.00"), "CASH MACHINE BRIDGE ST"),
+)
+
+
+def other_current_account() -> bytes:
+    """Sterling, day first, ``Money out | Money in | Balance``; not Mock Savings and Loan."""
+    buf = io.BytesIO()
+    c = canvas.Canvas(buf, pagesize=A4)
+    balances = _running(_CURRENT_OPENING, _CURRENT_ROWS)
+    _line(c, 800, [(40, "Harrowgate & Fold Bank")], size=14, bold=True)
+    _line(c, 800, [(380, "Account Number: ****5527")])
+    _line(c, 786, [(380, "Statement Period: 01/02/2026 - 28/02/2026")])
+    _line(c, 782, [(40, "Current Account Statement")])
+    _line(c, 60, [(40, _FOOTER)], size=7)
+    _rows(
+        c,
+        750,
+        [
+            [(40, "Opening Balance"), (-300, f"£{_money(_CURRENT_OPENING)}")],
+            [(40, "Closing Balance"), (-300, f"£{_money(balances[-1])}")],
+        ],
+    )
+    _line(
+        c,
+        700,
+        [
+            (40, "Date"),
+            (110, "Description"),
+            (-400, "Money out"),
+            (-470, "Money in"),
+            (-550, "Balance"),
+        ],
+        size=8,
+    )
+    _rows(
+        c,
+        686,
+        [
+            [
+                (40, posted.strftime("%d/%m/%Y")),
+                (110, payee),
+                (-400 if amount < 0 else -470, _money(amount)),
+                (-550, _money(balance)),
+            ]
+            for (posted, amount, payee), balance in zip(_CURRENT_ROWS, balances, strict=True)
+        ],
+    )
+    c.save()
+    return buf.getvalue()
+
+
+#: As the ledger keeps them: a charge is money out, the payment money in.
+_CARD_ROWS: Final[tuple[ExpectedRow, ...]] = (
+    (date(2026, 5, 4), _d("512.30"), "PAYMENT RECEIVED - THANK YOU"),
+    (date(2026, 5, 6), _d("-41.18"), "OAKHAVEN BOOKSELLERS"),
+    (date(2026, 5, 11), _d("-17.60"), "BRINDLE STREET CAFE"),
+    (date(2026, 5, 19), _d("-96.00"), "NORTHGATE RAIL TICKETS"),
+    (date(2026, 5, 26), _d("-63.47"), "FELLSIDE GARDEN SUPPLY"),
+)
+_CARD_PREVIOUS: Final = _d("512.30")
+
+
+def other_card_ending_in() -> bytes:
+    """A card statement (charges positive) that prints ``Card ending in 4410``."""
+    buf = io.BytesIO()
+    c = canvas.Canvas(buf, pagesize=letter)
+    charges = -sum((a for _, a, _ in _CARD_ROWS if a < 0), Decimal(0))
+    credits = sum((a for _, a, _ in _CARD_ROWS if a > 0), Decimal(0))
+    owed = _CARD_PREVIOUS - credits + charges
+    _line(c, 750, [(40, "Brackenfell Rewards Mastercard")], size=14, bold=True)
+    _line(c, 734, [(40, "Card ending in 4410")])
+    _line(c, 750, [(380, "Billing Period: 05/01/2026 - 05/31/2026")])
+    _line(c, 60, [(40, _FOOTER)], size=7)
+    _rows(
+        c,
+        700,
+        [
+            [(40, "Previous Balance"), (-300, f"${_money(_CARD_PREVIOUS)}")],
+            [(40, "Payments and Credits"), (-300, f"-${_money(credits)}")],
+            [(40, "New Charges"), (-300, f"+${_money(charges)}")],
+            [(40, "New Balance"), (-300, f"${_money(owed)}")],
+            [(40, "Minimum Payment Due"), (-300, "$25.00")],
+        ],
+    )
+    _line(c, 618, [(40, "Date"), (110, "Description"), (-560, "Amount")], size=8)
+    _rows(
+        c,
+        604,
+        [
+            [
+                (40, posted.strftime("%m/%d/%y")),
+                (110, payee),
+                (-560, f"${_money(amount)}" if amount < 0 else f"-${_money(amount)}"),
+            ]
+            for posted, amount, payee in _CARD_ROWS
+        ],
+    )
+    c.save()
+    return buf.getvalue()
+
+
 EXPECTED_ROWS: Final[dict[str, list[ExpectedRow]]] = {
     "left_heading_right_figures": list(_LEFT_ROWS),
     "tight_date_checking": list(_TIGHT_ROWS),
@@ -466,6 +633,9 @@ EXPECTED_ROWS: Final[dict[str, list[ExpectedRow]]] = {
     "summary_table_balances": list(_BOX_ROWS),
     "summary_label_wrapped": list(_WRAP_ROWS),
     "previous_statement_balance_first": list(_PREVIOUS_ROWS),
+    "checking_with_card_note": list(_NOTE_ROWS),
+    "other_current_account": list(_CURRENT_ROWS),
+    "other_card_ending_in": list(_CARD_ROWS),
 }
 
 #: ``(opening, closing)`` of the builders that are about balances.

@@ -139,7 +139,9 @@ are read the same way:
 
 Institution parsers (:mod:`app.ingestion.parsers.institutions`) subclass it
 and pin what the generic one has to guess: date format, sign convention,
-currency, fingerprint phrases and the institution's name.
+currency, fingerprint phrases and the institution's name. Such a parser
+claims a document only when every one of its phrases is on page 1
+(:meth:`TableStatementParser.detect`).
 """
 
 from __future__ import annotations
@@ -692,14 +694,17 @@ class TableStatementParser(DocumentParser):
         return hits / len(self.fingerprints)
 
     def detect(self, view: DocumentView) -> float:
+        """Generic: 0.4 with a table. A parser written for one institution
+        needs **every** phrase of its fingerprint on page 1 (1.0 with a
+        table, 0.54 without): one of them (``current account statement``,
+        ``card ending in``) is what any bank or issuer prints, and its
+        statement is not this institution's."""
         table = self.has_table(view)
         if not self.fingerprints:
             return 0.4 if table else 0.0
-        share = self.fingerprint_score(view)
-        if share == 0:
+        if self.fingerprint_score(view) < 1.0:
             return 0.0
-        score = 0.5 + 0.4 * share
-        return round(score + 0.1 if table else score * 0.6, 4)
+        return 1.0 if table else 0.54
 
     # -- reading ----------------------------------------------------------------
 
@@ -1896,7 +1901,8 @@ def totals_disagree(
 
 #: Words on a card statement's first page (the generic card parser's cue),
 #: read outside the transaction rows (:meth:`TableStatementParser.summary_lines`:
-#: a checking account's ``CREDIT CARD PAYMENT`` row is no cue).
+#: a checking account's ``CREDIT CARD PAYMENT`` row is no cue) and on short
+#: lines only (:data:`CARD_CUE_WORDS`).
 CARD_VOCABULARY: Final = (
     "card ending",
     "credit card",
@@ -1909,14 +1915,25 @@ CARD_VOCABULARY: Final = (
 #: Card words that other statements print too (``CARDMEMBER SERV`` as a
 #: payee, ``new charges`` on a fee notice): a cue only two together.
 WEAK_CARD_VOCABULARY: Final = ("new charges", "cardmember", "card member")
+#: The most words (as printed, split at spaces) a line may hold for its card
+#: or deposit-account words to count: a title or a label with its value says
+#: what the statement is, a sentence (a fee note that mentions the bank's
+#: credit card) only talks about one.
+CARD_CUE_WORDS: Final = 8
+#: A whole word of these on a short page-1 line outside the rows names a
+#: deposit account (``Business Checking``, ``Total Deposits``): the statement
+#: is not a card's, whatever card words are there.
+DEPOSIT_ACCOUNT_WORDS: Final = ("checking", "savings", "deposits", "withdrawals")
 
 
 class CardStatementParser(TableStatementParser):
     """Generic credit card statement: charges positive, credits ``CR`` or negative.
 
     Detected (0.45, above ``statement_generic``) when page 1 has a table and,
-    outside its rows, a card word (:data:`CARD_VOCABULARY`) or two of the
-    weak ones (:data:`WEAK_CARD_VOCABULARY`).
+    outside its rows on lines of at most :data:`CARD_CUE_WORDS` words, a card
+    word (:data:`CARD_VOCABULARY`) or two of the weak ones
+    (:data:`WEAK_CARD_VOCABULARY`), and no such line names a deposit account
+    (:data:`DEPOSIT_ACCOUNT_WORDS`).
     """
 
     name: ClassVar[str] = "card_statement_generic"
@@ -1927,10 +1944,22 @@ class CardStatementParser(TableStatementParser):
         if self.fingerprints:
             return super().detect(view)
         page_one = self.prepare([line for line in view.lines if line.page <= 1])
-        head = f" {' '.join(line.norm for line in self.summary_lines(page_one))} "
-        strong = any(f" {word} " in head for word in CARD_VOCABULARY)
+        short = [
+            f" {line.norm} "
+            for line in self.summary_lines(page_one)
+            if len(line.text.split()) <= CARD_CUE_WORDS
+        ]
+        if any(f" {word} " in text for text in short for word in DEPOSIT_ACCOUNT_WORDS):
+            return 0.0
+        strong = any(f" {word} " in text for text in short for word in CARD_VOCABULARY)
         # Each weak word once (``Card Member`` and ``Cardmember`` are one).
-        weak = len({w.replace(" ", "") for w in WEAK_CARD_VOCABULARY if f" {w} " in head})
+        weak = len(
+            {
+                word.replace(" ", "")
+                for word in WEAK_CARD_VOCABULARY
+                if any(f" {word} " in text for text in short)
+            }
+        )
         if not strong and weak < 2:
             return 0.0
         # Above the bank-statement generic parser for the same table.

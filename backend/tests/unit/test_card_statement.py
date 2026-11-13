@@ -513,3 +513,64 @@ def test_weak_card_words_need_a_second_cue(words: list[str], card: bool) -> None
         ]
     )
     assert (CardStatementParser().detect(view) > 0) is card
+
+
+ROW = [("01/05/2025", 62.0), ("Coffee", 150.0), ("4.50", 500.0)]
+
+
+def test_card_words_in_a_long_sentence_are_no_cue() -> None:
+    note = "Ask us how a higher credit limit could help your household budget"
+    assert len(note.split()) == 12
+    assert CardStatementParser().detect(_view([[(note, 62.0)], HEADER, ROW])) == 0.0
+    # The same words as a line of the summary are the cue they always were.
+    assert CardStatementParser().detect(_view([[("Credit Limit 5,000.00", 62.0)], HEADER, ROW])) > 0
+    # Eight words is still a summary line; two weak words in sentences are none.
+    eight = "Your credit limit as of this statement 5,000.00"
+    assert len(eight.split()) == 8
+    assert CardStatementParser().detect(_view([[(eight, 62.0)], HEADER, ROW])) > 0
+    weak = [
+        [("Every cardmember may ask for a paper copy of this notice", 62.0)],
+        [("Interest on new charges is set out in the agreement you hold", 62.0)],
+    ]
+    assert CardStatementParser().detect(_view([*weak, HEADER, ROW])) == 0.0
+
+
+@pytest.mark.parametrize(
+    ("line", "card"),
+    [
+        ("Checking Summary", False),
+        ("Premier Savings 1,204.00", False),
+        ("Total Deposits 2,000.00", False),
+        ("Withdrawals", False),
+        # A sentence, not a line of the summary: it names no account.
+        ("Pay this card from your checking account at any branch or online", True),
+        # Whole words only.
+        ("Savingsplan Rewards", True),
+        ("Deposit protection notice", True),
+    ],
+)
+def test_a_deposit_account_word_vetoes_the_card_reader(line: str, card: bool) -> None:
+    view = _view([[("Corporate Card", 62.0)], [(line, 62.0)], HEADER, ROW])
+    assert (CardStatementParser().detect(view) > 0) is card
+
+
+def test_a_deposit_account_word_among_the_rows_is_no_veto() -> None:
+    view = _view(
+        [
+            [("Corporate Card", 62.0)],
+            HEADER,
+            [("01/05/2025", 62.0), ("PAYMENT FROM CHECKING", 150.0), ("-40.00", 500.0)],
+            [("SAVINGS CLUB 0041", 150.0)],
+        ]
+    )
+    assert CardStatementParser().detect(view) > 0
+
+
+def test_a_deposit_account_word_after_page_one_is_no_veto() -> None:
+    lines = list(_view([[("Corporate Card", 62.0)], HEADER, ROW]).lines)
+    extra = _view([[("x", 62.0)]] * 3 + [[("Checking Summary", 62.0)]]).lines[-1]
+    lines.append(
+        ViewLine(page=2, index=extra.index, cells=extra.cells, text=extra.text, height=9.0)
+    )
+    view = DocumentView(lines=tuple(lines), source_format="pdf", truncated=False, page_count=2)
+    assert CardStatementParser().detect(view) > 0
