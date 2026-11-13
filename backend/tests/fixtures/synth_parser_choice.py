@@ -11,6 +11,10 @@ figure is invented:
   (``receipt._STATEMENT_WORDS``: no period label, no opening or closing
   balance), which is what this fixture is about: only its table says what
   it is.
+  The generic brokerage parser scores a little above the generic statement
+  parser here ("Account activity"; plan finding D4), is tried first and
+  reads nothing, so the statement parser reads the page as the fallback
+  (warning ``parser_fallback:brokerage_statement_generic``).
 * :func:`receipt_with_item_table`: a shop's receipt whose items sit under
   the same header, with a subtotal, tax, a total and a card tender line.
 

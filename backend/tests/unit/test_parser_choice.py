@@ -8,8 +8,15 @@ still is, table or not (``registry._without_receipt``).
 
 from __future__ import annotations
 
+from datetime import date
+from typing import Any
+
+import pytest
+
 from app.ingestion.extract.pdf import extract_pdf
-from app.ingestion.parsers.registry import PARSERS, _without_receipt, parse_extraction
+from app.ingestion.parsers.base import DocumentView, ParseOutcome
+from app.ingestion.parsers.registry import PARSERS, _without_receipt, parse_extraction, reparse
+from app.ingestion.parsers.table_statement import TableStatementParser
 from app.ingestion.sandbox.protocol import ExtractOptions, ExtractResult
 from tests.fixtures import synth_parser_choice as pc
 from tests.fixtures import synth_receipts as sr
@@ -58,6 +65,72 @@ def test_a_classified_receipt_with_an_item_table_is_still_a_receipt() -> None:
     assert parse.parser.name == "receipt_basic"
     assert parse.receipt is not None
     assert parse.receipt.total == pc.RECEIPT_TOTAL
+
+
+def test_an_unclassified_receipt_with_a_dated_table_is_read_as_a_statement() -> None:
+    """A decision, not an accident: with no classifier kind the table wins.
+
+    The receipt parser scores this page higher than the statement parser
+    does, and a page of activity that ends in "Total" lines scores nearly
+    the same (``activity_page_with_totals``), so the scores cannot tell the
+    two apart. Read as a statement, the items are rows that wait for a
+    person (none is confident, the tender line is no row); read as a
+    receipt, a real statement's rows would vanish behind one total. The
+    classifier calls this page a receipt, which keeps the receipt parser
+    (the test above).
+    """
+    result = parse_extraction(_extract(pc.receipt_with_item_table()))
+    parse = result.parse
+    assert parse is not None
+    assert parse.parser is not None
+    assert parse.parser.name == "statement_generic"
+    assert parse.receipt is None
+    (statement,) = result.statements
+    assert [t.payee for t in statement.transactions] == [text for _, text, _ in pc.RECEIPT_ITEMS]
+    assert all(t.low_confidence for t in statement.transactions)
+    assert pc.RECEIPT_TOTAL not in {abs(t.amount) for t in statement.transactions}
+
+
+def test_a_stored_receipt_is_still_a_receipt_when_read_again() -> None:
+    first = parse_extraction(_extract(pc.receipt_with_item_table()), kind="receipt")
+    assert first.parse is not None
+    assert first.parse.receipt is not None
+    again = reparse(first).parse
+    assert again is not None
+    assert again.parser is not None
+    assert again.parser.name == "receipt_basic"
+    assert again.receipt is not None
+    assert again.receipt.total == pc.RECEIPT_TOTAL
+    assert reparse(first).statements == []
+
+
+def test_reading_a_statement_again_does_not_make_it_a_receipt_hint() -> None:
+    first = parse_extraction(_extract(pc.activity_page_with_totals()))
+    again = reparse(first).parse
+    assert again is not None
+    assert again.parser is not None
+    assert again.parser.name == "statement_generic"
+    assert again.receipt is None
+    assert {s.name: s.score for s in again.scores}["receipt_basic"] == 0.0
+
+
+def test_reparse_hands_on_the_period_and_the_day_of_receipt(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    first = parse_extraction(_extract(pc.activity_page_with_totals()))
+    seen: list[DocumentView] = []
+
+    def capture(self: TableStatementParser, view: DocumentView, **_: Any) -> ParseOutcome:
+        seen.append(view)
+        return ParseOutcome()
+
+    monkeypatch.setattr(TableStatementParser, "parse_with", capture)
+    start, end, received = date(2026, 4, 1), date(2026, 4, 30), date(2026, 5, 4)
+    reparse(first, period=(start, end, 0.9), not_after=received)
+    assert seen
+    assert seen[0].hints.period == (start, end)
+    assert seen[0].hints.period_confidence == 0.9
+    assert seen[0].hints.not_after == received
 
 
 def test_receipts_without_a_table_are_unchanged() -> None:

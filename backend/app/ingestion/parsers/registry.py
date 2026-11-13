@@ -18,6 +18,9 @@ one extraction (:func:`parse_extraction`):
    receipt (:func:`_without_receipt`): a page of activity that ends in
    "Total" lines is not a purchase. So the receipt parser is neither
    chosen nor tried as a fallback there, and ``ParseInfo.scores`` shows 0.
+   With no classifier kind the table decides, also for a receipt whose
+   items sit under such a header: its rows then wait for a person, where
+   a statement read as a receipt would lose its rows behind one total.
 2. Otherwise every parser scores the pages (``detect``); the best score of
    at least :data:`MIN_SCORE` wins (ties: the order of :data:`PARSERS`, so
    an institution parser beats the generic one).
@@ -288,11 +291,27 @@ def parse_extraction(
     )
 
 
-def reparse(result: ExtractResult, *, threshold: float = DEFAULT_THRESHOLD) -> ExtractResult:
-    """Run the parsers again on a stored extraction, keeping the earlier choice as a hint."""
+def reparse(
+    result: ExtractResult,
+    *,
+    threshold: float = DEFAULT_THRESHOLD,
+    period: tuple[date, date, float] | None = None,
+    not_after: date | None = None,
+) -> ExtractResult:
+    """Run the parsers again on a stored extraction, keeping the earlier choice as a hint.
+
+    A document a receipt parser read is read again as a receipt (``kind``),
+    so its item table does not turn it into a statement
+    (:func:`_without_receipt`). ``period`` and ``not_after`` are those of
+    :func:`parse_extraction`: a caller that has them hands them on, so both
+    runs read the same hints.
+    """
     previous = result.parse.parser if result.parse is not None else None
     return parse_extraction(
         result,
         threshold=threshold,
         parser_name=previous.name if previous is not None else None,
+        kind="receipt" if previous is not None and previous.kind == "receipt" else None,
+        period=period,
+        not_after=not_after,
     )

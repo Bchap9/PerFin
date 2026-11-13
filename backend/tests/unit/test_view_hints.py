@@ -10,19 +10,22 @@ pin only that they arrive.
 from __future__ import annotations
 
 import io
-from datetime import date, timedelta
+from datetime import UTC, date, datetime, timedelta
 from typing import Any
+from unittest.mock import MagicMock
 
 import pytest
 from reportlab.lib.pagesizes import letter
 from reportlab.pdfgen import canvas
+from sqlalchemy.orm import Session
 
-from app.domain.documents.models import Document
+from app.domain.documents.models import Document, DocumentKind
 from app.ingestion.extract.pdf import extract_pdf
 from app.ingestion.parsers.base import DocumentView, ParseOutcome, ViewHints, created_day
+from app.ingestion.parsers.confidence import DEFAULT_THRESHOLD
 from app.ingestion.parsers.registry import parse_extraction
 from app.ingestion.parsers.table_statement import TableStatementParser
-from app.ingestion.pipeline import _period_hint
+from app.ingestion.pipeline import _parse_document, _period_hint
 from app.ingestion.sandbox.protocol import ExtractOptions, ExtractResult
 from tests.fixtures import synth_parser_choice as pc
 
@@ -185,3 +188,56 @@ def test_period_hint_reads_only_a_printed_period() -> None:
 )
 def test_period_hint_is_none_for_anything_else(confidence: dict[str, Any] | None) -> None:
     assert _period_hint(Document(confidence=confidence)) is None
+
+
+class _SeenError(Exception):
+    """Raised by the capturing parser: the view is all these tests need."""
+
+
+def _seen_by_the_pipeline(monkeypatch: pytest.MonkeyPatch, document: Document) -> DocumentView:
+    """The view ``_parse_document`` hands a parser for ``document``.
+
+    The parse stops at the first view, before anything is stored, so no
+    database is needed: the session is a mock that must stay unused.
+    """
+    seen: list[DocumentView] = []
+
+    def capture(self: TableStatementParser, view: DocumentView, **_: Any) -> ParseOutcome:
+        seen.append(view)
+        raise _SeenError
+
+    monkeypatch.setattr(TableStatementParser, "parse_with", capture)
+    db = MagicMock(spec=Session)
+    with pytest.raises(_SeenError):
+        _parse_document(db, document, _extract(pc.activity_page_with_totals()), DEFAULT_THRESHOLD)
+    assert not db.mock_calls
+    (view,) = seen
+    return view
+
+
+def test_the_pipeline_hands_the_period_and_the_day_of_receipt_to_the_parsers(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    document = Document(
+        kind=DocumentKind.STATEMENT,
+        confidence=_facts(),
+        created_at=datetime(2026, 4, 6, 9, 30, tzinfo=UTC),
+    )
+    view = _seen_by_the_pipeline(monkeypatch, document)
+    assert view.hints.period == (date(2026, 3, 1), date(2026, 3, 31))
+    assert view.hints.period_confidence == 0.95
+    assert view.hints.not_after == date(2026, 4, 6)
+    # The fixture pins its creation day far in the past: the earlier day wins.
+    assert view.ceiling == date(2000, 1, 1)
+
+
+def test_the_pipeline_hands_no_period_it_did_not_read_from_a_label(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    document = Document(
+        kind=DocumentKind.STATEMENT,
+        confidence=_facts(inferred=True),
+        created_at=datetime(2026, 4, 6, 9, 30, tzinfo=UTC),
+    )
+    view = _seen_by_the_pipeline(monkeypatch, document)
+    assert view.hints == ViewHints(not_after=date(2026, 4, 6))
