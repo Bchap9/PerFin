@@ -29,6 +29,9 @@ person.
   :func:`ofx_option_trades` are small fixed OFX files (SGML, one invented
   account) for the two prices OFX does not quote per unit: a bond's, per 100
   of face value, and an option's, per share of a contract.
+* :func:`ofx_written_options` (no position list: an option sold to open and
+  its expiry beside plain activity) and :func:`ofx_option_sold_with_positions`
+  (a position list, and a contract sold that was held before the period).
 * :func:`listed_twice` prints one holding as two positions on the same day
   at two prices, as a plan lists one per contribution source.
 * Tampering (SECURITY.md C12): ``"extra_row"`` prints a forged buy the cash
@@ -780,3 +783,67 @@ def ofx_option_trades() -> bytes:
         "<OPTBUYTYPE>BUYTOOPEN</OPTBUYTYPE></BUYOPT>"
     )
     return _small_ofx(activity=trade)
+
+
+# Options in an account's activity (written, and sold out of a listed account)
+# ---------------------------------------------------------------------------
+
+
+def _small_invtran(fitid: str, days_before: int, memo: str) -> str:
+    return (
+        f"<INVTRAN><FITID>{fitid}</FITID>"
+        f"<DTTRADE>{_ofx_date(_SMALL_DAY - timedelta(days=days_before))}</DTTRADE>"
+        f"<MEMO>{memo}</MEMO></INVTRAN>"
+    )
+
+
+def _small_option_sale(fitid: str, days_before: int, kind: str, price: str, total: str) -> str:
+    """A ``SELLOPT`` of one contract of :data:`OPTION_CUSIP` (``kind``: its ``OPTSELLTYPE``)."""
+    return (
+        f"<SELLOPT><INVSELL>{_small_invtran(fitid, days_before, 'Option sold')}"
+        f"{_small_secid(OPTION_CUSIP)}<UNITS>-1</UNITS><UNITPRICE>{price}</UNITPRICE>"
+        f"<COMMISSION>0.65</COMMISSION><TOTAL>{total}</TOTAL>"
+        "<SUBACCTSEC>CASH</SUBACCTSEC><SUBACCTFUND>CASH</SUBACCTFUND></INVSELL>"
+        f"<OPTSELLTYPE>{kind}</OPTSELLTYPE><SHPERCTRCT>100</SHPERCTRCT></SELLOPT>"
+    )
+
+
+def ofx_written_options() -> bytes:
+    """An account that writes an option: no position list, the rest plain activity.
+
+    ``SELLOPT`` of one contract (``SELLTOOPEN``, 109.35), the ``TRANSFER``
+    ``IN`` of one unit of the same security that is its expiry, a
+    ``BUYSTOCK`` of 5 ``PBXB`` at 40.00, an ``INCOME`` dividend of 3.10 and
+    a deposit of 500.00.
+    """
+    stock = _small_secid(BY_SYMBOL["PBXB"].cusip)
+    activity = (
+        _small_option_sale("PBW-1", 12, "SELLTOOPEN", "1.10", "109.35")
+        + f"<TRANSFER>{_small_invtran('PBW-2', 3, 'Option expired')}"
+        f"{_small_secid(OPTION_CUSIP)}<SUBACCTSEC>CASH</SUBACCTSEC><UNITS>1</UNITS>"
+        "<TFERACTION>IN</TFERACTION><POSTYPE>SHORT</POSTYPE></TRANSFER>"
+        f"<BUYSTOCK><INVBUY>{_small_invtran('PBW-3', 10, 'Bought')}{stock}"
+        "<UNITS>5</UNITS><UNITPRICE>40.00</UNITPRICE><COMMISSION>0.00</COMMISSION>"
+        "<TOTAL>-200.00</TOTAL><SUBACCTSEC>CASH</SUBACCTSEC><SUBACCTFUND>CASH</SUBACCTFUND>"
+        "</INVBUY><BUYTYPE>BUY</BUYTYPE></BUYSTOCK>"
+        f"<INCOME>{_small_invtran('PBW-4', 6, 'Dividend')}{stock}<INCOMETYPE>DIV</INCOMETYPE>"
+        "<TOTAL>3.10</TOTAL><SUBACCTSEC>CASH</SUBACCTSEC><SUBACCTFUND>CASH</SUBACCTFUND></INCOME>"
+        "<INVBANKTRAN><STMTTRN><TRNTYPE>CREDIT</TRNTYPE>"
+        f"<DTPOSTED>{_ofx_date(_SMALL_DAY - timedelta(days=14))}</DTPOSTED>"
+        "<TRNAMT>500.00</TRNAMT><FITID>PBW-5</FITID><NAME>Transfer from bank</NAME></STMTTRN>"
+        "<SUBACCTFUND>CASH</SUBACCTFUND></INVBANKTRAN>"
+    )
+    return _small_ofx(activity=activity)
+
+
+def ofx_option_sold_with_positions() -> bytes:
+    """A listed account that sells one option contract and lists none at the end.
+
+    The position list (12 ``PBXD`` at 50.00) is the whole account on the
+    statement's day, so the contract sold (``SELLTOCLOSE``, 239.35) was held
+    before the period: a long option, not a written one.
+    """
+    return _small_ofx(
+        positions=_small_position("POSSTOCK", BY_SYMBOL["PBXD"].cusip, "12", "50.00", "600.00"),
+        activity=_small_option_sale("PBL-1", 8, "SELLTOCLOSE", "2.40", "239.35"),
+    )

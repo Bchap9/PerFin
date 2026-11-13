@@ -693,6 +693,23 @@ const COPY: Readonly<Record<string, Copy>> = {
       left === 0
         ? ""
         : ` ${left === 1 ? "The 1 trade" : `The ${String(left)} trades`} in ${one ? "that security" : "those securities"} on this statement ${left === 1 ? "was" : "were"} left out with ${one ? "it" : "them"}.`;
+    if (item.payload["from_activity"] === true) {
+      // No position is printed short: the statement's own trades sell an
+      // option the account never held.
+      const lines =
+        left === 0
+          ? "nothing of it was imported"
+          : `${one ? "its" : "their"} ${left === 1 ? "1 trade was" : `${String(left)} trades were`} left out`;
+      return {
+        title: one ? "Written option left out" : "Written options left out",
+        what: `This statement sells ${one ? "an option" : `${String(count)} options`} the account did not hold (${one ? "a written option" : "written options"}). PerFin does not track written options yet, so ${lines}.`,
+        why: "Selling an option that is not held opens a short position, and the list of holdings holds none.",
+        steps: [
+          "The statement's other holdings and activity were imported.",
+          "Dismiss this item once you have seen it.",
+        ],
+      };
+    }
     return {
       title: "Short position not shown",
       what: `This statement lists ${one ? "a short position" : `${String(count)} short positions`} (a negative quantity). PerFin does not track short positions yet, so ${one ? "it is" : "they are"} not among the holdings shown for the account.${trades}`,

@@ -156,6 +156,23 @@ statements"). Per statement:
    ``investment_opening_basis_unknown`` item asking for the cost basis. A
    history the engine still refuses (selling units never held) rolls the
    statement back (savepoint) with an ``investment_lot_conflict`` item.
+   A **written option** never reaches the engine (:func:`_written_options`):
+   an option (``asset_class`` ``option`` on any of its rows) whose running
+   units over the statement's own rows fall below zero was sold without
+   being held. Its unit lines are left out, as a printed short position's
+   are, everything else of the statement is imported, and the
+   ``investment_short_position`` item says so (``from_activity`` when no
+   printed position is negative; one ``positions`` entry per such option
+   with its lowest running units). The count starts from the units the
+   statement itself implies when it lists positions (the listed units less
+   what its rows add), else from the units the account's history from
+   other documents holds. Only options: a share that would go negative
+   keeps the paths above. The rule sees one statement: an OFX file that
+   only closes a short opened in an earlier period (a ``BUYOPT`` with
+   nothing short on record) is read as a purchase, because OFX activity
+   reaches the importer with no open/close marker; and a file without a
+   position list that sells an option bought before its first row reads
+   as writing it (left out and said, never a made-up opening).
    A **positions export** (``app.ingestion.parsers.positions_table``: what
    every account holds on the day of the download, no activity) is a
    *snapshot*: its positions are the whole account on ``as_of``
@@ -1848,6 +1865,85 @@ def _shortfall_openings(
     return openings
 
 
+#: What a statement row does to the units held (``OPENING_TYPES`` and
+#: ``CLOSING_TYPES`` in the parser's words); any other row moves none.
+_UNIT_SIGNS: Final = {"buy": 1, "reinvest": 1, "transfer_in": 1, "sell": -1, "transfer_out": -1}
+
+
+def _history_units(ctx: _Context, account: Account, ref: SecurityRef) -> Decimal:
+    """Units of ``ref`` the account's rows from other documents add up to.
+
+    This document's own rows are left out: on a re-run they are the rows
+    being read again, and counting them twice would turn a sale of units
+    bought in an earlier statement into a sale of units never held.
+    """
+    security = _find_security(ctx, ref, account)
+    if security is None:
+        return Decimal(0)
+    rows = ctx.db.execute(
+        select(InvestmentTxn).where(
+            InvestmentTxn.household_id == ctx.household_id,
+            InvestmentTxn.account_id == account.id,
+            InvestmentTxn.security_id == security.id,
+            InvestmentTxn.source_document_id.is_distinct_from(ctx.document.id),
+        )
+    ).scalars()
+    return _units_after(Decimal(0), list(rows))
+
+
+def _written_options(
+    ctx: _Context,
+    account: Account,
+    statement: InvestmentStatement,
+    reported: Sequence[InvestmentPosition] = (),
+) -> list[tuple[SecurityRef, Decimal]]:
+    """Options the statement sells without holding them, with their lowest running units.
+
+    Module doc, step 7. Per security with an option row: the running units
+    over the statement's unit rows, in the lot engine's order. They start
+    from what the statement implies when it lists positions (``reported``,
+    else its own: the units listed for the security, none when it is not
+    listed, less what the rows add), else from the account's history
+    (:func:`_history_units`). A security with a split among its rows is left
+    to the engine, as :func:`_shortfall_openings` leaves it.
+    """
+    groups: list[tuple[set[tuple[str, str]], list[tuple[int, InvestmentActivity]]]] = []
+    for index, row in enumerate(statement.activity):
+        if row.type not in UNIT_TYPES or row.security is None:
+            continue
+        keys = _ref_keys(row.security)
+        for known, rows in groups:
+            if known & keys:
+                known |= keys
+                rows.append((index, row))
+                break
+        else:
+            if keys:
+                groups.append((keys, [(index, row)]))
+    listed = reported or statement.positions
+    written: list[tuple[SecurityRef, Decimal]] = []
+    for keys, rows in groups:
+        refs = [row.security for _, row in rows if row.security is not None]
+        if not any(ref.asset_class == "option" for ref in refs):
+            continue
+        if any(row.type == "split" for _, row in rows):
+            continue
+        rows.sort(key=lambda r: (r[1].trade_date, _DAY_RANK.get(r[1].type, 2), r[0]))
+        moves = [(row.quantity or Decimal(0)) * _UNIT_SIGNS.get(row.type, 0) for _, row in rows]
+        if listed:
+            closing = sum((p.quantity for p in listed if keys & _ref_keys(p.security)), Decimal(0))
+            units = closing - sum(moves, Decimal(0))
+        else:
+            units = _history_units(ctx, account, refs[0])
+        lowest = units
+        for move in moves:
+            units += move
+            lowest = min(lowest, units)
+        if lowest < -UNIT_TOLERANCE:
+            written.append((refs[0], lowest))
+    return written
+
+
 def _cash_statement(
     statement: InvestmentStatement, rows: Iterable[InvestmentActivity]
 ) -> Statement:
@@ -2074,9 +2170,18 @@ def _commit(
     # still counts it (the snapshot below is taken from every position).
     shorts = [p for p in statement.positions if p.quantity < 0]
     shorted = {key for p in shorts for key in _ref_keys(p.security)}
+    # A written option is short without a printed position saying so: the
+    # statement sells it and never held it (module doc, step 7). Kept out
+    # the same way; one a printed short position already names is that one.
+    options = [
+        (ref, lowest)
+        for ref, lowest in _written_options(ctx, account, statement, reported)
+        if not shorted & _ref_keys(ref)
+    ]
+    shorted |= {key for ref, _ in options for key in _ref_keys(ref)}
     writable = statement
     short_lines = 0
-    if shorts:
+    if shorted:
         activity = [
             a
             for a in statement.activity
@@ -2168,9 +2273,10 @@ def _commit(
     # doc, step 9): the account's value is not taken from them. Cash activity
     # that does not add up leaves the value alone when the statement's own
     # holdings and closing cash are its printed account value.
-    if shorts:
+    if shorted:
         # In the statement's value (and the snapshot below), not among the
-        # holdings shown; its trades were left out with it.
+        # holdings shown; its trades were left out with it. A written
+        # option has no printed position: its lowest running units stand in.
         ctx.review(
             ReviewKind.LOW_CONFIDENCE_FIELD,
             {
@@ -2181,16 +2287,30 @@ def _commit(
                 "as_of": on.isoformat() if on is not None else None,
                 # Lines moving the shorted securities' units, left out with them.
                 "lines_left_out": short_lines,
+                # Nothing printed is negative: the statement's own trades say so.
+                **({"from_activity": True} if not shorts else {}),
                 "positions": [
-                    {
-                        "symbol": p.security.symbol,
-                        "name": p.security.name,
-                        "quantity": _text(p.quantity),
-                        "market_value": _text(position_value(p)),
-                        "page": p.page,
-                    }
-                    for p in shorts[:IDS_MAX]
-                ],
+                    *(
+                        {
+                            "symbol": p.security.symbol,
+                            "name": p.security.name,
+                            "quantity": _text(p.quantity),
+                            "market_value": _text(position_value(p)),
+                            "page": p.page,
+                        }
+                        for p in shorts
+                    ),
+                    *(
+                        {
+                            "symbol": ref.symbol,
+                            "name": ref.name,
+                            "quantity": _text(lowest),
+                            "market_value": None,
+                            "page": None,
+                        }
+                        for ref, lowest in options
+                    ),
+                ][:IDS_MAX],
             },
         )
     if (

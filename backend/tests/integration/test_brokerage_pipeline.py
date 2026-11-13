@@ -1987,3 +1987,88 @@ def test_an_unknown_cost_basis_and_a_short_position_are_said(env: Env) -> None:
     stored = ExtractResult.model_validate(env.document(document_id).extraction)
     assert stored.investments[0].total_value is not None
     assert snapshot.balance == stored.investments[0].total_value.amount
+
+
+# ---------------------------------------------------------------------------
+# OFX: written options, prices that are not one unit's, values cut to the cent
+# ---------------------------------------------------------------------------
+
+
+def _small_account(env: Env) -> Account:
+    """The account of the small OFX files of ``synth_brokerage``."""
+    institution = env.ledger.institution(env.household_id, name=synth.INSTITUTION)
+    return env.ledger.account(
+        env.household_id,
+        type=AccountType.BROKERAGE,
+        number_last4=synth.SMALL_ACCOUNT[-4:],
+        currency="USD",
+        institution_id=institution.id,
+        name="Brokerage",
+    )
+
+
+def _option_rows(env: Env, account: Account) -> list[InvestmentTxn]:
+    options = {s.id for s in env.securities().values() if str(s.asset_class) == "option"}
+    return [t for t in env.txns(account) if t.security_id in options]
+
+
+def test_written_options_are_left_out_and_the_rest_imports(env: Env) -> None:
+    """A sale of an option the account never held opens no lot; the rest is imported."""
+    account = _small_account(env)
+    document_id = env.ingest(synth.ofx_written_options(), "activity.ofx")
+
+    stock = synth.BY_SYMBOL["PBXB"].cusip
+    assert env.holdings(account) == [(stock, Decimal(5))]
+    assert _option_rows(env, account) == []
+    assert sorted(str(t.type) for t in env.txns(account)) == ["buy", "dividend"]
+    assert [t.amount for t in env.cash_rows(account)] == [Decimal("500.00")]
+    (item,) = env.open_reviews(document_id)
+    assert item.payload["reason"] == "investment_short_position"
+    assert item.payload["from_activity"] is True
+    assert item.payload["lines_left_out"] == 2
+    (written,) = item.payload["positions"]
+    assert written["symbol"] is None
+    assert Decimal(written["quantity"]) == Decimal(-1)
+    assert (written["market_value"], written["page"]) == (None, None)
+
+    # The same file again leaves the same out and adds nothing.
+    _rerun(env, document_id)
+    assert env.holdings(account) == [(stock, Decimal(5))]
+    assert _option_rows(env, account) == []
+    assert env.reasons(document_id) == {"investment_short_position"}
+
+
+def test_an_option_sold_from_a_listed_account_was_held_before(env: Env) -> None:
+    """With a position list the statement says what was held: the sale closes a long option."""
+    account = _small_account(env)
+    document_id = env.ingest(synth.ofx_option_sold_with_positions(), "statement.ofx")
+
+    assert env.reasons(document_id) <= {"investment_opening_basis_unknown"}
+    assert sorted((str(t.type), t.quantity) for t in _option_rows(env, account)) == [
+        ("sell", Decimal(1)),
+        ("transfer_in", Decimal(1)),
+    ]
+    assert env.holdings(account) == [(synth.BY_SYMBOL["PBXD"].cusip, Decimal(12))]
+
+
+def test_ofx_with_truncated_cent_values_imports(env: Env) -> None:
+    """A market value cut (not rounded) to the cent is still quantity x price."""
+    account = _small_account(env)
+    document_id = env.ingest(synth.ofx_truncated_values(), "positions.ofx")
+
+    assert "investment_reconciliation_failed" not in env.reasons(document_id)
+    assert env.holdings(account) == [
+        (synth.BY_SYMBOL["PBXB"].cusip, Decimal("41.263")),
+        (synth.BY_SYMBOL["PBXD"].cusip, Decimal(12)),
+    ]
+
+
+def test_ofx_bond_position_price_is_one_units(env: Env) -> None:
+    """A bond priced per 100 of face value is stored at the price of one unit."""
+    account = _small_account(env)
+    document_id = env.ingest(synth.ofx_debt_position(), "bond.ofx")
+
+    assert env.reasons(document_id) <= {"investment_opening_basis_unknown"}
+    assert env.holdings(account) == [(synth.DEBT_CUSIP, Decimal(25000))]
+    (price,) = env.query(select(Price))
+    assert price.close == Decimal("0.98750")

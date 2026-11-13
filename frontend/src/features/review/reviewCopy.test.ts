@@ -555,6 +555,33 @@ describe("what the import says about rows and accounts", () => {
     );
     expect(found.what).toContain("a short position");
     expect(found.what).toContain("The 2 trades in that security");
+    expect(found.what).not.toContain("written option");
+  });
+
+  it("says a written option's trades were left out", () => {
+    const found = explain(
+      item("low_confidence_field", {
+        reason: "investment_short_position",
+        from_activity: true,
+        positions: [{ symbol: "ZZOP260619P00040000", quantity: "-1" }],
+        lines_left_out: 2,
+      }),
+    );
+    expect(found.title).toBe("Written option left out");
+    expect(found.what).toContain("an option the account did not hold");
+    expect(found.what).toContain("a written option");
+    expect(found.what).toContain("its 2 trades were left out");
+    expect(found.what).not.toContain("a short position");
+    const several = explain(
+      item("low_confidence_field", {
+        reason: "investment_short_position",
+        from_activity: true,
+        positions: [{ quantity: "-1" }, { quantity: "-2" }],
+        lines_left_out: 5,
+      }),
+    );
+    expect(several.what).toContain("2 options the account did not hold");
+    expect(several.what).toContain("their 5 trades were left out");
   });
 
   it("explains a value the account list prints differently", () => {
