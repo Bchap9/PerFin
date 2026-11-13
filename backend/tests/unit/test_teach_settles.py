@@ -89,3 +89,12 @@ def test_a_held_statement_is_answered_only_when_it_reconciles() -> None:
     )
     assert not _answers(held, ["closing_balance"], rerun="pipeline")
     assert _answers(held, ["closing_balance"], reconciled=True)
+
+
+def test_only_the_pipeline_answers_what_the_pipeline_raised() -> None:
+    """Rows imported from a taught table do not read the pages OCR never read."""
+    unread = _item(ReviewKind.UNPARSED, reason="ocr_failed")
+    assert not _answers(unread, ["statements"], rerun="import")
+    assert not _answers(unread, ["institution_id", "account_id"], remembered=True)
+    # The document read again through the pipeline raises it afresh if OCR fails again.
+    assert _answers(unread, [], rerun="pipeline")
