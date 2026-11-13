@@ -32,6 +32,17 @@ are read the same way:
    processing date) and may be month names without a year
    (``December 16``, ``16 Dec``); numeric rows with and without a year
    in one table are both read.
+   **Cells off their columns.** A figure that overlaps no heading and lies
+   near none (figures right-aligned in a wide column under a heading
+   printed at its left) goes to the numeric column that starts left of it,
+   when that column has no figure of its own on the line. A date printed
+   so close to the description that the two are one cell is split off it
+   (:meth:`TableStatementParser._split_fused_date`), on a line with a
+   figure only: a wrapped line that starts with a date stays a wrap. With
+   a figure in both the debit and the credit column, a zero is no figure
+   (``$250.00 | -$0.00``); two amounts, or two zeros, say nothing and the
+   row is counted as skipped. A year-less numeric text is a date only when
+   it can be a day and a month (``2.80`` is a figure).
    Section headings set the row type (fees, interest) or start a *pending*
    section whose rows are counted but not imported (they are not posted and
    not part of the balances). Totals, page footers and "continued" lines are
@@ -249,6 +260,9 @@ STUB_MARKERS: Final = (
 OTHER_STATEMENT_WORDS: Final = frozenset({"next", "upcoming", "following"})
 #: A marker after a row's date (``January 9 *``: a processing date).
 _DATE_MARKS: Final = " *\u2020"
+#: How far left of the date heading a cell may start and still begin with the
+#: row's date (dates printed a little outside their column).
+FUSED_DATE_SLACK: Final = 25.0
 #: Yearless styles a month-named row date may be printed in.
 NAMED_YEARLESS: Final[tuple[DateStyle, ...]] = ("mon_d", "d_mon")
 
@@ -664,6 +678,7 @@ class TableStatementParser(DocumentParser):
 
     def _assign(self, line: ViewLine, columns: Sequence[Column]) -> dict[Role, list[Cell]]:
         out: dict[Role, list[Cell]] = {}
+        unclaimed: list[Cell] = []
         for cell in line.cells:
             best: Column | None = None
             best_overlap = 0.0
@@ -681,11 +696,30 @@ class TableStatementParser(DocumentParser):
                     best = nearest
             if best is not None:
                 out.setdefault(best.role, []).append(cell)
+            elif read_amount(cell.text) is not None:
+                unclaimed.append(cell)
+        for cell in unclaimed:
+            # A figure no heading claims (right-aligned in a wide column whose
+            # heading is printed at its left): the numeric column that starts
+            # left of it, unless that column has its figure already.
+            left = [column for column in columns if column.x0 <= cell.centre]
+            if not left:
+                continue
+            home = max(left, key=lambda column: column.x0)
+            if home.role in NUMERIC_ROLES and home.role not in out:
+                out[home.role] = [cell]
         return out
 
     def _date_shaped(self, text: str) -> bool:
-        if numeric_parts(text) is not None:
-            return True
+        parts = numeric_parts(text)
+        if parts is not None:
+            first, second, year = parts
+            if year is not None:
+                return True
+            # Without a year: a day and a month in one order (``2.80`` is a figure).
+            return (1 <= first <= 12 and 1 <= second <= 31) or (
+                1 <= second <= 12 and 1 <= first <= 31
+            )
         if any(month_day(text, style) is not None for style in NAMED_YEARLESS):
             return True
         return any(read_date(text, style) is not None for style in ("d_mon_y", "mon_d_y", "ymd"))
@@ -719,6 +753,55 @@ class TableStatementParser(DocumentParser):
                     break
         if rest:
             cells["description"] = [*rest, *cells.get("description", [])]
+
+    def _split_fused_date(self, cells: dict[Role, list[Cell]], columns: Sequence[Column]) -> None:
+        """A date printed so close to the description that the two are one cell.
+
+        Only when the date column got no cell: the line's leftmost cell, if
+        it starts at the date column (up to :data:`FUSED_DATE_SLACK` left of
+        its heading), loses its first one to three words when they are
+        date-shaped; they become the date cell and the rest goes in front of
+        the description. In a table with one money column that got no cell,
+        a last word reading as an amount becomes the money cell (the whole
+        row printed as one cell).
+
+        Nothing changes unless the line then has a figure in a numeric
+        column: a wrapped line that starts with a date stays a wrap.
+        """
+        if cells.get("date"):
+            return
+        date_column = next((c for c in columns if c.role == "date"), None)
+        placed = [cell for found in cells.values() for cell in found]
+        if date_column is None or not placed:
+            return
+        first = min(placed, key=lambda cell: cell.x0)
+        if not date_column.x0 - FUSED_DATE_SLACK <= first.x0 <= date_column.x1:
+            return
+        words = first.word_cells()
+        for size in (3, 2, 1):
+            head = " ".join(w.text for w in words[:size]).strip(_DATE_MARKS)
+            if len(words) > size and self._date_shaped(head):
+                break
+        else:
+            return
+        rest = list(words[size:])
+        split: dict[Role, list[Cell]] = {
+            other: [c for c in found if c is not first] for other, found in cells.items()
+        }
+        split = {other: found for other, found in split.items() if found}
+        money = [c.role for c in columns if c.role in MONEY_ROLES]
+        if len(money) == 1 and money[0] not in split and read_amount(rest[-1].text) is not None:
+            split[money[0]] = [rest.pop()]
+        if not any(
+            other in NUMERIC_ROLES and self._amount(found) is not None
+            for other, found in split.items()
+        ):
+            return
+        split["date"] = [join_cells(words[:size])]
+        if rest:
+            split["description"] = [join_cells(rest), *split.get("description", [])]
+        cells.clear()
+        cells.update(split)
 
     def without_stubs(self, lines: Sequence[ViewLine]) -> list[ViewLine]:
         """``lines`` without payment stubs: a stub marker line (``Please detach
@@ -756,6 +839,7 @@ class TableStatementParser(DocumentParser):
                 continue
             cells = self._assign(line, columns)
             self._split_lead(cells)
+            self._split_fused_date(cells, columns)
             date_text = " ".join(c.text for c in cells.get("date", [])).strip(_DATE_MARKS)
             if date_text and self._date_shaped(date_text):
                 continue
@@ -960,6 +1044,7 @@ class TableStatementParser(DocumentParser):
                 continue
             cells = self._assign(line, columns)
             self._split_lead(cells)
+            self._split_fused_date(cells, columns)
             date_text = " ".join(c.text for c in cells.get("date", [])).strip(_DATE_MARKS)
             if not date_text or not self._date_shaped(date_text):
                 last = self._not_a_row(line, norm, cells, summary, last)
@@ -1083,10 +1168,20 @@ class TableStatementParser(DocumentParser):
             if self.sign == "card":
                 return abs(value.value) if value.negative_marked else -abs(value.value)
             return value.value
-        if row.debit is not None and row.credit is None:
-            return -abs(row.debit.value)
-        if row.credit is not None and row.debit is None:
-            return abs(row.credit.value)
+        debit, credit = row.debit, row.credit
+        if debit is not None and credit is not None:
+            # Both printed: a zero is no figure (``250.00 | 0.00``). Two
+            # amounts, or two zeros, say nothing: unread, and counted.
+            if (debit.value == 0) == (credit.value == 0):
+                return None
+            if debit.value == 0:
+                debit = None
+            else:
+                credit = None
+        if debit is not None:
+            return -abs(debit.value)
+        if credit is not None:
+            return abs(credit.value)
         return None
 
     def _ledger_balance(self, amount: Amount | None) -> Decimal | None:
@@ -1309,6 +1404,7 @@ class TableStatementParser(DocumentParser):
                 continue
             cells = self._assign(line, columns)
             self._split_lead(cells)
+            self._split_fused_date(cells, columns)
             opening = self._opening_row(cells)
             if opening is not None:
                 if balance is None or opening.value != balance:
