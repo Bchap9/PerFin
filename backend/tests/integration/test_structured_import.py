@@ -512,7 +512,7 @@ def test_qif_with_a_record_without_an_amount_raises_lines_skipped(env: Env) -> N
     data = (
         "!Type:Bank\n"
         "D03/04/2026\nT-12.40\nPHarbor Lane Bakery\n^\n"
-        "D03/11/2026\nPQuill Stationers\n^\n"
+        "D03/11/2026\nPQuire Stationers\n^\n"
         "D03/19/2026\nT300.00\nPNorthfield Payroll\n^\n"
     ).encode("ascii")
     document_id = env.ingest(data, account=account, name="export.qif")
