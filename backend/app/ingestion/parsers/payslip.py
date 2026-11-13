@@ -12,7 +12,9 @@ with month names.
 
 Checks: ``gross - total deductions = net`` (and the deduction lines add up
 to their total) within the reconciliation tolerance; a payslip that does not
-add up has every amount field below the threshold. Payslips are kept on the
+add up has every amount field below the threshold. On a scan each field is
+scaled by the OCR confidence of the lines it was read from; gross,
+deductions and net that add up keep full confidence. Payslips are kept on the
 document (``extraction.parse.payslip``, ``kind = payslip``, period); they
 create no ledger rows (the salary arrives as the bank statement's deposit).
 """
@@ -26,7 +28,13 @@ from typing import ClassVar, Final, Literal
 
 from app.core.money import sum_amounts
 from app.ingestion.parsers import confidence as conf
-from app.ingestion.parsers.base import DocumentParser, DocumentView, ParseOutcome, ViewLine
+from app.ingestion.parsers.base import (
+    Cell,
+    DocumentParser,
+    DocumentView,
+    ParseOutcome,
+    ViewLine,
+)
 from app.ingestion.parsers.table_statement import label_end
 from app.ingestion.parsers.text import (
     FULL_STYLES,
@@ -93,15 +101,20 @@ class PayslipParser(DocumentParser):
         earnings: list[PayslipLine] = []
         deductions: list[PayslipLine] = []
         section: str | None = None
+        #: Per field, the cells of the lines its label and value were read from.
+        cells: dict[str, list[Cell]] = {}
+        deduction_cells: list[Cell] = []
         for line in view.lines:
             if line.page > 1:
                 break
             norm = line.norm
             if employer is None and line.index == 0 and not any(w in norm for w in VOCABULARY):
                 employer = line.text.strip()[:200] or None
+                cells["employer"] = list(line.cells)
             end = label_end(line.text, "employer")
             if end is not None and line.text[end:].strip(" :"):
                 employer = line.text[end:].strip(" :")[:200]
+                cells["employer"] = list(line.cells)
             match = _CURRENCY.search(line.text)
             if match is not None and currency is None:
                 currency = match[1].upper()
@@ -110,10 +123,13 @@ class PayslipParser(DocumentParser):
                 found = find_dates(line.text[end:], styles)
                 if len(found) >= 2 and found[0] <= found[1]:
                     period = (found[0], found[1])
+                    cells["period"] = list(line.cells)
             end = label_end(line.text, "pay date")
             if end is not None and pay_date is None:
                 found = find_dates(line.text[end:], styles)
                 pay_date = found[0] if found else None
+                if pay_date is not None:
+                    cells["pay_date"] = list(line.cells)
             for label, slot in (("gross pay", "gross"), ("net pay", "net")):
                 value = _amount(line, label)
                 if value is not None:
@@ -121,10 +137,12 @@ class PayslipParser(DocumentParser):
                         gross = value
                     else:
                         net = value
+                    cells[slot] = list(line.cells)
                     section = None
             value = _amount(line, "total deductions")
             if value is not None:
                 total, section = value, None
+                cells["deductions"] = list(line.cells)
                 continue
             if norm in ("earnings", "payments"):
                 section = "earnings"
@@ -138,8 +156,11 @@ class PayslipParser(DocumentParser):
                 if amounts and label:
                     target = earnings if section == "earnings" else deductions
                     target.append(PayslipLine(label=label[:200], amount=abs(amounts[0].value)))
+                    if section == "deductions":
+                        deduction_cells.extend(line.cells)
         if total is None and deductions:
             total = sum_amounts(d.amount for d in deductions)
+            cells["deductions"] = deduction_cells
         adds_up: bool | None = None
         if gross is not None and net is not None and total is not None:
             adds_up = abs(gross - total - net) <= TOLERANCE
@@ -160,9 +181,11 @@ class PayslipParser(DocumentParser):
             "net": money if net is not None else conf.MISSING,
             "deductions": money if total is not None else conf.MISSING,
         }
-        ocr = [c for line in view.lines for c in [line.conf] if c is not None]
-        if ocr:
-            scores = {k: conf.scaled(v, min(ocr)) for k, v in scores.items()}
+        scores = conf.scaled_fields(
+            scores,
+            {name: [c.conf for c in read] for name, read in cells.items()},
+            confirmed=("gross", "net", "deductions") if adds_up else (),
+        )
         outcome.payslip = Payslip(
             employer=employer,
             period_start=period[0] if period else None,

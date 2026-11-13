@@ -9,6 +9,7 @@ whose figures do not reconcile (SECURITY.md C12).
 
 from __future__ import annotations
 
+from dataclasses import replace
 from datetime import date
 from decimal import Decimal
 
@@ -16,7 +17,12 @@ import pytest
 
 from app.ingestion.extract.pdf import extract_pdf
 from app.ingestion.parsers import confidence
-from app.ingestion.parsers.loan_statement import LoanStatementParser, reconcile_loan
+from app.ingestion.parsers.base import DocumentView
+from app.ingestion.parsers.loan_statement import (
+    MONEY_FIELDS,
+    LoanStatementParser,
+    reconcile_loan,
+)
 from app.ingestion.parsers.registry import parse_extraction, reparse
 from app.ingestion.sandbox.protocol import ExtractOptions, ExtractResult, LoanStatement
 from tests.fixtures import synth_loans as synth
@@ -84,8 +90,6 @@ def test_reparse_keeps_the_loan_parser() -> None:
 def test_bank_statements_are_not_loan_statements() -> None:
     data = sample_national_pdf(sample_national_statement())
     result = extract_pdf(data, OPTIONS, "pdf")
-    from app.ingestion.parsers.base import DocumentView
-
     assert LoanStatementParser().detect(DocumentView.from_result(result)) == 0.0
 
 
@@ -107,3 +111,45 @@ def test_series_dates_follow_the_schedule() -> None:
     first, second = synth.loan_series(2)
     assert (first.paid_on, second.paid_on) == (date(2024, 4, 1), date(2024, 5, 1))
     assert second.previous_balance == first.balance
+
+
+def _as_scan(data: bytes, *, clean: float, footer: float) -> DocumentView:
+    """The PDF's lines as an OCR view: every cell at ``clean``, the last line at ``footer``."""
+    result = extract_pdf(data, OPTIONS, "pdf")
+    assert result.ok, result.error
+    view = DocumentView.from_result(result)
+    last = len(view.lines) - 1
+    lines = tuple(
+        replace(
+            line,
+            cells=tuple(replace(c, conf=footer if at == last else clean) for c in line.cells),
+        )
+        for at, line in enumerate(view.lines)
+    )
+    return replace(view, lines=lines, source_format="image")
+
+
+def test_loan_fields_scale_by_their_own_cells() -> None:
+    stmt = synth.loan_series(1)[0]
+    view = _as_scan(synth.loan_statement_pdf(stmt, layout="classic"), clean=0.96, footer=0.02)
+    assert view.lines[-1].norm.startswith("synthetic test document")
+    outcome = LoanStatementParser().parse(view, threshold=confidence.DEFAULT_THRESHOLD)
+    loan = outcome.loan
+    assert loan is not None
+    assert loan.reconciliation is not None
+    assert loan.reconciliation.status == "ok"
+    assert {name: loan.confidence[name] for name in MONEY_FIELDS} == dict.fromkeys(
+        MONEY_FIELDS, 1.0
+    )
+    for name in ("paid_on", "statement_date", "rate", "lender", "last4"):
+        assert loan.confidence[name] == pytest.approx(confidence.GENERIC * 0.96), name
+    assert loan.low_confidence == []
+
+
+def test_tampered_scan_scales_its_figures_by_their_cells() -> None:
+    stmt = synth.loan_series(1)[0]
+    data = synth.loan_statement_pdf(stmt, layout="classic", tamper="parts")
+    view = _as_scan(data, clean=0.96, footer=0.02)
+    loan = LoanStatementParser().parse(view, threshold=confidence.DEFAULT_THRESHOLD).loan
+    assert loan is not None
+    assert loan.confidence["principal"] == pytest.approx(confidence.UNRECONCILED * 0.96)

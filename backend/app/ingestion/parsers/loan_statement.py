@@ -24,7 +24,9 @@ Checks (SECURITY.md C12, :class:`~app.ingestion.sandbox.protocol.LoanReconciliat
 confidence: 1.0 for figures a check confirmed, :data:`conf.GENERIC` for
 dates and text read from labels, :data:`conf.UNCHECKED` for figures no check
 could cover and :data:`conf.UNRECONCILED` for every figure of a statement
-that does not reconcile; OCR lowers all of them. The statement is kept in
+that does not reconcile. On a scan each field is scaled by the OCR
+confidence of the line it was read from; a figure a check covers on a
+statement that reconciles keeps full confidence. The statement is kept in
 ``extraction.parse.loan``; ``app.domain.loans.statement_import`` records
 the payment on the matching loan.
 """
@@ -38,7 +40,13 @@ from typing import ClassVar, Final, Literal
 
 from app.core.money import sum_amounts
 from app.ingestion.parsers import confidence as conf
-from app.ingestion.parsers.base import DocumentParser, DocumentView, ParseOutcome, ViewLine
+from app.ingestion.parsers.base import (
+    Cell,
+    DocumentParser,
+    DocumentView,
+    ParseOutcome,
+    ViewLine,
+)
 from app.ingestion.parsers.text import (
     FULL_STYLES,
     DateStyle,
@@ -145,13 +153,19 @@ class LoanStatementParser(DocumentParser):
         currency: str | None = None
         rate: Decimal | None = None
         next_due_amount: Decimal | None = None
+        #: Per field, the cells of the line its label and value were read from.
+        cells: dict[str, list[Cell]] = {}
         for line in view.lines:
             norm = line.norm
             text = line.text
             if lender is None and line.index == 0 and not any(w in norm for w in VOCABULARY):
                 lender = text.strip()[:200] or None
+                cells["lender"] = list(line.cells)
             if norm.startswith("lender "):
-                lender = text.split(":", 1)[-1].strip()[:200] or lender
+                named = text.split(":", 1)[-1].strip()[:200]
+                if named:
+                    lender = named
+                    cells["lender"] = list(line.cells)
             match = _CURRENCY.search(text)
             if match is not None and currency is None:
                 currency = match[1].upper()
@@ -159,10 +173,12 @@ class LoanStatementParser(DocumentParser):
                 found = _LAST4.search(text)
                 if found is not None:
                     last4 = found[1]
+                    cells["last4"] = list(line.cells)
             if "interest rate" in norm and rate is None:
                 percent = _PERCENT.search(text)
                 if percent is not None:
                     rate = Decimal(percent[1]) / 100
+                    cells["rate"] = list(line.cells)
                 continue
             for key, labels in (
                 ("statement_date", ("statement date",)),
@@ -177,6 +193,7 @@ class LoanStatementParser(DocumentParser):
                     found_dates = find_dates(text[text.lower().find(label.split()[0]) :], styles)
                     if found_dates:
                         dates[key] = found_dates[0]
+                        cells[key] = list(line.cells)
             if "amount due" in norm and next_due_amount is None:
                 value, symbol = _last_amount(line)
                 if value is not None:
@@ -197,6 +214,7 @@ class LoanStatementParser(DocumentParser):
             value, symbol = _last_amount(line)
             if value is not None:
                 money[filled] = value
+                cells[filled] = list(line.cells)
                 if symbol:
                     symbols.add(symbol)
         outcome = ParseOutcome()
@@ -207,9 +225,11 @@ class LoanStatementParser(DocumentParser):
             currency = symbols.pop()
         reconciliation = reconcile_loan(money)
         scores = _scores(money, dates, reconciliation, lender=lender, last4=last4, rate=rate)
-        ocr = [c for line in view.lines for c in [line.conf] if c is not None]
-        if ocr:
-            scores = {k: conf.scaled(v, min(ocr)) for k, v in scores.items()}
+        scores = conf.scaled_fields(
+            scores,
+            {name: [c.conf for c in read] for name, read in cells.items()},
+            confirmed=_confirmed(reconciliation) if reconciliation.status == "ok" else (),
+        )
         outcome.loan = LoanStatement(
             lender=lender,
             last4=last4,
@@ -255,6 +275,18 @@ def reconcile_loan(money: dict[str, Decimal]) -> LoanReconciliation:
     return LoanReconciliation(status=status, checks=checks, failed=failed)
 
 
+#: The money fields each check covers.
+_COVERED: Final[dict[str, frozenset[str]]] = {
+    "parts": frozenset({"principal", "interest", "escrow", "fees", "total"}),
+    "balance": frozenset({"principal", "previous", "balance"}),
+}
+
+
+def _confirmed(reconciliation: LoanReconciliation) -> set[str]:
+    """The money fields the statement's checks cover."""
+    return {f for check in reconciliation.checks for f in _COVERED[check]}
+
+
 def _scores(
     money: dict[str, Decimal],
     dates: dict[str, date],
@@ -264,11 +296,7 @@ def _scores(
     last4: str | None,
     rate: Decimal | None,
 ) -> dict[str, float]:
-    covered = {
-        "parts": {"principal", "interest", "escrow", "fees", "total"},
-        "balance": {"principal", "previous", "balance"},
-    }
-    confirmed = {f for check in reconciliation.checks for f in covered[check]}
+    confirmed = _confirmed(reconciliation)
     scores: dict[str, float] = {}
     for name in MONEY_FIELDS:
         if name not in money:
