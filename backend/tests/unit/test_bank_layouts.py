@@ -1596,18 +1596,26 @@ def test_shares_with_nothing_above_them_count_nothing() -> None:
     assert "rows_outside_account" not in outcome.warnings
 
 
-def test_lines_of_a_headerless_section_are_counted_not_read() -> None:
+def test_lines_of_a_headerless_section_are_read() -> None:
     result = _read(synth.titled_sections_without_headers())
     statement = _only(result)
-    assert _rows(statement) == synth.EXPECTED_ROWS["titled_sections_without_headers"]
-    assert len(statement.transactions) == 4
-    assert all(t.amount < 0 for t in statement.transactions)
-    assert _skipped(result) == 3
-    assert "rows_without_header:3" in _warnings(result)
-    assert result.parse is not None
-    assert len(result.parse.skipped_regions) == 3
-    # The deposits were not read, so the statement cannot add up: it is held.
-    assert _status(statement) == "mismatch"
+    assert len(statement.transactions) == 7
+    # The three deposits stand under their title alone: money in, by the title.
+    deposits = statement.transactions[:3]
+    assert [t.amount for t in deposits] == [Decimal("1420.00"), Decimal("75.00"), Decimal("31.20")]
+    assert [t.payee for t in deposits] == [
+        "Payroll Coldharbour Printworks",
+        "Mobile Deposit",
+        "Refund Ashlar Street Cobblers",
+    ]
+    assert _rows(statement)[3:] == synth.EXPECTED_ROWS["titled_sections_without_headers"]
+    assert all(t.amount < 0 for t in statement.transactions[3:])
+    assert _skipped(result) == 0
+    assert not any(w.startswith("rows_without_header") for w in _warnings(result))
+    assert "sections_without_header:1" in _warnings(result)
+    # No total is printed under the deposits; the balances check them.
+    assert _status(statement) == "ok"
+    assert all(not t.low_confidence for t in statement.transactions)
 
 
 def _undated(payee: str, amount: str) -> list[tuple[str, float]]:

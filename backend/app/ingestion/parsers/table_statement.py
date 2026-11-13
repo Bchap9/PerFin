@@ -151,16 +151,47 @@ are read the same way:
    carried date already), and not otherwise.
    **Found and not read.** Any other undated line with a figure in a money
    column that a dated row follows (two figures in one column, a line too
-   far below the row above) is counted as skipped, as is each date-led
-   line ending in an amount printed **under a section title and no
-   header** (outside any table, up to the next header, block title or page
-   end; warning ``rows_without_header:<n>``): nothing is imported from
-   those. The same holds, under the same warning, for date-led lines
-   ending in an amount that also have **words**, on the page of a line of
-   heading words that ended the table without being a header we read
-   (``Date | Balance``), up to the next title, block title or header:
-   such a line may have been a row's wrapped text, and the lines after it
-   rows. Figures by day under it have no words and are not counted.
+   far below the row above) is counted as skipped. So is, under the
+   warning ``rows_without_header:<n>``, each date-led line ending in an
+   amount that also has **words**, on the page of a line of heading words
+   that ended the table without being a header we read (``Date |
+   Balance``), up to the next title, block title or header: such a line
+   may have been a row's wrapped text, and the lines after it rows.
+   Figures by day under it have no words and are not counted, and neither
+   is a dated balance line (``01/31 | Ending Balance | 405.50``: a summary
+   grid printed under the table).
+   **Sections without a header.** A section title outside any table
+   (before the first header, or after a line of heading words ended the
+   table) opens a section whose rows are read from their own shape
+   (:func:`~app.ingestion.parsers.statement_lines.led_row`: a date, words,
+   an amount at the end; a dated balance, total, page or ``continued``
+   line is none). It stays open over a page break and runs on under its
+   title marked ``continued`` or printed again on a later page. It closes
+   at its total (a ``Total ...`` line, ``8 item(s) totaling $3,500.00``),
+   at another title, a block title, a header or a line of heading words,
+   and after :data:`HEADERLESS_GAP` lines in a row that are no such row.
+   When it closes with :data:`MIN_HEADERLESS_ROWS` rows and, where a total
+   is printed, the total is theirs (the sum of their magnitudes, or the
+   magnitude of their sum; one row is enough when the total is its
+   amount), the rows are rows of a section of their own, with the
+   direction and type of the title as under a header, and the total is the
+   section's total (warning ``sections_without_header:<n>``, the sections
+   read). An undated line of words right under such a row is its memo.
+   Otherwise nothing is imported and every such line is counted (warning
+   ``rows_without_header:<n>``): all of them when the section had the rows
+   or a total, else those on a page its title is printed on (one dated
+   line at the head of the next page is no section). A row of a section
+   that printed no total has nothing but the statement's balances to check
+   it: its amount scores at most ``confidence.INFERRED`` unless the
+   statement reconciles. A line under the title that starts with a date,
+   ends with an amount and has words, yet is no such row (an amount with a
+   balance beside it, of at most
+   :data:`~app.ingestion.parsers.statement_lines.MAX_LED_WORDS` words), is
+   counted; a sentence, a dated balance or total line and a line of a date
+   and a figure (balances by day) are neither read nor counted. A document
+   with no header at all is a statement when a title has
+   :data:`HEADERLESS_TABLE_ROWS` such rows after it on its page or the next
+   (:meth:`TableStatementParser.lines_have_table`).
    **A table that reads no row.** When a table ends (at the header of the
    next one, at a line of heading words that is no header we read, at the
    end) without one row read under its header, its undated lines with a
@@ -393,6 +424,7 @@ from app.ingestion.parsers.statement_header import TABLE_HEADING_WORDS as TABLE_
 from app.ingestion.parsers.statement_header import Column as Column
 from app.ingestion.parsers.statement_header import Role as Role
 from app.ingestion.parsers.statement_header import header_like, read_header, stack_headers
+from app.ingestion.parsers.statement_lines import MAX_LED_WORDS, LedRow, items_total, led_row
 from app.ingestion.parsers.text import (
     FULL_STYLES,
     MAX_LINE,
@@ -522,6 +554,15 @@ MIN_TOTAL_ROWS: Final = 2
 MIN_CARRIED: Final = 2
 #: The most words the date of a line outside a table is looked for in.
 LEAD_DATE_WORDS: Final = 3
+#: A section printed with a title and no header row ends after this many
+#: lines in a row that are no date-led row.
+HEADERLESS_GAP: Final = 6
+#: The date-led rows such a section needs to be read (one will do when the
+#: total printed under it is that row's amount).
+MIN_HEADERLESS_ROWS: Final = 2
+#: The date-led rows under one title that make a document without any
+#: header a statement with a table.
+HEADERLESS_TABLE_ROWS: Final = 3
 #: Words between the two dates of a range (``01/01 through 01/31``).
 RANGE_WORDS: Final = frozenset({"to", "through", "thru", "until", "-", "\u2013", "\u2014"})
 #: Yearless styles a month-named row date may be printed in.
@@ -897,6 +938,11 @@ class _Summary:
     carried: int = 0
     #: Date-led lines under a section title and no header (counted, not read).
     headerless: int = 0
+    #: Sections printed with a title and no header row that were read.
+    headerless_read: int = 0
+    #: The numbers of those of them that printed no total: nothing checked
+    #: their rows but the statement's own balances.
+    unchecked: set[int] = field(default_factory=set)
     #: Entries right of the left group of a table printed across the page
     #: (counted, not read).
     across: int = 0
@@ -905,6 +951,25 @@ class _Summary:
     #: row of the section (one with rows of the section after it was a
     #: subtotal, and is counted in :attr:`_Row.part`).
     section_totals: dict[int, Amount] = field(default_factory=dict)
+
+
+@dataclass
+class _Headerless:
+    """A section printed with a title and no header row, while it is open
+    (module doc, "Sections without a header")."""
+
+    title: SectionTitle
+    #: The pages its title was printed on.
+    pages: set[int]
+    #: Its date-led lines: the line, what it reads as, the lines of its memo.
+    led: list[tuple[ViewLine, LedRow, list[ViewLine]]] = field(default_factory=list)
+    #: The lines met since its first date-led line: their summary scan waits
+    #: until the section closes (a row is no line of the summary).
+    queued: list[ViewLine] = field(default_factory=list)
+    #: Lines in a row that were no date-led row.
+    gap: int = 0
+    #: The last line of the last date-led row, while the next line may be its memo.
+    under: ViewLine | None = None
 
 
 @dataclass
@@ -1100,7 +1165,28 @@ class TableStatementParser(DocumentParser):
         return self.lines_have_table(self.prepare(view.lines))
 
     def lines_have_table(self, lines: Iterable[ViewLine]) -> bool:
-        return any(self.columns(line) is not None for line in lines)
+        """A header we read, or a section printed without one: a known
+        title with :data:`HEADERLESS_TABLE_ROWS` date-led rows after it, on
+        its page or the next, before another title, a block title or a line
+        of heading words."""
+        lines = list(lines)
+        if any(self.columns(line) is not None for line in lines):
+            return True
+        title: SectionTitle | None = None
+        page = count = 0
+        for line in lines:
+            found = self._title(line)
+            if found is not None:
+                if title is None or (found.key, found.rule) != (title.key, title.rule):
+                    count = 0
+                title, page = found, line.page
+            elif block_title(line.norm) or self._header_like(line):
+                title = None
+            elif title is not None and line.page - page <= 1 and self._led(line) is not None:
+                count += 1
+                if count >= HEADERLESS_TABLE_ROWS:
+                    return True
+        return False
 
     def fingerprint_score(self, view: DocumentView) -> float:
         if not self.fingerprints:
@@ -1734,8 +1820,8 @@ class TableStatementParser(DocumentParser):
         held: list[_Row] = []
         loose: list[tuple[int, BBox]] = []
         waiting: list[tuple[ViewLine, bool]] = []
-        # The page a section title was printed on with no header after it yet.
-        titled: int | None = None
+        # The section open under a title with no header after it yet.
+        headerless: _Headerless | None = None
         # The section of the last dated line of a table that is not pending.
         dated_section: int | None = None
         # Subtotals met in each section: totals with rows of it after them.
@@ -1817,11 +1903,50 @@ class TableStatementParser(DocumentParser):
             rows_of_day = not block or self._balances_chain(block_open, held, closing)
             settle(dated=rows_of_day, summary_block=not rows_of_day)
 
+        def close_headerless(total: Amount | None = None) -> None:
+            """The section open under a title and no header ends, at its
+            ``total`` when it prints one. Its date-led lines are rows when
+            there are :data:`MIN_HEADERLESS_ROWS` of them and the total, if
+            printed, is theirs (one row will do when the total is its
+            amount); otherwise they are counted, those on a later page than
+            the title only when the section had the rows or a total."""
+            nonlocal headerless, section, skipped, title, row_page, found_header
+            found, headerless = headerless, None
+            if found is None:
+                return
+            built = [
+                self._headerless_row(line, led, memo, found.title, section + 1)
+                for line, led, memo in found.led
+            ]
+            enough = len(built) >= (1 if total is not None else MIN_HEADERLESS_ROWS)
+            read = enough and (total is None or self._total_of(total, built))
+            if read:
+                section += 1
+                rows.extend(built)
+                if total is not None:
+                    summary.section_totals[section] = total
+                else:
+                    summary.unchecked.add(section)
+                summary.headerless_read += 1
+                title, row_page, found_header = found.title, built[-1].page, True
+            else:
+                whole = total is not None or len(built) >= MIN_HEADERLESS_ROWS
+                for row in built:
+                    if whole or row.page in found.pages:
+                        skipped += 1
+                        summary.skipped_boxes.append((row.page, row.bbox))
+                        summary.headerless += 1
+            of_rows = {id(part) for line, _, memo in found.led for part in (line, *memo)}
+            for queued_line in found.queued:
+                if not (read and id(queued_line) in of_rows):
+                    self._scan_summary(queued_line, summary)
+
         for index, line in enumerate(lines):
             if index in taken:
                 continue
             header = self.columns(line)
             if header is not None:
+                close_headerless()
                 before = section
                 above = self._title_above(lines, index)
                 if above is not None:
@@ -1841,7 +1966,7 @@ class TableStatementParser(DocumentParser):
                     section += 1
                 if section != before:
                     settle(dated=False, ended=True)
-                columns, pending, last, anchor, titled = header, False, None, None, None
+                columns, pending, last, anchor = header, False, None, None
                 found_header, unread, head = True, None, line
                 continue
             norm = line.norm
@@ -1851,23 +1976,69 @@ class TableStatementParser(DocumentParser):
                 columns, last, anchor = None, None, None
                 unread = line.page
             if columns is None or head is None:
-                if self._title(line) is not None:
-                    titled, unread = line.page, None
+                found = self._title(line)
+                if found is not None:
+                    unread = None
+                    if (
+                        headerless is not None
+                        and (found.key, found.rule) == (headerless.title.key, headerless.title.rule)
+                        and (found.continued or line.page not in headerless.pages)
+                    ):
+                        # Its title once more: marked ``continued``, or
+                        # printed again on a later page. The section runs on.
+                        headerless.pages.add(line.page)
+                        headerless.gap, headerless.under = 0, None
+                    else:
+                        close_headerless()
+                        headerless = _Headerless(found, {line.page})
                 elif block_title(norm):
-                    titled = unread = None
+                    close_headerless()
+                    unread = None
                 elif self._header_like(line):
-                    titled = None
-                elif (
-                    titled == line.page or (unread == line.page and self._worded(line))
-                ) and self._date_led_amount(line):
-                    # A row of a section printed without a header, or one
-                    # with words after a header that ended the table and may
-                    # have been a row's wrapped text (figures by day under
-                    # ``Date | Balance`` have no words): not read, counted.
+                    close_headerless()
+                elif headerless is not None:
+                    led = self._led(line)
+                    total = None if led is not None else self._section_total(line, norm)
+                    if led is not None:
+                        # A row of a section printed without a header: read
+                        # or counted when the section closes.
+                        headerless.led.append((line, led, []))
+                        headerless.gap, headerless.under = 0, line
+                    elif total is not None:
+                        close_headerless(total)
+                    else:
+                        if self._memo_under(line, norm, headerless.under):
+                            headerless.led[-1][2].append(line)
+                            headerless.under = line
+                        else:
+                            headerless.under = None
+                            if (
+                                self._found_not_read(line)
+                                and len(line.text.split()) <= MAX_LED_WORDS
+                                and not self._dated_total(line)
+                            ):
+                                # Starts with a date and ends with a figure
+                                # and is no row we can tell: counted (a
+                                # longer line is a sentence, a dated total
+                                # a line of the summary).
+                                skipped += 1
+                                summary.skipped_boxes.append((line.page, line.bbox))
+                                summary.headerless += 1
+                        headerless.gap += 1
+                        if headerless.gap >= HEADERLESS_GAP:
+                            close_headerless()
+                elif unread == line.page and self._found_not_read(line):
+                    # Words after a header that ended the table: the line
+                    # may have been a row's wrapped text (figures by day
+                    # under ``Date | Balance`` have no words, and a dated
+                    # balance line is the summary's). Counted.
                     skipped += 1
                     summary.skipped_boxes.append((line.page, line.bbox))
                     summary.headerless += 1
-                self._scan_summary(line, summary)
+                if headerless is not None and headerless.led:
+                    headerless.queued.append(line)
+                else:
+                    self._scan_summary(line, summary)
                 continue
             cells = self._assign(line, columns)
             # The other copies of a table printed across the page are no part
@@ -2014,9 +2185,139 @@ class TableStatementParser(DocumentParser):
             last = anchor = row
             rows.append(row)
             table_rows += 1
+        close_headerless()
         settle(dated=False, ended=True)
         self._adjacent_balances(lines, summary)
         return rows, summary, pending_items, skipped, found_header
+
+    # -- sections without a header ----------------------------------------------
+
+    def _led(self, line: ViewLine) -> LedRow | None:
+        """The date-led row a line outside a table reads as
+        (:func:`~app.ingestion.parsers.statement_lines.led_row`), unless
+        what follows its date is a balance label (``04/30 | Ending Balance |
+        1,200.00``) or a total, a page or a ``continued`` line: lines of the
+        summary, never rows."""
+        found = led_row(line, self._date_shaped)
+        if found is None:
+            return None
+        described = normalise(" ".join(found.description))
+        if any(described.startswith(prefix.strip()) for prefix in self.skip_prefixes):
+            return None
+        labels = (*self.opening_labels, *self.closing_labels)
+        if any(
+            described.startswith(label) and self._label_only(described[len(label) :])
+            for label in labels
+        ):
+            return None
+        return found
+
+    def _section_total(self, line: ViewLine, norm: str) -> Amount | None:
+        """The total a section printed without a header ends at: a
+        ``Total ...`` line (:meth:`_total_line`) or a count and a total
+        (``8 item(s) totaling $3,500.00``)."""
+        total = self._total_line(line, norm)
+        return total if total is not None else items_total(line)
+
+    def _total_of(self, total: Amount, rows: Sequence[_Row]) -> bool:
+        """``total`` is the total of ``rows``: the sum of their magnitudes,
+        or the magnitude of their sum (a reversal taken off), whatever sign
+        it is printed with, within :data:`~app.ingestion.reconcile.TOLERANCE`."""
+        signed = [value for row in rows if (value := self._signed(row)) is not None]
+        if len(signed) != len(rows):
+            return False
+        printed = abs(total.value)
+        magnitudes = sum((abs(value) for value in signed), Decimal(0))
+        net = abs(sum(signed, Decimal(0)))
+        return any(abs(printed - read) <= TOLERANCE for read in (magnitudes, net))
+
+    def _starts_with_date(self, text: str) -> bool:
+        """The first one to :data:`LEAD_DATE_WORDS` words of ``text`` are a date."""
+        words = text.split()
+        return any(
+            len(words) >= size and self._date_shaped(" ".join(words[:size]).strip(_DATE_MARKS))
+            for size in range(LEAD_DATE_WORDS, 0, -1)
+        )
+
+    def _memo_under(self, line: ViewLine, norm: str, under: ViewLine | None) -> bool:
+        """``line`` is the memo of the date-led row that ends at ``under``:
+        right under it on its page, words and no amount, no date at its
+        start, no total, page or ``continued`` line."""
+        return (
+            under is not None
+            and line.page == under.page
+            and line.bbox[1] - under.bbox[3] < 1.5 * line.height
+            and any(ch.isalpha() for ch in line.text)
+            and not find_amounts(line.text)
+            and not self._starts_with_date(line.text)
+            and not any(norm.startswith(prefix.strip()) for prefix in self.skip_prefixes)
+        )
+
+    def _found_not_read(self, line: ViewLine) -> bool:
+        """A line outside a table that may have been a row and is not read:
+        it starts with a date, its last cell is an amount and it has words
+        (figures by day have none), and what follows the date is no balance
+        label (``04/30 | Ending Balance | 1,200.00``: a line of the summary;
+        ``New Balance Outlet 114`` is a payee)."""
+        if not (self._date_led_amount(line) and self._worded(line)):
+            return False
+        described = self._after_date(line.text)
+        labels = (*self.opening_labels, *self.closing_labels)
+        return not any(
+            described.startswith(label) and self._label_only(described[len(label) :])
+            for label in labels
+        )
+
+    def _after_date(self, text: str) -> str:
+        """``text`` normalised, without the date it starts with."""
+        words = text.split()
+        dated = next(
+            (
+                size
+                for size in range(min(LEAD_DATE_WORDS, len(words)), 0, -1)
+                if self._date_shaped(" ".join(words[:size]).strip(_DATE_MARKS))
+            ),
+            0,
+        )
+        return normalise(" ".join(words[dated:]))
+
+    def _dated_total(self, line: ViewLine) -> bool:
+        """What follows the date ``line`` starts with is a total, a page or
+        a ``continued`` line (``01/31 | Total fees this period | 3.00``)."""
+        described = self._after_date(line.text)
+        return any(described.startswith(prefix.strip()) for prefix in self.skip_prefixes)
+
+    def _headerless_row(
+        self,
+        line: ViewLine,
+        led: LedRow,
+        memo: Sequence[ViewLine],
+        title: SectionTitle,
+        section: int,
+    ) -> _Row:
+        """The row a date-led line of a section without a header is: its
+        direction and type from the section's title, as under a header."""
+        parts = (line, *memo)
+        return _Row(
+            page=line.page,
+            date_text=led.date,
+            description=list(led.description),
+            amount=led.amount,
+            debit=None,
+            credit=None,
+            balance=None,
+            ocr=_min(*(part.conf for part in parts)),
+            bbox=(
+                min(part.bbox[0] for part in parts),
+                line.bbox[1],
+                max(part.bbox[2] for part in parts),
+                parts[-1].bbox[3],
+            ),
+            section_type=title.rule.kind,
+            memo=[part.text for part in memo],
+            direction=self._direction(title.rule),
+            section=section,
+        )
 
     def _row(
         self,
@@ -3015,7 +3316,8 @@ class TableStatementParser(DocumentParser):
         ``period_texts`` are period candidates from outside the lines (the
         document's overview) tried after the lines' own; ``account`` is the
         account the lines belong to (:mod:`app.ingestion.parsers.accounts`).
-        ``statement`` is None when no transaction table header is found.
+        ``statement`` is None when no transaction table header is found and
+        no section printed without one was read.
         ``prepared`` says the lines went through :meth:`prepare` already
         (:meth:`parse` does it once for the whole document).
         """
@@ -3033,6 +3335,8 @@ class TableStatementParser(DocumentParser):
             skipped_lines=skipped,
             skipped_regions=list(summary.skipped_boxes),
         )
+        if summary.headerless_read:
+            outcome.warnings.append(f"sections_without_header:{summary.headerless_read}")
         if summary.headerless:
             outcome.warnings.append(f"rows_without_header:{summary.headerless}")
         if summary.across:
@@ -3195,6 +3499,12 @@ class TableStatementParser(DocumentParser):
             for index, checked in enumerate(ledger_rows):
                 if checked.balance is not None and index not in result.running_mismatches:
                     fields[index]["amount"] = 1.0
+        if result.status != "ok":
+            # Rows of a section printed without a header and without a total:
+            # nothing checked them, and the statement does not either.
+            for index, owner in enumerate(ledger_sections):
+                if owner in summary.unchecked:
+                    fields[index]["amount"] = min(fields[index]["amount"], conf.INFERRED)
         cap = {"mismatch": conf.UNRECONCILED, "unavailable": conf.UNCHECKED}.get(result.status)
         if cap is not None:
             # Only the rows the statement leaves in doubt (a printed running
