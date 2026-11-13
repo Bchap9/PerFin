@@ -554,7 +554,10 @@ class InvestmentReconciliation(_Strict):
     columns = ending balance; ``roll_forward_rows``: every fund row adds up
     the same way and the rows' ending balances add up to the total's.
     ``checks`` lists those that could run, ``failed`` those that did not
-    hold.
+    hold. ``unavailable``: none could run, or (a document that prints no
+    period) only ``positions`` and a ``holdings_total`` of one position
+    did, which say nothing about the account
+    (``brokerage.vouches_for_account``).
     """
 
     status: Literal["ok", "mismatch", "unavailable"]

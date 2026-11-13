@@ -195,6 +195,18 @@ What remains (details in docs/ROADMAP.md):
   or one that prints a loan, mortgage or investment-statement phrase, and
   a two-page document with no receipt word is a receipt only when the
   classifier says so.
+- **A holding nothing vouches for waits** (INGESTION.md "Brokerage
+  statements"). With the receipt parser out of the way, a year-end tax
+  form explainer that shows an account's one fund in a table was read by
+  the generic brokerage parser and imported as a holding: quantity x
+  price = value held, and that was the only check. On a PDF or image that
+  prints no statement period, that check, and a holdings total under a
+  single position, no longer make a statement `ok`. It is `unavailable`,
+  its rows wait under `investment_low_confidence`, and a person may
+  import them as read. A statement with a printed period, or with cash,
+  an account value or the total of several positions that agrees, is
+  read as before; OFX and CSV exports are not affected. No parser
+  version moves beyond those listed under "Parser versions".
 - **Loan bills are loan documents, and a statement with no payment is
   filed.** An auto or personal loan bill is recognised by its labels over
   all pages (one of them about the principal); its `Payment Allocation`

@@ -95,6 +95,7 @@ from app.workers.handlers import ingest
 from tests.fixtures import synth_brokerage as synth
 from tests.fixtures import synth_fidelity as fid
 from tests.fixtures import synth_fidelity_report as fidr
+from tests.fixtures import synth_parser_choice as choice
 from tests.fixtures import synth_plan_statement as plan
 from tests.fixtures.factories import Factories, UserRecord
 from tests.fixtures.imports import run_jobs
@@ -2286,3 +2287,61 @@ def test_plan_statement_of_two_plans_records_nothing(env: Env) -> None:
     _nothing_but_balances(env, account)
     (log,) = env.parse_logs(document_id)
     assert "plan_statement_several_accounts" in json.dumps(log)
+
+
+def _one_holding_account(env: Env) -> Account:
+    return env.ledger.account(
+        env.household_id,
+        type=AccountType.BROKERAGE,
+        currency="USD",
+        number_last4=choice.HOLDING_LAST4,
+        name="One fund",
+    )
+
+
+def test_a_holding_on_a_tax_form_explainer_is_held_for_a_person(env: Env) -> None:
+    """One fund in a table, no period, no figure about the account: nothing is written.
+
+    The household has an account with the digits the page prints, so the
+    only thing between the page and a holding is the statement's own check.
+    """
+    account = _one_holding_account(env)
+    document_id = env.ingest(choice.tax_form_explainer_with_a_holding(), "year-end.pdf")
+
+    document = env.document(document_id)
+    assert document.status is DocumentStatus.NEEDS_REVIEW
+    assert document.parser_version is not None
+    assert document.parser_version.startswith("brokerage_statement_generic/")
+    (item,) = env.open_reviews(document_id)
+    assert item.kind is ReviewKind.LOW_CONFIDENCE_FIELD
+    assert (item.payload["reason"], item.payload["reconciliation"]) == (
+        "investment_low_confidence",
+        "unavailable",
+    )
+    assert item.payload["fields"] == ["reconciliation"]
+    # A person who knows the page may still take the row as printed.
+    assert acceptable_as_read(item.payload)
+    assert env.txns(account) == []
+    assert env.holdings(account) == []
+    assert env.securities() == {}
+    assert env.snapshots(account) == []
+
+    # Said by a person, the row is imported as printed; no value is taken from it.
+    resolution = _import_as_read(env, item)
+    assert resolution["import_as_read"] is True
+    assert env.document(document_id).status is DocumentStatus.PROCESSED
+    name, shares, _, _ = choice.HOLDING
+    assert env.holdings(account) == [(name, Decimal(shares))]
+    assert env.snapshots(account) == []
+
+
+def test_a_one_holding_statement_with_a_period_and_totals_imports(env: Env) -> None:
+    account = _one_holding_account(env)
+    document_id = env.ingest(choice.one_holding_statement(), "statement.pdf")
+
+    assert env.document(document_id).status is DocumentStatus.PROCESSED, env.reasons(document_id)
+    assert env.open_reviews(document_id) == []
+    name, shares, _, _ = choice.HOLDING
+    assert env.holdings(account) == [(name, Decimal(shares))]
+    (snapshot,) = env.snapshots(account)
+    assert snapshot.balance == choice.HOLDING_VALUE + choice.HOLDING_CASH

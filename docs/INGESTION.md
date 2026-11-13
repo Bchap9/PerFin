@@ -1429,7 +1429,18 @@ OFX `INVSTMTRS` in the sandbox or from a PDF/scan's pages in the worker.
   printed holdings total, opening cash + activity = closing cash (no
   closing cash printed: the account value less the holdings), holdings +
   closing cash = the printed account value. Any
-  failure is `mismatch`; none checkable is `unavailable`. The parser caps
+  failure is `mismatch`; none checkable is `unavailable`. **A check that
+  vouches for the account** (PDF and image statements,
+  `vouches_for_account`): quantity x price = value holds on any table of
+  three such columns, and a holdings total under a single position only
+  repeats it, so a page that prints no statement period and on which no
+  other check could run is `unavailable` too (a year-end tax form that
+  shows the account's one fund, read by the generic brokerage parser as
+  the fallback): its rows wait under `investment_low_confidence`, and a
+  person may import them as read. With a printed period, or with any
+  figure about the whole account that agrees (the holdings total of
+  several positions, cash, the account value), it is `ok` as before.
+  The parser caps
   every row and position of a `mismatch` at 0.5 (`unavailable`: 0.8) and a
   position whose value disagrees at 0.4; values read in an institution's
   declared format score 1.0, the generic parser 0.95, OCR scales them.

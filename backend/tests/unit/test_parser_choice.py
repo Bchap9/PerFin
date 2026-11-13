@@ -4,6 +4,11 @@
 A page with a transaction table, or one the classifier calls a statement,
 is never read by the receipt parser; a document classified as a receipt
 still is, table or not (``registry._without_receipt``).
+
+And what a page with one holding on it is worth: a table that prints no
+period and no figure about the account as a whole is read, and is not a
+checked statement, whichever parser was asked first (``brokerage``, "a
+check that vouches for the account").
 """
 
 from __future__ import annotations
@@ -14,6 +19,7 @@ from typing import Any
 import pytest
 
 from app.ingestion.extract.pdf import extract_pdf
+from app.ingestion.parsers import confidence as conf
 from app.ingestion.parsers.base import DocumentView, ParseOutcome
 from app.ingestion.parsers.registry import PARSERS, _without_receipt, parse_extraction, reparse
 from app.ingestion.parsers.table_statement import TableStatementParser
@@ -152,3 +158,59 @@ def test_only_the_receipt_parsers_lose_their_score() -> None:
     no_table = {**scores, "statement_generic": 0.0}
     assert _without_receipt(no_table, None) == no_table
     assert _without_receipt(no_table, "payslip") == no_table
+
+
+@pytest.mark.parametrize("kind", ["tax_form", None])
+@pytest.mark.parametrize("total", [False, True])
+def test_a_holding_on_a_page_with_no_period_and_no_account_figure_is_not_checked(
+    kind: str | None, total: bool
+) -> None:
+    """A tax form explainer that shows one fund: read, and held for a person.
+
+    The classifier calls it a tax form, the tax form parser reads no box and
+    the brokerage parser is the fallback; with no classifier kind the
+    brokerage parser is chosen outright. Either way the row multiplying out
+    (and a ``Total`` line repeating it) says nothing about an account.
+    """
+    result = parse_extraction(
+        _extract(pc.tax_form_explainer_with_a_holding(total=total)), kind=kind
+    )
+    parse = result.parse
+    assert parse is not None
+    assert parse.parser is not None
+    assert parse.parser.name == "brokerage_statement_generic"
+    assert ("parser_fallback:tax_forms" in parse.warnings) is (kind == "tax_form")
+    assert parse.tax_forms == []
+    (statement,) = result.investments
+    assert (statement.period_start, statement.period_end) == (None, None)
+    (position,) = statement.positions
+    assert position.market_value == pc.HOLDING_VALUE
+    check = statement.reconciliation
+    assert check is not None
+    assert check.failed == []
+    assert check.status == "unavailable"
+    assert "reconciliation" in position.low_confidence
+    assert statement.confidence["reconciliation"] == conf.UNCHECKED
+
+
+@pytest.mark.parametrize(
+    ("totals", "checks"),
+    [
+        (True, ["positions", "holdings_total", "cash", "total_value"]),
+        # The period says whose statement the table is; read as before.
+        (False, ["positions"]),
+    ],
+)
+def test_a_one_holding_statement_with_a_period_is_checked_as_before(
+    totals: bool, checks: list[str]
+) -> None:
+    result = parse_extraction(_extract(pc.one_holding_statement(totals=totals)))
+    (statement,) = result.investments
+    assert statement.account.last4 == pc.HOLDING_LAST4
+    assert (statement.period_start, statement.period_end) == (date(2026, 3, 1), date(2026, 3, 31))
+    (position,) = statement.positions
+    assert position.low_confidence == []
+    check = statement.reconciliation
+    assert check is not None
+    assert (check.status, check.checks) == ("ok", checks)
+    assert statement.confidence["reconciliation"] == 1.0

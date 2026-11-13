@@ -28,6 +28,19 @@ Two halves (INGESTION.md "Brokerage statements", SECURITY.md C12):
   Status ``mismatch`` when any check fails, ``unavailable`` when none could
   run, else ``ok``.
 
+  **A check that vouches for the account** (:func:`vouches_for_account`;
+  documents only). ``positions`` multiplies each row out on its own, and a
+  ``holdings_total`` over a single position repeats that row: both hold on
+  any table of a quantity, a price and a value, whatever page it is on (a
+  year-end tax form that shows the account's one fund). A page read by
+  :class:`BrokerageStatementParser` that prints no statement period and
+  on which no other check could run is therefore ``unavailable``, not
+  ``ok``: its rows carry the ``reconciliation`` doubt and wait for a person
+  like those of any document with nothing to check against. A printed
+  period, or any figure about the account as a whole that agrees (the
+  holdings total of several positions, the cash, the account value), keeps
+  it ``ok`` as before.
+
 * :func:`section_checks` and :func:`localise` say **where** a failed check
   comes from, from what the statement prints about itself: the ``Total
   ...`` line under each activity section (:func:`_total_scope` says which
@@ -1961,6 +1974,19 @@ def _flow_rows(key: str, activity: Sequence[InvestmentActivity]) -> list[int]:
     return out
 
 
+def vouches_for_account(check: InvestmentReconciliation, positions: int) -> bool:
+    """Whether a check that ran compares a figure about the account as a whole.
+
+    Not ``positions`` (each row against itself), and not ``holdings_total``
+    when the statement has one position or none (the total of one row is
+    that row): module doc, "a check that vouches for the account".
+    """
+    ran = set(check.checks) - {"positions"}
+    if positions < 2:
+        ran.discard("holdings_total")
+    return bool(ran)
+
+
 def localise(
     statement: InvestmentStatement,
     check: InvestmentReconciliation,
@@ -3816,6 +3842,10 @@ class BrokerageStatementParser(DocumentParser):
             reconcile_investment(statement, indexed),
             section_checks(activity, activity_rows, collected.totals),
         )
+        if check.status == "ok" and read is None and not vouches_for_account(check, len(positions)):
+            # No period printed and nothing about the account agrees: rows
+            # that only multiply out are not a checked statement (module doc).
+            check = check.model_copy(update={"status": "unavailable"})
         for index in check.position_mismatches:
             position_scores[index]["market_value"] = conf.CONTRADICTED
         cap = {"mismatch": conf.UNRECONCILED, "unavailable": conf.UNCHECKED}.get(check.status)
