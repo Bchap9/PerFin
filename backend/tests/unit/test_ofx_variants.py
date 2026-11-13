@@ -200,7 +200,7 @@ def test_sgml_body_under_xml_declaration_is_read() -> None:
             id="xml-second-declaration",
         ),
         pytest.param(
-            XML_UTF8 + OFX_INSTRUCTION + sgml_body().replace("Quill", "<![CDATA[Quill]]>"),
+            XML_UTF8 + OFX_INSTRUCTION + sgml_body().replace("Quire", "<![CDATA[Quire]]>"),
             id="xml-cdata",
         ),
     ],
@@ -214,11 +214,11 @@ def test_other_processing_instructions_stay_refused(data: str) -> None:
 @pytest.mark.parametrize(
     ("body", "third_payee"),
     [
-        pytest.param(STYLESHEET + xml_body(), "Quill Stationers", id="stylesheet"),
-        pytest.param("<!-- exported -->\n" + xml_body(), "Quill Stationers", id="comment"),
+        pytest.param(STYLESHEET + xml_body(), "Quire Stationers", id="stylesheet"),
+        pytest.param("<!-- exported -->\n" + xml_body(), "Quire Stationers", id="comment"),
         pytest.param(
-            xml_body().replace("Quill Stationers", "<![CDATA[Quill <Stationers>]]>"),
-            "Quill <Stationers>",
+            xml_body().replace("Quire Stationers", "<![CDATA[Quire <Stationers>]]>"),
+            "Quire <Stationers>",
             id="cdata",
         ),
     ],
@@ -245,7 +245,7 @@ def test_a_dtd_is_refused_whatever_the_declaration_and_body(
     prolog: str, declaration: str, body: str
 ) -> None:
     """A DTD is never skipped over: not by the new ``<?OFX`` route, not by the fallback."""
-    payload = body.replace("Quill Stationers", "&xxe;")
+    payload = body.replace("Quire Stationers", "&xxe;")
     data = (declaration + OFX_INSTRUCTION + prolog + payload).encode("ascii")
     assert _refusal(data) == "xml_forbidden"
 
@@ -280,11 +280,11 @@ def test_an_ofx2_file_cut_short_is_not_read_by_the_fallback(body: str) -> None:
     [
         pytest.param(xml_body().replace("-42.18", "-4<B>2.18"), id="stray-tag-in-amount"),
         pytest.param(xml_body().replace("-42.18</TRNAMT>", "-42.1\n<FOO>8"), id="amount-cut"),
-        pytest.param(xml_body().replace("Quill Stationers", "Quill < Sons"), id="raw-lt-in-payee"),
-        pytest.param(xml_body().replace("Quill Stationers", "Quill & Sons"), id="raw-ampersand"),
+        pytest.param(xml_body().replace("Quire Stationers", "Quire < Sons"), id="raw-lt-in-payee"),
+        pytest.param(xml_body().replace("Quire Stationers", "Quire & Sons"), id="raw-ampersand"),
         pytest.param(
             xml_body()
-            .replace("Quill Stationers", "Quill & Sons")
+            .replace("Quire Stationers", "Quire & Sons")
             .replace("<NAME>Harbor Lane Bakery</NAME>", "<NAME/>"),
             id="self-closing-name-beside-raw-ampersand",
         ),

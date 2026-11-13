@@ -22,7 +22,7 @@ Row = tuple[date, Decimal, str]
 ROWS: Final[list[Row]] = [
     (date(2026, 3, 3), Decimal("-6.25"), "Harbor Lane Bakery"),
     (date(2026, 3, 9), Decimal("1250.00"), "Northfield Payroll"),
-    (date(2026, 3, 17), Decimal("-42.18"), "Quill Stationers"),
+    (date(2026, 3, 17), Decimal("-42.18"), "Quire Stationers"),
 ]
 
 #: ``(posted, amount, memo)`` of :func:`sgml_with_valueless_leaves`: the type,
