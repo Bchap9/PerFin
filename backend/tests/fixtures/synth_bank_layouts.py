@@ -96,9 +96,20 @@ file has: the day a file was made bounds the year its rows can be in):
   starts with another range.
 * :func:`statement_for_period`: ``Statement For: 06/01/2026 - 06/30/2026``.
 
+And a whole credit-union member statement, everything above at once:
+
+* :func:`credit_union_member_statement`: ``Statement For: 04/01/2026 -
+  04/30/2026``, the member number printed once, and three shares, each under
+  its title (``PRIMARY SHARE ID 0000`` with a year-to-date dividend figure on
+  the line, ``ID 0040 - SHARE DRAFT`` likewise, ``HOLIDAY CLUB ID 0050``
+  alone) and the header ``Date Transaction Description | Withdrawal |
+  Deposit | Balance`` (the first two headings one cell), with ``MM/DD`` rows
+  between a dated ``Beginning Balance`` and ``Ending Balance`` line.
+
 :data:`EXPECTED_ROWS` gives, per builder, the rows a correct reading returns
 (``(posted, amount, payee)``, money out negative); :data:`EXPECTED_BALANCES`
-the opening and closing balance of the builders that are about balances.
+the opening and closing balance of the builders that are about balances;
+:data:`EXPECTED_MEMBER` the shares of the member statement.
 """
 
 from __future__ import annotations
@@ -1411,6 +1422,103 @@ def statement_for_period() -> bytes:
     )
 
 
+# -- a whole credit-union member statement ---------------------------------------
+
+MEMBER_PERIOD: Final = (date(2026, 4, 1), date(2026, 4, 30))
+#: ``(title cells, name, last four digits, opening, rows)`` of each share. A
+#: title's second and third cells are a year-to-date figure and its label.
+_MEMBER_SHARES: Final[
+    tuple[tuple[tuple[str, ...], str, str, Decimal, tuple[ExpectedRow, ...]], ...]
+] = (
+    (
+        ("PRIMARY SHARE ID 0000", "Dividends Paid YTD:", "4.12"),
+        "PRIMARY SHARE",
+        "0000",
+        _d("1,250.00"),
+        (
+            (date(2026, 4, 15), _d("200.00"), "Transfer From Share 0040"),
+            (date(2026, 4, 30), _d("0.52"), "Dividend Paid"),
+        ),
+    ),
+    (
+        ("ID 0040 - SHARE DRAFT", "Dividends Paid YTD:", "0.00"),
+        "SHARE DRAFT",
+        "0040",
+        _d("2,318.44"),
+        (
+            (date(2026, 4, 3), _d("1,640.00"), "ACH Deposit PEBBLEMOOR PAYROLL"),
+            (date(2026, 4, 6), _d("-58.31"), "POS Debit ASHCOMBE GREENGROCER"),
+            (date(2026, 4, 10), _d("-420.00"), "Bill Pay Fellgarth Lettings"),
+            (date(2026, 4, 15), _d("-200.00"), "Transfer To Share 0000"),
+            (date(2026, 4, 22), _d("-96.75"), "ACH Debit Skelwith Water"),
+            (date(2026, 4, 28), _d("75.00"), "Mobile Deposit"),
+        ),
+    ),
+    (
+        ("HOLIDAY CLUB ID 0050",),
+        "HOLIDAY CLUB",
+        "0050",
+        _d("300.00"),
+        ((date(2026, 4, 17), _d("50.00"), "Payroll Allotment"),),
+    ),
+)
+#: The share draft of the member statement: ``(title cells, opening, rows)``.
+MEMBER_SHARE_DRAFT: Final = (_MEMBER_SHARES[1][0], _MEMBER_SHARES[1][3], _MEMBER_SHARES[1][4])
+#: Where the description of a row starts: under the second heading of the cell.
+_MEMBER_TEXT_X: Final = 78.0
+
+
+def credit_union_member_statement() -> bytes:
+    """Three shares of one member: titles with figures, one header cell of two
+    headings, ``MM/DD`` rows, a dated opening and closing line in each table."""
+    buf = io.BytesIO()
+    c = canvas.Canvas(buf, pagesize=letter)
+    _line(c, 750, [(40, "Rushmere Lakes Credit Union")], size=14, bold=True)
+    _line(c, 750, [(380, "Statement For: 04/01/2026 - 04/30/2026")])
+    _line(c, 738, [(380, "Member Number: ******6172")])
+    _line(c, 60, [(40, _FOOTER)], size=7)
+    start, end = (day.strftime("%m/%d") for day in MEMBER_PERIOD)
+    y = 700.0
+    for title, _, _, opening, rows in _MEMBER_SHARES:
+        balances = _running(opening, rows)
+        _line(c, y, [(40, title[0])], size=11, bold=True)
+        if len(title) > 1:
+            _line(c, y, [(330, title[1]), (-550, title[2])])
+        _line(
+            c,
+            y - 16,
+            [
+                # 4 points apart: the two headings are one cell.
+                (40, "Date"),
+                (40 + stringWidth("Date", _FONT, 8) + 4, "Transaction Description"),
+                (-400, "Withdrawal"),
+                (-470, "Deposit"),
+                (-550, "Balance"),
+            ],
+            size=8,
+        )
+        y = _rows(
+            c,
+            y - 29,
+            [
+                [(40, start), (_MEMBER_TEXT_X, "Beginning Balance"), (-550, _money(opening))],
+                *(
+                    [
+                        (40, posted.strftime("%m/%d")),
+                        (_MEMBER_TEXT_X, payee),
+                        (-400 if amount < 0 else -470, _money(amount)),
+                        (-550, _money(balance)),
+                    ]
+                    for (posted, amount, payee), balance in zip(rows, balances, strict=True)
+                ),
+                [(40, end), (_MEMBER_TEXT_X, "Ending Balance"), (-550, _money(balances[-1]))],
+            ],
+        )
+        y -= 17
+    c.save()
+    return buf.getvalue()
+
+
 EXPECTED_ROWS: Final[dict[str, list[ExpectedRow]]] = {
     "left_heading_right_figures": list(_LEFT_ROWS),
     "tight_date_checking": list(_TIGHT_ROWS),
@@ -1459,4 +1567,11 @@ EXPECTED_BALANCES: Final[dict[str, tuple[Decimal, Decimal]]] = {
 #: Per share of :func:`shares_opening_under_deposit`: ``(last4, opening, closing, rows)``.
 EXPECTED_SHARES: Final[list[tuple[str, Decimal, Decimal, list[ExpectedRow]]]] = [
     (last4, opening, _running(opening, rows)[-1], list(rows)) for _, last4, opening, rows in _SHARES
+]
+
+#: Per share of :func:`credit_union_member_statement`:
+#: ``(name, last4, opening, closing, rows)``.
+EXPECTED_MEMBER: Final[list[tuple[str, str, Decimal, Decimal, list[ExpectedRow]]]] = [
+    (name, last4, opening, _running(opening, rows)[-1], list(rows))
+    for _, name, last4, opening, rows in _MEMBER_SHARES
 ]

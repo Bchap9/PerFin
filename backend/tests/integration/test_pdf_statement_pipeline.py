@@ -19,6 +19,10 @@ institutions, invented numbers).
 * A statement whose rows print no year and that prints no period keeps its
   rows, each pending on its date, with one question naming the assumed year
   (``tests/fixtures/synth_bank_layouts.py``).
+* A statement of unsigned amounts under section titles, and one whose header
+  takes two lines, import clean; checks printed three across the page hold
+  the document with one ``lines_skipped`` item counting those not read
+  (``synth_bank_layouts``, ``synth_statement_headers``).
 * A card "Statement of Account" with only a statement date
   (``tests/fixtures/synth_card_statement.py``) imports into its credit card
   account with no review item.
@@ -64,6 +68,7 @@ from app.workers.handlers import ingest
 from tests.fixtures import synth_bank_layouts as layouts
 from tests.fixtures import synth_card_statement as card
 from tests.fixtures import synth_pdf_statements as synth
+from tests.fixtures import synth_statement_headers as headers
 from tests.fixtures.factories import Factories, UserRecord
 from tests.fixtures.imports import run_jobs
 from tests.fixtures.ledger import LedgerFactories
@@ -410,6 +415,70 @@ def test_yearless_statement_without_a_period_waits_with_a_year_question(env: Env
     assert "posted_date" in low.payload["fields"]
     # An assumed year is no stated period.
     assert (document.period_start, document.period_end) == (None, None)
+
+
+def _money6(amount: Decimal) -> Decimal:
+    return amount.quantize(Decimal("0.000001"))
+
+
+def test_sectioned_unsigned_statement_imports_clean(env: Env) -> None:
+    account = env.ledger.account(
+        env.household_id, number_last4="7318", type="checking", currency="USD"
+    )
+    document_id = env.ingest(layouts.sectioned_unsigned_checking())
+
+    document = env.document(document_id)
+    assert document.status is DocumentStatus.PROCESSED, env.open_reviews(document_id)
+    assert env.open_reviews(document_id) == []
+    assert document.account_id == account.id
+    rows = env.transactions(account)
+    assert len(rows) == 9
+    assert _rows(rows) == sorted(
+        (posted, _money6(amount), payee)
+        for posted, amount, payee in layouts.EXPECTED_ROWS["sectioned_unsigned_checking"]
+    )
+    assert all(r.review_state is ReviewState.NONE for r in rows)
+    # Five withdrawals and a fee are money out, on both pages.
+    assert sum(1 for r in rows if r.amount < 0) == 6
+    _, closing = layouts.EXPECTED_BALANCES["sectioned_unsigned_checking"]
+    assert [s.balance for s in env.snapshots(account)] == [closing]
+
+
+def test_stacked_header_statement_imports_clean(env: Env) -> None:
+    account = env.ledger.account(
+        env.household_id, number_last4="3871", type="checking", currency="USD"
+    )
+    document_id = env.ingest(headers.stacked_header_checking())
+
+    document = env.document(document_id)
+    assert document.status is DocumentStatus.PROCESSED, env.open_reviews(document_id)
+    assert env.open_reviews(document_id) == []
+    assert document.account_id == account.id
+    rows = env.transactions(account)
+    assert sorted((r.raw_payee or "", r.amount) for r in rows) == sorted(
+        (payee, _money6(amount)) for payee, amount in headers.STACKED_ROWS
+    )
+    assert all(r.review_state is ReviewState.NONE for r in rows)
+    assert len(env.snapshots(account)) == 1
+
+
+def test_checks_across_the_page_raise_lines_skipped(env: Env) -> None:
+    account = env.ledger.account(
+        env.household_id, number_last4="5127", type="checking", currency="USD"
+    )
+    document_id = env.ingest(layouts.checks_three_across())
+
+    document = env.document(document_id)
+    assert document.status is DocumentStatus.NEEDS_REVIEW
+    assert document.account_id == account.id
+    items = env.open_reviews(document_id)
+    skipped = [item for item in items if item.payload.get("reason") == "lines_skipped"]
+    assert len(skipped) == 1, [item.payload for item in items]
+    assert skipped[0].payload["count"] == 7
+    # The checks beside the left group were not read: nothing vouches for the
+    # closing balance, so none is recorded.
+    assert len(env.transactions(account)) == 9
+    assert env.snapshots(account) == []
 
 
 def test_unknown_account_is_chosen_later_from_the_stored_extraction(env: Env) -> None:

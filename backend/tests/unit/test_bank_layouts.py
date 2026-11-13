@@ -2476,3 +2476,94 @@ def test_only_dates_right_of_the_left_group_are_entries() -> None:
     assert outcome.skipped_lines == 1
     assert outcome.skipped_regions == [(1, (62.0, 114.0, 420.0, 123.0))]
     assert outcome.warnings.count("table_across_unread:1") == 1
+
+
+# -- a whole credit-union member statement ----------------------------------------
+
+
+def test_member_statement_is_three_accounts_read_whole() -> None:
+    result = _read(synth.credit_union_member_statement())
+    assert [(s.account.name, s.account.last4) for s in result.statements] == [
+        ("PRIMARY SHARE", "0000"),
+        ("SHARE DRAFT", "0040"),
+        ("HOLIDAY CLUB", "0050"),
+    ]
+    assert [len(s.transactions) for s in result.statements] == [2, 6, 1]
+    for statement, (_, _, opening, closing, rows) in zip(
+        result.statements, synth.EXPECTED_MEMBER, strict=True
+    ):
+        assert _rows(statement) == rows
+        assert _status(statement) == "ok"
+        assert (statement.period_start, statement.period_end) == synth.MEMBER_PERIOD
+        assert statement.reconciliation is not None
+        assert statement.reconciliation.opening == opening
+        assert statement.ledger_balance is not None
+        assert statement.ledger_balance.amount == closing
+        # The year is the period's: no row waits on its date.
+        assert not any(_low(statement, "posted_date"))
+    assert sum(1 for t in result.statements[1].transactions if t.amount < 0) == 4
+    warnings = _warnings(result)
+    assert "accounts_by_balance" in warnings
+    assert not any(w.startswith("year_assumed") for w in warnings)
+    assert _skipped(result) == 0
+
+
+def _scanned(rows: list[list[tuple[str, float]]]) -> DocumentView:
+    """:func:`_view` as an OCR page gives it: every cell with a confidence of 0.9.
+
+    A negative ``x`` is where the cell ends (a figure printed right-aligned).
+    """
+    lines = []
+    for index, cells in enumerate(rows):
+        y = 100.0 + 14.0 * index
+        built = tuple(
+            Cell(text, -x - width if x < 0 else x, y, -x if x < 0 else x + width, y + 9.0, 0.9)
+            for text, x, width in ((text, x, 5.0 * len(text)) for text, x in cells)
+        )
+        lines.append(
+            ViewLine(
+                page=1, index=index, cells=built, text=" ".join(t for t, _ in cells), height=9.0
+            )
+        )
+    return DocumentView(lines=tuple(lines), source_format="pdf", truncated=False, page_count=1)
+
+
+def test_member_statement_with_a_damaged_heading_reads_its_withdrawals() -> None:
+    title, opening, rows = synth.MEMBER_SHARE_DRAFT
+    balances = [opening]
+    for _, amount, _ in rows:
+        balances.append(balances[-1] + amount)
+    view = _scanned(
+        [
+            [("Statement For: 04/01/2026 - 04/30/2026", 300.0)],
+            [(title[0], 62.0), (title[1], 300.0), (title[2], -560.0)],
+            # ``Withdrawal`` as a scan gave it, its first letter lost.
+            [
+                ("Date Transaction Description", 62.0),
+                ("ithdrawal", -400.0),
+                ("Deposit", -480.0),
+                ("Balance", -560.0),
+            ],
+            [("04/01", 62.0), ("Beginning Balance", 100.0), (f"{opening:,.2f}", -560.0)],
+            *(
+                [
+                    (posted.strftime("%m/%d"), 62.0),
+                    (payee, 100.0),
+                    (f"{abs(amount):,.2f}", -400.0 if amount < 0 else -480.0),
+                    (f"{balance:,.2f}", -560.0),
+                ]
+                for (posted, amount, payee), balance in zip(rows, balances[1:], strict=True)
+            ),
+            [("04/30", 62.0), ("Ending Balance", 100.0), (f"{balances[-1]:,.2f}", -560.0)],
+        ]
+    )
+    outcome = TableStatementParser().parse(view, threshold=0.85)
+    statement = _one(outcome)
+    assert [(t.posted, t.amount, t.payee) for t in statement.transactions] == list(rows)
+    assert [t.amount for t in statement.transactions if t.amount < 0] == [
+        amount for _, amount, _ in rows if amount < 0
+    ]
+    assert len([t for t in statement.transactions if t.amount < 0]) == 4
+    assert statement.reconciliation is not None
+    assert statement.reconciliation.status == "ok"
+    assert outcome.skipped_lines == 0
