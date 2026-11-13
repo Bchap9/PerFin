@@ -37,6 +37,7 @@ const REASONS: readonly [ReviewItem["kind"], string][] = [
   ["unparsed", "format_not_supported"],
   ["unparsed", "encrypted"],
   ["unparsed", "no_records"],
+  ["unparsed", "no_rows"],
   ["unparsed", "scan_failed"],
   ["unparsed", "container_incomplete"],
   ["unparsed", "ocr_failed"],
@@ -85,6 +86,32 @@ describe("review explanations", () => {
     expect(found.what === fallback.what && found.title === fallback.title).toBe(
       false,
     );
+  });
+
+  it("says that a header-only file has no rows, and sends nobody to the mapping editor", () => {
+    const found = explain(
+      item("unparsed", { reason: "no_rows", source: "table", table: 0 }),
+    );
+    expect(found.title).toBe("Nothing to import");
+    expect(found.what).toBe("This file has no rows to import.");
+    expect(found.steps.join(" ")).not.toContain("Map columns");
+  });
+
+  it("says of a document's pages that no dated rows were found on them", () => {
+    const found = explain(
+      item("unparsed", { reason: "no_rows", source: "pages" }),
+    );
+    expect(found.title).toBe("Nothing to import");
+    expect(found.what).toBe(
+      "PerFin found no dated rows to import on the pages of this document.",
+    );
+    expect(found.steps.join(" ")).toContain("Teach PerFin");
+    expect(found.steps.join(" ")).not.toContain("Map columns");
+  });
+
+  it("sends an unreadable activity export to the mapping editor", () => {
+    const found = explain(item("unparsed", { reason: "activity_unreadable" }));
+    expect(found.steps.join(" ")).toContain("Map columns");
   });
 
   it.each([

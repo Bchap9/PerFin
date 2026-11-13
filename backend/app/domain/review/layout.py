@@ -60,6 +60,16 @@ MAX_HEADER_CHARS: Final = 120
 _DIGIT_RUN: Final = re.compile(r"\d{2,}")
 _LETTERS: Final = re.compile(r"[^\W\d_]{3,}")
 _DIGIT: Final = re.compile(r"\d")
+#: Anything a date could look like in a cell, with or without a year: digit
+#: groups joined by ``/`` or ``-``, two dotted groups, eight digits in a row,
+#: or a day number next to a word (a month name in any language).
+_DATE_LIKE: Final = re.compile(
+    r"\d{1,4}[/-]\d{1,2}"
+    r"|\d{1,4}\.\d{1,2}\."
+    r"|\d{8}"
+    r"|\d{1,2}\.?[\s-]*[^\W\d_]{3,}"
+    r"|[^\W\d_]{3,}\.?[\s-]*\d{1,2}"
+)
 
 
 def stored_result(extraction: dict[str, Any] | None) -> ExtractResult | None:
@@ -123,23 +133,62 @@ def layout_import_tables(pages: Sequence[Page]) -> list[Table]:
     ]
 
 
+def _dated(cell: str) -> bool:
+    return _DATE_LIKE.search(cell) is not None
+
+
+def has_dated_rows(table: Table) -> bool:
+    """Whether a row under the header could be a transaction: a date and another figure.
+
+    Deliberately wide (any date shape, with or without a year, alone in its
+    cell or before a description; any second cell with a digit): a table
+    that passes may still be unmappable, and is offered as before. One that
+    fails has no row a column mapping could read: a summary box of labels
+    and totals, a ``Payment due`` line whose only figure is the date.
+    """
+    for row in table.rows[1:]:
+        figures = [cell for cell in row if _DIGIT.search(cell)]
+        if len(figures) >= 2 and any(_dated(cell) for cell in figures):
+            return True
+    return False
+
+
+def _page_tables(result: ExtractResult) -> list[Table] | None:
+    """The page tables of a document no parser read (None: it is not such a document)."""
+    if result.statements or result.investments or result.tables or not result.pages:
+        return None
+    if result.parse is not None and (
+        result.parse.receipt is not None or result.parse.payslip is not None
+    ):
+        return None  # a receipt's or payslip's lines are not ledger rows
+    return layout_import_tables(result.pages)
+
+
 def with_layout_tables(result: ExtractResult) -> ExtractResult:
     """``result`` with its page tables as import tables when it has no records otherwise.
 
     Only for documents with pages (PDF, images) whose parsers produced no
     statement and that carry no structured table; anything else is
-    returned unchanged.
+    returned unchanged. A page table without a dated row
+    (:func:`has_dated_rows`) is never offered: there is nothing in it to
+    map (:func:`pages_without_rows`).
     """
-    if result.statements or result.investments or result.tables or not result.pages:
-        return result
-    if result.parse is not None and (
-        result.parse.receipt is not None or result.parse.payslip is not None
-    ):
-        return result  # a receipt's or payslip's lines are not ledger rows
-    tables = layout_import_tables(result.pages)
+    tables = [table for table in _page_tables(result) or [] if has_dated_rows(table)]
     if not tables:
         return result
     return result.model_copy(update={"tables": tables[:1]})
+
+
+def pages_without_rows(result: ExtractResult) -> bool:
+    """A document no parser read whose pages have tables, none of them with a dated row.
+
+    A statement's summary page, a notice with a box of totals: the importer
+    says that it holds no rows (``unparsed``/``no_rows``) instead of asking
+    for a column mapping of the box. Pages without any table stay
+    ``no_records``: nothing was found there to say that about.
+    """
+    tables = _page_tables(result) or []
+    return bool(tables) and not any(has_dated_rows(table) for table in tables)
 
 
 # ---------------------------------------------------------------------------

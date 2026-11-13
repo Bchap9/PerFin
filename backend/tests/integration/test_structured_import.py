@@ -1905,6 +1905,43 @@ def test_a_date_order_the_upload_day_cannot_settle_waits_for_a_person(env: Env) 
 # ---------------------------------------------------------------------------
 
 
+@pytest.mark.parametrize(
+    "data",
+    [
+        b"Date,Description,Amount,Balance\r\n",
+        b"Date,Description,Amount,Balance",
+        b"Posted Date;Payee;Money Out;Money In\r\n\r\n\r\n",
+    ],
+    ids=["header", "no_newline", "blank_lines_after"],
+)
+def test_header_only_export_says_no_rows(env: Env, data: bytes) -> None:
+    """A header and nothing under it: nothing to import, and nothing to map either."""
+    account = env.ledger.account(env.household_id, type=AccountType.CHECKING)
+    document_id = env.ingest(data, account=account, name="export.csv")
+    assert env.document(document_id).status is DocumentStatus.NEEDS_REVIEW
+    (item,) = env.open_reviews(document_id)
+    assert item.kind is ReviewKind.UNPARSED
+    assert item.payload == {"reason": "no_rows", "source": "table", "table": 0}
+    assert env.transactions(account) == []
+    assert _mappings(env) == []
+    with Actors.open(env.settings, env.factories) as actors:
+        owner = actors.login(env.owner)
+        (shown,) = owner.get(f"{API}/review?document={document_id}").json()["items"]
+    # The mapping editor has no row to read: it is not offered.
+    assert shown["reason"] == "no_rows"
+    assert shown["next_step"] == "reprocess"
+
+
+def test_a_single_row_without_a_header_is_not_called_empty(env: Env) -> None:
+    """One transaction and no header is a row, not a header: the columns are asked for."""
+    account = env.ledger.account(env.household_id, type=AccountType.CHECKING)
+    document_id = env.ingest(b"01/05/2026,Corner Bakery,-4.50\r\n", account=account, name="one.csv")
+    (item,) = env.open_reviews(document_id)
+    assert item.kind is ReviewKind.UNPARSED
+    assert item.payload["reason"] == "mapping_required"
+    assert item.payload["row_count"] == 1
+
+
 def test_headerless_export_opens_a_prefilled_mapping(env: Env) -> None:
     """Signed amounts and no header: the columns are offered, never imported on a guess."""
     data = layouts.headerless_five_quoted_columns()

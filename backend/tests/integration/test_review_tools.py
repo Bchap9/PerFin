@@ -45,7 +45,13 @@ from app.domain.documents.models import (
 from app.domain.documents.schemas import INGEST_JOB_TYPE
 from app.domain.imports.schemas import APPLY_MAPPING_JOB_TYPE
 from app.domain.imports.service import import_extraction
-from app.domain.review.layout import derive_match, layout_import_tables, stored_result
+from app.domain.review.layout import (
+    derive_match,
+    layout_import_tables,
+    pages_without_rows,
+    stored_result,
+    with_layout_tables,
+)
 from app.domain.transactions.models import ReviewState, Transaction
 from app.ingestion.classify.fingerprints import household_fingerprints
 from app.ingestion.classify.service import classify_extraction
@@ -875,6 +881,69 @@ def test_layout_tables_join_pages_and_neutralise_formulas() -> None:
     assert table.rows[0] == ["Date", "Details", "Amount"]
     assert len(table.rows) == 4  # one header, three rows; the repeated header dropped
     assert not table.rows[3][1].startswith("=")
+
+
+#: A statement's summary box: labels and totals, a due date, no dated row with a figure.
+SUMMARY_BOX = [
+    ["Account Summary", "Amount"],
+    ["Previous Balance", "$1,204.18"],
+    ["Payments and Credits", "-$350.00"],
+    ["New Balance", "$911.43"],
+    ["Payment Due Date", "04/21/2026"],
+]
+
+
+@pytest.mark.parametrize(
+    ("table", "offered"),
+    [
+        (TABLE, True),
+        (SUMMARY_BOX, False),
+        # Dates without a year, a date printed in front of the description,
+        # a month name in another language: all rows that may be mapped.
+        ([["Date", "Details", "Amount"], ["03/02", "Corner Bakery", "4.50"]], True),
+        ([["Transaction", "Amount"], ["03/02 Corner Bakery", "4.50"]], True),
+        ([["Datum", "Omschrijving", "Bedrag"], ["2 mei", "Bakkerij Voorbeeld", "4,50"]], True),
+        # Amounts alone are not dates.
+        ([["Charges", "Credits", "Total"], ["1,204.18", "350.00", "854.18"]], False),
+    ],
+    ids=["dated", "summary", "no_year", "date_in_text", "month_word", "amounts_only"],
+)
+def test_only_page_tables_with_dated_rows_are_offered_for_mapping(
+    table: list[list[str]], offered: bool
+) -> None:
+    result = ExtractResult.model_validate(table_extraction(table=table))
+    assert bool(with_layout_tables(result).tables) is offered
+    assert pages_without_rows(result) is not offered
+
+
+def test_pages_without_any_table_are_not_called_rowless() -> None:
+    result = ExtractResult.model_validate({"kind": "pdf", "ok": True, "pages": [page(1, HEADER)]})
+    assert not pages_without_rows(result)
+    assert not with_layout_tables(result).tables
+
+
+def test_summary_only_pdf_says_no_rows_and_offers_no_mapping(
+    home: dict[str, AuthedClient], factories: Factories, store: LocalFSBlobStore
+) -> None:
+    """A page with a box of totals: not a table to map (the editor could read no row of it)."""
+    owner = home["owner"]
+    hh = hh_of(owner)
+    doc = pdf_document(factories, store, hh, extraction=table_extraction(table=SUMMARY_BOX))
+    with factories.transaction() as db:
+        set_context(db, hh)
+        fresh = db.get(Document, doc.id)
+        assert fresh is not None
+        result = stored_result(fresh.extraction)
+        assert result is not None
+        outcome = import_extraction(db, fresh, result)
+    assert outcome.status is DocumentStatus.NEEDS_REVIEW
+    (shown,) = owner.get(f"{REVIEW}?document={doc.id}").json()["items"]
+    assert (shown["kind"], shown["reason"]) == ("unparsed", "no_rows")
+    assert shown["payload"] == {"reason": "no_rows", "source": "pages"}
+    assert shown["next_step"] == "reprocess"
+    preview = owner.get(f"{API}/imports/{doc.id}/preview")
+    assert preview.status_code == 200, preview.text
+    assert preview.json()["tables"] == []
 
 
 def test_pdf_table_mapping_is_reused_for_the_next_document(

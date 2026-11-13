@@ -414,6 +414,26 @@ const COPY: Readonly<Record<string, Copy>> = {
       "Otherwise check that you exported the right date range and upload again, or dismiss this item.",
     ],
   }),
+  "unparsed:no_rows": (item) =>
+    payloadString(item, "source") === "pages"
+      ? {
+          title: "Nothing to import",
+          what: "PerFin found no dated rows to import on the pages of this document.",
+          why: "The tables on its pages hold labels and totals (a summary, for example), not transactions.",
+          steps: [
+            "If it is a summary page or a notice, dismiss this item.",
+            "If the document does list transactions, use “Teach PerFin” and select the transaction table on the page.",
+          ],
+        }
+      : {
+          title: "Nothing to import",
+          what: "This file has no rows to import.",
+          why: "It holds a header row and nothing under it. Exports come out like this when the chosen date range has no transactions.",
+          steps: [
+            "Check the date range of the export, download it again and upload that.",
+            "Dismiss this item.",
+          ],
+        },
   "unparsed:loan_unmatched": () => ({
     title: "Which loan?",
     what: "This loan statement does not match any loan recorded in PerFin.",

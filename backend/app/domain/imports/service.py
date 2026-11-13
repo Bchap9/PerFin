@@ -53,7 +53,11 @@ The flow (INGESTION.md "Parse", "Match and deduplicate", "Commit"):
      review item (``mapping_required``) carrying the suggestion and why it
      was not used (``auto_import``), and the table is shown by ``GET
      /imports/{document_id}/preview`` for the mapping editor. The account is
-     the one given on re-run, the document's or the mapping's.
+     the one given on re-run, the document's or the mapping's. A table that
+     is only a header row (:func:`header_only`), and a PDF or image whose
+     page tables hold no dated row (``app.domain.review.layout``), have
+     nothing to map: they wait as ``unparsed``/``no_rows`` (``source``:
+     ``table`` or ``pages``), which the mapping editor is not offered for.
    * **Brokerage activity tables** come first: when table 0 of a CSV, TSV
      or XLSX is a brokerage "Activity" export
      (``app.ingestion.parsers.brokerage_table``: a date, an action that
@@ -232,7 +236,7 @@ from app.domain.imports.statement_records import (
 )
 from app.domain.investments.statement_import import import_investment_statements
 from app.domain.review import repo as review_repo
-from app.domain.review.layout import with_layout_tables
+from app.domain.review.layout import pages_without_rows, with_layout_tables
 from app.domain.rules.service import apply_rules_to
 from app.domain.transactions import repo as transactions_repo
 from app.domain.transactions.import_hash import HashInput
@@ -1501,6 +1505,23 @@ def _save_suggested(run: _Run, table: Table, suggestion: MappingSuggestion) -> I
     return mapping
 
 
+def header_only(table: Table) -> bool:
+    """A table that is a header row and nothing else (or nothing at all).
+
+    One row with text, at least two cells of it filled and none with a
+    digit: column names. A single row with a digit in it may be the file's
+    only transaction (an export without a header) and is never called
+    empty; it is asked about like any other table.
+    """
+    rows = [row for row in table.rows if any(cell.strip() for cell in row)]
+    if not rows:
+        return True
+    if len(rows) > 1:
+        return False
+    cells = [cell for cell in rows[0] if cell.strip()]
+    return len(cells) >= 2 and not any(ch.isdigit() for cell in cells for ch in cell)
+
+
 def _mapping_review(
     run: _Run,
     table: Table,
@@ -1992,8 +2013,12 @@ def import_extraction(
     """
     actor = user_id or document.uploaded_by
     # A PDF/image no parser read: its page table goes through the saved
-    # column mappings like a CSV (app.domain.review.layout).
+    # column mappings like a CSV (app.domain.review.layout), unless no
+    # table on its pages has a dated row.
+    no_rows = "pages" if pages_without_rows(result) else None
     result = with_layout_tables(result)
+    if result.tables and not (result.statements or result.investments):
+        no_rows = "table" if header_only(result.tables[0]) else None
     run = _Run(
         db=db,
         document=document,
@@ -2004,7 +2029,18 @@ def import_extraction(
         answers=document_answers(db, document),
     )
     statements: Sequence[InvestmentStatement] = result.investments
-    if result.statements:
+    if no_rows is not None:
+        # Nothing to import and nothing to map: said as such, whatever
+        # mapping fits the header (module doc).
+        run.review(
+            ReviewKind.UNPARSED,
+            {
+                "reason": "no_rows",
+                "source": no_rows,
+                **({"table": 0} if no_rows == "table" else {}),
+            },
+        )
+    elif result.statements:
         _import_statements(run, result, account_id=account_id)
     elif result.tables:
         # A brokerage positions or activity export is investment data, unless

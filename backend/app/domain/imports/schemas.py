@@ -496,7 +496,12 @@ class PreviewStatement(_Output):
 
 
 class SuggestionRole(_Output):
-    """Why the suggestion gave a column a role (no cell text)."""
+    """Why the suggestion gave a column a role (no cell text).
+
+    The roles of a cash ledger, then those only a brokerage activity
+    suggestion gives (``app.ingestion.parsers.brokerage_table``; ``other``:
+    a column the reader knows and does not read).
+    """
 
     role: Literal[
         "date",
@@ -509,6 +514,16 @@ class SuggestionRole(_Output):
         "account",
         "payee",
         "memo",
+        "settle",
+        "action",
+        "symbol",
+        "description",
+        "quantity",
+        "price",
+        "commission",
+        "fees",
+        "account_name",
+        "other",
     ]
     column: int
     #: How the header named the role (``content``: it did not, the column's

@@ -146,8 +146,12 @@ from app.domain.transactions.models import ReviewState, Transaction
 from app.domain.transactions.schemas import TransactionUpdate
 from app.ingestion.match import receipts as receipts_match
 
-#: ``unparsed`` reasons the column-mapping editor answers.
-MAPPING_REASONS: Final = frozenset({"mapping_required", "mapping_ambiguous", "mapping_failed"})
+#: ``unparsed`` reasons the column-mapping editor answers. A brokerage
+#: activity table none of whose rows read (``activity_unreadable``) is one:
+#: its columns are checked there. ``no_rows`` is not: nothing is there to map.
+MAPPING_REASONS: Final = frozenset(
+    {"mapping_required", "mapping_ambiguous", "mapping_failed", "activity_unreadable"}
+)
 #: Kinds with a typed resolution (the others can only be dismissed for now).
 RESOLVABLE: Final = frozenset(
     {
