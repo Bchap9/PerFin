@@ -55,7 +55,23 @@ rows) stands under a few lines that carry fewer delimiters, the way a bank's
 export opens with the account's name, masked number and date range
 (`_rows_after_preamble`; the column mapping finds the header row,
 `skip_rows`, and the account's last four digits are read from those lines
-when they name one account, `preamble_last4`). A text file stored as
+when they name one account, `preamble_last4`). Under such a preamble one
+shorter row between two rows of the table's shape (the rest of a long
+description printed on a line of its own) does not end the table, once the
+header and a first row have been seen together. When the text has double
+quotes that pair up, the delimiters are counted per logical record and
+outside the quotes first (`_record_counts`: a quoted cell may hold the
+delimiter, as in `"1,234.56"`, or run over up to 10 lines), then by
+physical lines as before; either reading may show the table, so no file
+accepted before is refused. OFX/QFX is also recognised when `<OFX>` opens
+a line under `KEY:VALUE` header lines in any order (a header that leaves
+`OFXHEADER` out or puts another key first; mail, whose headers have that
+shape, is tested first) and when `<OFX>` is the root right under an XML
+declaration; QIF may open with `#` comment lines. NUL bytes that pad the
+very end of a file are not content: the sniff ignores them when its window
+holds the whole file, and `decode_text` drops them; a NUL anywhere else is
+refused as before. The whole-file markup scan and the control-byte rules
+are unchanged. A text file stored as
 unsupported by an earlier release is sniffed again when it is reprocessed,
 so "Process again" reads it. A file
 that writes `a, "b, c"` (a space between the delimiter and a quote) is read
@@ -145,7 +161,14 @@ QIF since Phase 2; PDF, images (with OCR), EML, ZIP and XLSX since Phases
   counted (`meta`) and removed from the in-memory document (MuPDF's JS
   engine off, `scrub`, catalog `OpenAction`/`AA` cleared, any remaining
   action dictionaries disarmed); nothing of them is returned and pages render
-  with `annots=False` (C8). A PDF that needs a password is `ok=false`,
+  with `annots=False` (C8). A cross-reference entry whose object is not in
+  the file (common in files saved more than once) does not refuse the
+  document: the inventory and the removal step over an object MuPDF cannot
+  load, which holds nothing it could run. `scrub` stops at such an entry,
+  so it is run again without its JavaScript pass and the module's own loop
+  over every object disarms the actions, those numbered after the entry
+  included. An action that is found and cannot be cleared refuses the
+  document (`malformed_pdf`). A PDF that needs a password is `ok=false`,
   `encrypted`: the pipeline parks it in review. OCR fallback per page when
   the text layer is empty (`no_text`), mostly not text (`garbage`: share of
   letters, digits and common punctuation below 0.75) or sparse (under 2
@@ -172,6 +195,20 @@ QIF since Phase 2; PDF, images (with OCR), EML, ZIP and XLSX since Phases
   and tax right on 25 before, 30 after). Time caps per page and per document (`ocr_page_seconds`,
   `ocr_total_seconds`), at most `max_ocr_pages` pages; what is left out is
   `truncated` with an `ocr_page_cap`/`ocr_time_budget` warning.
+  Tesseract's page layout analysis crashes natively on some scans and
+  takes the sandbox child with it. After a `crashed` child on a PDF or
+  image that uses OCR, the worker (`pipeline._extract`) reads the document
+  again, each time in a new child with the same filter and limits: first
+  with `ExtractOptions.ocr_psm = single_block` (mode 6, no layout analysis;
+  warning `ocr_retried:single_block`), and if that child crashes too,
+  without OCR (text layers and previews only; warning
+  `ocr_disabled_after_crash`). In the last case the pipeline opens an
+  `unparsed` item (`ocr_failed`) and the document ends `needs_review`
+  whatever was imported from its text layers; an import re-run (an account
+  chosen, a mapping applied, the rows of a table taught in "Teach PerFin")
+  does not resolve that item. Any other sandbox
+  error fails the document as before, and when both retries crash the
+  first crash is the error reported.
 - Previews (`render.py`): every page (up to `max_preview_pages`) rendered to
   PNG at `preview_dpi` (default 100), the DPI lowered until it fits
   `max_render_pixels`; written as a new image with no ancillary chunks (the
@@ -183,13 +220,73 @@ QIF since Phase 2; PDF, images (with OCR), EML, ZIP and XLSX since Phases
   highlight); deleting or re-extracting a document shreds them.
 - CSV/TSV/XLSX: parsed with strict dialect detection; formulas in XLSX are
   never evaluated (values only). Cells beginning with `=`, `+`, `-`, `@` are
-  neutralised so a later CSV export cannot carry formula injection.
-- OFX/QFX/QIF: dedicated parsers; XML external entities disabled. OFX
-  investment statements (`INVSTMTRS`, `extract/ofx_invest.py`, extractor
+  neutralised so a later CSV export cannot carry formula injection. Two
+  departures from RFC 4180 that real exports make are read
+  (`delimited.py`). Blanks between a closing quote and the delimiter or
+  the line end (`"12.50" ,`) are dropped before the strict parse, in step
+  with the reader's own quote state; when the blank is a tab on every
+  line the sniffer calls the file TSV, and the reader sees that the tabs
+  are blanks and reads with the real delimiter. A file whose cells are
+  mostly written `'like this'` is read with `'` as its quote character
+  when the sample reads cleanly that way and is a table at least as much
+  as with `'` as text; an apostrophe inside a cell, at the start of a few
+  cells or at the two ends of a row stays text. Anything else after a
+  closing quote still fails the file (`malformed_csv`), and the formula
+  guard runs on the cell values once their quotes are off.
+- OFX/QFX/QIF: dedicated parsers; XML external entities disabled
+  (`ofx.py`, `qif.py`).
+  - *Route and encoding.* A file that opens with `<?xml` or `<?OFX` is
+    parsed as XML (`defusedxml`; a DTD or an entity refuses it,
+    `xml_forbidden`). The bytes are decoded before parsing and the XML
+    declaration is dropped, so an encoding the file declares wrongly, or
+    one the parser does not know (`USASCII`), cannot fail it: UTF-8 when
+    the bytes are UTF-8; else the declared encoding when it is one of a
+    fixed list of one-byte character sets (`DECLARABLE_ENCODINGS`:
+    cp1250-1258, ISO-8859-2 to -16, KOI8-R/U) and every byte is a
+    character of it; else cp1252, then latin-1. No other codec a
+    declaration names is ever applied.
+  - *An OFX 2 opening over an SGML body* (not well-formed XML, no tag that
+    carries a value closed by an end tag, `</OFX>` present) is read by the
+    SGML tokenizer once its leading `<?xml ?>` and `<?OFX ?>` instructions
+    are removed. Nothing else is removed, so any other declaration still
+    refuses the file. Damaged XML (leaves closed, not well-formed) and a
+    file cut short (no `</OFX>`) do not fall back: they stay
+    `malformed_xml`, so half an amount is never imported as if whole.
+  - *SGML.* A tag printed with no value opens an aggregate only when its
+    name has an end tag somewhere in the file or is an aggregate the
+    readers walk; otherwise it is an empty leaf, so a value-less
+    `<TRNTYPE>`, `<FITID>` or `<NAME>` no longer swallows the date and
+    amount after it. A value its exporter escaped twice (`&amp;lt;`) is
+    unescaped again, at most two more times. Bank transactions are the
+    `STMTTRN` of every `BANKTRANLIST` of the statement and those directly
+    under it (a stray `</BANKTRANLIST>` closes the list early in some
+    exports).
+  - *No record is dropped without a count.* A transaction with no
+    readable date or amount, a `STMTTRN` nested where the reader does not
+    look or under no statement at all, an investment activity that cannot
+    be read or is of a kind with no reading (margin interest, a return of
+    capital, a journal entry; `investment_activity_kind_unsupported`
+    names the reason), known activity left beside `INVTRANLIST` by a stray
+    end tag, a QIF record with no readable date or amount and a last QIF
+    record with no `^` are counted. Each statement that lost records adds
+    one warning `transaction_skipped:<n>` (kept per statement, the surplus
+    folded into the last when the result has no room for more, so the
+    counts add up to the records lost); it replaces
+    `transaction_skipped_invalid_date_or_amount` and
+    `investment_activity_skipped_invalid`. The records of a QIF section
+    that is skipped whole (`Invst`) are not counted:
+    `section_skipped:<name>` is all that says so. The importer turns the
+    counts into a review item ("Match and deduplicate", "Records the
+    extractor did not read").
+
+  OFX investment statements (`INVSTMTRS`, `extract/ofx_invest.py`, extractor
   `ofx/2`) are read from the same hardened tree: positions (`INVPOSLIST`),
   activity (`INVTRANLIST`: buys, sells, income, reinvestments, expenses,
   transfers, splits, cash `INVBANKTRAN`), closing cash (`INVBAL/AVAILCASH`)
-  and the `SECLIST` names; only the account's last four digits and
+  and the `SECLIST` names; a statement that carries `INV401K` or
+  `INV401KBAL` is a `retirement` account of subtype `401k` (nothing inside
+  those aggregates is read), any other a `brokerage` account; only the
+  account's last four digits and
   instrument identifiers leave the child (`ExtractResult.investments`,
   "Brokerage statements" below).
 - EML (`eml.py`): standard-library `email` with `policy.default`. Headers
@@ -1208,7 +1305,13 @@ OFX `INVSTMTRS` in the sandbox or from a PDF/scan's pages in the worker.
   are then written by the investments lot engine
   (`service.replay_position`); a history it refuses rolls the statement
   back (savepoint) with `investment_lot_conflict`. Position prices become
-  `price` rows (`source = statement`) unless another source has that day;
+  `price` rows (`source = statement`) unless another source has that day.
+  A security listed in two positions on one day (a plan's position per
+  contribution source, a sub-account's) gives one price row per run: the
+  first price printed is the day's, a later one that differs is left out
+  and the run's summary says so (`investments.warnings:
+  duplicate_price_ignored`, in the parse stage log and the audit facts;
+  no review item); the units of every position still count;
   holdings + closing cash on `as_of` is a `statement` balance snapshot when
   reconciled and both are known (a statement printing no cash, such as a
   529 plan's, gives none; nor does one imported as read). New rows of a statement older than activity already recorded
@@ -1303,7 +1406,8 @@ table; never a PDF's page table) before it looks for a column mapping:
   `brokerage_table` (statements, rows, notes, unknown actions, skipped rows,
   warnings); skipped rows raise one `low_confidence_field` item
   (`lines_skipped`: count, `unknown_activity`, parser), a table none of
-  whose rows reads an `unparsed` item (`activity_unreadable`).
+  whose rows reads an `unparsed` item (`activity_unreadable`), which the
+  mapping editor answers (its columns are checked there).
 - **Limits**: an export has no positions. A sale of units bought before
   its first row (with no earlier statement giving the account's positions)
   opens those units: one `transfer_in` of the shortfall on the security's
@@ -1576,24 +1680,106 @@ same database transaction.
   A column only takes a role when its cells fit (dates parse in one format,
   amounts parse, currencies are three-letter codes, an indicator column
   holds direction words such as `DR`/`CR`/`Debit`, an account column holds
-  several account-number-like values); an empty column never takes one,
-  and a "Type" column of `Cash`/`Margin` is no indicator, nor is a column of
-  direction words beside amounts that already carry a minus sign (it
-  describes the row; the amount signs it). A running balance
+  several account-number-like values or, under a header that is exactly
+  `Account`, `Account Name` or `Source Account`, the names of a few
+  accounts: "Multi-account files" below); an empty column never takes one,
+  and a "Type" column of `Cash`/`Margin` is no indicator. A column of
+  direction words is also found by its cells when no header names it
+  (match kind `content`). Beside unsigned amounts it is the indicator
+  that signs each row; beside amounts that already carry a minus sign it
+  is left out of the spec (it describes the row; the amount signs it) and
+  compared with the signs instead ("The sign" below). A running balance
   that agrees with only one sign convention sets `sign`. The suggestion is
-  **confident** when the date and amount (or debit/credit) columns are
-  named exactly, every row before the footer reads, the day/month order
-  is not a guess and, with an indicator, every row's indicator is a
-  direction word beside an unsigned amount (else the doubt
-  `indicator_values_unknown`: a `CHECK` row would otherwise read as money
-  in); it reports a score, per-role reasons (role, column, match
+  **confident** when it has no doubts: the date and amount (or
+  debit/credit) columns are named exactly (`header_not_exact`), every row
+  before the footer reads, the day/month order is not a guess
+  (`date_order_guessed`), the sign is not in doubt and, with an indicator,
+  every row's indicator is a direction word beside an unsigned amount
+  (else `indicator_values_unknown`: a `CHECK` row would otherwise read as
+  money in); it reports a score, per-role reasons (role, column, match
   kind, share of cells that fit) and its doubts.
+- **The sign is proven or the file waits.** `sign_evidence` says what
+  proves the convention: `debit_credit` columns, an `indicator`, a
+  reconciling running `balance`, or `indicator_correlation` (direction or
+  transaction-type words beside signed amounts: at least 4 rows, both
+  directions seen; plain `debit`/`credit` words prove a sign only when
+  every row agrees, type words such as `purchase`/`payment`/`refund` when
+  95% agree overall and in each direction; `sale` and `return` vote only
+  under a card header; the spec's `sign` is set to what they prove). With
+  no evidence, signed amounts are read as "positive is money in" on
+  trust, and that is the doubt `sign_unverified` when the header names a
+  card (`names_card`: `Card No.`, `Name on Card`, `Member Name`,
+  `Merchant`, `Statement Balance`, a `Post Date` beside a `Transaction
+  Date`...), more rows are money in than money out (every row among
+  them), or every amount is zero: a card export lists purchases as
+  positive, and read the other way every purchase would be income. An
+  amount column whose cells are all negative is read as money out with no
+  doubt: no export prints money in that way save a card export of
+  payments alone, and a sign on trust is never written into a liability
+  account (below). A lone `Inflow` or credit column of negatives stays a
+  doubt. A running balance is no proof under a card header or
+  when it has most rows as money in (what is owed on a card adds up with
+  purchases read as money in), unless direction words go with the signs
+  the same way (a savings export with `Credit`/`Debit` beside its signed
+  amounts); nor is a debit or credit column that mixes
+  signs, most of them negative. Words that go against the signs, or with
+  them against a reconciling balance, are the doubt
+  `indicator_contradicts_sign`. A header naming a security, a quantity
+  and a price is `investment_columns`: trades are never a confident cash
+  ledger. A debit or credit cell keeps its printed sign (a negative debit
+  is money in, a negative credit money out, a lone `Inflow` column of
+  negatives is money out), unless that column prints its amounts negative
+  as a rule, where it is read by magnitude.
+- **Day/month order.** A date column that fits month first and day first
+  alike is read month first and is the doubt `date_order_guessed` unless
+  the table settles the order (`_settled_date_format`; the whole table is
+  asked, not the sample): a cell only one order reads; a second column
+  named a date, of the same form, with such a cell; one order dating two
+  rows or more after the day the file arrived (plus a day's slack) while
+  the other dates none (the importer and the preview pass the upload
+  day; one row dated ahead, a scheduled payment, rules nothing out);
+  every cell the same day either way (`1/1`, `2/2`); or, read month
+  first, at least three distinct days of one month of one year (an export
+  covers the days of a month, not the same day of as many months). Proofs
+  that disagree, two rows, the same day of several months, and an
+  unbroken run of days with as many rows each (what one row a month on
+  the 1st looks like written day first) stay held.
+- **Tables without a header row** (`_headerless`). When no row names a
+  date and a money column, a table of two rows or more is read from the
+  shapes of its columns (`has_header` false, every role's match
+  `content`): the date column is the first whose cells all read in one
+  date format, money columns are those whose cells all fit money, the
+  description is the column with the most text; no account column is
+  read from shapes. A first row of words no role knows fits no shape, so
+  an unknown header still gives no suggestion. With one date column and
+  two to six money columns, every reading of them as an amount and a
+  balance, or a debit, a credit and a balance, is tried: exactly one
+  whose running balance adds up over the whole table (at least two
+  balances checked) proves the columns and the sign (`sign_evidence:
+  balance`, no doubt), unless it has most rows as money in or every
+  amount of one sign (`sign_unverified`). Otherwise the reading carries
+  the doubt `no_header` in place of `header_not_exact`: it fills the
+  mapping editor and the file waits. A column of direction words decides
+  the sign there, and the doubt stays (such a table is as a rule an
+  aggregator's export of several accounts, whose account column cannot
+  be told from a category without a header). A mapping saved from such
+  a suggestion is named `No header, N columns`, never after the cells of
+  its first transaction.
 - **Header words.** The suggestion knows the words English exports use
   for each role and those of German, French, Spanish, Dutch, Italian and
   Portuguese ones (`Buchungstag`, `Betrag`, `Libellé`, `Débit`/`Crédit`,
   `Fecha`, `Importe`, `Omschrijving`, `Af Bij`, `Saldo`...; `ROLE_WORDS`),
   and reads a unit after a money header as part of it (`Bedrag (EUR)`,
-  `Amount (USD)`). A word alone never assigns a role: the column's values
+  `Amount (USD)`); any other parenthesised qualifier (`Amount (total)`,
+  `Date (UTC)`) is read the same way unless it names a part (`fee`, `tax`,
+  `vat`, `tip`) or is all that tells two columns apart. `Created`,
+  `Datetime`, `Timestamp` and `Date Processed` name the date, `Credit
+  Amount`/`Debit Amount` the credit and debit columns, and `Gross` is the
+  amount beside a `Fee` and a `Net` column (a payment service's export;
+  an exact match only when gross and net agree on every row). Dates may
+  carry a zone offset after a blank or be written `31Jan2026` or
+  `31-Jan-26`; a currency may be written in letters (`zł`, `Kč`). A word
+  alone never assigns a role: the column's values
   must fit it, which also settles a word two languages use differently
   (`Valuta` is a value date in German and the currency in Dutch and
   Italian). Decimal commas and day-first dates are detected from the
@@ -1610,10 +1796,18 @@ same database transaction.
   often list purchases as positive): the mapping saved from such a
   suggestion while the account is still unknown is marked
   `sign_unverified`, and whenever it later meets a liability account (the
-  re-run after a person picks the card, next month's file) the import
-  waits as `mapping_required` (`auto_import: sign_unverified`) until a
-  person saves the mapping's spec in the editor or chooses the mapping
-  explicitly for the run. With one account-bound mapping among the fitting
+  re-run after a person picks the card, next month's file), or a file
+  whose own suggestion doubts the sign (whatever the account, which also
+  stops a mapping saved from a card export by an earlier release), the
+  import waits as `mapping_required` (`auto_import: sign_unverified`)
+  until a person saves the mapping's spec in the editor or chooses the
+  mapping explicitly for the run. A suggestion whose only doubt is the
+  sign waits with the same `auto_import: sign_unverified`; any other
+  doubt is `not_confident`. The account proposed for a table
+  (`app/domain/imports/proposals.py`) is a credit card when the header
+  names one, has no type when the mapping's sign is on trust (a person
+  chooses; `AccountProposal.type` is nullable) and is a checking account
+  otherwise. With one account-bound mapping among the fitting
   ones, it wins over household mappings (a member's upload may have saved
   one meanwhile) for an upload that names no account. Page tables of PDFs and images, drop
   folder and mail intake without a person, and doubtful suggestions are not
@@ -1627,10 +1821,57 @@ same database transaction.
   /imports/{document_id}/apply-mapping` re-runs the import from the stored
   extraction as the `imports.apply_mapping` job and resolves the items it
   answered. The next file with the same header is imported without asking.
-- **Rows.** Mapped rows that do not parse (totals, rows without an amount)
-  are skipped and listed in a `low_confidence_field` item; rows with at most
-  one filled cell (disclaimer paragraphs, a "Date downloaded" line) are
-  notes, neither imported nor reported. An empty currency cell is the
+  The review queue asks the question of the suggestion's doubt (trades,
+  no header row, words against signs, a sign nothing proves; `reviewCopy.ts`),
+  each answered in the editor. The preview also carries a brokerage
+  activity suggestion (its roles are in the response schema), so an
+  `activity_unreadable` item leads to the editor too. The upload list
+  links "Map columns" only for a file with an open item the editor
+  answers (`next_step: column_mapping`).
+- **Nothing to import.** A table that is only a header row (`header_only`:
+  an export of a date range without transactions), and a PDF or image no
+  parser read whose page tables hold no dated row (`pages_without_rows`
+  in `app/domain/review/layout.py`: a summary box of labels and totals),
+  have nothing to map: they wait as `unparsed` with reason `no_rows`
+  (`source`: `table` or `pages`), and the mapping editor is not offered.
+  The test for a dated row is deliberately wide (any date shape, with or
+  without a year, beside a second cell with a digit), so a page table
+  that might be mappable is offered as before. Two limits of these tests
+  as they stand:
+  - Only a table of a header row and no other row says `no_rows`. A
+    header row followed by a "Total" row or a "No transactions" line is
+    two rows: it is asked about like any other table (`mapping_required`,
+    the mapping editor), although no mapping reads a transaction from it.
+  - The page-table test reads a date within one cell. It does not
+    recognise a month and a day printed in separate cells (`Jan` | `15`,
+    `01` | `15`), nor a date of numbers separated by spaces (`15 01 2026`,
+    `2026 01 15`; `15 Jan 2026` is recognised). A page table whose rows
+    are all dated that way waits as `no_rows` with no mapping editor,
+    although it holds transactions.
+- **Records the extractor did not read.** The OFX, QFX and QIF extractors
+  count the records they could not read in `transaction_skipped:<n>`
+  warnings ("Extract"). The importer adds them up (`records_skipped`;
+  only a short ASCII count is read from a warning) and raises one
+  `low_confidence_field` item per document (`lines_skipped`: `count`,
+  `source: extraction`), for bank and brokerage statements alike. The
+  rows that were read are imported, and the document ends `needs_review`
+  instead of `processed` with fewer rows than the file has records.
+- **Rows.** Mapped rows that do not parse (rows without an amount, a
+  date in another form, a second section laid out differently) are skipped
+  and listed in a `low_confidence_field` item (`rows_skipped`); rows with
+  at most one filled cell (disclaimer paragraphs, a "Date downloaded"
+  line), or without a date and without an amount, are notes, neither
+  imported nor reported. A one-cell row under the description of the
+  transaction row directly above it continues that description and is
+  appended to the row's memo. A row whose date cell says `Pending` is not
+  booked yet: counted (`pending_rows` in the run summary) and not
+  imported. At most five unreadable rows after the table's last readable
+  row that hold no transaction (totals, closing lines) are footers
+  (`footer_rows`), not reported; more than five are all reported. A cash
+  amount with more than six decimals is rounded half-even to six, as OFX
+  amounts are (a share quantity is read exactly or not at all). A running
+  balance printed once a day is checked over the rows since the balance
+  before. An empty currency cell is the
   account's currency; another cell that is not a three-letter code makes
   the row unreadable. A running-balance column gives the closing balance and
   a reconciliation check (each balance = previous + amount; mismatches are a
@@ -1641,7 +1882,22 @@ same database transaction.
   last four digits of the cell and each group is matched like an OFX
   statement (`match_account` among the accounts the person may import
   into; the document's or the mapping's account only for a file with one
-  account). An account chosen on re-run takes the group it was chosen for
+  account). A column of account **names** (an aggregator's export telling
+  `Everyday Checking` from `Rewards Card`) takes the account role only
+  under a header that is exactly `Account`, `Account Name` or `Source
+  Account`, with 2 to 20 distinct names of which those standing on two
+  rows or more cover at least 60% of the rows (a payee or category column
+  never splits a file), and a column of account numbers wins when the
+  table has one. Rows are grouped by the case-folded,
+  whitespace-collapsed name; such a statement carries `account_name` and
+  no last four, so each raises its own `unknown_account` item, and the
+  detected account and its proposal are named after it. Digits are never
+  gathered across the words of a name into a last four, and two names
+  ending in the same digits are two accounts, each asked about. The
+  account a person puts a group on is remembered for the document by the
+  group's digest (`_group_key`, `statement_answers`; never the name), so
+  the groups can be answered one after the other.
+  An account chosen on re-run takes the group it was chosen for
   (the review item's `group`, passed on as `apply-mapping`'s `group`), else
   the groups with its own last four digits when it records them, else the
   one group that matches nothing when there is only one: one choice never
@@ -1787,7 +2043,10 @@ below the threshold (`PERFIN_INGEST_CONFIDENCE_THRESHOLD`) is written with
 one `low_confidence_field` item (`low_confidence`: the fields, the parser,
 and per row the transaction id, fields, confidence and page). Confirming them
 is a transaction change (`PATCH /transactions/{id}` or the bulk `confirm`
-action); resolving the item itself is only "dismiss" so far.
+action) or the item's own resolution: `low_confidence_field` corrects the
+rows it names and, with `confirm`, confirms the item's pending rows;
+`import_as_read` answers a brokerage statement held back by its figures
+("Review queue" below). Dismissing remains possible.
 
 **Payee and category of an imported row** (`app/domain/imports/payees.py`,
 `_commit_statement`). A row's description is kept as printed (`raw_payee`).
@@ -1813,8 +2072,13 @@ The review UI is where the user teaches the system. Each item shows the source
 document page with the relevant region highlighted, the proposed values, and
 the alternatives considered. Resolutions feed back:
 
-- Correct an institution guess -> offer to save a fingerprint.
-- Correct a category -> offer to create a rule.
+- A layout nothing recognised -> "Teach PerFin" (offered from every item
+  about a page the person may see) saves a fingerprint with "Remember this
+  layout". The review flow does not offer this by itself after an
+  institution is corrected.
+- A row the person recognises -> "Create a rule from this" on a
+  low-confidence item drafts a rule from the row. Correcting a category
+  does not offer one by itself.
 - Confirm a duplicate -> both hashes recorded as equivalent.
 - Assign an owner/account for a drop-folder file -> remember the subfolder
   mapping.
@@ -1897,10 +2161,13 @@ Phases 3-4 implementation (`app/domain/review/assist.py`, `actions.py`,
   keeps the row's sign), "Confirm as read" / "Save corrections and
   confirm", "Create a rule from this" (draft, then "Save this rule"),
   "Remember this layout" for a new institution (optionally re-reading files
-  already received), the member/account choice with "remember this
+  already received; the `new_institution` kind is resolved and shown but
+  no code path raises it today, so in practice a layout is remembered
+  through "Teach PerFin"), the member/account choice with "remember this
   folder" for an unknown owner, "Show receipt" beside ranked receipt
   suggestions, and "Map columns" with the page above the mapping form for a
-  PDF or image table. The document library (`/documents/library`: kind,
+  PDF or image table (only one with a dated row: "Nothing to import"
+  above). The document library (`/documents/library`: kind,
   status, tax year and full-text search with matched words marked) and
   document detail (`/documents/{id}`, page viewer, download only when the
   server says `downloadable`) use the same viewer. A low-confidence OCR row
@@ -1970,7 +2237,10 @@ the document page.
   document (`unparsed`) or an unknown account once the taught rows are
   imported; a new institution once it is set or the layout remembered; a
   low-confidence item once a fact it names changed (the period for a
-  period item, the balances for a balance item). A fact that does not
+  period item, the balances for a balance item). An `ocr_failed` item
+  (scanned pages OCR never read) is the exception to the imported rows: it
+  stays open until the person answers it or the document is read again
+  through the pipeline. A fact that does not
   answer the item (an institution or an account set without rows imported
   for an unknown account, anything for a possible duplicate), a note or an
   ignored line leaves it open (warning `item_left_open`).
@@ -1985,7 +2255,7 @@ the document page.
   and a dated line without an amount is skipped with its box recorded. The
   anchors give the period (yearless row dates take its year), the account's
   last four digits and the balances, and the statement is reconciled and
-  scored like a parser's (parser `layout_template/1`), so a template that
+  scored like a parser's (parser `layout_template/2`), so a template that
   misreads a statement is held back the same way. A template without
   tables only fills a parser's statement (the period always; the account
   and balances when there is one statement). Then the normal import runs.
@@ -2297,7 +2567,9 @@ upload, `scan` when ClamAV is configured, `extract` through the real sandbox,
 `classify`, `parse` (per bank statement and per brokerage account its last
 four digits, printed name, type, subtype and pages; the bank statements'
 period and row counts; the brokerage accounts' period, positions and
-activity counts, figures and reconciliation), and with `--household` a `match` read in a
+activity counts, figures and reconciliation; per table the suggested
+mapping, with the day/month order settled against today's date as an
+import settles it against the day of the upload), and with `--household` a `match` read in a
 rolled-back `READ ONLY` transaction). Nothing is written to the blob store or the
 database; previews and child documents are summarised, not printed.
 

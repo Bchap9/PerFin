@@ -54,13 +54,15 @@ from app.domain.documents.models import (
     Document,
     DocumentKind,
     DocumentStatus,
+    IngestJob,
+    IngestStage,
     ReviewItem,
     ReviewItemState,
     ReviewKind,
 )
 from app.domain.documents.schemas import INGEST_JOB_TYPE
+from app.domain.imports import proposals, wording
 from app.domain.imports import summary as import_summary
-from app.domain.imports import wording
 from app.domain.imports.models import StatementRecord
 from app.domain.imports.schemas import APPLY_MAPPING_JOB_TYPE, ApplyMapping
 from app.domain.imports.service import request_apply
@@ -194,6 +196,14 @@ class Env:
 
     def snapshots(self, account: Account) -> list[BalanceSnapshot]:
         return self.query(select(BalanceSnapshot).where(BalanceSnapshot.account_id == account.id))
+
+    def parse_logs(self, document_id: uuid.UUID) -> list[dict[str, Any]]:
+        jobs: list[IngestJob] = self.query(
+            select(IngestJob)
+            .where(IngestJob.document_id == document_id, IngestJob.stage == IngestStage.PARSE)
+            .order_by(IngestJob.started_at, IngestJob.id)
+        )
+        return [j.log or {} for j in jobs]
 
     def brokerage(self, stmt: synth.SynthBrokerage, **kwargs: Any) -> Account:
         institution = self.ledger.institution(self.household_id, name=synth.INSTITUTION)
@@ -505,6 +515,131 @@ def test_tampered_ofx_positions_are_held(env: Env) -> None:
     assert env.document(document_id).status is DocumentStatus.NEEDS_REVIEW
     assert "investment_reconciliation_failed" in env.reasons(document_id)
     assert env.txns(account) == []
+
+
+def test_same_security_listed_twice_imports(env: Env) -> None:
+    """One fund printed as two positions on the same day, at two prices.
+
+    A plan lists a position per contribution source. The holding is both
+    positions' units; the day has one price, the first one printed, and the
+    run says that it left the other out.
+    """
+    january, _ = synth.brokerage_series(seed=76)
+    twice = synth.listed_twice(january, "PBXA")
+    first, second = (p for p in twice.positions if p.symbol == "PBXA")
+    assert first.price != second.price
+    assert first.quantity + second.quantity == dict(_positions(january))["PBXA"]
+    account = env.brokerage(twice)
+
+    document_id = env.ingest(synth.ofx_investment(twice), "statement.ofx")
+
+    assert env.document(document_id).status is DocumentStatus.PROCESSED, env.open_reviews(
+        document_id
+    )
+    stored = ExtractResult.model_validate(env.document(document_id).extraction)
+    assert len(stored.investments[0].positions) == len(january.positions) + 1
+    assert env.holdings(account) == _positions(january)
+    assert env.activity(account) == _expected(january)
+    expected_prices = sorted(
+        (p.symbol, first.price if p.symbol == "PBXA" else p.price) for p in january.positions
+    )
+
+    def prices() -> list[tuple[str | None, Decimal]]:
+        by_id = env.securities()
+        rows: list[Price] = env.query(select(Price).where(Price.price_date == twice.end))
+        assert all(p.source == "statement" for p in rows)
+        return sorted((by_id[p.security_id].symbol, p.close) for p in rows)
+
+    assert prices() == expected_prices
+    assert env.parse_logs(document_id)[-1]["investments"]["warnings"] == ["duplicate_price_ignored"]
+    # The account's value counts both positions, each at its own price.
+    assert [(s.as_of_date, s.balance) for s in env.snapshots(account)] == [
+        (twice.end, twice.total_value)
+    ]
+
+    # Read again, the first price printed is still the day's price.
+    _rerun(env, document_id)
+    assert env.document(document_id).status is DocumentStatus.PROCESSED
+    assert prices() == expected_prices
+    assert env.holdings(account) == _positions(january)
+
+
+def test_same_security_listed_twice_at_one_price_is_no_warning(env: Env) -> None:
+    january, _ = synth.brokerage_series(seed=77)
+    twice = synth.listed_twice(january, "PBXA")
+    first = next(p for p in twice.positions if p.symbol == "PBXA")
+    twice = replace(
+        twice,
+        positions=tuple(
+            replace(p, price=first.price) if p.symbol == "PBXA" else p for p in twice.positions
+        ),
+    )
+    account = env.brokerage(twice)
+
+    document_id = env.ingest(synth.ofx_investment(twice), "statement.ofx")
+
+    assert env.document(document_id).status is DocumentStatus.PROCESSED, env.open_reviews(
+        document_id
+    )
+    assert env.holdings(account) == _positions(january)
+    by_id = env.securities()
+    rows: list[Price] = env.query(select(Price).where(Price.price_date == twice.end))
+    assert sorted((by_id[p.security_id].symbol, p.close) for p in rows) == sorted(
+        (p.symbol, p.price) for p in january.positions
+    )
+    assert env.parse_logs(document_id)[-1]["investments"]["warnings"] == []
+
+
+@pytest.mark.parametrize("aggregate", synth.PLAN_AGGREGATES)
+def test_inv401k_account_is_typed_retirement(env: Env, aggregate: str) -> None:
+    """An ``INVSTMTRS`` that carries a 401(k) aggregate is a retirement plan's."""
+    january, _ = synth.brokerage_series(seed=78)
+    document_id = env.ingest(synth.ofx_investment(january, plan=(aggregate,)), "plan.ofx")
+
+    stored = ExtractResult.model_validate(env.document(document_id).extraction)
+    (statement,) = stored.investments
+    assert (statement.account.account_type, statement.account.subtype) == ("retirement", "401k")
+    (item,) = env.open_reviews(document_id)
+    assert (item.payload["reason"], item.payload["account_type"]) == (
+        "account_not_found",
+        "retirement",
+    )
+    with env.factories.transaction() as db:
+        apply_rls_context(db, env.principal())
+        (found,) = proposals.detect_accounts(db, env.principal(), document_id).accounts
+    assert found.proposal is not None
+    assert (found.proposal.type, found.proposal.subtype) == (AccountType.RETIREMENT, "401k")
+
+    # The plan's account, once it exists, takes the statement.
+    account = env.brokerage(january, type=AccountType.RETIREMENT)
+    _rerun(env, document_id)
+    assert env.document(document_id).status is DocumentStatus.PROCESSED, env.open_reviews(
+        document_id
+    )
+    assert env.document(document_id).account_id == account.id
+    assert env.holdings(account) == _positions(january)
+
+
+def test_ofx_activity_of_an_unread_kind_waits_as_lines_skipped(env: Env) -> None:
+    """Margin interest is a kind the reader has no reading for: counted, and said."""
+    january, _ = synth.brokerage_series(seed=74)
+    account = env.brokerage(january)
+    interest = (
+        b"<MARGININTEREST><INVTRAN><FITID>SYN-MARGIN-1</FITID>"
+        b"<DTTRADE>" + january.end.strftime("%Y%m%d").encode("ascii") + b"</DTTRADE></INVTRAN>"
+        b"<TOTAL>-3.10</TOTAL><SUBACCTFUND>CASH</SUBACCTFUND></MARGININTEREST>"
+    )
+    data = _ofx_xml(january)
+    assert data.count(b"</INVTRANLIST>") == 1
+    document_id = env.ingest(data.replace(b"</INVTRANLIST>", interest + b"</INVTRANLIST>"), "x.ofx")
+
+    assert env.document(document_id).status is DocumentStatus.NEEDS_REVIEW
+    (item,) = env.open_reviews(document_id)
+    assert item.kind is ReviewKind.LOW_CONFIDENCE_FIELD
+    assert item.payload == {"reason": "lines_skipped", "count": 1, "source": "extraction"}
+    # Everything the reader did read is imported as before.
+    assert env.activity(account) == _expected(january)
+    assert env.holdings(account) == _positions(january)
 
 
 def test_unknown_account_is_chosen_later_from_the_stored_extraction(env: Env) -> None:

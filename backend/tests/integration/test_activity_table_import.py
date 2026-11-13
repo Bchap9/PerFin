@@ -584,17 +584,22 @@ def test_a_table_that_is_not_brokerage_activity_goes_through_the_mapping_path(en
     rows = activity_rows(67, synthetic)
     accounts = env.accounts(synthetic)
     outcome, items = _import(env, activity_csv_bytes(rows, header=LEDGER_HEADER))
-    assert outcome.status is DocumentStatus.PROCESSED, [i.payload for i in items]
     assert "brokerage_table" not in outcome.summary
     assert "investments" not in outcome.summary
-    assert outcome.summary["mapping_suggested"] is True
-    for account, mine in zip(accounts, synthetic, strict=True):
+    # Without an action column it is not brokerage activity; with a symbol, a
+    # quantity and a price it is not a cash ledger on a guess either: the
+    # mapping path asks a person, and nothing is imported as cash.
+    assert outcome.status is DocumentStatus.NEEDS_REVIEW
+    assert outcome.summary["mapping_suggested"] is False
+    (item,) = items
+    assert item.payload["reason"] == "mapping_required"
+    assert item.payload["auto_import"] == "not_confident"
+    assert item.payload["suggested_spec"]["mode"] == "cash"
+    assert "investment_columns" in item.payload["suggestion"]["doubts"]
+    for account in accounts:
         assert account is not None
         assert env.activity(account) == []
-        cash = sorted(
-            (r.run_date, r.amount) for r in rows if r.account == mine and r.amount is not None
-        )
-        assert [(d, a) for d, a, _ in env.cash(account)] == [(d, a.quantize(Q)) for d, a in cash]
+        assert env.cash(account) == []
     # The same rows with the brokerage header are investment activity.
     assert HEADER != LEDGER_HEADER
 

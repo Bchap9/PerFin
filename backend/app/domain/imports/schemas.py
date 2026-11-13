@@ -11,12 +11,17 @@ way of reading the amount is used:
   ``indicator_column`` the column holds an unsigned amount and the row is an
   outflow when the indicator cell is one of ``outflow_values`` (``DR``,
   ``Debit``; compared case-insensitively), an inflow otherwise.
-* ``debit_column`` and/or ``credit_column``: unsigned outflow and inflow
-  columns; the amount is ``credit - debit`` (signs in the cells are ignored).
+* ``debit_column`` and/or ``credit_column``: outflow and inflow columns; the
+  amount is ``credit - debit`` with each cell's printed sign, so a negative
+  debit is money in and a negative credit money out (a reversal, or a lone
+  ``Inflow`` column of negative cells). A column that prints every amount
+  negative (``-25.00`` under ``Amount Debit``) is read by magnitude; a lone
+  credit column never is.
 
 ``decimal_separator`` is ``.`` (``1,234.56``) or ``,`` (``1.234,56``);
 currency symbols, spaces and apostrophes are ignored, ``(12.34)`` and
-``12.34-`` are negative. ``date_format`` is one of :data:`DATE_FORMATS`
+``12.34-`` are negative, and more than six decimals are rounded half-even
+to six. ``date_format`` is one of :data:`DATE_FORMATS`
 (month names are English three-letter abbreviations, whatever the locale).
 ``currency`` fixes the currency of every row (default: the account's);
 ``currency_column`` reads it per row (an empty cell means the account's
@@ -31,7 +36,12 @@ an Individual, a Roth IRA and an HSA account). The rows are grouped by that
 column and each group is imported as its own statement, matched to an
 account by the **last four digits** of the cell like an OFX statement
 (``app.ingestion.match.accounts``); the cell text itself is never stored or
-logged. Mappings saved before the field existed have no ``account_column``
+logged. A column of account names (an aggregator's ``Account`` column of
+``Everyday Checking`` / ``Rewards Card``) groups the same way, by the
+folded name: such a statement has no digits to match, so each one asks for
+its account, and the name is read again from the stored table to tell the
+questions apart (never written to a review item or the audit trail).
+Mappings saved before the field existed have no ``account_column``
 and read exactly as before.
 
 ``mode`` is ``cash`` (the default; everything above) or ``activity``: the
@@ -98,6 +108,8 @@ DATE_FORMATS: Final[dict[str, str]] = {
     "DD MMM YYYY": "31 Jan 2026",
     "DD-MMM-YYYY": "31-Jan-2026",
     "MMM DD, YYYY": "Jan 31, 2026",
+    "DDMMMYYYY": "31Jan2026",
+    "DD-MMM-YY": "31-Jan-26",
 }
 
 DateFormat = Literal[
@@ -116,6 +128,8 @@ DateFormat = Literal[
     "DD MMM YYYY",
     "DD-MMM-YYYY",
     "MMM DD, YYYY",
+    "DDMMMYYYY",
+    "DD-MMM-YY",
 ]
 
 _FINGERPRINT = re.compile(r"^[0-9a-f]{64}$")
@@ -482,7 +496,12 @@ class PreviewStatement(_Output):
 
 
 class SuggestionRole(_Output):
-    """Why the suggestion gave a column a role (no cell text)."""
+    """Why the suggestion gave a column a role (no cell text).
+
+    The roles of a cash ledger, then those only a brokerage activity
+    suggestion gives (``app.ingestion.parsers.brokerage_table``; ``other``:
+    a column the reader knows and does not read).
+    """
 
     role: Literal[
         "date",
@@ -495,10 +514,22 @@ class SuggestionRole(_Output):
         "account",
         "payee",
         "memo",
+        "settle",
+        "action",
+        "symbol",
+        "description",
+        "quantity",
+        "price",
+        "commission",
+        "fees",
+        "account_name",
+        "other",
     ]
     column: int
-    #: How the header named the role.
-    match: Literal["exact", "word", "substring"]
+    #: How the header named the role (``content``: it did not, the column's
+    #: cells are direction words, or the table has no header row and every
+    #: column was read from the shape of its cells).
+    match: Literal["exact", "word", "substring", "content"]
     #: Share of the column's non-empty sample cells that fit the role (0-1).
     fit: float
 
@@ -511,11 +542,21 @@ class MappingSuggestionOut(_Output):
     ``doubts`` are codes: ``header_not_exact``, ``rows_unreadable``,
     ``date_order_guessed``, ``no_rows``, ``indicator_values_unknown`` (an
     indicator cell that is no direction word, or a signed amount beside
-    it). ``activity_type_unknown`` is a brokerage activity suggestion with
-    actions PerFin does not type. ``sign_evidence`` is ``activity`` for an
-    activity-mode suggestion (amounts keep their own signs), else
-    ``debit_credit``, ``indicator``, ``balance`` or null (a signed amount
-    column read as "positive is money in" on trust).
+    it), ``sign_unverified`` (nothing proves the sign and the table looks
+    like a card export, or its amounts say nothing: none is money out, or
+    more rows are money in than money out), ``indicator_contradicts_sign``
+    (direction words and the amounts' signs disagree) and
+    ``investment_columns`` (a security, a quantity and a price column:
+    trades, not a cash ledger) and ``no_header`` (the table has no header
+    row, ``spec.has_header`` is false, and its columns were read from the
+    shapes of their cells with no running balance to prove them).
+    ``activity_type_unknown`` is a brokerage
+    activity suggestion with actions PerFin does not type.
+    ``sign_evidence`` is ``activity`` for an activity-mode suggestion
+    (amounts keep their own signs), else ``debit_credit``, ``indicator``,
+    ``balance``, ``indicator_correlation`` (direction or transaction-type
+    words that go with the signs of the amounts) or null (signed amounts
+    read as "positive is money in" on trust).
     """
 
     spec: MappingSpec
@@ -525,7 +566,9 @@ class MappingSuggestionOut(_Output):
     failed_rows: int
     footer_rows: int
     accounts: int
-    sign_evidence: Literal["debit_credit", "indicator", "balance", "activity"] | None
+    sign_evidence: (
+        Literal["debit_credit", "indicator", "balance", "indicator_correlation", "activity"] | None
+    )
     doubts: list[str]
     roles: list[SuggestionRole]
 
@@ -542,7 +585,8 @@ class ImportPreview(_Output):
     warnings: list[str]
     #: The saved mapping whose fingerprint matches the table (visible to the caller).
     matched_mapping_id: uuid.UUID | None
-    #: A guess from the header names and cell shapes, for the mapping editor.
+    #: A guess from the header names and cell shapes (from the shapes
+    #: alone for a table without a header row), for the mapping editor.
     suggested_spec: MappingSpec | None
     #: The same guess with its confidence and per-role reasons.
     suggestion: MappingSuggestionOut | None
@@ -560,7 +604,10 @@ class AccountProposal(_Output):
     """A new account ready to create for one of a document's accounts (editable)."""
 
     name: str
-    type: AccountType
+    #: Null for a table whose sign was taken on trust and whose header names
+    #: no card: nothing says what kind of account it is, so a person chooses
+    #: (a card export read as a checking account would turn purchases into income).
+    type: AccountType | None
     #: What kind of account within ``type`` the file's name for it says (``roth_ira``).
     subtype: str | None = None
     currency: str | None

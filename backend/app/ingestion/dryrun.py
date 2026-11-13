@@ -232,8 +232,11 @@ class DryRun:
             return parsed
         if result.tables:
             tables = []
+            # The file "arrives" now: as in an import, a day/month order that
+            # would date rows after today is ruled out.
+            today = clock.utcnow().date()
             for table in result.tables:
-                suggestion = suggest_mapping(table)
+                suggestion = suggest_mapping(table, today=today)
                 spec = suggestion.spec if suggestion is not None else None
                 entry: dict[str, Any] = {
                     "rows": len(table.rows),
@@ -264,7 +267,7 @@ class DryRun:
                     ],
                 }
             positions = (
-                read_positions_table(result.tables[0], received_on=clock.utcnow().date())
+                read_positions_table(result.tables[0], received_on=today)
                 if kind in TABLE_KINDS
                 else None
             )

@@ -117,6 +117,136 @@ describe("document account choices", () => {
     ]);
   });
 
+  it("leaves the type for the person when the file does not prove one", () => {
+    const untyped = detected({
+      target: "statement",
+      name: "Synthetic export",
+      proposal: {
+        name: "Synthetic export",
+        type: null,
+        currency: "USD",
+        institution_name: null,
+        number_last4: null,
+        opening_balance: null,
+        opening_balance_date: null,
+        suggested_by_model: false,
+      },
+    });
+    const row = initialChoice(untyped);
+    expect(row.mode).toBe("create");
+    expect(row.type).toBe("");
+    expect(buildChoices([untyped], [row])).toEqual({
+      items: [],
+      problems: ["Choose the account type for Synthetic export."],
+    });
+    const chosen = buildChoices([untyped], [{ ...row, type: "credit_card" }]);
+    expect(chosen.problems).toEqual([]);
+    expect(chosen.items[0]?.create).toMatchObject({ type: "credit_card" });
+  });
+
+  it("creates nothing until the person has chosen the type of an untyped account", async () => {
+    const api = mockApi({
+      "GET /api/v1/auth/session": authedSession({ role: "member" }),
+      ...lookupHandlers([account("a-1", "Everyday")]),
+      "GET /api/v1/review": () =>
+        json({
+          items: [
+            {
+              id: "r-1",
+              kind: "unknown_account",
+              state: "open",
+              document_id: "d-1",
+              document: null,
+              reason: "account_not_found",
+              payload: { reason: "account_not_found", statement: 0 },
+              resolution: null,
+              resolved_at: null,
+              resolved_by: null,
+              created_at: NOW,
+              next_step: "choose_account",
+              can_resolve: true,
+            },
+          ],
+          next_cursor: null,
+        }),
+      "GET /api/v1/documents/:id/accounts": () =>
+        json({
+          document_id: "d-1",
+          accounts: [
+            detected({
+              target: "statement",
+              name: "Synthetic export",
+              institution_name: null,
+              account_type: null,
+              proposal: {
+                name: "Synthetic export",
+                type: null,
+                currency: "USD",
+                institution_name: null,
+                number_last4: null,
+                opening_balance: null,
+                opening_balance_date: null,
+                suggested_by_model: false,
+              },
+            }),
+          ],
+        }),
+      "POST /api/v1/documents/:id/accounts/apply": () =>
+        json({ document_id: "d-1", created: ["a-9"], job_id: "j-1" }, 202),
+    });
+    renderApp("/review");
+    const user = userEvent.setup();
+    await user.click(
+      await screen.findByRole("button", {
+        name: "Set up accounts from this file",
+      }),
+    );
+    const dialog = await screen.findByRole("dialog");
+    const type = await within(dialog).findByLabelText(/^Type/);
+    expect(type).toHaveValue("");
+    expect(type).toBeRequired();
+    expect(
+      within(dialog).getByText(
+        "PerFin could not tell from this file whether it is a bank account or a card, so choose the type.",
+      ),
+    ).toBeInTheDocument();
+    const create = within(dialog).getByRole("button", {
+      name: "Create accounts and import",
+    });
+    await user.click(create);
+    expect(
+      await within(dialog).findByText(
+        "Choose the account type for Synthetic export.",
+      ),
+    ).toBeInTheDocument();
+    expect(
+      api.callsTo("POST", "/api/v1/documents/:id/accounts/apply"),
+    ).toHaveLength(0);
+    await user.selectOptions(type, "credit_card");
+    await user.click(create);
+    await waitFor(() => {
+      expect(
+        api.callsTo("POST", "/api/v1/documents/:id/accounts/apply"),
+      ).toHaveLength(1);
+    });
+    expect(
+      api.callsTo("POST", "/api/v1/documents/:id/accounts/apply")[0]?.body,
+    ).toEqual({
+      items: [
+        {
+          target: "statement",
+          index: 0,
+          create: {
+            type: "credit_card",
+            name: "Synthetic export",
+            include_in_net_worth: true,
+            currency: "USD",
+          },
+        },
+      ],
+    });
+  });
+
   it("creates the accounts from the review queue and imports the file", async () => {
     const api = mockApi({
       "GET /api/v1/auth/session": authedSession({ role: "member" }),

@@ -59,6 +59,7 @@ from app.ingestion.sandbox.protocol import ExtractResult, Word
 from app.workers.handlers import ingest
 from tests.fixtures import synth_pdf_statements as pdf_synth
 from tests.fixtures import synth_taught_layout as synth
+from tests.fixtures.documents import make_review_item
 from tests.fixtures.factories import Factories, UserRecord
 from tests.fixtures.imports import run_jobs
 from tests.fixtures.ledger import LedgerFactories
@@ -521,6 +522,34 @@ def test_a_fact_that_does_not_answer_the_item_leaves_it_open(env: Env) -> None:
     assert env.document(document_id).status is DocumentStatus.NEEDS_REVIEW
     rows = env.query(select(Transaction).where(Transaction.source_document_id == document_id))
     assert rows == []
+
+
+def test_rows_imported_from_a_taught_table_do_not_answer_ocr_failed(env: Env) -> None:
+    """The scan OCR never read is not read by importing the rows of the text pages."""
+    account = env.ledger.account(env.household_id, number_last4="2468", currency="USD")
+    first = synth.statement_one()
+    document_id = env.ingest(synth.pdf(first))
+    document = env.document(document_id)
+    with env.factories.transaction() as db:
+        unread = make_review_item(db, document, ReviewKind.UNPARSED, {"reason": "ocr_failed"})
+
+    out = env.teach(
+        document_id,
+        {**_labels(document, first), "account_id": str(account.id), "item_id": str(unread.id)},
+    )
+    assert out.rerun == "import"
+    assert out.item is not None
+    assert out.item.state is ReviewItemState.OPEN
+    assert "item_left_open" in out.warnings
+    env.run(APPLY_MAPPING_JOB_TYPE)
+
+    # The taught rows are in the ledger; the document still waits for the
+    # person's answer about the pages OCR could not read.
+    assert _rows(env, account, document_id) == _expected(first)
+    assert [(i.kind, i.payload.get("reason")) for i in env.open_items(document_id)] == [
+        (ReviewKind.UNPARSED, "ocr_failed")
+    ]
+    assert env.document(document_id).status is DocumentStatus.NEEDS_REVIEW
 
 
 def test_the_same_layout_taught_again_keeps_what_was_taught(env: Env) -> None:

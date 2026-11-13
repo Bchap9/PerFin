@@ -1,10 +1,12 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-import { screen, waitFor } from "@testing-library/react";
+import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 
 import { authedSession, json, mockApi, renderApp } from "../auth/testing";
 import { account, lookupHandlers } from "../transactions/fixtures";
+import { SuggestionNote } from "./MappingEditor";
 import {
+  DATE_FORMATS,
   buildSpec,
   hasAccountColumn,
   rolesFor,
@@ -299,6 +301,108 @@ const PREVIEW = {
     },
   ],
 };
+
+describe("date formats", () => {
+  it.each(["DDMMMYYYY", "DD-MMM-YY"] as const)(
+    "offers %s, which the server accepts",
+    (format) => {
+      expect(DATE_FORMATS).toContain(format);
+    },
+  );
+
+  it("offers each format once", () => {
+    expect(new Set(DATE_FORMATS).size).toBe(DATE_FORMATS.length);
+    expect(DATE_FORMATS).toHaveLength(17);
+  });
+});
+
+describe("suggestion note", () => {
+  const spec = {
+    version: 1 as const,
+    mode: "cash" as const,
+    date_column: 0,
+    date_format: "MM/DD/YYYY" as const,
+    has_header: true,
+    skip_rows: 0,
+    decimal_separator: "." as const,
+    sign: "inflow_positive" as const,
+    outflow_values: [],
+    amount_column: 2,
+    payee_column: 1,
+  };
+  const suggestion = {
+    spec,
+    score: 0.5,
+    confident: false,
+    parsed_rows: 2,
+    failed_rows: 0,
+    footer_rows: 0,
+    accounts: 1,
+    sign_evidence: "balance" as const,
+    doubts: [] as string[],
+    roles: [],
+  };
+
+  it.each([
+    [
+      "sign_unverified",
+      "Nothing in the file proves whether a positive amount is money in or money out. Find a row you recognise and check the sign.",
+    ],
+    [
+      "indicator_contradicts_sign",
+      "The debit/credit words and the plus and minus signs of the amounts do not agree on every row.",
+    ],
+    [
+      "indicator_values_unknown",
+      "The debit/credit column has a value PerFin does not know, or the amounts beside it already carry a sign.",
+    ],
+    [
+      "investment_columns",
+      "The file has a security, a quantity and a price column, so its rows look like trades, not money in and out.",
+    ],
+    [
+      "no_header",
+      "The file has no header row, so the columns were worked out from the values alone.",
+    ],
+  ])("says what the doubt %s means", (doubt, sentence) => {
+    render(<SuggestionNote suggestion={{ ...suggestion, doubts: [doubt] }} />);
+    const note = screen.getByRole("status", { name: "Suggested mapping" });
+    expect(note).toHaveTextContent(sentence);
+    expect(note).not.toHaveTextContent(doubt);
+  });
+
+  it("does not say the sign twice", () => {
+    render(
+      <SuggestionNote
+        suggestion={{
+          ...suggestion,
+          sign_evidence: null,
+          doubts: ["sign_unverified"],
+        }}
+      />,
+    );
+    const note = screen.getByRole("status", { name: "Suggested mapping" });
+    expect(note).toHaveTextContent("Nothing in the file proves");
+    expect(note).not.toHaveTextContent("Check the sign:");
+  });
+
+  it("does not credit header names a file without a header does not have", () => {
+    render(
+      <SuggestionNote
+        suggestion={{
+          ...suggestion,
+          spec: { ...spec, has_header: false },
+          doubts: ["no_header"],
+        }}
+      />,
+    );
+    const note = screen.getByRole("status", { name: "Suggested mapping" });
+    expect(note).toHaveTextContent(
+      "PerFin guessed the columns from the values in them; check them.",
+    );
+    expect(note).not.toHaveTextContent("header names");
+  });
+});
 
 describe("mapping editor", () => {
   it("saves the mapping built from the chosen columns, then applies it", async () => {

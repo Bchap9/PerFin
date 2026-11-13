@@ -16,6 +16,7 @@ import { errorMessage } from "../../lib/api/client";
 import { formatDateTime } from "../../lib/dates";
 import { queryRoots } from "../../lib/queryKeys";
 import { accountLabel, useAccounts, useCanWrite } from "../accounts/api";
+import { listReviewItems, reviewKeys, type ReviewItem } from "../review/api";
 import {
   STATUS_LABELS,
   importKeys,
@@ -56,6 +57,23 @@ export function readAsPositions(row: {
   return row.parser_version?.startsWith("brokerage_positions_table/") ?? false;
 }
 
+/**
+ * The documents the column-mapping editor can do something for: those with an
+ * open review item the server answers there (`next_step`). A file with no rows
+ * or one read as statements has nothing to map.
+ */
+export function mappableDocuments(
+  items: readonly Pick<ReviewItem, "document_id" | "next_step">[],
+): ReadonlySet<string> {
+  const out = new Set<string>();
+  for (const item of items) {
+    if (item.next_step === "column_mapping" && item.document_id !== null) {
+      out.add(item.document_id);
+    }
+  }
+  return out;
+}
+
 export function statusTone(status: DocumentStatus): BadgeTone {
   switch (status) {
     case "processed":
@@ -84,6 +102,15 @@ export function UploadPage() {
     queryKey: importKeys.documents,
     queryFn: () => listRecentDocuments(),
   });
+
+  // What waits and why (the same list as the review queue; refreshed by the
+  // event stream). Until it is known, no file is offered the mapping editor.
+  const review = useQuery({
+    queryKey: reviewKeys.list("open"),
+    queryFn: () => listReviewItems("open"),
+    enabled: canWrite,
+  });
+  const mappable = mappableDocuments(review.data ?? []);
 
   const patchItem = (id: number, change: Partial<UploadItem>): void => {
     setItems((current) =>
@@ -266,20 +293,20 @@ export function UploadPage() {
                 cell: (row) =>
                   row.status === "needs_review" && canWrite ? (
                     <span className="ledger-actions">
-                      {readAsActivity(row) || readAsPositions(row) ? (
-                        <span className="ledger-muted">
-                          {readAsPositions(row)
-                            ? "Read as investment holdings"
-                            : "Read as investment activity"}
-                        </span>
-                      ) : (
+                      {mappable.has(row.id) ? (
                         <Link
                           to="/documents/$documentId/mapping"
                           params={{ documentId: row.id }}
                         >
                           Map columns
                         </Link>
-                      )}
+                      ) : readAsActivity(row) || readAsPositions(row) ? (
+                        <span className="ledger-muted">
+                          {readAsPositions(row)
+                            ? "Read as investment holdings"
+                            : "Read as investment activity"}
+                        </span>
+                      ) : null}
                       <Link to="/review">Review</Link>
                     </span>
                   ) : null,

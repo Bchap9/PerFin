@@ -18,22 +18,29 @@ from pydantic import ValidationError
 
 from app.domain.imports.schemas import MappingSpec, Sign
 from app.ingestion.extract.registry import builtin_extractors
+from app.ingestion.parsers.brokerage_table import read_activity_table, suggest_activity_mapping
 from app.ingestion.parsers.structured import (
     EXACT,
     HEADER_SEARCH_ROWS,
     SUBSTRING,
+    SUGGEST_SAMPLE_ROWS,
     WORD,
+    MappingSuggestion,
     _match_level,
     best_date_format,
     cell_last4,
     from_table,
     from_table_grouped,
     group_last4,
+    parse_cell_amount,
+    parse_cell_date,
     spec_fingerprint,
     suggest_mapping,
     suggest_spec,
 )
 from app.ingestion.sandbox.protocol import ExtractOptions, Table
+from tests.fixtures import synth_csv_layouts as layouts
+from tests.fixtures import synth_sniff_cases as sniff_cases
 from tests.fixtures.synth_activity_csv import (
     COLUMNS,
     HEADER,
@@ -92,7 +99,10 @@ def test_activity_header_maps_the_cash_ledger_columns() -> None:
     assert spec.indicator_column is None  # "Type" holds Cash/Margin
     assert spec.sign is Sign.INFLOW_POSITIVE
     assert spec == MappingSpec.model_validate(SPEC)
-    assert suggestion.confident
+    # A symbol, a quantity and a price: trades, never a confident cash ledger
+    # (the brokerage activity reader takes this header first).
+    assert "investment_columns" in suggestion.doubts
+    assert not suggestion.confident
     assert suggestion.score == 1.0
     assert suggestion.accounts == 2
     assert suggestion.failed_rows == ()
@@ -198,12 +208,16 @@ def test_every_synthetic_layout_is_suggested_exactly_but_the_sign() -> None:
         suggestion = suggest_mapping(table)
         assert suggestion is not None, name
         want = MappingSpec.model_validate(layout.spec)
+        doubts: tuple[str, ...] = ()
         if want.sign is Sign.OUTFLOW_POSITIVE:
-            # Nothing in a purchases-positive file proves its sign.
+            # Nothing in a purchases-positive file proves its sign: the
+            # columns are found, and a person says which way the money went.
             assert suggestion.sign_evidence is None
             want = want.model_copy(update={"sign": Sign.INFLOW_POSITIVE})
+            doubts = ("sign_unverified",)
         assert suggestion.spec == want, name
-        assert suggestion.confident, (name, suggestion.doubts)
+        assert suggestion.doubts == doubts, name
+        assert suggestion.confident is (not doubts), name
         assert suggest_spec(table) == suggestion.spec
 
 
@@ -309,7 +323,7 @@ def test_balance_proves_an_outflow_positive_sign() -> None:
 def test_partial_header_words_are_not_confident() -> None:
     rows = [
         ["Date of booking", "Amount in USD", "Payee"],
-        ["2026-01-14", "1.00", "Blue Owl"],
+        ["2026-01-14", "-1.00", "Blue Owl"],
         ["2026-01-15", "2.00", "Maple"],
     ]
     suggestion = suggest_mapping(_table(rows))
@@ -323,10 +337,10 @@ def test_partial_header_words_are_not_confident() -> None:
 def test_unreadable_rows_before_the_footer_are_not_confident() -> None:
     rows = [
         ["Date", "Amount", "Payee"],
-        ["2026-01-14", "1.00", "Blue Owl"],
+        ["2026-01-14", "-1.00", "Blue Owl"],
         ["2026-01-15", "", "Share transfer"],
         ["2026-01-16", "2.00", "Maple"],
-        ["Total", "3.00", ""],
+        ["Total", "1.00", ""],
     ]
     suggestion = suggest_mapping(_table(rows))
     assert suggestion is not None
@@ -338,7 +352,7 @@ def test_unreadable_rows_before_the_footer_are_not_confident() -> None:
 
 
 def test_a_guessed_day_month_order_is_not_confident() -> None:
-    rows = [["Date", "Amount"], ["01/02/2026", "1.00"], ["03/04/2026", "2.00"]]
+    rows = [["Date", "Amount"], ["01/02/2026", "-1.00"], ["03/04/2026", "2.00"]]
     suggestion = suggest_mapping(_table(rows))
     assert suggestion is not None
     assert suggestion.spec.date_format == "MM/DD/YYYY"  # month first, as before
@@ -424,8 +438,9 @@ def test_grouping_keeps_unnamed_accounts_apart_and_reports_unreadable_rows() -> 
     ]
     assert statements[1].skipped_rows == [5]  # "Joint"'s unreadable row
     assert statements[0].skipped_rows == []
-    # The total row belongs to the empty-account group, which has a readable row.
-    assert statements[2].skipped_rows == [6]
+    # The total row belongs to the empty-account group, which has a readable
+    # row; after the table's last readable row and undated, it is a footer.
+    assert (statements[2].skipped_rows, statements[2].footer_rows) == ([], [6])
     assert statements[2].note_rows == [7]  # notes follow their (empty) account cell
     unreadable = _table([["Date", "Account Number", "Amount"], ["x", "1", "y"]])
     empty = from_table_grouped(unreadable, spec)
@@ -513,7 +528,11 @@ def _typed(cells: list[tuple[str, str]]) -> Table:
 
 
 def test_a_type_column_beside_signed_amounts_is_not_the_sign() -> None:
-    """``Type`` of DEBIT/CREDIT/CHECK next to signed amounts describes the row."""
+    """``Type`` of DEBIT/CREDIT/CHECK next to signed amounts describes the row.
+
+    It is not the indicator of the spec; that its words go with the signs
+    is what proves "positive is money in".
+    """
     table = _typed(
         [
             ("DEBIT", "-12.50"),
@@ -530,7 +549,9 @@ def test_a_type_column_beside_signed_amounts_is_not_the_sign() -> None:
     assert suggestion is not None
     assert suggestion.spec.indicator_column is None
     assert suggestion.spec.outflow_values == []
-    assert suggestion.sign_evidence is None  # a signed column, read on trust
+    assert suggestion.sign_evidence == "indicator_correlation"
+    assert suggestion.spec.sign is Sign.INFLOW_POSITIVE
+    assert suggestion.confident, suggestion.doubts
     assert "indicator" not in {r.role for r in suggestion.reasons}
     (statement,) = from_table_grouped(table, suggestion.spec)
     assert [t.amount for t in statement.transactions][4] == Decimal("-250.00")
@@ -680,3 +701,1419 @@ def test_valuta_is_a_date_or_a_currency_by_its_values() -> None:
     spec = suggest_spec(italian)
     assert spec is not None
     assert (spec.date_column, spec.currency_column) == (0, 3)
+
+
+# ---------------------------------------------------------------------------
+# The sign of a file is proven, or the suggestion is not confident
+# ---------------------------------------------------------------------------
+
+
+def _suggested(table: Table) -> MappingSuggestion:
+    suggestion = suggest_mapping(table)
+    assert suggestion is not None
+    return suggestion
+
+
+def _read(table: Table, spec: MappingSpec) -> list[Decimal]:
+    return [t.amount for s in from_table_grouped(table, spec) for t in s.transactions]
+
+
+def test_card_like_table_without_evidence_is_not_confident() -> None:
+    table = _extracted(layouts.card_positive_purchases())
+    suggestion = _suggested(table)
+    assert suggestion.sign_evidence is None
+    assert suggestion.doubts == ("sign_unverified",)
+    assert not suggestion.confident
+    assert suggestion.summary()["doubts"] == ["sign_unverified"]
+    # Money out on most rows and no card word in the header: taken on trust, as before.
+    trusted = _suggested(_extracted(layouts.checking_signed_no_balance()))
+    assert (trusted.confident, trusted.sign_evidence, trusted.doubts) == (True, None, ())
+
+
+@pytest.mark.parametrize(
+    ("header", "amounts"),
+    [
+        (["Date", "Description", "Amount"], ["12.50", "40.00", "9.99"]),  # every row positive
+        (["Date", "Merchant", "Amount"], ["-12.50", "-40.00", "900.00"]),
+        (["Date", "Description", "Card No.", "Amount"], ["-12.50", "-40.00", "900.00"]),
+        (
+            ["Transaction Date", "Post Date", "Description", "Amount"],
+            ["-12.50", "-40.00", "900.00"],
+        ),
+        (["Date", "Description", "Amount", "Statement Balance"], ["-12.50", "-40.00", "900.00"]),
+        (["Date", "Description", "Name on Card", "Amount"], ["-12.50", "-40.00", "900.00"]),
+        (["Date", "Description", "Amount"], ["0.00", "0.00", "0.00"]),  # nothing moved
+        (["Date", "Merchant", "Amount"], ["-12.50", "-40.00", "-9.99"]),
+    ],
+    ids=[
+        "all-positive",
+        "merchant",
+        "card-no",
+        "post-date",
+        "statement-balance",
+        "name-on-card",
+        "all-zero",
+        "all-negative-card",
+    ],
+)
+def test_positive_tables_and_card_headers_wait_for_a_person(
+    header: list[str], amounts: list[str]
+) -> None:
+    rows = [header]
+    for index, amount in enumerate(amounts):
+        row = [f"2026-01-{index + 14}", f"SYNTHETIC PAYEE {index}", amount]
+        if len(header) == 4 and header[1] == "Post Date":
+            row = [f"2026-01-{index + 13}", f"2026-01-{index + 14}", row[1], amount]
+        elif len(header) == 4 and header[3] == "Amount":
+            row = [row[0], row[1], "CARD ENDING IN XXXX", amount]
+        elif len(header) == 4:
+            row = [*row, ""]
+        rows.append(row)
+    suggestion = _suggested(_table(rows))
+    assert suggestion.sign_evidence is None
+    assert "sign_unverified" in suggestion.doubts
+    assert not suggestion.confident
+
+
+def test_a_table_of_money_out_alone_is_read_as_spending() -> None:
+    """Every amount negative, no card word: no export prints money in that way."""
+    table = _extracted(layouts.checking_only_spending())
+    suggestion = _suggested(table)
+    # Still on trust: a mapping saved from it never writes into a liability account.
+    assert (suggestion.confident, suggestion.sign_evidence, suggestion.doubts) == (True, None, ())
+    assert suggestion.spec.sign is Sign.INFLOW_POSITIVE
+    assert all(amount < 0 for amount in _read(table, suggestion.spec))
+    # One row is as plain as five.
+    one = _suggested(_table([["Date", "Description", "Amount"], ["2026-10-02", "X", "-58.12"]]))
+    assert one.doubts == ()
+    # Under a header that names a card the same rows wait.
+    card = _suggested(
+        _extracted(
+            layouts.checking_only_spending(("Date", "Description", "Name on Card", "Amount"))
+        )
+    )
+    assert (card.sign_evidence, card.doubts) == (None, ("sign_unverified",))
+
+
+def test_words_that_go_with_the_signs_stand_whatever_the_balance_looks_like() -> None:
+    """Mostly deposits and a balance that grows: the ``Credit``/``Debit`` words settle it."""
+    table = _extracted(layouts.savings_with_type_words_and_balance())
+    suggestion = _suggested(table)
+    assert suggestion.confident, suggestion.doubts
+    assert suggestion.sign_evidence == "balance"
+    assert suggestion.spec.sign is Sign.INFLOW_POSITIVE
+    amounts = _read(table, suggestion.spec)
+    assert (amounts[0], amounts[2]) == (Decimal("300.00"), Decimal("-220.00"))
+    # The words prove the sign under a card header without a balance; with one too.
+    card = _suggested(_extracted(layouts.savings_with_type_words_and_balance(card=True)))
+    assert card.confident, card.doubts
+    # Without the words the balance alone is the shape of what is owed on a card.
+    rows = [[c for i, c in enumerate(row) if i != 2] for row in table.rows]
+    bare = _suggested(_table(rows))
+    assert (bare.sign_evidence, bare.doubts) == ("balance", ("sign_unverified",))
+
+
+def test_type_words_prove_purchases_positive() -> None:
+    table = _extracted(layouts.card_with_type_column())
+    suggestion = _suggested(table)
+    assert suggestion.confident, suggestion.doubts
+    assert suggestion.spec.sign is Sign.OUTFLOW_POSITIVE
+    assert suggestion.sign_evidence == "indicator_correlation"
+    # The words prove the sign; the amounts keep signing themselves.
+    assert suggestion.spec.indicator_column is None
+    amounts = _read(table, suggestion.spec)
+    assert amounts[0] == Decimal("-54.18")  # a purchase is money out
+    assert amounts[4] == Decimal("350.00")  # the payment is money in
+
+
+def test_direction_words_beside_signed_amounts_are_evidence() -> None:
+    table = _extracted(layouts.aggregator_debit_positive())
+    suggestion = _suggested(table)
+    assert suggestion.confident, suggestion.doubts
+    assert suggestion.spec.sign is Sign.OUTFLOW_POSITIVE
+    assert suggestion.sign_evidence == "indicator_correlation"
+    amounts = _read(table, suggestion.spec)
+    assert amounts[0] == Decimal("-1210.00")
+    assert amounts[5] == Decimal("2840.00")
+
+
+def test_direction_words_need_four_rows_and_both_directions() -> None:
+    few = _typed([("DEBIT", "12.50"), ("DEBIT", "40.00"), ("CREDIT", "-900.00")])
+    assert (_suggested(few).sign_evidence, _suggested(few).spec.sign) == (
+        None,
+        Sign.INFLOW_POSITIVE,
+    )
+    assert "sign_unverified" in _suggested(few).doubts  # more money in than out, unproven
+    one_way = _typed([("DEBIT", "-12.50"), ("DEBIT", "-40.00"), ("DEBIT", "-9.99"), ("DEBIT", "5")])
+    assert _suggested(one_way).sign_evidence is None
+    assert "indicator_contradicts_sign" not in _suggested(one_way).doubts
+
+
+def test_indicator_is_found_by_content() -> None:
+    table = _extracted(layouts.unsigned_with_indicator_header_unknown())
+    suggestion = _suggested(table)
+    assert suggestion.spec.indicator_column == 3
+    assert suggestion.spec.outflow_values == ["Debit"]
+    assert suggestion.sign_evidence == "indicator"
+    assert suggestion.confident, suggestion.doubts
+    by_role = {r.role: r for r in suggestion.reasons}
+    assert (by_role["indicator"].column, by_role["indicator"].match) == (3, "content")
+    amounts = _read(table, suggestion.spec)
+    assert amounts[0] == Decimal("-58.30")  # a debit row
+    assert amounts[3] == Decimal("2840.00")  # the credit row
+
+
+def test_mixed_words_and_signs_are_a_doubt() -> None:
+    rows = [["Date", "Description", "Amount", "Transaction Type"]]
+    debits = 0
+    for day, payee, amount, word in layouts.AGGREGATOR_ROWS:
+        if word == "debit":
+            debits += 1
+            amount = f"-{amount}" if debits % 2 else amount  # half the debit rows negative
+        rows.append([day, payee, amount, word])
+    suggestion = _suggested(_table(rows))
+    assert "indicator_contradicts_sign" in suggestion.doubts
+    assert not suggestion.confident
+    assert suggestion.sign_evidence is None
+
+
+def test_words_that_contradict_a_reconciling_balance_are_a_doubt() -> None:
+    """A card's running balance is what is owed: it adds up with purchases as money in."""
+    rows = [["Date", "Description", "Type", "Amount", "Balance"]]
+    owed = Decimal(0)
+    for index, (kind, amount) in enumerate(
+        [("Purchase", "25.00"), ("Purchase", "40.00"), ("Payment", "-50.00"), ("Purchase", "8.00")]
+    ):
+        owed += Decimal(amount)
+        rows.append([f"2026-01-{index + 14}", f"SYNTHETIC PAYEE {index}", kind, amount, f"{owed}"])
+    suggestion = _suggested(_table(rows))
+    assert "indicator_contradicts_sign" in suggestion.doubts
+    assert not suggestion.confident
+
+
+def test_a_running_balance_proves_nothing_under_a_card_header() -> None:
+    """What is owed grows with each purchase: it reconciles with purchases as money in."""
+    rows = [["Date", "Merchant", "Amount", "Balance"]]
+    owed = Decimal(0)
+    for index, amount in enumerate(["25.00", "40.00", "-50.00", "8.00"]):
+        owed += Decimal(amount)
+        rows.append([f"2026-01-{index + 14}", f"SYNTHETIC PAYEE {index}", amount, f"{owed}"])
+    suggestion = _suggested(_table(rows))
+    assert suggestion.sign_evidence == "balance"
+    assert suggestion.doubts == ("sign_unverified",)
+    # The same figures without a card word in the header: most rows are
+    # money in, the shape of a balance owed, and it is not believed either.
+    rows[0][1] = "Description"
+    plain = _suggested(_table(rows))
+    assert (plain.sign_evidence, plain.doubts) == ("balance", ("sign_unverified",))
+    # Most rows money out under that header: an account's balance, trusted as before.
+    spent = [["Date", "Description", "Amount", "Balance"]]
+    left = Decimal(500)
+    for index, amount in enumerate(["-25.00", "-40.00", "50.00", "-8.00"]):
+        left += Decimal(amount)
+        spent.append([f"2026-01-{index + 14}", f"SYNTHETIC PAYEE {index}", amount, f"{left}"])
+    trusted = _suggested(_table(spent))
+    assert (trusted.confident, trusted.sign_evidence) == (True, "balance")
+
+
+def test_lone_debit_or_credit_column_keeps_its_sign() -> None:
+    table = _extracted(layouts.lone_inflow_column_of_negatives())
+    suggestion = _suggested(table)
+    assert (suggestion.spec.credit_column, suggestion.spec.debit_column) == (2, None)
+    amounts = _read(table, suggestion.spec)
+    assert amounts[:2] == [Decimal("-48.12"), Decimal("-19.80")]
+    assert all(amount < 0 for amount in amounts)
+    # Signed cells under a header that says "money in": nothing proves which is right.
+    assert suggestion.sign_evidence is None
+    assert "sign_unverified" in suggestion.doubts
+    # A lone debit column: a positive cell is money out, a negative one comes back.
+    lone = _table(
+        [
+            ["Date", "Description", "Debit"],
+            ["2026-01-14", "Harbor Lane Grocery", "12.50"],
+            ["2026-01-15", "Refund Harbor Lane Grocery", "-12.50"],
+            ["2026-01-16", "Tin Roof Diner", "30.00"],
+        ]
+    )
+    spec = MappingSpec(date_column=0, date_format="YYYY-MM-DD", payee_column=1, debit_column=2)
+    assert _read(lone, spec) == [Decimal("-12.50"), Decimal("12.50"), Decimal("-30.00")]
+    mixed = _suggested(lone)
+    assert (mixed.spec.debit_column, mixed.sign_evidence) == (2, None)  # signed cells: on trust
+    # Unsigned cells under one header: the header says which way, as before.
+    unsigned = _table([r if "-" not in r[2] else [*r[:2], "7.00"] for r in lone.rows])
+    assert (_suggested(unsigned).confident, _suggested(unsigned).sign_evidence) == (
+        True,
+        "debit_credit",
+    )
+    assert all(amount < 0 for amount in _read(unsigned, spec))
+    # A debit column that prints every amount negative: money out, as before.
+    printed = _table([lone.rows[0], *([*r[:2], f"-{r[2]}"] for r in unsigned.rows[1:])])
+    assert _read(printed, spec) == _read(unsigned, spec)
+    assert (_suggested(printed).confident, _suggested(printed).sign_evidence) == (
+        True,
+        "debit_credit",
+    )
+
+
+def test_both_columns_negative_value_is_the_opposite_column() -> None:
+    rows = [
+        ["Date", "Description", "Debit", "Credit"],
+        ["2026-01-14", "Harbor Lane Grocery", "12.50", ""],
+        ["2026-01-15", "Reversal Harbor Lane Grocery", "-12.50", ""],
+        ["2026-01-16", "Marlow Design Payroll", "", "900.00"],
+        ["2026-01-17", "Payroll correction", "", "-40.00"],
+        ["2026-01-18", "Tin Roof Diner", "30.00", ""],
+    ]
+    spec = MappingSpec(
+        date_column=0, date_format="YYYY-MM-DD", payee_column=1, debit_column=2, credit_column=3
+    )
+    assert _read(_table(rows), spec) == [
+        Decimal("-12.50"),
+        Decimal("12.50"),  # a negative debit is a credit
+        Decimal("900.00"),
+        Decimal("-40.00"),  # a negative credit is a debit
+        Decimal("-30.00"),
+    ]
+
+
+def test_a_debit_column_printed_negative_throughout_is_still_money_out() -> None:
+    """Exports that print every withdrawal as ``-25.00`` under ``Amount Debit``."""
+    rows = [
+        ["Date", "Description", "Debit", "Credit"],
+        ["2026-01-14", "Harbor Lane Grocery", "-12.50", ""],
+        ["2026-01-15", "Tin Roof Diner", "-30.00", ""],
+        ["2026-01-16", "Marlow Design Payroll", "", "900.00"],
+        ["2026-01-17", "Northgate Fuel Stop", "-41.00", ""],
+    ]
+    suggestion = _suggested(_table(rows))
+    assert suggestion.confident, suggestion.doubts
+    assert suggestion.sign_evidence == "debit_credit"
+    assert _read(_table(rows), suggestion.spec) == [
+        Decimal("-12.50"),
+        Decimal("-30.00"),
+        Decimal("900.00"),
+        Decimal("-41.00"),
+    ]
+
+
+def test_trades_and_fund_tables_are_never_cash() -> None:
+    trades = _extracted(layouts.trades_list())
+    assert suggest_activity_mapping(trades) is None  # no action column: not brokerage activity
+    suggestion = _suggested(trades)
+    assert "investment_columns" in suggestion.doubts
+    assert not suggestion.confident
+    funds = _extracted(layouts.fund_transactions())
+    activity = suggest_activity_mapping(funds)
+    assert activity is not None  # the brokerage activity reader takes it first
+    assert activity.spec.mode == "activity"
+    assert activity.sign_evidence == "activity"
+    # Read as a cash ledger anyway, it is never confident.
+    assert "investment_columns" in _suggested(funds).doubts
+
+
+def test_balance_proven_checking_stays_confident() -> None:
+    table = _extracted(layouts.checking_with_running_balance())
+    suggestion = _suggested(table)
+    assert suggestion.confident, suggestion.doubts
+    assert suggestion.sign_evidence == "balance"
+    assert suggestion.spec.sign is Sign.INFLOW_POSITIVE
+    amounts = _read(table, suggestion.spec)
+    assert (amounts[0], amounts[3]) == (Decimal("-1210.00"), Decimal("2840.00"))
+
+
+# ---------------------------------------------------------------------------
+# An account column of names splits the file
+# ---------------------------------------------------------------------------
+
+
+def _groups(table: Table) -> list[tuple[str | None, str | None, int]]:
+    """(name, last four, rows) of each statement the suggested mapping reads."""
+    statements = from_table_grouped(table, _suggested(table).spec)
+    return [(s.account_name, s.last4, len(s.transactions)) for s in statements]
+
+
+@pytest.mark.parametrize("header", ["Account", "Account Name", "Source Account", "ACCOUNT  name"])
+def test_account_name_column_groups_rows(header: str) -> None:
+    table = _extracted(layouts.aggregator_two_accounts(header))
+    suggestion = _suggested(table)
+    statements = from_table_grouped(table, suggestion.spec)
+    assert [len(s.transactions) for s in statements] == [5, 4]
+    assert suggestion.spec.account_column == 1
+    assert suggestion.accounts == 2
+    assert suggestion.confident, suggestion.doubts
+    (reason,) = [r for r in suggestion.reasons if r.role == "account"]
+    assert (reason.column, reason.match, reason.fit) == (1, "exact", 1.0)
+    # Each statement carries its account's name as printed and no last four.
+    assert _groups(table) == [("Everyday Checking", None, 5), ("Rewards Card", None, 4)]
+    checking, card = statements
+    assert [t.raw_payee for t in card.transactions] == [
+        row[2] for row in layouts.TWO_ACCOUNT_ROWS if row[1] == "Rewards Card"
+    ]
+    assert sum(t.amount for t in checking.transactions) == Decimal("1491.75")
+    assert [group_last4(table, suggestion.spec, group) for group in (0, 1)] == [None, None]
+
+
+def test_account_names_are_grouped_folded_and_whitespace_collapsed() -> None:
+    rows = [["Date", "Account", "Description", "Amount"]]
+    cells = ["Everyday Checking", "REWARDS CARD", "everyday  checking", " Rewards Card "]
+    for index, cell in enumerate(cells * 2):
+        rows.append([f"2026-09-{index + 1:02d}", cell, f"SYNTHETIC PAYEE {index}", "-10.00"])
+    rows.append(["2026-09-20", "Everyday Checking", "SYNTHETIC PAYROLL", "900.00"])
+    table = _table(rows)
+    # The name is the first cell of the group, its blanks collapsed.
+    assert _groups(table) == [("Everyday Checking", None, 5), ("REWARDS CARD", None, 4)]
+
+
+def test_a_name_that_starts_with_a_number_sign_is_a_name() -> None:
+    table = _table(
+        [
+            ["Date", "Account", "Amount"],
+            ["2026-01-02", "#1 Joint", "-1.00"],
+            ["2026-01-03", "#2 Solo", "-2.00"],
+            ["2026-01-04", "#1 Joint", "3.00"],
+            ["2026-01-05", "#2 Solo", "-4.00"],
+        ]
+    )
+    assert _groups(table) == [("#1 Joint", None, 2), ("#2 Solo", None, 2)]
+
+
+def test_a_masked_number_is_never_kept_as_a_name() -> None:
+    table = _table(
+        [
+            ["Date", "Account Number", "Amount"],
+            ["2026-01-02", "Z2xxxxxxxx", "1.00"],  # too few digits for a last four
+            ["2026-01-03", "****1234", "2.00"],
+            ["2026-01-04", "Joint", "3.00"],
+        ]
+    )
+    spec = MappingSpec(date_column=0, date_format="YYYY-MM-DD", amount_column=2, account_column=1)
+    statements = from_table_grouped(table, spec)
+    assert [(s.account_name, s.last4) for s in statements] == [
+        (None, None),
+        (None, "1234"),
+        ("Joint", None),
+    ]
+    assert "Z2" not in repr(statements)
+
+
+def test_unique_account_cells_do_not_split() -> None:
+    table = _extracted(layouts.export_with_unique_account_cells())
+    suggestion = _suggested(table)
+    assert "account" not in {r.role for r in suggestion.reasons}
+    assert suggestion.spec.account_column is None
+    assert suggestion.accounts == 1
+    assert _groups(table) == [(None, None, 6)]
+
+
+@pytest.mark.parametrize(
+    ("accounts", "repeats", "split"),
+    [
+        (2, 2, True),
+        (20, 2, True),
+        (21, 2, False),  # too many to be one person's accounts
+        (1, 6, False),  # one account: nothing to group
+        (3, 1, False),  # no value repeats
+    ],
+)
+def test_a_name_column_needs_a_few_values_that_each_repeat(
+    accounts: int, repeats: int, split: bool
+) -> None:
+    rows = [["Date", "Account", "Description", "Amount"]]
+    for index in range(accounts * repeats):
+        name = f"Synthetic Pot {chr(65 + index % accounts)}"
+        rows.append(["2026-03-05", name, f"SYNTHETIC PAYEE {index}", "-10.00"])
+    rows.append(["2026-03-06", "Synthetic Pot A", "SYNTHETIC PAYROLL", "900.00"])
+    table = _table(rows)
+    assert ("account" in _roles(table)) is split
+    assert len(_groups(table)) == (accounts if split else 1)
+    # One more value, seen once among values that repeat: an account with one
+    # row in the period, split off like the others (never read into theirs),
+    # unless that makes too many values to be one person's accounts.
+    if split:
+        rows.append(["2026-03-07", "Synthetic Pot Once", "SYNTHETIC PAYEE", "-1.00"])
+        assert len(_groups(_table(rows))) == (accounts + 1 if accounts < 20 else 1)
+
+
+def test_payee_column_is_never_an_account_column() -> None:
+    table = _extracted(layouts.export_with_payee_and_category())
+    suggestion = _suggested(table)
+    assert "account" not in {r.role for r in suggestion.reasons}
+    assert suggestion.spec.account_column is None
+    assert _groups(table) == [(None, None, 8)]
+    roles = _roles(table)
+    assert (roles["payee"], roles["memo"]) == (1, 2)
+
+
+@pytest.mark.parametrize(
+    "header",
+    ["Payee", "Category", "Account Type", "From Account", "Account Owner", "Counterparty", "Name"],
+)
+def test_only_an_exact_account_header_names_a_column_of_names(header: str) -> None:
+    # The very rows that split under "Account" stay together under any other header.
+    table = _extracted(layouts.aggregator_two_accounts(header))
+    suggestion = _suggested(table)
+    assert suggestion.spec.account_column is None
+    assert _groups(table) == [(None, None, 9)]
+
+
+def test_a_number_column_wins_over_a_name_column() -> None:
+    rows = [["Date", "Account", "Account Number", "Description", "Amount"]]
+    for index, (name, number) in enumerate(
+        [("Synthetic Joint", "****4410"), ("Synthetic Solo", "****9026")] * 3
+    ):
+        rows.append([f"2026-04-{index + 1:02d}", name, number, f"SYNTHETIC PAYEE {index}", "-5.00"])
+    rows.append(["2026-04-09", "Synthetic Joint", "****4410", "SYNTHETIC PAYROLL", "700.00"])
+    table = _table(rows)
+    assert _roles(table)["account"] == 2
+    # Matched by their digits like any numbered statement; the nickname is not read.
+    assert _groups(table) == [(None, "4410", 4), (None, "9026", 3)]
+
+
+# ---------------------------------------------------------------------------
+# Words, shapes and rows that are not transactions
+# ---------------------------------------------------------------------------
+
+
+def _reason(suggestion: MappingSuggestion, role: str) -> tuple[int, str]:
+    found = [(r.column, r.match) for r in suggestion.reasons if r.role == role]
+    assert len(found) == 1, suggestion.reasons
+    return found[0]
+
+
+@pytest.mark.parametrize("header", ["Created", "Datetime", "Timestamp", "Date Processed"])
+def test_more_headers_name_the_date_exactly(header: str) -> None:
+    suggestion = _suggested(_extracted(layouts.export_dated_under(header)))
+    assert _reason(suggestion, "date") == (0, "exact")
+    assert suggestion.confident, suggestion.doubts
+    assert suggestion.parsed_rows == len(layouts.STAMPED_ROWS)
+
+
+def test_a_date_word_still_needs_cells_that_are_dates() -> None:
+    rows = [
+        ["Created", "Posted", "Amount"],
+        ["Ada Finch", "2026-02-03", "-61.30"],
+        ["Noor Vale", "2026-02-06", "-27.85"],
+    ]
+    assert _suggested(_table(rows)).spec.date_column == 1
+
+
+def test_a_timestamp_with_a_spaced_zone_offset_parses() -> None:
+    for text in (
+        "2026-02-25 20:48:09 +0000",
+        "2026-02-25 20:48:09 -05:00",
+        "2026-02-25T20:48:09 Z",
+    ):
+        assert parse_cell_date(text, "YYYY-MM-DD") == date(2026, 2, 25), text
+    assert parse_cell_date("2026-02-25 20:48:09 +00", "YYYY-MM-DD") is None
+    table = _extracted(layouts.export_dated_under("created", zone=" +0000"))
+    suggestion = _suggested(table)
+    assert suggestion.confident, suggestion.doubts
+    parsed = from_table(table, suggestion.spec)
+    assert [t.posted_date for t in parsed.transactions][:2] == [date(2026, 2, 3), date(2026, 2, 6)]
+    assert len(parsed.transactions) == len(layouts.STAMPED_ROWS)
+
+
+def test_gross_is_the_amount_beside_fee_and_net() -> None:
+    table = _extracted(layouts.payments_gross_fee_net())
+    suggestion = _suggested(table)
+    assert _reason(suggestion, "amount") == (5, "exact")
+    assert suggestion.confident, suggestion.doubts
+    assert _read(table, suggestion.spec)[:3] == [
+        Decimal("-48.20"),
+        Decimal("-26.75"),
+        Decimal("120.00"),
+    ]
+    # A fee on a row: gross and net differ, so which of them is the amount
+    # is for a person to say. Gross is offered, not imported on its own.
+    with_fee = _suggested(_extracted(layouts.payments_gross_fee_net(fees=True)))
+    assert _reason(with_fee, "amount") == (5, "word")
+    assert with_fee.doubts == ("header_not_exact",)
+    # ``Gross`` alone (a payslip's column, a price list) is no amount word.
+    alone = _table(
+        [["Date", "Name", "Gross"], ["2026-03-03", "A", "-1.00"], ["2026-03-04", "B", "2"]]
+    )
+    assert suggest_mapping(alone) is None
+
+
+def test_credit_amount_and_debit_amount_are_the_credit_and_debit_columns() -> None:
+    table = _extracted(layouts.credit_debit_amount_columns())
+    suggestion = _suggested(table)
+    assert _reason(suggestion, "credit") == (2, "exact")
+    assert _reason(suggestion, "debit") == (3, "exact")
+    assert suggestion.spec.amount_column is None
+    assert (suggestion.confident, suggestion.sign_evidence) == (True, "debit_credit")
+    assert _read(table, suggestion.spec) == [
+        Decimal("1850.00"),
+        Decimal("-200.00"),
+        Decimal("-1500.00"),
+        Decimal("920.00"),
+        Decimal("-3.00"),
+    ]
+
+
+def test_a_parenthesised_qualifier_is_a_unit_suffix() -> None:
+    table = _extracted(layouts.wallet_export_with_opening_row())
+    suggestion = _suggested(table)
+    assert _reason(suggestion, "date") == (2, "exact")  # ``Datetime``
+    assert _reason(suggestion, "amount") == (6, "exact")  # ``Amount (total)``
+    assert "header_not_exact" not in suggestion.doubts
+    # A part of the amount is not the amount, whichever column comes first.
+    rows = [
+        ["Date", "Amount (fee)", "Amount (total)", "Balance (pending)"],
+        ["2026-04-02", "0.25", "-14.50", "85.50"],
+        ["2026-04-05", "0.00", "-36.00", "49.50"],
+    ]
+    fee_first = _suggested(_table(rows))
+    assert _reason(fee_first, "amount") == (2, "exact")
+    assert _reason(fee_first, "balance") == (3, "exact")
+    # Two columns told apart by their qualifiers alone: a person says which.
+    rows[0] = ["Date", "Amount (original)", "Amount (converted)", "Balance"]
+    either = _suggested(_table(rows))
+    assert _reason(either, "amount") == (1, "word")
+    assert "header_not_exact" in either.doubts
+    # Units are read as before, also on two columns.
+    rows[0] = ["Date", "Amount (USD)", "Amount (EUR)", "Balance"]
+    assert _reason(_suggested(_table(rows)), "amount") == (1, "exact")
+
+
+def test_a_row_without_a_date_or_an_amount_is_a_note_row() -> None:
+    """The first row of a wallet export: the holder's name and ``$0``, nothing else."""
+    table = _extracted(layouts.wallet_export_with_opening_row())
+    suggestion = _suggested(table)
+    assert suggestion.failed_rows == ()
+    assert suggestion.parsed_rows == 5
+    assert suggestion.confident, suggestion.doubts
+    # The balance column holds that one cell: it checks nothing, so it proves nothing.
+    assert suggestion.sign_evidence is None
+    parsed = from_table(table, suggestion.spec)
+    assert (parsed.note_rows, parsed.skipped_rows) == ([1], [])
+    assert [t.amount for t in parsed.transactions][:3] == [
+        Decimal("-14.50"),
+        Decimal("-36.00"),
+        Decimal("40.00"),
+    ]
+    # A row with a date and no amount is still a row that did not read.
+    rows = [
+        ["Date", "Amount", "Payee", "Memo"],
+        ["2026-01-14", "-1.00", "Blue Owl", ""],
+        ["", "", "Pending items", "see below"],
+        ["2026-01-15", "", "Share transfer", ""],
+        ["2026-01-16", "2.00", "Maple", ""],
+    ]
+    spec = MappingSpec(date_column=0, date_format="YYYY-MM-DD", amount_column=1, payee_column=2)
+    mixed = from_table(_table(rows), spec)
+    assert (mixed.note_rows, mixed.skipped_rows) == ([2], [3])
+
+
+def test_a_continuation_row_is_appended_to_its_rows_memo() -> None:
+    table = _extracted(sniff_cases.csv_preamble_with_continuation_rows())
+    suggestion = _suggested(table)
+    assert suggestion.doubts == ("date_order_guessed",)  # every day is 12 or less
+    assert (suggestion.parsed_rows, suggestion.failed_rows) == (4, ())
+    parsed = from_table(table, suggestion.spec)
+    assert [(t.raw_payee, t.memo, t.amount) for t in parsed.transactions] == [
+        ("DEBIT PURCHASE", "01/03/26 xx-0000 MOSSY OAK DELI", Decimal("-18.40")),
+        ("DEBIT PURCHASE", "02/03/26 xx-0000 TERN STREET CAFE", Decimal("-6.75")),
+        ("FUND TRANSFER", "from 000-0-000001 QUILLFEATHER", Decimal("250.00")),
+        ("DEBIT PURCHASE", "05/03/26 xx-0000 PEBBLE LANE GROCER", Decimal("-32.10")),
+    ]
+    assert (parsed.note_rows, parsed.skipped_rows) == ([], [])
+
+
+def test_only_a_cell_under_the_description_continues_a_row() -> None:
+    spec = MappingSpec(
+        date_column=0, date_format="YYYY-MM-DD", amount_column=1, payee_column=2, memo_column=3
+    )
+    rows = [
+        ["Date", "Amount", "Payee", "Memo"],
+        ["2026-01-14", "-1.00", "Blue Owl", "card 0000"],
+        ["", "", "", "second line"],
+        ["", "", "third line"],
+        ["2026-01-15", "-2.00", "Maple", ""],
+        ["Statement notes"],  # under the date column: a note, not a description
+        ["2026-01-16", "3.00", "Initech", ""],
+        ["", "", "", ""],
+        ["", "", "not directly below a row"],
+    ]
+    parsed = from_table(_table(rows), spec)
+    assert [t.memo for t in parsed.transactions] == [
+        "card 0000 second line third line",
+        None,
+        None,
+    ]
+    assert parsed.note_rows == [5, 8]
+    # A single cell after the last row of a table that has no other
+    # continuation is what it always was: a closing note.
+    closing = from_table(
+        _table([*rows[:2], rows[4], ["", "", "Thank you for banking with us"]]), spec
+    )
+    assert [t.memo for t in closing.transactions] == ["card 0000", None]
+    assert closing.note_rows == [3]
+
+
+def test_a_short_trailing_footer_does_not_dilute_the_fit() -> None:
+    table = _extracted(layouts.export_with_short_footer())
+    suggestion = _suggested(table)
+    assert _reason(suggestion, "date") == (0, "exact")
+    assert next(r.fit for r in suggestion.reasons if r.role == "date") == 1.0
+    assert (suggestion.parsed_rows, suggestion.failed_rows, suggestion.footer_rows) == (2, (), 2)
+    assert (suggestion.confident, suggestion.sign_evidence) == (True, "balance")
+    # Short rows that outnumber the rows before them are not a footer block:
+    # the file leaves out its empty trailing cells, and every row is looked at.
+    rows = [
+        ["Date", "Amount", "Payee", "Memo"],
+        ["03/04/2026", "-1.00", "Blue Owl", "weekly"],
+        ["25/04/2026", "-2.00", "Maple"],
+        ["26/04/2026", "3.00", "Initech"],
+        ["27/04/2026", "-4.00", "Corner Fuel"],
+    ]
+    ragged = _suggested(_table(rows))
+    assert (ragged.spec.date_format, ragged.parsed_rows) == ("DD/MM/YYYY", 4)
+    assert ragged.confident, ragged.doubts
+
+
+def test_rows_after_the_last_readable_row_are_footers() -> None:
+    table = _extracted(layouts.export_with_short_footer())
+    parsed = from_table(table, _suggested(table).spec)
+    assert (parsed.skipped_rows, parsed.footer_rows) == ([], [3, 4])
+    # A trailing row that has a date is a transaction that did not read, not a footer.
+    spec = MappingSpec(date_column=0, date_format="YYYY-MM-DD", amount_column=1, payee_column=2)
+    rows = [
+        ["Date", "Amount", "Payee"],
+        ["2026-01-14", "-1.00", "Blue Owl"],
+        ["Subtotal", "-1.00", ""],
+        ["2026-01-15", "2.00", "Maple"],
+        ["2026-01-16", "n/a", "Initech"],
+        ["Total", "1.00", ""],
+    ]
+    mixed = from_table(_table(rows), spec)
+    assert (mixed.skipped_rows, mixed.footer_rows) == ([2, 4], [5])
+    # Nothing reads: every row is reported, none is called a footer.
+    none = from_table(_table([rows[0], rows[2], rows[5]]), spec)
+    assert (none.skipped_rows, none.footer_rows) == ([1, 2], [])
+
+
+def test_a_pending_date_cell_is_a_pending_row() -> None:
+    table = _extracted(layouts.card_with_pending_rows())
+    suggestion = _suggested(table)
+    assert _reason(suggestion, "date") == (0, "exact")
+    assert (suggestion.parsed_rows, suggestion.failed_rows) == (5, ())
+    assert suggestion.confident, suggestion.doubts
+    parsed = from_table(table, suggestion.spec)
+    assert parsed.pending_rows == [1, 2]
+    assert parsed.skipped_rows == []
+    assert [t.row for t in parsed.transactions] == [3, 4, 5, 6, 7]
+    assert parsed.transactions[0].posted_date == date(2026, 10, 27)
+
+
+def test_an_amount_with_more_decimals_than_are_kept_is_rounded() -> None:
+    # The cash reader rounds (``round_long``); the rule is opt-in, see
+    # test_a_quantity_with_more_decimals_than_money_is_never_shortened.
+    assert parse_cell_amount("318,40277777778", ",", round_long=True) == Decimal("318.402778")
+    # Half to even; an amount that is not zero is never read as zero.
+    assert parse_cell_amount("-0.0000005", ".", round_long=True) is None
+    assert parse_cell_amount("-0.0000015", ".", round_long=True) == Decimal("-0.000002")
+    assert str(parse_cell_amount("-48.20", ".")) == "-48.20"  # a short amount stays as printed
+    assert parse_cell_amount("2.0000015", ".", round_long=True) == Decimal("2.000002")
+    table = _extracted(layouts.export_with_long_decimals())
+    suggestion = _suggested(table)
+    assert suggestion.failed_rows == ()
+    assert suggestion.confident, suggestion.doubts
+    assert _read(table, suggestion.spec)[:2] == [Decimal("-58.30"), Decimal("318.402778")]
+
+
+def test_an_amount_behind_a_lettered_currency_parses() -> None:
+    lettered = layouts.LETTERED_CURRENCY
+    assert parse_cell_amount(f"{lettered}18.250", ".") == Decimal("18.250")
+    assert parse_cell_amount(f"-{lettered}18.250", ".") == Decimal("-18.250")
+    assert parse_cell_amount(f"{lettered}-18.250", ".") == Decimal("-18.250")
+    assert parse_cell_amount("1 234,50 K\u010d", ",") == Decimal("1234.50")
+    assert parse_cell_amount("45,00 z\u0142", ",") == Decimal("45.00")
+    assert parse_cell_amount("\u20bd 99.90", ".") == Decimal("99.90")  # a currency sign
+    # Words are not currencies: no more than three letters, and not plain ASCII ones.
+    words = ("Caf\u00e9s 12", "No 5", "A1", f"{lettered}", "\u062f.\u0625. twelve", "50\u00a2")
+    for text in words:
+        assert parse_cell_amount(text, ".") is None, text
+    table = _extracted(layouts.export_with_lettered_currency())
+    suggestion = _suggested(table)
+    assert (suggestion.parsed_rows, suggestion.failed_rows) == (4, ())
+    assert _read(table, suggestion.spec) == [
+        Decimal("-18.250"),
+        Decimal("-4.500"),
+        Decimal("1250.000"),
+        Decimal("-9.750"),
+    ]
+
+
+def test_month_name_dates_without_separators_or_a_century_parse() -> None:
+    assert parse_cell_date("07Mar2026 00:00:00", "DDMMMYYYY") == date(2026, 3, 7)
+    assert parse_cell_date("7March2026", "DDMMMYYYY") == date(2026, 3, 7)
+    assert parse_cell_date("14-Aug-25", "DD-MMM-YY") == date(2025, 8, 14)
+    assert parse_cell_date("14-Aug-2025", "DD-MMM-YY") is None
+    assert parse_cell_date("14-Aug-25", "DD-MMM-YYYY") is None
+    compact = _suggested(_extracted(layouts.export_with_month_name_dates()))
+    assert (compact.spec.date_format, compact.confident) == ("DDMMMYYYY", True)
+    short = _extracted(layouts.export_with_month_name_dates(short_year=True))
+    suggestion = _suggested(short)
+    assert (suggestion.spec.date_format, suggestion.confident) == ("DD-MMM-YY", True)
+    assert from_table(short, suggestion.spec).transactions[0].posted_date == date(2025, 8, 14)
+
+
+def test_a_balance_printed_once_a_day_reconciles() -> None:
+    table = _extracted(layouts.checking_with_daily_balance())
+    suggestion = _suggested(table)
+    assert (suggestion.confident, suggestion.sign_evidence) == (True, "balance")
+    parsed = from_table(table, suggestion.spec)
+    assert parsed.balance_mismatches == []
+    assert parsed.closing_balance is not None
+    assert (parsed.closing_balance.amount, parsed.closing_balance.as_of) == (
+        Decimal("4250.65"),
+        date(2026, 7, 8),
+    )
+    # A day's balance that is not the sum of the day's rows is still caught,
+    # on the row that prints it.
+    rows = [list(r) for r in table.rows]
+    rows[5][3] = "4317.15"
+    wrong = from_table(_table(rows), suggestion.spec)
+    assert wrong.balance_mismatches == [5, 6]
+    # Newest first: the day's balance stands on the day's first printed row.
+    newest = _table([list(table.rows[0]), *(list(r) for r in reversed(table.rows[1:]))])
+    assert [r[3] for r in newest.rows[1:]] == ["4250.65", "4317.05", "", "", "1555.40", ""]
+    assert from_table(newest, suggestion.spec).balance_mismatches == []
+
+
+# ---------------------------------------------------------------------------
+# A day/month tie that the file itself resolves is no guess
+# ---------------------------------------------------------------------------
+
+#: Month first: 3 and 9 February, 4 and 11 March. Day first: 2 March,
+#: 2 September, 3 April, 3 November. No day is above 12, the days are not
+#: the months and neither component is constant: the cells settle nothing.
+TIED_DATES = ["02/03/2026", "02/09/2026", "03/04/2026", "03/11/2026"]
+
+
+def _dates(table: Table, suggestion: MappingSuggestion) -> list[date]:
+    return [t.posted_date for t in from_table(table, suggestion.spec).transactions]
+
+
+def _dated(dates: list[str], today: date | None = None) -> tuple[Table, MappingSuggestion]:
+    table = _extracted(layouts.checking_dated(dates))
+    suggestion = suggest_mapping(table, today=today)
+    assert suggestion is not None
+    assert suggestion.sign_evidence == "balance"  # the date is the only question
+    return table, suggestion
+
+
+def test_same_day_under_both_orders_is_no_guess() -> None:
+    table, suggestion = _dated(["1/1/2026", "2/2/2026", "3/3/2026"])
+    assert suggestion.doubts == ()
+    assert (suggestion.confident, suggestion.score) == (True, 1.0)
+    assert suggestion.spec.date_format == "MM/DD/YYYY"
+    assert _dates(table, suggestion) == [date(2026, 1, 1), date(2026, 2, 2), date(2026, 3, 3)]
+    # One row where the day is not the month, and the orders differ again.
+    _, mixed = _dated(["1/1/2026", "2/2/2026", "3/4/2026"])
+    assert mixed.doubts == ("date_order_guessed",)
+
+
+def test_constant_component_is_the_month() -> None:
+    days = (1, 2, 3, 5, 6, 8, 9, 10)
+    table, suggestion = _dated([f"06/{day:02d}/2026" for day in days])
+    assert suggestion.doubts == ()
+    assert (suggestion.confident, suggestion.score) == (True, 1.0)
+    assert suggestion.spec.date_format == "MM/DD/YYYY"
+    assert _dates(table, suggestion) == [date(2026, 6, day) for day in days]
+    # Three distinct days are the least that say so.
+    _, three = _dated(["06/01/2026", "06/01/2026", "06/04/2026", "06/09/2026"])
+    assert (three.doubts, three.spec.date_format) == ((), "MM/DD/YYYY")
+    # The sample cannot tell day from month and best_date_format still says so:
+    # the rules above belong to the cash suggestion, read over the whole table.
+    assert best_date_format(f"06/{day:02d}/2026" for day in days) == ("MM/DD/YYYY", 8, True)
+
+
+def test_two_rows_stay_held() -> None:
+    _, suggestion = _dated(["06/01/2026", "06/02/2026"])
+    assert suggestion.doubts == ("date_order_guessed",)
+    assert not suggestion.confident
+    assert suggestion.spec.date_format == "MM/DD/YYYY"  # month first, as before
+    assert suggestion.score == 0.9
+
+
+@pytest.mark.parametrize(
+    "dates",
+    [
+        # The 5th of January, February and March, or three days of May: the
+        # second component is constant, so the first would be the day. The
+        # order is only ever taken as proven the way it would be guessed
+        # (month first); day first needs a cell that reads no other way.
+        ["01/05/2026", "02/05/2026", "03/05/2026"],
+        ["06/01/2026", "06/01/2026", "06/02/2026", "06/02/2026"],  # one month, two days
+        ["01/05/2026", "01/06/2026", "02/05/2026", "02/06/2026"],  # two values of each
+        ["06/01/2025", "06/02/2026", "06/03/2026"],  # June of two years is not one month
+    ],
+    ids=["same-day-three-months", "two-days", "two-by-two", "two-years"],
+)
+def test_same_day_of_several_months_stays_held(dates: list[str]) -> None:
+    _, suggestion = _dated(dates)
+    assert suggestion.doubts == ("date_order_guessed",)
+    assert suggestion.spec.date_format == "MM/DD/YYYY"
+
+
+@pytest.mark.parametrize(
+    ("headers", "dates", "date_format", "expected"),
+    [
+        (
+            # Post Date is the date column and fits both orders; a
+            # transaction on the 30th says which.
+            ("Transaction Date", "Post Date"),
+            [
+                ("01/30/2026", "02/02/2026"),
+                ("02/03/2026", "02/04/2026"),
+                ("03/04/2026", "03/05/2026"),
+                ("03/08/2026", "03/09/2026"),
+            ],
+            "MM/DD/YYYY",
+            [date(2026, 2, 2), date(2026, 2, 4), date(2026, 3, 5), date(2026, 3, 9)],
+        ),
+        (
+            ("Transaction Date", "Post Date"),
+            [
+                ("30/01/2026", "02/02/2026"),
+                ("03/02/2026", "04/02/2026"),
+                ("04/03/2026", "05/03/2026"),
+                ("08/03/2026", "09/03/2026"),
+            ],
+            "DD/MM/YYYY",
+            [date(2026, 2, 2), date(2026, 2, 4), date(2026, 3, 5), date(2026, 3, 9)],
+        ),
+        (
+            # Transaction Date is the date column; a settlement on the 13th decides.
+            ("Transaction Date", "Settlement Date"),
+            [
+                ("02/03/2026", "02/05/2026"),
+                ("02/11/2026", "02/13/2026"),
+                ("03/04/2026", "03/06/2026"),
+                ("03/09/2026", "03/11/2026"),
+            ],
+            "MM/DD/YYYY",
+            [date(2026, 2, 3), date(2026, 2, 11), date(2026, 3, 4), date(2026, 3, 9)],
+        ),
+    ],
+    ids=["post-date-by-transaction-date", "day-first", "transaction-date-by-settlement-date"],
+)
+def test_unambiguous_second_date_column_decides(
+    headers: tuple[str, str],
+    dates: list[tuple[str, str]],
+    date_format: str,
+    expected: list[date],
+) -> None:
+    table = _extracted(layouts.export_with_two_date_columns(dates, headers=headers))
+    suggestion = _suggested(table)
+    assert suggestion.spec.date_column == (1 if headers[1] == "Post Date" else 0)
+    assert suggestion.doubts == ()
+    assert suggestion.spec.date_format == date_format
+    assert _dates(table, suggestion) == expected
+
+
+def test_a_second_date_column_that_fits_both_orders_decides_nothing() -> None:
+    dates = [
+        ("02/03/2026", "02/04/2026"),
+        ("02/09/2026", "02/10/2026"),
+        ("03/04/2026", "03/05/2026"),
+    ]
+    suggestion = _suggested(_extracted(layouts.export_with_two_date_columns(dates)))
+    assert suggestion.doubts == ("date_order_guessed",)
+    # Nor does one whose cells do not agree with each other.
+    mixed = [
+        ("01/30/2026", "02/02/2026"),
+        ("30/01/2026", "02/04/2026"),
+        ("03/04/2026", "03/05/2026"),
+    ]
+    suggestion = _suggested(_extracted(layouts.export_with_two_date_columns(mixed)))
+    assert suggestion.doubts == ("date_order_guessed",)
+    # A column of dates under a header that names no date is not asked.
+    unnamed = layouts.export_with_two_date_columns(
+        [("01/30/2026", "02/02/2026"), ("02/13/2026", "02/04/2026"), ("03/04/2026", "03/05/2026")],
+        headers=("Reference", "Post Date"),
+    )
+    assert _suggested(_extracted(unnamed)).doubts == ("date_order_guessed",)
+
+
+def test_reading_that_dates_rows_after_upload_is_rejected() -> None:
+    # Uploaded on 20 March: day first would date rows in April, September and November.
+    table, suggestion = _dated(TIED_DATES, today=date(2026, 3, 20))
+    assert suggestion.doubts == ()
+    assert suggestion.spec.date_format == "MM/DD/YYYY"
+    assert _dates(table, suggestion)[-1] == date(2026, 3, 11)
+    # The same cells written day first (3 and 9 February, 4 and 11 March).
+    swapped = ["/".join((d, m, y)) for m, d, y in (cell.split("/") for cell in TIED_DATES)]
+    table, suggestion = _dated(swapped, today=date(2026, 3, 20))
+    assert suggestion.doubts == ()
+    assert suggestion.spec.date_format == "DD/MM/YYYY"
+    assert _dates(table, suggestion) == [
+        date(2026, 2, 3),
+        date(2026, 2, 9),
+        date(2026, 3, 4),
+        date(2026, 3, 11),
+    ]
+    # A row dated the day after the upload is the same day somewhere else on
+    # the globe: it does not rule its reading out.
+    _, eve = _dated(TIED_DATES, today=date(2026, 3, 10))
+    assert (eve.doubts, eve.spec.date_format) == ((), "MM/DD/YYYY")
+
+
+@pytest.mark.parametrize(
+    "today",
+    [None, date(2026, 12, 31), date(2026, 2, 5)],
+    ids=["no-upload-day", "both-in-the-past", "both-after-upload"],
+)
+def test_an_upload_day_that_rules_out_neither_or_both_orders_decides_nothing(
+    today: date | None,
+) -> None:
+    _, suggestion = _dated(TIED_DATES, today=today)
+    assert suggestion.doubts == ("date_order_guessed",)
+    assert suggestion.spec.date_format == "MM/DD/YYYY"
+
+
+def test_proofs_of_the_date_order_that_disagree_decide_nothing() -> None:
+    # The transaction on the 28th says month first. The upload day says day
+    # first: month first dates the postings up to 2 May, after the upload,
+    # and day first dates none later than 5 February.
+    dates = [
+        ("02/28/2026", "03/01/2026"),
+        ("03/30/2026", "04/01/2026"),
+        ("04/30/2026", "05/02/2026"),
+    ]
+    table = _extracted(layouts.export_with_two_date_columns(dates))
+    suggestion = suggest_mapping(table, today=date(2026, 3, 20))
+    assert suggestion is not None
+    assert suggestion.doubts == ("date_order_guessed",)
+    assert suggestion.spec.date_format == "MM/DD/YYYY"
+    # Days of one month that are all after the upload, whichever way they are
+    # read: the month is not taken as proven for a file that cannot be right.
+    _, june = _dated(["06/07/2026", "06/08/2026", "06/09/2026"], today=date(2026, 5, 20))
+    assert june.doubts == ("date_order_guessed",)
+
+
+def test_the_rows_below_the_sample_count_too() -> None:
+    sample = [f"06/{1 + index // 17:02d}/2026" for index in range(204)]  # 1 to 12 June
+    assert len(sample) > SUGGEST_SAMPLE_ROWS
+    # A row on the 13th, below the rows the roles are assigned from, reads one way only.
+    _, suggestion = _dated([*sample, "06/13/2026", "06/14/2026"])
+    assert (suggestion.doubts, suggestion.spec.date_format) == ((), "MM/DD/YYYY")
+    assert suggestion.parsed_rows == 206
+    # Rows of July down there: the first component is not constant after all.
+    _, suggestion = _dated([*sample, "07/01/2026", "07/02/2026"])
+    assert suggestion.doubts == ("date_order_guessed",)
+
+
+def test_card_file_is_still_held_for_its_sign() -> None:
+    table = _extracted(layouts.card_positive_purchases(low_days=True))
+    suggestion = _suggested(table)
+    assert suggestion.spec.date_format == "MM/DD/YYYY"
+    assert suggestion.doubts == ("sign_unverified",)  # the dates are proven, the sign is not
+    assert not suggestion.confident
+    assert suggestion.sign_evidence is None
+
+
+# ---------------------------------------------------------------------------
+# A table without a header gets a suggestion
+# ---------------------------------------------------------------------------
+
+
+def _columns(suggestion: MappingSuggestion) -> dict[str, int]:
+    return {r.role: r.column for r in suggestion.reasons}
+
+
+def test_headerless_table_with_reconciling_balance_is_confident() -> None:
+    table = _extracted(layouts.headerless_with_balance())
+    suggestion = _suggested(table)
+    spec = suggestion.spec
+    assert (spec.has_header, spec.skip_rows) == (False, 0)
+    # The check numbers are numbers too: only the debit, credit and balance add up.
+    assert _columns(suggestion) == {"date": 0, "payee": 2, "debit": 3, "credit": 4, "balance": 5}
+    assert {r.match for r in suggestion.reasons} == {"content"}
+    assert suggestion.doubts == ()
+    assert suggestion.confident
+    assert suggestion.sign_evidence == "balance"
+    assert spec.date_format == "MM/DD/YYYY"
+    # The first line is a transaction, not a header: every row reads.
+    assert (suggestion.parsed_rows, suggestion.failed_rows, suggestion.footer_rows) == (8, (), 0)
+    amounts = _read(table, spec)
+    assert amounts[:3] == [Decimal("2840.00"), Decimal("-1210.00"), Decimal("-74.60")]
+    (statement,) = from_table_grouped(table, spec)
+    assert statement.balance_mismatches == []
+    assert statement.closing_balance is not None
+    assert statement.closing_balance.amount == Decimal("4516.35")
+    assert suggestion.score == 1.0
+
+
+def test_headerless_signed_amount_is_suggested_not_confident() -> None:
+    table = _extracted(layouts.headerless_five_quoted_columns())
+    suggestion = _suggested(table)
+    spec = suggestion.spec
+    assert (spec.has_header, spec.skip_rows) == (False, 0)
+    # The asterisk column and the empty one take no role.
+    assert _columns(suggestion) == {"date": 0, "amount": 1, "payee": 4}
+    assert suggestion.doubts == ("no_header",)
+    assert not suggestion.confident
+    assert suggestion.sign_evidence is None
+    assert suggestion.summary()["doubts"] == ["no_header"]
+    assert (spec.date_format, spec.sign) == ("MM/DD/YYYY", Sign.INFLOW_POSITIVE)
+    assert suggestion.parsed_rows == len(layouts.HEADERLESS_SIGNED_ROWS)
+    (statement,) = from_table_grouped(table, spec)
+    first = statement.transactions[0]
+    assert (first.posted_date, first.amount) == (date(2026, 9, 2), Decimal("-1210.00"))
+    assert first.raw_payee == layouts.HEADERLESS_SIGNED_ROWS[0][2]
+    assert 0 < suggestion.score < 1
+
+
+def test_headerless_with_direction_cell_uses_it() -> None:
+    table = _extracted(layouts.headerless_with_direction_cell())
+    suggestion = _suggested(table)
+    spec = suggestion.spec
+    assert spec.has_header is False
+    assert _columns(suggestion) == {"date": 0, "payee": 1, "amount": 3, "indicator": 4}
+    assert spec.outflow_values == ["debit"]
+    assert suggestion.sign_evidence == "indicator"
+    amounts = _read(table, spec)
+    assert (amounts[0], amounts[5]) == (Decimal("-1210.00"), Decimal("2840.00"))
+    # The words decide the sign; that the fourth column is the amount is
+    # still read from its shape alone, so a person looks before it imports.
+    assert suggestion.doubts == ("no_header",)
+    # Amounts that carry their own sign are compared with the words instead.
+    signed_table = _extracted(layouts.headerless_with_direction_cell(signed=True))
+    signed = _suggested(signed_table)
+    assert _columns(signed) == {"date": 0, "payee": 1, "amount": 3}
+    assert signed.spec.indicator_column is None
+    assert (signed.spec.sign, signed.sign_evidence) == (
+        Sign.OUTFLOW_POSITIVE,
+        "indicator_correlation",
+    )
+    assert signed.doubts == ("no_header",)
+    assert _read(signed_table, signed.spec) == amounts
+
+
+def test_headerless_export_of_two_accounts_is_never_read_as_one_on_its_own() -> None:
+    """No header says which column of names is the account: a person does."""
+    rows = [
+        [day, account, text, amount.removeprefix("-"), "debit" if amount[0] == "-" else "credit"]
+        for day, account, text, amount in layouts.TWO_ACCOUNT_ROWS
+    ]
+    suggestion = _suggested(_table(rows))
+    assert suggestion.sign_evidence == "indicator"
+    assert suggestion.spec.account_column is None
+    assert suggestion.accounts == 1
+    assert suggestion.doubts == ("no_header",)
+    assert not suggestion.confident
+
+
+def test_one_row_file_gets_no_suggestion() -> None:
+    row = ["09/02/2026", "-1210.00", "*", "", "WILLOW COURT RENT"]
+    assert suggest_mapping(_table([row])) is None
+    # A title line above it does not make it a table either.
+    assert suggest_mapping(_table([["Synthetic export"], row])) is None
+    # Two transactions are the least a column's shape can be read from.
+    second = ["09/15/2026", "2840.00", "*", "", "MARLOW DESIGN PAYROLL"]
+    two = _suggested(_table([row, second]))
+    assert two.doubts == ("no_header",)
+    assert two.parsed_rows == 2
+
+
+def test_a_first_row_of_words_nothing_knows_is_never_read_as_data() -> None:
+    rows = [
+        ["Paivamaara", "Summa", "Selite"],
+        ["09/14/2026", "-48.15", "HARBOR LANE GROCERY"],
+        ["09/15/2026", "-12.00", "TIN ROOF DINER"],
+        ["09/16/2026", "250.00", "MARLOW DESIGN PAYROLL"],
+    ]
+    # An unknown header is still a header: its words may say what the shapes cannot.
+    assert suggest_mapping(_table(rows)) is None
+    # A column that mixes dates and words is not the date column.
+    assert suggest_mapping(_table([*rows[1:], ["n/a", "-3.00", "SILVER FERN CAFE"]])) is None
+
+
+def test_headerless_balance_owed_is_not_taken_for_an_accounts_balance() -> None:
+    """A card's balance owed adds up with the purchases read as money in."""
+    table = _extracted(layouts.headerless_card_with_balance_owed())
+    suggestion = _suggested(table)
+    assert not suggestion.confident
+    assert "sign_unverified" in suggestion.doubts
+    assert suggestion.parsed_rows == len(layouts.CARD_ROWS)
+
+
+def test_headerless_balance_that_two_readings_fit_proves_no_column() -> None:
+    rows = []
+    balance = Decimal("900.00")
+    for day, (_, amount) in enumerate(layouts.DATED_ROWS, start=13):
+        balance += Decimal(amount)
+        # The amount is printed twice (as booked and as converted).
+        rows.append([f"2026-09-{day}", "Synthetic payee", amount, amount, str(balance)])
+    suggestion = _suggested(_table(rows))
+    assert suggestion.doubts == ("no_header",)
+    assert suggestion.sign_evidence is None
+    assert suggestion.spec.balance_column is None
+    assert suggestion.spec.amount_column == 2
+
+
+def test_headerless_debit_and_credit_columns_without_a_balance_are_a_guess() -> None:
+    rows = [
+        [day, text, debit, credit]
+        for day, _, text, debit, credit in layouts.HEADERLESS_BALANCE_ROWS
+    ]
+    suggestion = _suggested(_table(rows))
+    spec = suggestion.spec
+    assert (spec.debit_column, spec.credit_column, spec.balance_column) == (2, 3, None)
+    # Which of the two is the money out is the usual order, not a fact of the file.
+    assert suggestion.doubts == ("no_header",)
+    assert suggestion.sign_evidence is None
+    assert not suggestion.confident
+
+
+def test_headerless_whole_numbers_are_not_the_amount_beside_priced_cells() -> None:
+    rows = [
+        [day, str(70412 + index), text, amount]
+        for index, (day, amount, text) in enumerate(layouts.HEADERLESS_SIGNED_ROWS)
+    ]
+    suggestion = _suggested(_table(rows))
+    assert _columns(suggestion) == {"date": 0, "payee": 2, "amount": 3}
+    assert suggestion.doubts == ("no_header",)
+
+
+def test_headerless_day_month_tie_is_still_a_guess() -> None:
+    rows = [
+        [day, amount, text]
+        for day, (text, amount) in zip(
+            ("02/03/2026", "02/09/2026", "03/04/2026", "03/11/2026", "04/05/2026", "04/12/2026"),
+            layouts.DATED_ROWS,
+            strict=True,
+        )
+    ]
+    suggestion = _suggested(_table(rows))
+    assert suggestion.doubts == ("no_header", "date_order_guessed")
+    assert suggestion.spec.date_format == "MM/DD/YYYY"
+    # The day the file arrived settles it for a table without a header too.
+    settled = suggest_mapping(_table(rows), today=date(2026, 4, 20))
+    assert settled is not None
+    assert settled.doubts == ("no_header",)
+
+
+def test_a_table_with_a_header_is_never_read_as_headerless() -> None:
+    suggestion = _suggested(_extracted(layouts.checking_with_running_balance()))
+    assert (suggestion.spec.has_header, suggestion.doubts) == (True, ())
+    assert {r.match for r in suggestion.reasons} == {"exact"}
+
+
+# ---------------------------------------------------------------------------
+# Review findings of lane C
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("words", [("DR", "CR"), ("Debit", "Credit"), ("Purchase", "Payment")])
+def test_words_that_almost_all_agree_do_not_prove_the_sign(words: tuple[str, str]) -> None:
+    """One negative refund among unsigned amounts: the payment row must not become spending."""
+    table = _extracted(layouts.card_unsigned_with_direction_words(words))
+    suggestion = _suggested(table)
+    assert suggestion.sign_evidence is None
+    assert "indicator_contradicts_sign" in suggestion.doubts
+    assert not suggestion.confident
+    assert suggestion.spec.sign is Sign.INFLOW_POSITIVE  # nothing was proven the other way
+
+
+def test_a_sale_is_money_in_on_a_sellers_own_ledger() -> None:
+    table = _extracted(layouts.seller_ledger_with_type_column())
+    suggestion = _suggested(table)
+    # "Sale" and "Return" mean opposite things to a card holder and to a
+    # seller: without a header that names a card they prove nothing.
+    assert (suggestion.sign_evidence, suggestion.spec.sign) == (None, Sign.INFLOW_POSITIVE)
+    amounts = _read(table, suggestion.spec)
+    assert (amounts[0], amounts[2]) == (Decimal("38.00"), Decimal("-38.00"))
+    # Under a header that names a card the same words are a card's.
+    rows = [["Date", "Merchant", "Type", "Amount"]]
+    kinds = ["Sale", "Sale", "Return", "Sale", "Payment", "Sale"]
+    figures = ["25.00", "40.00", "-25.00", "8.00", "-48.00", "12.00"]
+    for index, (kind, amount) in enumerate(zip(kinds, figures, strict=True)):
+        rows.append([f"2026-01-{index + 14}", f"SYNTHETIC PAYEE {index}", kind, amount])
+    card = _suggested(_table(rows))
+    assert (card.sign_evidence, card.spec.sign) == ("indicator_correlation", Sign.OUTFLOW_POSITIVE)
+
+
+def test_a_balance_that_grows_with_most_rows_is_not_believed_under_any_header() -> None:
+    """Review Focus 1: a card export without a card word, with the balance owed."""
+    table = _extracted(layouts.card_with_balance_owed())
+    suggestion = _suggested(table)
+    assert suggestion.sign_evidence == "balance"
+    assert suggestion.doubts == ("sign_unverified",)
+    assert not suggestion.confident
+
+
+def test_one_positive_cell_does_not_turn_a_negative_debit_column_round() -> None:
+    plain = _extracted(layouts.debit_column_printed_negative())
+    spec = _suggested(plain).spec
+    assert (spec.debit_column, spec.credit_column) == (2, 3)
+    withdrawals = [Decimal(f"-{day + 10}.40") for day in range(1, 10)]
+    assert _read(plain, spec) == [*withdrawals, Decimal("900.00")]
+    assert _suggested(plain).confident
+    table = _extracted(layouts.debit_column_printed_negative(reversal=True))
+    suggestion = _suggested(table)
+    # The nine withdrawals stay money out; the one positive cell is what comes back.
+    assert _read(table, suggestion.spec) == [*withdrawals, Decimal("900.00"), Decimal("13.40")]
+    # A saved mapping reads the next month's file the same way.
+    assert _read(table, spec) == _read(table, suggestion.spec)
+    # A column that mixes signs with most of them negative: a person confirms.
+    assert suggestion.doubts == ("sign_unverified",)
+    assert not suggestion.confident
+
+
+def test_a_name_with_digits_in_it_is_grouped_by_its_name() -> None:
+    names = ["Pot 12 of 34", "Everyday Checking"] * 3
+    table = _extracted(layouts.aggregator_named_accounts(names))
+    assert _suggested(table).spec.account_column == 1
+    # Digits scattered among words are no account number: no last four is made up.
+    assert _groups(table) == [("Pot 12 of 34", None, 3), ("Everyday Checking", None, 3)]
+    assert from_table(table, _suggested(table).spec).last4 is None
+
+
+def test_two_names_that_end_in_the_same_digits_are_two_accounts() -> None:
+    spec = MappingSpec(
+        date_column=0, date_format="YYYY-MM-DD", amount_column=3, payee_column=2, account_column=1
+    )
+    table = _extracted(layouts.aggregator_named_accounts(["Trip 2027", "Taxes 2027"] * 3))
+    # The same four digits under two names identify neither: each is asked by name.
+    statements = from_table_grouped(table, spec)
+    assert [(s.account_name, s.last4, len(s.transactions)) for s in statements] == [
+        ("Trip 2027", None, 3),
+        ("Taxes 2027", None, 3),
+    ]
+    assert [group_last4(table, spec, group) for group in (0, 1)] == [None, None]
+    # Scattered digits that happen to end like another cell's number.
+    mixed = _extracted(layouts.aggregator_named_accounts(["Joint 20 Pot 27", "Card 2027"] * 3))
+    statements = from_table_grouped(mixed, spec)
+    assert [(s.account_name, s.last4, len(s.transactions)) for s in statements] == [
+        ("Joint 20 Pot 27", None, 3),
+        (None, "2027", 3),
+    ]
+    # A long number under two names is never kept in a name.
+    numbered = _extracted(
+        layouts.aggregator_named_accounts(["Share 000123456", "Draft 000123456"] * 2)
+    )
+    statements = from_table_grouped(numbered, spec)
+    assert [(s.account_name, s.last4) for s in statements] == [("Share", None), ("Draft", None)]
+    assert "123456" not in repr(statements)
+
+
+def test_number_cells_keep_their_last_four_whatever_stands_around_them() -> None:
+    spec = MappingSpec(date_column=0, date_format="YYYY-MM-DD", amount_column=3, account_column=1)
+    cells = ["0000 1111 2222 3456", "Checking ...7788", "00012345-S01", "ZZ89 3704 0044 0532 00"]
+    table = _extracted(layouts.aggregator_named_accounts(cells))
+    assert [s.last4 for s in from_table_grouped(table, spec)] == ["3456", "7788", "4501", "3200"]
+
+
+def test_an_account_seen_once_among_accounts_that_repeat_is_split_off() -> None:
+    names = ["Everyday Checking", "Rewards Card"] * 4 + ["Holiday Savings"]
+    table = _extracted(layouts.aggregator_named_accounts(names))
+    suggestion = _suggested(table)
+    assert suggestion.spec.account_column == 1
+    assert _groups(table) == [
+        ("Everyday Checking", None, 4),
+        ("Rewards Card", None, 4),
+        ("Holiday Savings", None, 1),
+    ]
+    # Mostly values seen once: who the money went to, not whose account it is.
+    payees = ["Synthetic Pot A", "Synthetic Pot A", "Blue Owl", "Maple", "Initech"]
+    assert _suggested(_extracted(layouts.aggregator_named_accounts(payees))).accounts == 1
+
+
+@pytest.mark.parametrize(
+    ("trailing", "skipped", "footers"),
+    [
+        # A second section laid out differently: its rows are reported.
+        (
+            [(f"Card ending 0000 no {n}", f"2026-04-{n:02d}", f"-{n}.50") for n in range(1, 4)],
+            [7, 8, 9],
+            [],
+        ),
+        # Dates of another form are transactions that did not read.
+        ([("14 Apr 2026", "SYNTHETIC LATE SHOP", "-7.25")], [7], []),
+        # No date and an amount (an item not booked yet), a word for a date.
+        (
+            [("", "SYNTHETIC UNPOSTED", "-7.00"), ("Processing", "SYNTHETIC SHOP", "-8.00")],
+            [7, 8],
+            [],
+        ),
+        # A label and figures, a line without an amount, a short line: footers.
+        (
+            [("Total", "", "-141.60"), ("Closing balance", "as printed", ""), ("Exported", "ok")],
+            [],
+            [7, 8, 9],
+        ),
+        # More trailing lines than a footer has: all of them are reported.
+        ([("Total", "", f"-{n}.00") for n in range(1, 8)], [7, 8, 9, 10, 11, 12, 13], []),
+    ],
+    ids=["second-section", "other-date-form", "unposted", "totals", "too-many"],
+)
+def test_only_a_few_lines_without_a_transaction_in_them_are_footers(
+    trailing: list[tuple[str, ...]], skipped: list[int], footers: list[int]
+) -> None:
+    table = _extracted(layouts.export_with_trailing_rows(trailing))
+    spec = MappingSpec(date_column=0, date_format="YYYY-MM-DD", amount_column=2, payee_column=1)
+    parsed = from_table(table, spec)
+    assert len(parsed.transactions) == 6
+    assert (parsed.skipped_rows, parsed.footer_rows) == (skipped, footers)
+
+
+def test_a_quantity_with_more_decimals_than_money_is_never_shortened() -> None:
+    # Only the cash reader rounds; any other caller reads a cell exactly or not at all.
+    assert parse_cell_amount("0.12345678", ".") is None
+    assert parse_cell_amount("0.12345678", ".", places=10) == Decimal("0.12345678")
+    assert parse_cell_amount("0.12345678", ".", round_long=True) == Decimal("0.123457")
+    # A cash cell that is not zero is never read as zero.
+    assert parse_cell_amount("0.00000049", ".", round_long=True) is None
+    assert parse_cell_amount("0.0000000", ".", round_long=True) == Decimal(0)
+    row = [""] * len(HEADER)
+    for column, cell in {
+        0: "03/02/2026",
+        1: "Individual",
+        2: "Z00000001",
+        3: "YOU BOUGHT",
+        4: "ZQXA",
+        5: "ZEPHYR QUARRY A",
+        6: "Cash",
+        9: "USD",
+        10: "41.20",
+        11: "0.12345678",
+        16: "-5.09",
+        17: "03/02/2026",
+    }.items():
+        row[column] = cell
+    other = list(row)
+    other[11], other[16] = "2.5", "-103.00"
+    activity = read_activity_table(_table([list(HEADER), row, other]))
+    assert activity is not None
+    # The buy of 0.12345678 units is counted as a row that did not read,
+    # never imported as a buy of 0.123457.
+    assert [a.quantity for s in activity.statements for a in s.activity] == [Decimal("2.5")]
+    assert activity.skipped == 1
+
+
+@pytest.mark.parametrize("text", ["Nº 12", "nº12", "12 ª"])
+def test_an_ordinal_indicator_is_not_a_currency(text: str) -> None:
+    assert parse_cell_amount(text, ".") is None
+
+
+def test_one_row_a_month_written_day_first_is_not_the_days_of_january() -> None:
+    # The 1st of ten months, day first: read month first it is 1 to 10 January.
+    monthly = [f"01/{month:02d}/2026" for month in range(1, 11)]
+    _, suggestion = _dated(monthly, today=date(2026, 11, 12))
+    assert suggestion.doubts == ("date_order_guessed",)
+    # Two rows on the 1st of each month are as regular.
+    _, twice = _dated([cell for cell in monthly[:5] for _ in range(2)], today=date(2026, 11, 12))
+    assert twice.doubts == ("date_order_guessed",)
+
+
+def test_one_row_dated_after_the_upload_does_not_turn_the_dates_round() -> None:
+    # Month first, with one payment scheduled for 1 December; uploaded on 12 November.
+    dates = ["09/03/2026", "10/07/2026", "11/02/2026", "12/01/2026", "10/09/2026"]
+    table, suggestion = _dated(dates, today=date(2026, 11, 12))
+    assert suggestion.doubts == ("date_order_guessed",)
+    assert suggestion.spec.date_format == "MM/DD/YYYY"
+    assert _dates(table, suggestion)[0] == date(2026, 9, 3)

@@ -7,7 +7,10 @@ For every ``INVSTMTRS``:
 
 * the account: ``INVACCTFROM/ACCTID`` cut to its **last four digits** (the
   full number never leaves the child), the broker (``FI/ORG`` or
-  ``BROKERID``), ``CURDEF``;
+  ``BROKERID``), ``CURDEF``; a statement that carries ``INV401K`` or
+  ``INV401KBAL`` (only a 401(k) plan's does) is a ``retirement`` account of
+  subtype ``401k``, any other a ``brokerage`` account (nothing inside those
+  aggregates is read: the employer and the plan are not kept);
 * ``INVPOSLIST``: ``POSSTOCK``/``POSMF``/``POSDEBT``/``POSOPT``/``POSOTHER``
   with ``SECID``, ``UNITS`` (negative for ``POSTYPE`` ``SHORT``),
   ``UNITPRICE``, ``MKTVAL``, ``DTPRICEASOF``; ``DTASOF`` of the list (else
@@ -18,7 +21,14 @@ For every ``INVSTMTRS``:
   ``reinvest`` of the same amount, so the cash nets to zero as it does in
   the account), ``INVEXPENSE``, ``TRANSFER``, ``SPLIT`` (``split_ratio`` =
   ``(NEWUNITS, OLDUNITS)``) and ``INVBANKTRAN`` (cash ``deposit`` /
-  ``withdrawal``); unknown kinds are counted in a warning;
+  ``withdrawal``). **No activity is dropped without a count**: one of a
+  known kind that cannot be read, one of a kind this module has no reading
+  for (margin interest, a return of capital, a journal entry: the warning
+  ``investment_activity_kind_unsupported`` names the reason) and one of a
+  known kind that sits beside the list (after a stray ``</INVTRANLIST>``)
+  are each counted, and a statement that lost any adds one
+  ``transaction_skipped:<n>`` to the result's warnings. A tag of the list
+  with nothing inside it is no activity and is not counted;
 * ``INVBAL/AVAILCASH``: the closing cash balance;
 * ``SECLISTMSGSRSV1``: ticker, name and kind of each ``SECID`` (a CUSIP or
   ISIN ``UNIQUEID`` is kept as such; without a ticker the CUSIP/ISIN is the
@@ -87,6 +97,35 @@ _INCOME_TYPES: Final[dict[str, InvestmentActivityType]] = {
 _KNOWN: Final = frozenset(
     {*_BUY, *_SELL, "INCOME", "REINVEST", "INVEXPENSE", "TRANSFER", "SPLIT", "INVBANKTRAN"}
 )
+#: Aggregates this module walks: the SGML tokenizer nests them even when a
+#: file leaves their end tags out (:data:`app.ingestion.extract.ofx.AGGREGATES`).
+INVESTMENT_AGGREGATES: Final = frozenset(
+    {
+        *_KNOWN,
+        *POSITION_KINDS,
+        *INFO_KINDS,
+        "INVSTMTMSGSRSV1",
+        "INVSTMTTRNRS",
+        "INVSTMTRS",
+        "INVACCTFROM",
+        "INVTRANLIST",
+        "INVPOSLIST",
+        "INVPOS",
+        "INVBAL",
+        "INVTRAN",
+        "INVBUY",
+        "INVSELL",
+        "SECID",
+        "SECLISTMSGSRSV1",
+        "SECLIST",
+        "SECINFO",
+        "STMTTRN",
+    }
+)
+#: Aggregates of an ``INVSTMTRS`` that only a 401(k) plan's statement carries.
+#: Not in :data:`INVESTMENT_AGGREGATES`: found as a child of the statement
+#: whether or not the tokenizer nests them, and nothing inside them is read.
+_PLAN_401K: Final = ("INV401K", "INV401KBAL")
 _DATE: Final = re.compile(r"^\s*(\d{4})(\d{2})(\d{2})")
 
 
@@ -425,6 +464,7 @@ def _statement(
     options: ExtractOptions,
     budget: list[int],
     warnings: set[str],
+    skipped: list[int],
     institution: str | None,
 ) -> InvestmentStatement:
     account_node = node.child("INVACCTFROM")
@@ -442,12 +482,17 @@ def _statement(
     activity: list[InvestmentActivity] = []
     truncated = False
     unknown = 0
+    unread = 0
     if tranlist is not None:
         for item in tranlist.children:
             if item.name in ("DTSTART", "DTEND"):
                 continue
             if item.name not in _KNOWN:
                 unknown += 1
+                # An aggregate is a record (it carries an ``INVTRAN`` at
+                # least) and was not imported; a lone leaf is not one.
+                if item.children:
+                    unread += 1
                 continue
             if budget[0] <= 0:
                 truncated = True
@@ -457,12 +502,15 @@ def _statement(
             except ValidationError:
                 rows = None
             if rows is None:
-                warnings.add("investment_activity_skipped_invalid")
+                unread += 1
                 continue
             activity.extend(rows)
             budget[0] -= 1
     if unknown:
         warnings.add("investment_activity_kind_unsupported")
+    # Activity beside the list (a stray ``</INVTRANLIST>`` closed it early) is not read.
+    unread += sum(1 for item in node.children if item.name in _KNOWN)
+    skipped.append(unread)
     if truncated:
         warnings.add(f"transactions_truncated:{options.max_transactions}")
     cash: Balance | None = None
@@ -472,10 +520,12 @@ def _statement(
         if available is not None:
             cash = Balance(amount=available, as_of=as_of)
     currency = _currency(node.text("CURDEF"))
+    plan = any(node.child(name) is not None for name in _PLAN_401K)
     return InvestmentStatement(
         source_format="qfx" if kind == "qfx" else "ofx",
         account=StatementAccount(
-            account_type="brokerage",
+            account_type="retirement" if plan else "brokerage",
+            subtype="401k" if plan else None,
             last4=last4(number),
             currency=currency,
             institution=institution or clean_text(broker, limit=200),
@@ -496,14 +546,19 @@ def investment_statements(
     options: ExtractOptions,
     budget: list[int],
     warnings: set[str],
+    skipped: list[int],
     institution: str | None,
 ) -> list[InvestmentStatement]:
-    """Every ``INVSTMTRS`` of the file (module doc); ``budget`` caps activity rows."""
+    """Every ``INVSTMTRS`` of the file (module doc); ``budget`` caps activity rows.
+
+    ``skipped`` receives, per statement, how many activity records were not
+    read (module doc).
+    """
     nodes = list(root.iter("INVSTMTRS"))
     if not nodes:
         return []
     catalogue = _Catalogue(root)
     return [
-        _statement(node, kind, catalogue, options, budget, warnings, institution)
+        _statement(node, kind, catalogue, options, budget, warnings, skipped, institution)
         for node in nodes[:MAX_STATEMENTS]
     ]

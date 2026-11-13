@@ -37,8 +37,10 @@ const REASONS: readonly [ReviewItem["kind"], string][] = [
   ["unparsed", "format_not_supported"],
   ["unparsed", "encrypted"],
   ["unparsed", "no_records"],
+  ["unparsed", "no_rows"],
   ["unparsed", "scan_failed"],
   ["unparsed", "container_incomplete"],
+  ["unparsed", "ocr_failed"],
   ["low_confidence_field", "lines_skipped"],
   ["low_confidence_field", "low_confidence"],
   ["low_confidence_field", "reconciliation_failed"],
@@ -86,6 +88,108 @@ describe("review explanations", () => {
     );
   });
 
+  it("says that a header-only file has no rows, and sends nobody to the mapping editor", () => {
+    const found = explain(
+      item("unparsed", { reason: "no_rows", source: "table", table: 0 }),
+    );
+    expect(found.title).toBe("Nothing to import");
+    expect(found.what).toBe("This file has no rows to import.");
+    expect(found.steps.join(" ")).not.toContain("Map columns");
+  });
+
+  it("says of a document's pages that no dated rows were found on them", () => {
+    const found = explain(
+      item("unparsed", { reason: "no_rows", source: "pages" }),
+    );
+    expect(found.title).toBe("Nothing to import");
+    expect(found.what).toBe(
+      "PerFin found no dated rows to import on the pages of this document.",
+    );
+    expect(found.steps.join(" ")).toContain("Teach PerFin");
+    expect(found.steps.join(" ")).not.toContain("Map columns");
+  });
+
+  it("sends an unreadable activity export to the mapping editor", () => {
+    const found = explain(item("unparsed", { reason: "activity_unreadable" }));
+    expect(found.steps.join(" ")).toContain("Map columns");
+  });
+
+  it.each([
+    ["sign_unverified", "Money in or money out?", "Positive amounts are"],
+    [
+      "indicator_contradicts_sign",
+      "The words and the signs disagree",
+      "Positive amounts are",
+    ],
+    ["investment_columns", "Trades, not a cash ledger", "Investment activity"],
+    ["no_header", "No header row", "Positive amounts are"],
+  ])(
+    "asks the question of a mapping suggestion's doubt: %s",
+    (doubt, title, word) => {
+      const general = explain(item("unparsed", { reason: "mapping_required" }));
+      const found = explain(
+        item("unparsed", {
+          reason: "mapping_required",
+          auto_import: "not_confident",
+          suggestion: { confident: false, doubts: ["rows_unreadable", doubt] },
+        }),
+      );
+      expect(found.title).toBe(title);
+      expect(found.what).not.toBe(general.what);
+      expect(found.why).toBeDefined();
+      // The mapping editor is the answer to every doubt.
+      expect(found.steps[0]).toContain("Map columns");
+      expect(found.steps.join(" ")).toContain(word);
+    },
+  );
+
+  it("asks for the sign when that is all that held the file", () => {
+    // A mapping saved on trust that met a card account carries no doubt of its own.
+    const found = explain(
+      item("unparsed", {
+        reason: "mapping_required",
+        auto_import: "sign_unverified",
+        suggestion: { confident: true, doubts: [] },
+      }),
+    );
+    expect(found.title).toBe("Money in or money out?");
+  });
+
+  it("asks about the columns of a file without a header before its sign", () => {
+    // Nothing named the columns, so "PerFin found the columns" is not yet true.
+    const found = explain(
+      item("unparsed", {
+        reason: "mapping_required",
+        auto_import: "not_confident",
+        suggestion: { confident: false, doubts: ["no_header", "sign_unverified"] },
+      }),
+    );
+    expect(found.title).toBe("No header row");
+    expect(found.what).toContain("no header row");
+  });
+
+  it("keeps the general words for the other doubts, and names trades first", () => {
+    const general = explain(item("unparsed", { reason: "mapping_required" }));
+    expect(general.title).toBe("Needs a column mapping");
+    expect(
+      explain(
+        item("unparsed", {
+          reason: "mapping_required",
+          auto_import: "not_confident",
+          suggestion: { doubts: ["date_order_guessed"] },
+        }),
+      ),
+    ).toEqual(general);
+    expect(
+      explain(
+        item("unparsed", {
+          reason: "mapping_required",
+          suggestion: { doubts: ["sign_unverified", "investment_columns"] },
+        }),
+      ).title,
+    ).toBe("Trades, not a cash ledger");
+  });
+
   it("lists the unknown actions of skipped rows", () => {
     const found = explain(
       item("low_confidence_field", {
@@ -98,6 +202,26 @@ describe("review explanations", () => {
     expect(found.what).toBe(
       "3 rows of this file were not imported, 2 of them with an action PerFin does not know. Unknown actions: mystery item.",
     );
+  });
+
+  it("says records of a statement file were not read", () => {
+    const found = explain(
+      item("low_confidence_field", { reason: "lines_skipped", count: 2, source: "extraction" }),
+    );
+    expect(found.title).toBe("Some records were not read");
+    expect(found.what).toBe("2 records of this file could not be read and were not imported.");
+    expect(found.steps.join(" ")).not.toContain("Teach PerFin");
+    // Rows a table reader skipped keep their own words.
+    expect(explain(item("low_confidence_field", { reason: "lines_skipped", count: 2 })).title).toBe(
+      "Some rows were skipped",
+    );
+  });
+
+  it("says one unread record in the singular", () => {
+    const found = explain(
+      item("low_confidence_field", { reason: "lines_skipped", count: 1, source: "extraction" }),
+    );
+    expect(found.what).toBe("1 record of this file could not be read and was not imported.");
   });
 
   it("names both periods of an overlapping statement", () => {

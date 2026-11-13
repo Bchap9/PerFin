@@ -43,7 +43,8 @@ export interface RowChoice {
   mode: "create" | "use" | "skip";
   accountId: string;
   name: string;
-  type: AccountType;
+  /** "" until the person chooses: the file did not say what kind of account it is. */
+  type: AccountType | "";
   /** The kind of account within the type ("" for none). */
   subtype: string;
   institution: string;
@@ -63,7 +64,7 @@ export function initialChoice(found: DetectedAccount): RowChoice {
     mode,
     accountId: found.status === "ambiguous" ? (found.candidates[0] ?? "") : "",
     name: proposal?.name ?? "",
-    type: proposal?.type ?? "checking",
+    type: proposal?.type ?? "",
     subtype: proposal?.subtype ?? "",
     institution: proposal?.institution_name ?? "",
     currency: proposal?.currency ?? "",
@@ -105,6 +106,10 @@ export function buildChoices(
     }
     if (currency !== "" && !/^[A-Z]{3}$/.test(currency)) {
       problems.push(`Use a three-letter currency for ${label}.`);
+      return;
+    }
+    if (row.type === "") {
+      problems.push(`Choose the account type for ${label}.`);
       return;
     }
     const opening = row.openingBalance.trim();
@@ -185,7 +190,7 @@ function AccountRow({
 }) {
   const status = STATUS[found.status];
   const subtypes = useAccountSubtypes();
-  const kinds = subtypeOptions(subtypes.data, row.type);
+  const kinds = row.type === "" ? [] : subtypeOptions(subtypes.data, row.type);
   const known = accounts.find((account) => account.id === found.account_id);
   const choices =
     found.status === "ambiguous"
@@ -253,8 +258,19 @@ function AccountRow({
                   }}
                 />
               </Field>
-              <Field label="Type">
+              <Field
+                label="Type"
+                required
+                hint={
+                  row.type === ""
+                    ? found.proposal?.type === null
+                      ? "PerFin could not tell from this file whether it is a bank account or a card, so choose the type."
+                      : "Choose what kind of account this is."
+                    : undefined
+                }
+              >
                 <Select
+                  {...(row.type === "" ? { placeholder: "Choose a type" } : {})}
                   options={ACCOUNT_TYPES.filter(
                     (entry) =>
                       entry.type !== "manual_asset" &&

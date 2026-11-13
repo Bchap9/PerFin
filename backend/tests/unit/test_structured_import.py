@@ -167,7 +167,7 @@ def test_amount_cells(text: str, separator: str, expected: str) -> None:
 
 @pytest.mark.parametrize(
     "text",
-    ["", "abc", "1.2.3", "12.1234567", "1e5", "NaN", "--5", "100000000000000", "=1+2"],
+    ["", "abc", "1.2.3", "1e5", "NaN", "--5", "100000000000000", "=1+2"],
 )
 def test_non_amount_cells(text: str) -> None:
     assert parse_cell_amount(text, ".") is None
@@ -253,7 +253,7 @@ def test_debit_credit_indicator_and_sign_conventions() -> None:
     assert [t.amount for t in split.transactions] == [
         Decimal("-10.00"),
         Decimal("2.50"),
-        Decimal("-1.00"),
+        Decimal("1.00"),  # a negative debit beside positive ones is a reversal: money in
     ]
     flagged = from_table(
         table,

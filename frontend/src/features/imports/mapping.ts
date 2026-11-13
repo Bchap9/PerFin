@@ -101,6 +101,8 @@ export const DATE_FORMATS: readonly MappingSpec["date_format"][] = [
   "DD MMM YYYY",
   "DD-MMM-YYYY",
   "MMM DD, YYYY",
+  "DDMMMYYYY",
+  "DD-MMM-YY",
 ];
 
 export function isDateFormat(

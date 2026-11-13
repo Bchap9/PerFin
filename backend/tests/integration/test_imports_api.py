@@ -24,7 +24,7 @@ from app.core import clock
 from app.core.settings import Settings
 from app.db.models import AuditLog, Event, Job, Setting, SettingScope
 from app.db.rls import set_context
-from app.domain.accounts.models import Account
+from app.domain.accounts.models import Account, AccountType
 from app.domain.documents.models import (
     DocumentKind,
     DocumentStatus,
@@ -36,10 +36,13 @@ from app.domain.documents.models import (
 from app.domain.imports import wording
 from app.domain.imports.schemas import APPLY_MAPPING_JOB_TYPE
 from app.domain.transactions.models import Transaction
+from app.ingestion.extract.delimited import extract_delimited
+from app.ingestion.parsers.brokerage_table import activity_spec
 from app.ingestion.parsers.structured import header_fingerprint
 from app.ingestion.sandbox.protocol import (
     Balance,
     ExtractedTransaction,
+    ExtractOptions,
     ExtractResult,
     Statement,
     StatementAccount,
@@ -55,6 +58,12 @@ from tests.fixtures.imports import (
     table_result,
 )
 from tests.fixtures.ledger import LedgerFactories
+from tests.fixtures.synth_activity_csv import (
+    ActivityRow,
+    activity_accounts,
+    activity_csv_bytes,
+    activity_rows,
+)
 
 pytestmark = pytest.mark.integration
 
@@ -508,13 +517,60 @@ def test_apply_mapping_on_a_tsv_result_with_table_and_rerun(
     assert amounts == sorted(["-42.10", "1500.00", "-30.00"])
 
 
+def test_activity_unreadable_offers_the_mapping_editor(
+    actors: Actors, factories: Factories, ledger: LedgerFactories
+) -> None:
+    """Its explanation says "Open Map columns": the item has to lead there."""
+    owner = actors.new(role="owner")
+    household_id = _hh(owner.record)
+    (account,) = activity_accounts(71, 1)
+    ledger.account(household_id, type=AccountType.BROKERAGE, number_last4=account.last4)
+    # Every row has an action no reader knows.
+    rows = [
+        ActivityRow(
+            date(2026, 10, 5 + index),
+            account,
+            f"MYSTERY SYNTHETIC SPECIAL {word}",
+            "SGRX",
+            "SYNTHETIC GROWTH INDEX ETF",
+            None,
+            Decimal(index + 1),
+            None,
+            None,
+        )
+        for index, word in enumerate(("ALPHA", "BRAVO", "CHARLIE"))
+    ]
+    cells = extract_delimited(activity_csv_bytes(rows), ExtractOptions(), "csv").tables[0].rows
+    # A person saved an activity mapping for this layout from an earlier file.
+    earlier = extract_delimited(
+        activity_csv_bytes(activity_rows(71, (account,))), ExtractOptions(), "csv"
+    ).tables[0]
+    spec = activity_spec(earlier)
+    assert spec is not None
+    _mapping(factories, household_id, spec=spec.model_dump(mode="json"), rows=earlier.rows)
+    document_id = _document(factories, household_id, result=table_result(cells))
+    assert owner.post(f"{API}/imports/{document_id}/apply-mapping", json={}).status_code == 202
+    assert run_jobs(factories, household_id, APPLY_MAPPING_JOB_TYPE, done=set())
+    (item,) = owner.get(f"{API}/review?document={document_id}").json()["items"]
+    assert (item["kind"], item["reason"]) == ("unparsed", "activity_unreadable")
+    assert item["next_step"] == "column_mapping"
+    # The editor it leads to has the table to map.
+    opened = owner.get(f"{API}/imports/{document_id}/preview")
+    assert opened.status_code == 200, opened.text
+    preview = opened.json()
+    assert preview["tables"][0]["row_count"] == len(cells)
+    assert preview["suggested_spec"]["mode"] == "activity"
+    assert {"action", "symbol", "quantity"} <= {r["role"] for r in preview["suggestion"]["roles"]}
+
+
 def test_rerun_does_not_repeat_open_review_items(
     actors: Actors, factories: Factories, ledger: LedgerFactories
 ) -> None:
     owner = actors.new(role="owner")
     household_id = _hh(owner.record)
     account = ledger.account(household_id)
-    rows = [*SAMPLE_ROWS, ["Total", "1427.90", ""]]
+    # A dated row whose amount does not read (a footer would not be reported).
+    rows = [*SAMPLE_ROWS, ["01/08/2026", "Card fee", "n/a", ""]]
     document_id = _document(factories, household_id, account, result=table_result(rows))
     _mapping(factories, household_id)
     done: set[uuid.UUID] = set()
@@ -541,6 +597,41 @@ def test_rerun_does_not_repeat_open_review_items(
     ]
     assert count == 3
     assert owner.get(f"{API}/imports/{document_id}/preview").json()["status"] == "needs_review"
+
+
+def test_trailing_footers_and_pending_rows_are_counted_not_reported(
+    actors: Actors, factories: Factories, ledger: LedgerFactories
+) -> None:
+    """Rows after the last readable one are footers: they raise no ``rows_skipped``."""
+    owner = actors.new(role="owner")
+    household_id = _hh(owner.record)
+    account = ledger.account(household_id)
+    rows = [
+        SAMPLE_ROWS[0],
+        ["Pending", "Tin Roof Diner", "-12.40", ""],
+        *SAMPLE_ROWS[1:],
+        ["Total", "1427.90", ""],
+        ["", "Closing balance", "", "2427.90"],  # no date, no amount: a note
+    ]
+    document_id = _document(factories, household_id, account, result=table_result(rows))
+    _mapping(factories, household_id)
+    assert owner.post(f"{API}/imports/{document_id}/apply-mapping", json={}).status_code == 202
+    assert run_jobs(factories, household_id, APPLY_MAPPING_JOB_TYPE, done=set())
+    with factories.transaction() as db:
+        set_context(db, household_id)
+        items = list(
+            db.execute(select(ReviewItem).where(ReviewItem.document_id == document_id)).scalars()
+        )
+        count = len(
+            list(db.execute(select(Transaction).where(Transaction.account_id == account.id)))
+        )
+    assert items == []
+    assert count == 3  # the pending row is not imported
+    preview = owner.get(f"{API}/imports/{document_id}/preview").json()
+    assert preview["status"] == "processed"
+    summary = preview["last_import"]
+    assert (summary["imported"], summary["skipped_rows"]) == (3, 0)
+    assert (summary["footer_rows"], summary["pending_rows"]) == (1, 1)
 
 
 # ---------------------------------------------------------------------------

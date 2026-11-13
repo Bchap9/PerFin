@@ -22,7 +22,10 @@ person.
 * :func:`ofx_investment` writes the same statement as OFX 1.x SGML or 2.x
   XML: ``SECLIST``, ``INVPOSLIST``, ``INVTRANLIST`` (``BUYMF``,
   ``BUYSTOCK``, ``SELLSTOCK``, ``INCOME``, ``REINVEST``, ``INVEXPENSE``,
-  ``INVBANKTRAN``) and ``INVBAL``.
+  ``INVBANKTRAN``) and ``INVBAL``; with ``plan`` also the 401(k) aggregates
+  a retirement plan's download carries (``INV401K``, ``INV401KBAL``).
+* :func:`listed_twice` prints one holding as two positions on the same day
+  at two prices, as a plan lists one per contribution source.
 * Tampering (SECURITY.md C12): ``"extra_row"`` prints a forged buy the cash
   balance does not account for, ``"market_value"`` misprints one position's
   market value, ``"total"`` misprints the account value.
@@ -272,6 +275,39 @@ def brokerage_series(
 
 def brokerage_statement(seed: int = 51) -> SynthBrokerage:
     return brokerage_series(seed, months=1)[0]
+
+
+#: How much dearer :func:`listed_twice` prints the second part of a holding.
+TWICE_PRICE_STEP: Final = Decimal("0.3700")
+
+
+def listed_twice(stmt: SynthBrokerage, symbol: str = "PBXA") -> SynthBrokerage:
+    """``stmt`` with the holding of ``symbol`` printed as two positions on the same day.
+
+    A retirement plan lists one position per contribution source, a taxable
+    account one per sub-account. The units are split in two (they still add
+    up to the holding) and the second part is priced :data:`TWICE_PRICE_STEP`
+    higher; each part's market value is its own units at its own price, so
+    the statement still adds up.
+    """
+    positions: list[SynthPosition] = []
+    for position in stmt.positions:
+        if position.symbol != symbol:
+            positions.append(position)
+            continue
+        part = (position.quantity * Decimal("0.4")).quantize(Decimal("0.001"))
+        cost = (position.cost * Decimal("0.4")).quantize(CENT)
+        positions.append(replace(position, quantity=part, cost=cost))
+        positions.append(
+            replace(
+                position,
+                quantity=position.quantity - part,
+                price=position.price + TWICE_PRICE_STEP,
+                cost=position.cost - cost,
+            )
+        )
+    assert len(positions) == len(stmt.positions) + 1, symbol
+    return replace(stmt, positions=tuple(positions))
 
 
 #: The buy a ``tamper="extra_row"`` statement prints but its cash does not reflect.
@@ -556,8 +592,35 @@ def _seclist(stmt: SynthBrokerage) -> str:
     return f"<SECLISTMSGSRSV1><SECLIST>{''.join(infos)}</SECLIST></SECLISTMSGSRSV1>"
 
 
-def ofx_investment(stmt: SynthBrokerage, *, xml: bool = False, tamper: Tamper = None) -> bytes:
-    """The statement as an OFX investment download (module doc)."""
+#: The 401(k) aggregates of an ``INVSTMTRS``, as :func:`ofx_investment` writes them.
+PLAN_AGGREGATES: Final = ("INV401K", "INV401KBAL")
+
+
+def _plan(stmt: SynthBrokerage, aggregates: Sequence[str]) -> str:
+    assert set(aggregates) <= set(PLAN_AGGREGATES), aggregates
+    out = ""
+    if "INV401K" in aggregates:
+        out += "<INV401K><EMPLOYERNAME>Placeholder Employer</EMPLOYERNAME></INV401K>"
+    if "INV401KBAL" in aggregates:
+        out += (
+            f"<INV401KBAL><PRETAX>{stmt.total_value}</PRETAX>"
+            f"<TOTAL>{stmt.total_value}</TOTAL></INV401KBAL>"
+        )
+    return out
+
+
+def ofx_investment(
+    stmt: SynthBrokerage,
+    *,
+    xml: bool = False,
+    tamper: Tamper = None,
+    plan: Sequence[str] = (),
+) -> bytes:
+    """The statement as an OFX investment download (module doc).
+
+    ``plan``: the 401(k) aggregates (:data:`PLAN_AGGREGATES`) the statement
+    carries after its balances; none for a taxable account.
+    """
     rows = _printed_activity(stmt, tamper)
     positions = "".join(_position(p, stmt.end) for p in stmt.positions)
     if tamper == "market_value":
@@ -580,7 +643,7 @@ def ofx_investment(stmt: SynthBrokerage, *, xml: bool = False, tamper: Tamper = 
         f"<DTEND>{_ofx_date(stmt.end)}</DTEND>{''.join(_txn(a) for a in rows)}</INVTRANLIST>"
         f"<INVPOSLIST>{positions}</INVPOSLIST>"
         f"<INVBAL><AVAILCASH>{stmt.cash_closing}</AVAILCASH><MARGINBALANCE>0</MARGINBALANCE>"
-        "<SHORTBALANCE>0</SHORTBALANCE></INVBAL>"
+        f"<SHORTBALANCE>0</SHORTBALANCE></INVBAL>{_plan(stmt, plan)}"
         "</INVSTMTRS></INVSTMTTRNRS></INVSTMTMSGSRSV1>"
         f"{_seclist(stmt)}"
     )

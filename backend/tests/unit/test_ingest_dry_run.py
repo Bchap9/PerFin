@@ -5,14 +5,17 @@ from __future__ import annotations
 
 import io
 import json
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
 import pytest
 
 from app.cli import EXIT_UNAVAILABLE, main
+from app.core import clock
 from app.ingestion.dryrun import DryRun
 from app.integrations.antivirus.clamav import ClamdAddress, ClamdScanner
+from tests.fixtures import synth_csv_layouts as layouts
 from tests.fixtures import synth_documents as synth
 from tests.fixtures.fake_clamd import MARKER, SIGNATURE, fake_clamd
 from tests.fixtures.statements import csv_bytes, ofx_sgml, synth_transactions
@@ -75,6 +78,30 @@ def test_csv_shows_the_suggested_mapping_and_rows(tmp_path: Path) -> None:
     assert [t["amount"] for t in table["first_transactions"]] == [str(t.amount) for t in txns]
     classify = next(s for s in stages if s["stage"] == "classify")
     assert classify["pipeline_kind"] == "statement"
+
+
+def test_csv_day_month_order_is_settled_by_today_as_an_import_would(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Every day is 12 or less. Read day first, the rows would be dated in
+    # April, September and November: after 20 March, the day of the dry run.
+    data = layouts.checking_dated(["02/03/2026", "02/09/2026", "03/04/2026", "03/11/2026"])
+    path = _write(tmp_path, "s.csv", data)
+
+    def table(now: datetime) -> dict[str, Any]:
+        monkeypatch.setattr(clock, "utcnow", lambda: now)
+        code, stages = _run(path)
+        assert code == 0
+        (found,) = next(s for s in stages if s["stage"] == "parse")["tables"]
+        return dict(found)
+
+    settled = table(datetime(2026, 3, 20, 12, tzinfo=UTC))
+    assert settled["suggestion"]["doubts"] == []
+    assert settled["suggested_mapping"]["date_format"] == "MM/DD/YYYY"
+    assert [t["posted"] for t in settled["first_transactions"]][-1] == "2026-03-11"
+    # At the end of the year both orders are in the past: the order stays a guess.
+    guessed = table(datetime(2026, 12, 31, 12, tzinfo=UTC))
+    assert guessed["suggestion"]["doubts"] == ["date_order_guessed"]
 
 
 def test_activity_export_shows_the_investment_statements(tmp_path: Path) -> None:

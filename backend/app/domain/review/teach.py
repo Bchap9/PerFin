@@ -357,6 +357,10 @@ def _settles(
       the import re-run answers (``unparsed``, ``unknown_account``:
       :data:`app.domain.imports.service.RERUN_ANSWERS`) and lines the
       parsers skipped.
+    - What the pipeline raised about the reading itself
+      (:data:`app.domain.imports.service.PIPELINE_REASONS`: scanned pages
+      OCR never read): only the document read again through the pipeline,
+      never rows imported from a taught table or a fact applied.
     - A ``new_institution`` item: the institution set or the layout remembered.
     - A ``low_confidence_field`` item: a fact applied that is a field the
       item names (:data:`_FIELD_FACTS`: the period for a period item, the
@@ -371,6 +375,8 @@ def _settles(
         return reconciled
     if rerun == "pipeline":
         return True
+    if reason in imports_service.PIPELINE_REASONS:
+        return False
     if rerun == "import" and (
         item.kind in imports_service.RERUN_ANSWERS or reason in _READING_REASONS
     ):

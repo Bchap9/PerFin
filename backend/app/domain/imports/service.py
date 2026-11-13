@@ -24,15 +24,27 @@ The flow (INGESTION.md "Parse", "Match and deduplicate", "Commit"):
      XLSX and the person whose document it is may save mappings (member or
      above): the suggestion is saved as a new mapping (audited
      ``import_mapping.create`` with ``origin: suggested``) so the next file
-     is recognised, and the run summary says ``mapping_suggested``. A
-     single signed amount column read on trust (no debit/credit columns, no
-     indicator, no running balance that agrees) is never used to write into a
-     liability account (a card export may list purchases as positive). A
+     is recognised, and the run summary says ``mapping_suggested``. The
+     sign of a file is proven or the file waits: signed amounts read on
+     trust (no debit/credit columns, no indicator, no running balance that
+     agrees, no direction words that go with the signs) are not confident
+     when the header names a card, no amount is money out or more rows
+     are money in than money out (the suggestion's ``sign_unverified``
+     doubt; ``auto_import: sign_unverified`` when it is the only one), and
+     a sign on trust is never used to write into a liability account (a
+     card export may list purchases as positive). A table of securities
+     trades (``investment_columns``) and direction words that contradict
+     the signs (``indicator_contradicts_sign``) are never confident either. A
+     table without a header row is read from the shapes of its columns
+     and waits (``no_header``) unless a running balance proves which
+     columns hold the money; the mapping saved for it is named by its
+     column count, never after its first row. A
      statement whose account is not known yet still gets its own
      ``account_required``/``unknown_account`` item, and the mapping saved
-     from such a suggestion is marked ``sign_unverified``: whenever it
+     from a suggestion on trust is marked ``sign_unverified``: whenever it
      later meets a liability account (the re-run after a person picks the
-     card, next month's file) the import waits as ``mapping_required``
+     card, next month's file), or a file whose own suggestion doubts the
+     sign, the import waits as ``mapping_required``
      (``auto_import: sign_unverified``) until a person saves the mapping's
      spec in the editor (which clears the mark) or chooses the mapping
      explicitly for that re-run. With one account-bound mapping among the
@@ -41,7 +53,11 @@ The flow (INGESTION.md "Parse", "Match and deduplicate", "Commit"):
      review item (``mapping_required``) carrying the suggestion and why it
      was not used (``auto_import``), and the table is shown by ``GET
      /imports/{document_id}/preview`` for the mapping editor. The account is
-     the one given on re-run, the document's or the mapping's.
+     the one given on re-run, the document's or the mapping's. A table that
+     is only a header row (:func:`header_only`), and a PDF or image whose
+     page tables hold no dated row (``app.domain.review.layout``), have
+     nothing to map: they wait as ``unparsed``/``no_rows`` (``source``:
+     ``table`` or ``pages``), which the mapping editor is not offered for.
    * **Brokerage activity tables** come first: when table 0 of a CSV, TSV
      or XLSX is a brokerage "Activity" export
      (``app.ingestion.parsers.brokerage_table``: a date, an action that
@@ -89,6 +105,10 @@ The flow (INGESTION.md "Parse", "Match and deduplicate", "Commit"):
      the digits); ``remember`` on it re-reads the group's last four digits
      from the stored table (:func:`stored_group_last4`), and an item whose
      mapping spec has changed since is stale (:func:`group_item_current`).
+     The account a person puts one of those statements on is remembered
+     for the document by the statement's digest (:func:`_group_key`), so
+     the statements of a table split by account *names*, which no digits
+     match, can be answered one after the other.
    * Deduplication (``app.ingestion.match.dedupe``): exact ``import_hash``
      matches are skipped, near matches (same date and amount) are imported as
      ``review_state = pending`` with a ``possible_duplicate`` review item.
@@ -106,6 +126,13 @@ The flow (INGESTION.md "Parse", "Match and deduplicate", "Commit"):
      does not reconcile (``app.ingestion.reconcile``) has all its rows
      pending, a ``reconciliation_failed``/``reconciliation_unavailable``
      item with the figures, and writes no balance snapshot (SECURITY.md C12).
+   * Records the extractor could not read (OFX, QFX and QIF: a record with
+     no date or amount, an investment activity of a kind it does not read)
+     are counted in its ``transaction_skipped:<n>`` warnings, one per
+     statement. Their sum raises one ``low_confidence_field`` item per
+     document (``lines_skipped``: ``count``, ``source`` ``extraction``), so
+     the document waits in review although the rows that were read are
+     imported.
    * Brokerage statements (``result.investments``: OFX ``INVSTMTRS``,
      PDFs read by ``app.ingestion.parsers.brokerage``; brokerage activity
      tables above) go to
@@ -134,9 +161,11 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 import uuid
 from collections.abc import Collection, Sequence
 from dataclasses import dataclass, field
+from datetime import UTC, date
 from decimal import Decimal
 from typing import TYPE_CHECKING, Any, Final, Literal, cast
 
@@ -163,6 +192,7 @@ from app.domain.documents.models import (
     DocumentStatus,
     IngestJob,
     IngestStage,
+    ReviewItem,
     ReviewItemState,
     ReviewKind,
 )
@@ -206,7 +236,7 @@ from app.domain.imports.statement_records import (
 )
 from app.domain.investments.statement_import import import_investment_statements
 from app.domain.review import repo as review_repo
-from app.domain.review.layout import with_layout_tables
+from app.domain.review.layout import pages_without_rows, with_layout_tables
 from app.domain.rules.service import apply_rules_to
 from app.domain.transactions import repo as transactions_repo
 from app.domain.transactions.import_hash import HashInput
@@ -253,6 +283,16 @@ if TYPE_CHECKING:
 IDS_MAX: Final = 50
 #: Review kinds a re-run answers (resolved when the re-run goes through).
 RERUN_ANSWERS: Final = frozenset({ReviewKind.UNPARSED, ReviewKind.UNKNOWN_ACCOUNT})
+#: ``unparsed`` reasons a re-run does not answer: the pipeline raised them
+#: about the reading itself (scanned pages OCR never read), the importer
+#: never raises them again, and only the person or reading the document
+#: again through the pipeline settles them.
+PIPELINE_REASONS: Final = frozenset({"ocr_failed"})
+#: An extractor's count of the records of one statement it could not read
+#: (``app.ingestion.extract.ofx.skipped_warnings``; OFX, QFX and QIF).
+#: Extraction output is untrusted: ASCII digits only, and no count longer
+#: than a file could hold (anything else is not a count and is ignored).
+_SKIPPED_WARNING: Final = re.compile(r"transaction_skipped:([0-9]{1,9})")
 #: Statuses whose stored extraction may be (re-)imported.
 IMPORTABLE_STATUSES: Final = frozenset({DocumentStatus.NEEDS_REVIEW, DocumentStatus.PROCESSED})
 #: Extraction kinds whose table may be imported with a confident suggestion
@@ -673,6 +713,10 @@ class _Run:
     duplicates: int = 0
     possible_duplicates: int = 0
     skipped_rows: int = 0
+    #: Table rows after the last readable one (totals, closing lines) and
+    #: rows the bank had not booked yet (``Pending``): counted, never reported.
+    footer_rows: int = 0
+    pending_rows: int = 0
     skipped_currency: int = 0
     snapshots: int = 0
     rules_changed: int = 0
@@ -754,6 +798,8 @@ class _Run:
             "duplicates": self.duplicates,
             "possible_duplicates": self.possible_duplicates,
             "skipped_rows": self.skipped_rows,
+            "footer_rows": self.footer_rows,
+            "pending_rows": self.pending_rows,
             "skipped_currency": self.skipped_currency,
             "snapshots": self.snapshots,
             "rules_changed": self.rules_changed,
@@ -805,6 +851,10 @@ def _category_id(run: _Run, name: str | None) -> uuid.UUID | None:
 
 
 def _row_problems(run: _Run, parsed: ParsedStatement, account: Account) -> None:
+    # Footers and pending rows are not problems: ``rows_skipped`` is raised
+    # for the rows that should have read (``parsed.skipped_rows``) only.
+    run.footer_rows += len(parsed.footer_rows)
+    run.pending_rows += len(parsed.pending_rows)
     if parsed.skipped_rows:
         run.skipped_rows += len(parsed.skipped_rows)
         run.review(
@@ -1136,6 +1186,32 @@ def _several_kinds(result: ExtractResult) -> bool:
     return len(named) > 1
 
 
+def records_skipped(result: ExtractResult) -> int:
+    """How many records of the file its extractor could not read.
+
+    The OFX and QIF extractors say so in ``transaction_skipped:<n>`` warnings,
+    one per statement (bank and brokerage alike); the counts add up.
+    """
+    found = (_SKIPPED_WARNING.fullmatch(warning) for warning in result.warnings)
+    return sum(int(match.group(1)) for match in found if match is not None)
+
+
+def _report_skipped(run: _Run, result: ExtractResult) -> None:
+    """Raise one ``lines_skipped`` item for the records the extractor lost.
+
+    One per document, whatever the number of statements and whether or not
+    each found its account: a file that lost records never ends
+    ``processed`` on the rows that were read. The warnings name no
+    statement, so the item names none either.
+    """
+    count = records_skipped(result)
+    if count:
+        run.review(
+            ReviewKind.LOW_CONFIDENCE_FIELD,
+            {"reason": "lines_skipped", "count": count, "source": "extraction"},
+        )
+
+
 def _import_statements(run: _Run, result: ExtractResult, *, account_id: uuid.UUID | None) -> None:
     single = len(result.statements) == 1 and not _several_kinds(result)
     for index, statement in enumerate(result.statements):
@@ -1187,6 +1263,38 @@ def _import_statements(run: _Run, result: ExtractResult, *, account_id: uuid.UUI
             record_statement(run.db, run.document, account, facts)
 
 
+class _GroupFacts(BaseModel):
+    """One account's rows of a multi-account table as read, for :func:`_group_key`."""
+
+    kind: Literal["table_group"] = "table_group"
+    last4: str | None
+    name: str | None
+    #: (row, date, amount) of every transaction of the group.
+    rows: list[tuple[int, str, str]]
+
+
+def _group_key(parsed: ParsedStatement) -> str:
+    """The digest of one statement of a multi-account table as read (``statement_answers``).
+
+    Like a statement's key it is of the statement exactly as read: its
+    account (last four digits or name), and the row, date and amount of
+    each transaction. The same stored table read with the same mapping
+    gives the same key, so the account a person put the group on is found
+    again by every later run; read with another mapping the group is asked
+    about anew. Only the digest is ever stored, never the name.
+    """
+    return statement_key(
+        _GroupFacts(
+            last4=parsed.last4,
+            name=parsed.account_name,
+            rows=[
+                (t.row if t.row is not None else -1, t.posted_date.isoformat(), str(t.amount))
+                for t in parsed.transactions
+            ],
+        )
+    )
+
+
 @dataclass
 class _Target:
     """One statement of a table and the account it goes to (None: not known)."""
@@ -1207,7 +1315,16 @@ def _table_targets(
     account_id: uuid.UUID | None,
     group: int | None = None,
 ) -> list[_Target]:
-    """The account of each statement of a table (module doc, CSV/TSV)."""
+    """The account of each statement of a table (module doc, CSV/TSV).
+
+    A statement of a multi-account table goes to the account the run
+    assigns to it (the Accounts dialog), else the one chosen for it on
+    this run (``account_id`` with ``group``), else the one an earlier
+    answer put it on (:func:`_group_key`, ``statement_answers``), else the
+    one its digits match. Without the third, a file split by account
+    names could never be finished one question at a time: answering one
+    name would raise the other again.
+    """
     if spec.account_column is None:
         target = (
             run.assigned.get(("table", 0))
@@ -1231,6 +1348,8 @@ def _table_targets(
         account: Account | None = None
         candidates: tuple[uuid.UUID, ...] = ()
         assigned = run.assigned.get(("group", index))
+        if assigned is None and not (chosen is not None and index in takes):
+            assigned = run.answers.account("statement", _group_key(parsed))
         if assigned is not None:
             account = _usable_account(run, assigned)
             if account is not None:
@@ -1294,7 +1413,9 @@ def _held(run: _Run, result: ExtractResult, suggestion: MappingSuggestion | None
     if suggestion is None:
         return "no_suggestion"
     if not suggestion.confident:
-        return "not_confident"
+        # The columns are found and only the sign is unproven: the same
+        # question as a sign on trust that meets a card account.
+        return "sign_unverified" if suggestion.doubts == ("sign_unverified",) else "not_confident"
     if result.kind not in AUTO_MAPPING_KINDS:
         return "not_delimited"
     if not _may_save_mappings(run):
@@ -1302,7 +1423,7 @@ def _held(run: _Run, result: ExtractResult, suggestion: MappingSuggestion | None
     return None
 
 
-def _sign_held(on_trust: bool, targets: list[_Target]) -> str | None:
+def _sign_held(on_trust: bool, targets: list[_Target], doubted: bool = False) -> str | None:
     """A sign taken on trust is never used to write into a liability account.
 
     ``on_trust``: a suggestion without ``sign_evidence``, or a mapping saved
@@ -1310,10 +1431,16 @@ def _sign_held(on_trust: bool, targets: list[_Target]) -> str | None:
     yet are left to their ``unknown_account`` / ``account_required`` item;
     the mapping saved meanwhile keeps ``sign_unverified``, so the re-run
     after a person picks a liability account is held here again.
+
+    ``doubted``: the suggestion for this very table doubts the sign
+    (``sign_unverified``: a card-like header, no money out, more money
+    in than out). A mapping still on trust is not used for such a
+    file whatever the account, which also stops a mapping saved from a card
+    export before those doubts existed.
     """
     if not on_trust:
         return None
-    if any(t.account is not None and t.account.type in LIABILITY_TYPES for t in targets):
+    if doubted or any(t.account is not None and t.account.type in LIABILITY_TYPES for t in targets):
         return "sign_unverified"
     return None
 
@@ -1343,15 +1470,24 @@ def _unique_name(run: _Run, base: str) -> str:
 
 
 def _save_suggested(run: _Run, table: Table, suggestion: MappingSuggestion) -> ImportMapping | None:
-    """Save the suggestion as a household mapping for the table's header (None: not saved)."""
+    """Save the suggestion as a household mapping for the table's header (None: not saved).
+
+    Without a header row the row at ``skip_rows`` is the first transaction:
+    the mapping is named by the table's column count, never by those cells.
+    """
     spec = suggestion.spec
     fingerprint = spec_fingerprint(table, spec)
     if fingerprint is None:  # pragma: no cover - a confident suggestion has a header row
         return None
     actor = run.user_id or run.document.uploaded_by
+    name = (
+        _suggested_name(table.rows[spec.skip_rows])
+        if spec.has_header
+        else f"No header, {table.column_count} columns"
+    )
     mapping = ImportMapping(
         household_id=run.household_id,
-        name=_unique_name(run, _suggested_name(table.rows[spec.skip_rows])),
+        name=_unique_name(run, name),
         header_fingerprint=fingerprint,
         spec=spec.model_dump(mode="json"),
         created_by=actor,
@@ -1374,6 +1510,23 @@ def _save_suggested(run: _Run, table: Table, suggestion: MappingSuggestion) -> I
     )
     emit(run.db, run.household_id, "document.mapping_created", {"id": str(mapping.id)})
     return mapping
+
+
+def header_only(table: Table) -> bool:
+    """A table that is a header row and nothing else (or nothing at all).
+
+    One row with text, at least two cells of it filled and none with a
+    digit: column names. A single row with a digit in it may be the file's
+    only transaction (an export without a header) and is never called
+    empty; it is asked about like any other table.
+    """
+    rows = [row for row in table.rows if any(cell.strip() for cell in row)]
+    if not rows:
+        return True
+    if len(rows) > 1:
+        return False
+    cells = [cell for cell in rows[0] if cell.strip()]
+    return len(cells) >= 2 and not any(ch.isdigit() for cell in cells for ch in cell)
 
 
 def _mapping_review(
@@ -1428,7 +1581,11 @@ def _import_table(
         # fits): asked for again rather than read as a cash ledger.
         saved, spec = None, None
     if saved is None or spec is None:
-        suggestion = None if choice.ambiguous else suggest_table_mapping(table)
+        suggestion = (
+            None
+            if choice.ambiguous
+            else suggest_table_mapping(table, received_on=_received_on(run.document))
+        )
         held = "mapping_ambiguous" if choice.ambiguous else _held(run, result, suggestion)
         if held is None and suggestion is not None and suggestion.spec.mode == "activity":
             # A brokerage layout whose actions are mostly unknown: a person
@@ -1473,9 +1630,13 @@ def _import_table(
         run.mapping_suggested = True
     else:
         # A mapping saved from a trust-only suggestion is checked again
-        # whenever it meets a liability account, unless the person chose it.
-        if _sign_held(saved.sign_unverified and mapping_id is None, targets) is not None:
-            _mapping_review(run, table, choice, suggest_mapping(table), "sign_unverified")
+        # whenever it meets a liability account or a file whose sign the
+        # suggestion doubts, unless the person chose it.
+        on_trust = saved.sign_unverified and mapping_id is None
+        fresh = suggest_mapping(table, today=_received_on(run.document)) if on_trust else None
+        doubted = fresh is not None and "sign_unverified" in fresh.doubts
+        if _sign_held(on_trust, targets, doubted) is not None:
+            _mapping_review(run, table, choice, fresh, "sign_unverified")
             return
         mapping = saved
     run.mapping_id = mapping.id
@@ -1528,9 +1689,21 @@ def _import_table(
         run.document.institution_id = mapping.institution_id
 
 
-def suggest_table_mapping(table: Table) -> MappingSuggestion | None:
-    """The mapping editor's suggestion: an activity mapping for a brokerage layout, else cash."""
-    return suggest_activity_mapping(table) or suggest_mapping(table)
+def _received_on(document: Document) -> date | None:
+    """The day (UTC) the document was uploaded: no row of it is dated later."""
+    received = document.created_at
+    return received.astimezone(UTC).date() if received is not None else None
+
+
+def suggest_table_mapping(
+    table: Table, *, received_on: date | None = None
+) -> MappingSuggestion | None:
+    """The mapping editor's suggestion: an activity mapping for a brokerage layout, else cash.
+
+    ``received_on`` is the day the file arrived, which settles a day/month
+    order that would date rows after it (:func:`suggest_mapping`).
+    """
+    return suggest_activity_mapping(table) or suggest_mapping(table, today=received_on)
 
 
 def spec_digest(spec: MappingSpec) -> str:
@@ -1847,8 +2020,12 @@ def import_extraction(
     """
     actor = user_id or document.uploaded_by
     # A PDF/image no parser read: its page table goes through the saved
-    # column mappings like a CSV (app.domain.review.layout).
+    # column mappings like a CSV (app.domain.review.layout), unless no
+    # table on its pages has a dated row.
+    no_rows = "pages" if pages_without_rows(result) else None
     result = with_layout_tables(result)
+    if result.tables and not (result.statements or result.investments):
+        no_rows = "table" if header_only(result.tables[0]) else None
     run = _Run(
         db=db,
         document=document,
@@ -1859,7 +2036,18 @@ def import_extraction(
         answers=document_answers(db, document),
     )
     statements: Sequence[InvestmentStatement] = result.investments
-    if result.statements:
+    if no_rows is not None:
+        # Nothing to import and nothing to map: said as such, whatever
+        # mapping fits the header (module doc).
+        run.review(
+            ReviewKind.UNPARSED,
+            {
+                "reason": "no_rows",
+                "source": no_rows,
+                **({"table": 0} if no_rows == "table" else {}),
+            },
+        )
+    elif result.statements:
         _import_statements(run, result, account_id=account_id)
     elif result.tables:
         # A brokerage positions or activity export is investment data, unless
@@ -1880,6 +2068,7 @@ def import_extraction(
             statements = activity.statements
     elif not result.investments:
         run.review(ReviewKind.UNPARSED, {"reason": "no_records"})
+    _report_skipped(run, result)
     investments: dict[str, Any] | None = None
     if statements:
         # Brokerage statements (app.domain.investments.statement_import);
@@ -1993,18 +2182,20 @@ def _placed(
     item: dict[str, Any],
     payload: ApplyMappingJob,
     imported_into: Collection[str],
+    mapping_id: str | None = None,
 ) -> dict[str, Any]:
     """Where the re-run put the statement an ``unknown_account`` item asked about.
 
     The account the run assigned to it (the Accounts dialog's assignment,
     or the account chosen for that statement), when the run imported into
     that account: recorded with the statement's key so later imports of
-    the document put it there again (``statement_answers``). Empty for an
-    item about anything else (a group of a table, an unparsed file).
+    the document put it there again (``statement_answers``). The same for
+    a statement of a multi-account table (:func:`_placed_group`). Empty
+    for an item about anything else (an unparsed file).
     """
     index = item.get("statement")
     if not isinstance(index, int) or isinstance(index, bool):
-        return {}
+        return _placed_group(db, document, result, item, payload, imported_into, mapping_id)
     investment = item.get("investment") is True
     target: Literal["statement", "investment"] = "investment" if investment else "statement"
     account_id = next(
@@ -2019,6 +2210,73 @@ def _placed(
     if not 0 <= index < len(statements):
         return {}
     return placement(target, statement_key(statements[index]), account_id)
+
+
+def _placed_group(
+    db: Session,
+    document: Document,
+    result: ExtractResult,
+    item: dict[str, Any],
+    payload: ApplyMappingJob,
+    imported_into: Collection[str],
+    mapping_id: str | None,
+) -> dict[str, Any]:
+    """Where the re-run put the group of a table an ``unknown_account`` item asked about.
+
+    ``item`` names the group by its index under the mapping it was raised
+    with (``group``, ``mapping_id``, ``spec_digest``). The placement is
+    recorded when the run read the table with that very mapping
+    (``mapping_id``, unchanged since), an account was assigned to or
+    chosen for that group, and the run imported into it. The key is the
+    group's digest (:func:`_group_key`); a table group and a bank
+    statement share the ``statement`` target, their digests never meet.
+    """
+    group = item.get("group")
+    if not isinstance(group, int) or isinstance(group, bool):
+        return {}
+    if mapping_id is None or item.get("mapping_id") != mapping_id:
+        return {}
+    account_id = next(
+        (a.account_id for a in payload.assignments if a.target == "group" and a.index == group),
+        payload.account_id if payload.group == group else None,
+    )
+    if account_id is None or str(account_id) not in imported_into:
+        return {}
+    spec = _item_spec(db, document, item)
+    tables = with_layout_tables(result).tables
+    if spec is None or not tables:
+        return {}
+    readable = [s for s in from_table_grouped(tables[0], spec) if s.transactions]
+    if not 0 <= group < len(readable):
+        return {}
+    return placement("statement", _group_key(readable[group]), account_id)
+
+
+def _resolved_for(db: Session, document: Document, job_id: uuid.UUID | None) -> list[ReviewItem]:
+    """The ``unknown_account`` items the review queue resolved by queueing this very job.
+
+    "Use this account" resolves its item at once and records the job that
+    carries the choice out (``app.domain.review.service``). Where that job
+    put the item's statement is added to the resolution when the job has
+    run, as for the items it finds open (:func:`_placed`).
+    """
+    if job_id is None:
+        return []
+    rows = db.execute(
+        select(ReviewItem)
+        .where(
+            ReviewItem.household_id == document.household_id,
+            ReviewItem.document_id == document.id,
+            ReviewItem.state == ReviewItemState.RESOLVED,
+            ReviewItem.kind == ReviewKind.UNKNOWN_ACCOUNT,
+        )
+        .with_for_update()
+    ).scalars()
+    return [
+        item
+        for item in rows
+        if isinstance(item.resolution, dict) and item.resolution.get("job_id") == str(job_id)
+    ]
 
 
 def run_apply_job(
@@ -2037,7 +2295,11 @@ def run_apply_job(
         result = _importable(document)
     except ProblemError:
         return None
-    answered = repo.open_review_items(db, household_id, document.id, RERUN_ANSWERS)
+    answered = [
+        item
+        for item in repo.open_review_items(db, household_id, document.id, RERUN_ANSWERS)
+        if (item.payload or {}).get("reason") not in PIPELINE_REASONS
+    ]
     started = clock.utcnow()
     outcome = import_extraction(
         db,
@@ -2065,8 +2327,28 @@ def run_apply_job(
         item.resolved_by = payload.requested_by
         item.resolution = {
             **resolution,
-            **_placed(db, document, result, item.payload or {}, payload, imported_into),
+            **_placed(
+                db,
+                document,
+                result,
+                item.payload or {},
+                payload,
+                imported_into,
+                resolution["mapping_id"],
+            ),
         }
+    for item in _resolved_for(db, document, job_id):
+        placed = _placed(
+            db,
+            document,
+            result,
+            item.payload or {},
+            payload,
+            imported_into,
+            resolution["mapping_id"],
+        )
+        if placed:
+            item.resolution = {**(item.resolution or {}), **placed}
     db.flush()
     status = DocumentStatus.NEEDS_REVIEW if _open_items(db, document) else DocumentStatus.PROCESSED
     db.add(
@@ -2183,7 +2465,7 @@ def preview(
             visible=_visible(principal),
         )
         matched = choice.mapping.id if choice.mapping is not None else None
-        suggested = suggest_table_mapping(tables[0])
+        suggested = suggest_table_mapping(tables[0], received_on=_received_on(document))
     return ImportPreview(
         document_id=document.id,
         status=document.status,

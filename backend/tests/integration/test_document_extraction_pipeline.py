@@ -11,6 +11,8 @@ from __future__ import annotations
 
 import io
 import uuid
+from collections.abc import Callable, Iterable
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -34,7 +36,7 @@ from app.domain.documents.previews import read_preview, stored_previews
 from app.ingestion import pipeline
 from app.ingestion.intake.upload import receive_stream
 from app.ingestion.sandbox.protocol import ExtractOptions, ExtractResult
-from app.ingestion.sandbox.runner import SandboxConfig
+from app.ingestion.sandbox.runner import SandboxConfig, SandboxError, run_extraction
 from tests.fixtures import synth_documents as synth
 from tests.fixtures.factories import Factories, UserRecord
 
@@ -266,3 +268,132 @@ def test_scanned_image_is_ocrd(
     assert stored.pages[0].text_source == "ocr"
     assert "11.43" in stored.text
     assert len(stored_previews(document.extraction)) == 1
+
+
+# ---- an OCR engine crash (Tesseract's page layout analysis) -------------------
+
+
+def _failing_extract(
+    code: str, fails: Callable[[ExtractOptions], bool], seen: list[ExtractOptions]
+) -> pipeline.Extract:
+    """The real sandbox, except that it "dies" with ``code`` for some options."""
+
+    def extract(
+        kind: str,
+        data: bytes | Iterable[bytes],
+        *,
+        config: SandboxConfig | None = None,
+        options: ExtractOptions | None = None,
+    ) -> ExtractResult:
+        options = options or ExtractOptions()
+        seen.append(options)
+        if fails(options):
+            raise SandboxError(code, "child killed by signal 11")
+        return run_extraction(kind, data, config=config, options=options)
+
+    return extract
+
+
+def _psm(options: ExtractOptions) -> str:
+    return str(getattr(options, "ocr_psm", "auto"))
+
+
+def test_ocr_crash_is_retried_with_single_block(
+    factories: Factories, store: LocalFSBlobStore, keyring: Keyring
+) -> None:
+    owner = factories.user(role="owner")
+    png = synth.image_bytes(synth.receipt_image(), "PNG")
+    document_id = _receive(factories, owner, store, keyring, png, "receipt.png")
+    seen: list[ExtractOptions] = []
+    deps = replace(
+        _deps(store, keyring),
+        extract=_failing_extract("crashed", lambda o: o.ocr and _psm(o) == "auto", seen),
+    )
+    status = _ingest(factories, owner, document_id, deps)
+    assert status is not DocumentStatus.FAILED
+    assert [(o.ocr, _psm(o)) for o in seen] == [(True, "auto"), (True, "single_block")]
+    document = _document(factories, owner, document_id)
+    assert document.error is None
+    stored = ExtractResult.model_validate(document.extraction)
+    assert "ocr_retried:single_block" in stored.warnings
+    assert "ocr_disabled_after_crash" not in stored.warnings
+    # The second child did read the scan.
+    assert stored.pages[0].text_source == "ocr"
+    assert "11.43" in stored.text
+    reasons = [i.payload.get("reason") for i in _items(factories, owner, document_id)]
+    assert "extraction_failed" not in reasons
+    assert "ocr_failed" not in reasons
+
+
+def test_second_crash_falls_back_to_no_ocr(
+    factories: Factories, store: LocalFSBlobStore, keyring: Keyring
+) -> None:
+    owner = factories.user(role="owner")
+    png = synth.image_bytes(synth.receipt_image(), "PNG")
+    document_id = _receive(factories, owner, store, keyring, png, "receipt.png")
+    seen: list[ExtractOptions] = []
+    deps = replace(
+        _deps(store, keyring), extract=_failing_extract("crashed", lambda o: o.ocr, seen)
+    )
+    status = _ingest(factories, owner, document_id, deps)
+    assert status is DocumentStatus.NEEDS_REVIEW
+    assert [(o.ocr, _psm(o)) for o in seen] == [
+        (True, "auto"),
+        (True, "single_block"),
+        (False, "single_block"),
+    ]
+    document = _document(factories, owner, document_id)
+    stored = ExtractResult.model_validate(document.extraction)
+    assert "ocr_disabled_after_crash" in stored.warnings
+    assert "ocr_retried:single_block" not in stored.warnings
+    assert stored.pages[0].text_source == "none"
+    # The page picture is kept, so the person can still look at the scan.
+    assert len(stored_previews(document.extraction)) == 1
+    items = _items(factories, owner, document_id)
+    told = [i for i in items if i.payload.get("reason") == "ocr_failed"]
+    assert len(told) == 1
+    assert told[0].state.value == "open"
+    assert told[0].payload == {"reason": "ocr_failed", "kind": "png"}
+    assert "extraction_failed" not in [i.payload.get("reason") for i in items]
+
+
+def test_other_sandbox_errors_are_not_retried(
+    factories: Factories, store: LocalFSBlobStore, keyring: Keyring
+) -> None:
+    owner = factories.user(role="owner")
+    png = synth.image_bytes(synth.receipt_image(), "PNG")
+    document_id = _receive(factories, owner, store, keyring, png, "receipt.png")
+    seen: list[ExtractOptions] = []
+    deps = replace(
+        _deps(store, keyring), extract=_failing_extract("memory_limit", lambda o: True, seen)
+    )
+    assert _ingest(factories, owner, document_id, deps) is DocumentStatus.FAILED
+    assert len(seen) == 1
+    (item,) = _items(factories, owner, document_id)
+    assert item.payload == {"reason": "extraction_failed", "code": "memory_limit"}
+
+
+def test_crash_that_survives_both_retries_fails_the_document(
+    factories: Factories, store: LocalFSBlobStore, keyring: Keyring
+) -> None:
+    owner = factories.user(role="owner")
+    png = synth.image_bytes(synth.receipt_image(), "PNG")
+    document_id = _receive(factories, owner, store, keyring, png, "receipt.png")
+    seen: list[ExtractOptions] = []
+    deps = replace(_deps(store, keyring), extract=_failing_extract("crashed", lambda o: True, seen))
+    assert _ingest(factories, owner, document_id, deps) is DocumentStatus.FAILED
+    assert len(seen) == 3
+    (item,) = _items(factories, owner, document_id)
+    assert item.payload == {"reason": "extraction_failed", "code": "crashed"}
+
+
+def test_crash_on_a_table_file_is_not_retried(
+    factories: Factories, store: LocalFSBlobStore, keyring: Keyring
+) -> None:
+    owner = factories.user(role="owner")
+    data = b"Date,Description,Amount\n2026-03-02,Invented Grocer,-12.40\n"
+    document_id = _receive(factories, owner, store, keyring, data, "rows.csv")
+    seen: list[ExtractOptions] = []
+    deps = replace(_deps(store, keyring), extract=_failing_extract("crashed", lambda o: True, seen))
+    assert _ingest(factories, owner, document_id, deps) is DocumentStatus.FAILED
+    assert len(seen) == 1

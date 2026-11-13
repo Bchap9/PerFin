@@ -450,6 +450,7 @@ def _create_all(env: Env, document_id: uuid.UUID) -> list[uuid.UUID]:
     for detected in found.accounts:
         proposal = detected.proposal
         assert proposal is not None
+        assert proposal.type is not None  # a positions export's accounts are typed
         choices.append(
             AccountChoice(
                 target=detected.target,

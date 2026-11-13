@@ -165,7 +165,11 @@ def extract_image(data: bytes, options: ExtractOptions, kind: str) -> ExtractRes
     previews: list[Preview] = []
     truncated = frames > count
     engine = (
-        OcrEngine(page_seconds=options.ocr_page_seconds, total_seconds=options.ocr_total_seconds)
+        OcrEngine(
+            page_seconds=options.ocr_page_seconds,
+            total_seconds=options.ocr_total_seconds,
+            psm=options.ocr_psm,
+        )
         if options.ocr and options.max_ocr_pages > 0
         else None
     )

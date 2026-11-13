@@ -158,6 +158,106 @@ function asReadSteps(item: ReviewItem, step: string): string[] {
   return canImportAsRead(item) ? [step] : [];
 }
 
+/**
+ * The doubts of the column-mapping suggestion a `mapping_required` item
+ * carries (the server's `payload.suggestion.doubts`): stable codes.
+ */
+function suggestionDoubts(item: ReviewItem): string[] {
+  const suggestion: unknown = new Map(Object.entries(item.payload)).get(
+    "suggestion",
+  );
+  if (typeof suggestion !== "object" || suggestion === null) {
+    return [];
+  }
+  const doubts: unknown = new Map(Object.entries(suggestion)).get("doubts");
+  return Array.isArray(doubts)
+    ? doubts.filter((entry): entry is string => typeof entry === "string")
+    : [];
+}
+
+const MAPPING_REQUIRED: ReturnType<Copy> = {
+  title: "Needs a column mapping",
+  what: "PerFin has not seen this spreadsheet layout before and could not tell its columns apart with confidence.",
+  why: "A wrong guess would import wrong amounts or dates, so you confirm it once; the mapping is saved for every later file with the same header.",
+  steps: [
+    "Open “Map columns” and check the suggested role of each column.",
+    "For a brokerage activity export, choose “Investment activity”.",
+    "Save; the file is imported right away.",
+  ],
+};
+
+/**
+ * A suggestion's doubt that has its own question, most telling first: what
+ * kind of table it is (trades; no header row, so every column is a reading
+ * of its values), then words against signs, then a sign nothing proves.
+ * The mapping editor is the answer to each.
+ */
+const MAPPING_DOUBTS: readonly (readonly [string, ReturnType<Copy>])[] = [
+  [
+    "investment_columns",
+    {
+      title: "Trades, not a cash ledger",
+      what: "This file has a column for a security, one for a quantity and one for a price, so its rows look like trades of shares or fund units.",
+      why: "Imported as plain money in and out, a purchase of shares would be recorded as spending or income and no holding would be kept, so PerFin did not import it on its own.",
+      steps: [
+        "Open “Map columns” and choose “Investment activity” if these are buys and sells; name the action, symbol, quantity and price columns.",
+        "If the rows really are cash movements, keep the cash mapping and check the amount column and its sign.",
+        "Save; the file is imported right away.",
+      ],
+    },
+  ],
+  [
+    "no_header",
+    {
+      title: "No header row",
+      what: "This file has no header row that names its columns, so PerFin worked out which column is the date, which the amount and which the description from the values alone.",
+      why: "Without column names nothing confirms that reading: two columns of numbers can be taken for each other, money out for money in, or the rows of several accounts for one account's, so the file waits for you to check it.",
+      steps: [
+        "Open “Map columns”; the columns are filled in with what PerFin read.",
+        "Check the date and the amount columns against a row you recognise, and that “Positive amounts are” is set the right way.",
+        "If the file lists more than one account, set the column that tells them apart to “Account number (several accounts)”.",
+        "Save; the file is imported right away and later files with the same columns are read the same way.",
+      ],
+    },
+  ],
+  [
+    "indicator_contradicts_sign",
+    {
+      title: "The words and the signs disagree",
+      what: "A column of this file says which way the money went (debit or credit, purchase or payment), but its words do not go with the plus and minus signs of the amounts in the same way on every row.",
+      why: "PerFin cannot tell which of the two to believe, and the wrong one would turn spending into income, so nothing was imported.",
+      steps: [
+        "Open “Map columns” and find a row you recognise, a purchase for example.",
+        "Set “Positive amounts are” to match it, or map the column of words as the indicator if the amounts carry no sign of their own.",
+        "Save; the file is imported right away.",
+      ],
+    },
+  ],
+  [
+    "sign_unverified",
+    {
+      title: "Money in or money out?",
+      what: "PerFin found the columns of this file, but nothing in it proves whether a positive amount is money in or money out.",
+      why: "Card exports often list purchases as positive amounts. Read the wrong way round, every purchase would be recorded as income, so the file waits for your answer.",
+      steps: [
+        "Open “Map columns” and find a row you recognise, a purchase for example.",
+        "Set “Positive amounts are” to “Money out” if purchases are printed as positive amounts, to “Money in” otherwise.",
+        "Save; the file is imported right away and the answer is remembered for later files with the same header.",
+      ],
+    },
+  ],
+];
+
+/** `mapping_required`: the question of the suggestion's doubt, else the general words. */
+function mappingRequired(item: ReviewItem): ReturnType<Copy> {
+  const doubts = suggestionDoubts(item);
+  if (payloadString(item, "auto_import") === "sign_unverified") {
+    doubts.push("sign_unverified");
+  }
+  const found = MAPPING_DOUBTS.find(([doubt]) => doubts.includes(doubt));
+  return found === undefined ? MAPPING_REQUIRED : found[1];
+}
+
 const ACCOUNT_STEPS = [
   "Choose the account below and import.",
   "If the account does not exist in PerFin yet, create it (Accounts, New account) and come back, or use “Set up accounts from this file”.",
@@ -245,16 +345,7 @@ const COPY: Readonly<Record<string, Copy>> = {
     ],
   }),
   // -- unparsed --------------------------------------------------------------
-  "unparsed:mapping_required": () => ({
-    title: "Needs a column mapping",
-    what: "PerFin has not seen this spreadsheet layout before and could not tell its columns apart with confidence.",
-    why: "A wrong guess would import wrong amounts or dates, so you confirm it once; the mapping is saved for every later file with the same header.",
-    steps: [
-      "Open “Map columns” and check the suggested role of each column.",
-      "For a brokerage activity export, choose “Investment activity”.",
-      "Save; the file is imported right away.",
-    ],
-  }),
+  "unparsed:mapping_required": mappingRequired,
   "unparsed:mapping_ambiguous": () => ({
     title: "Several mappings fit",
     what: "More than one saved column mapping fits this file, and they point at different accounts.",
@@ -323,6 +414,26 @@ const COPY: Readonly<Record<string, Copy>> = {
       "Otherwise check that you exported the right date range and upload again, or dismiss this item.",
     ],
   }),
+  "unparsed:no_rows": (item) =>
+    payloadString(item, "source") === "pages"
+      ? {
+          title: "Nothing to import",
+          what: "PerFin found no dated rows to import on the pages of this document.",
+          why: "The tables on its pages hold labels and totals (a summary, for example), not transactions.",
+          steps: [
+            "If it is a summary page or a notice, dismiss this item.",
+            "If the document does list transactions, use “Teach PerFin” and select the transaction table on the page.",
+          ],
+        }
+      : {
+          title: "Nothing to import",
+          what: "This file has no rows to import.",
+          why: "It holds a header row and nothing under it. Exports come out like this when the chosen date range has no transactions.",
+          steps: [
+            "Check the date range of the export, download it again and upload that.",
+            "Dismiss this item.",
+          ],
+        },
   "unparsed:loan_unmatched": () => ({
     title: "Which loan?",
     what: "This loan statement does not match any loan recorded in PerFin.",
@@ -335,6 +446,16 @@ const COPY: Readonly<Record<string, Copy>> = {
     title: "Virus scan did not run",
     what: "The virus scanner could not check this file, so it was not processed.",
     steps: ["Try “Process again” once the scanner is back."],
+  }),
+  "unparsed:ocr_failed": () => ({
+    title: "The scan could not be read",
+    what: "The text recognition (OCR) stopped unexpectedly on this scan, twice. PerFin kept the document, but the words on its scanned pages were not read.",
+    why: "Nothing is imported from a page PerFin could not read.",
+    steps: [
+      "If your bank offers a PDF download or a CSV or OFX export, upload that instead of the scan.",
+      "Or scan the page again (straight, well lit, the whole page) and upload the new picture.",
+      "Dismiss this item to keep the document as it is.",
+    ],
   }),
   "unparsed:container_incomplete": () => ({
     title: "Some contents were left out",
@@ -361,6 +482,23 @@ const COPY: Readonly<Record<string, Copy>> = {
           )
           .filter((text) => text !== "")
       : [];
+    if (item.payload["source"] === "extraction") {
+      // An OFX, QFX or QIF record the reader could not make out (no date, no
+      // amount, a kind of investment activity it does not read).
+      return {
+        title: "Some records were not read",
+        what:
+          payloadNumber(item, "count") === 1
+            ? "1 record of this file could not be read and was not imported."
+            : `${count(item, "count")} records of this file could not be read and were not imported.`,
+        why: "The file holds more records than PerFin imported: a record had no date or amount it could make out, or is of a kind it does not read. PerFin never guesses a record; everything else in the file was imported.",
+        steps: [
+          "Compare the imported rows with the file or your statement to find what is missing.",
+          "Add any that matter by hand (Transactions or Investments).",
+          "Dismiss this item once you are done.",
+        ],
+      };
+    }
     return {
       title: "Some rows were skipped",
       what: `${count(item, "count")} rows of this file were not imported${payloadNumber(item, "unknown_activity") ? `, ${count(item, "unknown_activity")} of them with an action PerFin does not know` : ""}.${examples.length > 0 ? ` Unknown actions: ${examples.join(", ")}.` : ""}`,
