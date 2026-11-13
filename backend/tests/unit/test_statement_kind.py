@@ -109,3 +109,74 @@ def test_a_member_statement_is_no_loan_bill() -> None:
     assert not loan_bill(_lines(*LOAN, "Deposits 400.00"))
     # The deposit phrase starts its line: a note that mentions one vetoes nothing.
     assert loan_bill(_lines(*LOAN, "AutoPay withdrawals post on the due date"))
+
+
+def test_a_card_line_that_mentions_withdrawals_is_still_a_card() -> None:
+    # The card's veto is by line start: a card prints its cash withdrawals.
+    assert card_summary(_lines(*CARD, "New Balance $350.38", "Cash withdrawals 0.00"))
+    assert card_summary(_lines(*CARD, "New Balance $350.38", "Total Deposits 0.00"))
+
+
+@pytest.mark.parametrize(
+    "deposit",
+    [
+        # A total, a share's name or a count comes before the label.
+        "Total Deposits 400.00",
+        "Total Withdrawals 113.76",
+        "Share Savings Beginning Balance 1,250.00",
+        "Share Savings Ending Balance 1,536.24",
+        "2 Deposits 400.00",
+        "1 Withdrawals 10.00",
+        "Deposits and Credits 400.00",
+        # A checking summary that prints neither word.
+        "Starting Balance 1,250.00",
+        "Balance Forward 1,250.00",
+    ],
+)
+def test_a_deposit_label_behind_a_prefix_is_no_loan_bill(deposit: str) -> None:
+    assert loan_bill(_lines(*LOAN))
+    assert not loan_bill(_lines(*LOAN, deposit))
+
+
+def test_a_checking_summary_with_a_credit_line_is_no_loan_bill() -> None:
+    # An overdraft line of credit printed under a checking summary.
+    lines = _lines(
+        "Starting Balance 1,250.00",
+        "Total Credits 400.00",
+        "Total Debits 113.76",
+        "Current Balance 1,536.24",
+        "Principal Balance 600.00",
+        "Minimum Payment Due 25.00",
+    )
+    assert not loan_bill(lines)
+
+
+@pytest.mark.parametrize(
+    "note",
+    [
+        # A sentence that mentions a deposit word labels nothing.
+        "AutoPay withdrawals post on the due date",
+        "Payments are not deposits and post in two days",
+        "Your ending balance is shown on the coupon below",
+        "See the balance forward notice overleaf",
+        # A loan's escrow account is the loan's, whatever it prints.
+        "Escrow Deposits 212.40",
+        "Escrow Beginning Balance 1,804.11",
+        "Escrow Ending Balance 2,016.51",
+    ],
+)
+def test_a_note_or_an_escrow_line_leaves_a_loan_bill(note: str) -> None:
+    assert loan_bill(_lines(*LOAN, note))
+
+
+def test_a_card_with_a_plan_principal_is_no_loan_bill() -> None:
+    # A card prints an instalment plan's principal beside its payment due date.
+    plan = "Plan Principal Balance 600.00"
+    assert not loan_bill(
+        _lines("New Balance $350.38", "Minimum Payment Due 25.00", "Payment Due Date 12/05", plan)
+    )
+    assert not loan_bill(_lines(*CARD, "New Balance $350.38", "Payment Due Date 12/05", plan))
+    # One card label alone does not make a card of a loan bill.
+    assert loan_bill(_lines(*LOAN, "New Balance $18,204.55"))
+    assert loan_bill(_lines(*LOAN, "Minimum Payment Due 342.10"))
+    assert loan_bill(_lines(*LOAN, "Your new balance and purchases are overleaf"))

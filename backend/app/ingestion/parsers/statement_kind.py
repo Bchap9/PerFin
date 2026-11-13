@@ -21,12 +21,20 @@ testable on plain strings without a PDF. The caller chooses the lines
 Both stand down when a line starts with a deposit account's summary label
 (:data:`DEPOSIT_LABELS`): a checking statement that says ``New Balance``
 is no card, and a member statement that lists a loan beside the share
-accounts is no loan bill.
+accounts is no loan bill. The loan bill stands down further, because a
+summary beside a loan is worded many ways: when the label ends its line's
+words behind a total, a share's name or a count (``Total Deposits``,
+``Share Savings Ending Balance``, ``2 Deposits``), when a line is labelled
+``Starting Balance`` or ``Balance Forward``, and when the summary is a
+card's (``New Balance`` with a charge label: a card prints an instalment
+plan's principal beside its payment due date). A line that names the
+loan's own escrow account vetoes nothing.
 
 A label **starts** its line where the functions say "starts with" (a label
-with its value: ``new balance 350 38``); a sentence that mentions the label
-names nothing. Labels are compared by whole words (``new balances`` is not
-``new balance``).
+with its value: ``new balance 350 38``) and **ends** it where they say
+"ends with" (the words before the figures: ``total deposits 400 00``); a
+sentence that mentions the label names nothing. Labels are compared by
+whole words (``new balances`` is not ``new balance``).
 """
 
 from __future__ import annotations
@@ -56,6 +64,11 @@ DEPOSIT_LABELS: Final = (
     "deposits",
     "withdrawals",
 )
+#: Deposit labels read only beside a loan: a card's summary prints its own
+#: previous balance and is not asked.
+LOAN_DEPOSIT_LABELS: Final = (*DEPOSIT_LABELS, "starting balance", "balance forward")
+#: A loan's own side account: its lines are no deposit account's.
+LOAN_ESCROW_WORDS: Final = ("escrow",)
 #: What a loan owes...
 LOAN_BALANCE_PHRASES: Final = ("principal balance", "payoff amount")
 #: ...and what its bill asks for.
@@ -70,6 +83,19 @@ def _starts(lines: Sequence[str], labels: Sequence[str]) -> bool:
 def _holds(lines: Sequence[str], phrases: Sequence[str]) -> bool:
     """One of ``lines`` holds one of ``phrases``, as whole words."""
     return any(f" {phrase} " in f" {line} " for line in lines for phrase in phrases)
+
+
+def _ends(lines: Sequence[str], labels: Sequence[str]) -> bool:
+    """One of ``lines`` ends with one of ``labels``, as whole words, once
+    the figures that close the line are dropped."""
+    for line in lines:
+        words = line.split()
+        while words and words[-1].isdigit():
+            words.pop()
+        tail = " " + " ".join(words)
+        if any(tail.endswith(f" {label}") for label in labels):
+            return True
+    return False
 
 
 def card_summary(lines: Sequence[str]) -> bool:
@@ -89,9 +115,17 @@ def card_summary(lines: Sequence[str]) -> bool:
 
 def loan_bill(lines: Sequence[str]) -> bool:
     """The lines are a loan bill's summary: one holds ``principal balance``
-    or ``payoff amount``, one holds ``amount due`` or ``payment due``, and
-    none starts with a deposit account's label (:data:`DEPOSIT_LABELS`). An
-    amount due alone is a card's (``minimum payment due``)."""
-    if _starts(lines, DEPOSIT_LABELS):
+    or ``payoff amount`` and one holds ``amount due`` or ``payment due``. An
+    amount due alone is a card's (``minimum payment due``).
+
+    It stands down for a deposit account's summary, a line outside the
+    loan's escrow account that starts or ends with a deposit label
+    (:data:`LOAN_DEPOSIT_LABELS`), and for a card's, a line that starts with
+    ``new balance`` beside one that starts with a charge label
+    (:data:`CARD_CHARGE_LABELS`)."""
+    own = [line for line in lines if not _holds([line], LOAN_ESCROW_WORDS)]
+    if _starts(own, LOAN_DEPOSIT_LABELS) or _ends(own, LOAN_DEPOSIT_LABELS):
+        return False
+    if _starts(lines, CARD_BALANCE_LABELS) and _starts(lines, CARD_CHARGE_LABELS):
         return False
     return _holds(lines, LOAN_BALANCE_PHRASES) and _holds(lines, LOAN_DUE_PHRASES)
