@@ -282,6 +282,34 @@ def receipt_text(spec: ReceiptSpec, width: int = 40) -> str:
     return "\n".join(out)
 
 
+def unchecked_receipt_text(spec: ReceiptSpec, width: int = 40) -> str:
+    """The receipt as OCR reads a drifted print, with nothing to check it by.
+
+    No subtotal line; the last item's price and the tax amount are each on
+    the line below their label. The items read no longer add up to anything,
+    so the total is labelled and unchecked, and the amount-only line above
+    the tax label is the last item's price, not the tax.
+    """
+    last_item = max(
+        i for i, row in enumerate(receipt_rows(spec)) if row.left == spec.items[-1].name
+    )
+    out: list[str] = []
+    for index, row in enumerate(receipt_rows(spec)):
+        if row.left == spec.labels["subtotal"]:
+            continue
+        if row.centre:
+            out.append(row.left.center(width).rstrip())
+        elif row.right and (index == last_item or row.left.startswith(spec.labels["tax"])):
+            out += [row.left, row.right.rjust(width)]
+        elif row.right:
+            out.append(
+                f"{row.left}{' ' * max(2, width - len(row.left) - len(row.right))}{row.right}"
+            )
+        else:
+            out.append(row.left)
+    return "\n".join(out)
+
+
 # -- thermal image -------------------------------------------------------------
 
 

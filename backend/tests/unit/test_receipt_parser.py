@@ -280,6 +280,86 @@ def test_a_receipt_that_adds_up_reads_as_before(monkeypatch: pytest.MonkeyPatch)
         ), spec.seed
 
 
+def _below_only(text: str, monkeypatch: pytest.MonkeyPatch) -> Receipt:
+    """``text`` read with the amounts-below pairing alone (how it read before)."""
+    with monkeypatch.context() as patch:
+        patch.setattr(rp, "_PAIRINGS", ("below",))
+        return _read(text)
+
+
+#: Every amount drifted to the line below its label, with nothing to check the
+#: total by: the amount-only line above the tax label is an item's price.
+DRIFTED_TAX_EXEMPT = (
+    "FERNLEY STORES\n2026-03-14 10:15\nMILK  4.00\nBREAD  3.00\nAPPLES\n2.50\nTAX\n0.00\n"
+)
+DRIFTED_VAT = (
+    "FERNLEY STORES\n14/03/2026 10:15\nMILK  £4.00\nBREAD  £3.00\nAPPLES\n£2.50\nVAT\n£1.58\n"
+)
+
+
+@pytest.mark.parametrize(
+    ("text", "tax"),
+    [
+        (DRIFTED_TAX_EXEMPT + "TOTAL  9.50\n", "0.00"),
+        (DRIFTED_VAT + "TOTAL  £9.50\n", "1.58"),
+        (DRIFTED_TAX_EXEMPT + "TOTAL\n9.50\nVISA\n9.50\n", "0.00"),
+        # The item's name lost: the amount is still not the tax printed below its label.
+        (DRIFTED_TAX_EXEMPT.replace("APPLES\n", "") + "TOTAL  9.50\n", "0.00"),
+    ],
+)
+def test_an_item_price_on_its_own_line_is_not_the_tax(
+    text: str, tax: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    receipt = _read(text)
+    assert receipt.tax == Decimal(tax)
+    assert receipt.total == Decimal("9.50")
+    assert receipt.subtotal != Decimal("7.00")
+    assert receipt == _below_only(text, monkeypatch)
+
+
+def test_above_and_nearest_leave_an_item_its_price() -> None:
+    lines = [
+        sr.placed_line(0, 0.0, "APPLES"),
+        sr.placed_line(1, sr.LINE_HEIGHT, "2.50"),
+        sr.placed_line(2, 2 * sr.LINE_HEIGHT, "TAX"),
+        sr.placed_line(3, 3 * sr.LINE_HEIGHT, "TOTAL", "9.50"),
+    ]
+    for pairing in ("below", "nearest", "above"):
+        assert _paired(lines, pairing)["TAX"] == [], pairing
+    # Under a keyword or a priced line the amount is free to take.
+    for above in (("SUBTOTAL", "7.00"), ("APPLES", "2.50"), ("TIP",)):
+        free = [sr.placed_line(0, 0.0, *above), *lines[1:]]
+        assert _paired(free, "above")["TAX"] == [Decimal("2.50")], above
+
+
+def test_a_label_with_its_amount_below_and_no_contradiction_is_kept() -> None:
+    # Adding up through another pairing is no evidence against a reading
+    # that paired its labels and that nothing contradicts.
+    text = "SHOP\n2026-03-14\nMILK 4.00\nBREAD 3.00\n2.50\nTAX\n0.00\nTOTAL 9.50\n"
+    assert _paired(rp.view_lines_from_text(text), "above")["TAX"] == [Decimal("2.50")]
+    receipt = _read(text)
+    assert (receipt.tax, receipt.total, receipt.adds_up) == (Decimal("0.00"), Decimal("9.50"), None)
+    # No label paired below, no item the amount could belong to: above is tried.
+    lost = "SHOP\n2026-03-14\nMILK 4.00\nBREAD 3.00\n2.50\nTAX\nTOTAL 9.50\n"
+    receipt = _read(lost)
+    assert (receipt.tax, receipt.total, receipt.adds_up) == (Decimal("2.50"), Decimal("9.50"), True)
+
+
+def test_an_unchecked_receipt_reads_as_before(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Amounts below their labels and no subtotal to check them by: the other
+    pairings must not find a set that "adds up" out of an item's price."""
+    specs = [*sr.tuning_specs(), *sr.held_out_specs()]
+    texts = [sr.unchecked_receipt_text(spec) for spec in specs]
+    now = [_read(text) for text in texts]
+    before = [_below_only(text, monkeypatch) for text in texts]
+    changed = [spec.seed for spec, a, b in zip(specs, now, before, strict=True) if a != b]
+    assert changed == []
+    assert any(spec.tax == 0 for spec in specs)
+    for spec, receipt in zip(specs, now, strict=True):
+        assert receipt.total == spec.total, spec.seed
+        assert receipt.tax == spec.tax, spec.seed
+
+
 @pytest.mark.parametrize(
     ("printed", "currency", "expected", "order"),
     [
@@ -360,6 +440,48 @@ def test_purchase_dates_drops_only_the_date_its_lead_in_disowns() -> None:
     assert [d for d, _, _ in rp._purchase_dates(line, "mdy")] == [date(2026, 3, 14)]
     plain = "Date: 2026-02-03 10:15"
     assert rp._purchase_dates(plain, None) == rp._dates_in(plain, None)
+
+
+@pytest.mark.parametrize(
+    "line",
+    [
+        # The second date of a validity or return range is no purchase date.
+        "Coupon valid 03/15/2026 - 03/29/2026",
+        "Offer valid from 03/15/2026 to 03/29/2026",
+        "Returns accepted 03/14/2026 through 04/13/2026",
+        "Return by 04/13/2026 or exchange until 05/13/2026",
+        "Warranty valid 03/14/2026 - 03/14/2027",
+        "Rewards expire 06/30/2026 Next statement 04/01/2026",
+        "Valid 03/15/2026 09:00 - 03/29/2026 21:00",
+        # Nor is a date in front of the word that nothing says is the purchase.
+        "Member since 01/02/2019 EXP 01/02/2027",
+        "Member since 01/02/2019 Expiry date 01/02/2027",
+    ],
+)
+def test_a_range_or_an_unmarked_date_beside_an_expiry_is_no_purchase_date(line: str) -> None:
+    receipt = _read(f"SHOP\nWIDGET 5.00\nTOTAL 5.00\n{line}\n")
+    assert receipt.purchase_date is None
+    assert "date" in receipt.low_confidence
+    assert rp._purchase_dates(line, "mdy") == []
+
+
+def test_a_validity_range_does_not_displace_the_purchase_date() -> None:
+    text = "SHOP\nCoupon valid 03/15/2026 - 03/29/2026\nWIDGET 5.00\nTOTAL 5.00\n03/14/2026\n"
+    assert _read(text).purchase_date == date(2026, 3, 14)
+
+
+@pytest.mark.parametrize(
+    "line",
+    [
+        "03/14/2026 11:42 AM   EXPIRES 06/12/26",
+        "11:42 AM 03/14/2026   EXPIRES 06/12/26",
+        "Date 03/14/2026   Valid until 06/12/26",
+        "EXP 06/12/26  DATE 03/14/2026",
+        "Return by 04/13/2026   Purchase date: 03/14/2026",
+    ],
+)
+def test_a_date_beside_an_expiry_is_kept_on_a_time_or_a_date_label(line: str) -> None:
+    assert [d for d, _, _ in rp._purchase_dates(line, "mdy")] == [date(2026, 3, 14)]
 
 
 def test_mail_date_header_when_the_body_has_none() -> None:

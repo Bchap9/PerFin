@@ -24,13 +24,16 @@ every pattern runs on single lines cut to :data:`MAX_LINE` characters.
   that contradicts the other figures :data:`conf.GUESSED`. A missing
   subtotal or tax is derived from the others (:data:`conf.DERIVED`).
   A label whose amount OCR put on a line of its own takes the amount-only
-  line below it; when that reading does not add up, the nearest such line
-  (above or below) and then the line above are tried, and the first set
-  that adds up is kept (:func:`_best_reading`).
+  line below it; when that reading finds no labelled total, is
+  contradicted, or paired no label at all, the nearest such line (above or
+  below) and then the line above are tried, and the first set that adds up
+  is kept (:func:`_best_reading`). The amount under an unpriced item line
+  is that item's price and is never taken from above.
 * **Date**: every date format of :mod:`app.ingestion.classify.dates` plus
   ``14-MAR-26``; a labelled date ("Date", "Order date") or one printed next
-  to a time wins over others; a date whose own lead-in says expiry, return
-  by or the like is ignored, and the purchase date printed beside it is kept.
+  to a time wins over others; a line that says expiry, valid, return by or
+  the like gives a date only where a date label or a time marks it as the
+  purchase date (:func:`_purchase_dates`).
   Numeric dates whose day/month order is not visible follow the receipt's
   currency (GBP/EUR day first, USD/CAD month first) at the threshold, or
   are a guess (:data:`conf.GUESSED`) without one.
@@ -360,6 +363,8 @@ class _Line:
     strong: bool = False
     #: The label without OCR corrections ("TAX8" stays "tax8", not "taxb").
     plain: str = ""
+    #: The amounts come from an adjacent amount-only line (:func:`_typed`).
+    paired: bool = False
 
     @property
     def amount(self) -> Money | None:
@@ -403,6 +408,15 @@ def _apart(a: ViewLine, b: ViewLine) -> float | None:
     return abs((a0 + a1) / 2 - (b0 + b1) / 2)
 
 
+def _unpriced_item(entry: _Line, below: _Line) -> bool:
+    """``entry`` is an item's name without a price and ``below`` the line
+    under it on the same page: an amount-only line there is that item's
+    price ("APPLES" / "2.50"), not the amount of the label that follows."""
+    if entry.money or entry.paired or entry.line.page != below.line.page:
+        return False
+    return _kind(entry.label, True, entry.plain)[0] == "item"
+
+
 def _amount_line(out: Sequence[_Line], index: int, pairing: Pairing) -> _Line | None:
     """The amount-only line the amountless keyword line ``out[index]`` takes."""
     entry = out[index]
@@ -410,6 +424,8 @@ def _amount_line(out: Sequence[_Line], index: int, pairing: Pairing) -> _Line | 
     if pairing == "below":
         return after if after is not None and _amount_only(after) else None
     before = out[index - 1] if index else None
+    if before is not None and index >= 2 and _unpriced_item(out[index - 2], before):
+        before = None
     # The line below first: it keeps a tie.
     near = [
         other
@@ -435,7 +451,8 @@ def _typed(lines: Iterable[ViewLine], *, pairing: Pairing = "below") -> list[_Li
     ``below`` it, the line ``above`` it on the same page, or the ``nearest``
     of the two (by the distance between line centres, the line below on a
     tie, none farther than :data:`PAIRING_REACH` line heights). An amount
-    line is given to one label only.
+    line is given to one label only, and the line above is never taken when
+    it sits under an item's name that has no price (:func:`_unpriced_item`).
     """
     out: list[_Line] = []
     for line in lines:
@@ -458,6 +475,7 @@ def _typed(lines: Iterable[ViewLine], *, pairing: Pairing = "below") -> list[_Li
         if source is None:
             continue
         entry.money, entry.kind, entry.strong = source.money, kind, strong
+        entry.paired = True
         source.money, source.kind = [], "other"
     return out
 
@@ -675,28 +693,54 @@ def _dates_in(text: str, order: date_rules.DateOrder | None) -> list[_DateRead]:
     return [read for _, _, read in _dated_spans(text, order)]
 
 
+def _beside_time(text: str, start: int, end: int, floor: int) -> bool:
+    """A time of day is printed directly after the date at ``text[start:end]``,
+    or directly before it and after ``floor`` (the end of the previous date)."""
+    after = _TIME.search(text, end)
+    if after is not None and text[end : after.start()].strip(" ,@-").lower() in ("", "at"):
+        return True
+    return any(
+        not text[match.end() : start].strip(" ,-") for match in _TIME.finditer(text, floor, start)
+    )
+
+
 def _purchase_dates(text: str, order: date_rules.DateOrder | None) -> list[_DateRead]:
     """The dates of a line that may be the day of the purchase.
 
-    A date is left out when its own lead-in (the words between the previous
-    date, or the line start, and the date) says it is something else:
-    ``EXPIRES 06/12/26``, ``Return by ...`` (:data:`_NOT_PURCHASE_DATE`). So
-    ``03/14/2026 11:42 AM  EXPIRES 06/12/26`` keeps its first date. When such
-    a word is on the line and in front of none of its dates (``06/12/26
-    EXPIRY``) nothing says which date it speaks of, and none is kept.
+    A line without an expiry, validity or return word
+    (:data:`_NOT_PURCHASE_DATE`) gives all its dates. On a line with one, a
+    date is kept only on positive evidence that it is the purchase date:
+
+    * its own lead-in (the words between the previous date, or the line
+      start, and the date) holds a date label and no such word:
+      ``EXP 06/12/26  DATE 03/14/2026`` keeps its second date;
+    * or it stands in front of the first disowned date with a time of day
+      beside it: ``03/14/2026 11:42 AM  EXPIRES 06/12/26`` keeps its first.
+
+    So the second date of a range (``valid 03/15/2026 - 03/29/2026``,
+    ``Return by ... or exchange until ...``) and an unmarked date in front of
+    the word (``Member since 01/02/2019 EXP 01/02/2027``) are left out. When
+    the word is in front of none of the dates (``06/12/26 EXPIRY``) nothing
+    says which date it speaks of, and none is kept.
     """
+    spans = _dated_spans(text, order)
     kept: list[_DateRead] = []
-    dropped = False
+    disowned = False
     previous_end = 0
-    for start, end, read in _dated_spans(text, order):
-        if _NOT_PURCHASE_DATE.search(fold(text[previous_end:start])):
-            dropped = True
-        else:
+    for start, end, read in spans:
+        lead = fold(text[previous_end:start])
+        if _NOT_PURCHASE_DATE.search(lead):
+            disowned = True
+        elif _DATE_LABEL.search(lead) or (
+            not disowned and _beside_time(text, start, end, previous_end)
+        ):
             kept.append(read)
         previous_end = max(previous_end, end)
-    if not dropped and _NOT_PURCHASE_DATE.search(fold(text)):
+    if disowned:
+        return kept
+    if _NOT_PURCHASE_DATE.search(fold(text)):
         return []
-    return kept
+    return [read for _, _, read in spans]
 
 
 def _find_date(
@@ -961,19 +1005,37 @@ def _reading(view_lines: Sequence[ViewLine], pairing: Pairing) -> _Reading:
     return _Reading(typed, currency, currency_conf, header, found_date, time, items, totals)
 
 
+def _settled(reading: _Reading) -> bool:
+    """A labelled total that nothing contradicts, in a reading that paired at
+    least one label with the amount below it: another pairing "adding up" is
+    then no evidence, since it can do so by moving an amount to the wrong
+    label (an unlabelled price read as the tax)."""
+    totals = reading.totals
+    return (
+        totals.total_labelled
+        and totals.adds_up is None
+        and any(entry.paired for entry in reading.typed)
+    )
+
+
 def _best_reading(view_lines: Sequence[ViewLine]) -> _Reading:
     """The first pairing whose figures add up; the first pairing when none does.
 
     Amounts below their labels are tried first, so a receipt that adds up
     that way reads as it always did; a pairing that does not add up is never
-    preferred to it.
+    preferred to it. The other pairings are tried only when the first found
+    no labelled total, is contradicted by its own figures, or paired no
+    label at all (:func:`_settled`).
     """
     first: _Reading | None = None
     for pairing in _PAIRINGS:
         reading = _reading(view_lines, pairing)
         if reading.totals.adds_up:
             return reading
-        first = first or reading
+        if first is None:
+            first = reading
+            if _settled(reading):
+                break
     if first is None:  # pragma: no cover - _PAIRINGS is never empty
         return _reading(view_lines, "below")
     return first
@@ -1109,7 +1171,7 @@ class ReceiptParser(DocumentParser):
         self, view: DocumentView, *, threshold: float, date_order: str | None = None
     ) -> ParseOutcome:
         outcome = ParseOutcome()
-        lines = [line for line in view.lines if line.page <= 2]
+        lines = [line for line in view.lines if line.page <= MAX_RECEIPT_PAGES]
         receipt = read_receipt(lines, threshold=threshold)
         if receipt is None:
             outcome.warnings.append("no_receipt_total")
