@@ -61,10 +61,25 @@ def test_description_and_amount_pairs_are_no_header() -> None:
     one_cell = _line([("Date", 40.0), ("Description Amount Description Amount", 100.0)])
     assert read_header(one_cell) is None
     assert header_like(one_cell)
-    # Other words for the text column are the same column named twice.
+    # Other words for the text column, and no figure after the second label:
+    # the money heading still stands between the two.
     worded = _line([("Date", 40.0), ("Details", 100.0), ("Amount", 250.0), ("Particulars", 330.0)])
     assert read_header(worded) is None
     assert header_like(worded)
+    # Any money heading between them, and more figures beside each label.
+    wide = _line(
+        [
+            ("Date", 40.0),
+            ("Description", 100.0),
+            ("Withdrawals", 200.0),
+            ("Balance", 270.0),
+            ("Description", 330.0),
+            ("Amount", 430.0),
+            ("Balance", 500.0),
+        ]
+    )
+    assert read_header(wide) is None
+    assert header_like(wide)
 
 
 def test_one_description_heading_is_still_a_header() -> None:
@@ -83,6 +98,88 @@ def test_one_description_heading_is_still_a_header() -> None:
         Column("description", 100.0, 215.0),
         Column("amount", 330.0, 360.0),
     ]
+
+
+@pytest.mark.parametrize(
+    ("cells", "roles", "text_x0"),
+    [
+        pytest.param(
+            [("Date", 40.0), ("Payee", 100.0), ("Description", 220.0), ("Amount", 480.0)],
+            ["date", "description", "amount"],
+            100.0,
+            id="payee-description",
+        ),
+        pytest.param(
+            [
+                ("Date", 40.0),
+                ("Description", 100.0),
+                ("Details", 220.0),
+                ("Fee", 400.0),
+                ("Amount", 480.0),
+            ],
+            ["date", "description", "amount"],
+            100.0,
+            id="description-details-fee",
+        ),
+        pytest.param(
+            [
+                ("Date", 40.0),
+                ("Type", 90.0),
+                ("Details", 140.0),
+                ("Particulars", 220.0),
+                ("Code", 300.0),
+                ("Reference", 350.0),
+                ("Amount", 440.0),
+                ("Balance", 520.0),
+            ],
+            ["date", "description", "amount", "balance"],
+            140.0,
+            id="details-particulars-code-reference",
+        ),
+        pytest.param(
+            [("Trans Date", 40.0), ("Transaction", 120.0), ("Merchant", 240.0), ("Amount", 480.0)],
+            ["date", "description", "amount"],
+            120.0,
+            id="transaction-merchant",
+        ),
+        pytest.param(
+            [("Transaction", 40.0), ("Date", 120.0), ("Description", 200.0), ("Amount", 480.0)],
+            ["description", "date", "amount"],
+            40.0,
+            id="text-date-text",
+        ),
+        pytest.param(
+            [
+                ("Date", 40.0),
+                ("Transaction", 100.0),
+                ("Description", 200.0),
+                ("Debit", 400.0),
+                ("Credit", 460.0),
+                ("Balance", 520.0),
+            ],
+            ["date", "description", "debit", "credit", "balance"],
+            100.0,
+            id="two-texts-debit-credit",
+        ),
+        pytest.param(
+            [("Date", 40.0), ("Payee Description", 100.0), ("Amount", 480.0)],
+            ["date", "description", "amount"],
+            100.0,
+            id="two-texts-in-one-cell",
+        ),
+    ],
+)
+def test_text_headings_side_by_side_are_still_a_header(
+    cells: list[tuple[str, float]], roles: list[Role], text_x0: float
+) -> None:
+    """The negative of the grid rule: two text headings with no money heading
+    between them are the text columns of one table (a payee and what it was
+    for), and the header reads as it always did, the first one named being
+    the description column."""
+    header = read_header(_line(cells))
+    assert header is not None
+    assert [c.role for c in header if c.role != "other"] == roles
+    assert next(c.x0 for c in header if c.role == "description") == text_x0
 
 
 def test_two_date_headings_are_still_a_header() -> None:
@@ -231,6 +328,38 @@ def test_groups_of_a_table_across() -> None:
     # No column of one group reaches into the next.
     for left, right in itertools.pairwise(groups):
         assert max(c.x1 for c in left) <= min(c.x0 for c in right)
+
+
+def test_a_role_named_twice_in_a_group_keeps_its_first_heading() -> None:
+    """``Date | Payee | Description | Amount`` printed twice: each group's
+    description column is its own first text heading, as in a plain header
+    and in :func:`read_header`'s first group."""
+    line = _line(
+        [
+            ("Date", 40.0),
+            ("Payee", 90.0),
+            ("Description", 140.0),
+            ("Amount", 220.0),
+            ("Date", 300.0),
+            ("Payee", 350.0),
+            ("Description", 400.0),
+            ("Amount", 480.0),
+        ]
+    )
+    groups = across_groups(line)
+    assert groups == [
+        [
+            Column("date", 40.0, 60.0),
+            Column("description", 90.0, 115.0),
+            Column("amount", 220.0, 250.0),
+        ],
+        [
+            Column("date", 300.0, 320.0),
+            Column("description", 350.0, 375.0),
+            Column("amount", 480.0, 510.0),
+        ],
+    ]
+    assert read_header(line) == [*groups[0], Column("across", 300.0, math.inf)]
 
 
 def test_groups_of_one_cell_headings() -> None:

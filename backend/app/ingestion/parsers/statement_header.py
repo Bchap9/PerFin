@@ -52,13 +52,17 @@ How :func:`read_header` works on a line:
    no digit, and none of :data:`NOT_A_DESCRIPTION` (a title such as
    ``DAILY ENDING BALANCE`` between ``Date`` and ``Amount`` heads a list
    of balances, not rows). Two unknown cells, and the line is no header.
-6. A line that names the **description** twice, in two cells or in two
-   phrases of one cell that stand side by side (their spans do not
-   overlap), is no header: ``Date | Description | Amount | Description |
-   Amount`` heads a grid of labels and their values (an account summary),
-   and its lines are no rows. It is :func:`header_like`, so it ends the
-   table above it. A table printed across the page is found before this
-   and is not meant.
+6. A line that names the **description** twice with a money heading
+   **between** the two (left to right, by where each heading starts; the
+   headings may be cells or phrases of one cell) is no header: ``Date |
+   Description | Amount | Description | Amount`` heads a grid of labels
+   and their values (an account summary), and its lines are no rows. It
+   is :func:`header_like`, so it ends the table above it. A table printed
+   across the page is found before this and is not meant. Two text
+   headings with no money heading between them (``Payee | Description``,
+   ``Details | Particulars | Code | Reference``, ``Transaction | Date |
+   Description``) are the text columns of one table: the first one named
+   is its description column and the line is a header.
 7. The line is a header when it names a date, a description or check
    number, and a money column; else it may be a headless header
    (:func:`_headless`).
@@ -549,14 +553,28 @@ def across_groups(
     return [list(group.values()) for group in groups]
 
 
+def _label_value_grid(headings: Sequence[tuple[Role, Cell]]) -> bool:
+    """The headings name a description, then a money column, then a
+    description again, left to right (module doc, 6)."""
+    seen = 0  # 1: a description; 2: a money heading right of it
+    for role, _ in sorted(headings, key=lambda heading: heading[1].x0):
+        if role == "description":
+            if seen == 2:
+                return True
+            seen = 1
+        elif role in MONEY_ROLES and seen == 1:
+            seen = 2
+    return False
+
+
 def read_header(line: ViewLine, headers: Mapping[str, Role] = HEADERS) -> list[Column] | None:
     """The table columns ``line`` declares, or None when it is no header.
 
     A table printed across the page (:func:`across_start`) declares the
     columns of its first group and an ``across`` column from the second
     group on, when the first group is a header by itself; else it is none.
-    Any other line of headings that names the description twice, side by
-    side, is none either (module doc, 6).
+    Any other line of headings that names the description twice with a
+    money heading between the two is none either (module doc, 6).
     """
     across = _across(line, headers)
     if across is not None:
@@ -570,18 +588,15 @@ def read_header(line: ViewLine, headers: Mapping[str, Role] = HEADERS) -> list[C
     found: list[Column] = []
     roles: set[Role] = set()
     dates: list[Cell] = []
-    texts: list[Cell] = []
     for role, cell in headings:
         if role == "date":
             dates.append(cell)
-        elif role == "description":
-            texts.append(cell)
         if role in roles:
             continue
         roles.add(role)
         found.append(Column(role, cell.x0, cell.x1))
     if plain:
-        if any(a.overlap(b.x0, b.x1) <= 0 for a, b in combinations(texts, 2)):
+        if _label_value_grid(headings):
             return None  # a label beside its value, twice: a grid, no table
         if len(dates) > 1 and "post_date" not in roles:
             # Two date headings: the left one is the row's date, the next its posting date.
