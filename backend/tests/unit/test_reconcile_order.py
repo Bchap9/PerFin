@@ -11,6 +11,8 @@ from __future__ import annotations
 from datetime import date, timedelta
 from decimal import Decimal
 
+import pytest
+
 from app.ingestion.reconcile import (
     Row,
     newest_first,
@@ -101,6 +103,25 @@ def test_sign_of_the_printed_total_does_not_matter() -> None:
     # Withdrawals printed as a positive total; a deposit total printed negative.
     assert section_mismatches(rows, sections, {4: _d("99.00"), 7: _d("-75.00")}) == []
     assert section_mismatches(rows, sections, {4: _d("-99.00"), 7: _d("75.00")}) == []
+
+
+def test_section_total_is_the_net_of_its_rows_not_their_magnitudes() -> None:
+    # A reversal inside a section of withdrawals takes away from its total.
+    rows = [Row(_d("-40.00")), Row(_d("-59.00")), Row(_d("10.00")), Row(_d("75.00"))]
+    sections = [4, 4, 4, 7]
+    assert section_mismatches(rows, sections, {4: _d("89.00"), 7: _d("75.00")}) == []
+    assert section_mismatches(rows, sections, {4: _d("-89.00")}) == []
+    # 109.00 is what the three amounts come to with their signs dropped.
+    assert section_mismatches(rows, sections, {4: _d("109.00"), 7: _d("75.00")}) == [4]
+
+
+def test_sections_must_name_one_section_per_row() -> None:
+    rows = [Row(_d("100.00")), Row(_d("-40.00"))]
+    # A list built from other rows is a caller's mistake, never a shorter check.
+    with pytest.raises(ValueError, match="one section per row"):
+        section_mismatches(rows, [1], {1: _d("100.00")})
+    with pytest.raises(ValueError, match="one section per row"):
+        section_mismatches(rows, [1, 2, 2], {})
 
 
 def test_section_without_a_total_is_not_checked() -> None:

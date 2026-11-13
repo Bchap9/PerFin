@@ -81,10 +81,16 @@ def section_mismatches(
 ) -> list[int]:
     """Ids (sorted) of the sections whose printed total is not the sum of their rows.
 
-    ``sections[i]`` is the section of ``rows[i]``. Magnitudes are compared,
-    so the sign of the printed total does not matter. A section without a
-    printed total is not checked; a total printed for a section with no rows
-    is compared against zero.
+    ``sections[i]`` is the section of ``rows[i]``: build both from one list,
+    since a different length raises ``ValueError`` (a check on the wrong rows
+    would be worse than none). The rows of a section are added with their
+    signs, so a reversal takes away from the total; only the magnitudes of
+    that sum and of the printed total are compared, so the sign of the printed
+    total does not matter. A section without a printed total is not checked;
+    a total printed for a section with no rows is compared against zero.
+
+    A total says how much, never which way: rows all read with the wrong sign
+    still add up to it, so a section total never vouches for a row.
     """
     if len(sections) != len(rows):
         raise ValueError("sections must name one section per row")
