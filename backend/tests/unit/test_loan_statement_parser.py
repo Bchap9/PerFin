@@ -19,6 +19,7 @@ from app.ingestion.extract.pdf import extract_pdf
 from app.ingestion.parsers import confidence
 from app.ingestion.parsers.base import Cell, DocumentView, ViewLine
 from app.ingestion.parsers.loan_statement import (
+    MAX_LOAN_PAGES,
     MONEY_FIELDS,
     LoanStatementParser,
     reconcile_loan,
@@ -322,3 +323,32 @@ def test_several_loans_need_a_header_and_two_rows(
     outcome = LoanStatementParser().parse(view, threshold=confidence.DEFAULT_THRESHOLD)
     assert (outcome.loan is None) is several
     assert ("loan_bill_several_loans" in outcome.warnings) is several
+
+
+def test_a_long_document_about_loan_statements_is_not_read_as_one() -> None:
+    """A guide with a sample statement inside it: the sample is not the reader's payment."""
+    (stmt,) = synth.loan_series(1)
+    view = _pdf_view(synth.loan_guide_pdf(stmt, pages=12))
+    assert view.page_count == 12 > MAX_LOAN_PAGES
+    outcome = LoanStatementParser().parse(view, threshold=confidence.DEFAULT_THRESHOLD)
+    assert outcome.empty
+    assert outcome.loan is None
+    assert outcome.warnings == ["loan_document_too_long"]
+    # Through the registry nothing else is made of it either.
+    result = _parse(synth.loan_guide_pdf(stmt, pages=12))
+    assert result.parse is not None
+    assert result.parse.loan is None
+    assert result.parse.receipt is None
+    assert result.statements == []
+    assert "loan_document_too_long" in result.parse.warnings
+
+
+@pytest.mark.parametrize(("pages", "read"), [(MAX_LOAN_PAGES, True), (MAX_LOAN_PAGES + 1, False)])
+def test_the_page_limit_of_a_loan_statement(pages: int, read: bool) -> None:
+    (stmt,) = synth.loan_series(1)
+    data = synth.loan_guide_pdf(stmt, pages=pages, sample_page=2)
+    outcome = LoanStatementParser().parse(_pdf_view(data), threshold=confidence.DEFAULT_THRESHOLD)
+    assert (outcome.loan is not None) is read
+    assert ("loan_document_too_long" in outcome.warnings) is not read
+    if outcome.loan is not None:
+        assert (outcome.loan.paid_on, outcome.loan.principal) == (stmt.paid_on, stmt.principal)

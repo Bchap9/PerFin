@@ -15,7 +15,12 @@ balance``) is not counted beside it.
 A bill that lists several loans in one table
 (:func:`~app.ingestion.parsers.loan_periodic.lists_several_loans`) is not
 one loan's statement: nothing is read and the warning is
-``loan_bill_several_loans``.
+``loan_bill_several_loans``. Nor is a document of more than
+:data:`MAX_LOAN_PAGES` pages (a servicing guide, a report with sample
+statements in it): the labels are read over all pages, so a sample that
+adds up would be recorded as a payment on a loan whose digits it happens
+to print, or that the file was uploaded to. Nothing is read and the
+warning is ``loan_document_too_long``.
 
 Two layouts, each with its own reader:
 
@@ -105,6 +110,9 @@ from app.ingestion.parsers.text import (
 from app.ingestion.reconcile import TOLERANCE
 from app.ingestion.sandbox.protocol import LoanReconciliation, LoanStatement
 
+#: A loan statement is a few pages (the statement, its coupon, an escrow
+#: page); a longer document is about statements, whatever it prints.
+MAX_LOAN_PAGES: Final = 6
 VOCABULARY: Final = (
     "mortgage statement",
     "loan statement",
@@ -245,6 +253,9 @@ class LoanStatementParser(DocumentParser):
     def parse(
         self, view: DocumentView, *, threshold: float, date_order: str | None = None
     ) -> ParseOutcome:
+        if view.page_count > MAX_LOAN_PAGES:
+            # A guide or a report about loan statements: its sample is nobody's payment.
+            return ParseOutcome(warnings=["loan_document_too_long"])
         if lists_several_loans(view):
             # One account with several loans is not one loan's statement.
             return ParseOutcome(warnings=["loan_bill_several_loans"])

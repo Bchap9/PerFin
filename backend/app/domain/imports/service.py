@@ -64,7 +64,8 @@ The flow (INGESTION.md "Parse", "Match and deduplicate", "Commit"):
      ``receipt_unreadable``, ``payslip_unreadable``, ``tax_form_unreadable``
      or ``loan_unreadable`` (``parser``, and the parse ``warnings``, which
      say why: ``loan_bill_several_loans`` for a bill listing several
-     loans). Its page tables are never offered to the mapping editor.
+     loans, ``loan_document_too_long`` for a guide or report of many
+     pages). Its page tables are never offered to the mapping editor.
    * **Brokerage activity tables** come first: when table 0 of a CSV, TSV
      or XLSX is a brokerage "Activity" export
      (``app.ingestion.parsers.brokerage_table``: a date, an action that

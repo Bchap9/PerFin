@@ -17,6 +17,9 @@ and the next payment due. Loan numbers are invented and printed masked
 * ``tamper="parts"`` prints a total that is not the sum of the parts,
   ``tamper="balance"`` a new balance the principal does not explain: neither
   reconciles (SECURITY.md C12).
+* :func:`loan_guide_pdf` draws a guide of many pages about mortgage
+  statements with one such statement inside it as a sample: a document a
+  loan statement parser must not take for the reader's own statement.
 * :func:`periodic_statement_pdf` draws a :class:`PeriodicStatement`: the
   periodic statement a mortgage servicer sends each month. It prints three
   sets of figures that must not be confused: the split of the **next**
@@ -144,10 +147,19 @@ def _us(day: date) -> str:
 def loan_statement_pdf(
     stmt: SynthLoanStatement, *, layout: Layout = "classic", tamper: Tamper = None
 ) -> bytes:
-    total = stmt.total + (Decimal("100.00") if tamper == "parts" else 0)
-    balance = stmt.balance - (Decimal("500.00") if tamper == "balance" else 0)
     buf = io.BytesIO()
     c = canvas.Canvas(buf, pagesize=letter)
+    _draw_statement(c, stmt, layout, tamper)
+    c.save()
+    return buf.getvalue()
+
+
+def _draw_statement(
+    c: canvas.Canvas, stmt: SynthLoanStatement, layout: Layout, tamper: Tamper
+) -> None:
+    """One statement on a page of its own."""
+    total = stmt.total + (Decimal("100.00") if tamper == "parts" else 0)
+    balance = stmt.balance - (Decimal("500.00") if tamper == "balance" else 0)
     left, right = 72, 520
     y = 750
 
@@ -201,6 +213,43 @@ def loan_statement_pdf(
     c.setFont(FONT, 8)
     c.drawString(left, 60, "Synthetic test document. Placeholder Home Lending is fictional.")
     c.showPage()
+
+
+#: The prose of a guide page (:func:`loan_guide_pdf`); none of it is a labelled figure.
+_GUIDE_LINES: Final = (
+    "This guide explains each part of the statement a servicer sends every month.",
+    "The first part says what was paid and how the payment was divided.",
+    "The second part says what is still owed and at which rate.",
+    "A sample is printed on one of the pages that follow. Its figures are examples.",
+    "Compare the sample with your own statement, line by line.",
+)
+
+
+def loan_guide_pdf(stmt: SynthLoanStatement, *, pages: int = 12, sample_page: int = 5) -> bytes:
+    """A guide of ``pages`` pages about mortgage statements, one of them a sample.
+
+    Page 1 is headed ``Your Mortgage Statement Explained``; page
+    ``sample_page`` is ``stmt`` exactly as :func:`loan_statement_pdf` draws
+    it (it reconciles); every other page is prose. A document about
+    statements, not a statement of the reader's loan.
+    """
+    buf = io.BytesIO()
+    c = canvas.Canvas(buf, pagesize=letter)
+    for number in range(1, pages + 1):
+        if number == sample_page:
+            _draw_statement(c, stmt, "classic", None)
+            continue
+        c.setFont(BOLD, 14)
+        heading = "Your Mortgage Statement Explained" if number == 1 else f"Chapter {number}"
+        c.drawString(72, 750, heading)
+        c.setFont(FONT, 10)
+        y = 720
+        for text in _GUIDE_LINES:
+            c.drawString(72, y, text)
+            y -= 16
+        c.setFont(FONT, 8)
+        c.drawString(72, 60, f"Synthetic test document. Page {number} of {pages}.")
+        c.showPage()
     c.save()
     return buf.getvalue()
 

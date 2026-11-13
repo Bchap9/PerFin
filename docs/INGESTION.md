@@ -2132,7 +2132,12 @@ reconciliation, per-field confidence).
   any table that starts with a date, says payment and prints exactly one
   amount). A bill that lists several loans in one table is not one loan's
   statement: nothing is read (warning `loan_bill_several_loans`) and the
-  document waits as `loan_unreadable` ("Review queue").
+  document waits as `loan_unreadable` ("Review queue"). So does a
+  document of more than six pages (`MAX_LOAN_PAGES`; warning
+  `loan_document_too_long`): the labels are read over all pages, and a
+  guide or report with a sample statement in it that adds up would
+  otherwise record the sample's payment on a loan whose digits it
+  prints, or that it was uploaded to.
 - **Both layouts** read the interest rate (a percentage, stored as a
   fraction; the tail of a number OCR split, `4, 75%`, is no rate), the
   lender (a `Lender:` line with its colon, else the first line), the loan

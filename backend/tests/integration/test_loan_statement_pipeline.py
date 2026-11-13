@@ -24,6 +24,8 @@ Statements come from ``tests/fixtures/synth_loans.py`` (an invented lender).
 * A loan bill is a loan document, never a receipt: an auto-loan bill records
   its payment; a bill listing several loans, which the parser does not read,
   waits as ``unparsed``/``loan_unreadable`` with the parser's warning.
+* A long document about loan statements (a guide with a sample inside) is
+  not a statement: nothing is recorded on a loan its sample's digits match.
 """
 
 from __future__ import annotations
@@ -368,6 +370,20 @@ def test_bill_of_several_loans_says_so(env: Env) -> None:
     assert item.payload["parser"] == "loan_statement_generic"
     assert "loan_bill_several_loans" in item.payload["warnings"]
     assert env.query(select(LoanPayment)) == []
+
+
+def test_a_guide_with_a_sample_statement_records_nothing_on_a_matching_loan(env: Env) -> None:
+    """Twelve pages about mortgage statements, one a sample with the loan's own digits."""
+    account, loan = env.loan()
+    (sample,) = synth.loan_series(1)
+    document = env.ingest(synth.loan_guide_pdf(sample, pages=12), "guide.pdf")
+    assert document.status is DocumentStatus.NEEDS_REVIEW
+    [item] = _open_items(env, document)
+    assert item.kind is ReviewKind.UNPARSED
+    assert item.payload["reason"] == "loan_unreadable"
+    assert "loan_document_too_long" in item.payload["warnings"]
+    assert env.payments(loan) == []
+    assert _statement_snapshots(env, account) == []
 
 
 def test_auto_loan_bill_is_a_loan_document_not_a_receipt(env: Env) -> None:

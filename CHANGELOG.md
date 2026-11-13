@@ -213,7 +213,10 @@ What remains (details in docs/ROADMAP.md):
   block is the payment. A statement that reports no payment in its
   period and whose amount due adds up is filed with its balance on the
   statement date instead of waiting in review. A bill that lists several
-  loans is recognised and not read.
+  loans is recognised and not read. Nor is a document of more than six
+  pages (a servicing guide, a report with sample statements): a sample
+  that adds up could have been recorded as a payment on a matching loan.
+  It waits as `loan_unreadable` (warning `loan_document_too_long`).
 - **A written option stays out of the holdings.** An export or OFX file
   that sells an option the account did not hold (sold to open) is not a
   sale of units the lot engine can book. Everything else of the
