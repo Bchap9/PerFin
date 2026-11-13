@@ -73,6 +73,17 @@ What the first page's summary names:
   table. The only deposit labels on the page are the dated ``Beginning
   Balance`` and ``Ending Balance`` lines inside the shares' tables.
 
+Lines of a card's section that print no date:
+
+* :func:`card_interest_lines`: a card whose table holds its sections under
+  their titles. ``Fees`` prints one dated fee and ``TOTAL FEES FOR THIS
+  PERIOD``; ``Interest Charged`` prints ``Interest Charge on Purchases``
+  with a figure and no date, ``Interest Charge on Cash Advances 0.00`` and
+  ``TOTAL INTEREST FOR THIS PERIOD``; then a year-to-date block (``Total
+  fees charged in 2026``, ``Total interest charged in 2026``) with other
+  figures. The new balance counts the interest: the statement adds up only
+  with the undated interest line read as a row.
+
 :data:`EXPECTED_ROWS` gives, per builder, the rows a correct reading returns
 (``(posted, amount, payee)``, money out negative).
 """
@@ -811,6 +822,120 @@ def member_statement_with_a_loan_share() -> bytes:
     return buf.getvalue()
 
 
+# -- a card whose interest is printed without a date -----------------------------
+
+_INTEREST_PREVIOUS: Final = _d("1,204.75")
+_INTEREST_PAYMENT: Final[ExpectedRow] = (
+    date(2026, 6, 11),
+    _d("450.00"),
+    "PAYMENT RECEIVED - THANK YOU",
+)
+_INTEREST_PURCHASES: Final[tuple[ExpectedRow, ...]] = (
+    (date(2026, 6, 4), _d("-37.60"), "ELTERBURN GARDEN SUPPLY"),
+    (date(2026, 6, 9), _d("-112.05"), "KESTLEWICK TYRES"),
+    (date(2026, 6, 18), _d("-14.99"), "ROWANFOLD NEWSAGENT"),
+    (date(2026, 6, 25), _d("-68.44"), "SWINSTY FARM SHOP"),
+)
+_INTEREST_FEE: Final[ExpectedRow] = (date(2026, 6, 22), _d("-25.00"), "LATE FEE")
+#: The period of :func:`card_interest_lines`; its last day dates the interest.
+INTEREST_PERIOD: Final = (date(2026, 6, 1), date(2026, 6, 30))
+#: The interest line printed without a date, as a correct reading returns it.
+INTEREST_ROW: Final[ExpectedRow] = (
+    INTEREST_PERIOD[1],
+    _d("-6.20"),
+    "Interest Charge on Purchases",
+)
+#: The line that charges nothing: never a row.
+INTEREST_ZERO_LINE: Final = "Interest Charge on Cash Advances"
+#: The year-to-date figures: totals of another span of time, never rows.
+_INTEREST_YEAR_FEES: Final = _d("75.00")
+_INTEREST_YEAR_INTEREST: Final = _d("41.30")
+#: What the card owes at the end of :func:`card_interest_lines`.
+INTEREST_NEW_BALANCE: Final = (
+    _INTEREST_PREVIOUS
+    - _INTEREST_PAYMENT[1]
+    + _total(_INTEREST_PURCHASES)
+    + abs(_INTEREST_FEE[1])
+    + abs(INTEREST_ROW[1])
+)
+
+
+def _card_table_rows(rows: Sequence[ExpectedRow], *, minus: bool) -> list[list[tuple[float, str]]]:
+    """Dated lines of a card's table: the figure bare, or with a minus (money in)."""
+    return [
+        [
+            (40, posted.strftime("%m/%d/%Y")),
+            (110, payee),
+            (-500, f"-{_money(amount)}" if minus else _money(amount)),
+        ]
+        for posted, amount, payee in rows
+    ]
+
+
+def card_interest_lines() -> bytes:
+    """A card that adds up only with its undated interest line read as a row."""
+    buf = io.BytesIO()
+    c = canvas.Canvas(buf, pagesize=letter)
+    purchases = _total(_INTEREST_PURCHASES)
+    start, end = (day.strftime("%m/%d/%Y") for day in INTEREST_PERIOD)
+    _top(c, "Yewdale Card Company", "5126", f"{start} - {end}")
+    _rows(
+        c,
+        700,
+        [
+            [(40, "Credit Limit"), (-300, "$4,500.00")],
+            [(40, "Previous Balance"), (-300, f"${_money(_INTEREST_PREVIOUS)}")],
+            [(40, "Payments and Other Credits"), (-300, f"-${_money(_INTEREST_PAYMENT[1])}")],
+            [(40, "Purchases and Adjustments"), (-300, f"${_money(purchases)}")],
+            [(40, "Fees Charged"), (-300, f"${_money(_INTEREST_FEE[1])}")],
+            [(40, "Interest Charged"), (-300, f"${_money(INTEREST_ROW[1])}")],
+            [(40, "New Balance"), (-300, f"${_money(INTEREST_NEW_BALANCE)}")],
+        ],
+    )
+    _line(c, 596, [(40, "Date"), (110, "Description"), (-500, "Amount")], size=8)
+    y = 582.0
+    _line(c, y, [(40, "Payments and Other Credits")], size=10, bold=True)
+    y = _rows(c, y - 14, _card_table_rows([_INTEREST_PAYMENT], minus=True))
+    _line(c, y - 4, [(40, "Purchases and Adjustments")], size=10, bold=True)
+    y = _rows(c, y - 18, _card_table_rows(_INTEREST_PURCHASES, minus=False))
+    _line(c, y - 4, [(40, "Fees")], size=10, bold=True)
+    y = _rows(c, y - 18, _card_table_rows([_INTEREST_FEE], minus=False))
+    _line(
+        c,
+        y,
+        [(110, "TOTAL FEES FOR THIS PERIOD"), (-500, _money(_INTEREST_FEE[1]))],
+        bold=True,
+    )
+    y -= 17
+    _line(c, y, [(40, "Interest Charged")], size=10, bold=True)
+    y = _rows(
+        c,
+        y - 14,
+        [
+            [(110, INTEREST_ROW[2]), (-500, _money(INTEREST_ROW[1]))],
+            [(110, INTEREST_ZERO_LINE), (-500, "0.00")],
+        ],
+    )
+    _line(
+        c,
+        y,
+        [(110, "TOTAL INTEREST FOR THIS PERIOD"), (-500, _money(INTEREST_ROW[1]))],
+        bold=True,
+    )
+    y -= 17
+    _line(c, y, [(40, "2026 Totals Year-to-Date")], size=10, bold=True)
+    _rows(
+        c,
+        y - 14,
+        [
+            [(110, "Total fees charged in 2026"), (-500, _money(_INTEREST_YEAR_FEES))],
+            [(110, "Total interest charged in 2026"), (-500, _money(_INTEREST_YEAR_INTEREST))],
+        ],
+    )
+    c.save()
+    return buf.getvalue()
+
+
 EXPECTED_ROWS: Final[dict[str, list[ExpectedRow]]] = {
     "headerless_sections_checking": [*_CHECKING_DEPOSITS, *_CHECKING_WITHDRAWALS],
     "headerless_total_off": list(_CHECKING_WITHDRAWALS),
@@ -826,4 +951,10 @@ EXPECTED_ROWS: Final[dict[str, list[ExpectedRow]]] = {
     ],
     "summary_printed_twice": list(_TWICE_ROWS),
     "card_named_by_its_summary": list(_EQUATION_ROWS),
+    "card_interest_lines": [
+        _INTEREST_PAYMENT,
+        *_INTEREST_PURCHASES,
+        _INTEREST_FEE,
+        INTEREST_ROW,
+    ],
 }

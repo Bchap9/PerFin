@@ -192,6 +192,25 @@ are read the same way:
    with no header at all is a statement when a title has
    :data:`HEADERLESS_TABLE_ROWS` such rows after it on its page or the next
    (:meth:`TableStatementParser.lines_have_table`).
+   **Lines of the closing day.** Only on a card (``sign == "card"``), in a
+   section whose title has the kind ``fee`` or ``int`` (``Fees``,
+   ``Interest Charged``), under a header or without one: an undated line
+   of words with exactly one figure on it, not zero, under ``Amount``
+   (without a header: in the line's last cell), that is no total, title or
+   balance line and names no other span of time (``Interest charged in
+   2026``), is held. When the section's total follows and is the total of
+   the section's dated rows **with** the lines held, and not without them,
+   they are rows (``Interest Charge on Purchases 6.20`` over ``TOTAL
+   INTEREST FOR THIS PERIOD 6.20``); with any other total, or none before
+   the next title, header or dated row, they stay the summary lines they
+   were (counted when a dated row follows, as any undated line with a
+   figure). Nothing is held in a section after its total, and a line right
+   under a dated row is that day's candidate first (**a date printed once
+   per day**). Such a row prints no day: it takes the period's last day,
+   its ``posted_date`` scoring at most ``confidence.DERIVED`` and the
+   period's own confidence. Without a printed period (a statement date
+   only, an assumed year) it is skipped and counted. A bank statement's
+   ``Interest earned this period`` is never a row.
    **A table that reads no row.** When a table ends (at the header of the
    next one, at a line of heading words that is no header we read, at the
    end) without one row read under its header, its undated lines with a
@@ -898,6 +917,9 @@ OTHER_SPAN_WORDS: Final = ("year to date", "ytd", "this year", "last year", "pre
 #: A year printed on a line (``Total fees charged in 2026``), not a figure
 #: (``$2,026.00``, ``2026.00``).
 _YEAR_WORD: Final = re.compile(r"(?<![\d.,$])(?:19|20)\d{2}(?![\d.,]*\d)")
+#: The kinds of a card's section whose lines may print no date (``Interest
+#: Charge on Purchases``, an annual fee): charged on the closing day.
+CLOSING_DAY_KINDS: Final = frozenset({"fee", "int"})
 
 
 class SectionTitle(NamedTuple):
@@ -973,6 +995,10 @@ class _Row:
     #: (0: none): its rows are dropped together when every one of them is a
     #: row of another table too (module doc, "A second listing").
     listing: int = 0
+    #: The line printed no date and its section's total says it is a charge
+    #: of the period (module doc, "Lines of the closing day"): ``date_text``
+    #: is empty and the row takes the period's last day.
+    closing_dated: bool = False
 
 
 @dataclass
@@ -1034,7 +1060,11 @@ class _Headerless:
     pages: set[int]
     #: Its date-led lines: the line, what it reads as, the lines of its memo.
     led: list[tuple[ViewLine, LedRow, list[ViewLine]]] = field(default_factory=list)
-    #: The lines met since its first date-led line: their summary scan waits
+    #: Its undated lines of words and one figure, in a card's fee or interest
+    #: section: rows only when its total says so (module doc, "Lines of the
+    #: closing day").
+    closing: list[tuple[ViewLine, Amount]] = field(default_factory=list)
+    #: The lines met since its first date-led or held line: their summary scan waits
     #: until the section closes (a row is no line of the summary).
     queued: list[ViewLine] = field(default_factory=list)
     #: Lines in a row that were no date-led row.
@@ -1997,6 +2027,11 @@ class TableStatementParser(DocumentParser):
         checks_only = False
         # Sections whose total is the one printed beside their title.
         titled: set[int] = set()
+        # Undated lines of a card's fee or interest section, each with the
+        # row it would be, held until the section's total (module doc,
+        # "Lines of the closing day"); the sections whose total was met.
+        closing: list[tuple[_Row, ViewLine]] = []
+        totalled: set[int] = set()
 
         def runs_on(found: SectionTitle, page: int) -> bool:
             """``found`` names the section being read once more: marked
@@ -2063,13 +2098,43 @@ class TableStatementParser(DocumentParser):
             rows_of_day = not block or self._balances_chain(block_open, held, closing)
             settle(dated=rows_of_day, summary_block=not rows_of_day)
 
+        def release(total: Amount | None = None) -> None:
+            """The undated lines held in a card's fee or interest section
+            meet the section's ``total``, or the section ends without one.
+            They are rows of the closing day when the total is that of the
+            section's rows with them and not without them; otherwise they
+            are what they were, lines of the summary with a figure under
+            the table's money (counted when a dated row follows)."""
+            nonlocal row_page, table_rows
+            found = list(closing)
+            closing.clear()
+            if not found:
+                return
+            candidates = [row for row, _ in found]
+            own = [row for row in rows if row.section == candidates[0].section]
+            if (
+                total is not None
+                and not self._total_of(total, own)
+                and self._total_of(total, [*own, *candidates])
+            ):
+                rows.extend(candidates)
+                summary.section_totals.setdefault(candidates[0].section, total)
+                row_page = candidates[-1].page
+                table_rows += len(candidates)
+                return
+            for _, held_line in found:
+                loose.append((held_line.page, held_line.bbox))
+                scan(held_line)
+
         def close_headerless(total: Amount | None = None) -> None:
             """The section open under a title and no header ends, at its
             ``total`` when it prints one. Its date-led lines are rows when
             there are :data:`MIN_HEADERLESS_ROWS` of them and the total, if
             printed, is theirs (one row will do when the total is its
             amount); otherwise they are counted, those on a later page than
-            the title only when the section had the rows or a total."""
+            the title only when the section had the rows or a total. The
+            undated lines held with them are rows too when the total is
+            that of all of them and not of the date-led lines alone."""
             nonlocal headerless, section, skipped, title, row_page, found_header
             found, headerless = headerless, None
             if found is None:
@@ -2078,6 +2143,19 @@ class TableStatementParser(DocumentParser):
                 self._headerless_row(line, led, memo, found.title, section + 1)
                 for line, led, memo in found.led
             ]
+            undated = [
+                self._closing_led_row(line, amount, found.title, section + 1)
+                for line, amount in found.closing
+            ]
+            with_undated = (
+                total is not None
+                and bool(undated)
+                and not self._total_of(total, built)
+                and self._total_of(total, [*built, *undated])
+            )
+            if with_undated:
+                # In the order printed.
+                built = sorted([*built, *undated], key=lambda row: (row.page, row.bbox[1]))
             enough = len(built) >= (1 if total is not None else MIN_HEADERLESS_ROWS)
             read = enough and (total is None or self._total_of(total, built))
             if read:
@@ -2097,6 +2175,8 @@ class TableStatementParser(DocumentParser):
                         summary.skipped_boxes.append((row.page, row.bbox))
                         summary.headerless += 1
             of_rows = {id(part) for line, _, memo in found.led for part in (line, *memo)}
+            if with_undated:
+                of_rows |= {id(line) for line, _ in found.closing}
             for queued_line in found.queued:
                 if not (read and id(queued_line) in of_rows):
                     self._scan_summary(queued_line, summary)
@@ -2130,6 +2210,7 @@ class TableStatementParser(DocumentParser):
                     title = None
                     section += 1
                 if section != before:
+                    release()
                     settle(dated=False, ended=True)
                 columns, pending, last, anchor = header, False, None, None
                 found_header, unread, head = True, None, line
@@ -2145,6 +2226,7 @@ class TableStatementParser(DocumentParser):
             norm = line.norm
             if columns is not None and self._header_like(line):
                 # The header of a table we do not read ("Date | Balance"): ours ends.
+                release()
                 settle(dated=False, ended=True)
                 columns, last, anchor = None, None, None
                 unread = line.page
@@ -2185,6 +2267,16 @@ class TableStatementParser(DocumentParser):
                             headerless.under = line
                         else:
                             headerless.under = None
+                            charged = (
+                                self._closing_led(line, norm)
+                                if self._closing_day(headerless.title)
+                                else None
+                            )
+                            if charged is not None:
+                                # Words and one figure and no date, under a
+                                # card's ``Fees`` or ``Interest Charged``: a
+                                # row if the section's total says so.
+                                headerless.closing.append((line, charged))
                             if (
                                 self._found_not_read(line)
                                 and len(line.text.split()) <= MAX_LED_WORDS
@@ -2208,7 +2300,7 @@ class TableStatementParser(DocumentParser):
                     skipped += 1
                     summary.skipped_boxes.append((line.page, line.bbox))
                     summary.headerless += 1
-                if headerless is not None and headerless.led:
+                if headerless is not None and (headerless.led or headerless.closing):
                     headerless.queued.append(line)
                 else:
                     self._scan_summary(line, summary)
@@ -2261,12 +2353,25 @@ class TableStatementParser(DocumentParser):
                     # under it starts no chain from the block's lines.
                     close_block(None)
                     anchor = None
-                if not pending and dated_section == section:
-                    total = self._total_line(line, norm)
-                    if total is not None:
+                total = None if pending else self._total_line(line, norm)
+                if total is not None:
+                    if dated_section == section:
                         # The first total after the section's rows is its
                         # total (until a dated row of the section follows).
                         summary.section_totals.setdefault(section, total)
+                    # The undated lines held over it are rows when it is
+                    # theirs; nothing after it is held in this section.
+                    release(total)
+                    totalled.add(section)
+                elif figures == 1 and section not in totalled and self._closing_day(title):
+                    of_closing = self._closing_row(line, norm, cells, title, section)
+                    if of_closing is not None:
+                        # Words and one figure and no date, under a card's
+                        # ``Fees`` or ``Interest Charged``: held for the total.
+                        of_closing.part = subtotals.get(section, 0)
+                        closing.append((of_closing, line))
+                        last = anchor = None
+                        continue
                 if figures:
                     loose.append((line.page, line.bbox))
                 last = self._not_a_row(
@@ -2277,15 +2382,20 @@ class TableStatementParser(DocumentParser):
                         waiting.append((line, True))
                     continue
                 if any(norm.startswith(marker) for marker in self.pending_markers):
+                    release()
                     settle(dated=False)
                     pending, title, anchor = True, None, None
                     section += 1
                 elif (found := self._title(line)) is not None:
                     if not runs_on(found, line.page):
+                        release()
                         settle(dated=False)
                         section += 1
                     pending, title, anchor = False, found, None
                 continue
+            # A dated line: the undated lines held for a total that did not
+            # come are what they were.
+            release()
             # The other groups of a table printed across: a row each, left
             # to right; one that reads no row is counted.
             beside, unread_beside = self._across_rows(
@@ -2390,9 +2500,108 @@ class TableStatementParser(DocumentParser):
             rows.extend(beside)
             table_rows += 1 + len(beside)
         close_headerless()
+        release()
         settle(dated=False, ended=True)
         self._adjacent_balances(lines, summary)
         return rows, summary, pending_items, skipped, found_header
+
+    # -- lines of the closing day -----------------------------------------------
+
+    def _closing_day(self, title: SectionTitle | None) -> bool:
+        """An undated line under ``title`` may be a charge of the closing
+        day: a card's section of fees or of interest (module doc, "Lines of
+        the closing day"). A bank's ``Interest earned this period`` is a
+        line of its summary."""
+        return self.sign == "card" and title is not None and title.rule.kind in CLOSING_DAY_KINDS
+
+    @staticmethod
+    def _other_span(line: ViewLine, norm: str) -> bool:
+        """``line`` names another span of time than the statement's
+        (:data:`OTHER_SPAN_WORDS`, a four-digit year)."""
+        padded = f" {norm} "
+        return (
+            any(f" {words} " in padded for words in OTHER_SPAN_WORDS)
+            or _YEAR_WORD.search(line.text[:MAX_LINE]) is not None
+        )
+
+    def _closing_row(
+        self,
+        line: ViewLine,
+        norm: str,
+        cells: Mapping[Role, list[Cell]],
+        title: SectionTitle | None,
+        section: int,
+    ) -> _Row | None:
+        """The row an undated line of a table is under a title of
+        :meth:`_closing_day`, if its section's total turns out to count it:
+        words, and exactly one figure on the line, not zero, under
+        ``Amount``. None for a line with a date among its words, a check
+        number, or the name of another span of time (``Interest charged in
+        2026``). The caller has :meth:`_undated_figures` say it is no total,
+        title or balance line."""
+        figure = self._amount(cells.get("amount"))
+        if figure is None or figure.value == 0 or len(find_amounts(line.text)) != 1:
+            return None
+        if cells.get("check") or self._stray_date(cells) or self._other_span(line, norm):
+            return None
+        words = sorted(
+            (cell for role in ("date", "description") for cell in cells.get(role, [])),
+            key=lambda cell: cell.x0,
+        )
+        if not any(ch.isalpha() for cell in words for ch in cell.text):
+            return None
+        row = self._row(line, cells, "", title, section)
+        row.description = [cell.text for cell in words]
+        row.closing_dated = True
+        return row
+
+    def _closing_led(self, line: ViewLine, norm: str) -> Amount | None:
+        """The amount of an undated line of a section printed without a
+        header, under a title of :meth:`_closing_day`: the line's last cell,
+        the only figure on the line and not zero, after cells with words.
+        None for a total, page or ``continued`` line, a balance label, a
+        pending heading, a line that starts with a date or a range of dates,
+        one that names another span of time, and a sentence (more than
+        :data:`~app.ingestion.parsers.statement_lines.MAX_LED_WORDS` words)."""
+        if len(line.cells) < 2 or len(line.text.split()) > MAX_LED_WORDS:
+            return None
+        figure = read_amount(line.cells[-1].text)
+        if figure is None or figure.value == 0 or len(find_amounts(line.text)) != 1:
+            return None
+        if not any(ch.isalpha() for cell in line.cells[:-1] for ch in cell.text):
+            return None
+        labels = (*self.opening_labels, *self.closing_labels)
+        if (
+            any(norm.startswith(prefix.strip()) for prefix in self.skip_prefixes)
+            or any(norm.startswith(marker) for marker in self.pending_markers)
+            or any(norm.startswith(label) for label in labels)
+            or self._starts_with_date(line.text)
+            or self._range_led(line.text)
+            or self._other_span(line, norm)
+        ):
+            return None
+        return figure
+
+    def _closing_led_row(
+        self, line: ViewLine, amount: Amount, title: SectionTitle, section: int
+    ) -> _Row:
+        """The row a line :meth:`_closing_led` read is: direction and type
+        from the section's title, no date of its own."""
+        return _Row(
+            page=line.page,
+            date_text="",
+            description=[cell.text for cell in line.cells[:-1]],
+            amount=amount,
+            debit=None,
+            credit=None,
+            balance=None,
+            ocr=line.conf,
+            bbox=line.bbox,
+            section_type=title.rule.kind,
+            direction=self._direction(title.rule),
+            section=section,
+            closing_dated=True,
+        )
 
     # -- sections without a header ----------------------------------------------
 
@@ -3302,6 +3511,8 @@ class TableStatementParser(DocumentParser):
             styles = follow_order(styles, read.order)
         start, end = read.span
         inside = 0
+        # A row of the closing day prints no date: it says nothing here.
+        rows = [row for row in rows if not row.closing_dated]
         for row in rows:
             posted = self._row_date(row, styles, read.span, False)
             inside += posted is not None and start <= posted <= end
@@ -3859,6 +4070,14 @@ class TableStatementParser(DocumentParser):
             # Only a statement date: a yearless row is the latest date not after it.
             window, strict = (anchor[0] - timedelta(days=364), anchor[0]), True
         dates = [self._row_date(row, styles, window, strict) for row in rows]
+        if read is not None:
+            # A row of the closing day (module doc) is of the period's last
+            # day. Without a printed period it has no day: skipped and
+            # counted below, like any row whose date does not read.
+            dates = [
+                read.end if row.closing_dated else posted
+                for row, posted in zip(rows, dates, strict=True)
+            ]
         if anchor is not None:
             later = sum(1 for d in dates if d is not None and d > anchor[0])
             if later and 2 * later >= sum(1 for d in dates if d is not None):
@@ -3891,7 +4110,8 @@ class TableStatementParser(DocumentParser):
                 summary.section_totals.pop(section, None)
             rows, dates = [rows[at] for at in kept], [dates[at] for at in kept]
             outcome.warnings.append("checks_listed_twice")
-        if newest_first(dates) and (
+        printed = [d for row, d in zip(rows, dates, strict=True) if not row.closing_dated]
+        if newest_first(printed) and (
             any(row.balance is not None for row in rows) or len({row.section for row in rows}) == 1
         ):
             # Printed from the latest day back: read in the order it happened.
@@ -3916,6 +4136,9 @@ class TableStatementParser(DocumentParser):
             if row.carried:
                 # Printed on the row above, once for the day.
                 date_conf = min(date_conf, conf.DERIVED)
+            if row.closing_dated and read is not None:
+                # The period's last day, not the line's: no surer than the period.
+                date_conf = min(date_conf, conf.DERIVED, read.confidence(self.base))
             if assumed:
                 # The year is a guess: the row waits for a person.
                 date_conf = min(date_conf, conf.GUESSED)

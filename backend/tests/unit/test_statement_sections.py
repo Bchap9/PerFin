@@ -1031,3 +1031,176 @@ def test_a_dated_balance_line_of_a_table_beside_a_loan_is_no_loan_bill() -> None
 def test_a_loan_s_labels_after_page_one_stop_nothing() -> None:
     view = _pages([[HEADER, ROW], LOAN_SHARE])
     assert TableStatementParser().detect(view) > 0
+
+
+# -- undated interest and fee lines of a card's section ---------------------------
+
+PERIOD = [("Statement Period: 01/01/2026 - 01/31/2026", 62.0)]
+CARD_BALANCES = [[("Previous Balance 100.00", 62.0)], [("New Balance 110.70", 62.0)]]
+PURCHASE = [("01/05/2026", 62.0), ("Coffee", 150.0), ("4.50", 500.0)]
+INTEREST_CHARGED = [("Interest Charged", 62.0)]
+ON_PURCHASES = [("Interest Charge on Purchases", 150.0), ("6.20", 500.0)]
+ON_ADVANCES = [("Interest Charge on Cash Advances", 150.0), ("0.00", 500.0)]
+
+
+def _interest_total(figure: str) -> list[tuple[str, float]]:
+    return [("TOTAL INTEREST FOR THIS PERIOD", 150.0), (figure, 500.0)]
+
+
+def _card(*pages: list[list[tuple[str, float]]]) -> ParseOutcome:
+    return CardStatementParser().parse(_pages(list(pages)), threshold=0.85)
+
+
+def test_undated_interest_lines_are_rows_on_the_closing_day() -> None:
+    result = _read(synth.card_interest_lines())
+    assert _parser(result) == "card_statement_generic"
+    statement = _only(result)
+    assert _rows(statement) == synth.EXPECTED_ROWS["card_interest_lines"]
+    interest = [t for t in statement.transactions if t.type == "int"]
+    assert [(t.posted, t.amount, t.payee) for t in interest] == [synth.INTEREST_ROW]
+    assert interest[0].posted == statement.period_end == synth.INTEREST_PERIOD[1]
+    assert interest[0].amount < 0
+    assert _status(statement) == "ok"
+    assert _skipped(result) == 0
+    assert statement.ledger_balance is not None
+    assert abs(statement.ledger_balance.amount) == synth.INTEREST_NEW_BALANCE
+    # The day is the period's, not the line's: believed as a derived value is.
+    assert "posted_date" not in interest[0].low_confidence
+    assert interest[0].confidence is not None
+    assert interest[0].confidence <= 0.9
+    # The dated fee of the section before it is the row it was.
+    assert [t.payee for t in statement.transactions if t.type == "fee"] == ["LATE FEE"]
+
+
+def test_undated_lines_of_a_section_without_a_header_are_rows_too() -> None:
+    lines = [PERIOD, *CARD_BALANCES, [("Purchases", 62.0)], _led(5, "Coffee", "4.50")]
+    lines += [[("Total purchases", 62.0), ("4.50", 500.0)], INTEREST_CHARGED]
+    lines += [ON_PURCHASES, ON_ADVANCES, _interest_total("6.20")]
+    outcome = _card(lines)
+    statement = _one(outcome)
+    assert [(t.posted, t.amount, t.payee, t.type) for t in statement.transactions] == [
+        (date(2026, 1, 5), Decimal("-4.50"), "Coffee", None),
+        (date(2026, 1, 31), Decimal("-6.20"), "Interest Charge on Purchases", "int"),
+    ]
+    assert statement.reconciliation is not None
+    assert statement.reconciliation.status == "ok"
+    assert outcome.skipped_lines == 0
+    # Without its total nothing says the line is a charge of this period.
+    outcome = _card(lines[:-1])
+    assert [t.payee for t in _one(outcome).transactions] == ["Coffee"]
+    assert outcome.skipped_lines == 0
+
+
+def test_a_zero_interest_line_is_no_row() -> None:
+    statement = _only(_read(synth.card_interest_lines()))
+    assert not any(synth.INTEREST_ZERO_LINE in (t.payee or "") for t in statement.transactions)
+    assert all(t.amount != 0 for t in statement.transactions)
+    # Alone under its title, with a total of nothing: no row either.
+    outcome = _card(
+        [PERIOD, HEADER, PURCHASE, INTEREST_CHARGED, ON_ADVANCES, _interest_total("0.00")]
+    )
+    assert [t.payee for t in _one(outcome).transactions] == ["Coffee"]
+    assert outcome.skipped_lines == 0
+
+
+def test_interest_lines_that_miss_their_total_stay_out() -> None:
+    table = [PERIOD, *CARD_BALANCES, HEADER, PURCHASE, INTEREST_CHARGED, ON_PURCHASES]
+    outcome = _card([*table, ON_ADVANCES, _interest_total("9.00")])
+    statement = _one(outcome)
+    assert [t.payee for t in statement.transactions] == ["Coffee"]
+    assert outcome.skipped_lines == 0
+    assert outcome.skipped_regions == []
+    # With the total that is theirs the same lines are a row, and the card adds up.
+    outcome = _card([*table, ON_ADVANCES, _interest_total("6.20")])
+    statement = _one(outcome)
+    assert [t.amount for t in statement.transactions] == [Decimal("-4.50"), Decimal("-6.20")]
+    assert statement.reconciliation is not None
+    assert statement.reconciliation.status == "ok"
+    # No total at all, or a line with two figures: no row.
+    assert [t.payee for t in _one(_card(table)).transactions] == ["Coffee"]
+    for beside in (("512.40", 400.0), ("512.40", 300.0)):
+        two = [("Interest Charge on Purchases", 150.0), beside, ("6.20", 500.0)]
+        outcome = _card([*table[:-1], two, _interest_total("6.20")])
+        assert [t.payee for t in _one(outcome).transactions] == ["Coffee"]
+    # A section whose dated rows are its total already takes no undated line.
+    fees = [("Fees", 62.0)]
+    late = [("01/20/2026", 62.0), ("Late Fee", 150.0), ("25.00", 500.0)]
+    waived = [("Fee waived as a courtesy", 150.0), ("-25.00", 500.0)]
+    total = [("TOTAL FEES FOR THIS PERIOD", 150.0), ("25.00", 500.0)]
+    outcome = _card([PERIOD, HEADER, PURCHASE, fees, late, total, waived])
+    assert [t.payee for t in _one(outcome).transactions] == ["Coffee", "Late Fee"]
+
+
+def test_an_undated_fee_line_is_a_row_with_the_dated_fees_of_its_total() -> None:
+    fees = [("Fees Charged", 62.0)]
+    late = [("01/20/2026", 62.0), ("Late Fee", 150.0), ("25.00", 500.0)]
+    # At the head of the next page: a line of its own, not one of the fee's day.
+    annual = [("Annual Membership Fee", 150.0), ("95.00", 500.0)]
+    total = [("TOTAL FEES FOR THIS PERIOD", 150.0), ("120.00", 500.0)]
+    outcome = _card([PERIOD, HEADER, PURCHASE, fees, late], [annual, total])
+    statement = _one(outcome)
+    assert [(t.posted, t.amount, t.payee, t.type) for t in statement.transactions] == [
+        (date(2026, 1, 5), Decimal("-4.50"), "Coffee", None),
+        (date(2026, 1, 20), Decimal("-25.00"), "Late Fee", "fee"),
+        (date(2026, 1, 31), Decimal("-95.00"), "Annual Membership Fee", "fee"),
+    ]
+    assert outcome.skipped_lines == 0
+    assert "section_total_mismatch" not in outcome.warnings
+
+
+def test_year_to_date_lines_are_not_rows() -> None:
+    statement = _only(_read(synth.card_interest_lines()))
+    assert not any("2026" in (t.payee or "") for t in statement.transactions)
+    assert len(statement.transactions) == 7
+    # After a section's total nothing more of it is read, whatever follows.
+    table = [PERIOD, *CARD_BALANCES, HEADER, PURCHASE, INTEREST_CHARGED, ON_PURCHASES]
+    year = [
+        [("2026 Totals Year-to-Date", 62.0)],
+        [("Interest charged in 2026", 150.0), ("41.30", 500.0)],
+        [("Fees charged this year", 150.0), ("41.30", 500.0)],
+        [("Total", 150.0), ("82.60", 500.0)],
+    ]
+    outcome = _card([*table, _interest_total("6.20"), *year])
+    assert [t.amount for t in _one(outcome).transactions] == [Decimal("-4.50"), Decimal("-6.20")]
+    assert outcome.skipped_lines == 0
+    # A line that names a year is of that year, with a total that is its own or not.
+    named = [("Interest charged in 2026", 150.0), ("41.30", 500.0)]
+    outcome = _card([*table[:-1], named, _interest_total("41.30")])
+    assert [t.payee for t in _one(outcome).transactions] == ["Coffee"]
+
+
+def test_a_bank_statement_takes_no_undated_interest_line() -> None:
+    result = _read(synth_bank_layouts.summary_lines_under_table())
+    assert _parser(result) == "statement_generic"
+    statement = _only(result)
+    assert _rows(statement) == synth_bank_layouts.EXPECTED_ROWS["summary_lines_under_table"]
+    assert _status(statement) == "ok"
+    assert _skipped(result) == 0
+    # Under ``Interest`` and over a total that is its own: a bank's line all the same.
+    earned = [("Interest earned this period", 150.0), ("0.42", 500.0)]
+    lines = [PERIOD, HEADER, ROW, [("Interest", 62.0)], earned]
+    lines += [[("Total interest", 150.0), ("0.42", 500.0)]]
+    outcome = _parse(lines)
+    assert [t.payee for t in _one(outcome).transactions] == ["Coffee"]
+    assert outcome.skipped_lines == 0
+    # A card's section of purchases takes none either: only fees and interest do.
+    extra = [("Loyalty adjustment", 150.0), ("6.20", 500.0)]
+    total = [("TOTAL PURCHASES FOR THIS PERIOD", 150.0), ("10.70", 500.0)]
+    outcome = _card([PERIOD, HEADER, [("Purchases", 62.0)], PURCHASE, [NOTE[0]], extra, total])
+    assert [t.payee for t in _one(outcome).transactions] == ["Coffee"]
+
+
+def test_a_closing_day_row_needs_the_period_s_end() -> None:
+    table = [HEADER, PURCHASE, INTEREST_CHARGED, ON_PURCHASES, _interest_total("6.20")]
+    # A statement date only: the line is found, not dated, and counted.
+    outcome = _card([[("Statement Date: 01/31/2026", 62.0)], *CARD_BALANCES, *table])
+    statement = _one(outcome)
+    assert [t.payee for t in statement.transactions] == ["Coffee"]
+    assert outcome.skipped_lines == 1
+    assert outcome.skipped_regions == [(1, (150.0, 184.0, 520.0, 193.0))]
+    assert statement.reconciliation is not None
+    assert statement.reconciliation.status != "ok"
+    # No date for the statement at all.
+    outcome = _card([*CARD_BALANCES, *table])
+    assert [t.payee for t in _one(outcome).transactions] == ["Coffee"]
+    assert outcome.skipped_lines == 1
