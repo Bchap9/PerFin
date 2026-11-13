@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""Single lines of a statement, read by themselves.
+"""Single lines of a statement, read by themselves; where a summary starts.
 
 Pure functions on a :class:`~app.ingestion.parsers.base.ViewLine` for the
 lines a table reader meets where no header row says what the columns are.
@@ -20,6 +20,12 @@ Testable on hand-built lines without a PDF.
 * :func:`items_total`: a line that is a count and a total and nothing else
   (``8 item(s) totaling $3,500.00``), the total of the rows above it.
 * :func:`amount_only`: a line that is one amount.
+
+One function reads a run of lines: :func:`summary_starts` says at which
+line each account of a statement starts when the accounts are told apart
+only by their summaries (two accounts printed under one masked number).
+What an opening or a closing balance line is, and which lines belong to a
+table, the caller says.
 
 What :func:`led_row` refuses, so that the caller counts the line and no
 row is made of it:
@@ -65,6 +71,9 @@ TOTAL_WORDS: Final = frozenset(
         "withdrawals",
     }
 )
+
+#: A summary's title is looked for in this many lines above its opening line.
+TITLE_LINES_ABOVE: Final = 3
 
 #: Between two dates these make a range of them.
 _RANGE_WORDS: Final = frozenset({"through", "thru", "to", "until", "-", "\u2013", "\u2014"})
@@ -235,3 +244,56 @@ def items_total(line: ViewLine) -> Amount | None:
 def amount_only(line: ViewLine) -> Amount | None:
     """The amount the whole line is, or None."""
     return read_amount(" ".join(line.text[:MAX_LINE].split()))
+
+
+def _title_shaped(line: ViewLine) -> bool:
+    """Letters and no digit: the title of a block (``SAVINGS SUMMARY``)."""
+    text = line.text[:MAX_LINE]
+    return any(ch.isalpha() for ch in text) and not any(ch.isdigit() for ch in text)
+
+
+def summary_starts(
+    lines: Sequence[ViewLine],
+    opening: Callable[[ViewLine], Amount | None],
+    closing: Callable[[ViewLine], Amount | None],
+    in_table: Callable[[int], bool],
+) -> list[int]:
+    """The index in ``lines`` at which each account starts; ``[]`` for fewer than two.
+
+    Only lines outside a table count (``in_table(index)`` false). An account
+    starts at a line for which ``opening`` gives a figure when it is the
+    first such line, or when a ``closing`` figure was met since the last
+    start and the figure differs from that start's opening figure: the same
+    summary printed again (the head of the next page) is the same account,
+    and a second opening figure before any closing one is no new account.
+
+    The start moves up to the nearest of the :data:`TITLE_LINES_ABOVE` lines
+    above the opening line that has letters and no digit (the block's
+    title), on the opening line's page. The search stops at a line of a
+    table and at the closing line met before it: what stands there belongs
+    to the account above.
+    """
+    starts: list[int] = []
+    opened: Amount | None = None
+    #: The last closing line met since the last start (None: none yet).
+    closed_at: int | None = None
+    for index, line in enumerate(lines):
+        if in_table(index):
+            continue
+        figure = opening(line)
+        if figure is None:
+            if closing(line) is not None:
+                closed_at = index
+            continue
+        if opened is not None and (closed_at is None or figure.value == opened.value):
+            continue
+        start = index
+        for above in range(index - 1, max(index - TITLE_LINES_ABOVE, 0) - 1, -1):
+            if above == closed_at or in_table(above) or lines[above].page != line.page:
+                break
+            if _title_shaped(lines[above]):
+                start = above
+                break
+        starts.append(start)
+        opened, closed_at = figure, None
+    return starts if len(starts) >= 2 else []

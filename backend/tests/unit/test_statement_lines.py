@@ -4,12 +4,14 @@
 :mod:`app.ingestion.parsers.statement_lines` holds pure functions on a
 :class:`ViewLine`: a row that starts with its date and ends with its
 amount, a section title printed with its total, a line that is a count and
-a total, a line that is one amount. Every line here is built from
-``(text, x0)`` cells; no PDF is drawn and every figure is invented.
+a total, a line that is one amount; and one function on a run of lines,
+the line at which each account's summary starts. Every line here is built
+from ``(text, x0)`` cells; no PDF is drawn and every figure is invented.
 """
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from decimal import Decimal
 
 import pytest
@@ -22,17 +24,18 @@ from app.ingestion.parsers.statement_lines import (
     amount_only,
     items_total,
     led_row,
+    summary_starts,
     titled_total,
 )
-from app.ingestion.parsers.text import month_day, numeric_parts
+from app.ingestion.parsers.text import Amount, find_amounts, month_day, numeric_parts
 
 
-def _line(cells: list[tuple[str, float]], index: int = 0) -> ViewLine:
+def _line(cells: list[tuple[str, float]], index: int = 0, page: int = 1) -> ViewLine:
     """One line of ``(text, x0)`` cells, each five points wide per character."""
     y = 100.0 + 14 * index
     built = tuple(Cell(text, x0, y, x0 + 5.0 * len(text), y + 9.0) for text, x0 in cells)
     return ViewLine(
-        page=1, index=index, cells=built, text=" ".join(t for t, _ in cells), height=9.0
+        page=page, index=index, cells=built, text=" ".join(t for t, _ in cells), height=9.0
     )
 
 
@@ -318,3 +321,155 @@ def test_amount_only(cells: list[tuple[str, float]], value: str) -> None:
 )
 def test_other_lines_are_no_amount_only(text: str) -> None:
     assert amount_only(_line([(text, 62.0)])) is None
+
+
+# --- summary_starts ----------------------------------------------------------
+
+
+def _labelled(label: str) -> Callable[[ViewLine], Amount | None]:
+    """The one figure of a line that starts with ``label``, as a caller's reader would."""
+
+    def read(line: ViewLine) -> Amount | None:
+        if not line.text.lower().startswith(label):
+            return None
+        found = find_amounts(line.text)
+        return found[0] if len(found) == 1 else None
+
+    return read
+
+
+_OPENING = _labelled("beginning balance")
+_CLOSING = _labelled("ending balance")
+
+
+def _page(texts: list[str], page: int = 1) -> list[ViewLine]:
+    """One page of one-cell lines, indexed from 0 on the page."""
+    return [_line([(text, 62.0)], index, page) for index, text in enumerate(texts)]
+
+
+def _starts(lines: list[ViewLine], table: frozenset[int] = frozenset()) -> list[int]:
+    return summary_starts(lines, _OPENING, _CLOSING, lambda index: index in table)
+
+
+_FIRST = [
+    "Harbour Lantern Savings Bank",
+    "Account Number: 0000",
+    "CHEQUING SUMMARY",
+    "Beginning Balance 2,410.00",
+    "Deposits and Additions 615.25",
+    "Withdrawals 402.10",
+    "Ending Balance 2,623.15",
+    "Date Description Amount",
+    "04/02 PAYROLL 615.25",
+    "04/09 RENT 402.10",
+]
+_SECOND = [
+    "RESERVE SUMMARY",
+    "Beginning Balance 18,300.00",
+    "Interest 4.75",
+    "Ending Balance 18,304.75",
+]
+#: The lines of ``_FIRST`` that are its table (header and rows).
+_FIRST_TABLE = frozenset({7, 8, 9})
+
+
+def test_two_summaries_are_two_starts() -> None:
+    lines = _page(_FIRST) + _page(_SECOND, page=2)
+    assert _starts(lines, _FIRST_TABLE) == [2, 10]
+    assert [lines[at].text for at in _starts(lines, _FIRST_TABLE)] == [
+        "CHEQUING SUMMARY",
+        "RESERVE SUMMARY",
+    ]
+
+
+def test_two_summaries_on_one_page_are_two_starts() -> None:
+    lines = _page(_FIRST + _SECOND)
+    assert _starts(lines, _FIRST_TABLE) == [2, 10]
+
+
+def test_three_summaries_are_three_starts() -> None:
+    third = ["HOLIDAY SUMMARY", "Beginning Balance 90.00", "Ending Balance 140.00"]
+    lines = _page(_FIRST) + _page(_SECOND, page=2) + _page(third, page=3)
+    assert _starts(lines, _FIRST_TABLE) == [2, 10, 14]
+
+
+def test_the_same_summary_printed_again_is_no_start() -> None:
+    again = ["CHEQUING SUMMARY", "Beginning Balance 2,410.00", "Ending Balance 2,623.15"]
+    assert _starts(_page(_FIRST) + _page(again, page=2), _FIRST_TABLE) == []
+    # The account after it still starts: its opening figure is another one.
+    lines = _page(_FIRST) + _page(again, page=2) + _page(_SECOND, page=3)
+    assert _starts(lines, _FIRST_TABLE) == [2, 13]
+
+
+def test_an_opening_without_a_closing_before_it_is_no_start() -> None:
+    # A second opening figure under the first, with no closing between them
+    # (an overview of balances, a restated figure): one account.
+    texts = [
+        "CHEQUING SUMMARY",
+        "Beginning Balance 2,410.00",
+        "Deposits and Additions 615.25",
+        "Beginning Balance 18,300.00",
+        "Ending Balance 2,623.15",
+    ]
+    assert _starts(_page(texts)) == []
+    # After the one closing, the next differing opening starts an account;
+    # the one after that, with no closing between, does not.
+    more = [*texts, "RESERVE SUMMARY", "Beginning Balance 18,300.00", "Beginning Balance 77.00"]
+    assert _starts(_page(more)) == [0, 5]
+
+
+def test_opening_lines_inside_a_table_are_ignored() -> None:
+    # The second account's balances are rows of its table: no summary of its own.
+    table = [
+        "Date Description Amount Balance",
+        "Beginning Balance 18,300.00",
+        "04/30 INTEREST 4.75 18,304.75",
+        "Ending Balance 18,304.75",
+    ]
+    lines = _page(_FIRST) + _page(table, page=2)
+    inside = _FIRST_TABLE | frozenset(range(10, 14))
+    assert _starts(lines, inside) == []
+    # A closing line inside a table closes nothing either.
+    texts = [
+        "CHEQUING SUMMARY",
+        "Beginning Balance 2,410.00",
+        "Date Description Amount Balance",
+        "Ending Balance 2,623.15",
+        "RESERVE SUMMARY",
+        "Beginning Balance 18,300.00",
+    ]
+    assert _starts(_page(texts), frozenset({2, 3})) == []
+    assert _starts(_page(texts)) == [0, 4]
+
+
+def test_one_summary_gives_nothing() -> None:
+    assert _starts(_page(_FIRST), _FIRST_TABLE) == []
+    assert _starts([]) == []
+    assert _starts(_page(["Harbour Lantern Savings Bank", "Page 1 of 2"])) == []
+
+
+def test_the_start_is_the_nearest_title_within_three_lines() -> None:
+    def second(above: list[str]) -> list[int]:
+        return _starts(_page([*_FIRST, *above, "Beginning Balance 18,300.00"]), _FIRST_TABLE)
+
+    # No line above it: the opening line itself (index 10) is the start.
+    assert second([]) == [2, 10]
+    # Lines with a digit are passed over; the nearest line of letters wins.
+    assert second(["RESERVE SUMMARY", "Account Number: 0000", "Period 04/01/2026"]) == [2, 10]
+    assert second(["Reserve accounts", "RESERVE SUMMARY", "Account Number: 0000"]) == [2, 11]
+    # Four lines above is too far: the start stays on the opening line.
+    far = ["RESERVE SUMMARY", "Account Number: 0000", "Period 04/01/2026", "Rate 1.10%"]
+    assert second(far) == [2, 14]
+    # Nothing at or above the closing line met before it is its title.
+    closed = [*_FIRST[:6], "Totals", "Ending Balance 2,623.15", "Beginning Balance 18,300.00"]
+    assert _starts(_page(closed)) == [2, 8]
+    # A line of a table is no title, and nothing above a table is one.
+    rows = [*_FIRST[:9], "CONTINUED", "Beginning Balance 18,300.00"]
+    assert _starts(_page(rows), frozenset({7, 8, 9})) == [2, 10]
+
+
+def test_the_title_is_looked_for_on_the_opening_line_s_page() -> None:
+    # Page 2 begins with the opening line: the last line of page 1 is not its title.
+    first = [*_FIRST, "Thank you for banking with us"]
+    lines = _page(first) + _page(["Beginning Balance 18,300.00", "Ending Balance 18,304.75"], 2)
+    assert _starts(lines, _FIRST_TABLE) == [2, 11]
