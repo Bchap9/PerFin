@@ -37,6 +37,14 @@ total a section prints ("Total deposits") with the rows read under it; the
 sign of the printed total is not compared, since a section of withdrawals
 usually prints its total without one.
 
+**A sign that may be a separator.** ``Ending Balance - $992.50`` prints a
+dash between a label and its figure: a minus, or only a separator. The
+parser says which balances were read that way and :func:`settle_signs`
+takes, for each, the reading the rows agree with (the other balance and the
+rows' total, or the running balance printed beside the first or last row).
+A balance nothing settles is not given at all: a statement held for want of
+a balance is better than one recorded with the wrong sign.
+
 Pure functions on :class:`~decimal.Decimal`; no I/O.
 """
 
@@ -147,6 +155,59 @@ def doubtful_rows(
         if len(surplus) == 1:
             return surplus
     return list(range(len(rows)))
+
+
+def settle_signs(
+    opening: Decimal | None,
+    closing: Decimal | None,
+    rows: Sequence[Row],
+    *,
+    opening_open: bool,
+    closing_open: bool,
+) -> tuple[Decimal | None, Decimal | None]:
+    """``(opening, closing)`` with each open sign settled (module doc).
+
+    A balance whose sign is open (``opening_open``, ``closing_open``) may be
+    the figure given or its negation. The pair of readings that agrees with
+    everything the rows can check is taken when there is exactly one: the
+    opening balance against the balance before the first row, the closing
+    one against the balance after the last, and the two against the rows'
+    total. An open balance that nothing checks, or that no reading or more
+    than one fits, becomes None. A balance whose sign is not open is never
+    changed.
+    """
+    opening_open = opening_open and opening is not None
+    closing_open = closing_open and closing is not None
+    if not (opening_open or closing_open):
+        return opening, closing
+    total = sum_amounts(row.amount for row in rows)
+    before = rows[0].balance - rows[0].amount if rows and rows[0].balance is not None else None
+    after = rows[-1].balance if rows else None
+
+    def fits(first: Decimal | None, last: Decimal | None) -> bool:
+        if first is not None and before is not None and abs(first - before) > TOLERANCE:
+            return False
+        if last is not None and after is not None and abs(last - after) > TOLERANCE:
+            return False
+        if first is not None and last is not None:
+            return abs(first + total - last) <= TOLERANCE
+        return True
+
+    def readings(value: Decimal | None, is_open: bool) -> list[Decimal | None]:
+        return [value, -value] if is_open and value is not None else [value]
+
+    withheld = (None if opening_open else opening, None if closing_open else closing)
+    if opening_open and before is None and closing is None:
+        return withheld
+    if closing_open and after is None and opening is None:
+        return withheld
+    fitting = {
+        (first, last)
+        for first in readings(opening, opening_open)
+        for last in readings(closing, closing_open)
+        if fits(first, last)
+    }
+    return next(iter(fitting)) if len(fitting) == 1 else withheld
 
 
 def reconcile(

@@ -390,6 +390,8 @@ def test_daily_balances_are_not_transactions() -> None:
     statement, info = _read(synth.daily_balance_after_rows())
     assert _rows(statement) == list(synth.DAILY_ROWS)
     assert not {t.amount for t in statement.transactions} & set(synth.DAILY_BALANCES)
+    # The title of the table of balances is no second line of the last row.
+    assert [t.memo for t in statement.transactions] == [None] * len(synth.DAILY_ROWS)
     assert info.skipped_lines == 0
     assert statement.reconciliation is not None
     assert statement.reconciliation.status == "ok"

@@ -109,7 +109,15 @@ are read the same way:
    line ending in an amount printed **under a section title and no
    header** (outside any table, up to the next header, block title or page
    end; warning ``rows_without_header:<n>``): nothing is imported from
-   those.
+   those. The same holds, under the same warning, for date-led lines
+   ending in an amount that also have **words**, on the page of a line of
+   heading words that ended the table without being a header we read
+   (``Date | Balance``), up to the next title, block title or header:
+   such a line may have been a row's wrapped text, and the lines after it
+   rows. Figures by day under it have no words and are not counted.
+   **Titles.** The line printed over a header on its page (the title of
+   the next table) and the title of a block (:func:`block_title`) are
+   never the wrapped text of the row above them.
    **A table printed across the page.** ``Number | Date Paid | Amount``
    printed two or three times side by side
    (:func:`~app.ingestion.parsers.statement_header.across_start`) is read as
@@ -345,6 +353,7 @@ from app.ingestion.parsers.text import (
     numeric_parts,
     read_amount,
     read_date,
+    separator_sign,
     symbol_currency,
 )
 from app.ingestion.reconcile import (
@@ -354,6 +363,7 @@ from app.ingestion.reconcile import (
     newest_first,
     reconcile,
     section_mismatches,
+    settle_signs,
 )
 from app.ingestion.sandbox.protocol import (
     Balance,
@@ -801,6 +811,11 @@ class _Summary:
     #: The balance is the figure alone on the line beside its label.
     opening_adjacent: bool = False
     closing_adjacent: bool = False
+    #: The balance was read after its label with a minus standing apart, in
+    #: the label's own cell (``Ending Balance - $992.50``): a sign or a
+    #: separator, which the rows decide (:func:`~app.ingestion.reconcile.settle_signs`).
+    opening_sign_open: bool = False
+    closing_sign_open: bool = False
     period: PeriodCandidates = field(default_factory=PeriodCandidates)
     last4: str | None = None
     currency: str | None = None
@@ -1288,14 +1303,23 @@ class TableStatementParser(DocumentParser):
                     return amounts[0]
         return None
 
+    @staticmethod
+    def _sign_open(line: ViewLine, amount: Amount | None) -> bool:
+        """The minus of ``amount``, read after a label on ``line``, may be a
+        separator (:func:`~app.ingestion.parsers.text.separator_sign`): the
+        rows decide (:func:`~app.ingestion.reconcile.settle_signs`)."""
+        return amount is not None and separator_sign(amount, [c.text for c in line.cells])
+
     def _scan_summary(self, line: ViewLine, summary: _Summary) -> None:
         if summary.opening is None:
             summary.opening = self._label_amount(line, self.opening_labels)
+            summary.opening_sign_open = self._sign_open(line, summary.opening)
         closing = self._label_amount(
             line, self.closing_labels, inside=self.opening_labels, earlier=True
         )
         if closing is not None and summary.closing is None:
             summary.closing = closing
+            summary.closing_sign_open = self._sign_open(line, closing)
         if summary.credits_total is None:
             summary.credits_total = self._label_amount(line, self.credit_total_labels)
         if summary.charges_total is None:
@@ -1501,6 +1525,9 @@ class TableStatementParser(DocumentParser):
         dated_section: int | None = None
         # Subtotals met in each section: totals with rows of it after them.
         subtotals: dict[int, int] = {}
+        # The page on which the header of a table we do not read ended ours,
+        # until a title, a block title or a header we read.
+        unread: int | None = None
 
         def runs_on(found: SectionTitle, page: int) -> bool:
             """``found`` names the section being read once more: marked
@@ -1562,20 +1589,28 @@ class TableStatementParser(DocumentParser):
                 if section != before:
                     settle(dated=False)
                 columns, pending, last, anchor, titled = header, False, None, None, None
-                found_header = True
+                found_header, unread = True, None
                 continue
             norm = line.norm
             if columns is not None and self._header_like(line):
                 # The header of a table we do not read ("Date | Balance"): ours ends.
                 settle(dated=False)
                 columns, last, anchor = None, None, None
+                unread = line.page
             if columns is None:
                 if self._title(line) is not None:
-                    titled = line.page
-                elif titled != line.page or block_title(norm) or self._header_like(line):
+                    titled, unread = line.page, None
+                elif block_title(norm):
+                    titled = unread = None
+                elif self._header_like(line):
                     titled = None
-                elif self._date_led_amount(line):
-                    # A row of a section printed without a header: not read.
+                elif (
+                    titled == line.page or (unread == line.page and self._worded(line))
+                ) and self._date_led_amount(line):
+                    # A row of a section printed without a header, or one
+                    # with words after a header that ended the table and may
+                    # have been a row's wrapped text (figures by day under
+                    # ``Date | Balance`` have no words): not read, counted.
                     skipped += 1
                     summary.skipped_boxes.append((line.page, line.bbox))
                     summary.headerless += 1
@@ -1606,7 +1641,17 @@ class TableStatementParser(DocumentParser):
                         summary.section_totals.setdefault(section, total)
                 if figures:
                     loose.append((line.page, line.bbox))
-                last = self._not_a_row(line, norm, cells, summary, last, scan, columns)
+                following = lines[index + 1] if index + 1 < len(lines) else None
+                # The line over a header on its page is that table's title,
+                # wherever it is printed: no second line of the row above.
+                over_table = (
+                    following is not None
+                    and following.page == line.page
+                    and (self.columns(following) is not None or self._header_like(following))
+                )
+                last = self._not_a_row(
+                    line, norm, cells, summary, last, scan, columns, over_table=over_table
+                )
                 if last is not None:
                     if held and last is held[-1]:
                         waiting.append((line, True))
@@ -1637,6 +1682,7 @@ class TableStatementParser(DocumentParser):
                         summary.opening, summary.opening_in_table = figure, True
                 elif figure is not None:
                     summary.closing, summary.closing_in_table = figure, True
+                    summary.closing_sign_open = False
                 if not pending:
                     # A dated line of the table: the undated rows above it
                     # are of the day printed over them, as before a dated row.
@@ -1811,6 +1857,16 @@ class TableStatementParser(DocumentParser):
             for size in range(LEAD_DATE_WORDS, 0, -1)
         )
 
+    def _worded(self, line: ViewLine) -> bool:
+        """A cell of ``line`` has a letter and is neither a date nor an
+        amount (``Jan 6`` and ``405.50 CR`` are no words)."""
+        return any(
+            any(ch.isalpha() for ch in cell.text)
+            and read_amount(cell.text) is None
+            and not self._date_shaped(cell.text.strip(_DATE_MARKS))
+            for cell in line.cells
+        )
+
     def _balance_row(
         self, desc_norm: str, cells: Mapping[Role, list[Cell]]
     ) -> tuple[Literal["opening", "closing"], Amount | None] | None:
@@ -1911,8 +1967,14 @@ class TableStatementParser(DocumentParser):
         last: _Row | None,
         scan: Callable[[ViewLine], None],
         columns: Sequence[Column] = (),
+        *,
+        over_table: bool = False,
     ) -> _Row | None:
         """Handle an undated line in the table; return the row a wrap may extend.
+
+        A line printed over a header (``over_table``: the title of the next
+        table) or that is the title of a block (:func:`block_title`) extends
+        no row.
 
         ``scan`` reads a line of the summary (at once, or after the
         candidate rows held back before it: :meth:`_collect`). A line right
@@ -1936,6 +1998,8 @@ class TableStatementParser(DocumentParser):
             and line.page == last.page
             and line.bbox[1] - last.bbox[3] < 1.5 * line.height
             and not self._heading_under_row(line, norm, columns)
+            and not over_table
+            and not block_title(norm)
             and not find_amounts(line.text)
         ):
             last.memo.extend(c.text for c in cells.get("description", []))
@@ -1957,6 +2021,7 @@ class TableStatementParser(DocumentParser):
                 # FORWARD`` at the foot of every page): the last one printed
                 # is the statement's, as for a dated one.
                 summary.closing, summary.closing_in_table = carried, True
+                summary.closing_sign_open = False
                 return None
         scan(line)
         return None
@@ -2606,6 +2671,15 @@ class TableStatementParser(DocumentParser):
         statement_conf: dict[str, float] = {}
         opening = self._ledger_balance(summary.opening)
         closing = self._ledger_balance(summary.closing)
+        # ``Ending Balance - $992.50``: the rows say whether the dash is a
+        # minus; a balance they do not settle is not given.
+        opening, closing = settle_signs(
+            opening,
+            closing,
+            ledger_rows,
+            opening_open=summary.opening_sign_open,
+            closing_open=summary.closing_sign_open,
+        )
         # A figure read beside its label, not after it, is believed a little less.
         opening_conf = min(self.base, conf.DERIVED) if summary.opening_adjacent else self.base
         closing_conf = min(self.base, conf.DERIVED) if summary.closing_adjacent else self.base

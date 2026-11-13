@@ -813,6 +813,138 @@ def test_two_figures_beside_a_label_are_not_one_balance() -> None:
     assert _balances(_one(outcome)) == (Decimal("410.00"), None)
 
 
+# -- a dash between a balance label and its figure -------------------------------
+
+OPENING = [("Beginning Balance 410.00", 62.0)]
+
+
+def test_a_dash_between_the_label_and_the_figure_is_a_separator_when_the_rows_say_so() -> None:
+    for closing in ("Ending Balance - $405.50", "Ending Balance - 405.50"):
+        statement = _one(_parse([OPENING, [(closing, 62.0)], HEADER, ROW]))
+        assert _balances(statement) == (Decimal("410.00"), Decimal("405.50"))
+        assert _status(statement) == "ok"
+    # Both labels print the dash.
+    statement = _one(
+        _parse(
+            [
+                [("Beginning Balance - $410.00", 62.0)],
+                [("Ending Balance - $405.50", 62.0)],
+                HEADER,
+                ROW,
+            ]
+        )
+    )
+    assert _balances(statement) == (Decimal("410.00"), Decimal("405.50"))
+    assert _status(statement) == "ok"
+
+
+@pytest.mark.parametrize("closing", ["Ending Balance -$20.00", "Ending Balance - $20.00"])
+def test_an_overdraft_stays_negative(closing: str) -> None:
+    # The sign on the figure is a sign; the one standing apart is one too
+    # when the rows end below zero.
+    row = [("01/05/2026", 62.0), ("Coffee", 150.0), ("-430.00", 500.0)]
+    statement = _one(_parse([OPENING, [(closing, 62.0)], HEADER, row]))
+    assert _balances(statement) == (Decimal("410.00"), Decimal("-20.00"))
+    assert _status(statement) == "ok"
+
+
+def test_a_sign_printed_on_the_figure_is_never_reread() -> None:
+    # ``-$405.50`` is an overdraft as printed: the statement does not add up
+    # and is held, the figure is not turned round to make it fit.
+    statement = _one(_parse([OPENING, [("Ending Balance -$405.50", 62.0)], HEADER, ROW]))
+    assert _balances(statement) == (Decimal("410.00"), Decimal("-405.50"))
+    assert _status(statement) == "mismatch"
+
+
+def test_a_dash_nothing_settles_gives_no_balance() -> None:
+    # No opening balance and no running balance: neither reading is taken.
+    statement = _one(_parse([[("Ending Balance - $405.50", 62.0)], HEADER, ROW]))
+    assert _balances(statement) == (None, None)
+    assert statement.confidence["closing_balance"] == 0.5
+    assert _status(statement) == "unavailable"
+    # Neither reading agrees with the rows.
+    statement = _one(_parse([OPENING, [("Ending Balance - $300.00", 62.0)], HEADER, ROW]))
+    assert _balances(statement) == (Decimal("410.00"), None)
+    assert _status(statement) == "unavailable"
+
+
+def test_a_signed_figure_in_a_cell_of_its_own_keeps_its_sign() -> None:
+    # The label in one cell, the figure with its sign in another: a sign.
+    statement = _one(_parse([[("Ending Balance", 62.0), ("- $20.00", 300.0)], HEADER, ROW]))
+    assert _balances(statement) == (None, Decimal("-20.00"))
+
+
+def test_a_running_balance_settles_the_dash() -> None:
+    header = [("Date", 62.0), ("Description", 150.0), ("Amount", 420.0), ("Balance", 500.0)]
+    row = [("01/05/2026", 62.0), ("Coffee", 150.0), ("-4.50", 420.0), ("405.50", 500.0)]
+    statement = _one(_parse([[("Ending Balance - $405.50", 62.0)], header, row]))
+    assert _balances(statement) == (Decimal("410.00"), Decimal("405.50"))
+    assert _status(statement) == "ok"
+
+
+# -- a title over the next table, and rows after a header that is not read -------
+
+UNREAD = [("Date", 62.0), ("Balance", 500.0)]
+
+
+def _coffee(day: int, payee: str, amount: str) -> list[tuple[str, float]]:
+    return [(f"01/{day:02d}/2026", 62.0), (payee, 150.0), (amount, 500.0)]
+
+
+@pytest.mark.parametrize("header", [UNREAD, HEADER], ids=["unread", "read"])
+def test_a_line_over_a_header_is_not_the_memo_of_the_row_above(
+    header: list[tuple[str, float]],
+) -> None:
+    # In the description column, right under the row: a wrapped line by its
+    # place, the title of the table whose header follows by what comes next.
+    outcome = _parse(
+        [HEADER, ROW, [("Daily ledger figures", 150.0)], header, [("01/05/2026", 62.0)]],
+        step=10.0,
+    )
+    (row,) = _one(outcome).transactions
+    assert (row.payee, row.memo) == ("Coffee", None)
+
+
+def test_a_line_over_a_dated_row_is_still_the_memo_of_the_row_above() -> None:
+    outcome = _parse(
+        [HEADER, ROW, [("Daily ledger figures", 150.0)], _coffee(6, "Tea", "-3.00")], step=10.0
+    )
+    first, second = _one(outcome).transactions
+    assert (first.payee, first.memo) == ("Coffee", "Daily ledger figures")
+    assert second.memo is None
+
+
+def test_rows_under_a_header_that_is_not_read_are_counted() -> None:
+    # ``Date | Balance`` ends the table (a table of balances by day). Lines
+    # after it that are a date, words and a figure are rows of something:
+    # found, not read, counted.
+    outcome = _parse([HEADER, ROW, UNREAD, _coffee(6, "Tea", "-3.00"), _coffee(7, "Bun", "-2.00")])
+    assert [t.payee for t in _one(outcome).transactions] == ["Coffee"]
+    assert outcome.skipped_lines == 2
+    assert len(outcome.skipped_regions) == 2
+    assert "rows_without_header:2" in outcome.warnings
+
+
+def test_balances_by_day_under_a_header_that_is_not_read_are_not_counted() -> None:
+    by_day = [("01/05/2026", 62.0), ("405.50", 500.0)]
+    named = [("Jan 6", 62.0), ("402.50", 500.0)]
+    across = [("01/05/2026", 62.0), ("405.50", 200.0), ("01/06/2026", 300.0), ("402.50", 500.0)]
+    outcome = _parse([HEADER, ROW, UNREAD, by_day, named, across])
+    assert [t.payee for t in _one(outcome).transactions] == ["Coffee"]
+    assert outcome.skipped_lines == 0
+    assert not any(w.startswith("rows_without_header") for w in outcome.warnings)
+
+
+def test_counting_under_an_unread_header_ends_with_a_title_or_a_header() -> None:
+    # A block title after the unread table: what follows is not counted.
+    outcome = _parse([HEADER, ROW, UNREAD, [("Account summary", 62.0)], _coffee(6, "Tea", "-3.00")])
+    assert outcome.skipped_lines == 0
+    # A header we read: its rows are rows again.
+    outcome = _parse([HEADER, ROW, UNREAD, HEADER, _coffee(6, "Tea", "-3.00")])
+    assert [t.payee for t in _one(outcome).transactions] == ["Coffee", "Tea"]
+    assert outcome.skipped_lines == 0
+
+
 # -- section titles and the direction of unsigned amounts -----------------------
 
 IN = SectionRule("in", None, None)

@@ -18,6 +18,7 @@ from app.ingestion.reconcile import (
     newest_first,
     running_mismatches,
     section_mismatches,
+    settle_signs,
 )
 
 
@@ -132,3 +133,70 @@ def test_section_without_a_total_is_not_checked() -> None:
     # A total printed for a section no row was read under compares against zero.
     assert section_mismatches(rows, sections, {2: _d("99.00"), 3: _d("18.50")}) == [3]
     assert section_mismatches(rows, sections, {3: _d("0.00")}) == []
+
+
+# -- a balance whose minus may be a separator -----------------------------------
+
+
+def _settle(
+    opening: str | None,
+    closing: str | None,
+    rows: list[Row],
+    *,
+    opening_open: bool = False,
+    closing_open: bool = False,
+) -> tuple[Decimal | None, Decimal | None]:
+    return settle_signs(
+        _d(opening) if opening is not None else None,
+        _d(closing) if closing is not None else None,
+        rows,
+        opening_open=opening_open,
+        closing_open=closing_open,
+    )
+
+
+def test_balances_with_a_sure_sign_are_left_alone() -> None:
+    rows = [Row(_d("-4.50"))]
+    # Not even a balance that disagrees with the rows is touched.
+    assert _settle("410.00", "-300.00", rows) == (_d("410.00"), _d("-300.00"))
+    assert _settle(None, None, rows, opening_open=True, closing_open=True) == (None, None)
+
+
+def test_an_open_sign_takes_the_reading_the_rows_agree_with() -> None:
+    rows = [Row(_d("-4.50"))]
+    # ``Ending Balance - $405.50``: the dash was a separator.
+    assert _settle("410.00", "-405.50", rows, closing_open=True) == (_d("410.00"), _d("405.50"))
+    # An overdraft: the dash was the sign.
+    assert _settle("-15.50", "-20.00", rows, closing_open=True) == (_d("-15.50"), _d("-20.00"))
+    assert _settle("-410.00", "405.50", rows, opening_open=True) == (_d("410.00"), _d("405.50"))
+
+
+def test_a_running_balance_settles_an_open_sign() -> None:
+    rows = [Row(_d("-4.50"), _d("405.50")), Row(_d("-5.50"), _d("400.00"))]
+    assert _settle(None, "-400.00", rows, closing_open=True) == (None, _d("400.00"))
+    assert _settle("-410.00", None, rows, opening_open=True) == (_d("410.00"), None)
+    overdrawn = [Row(_d("-4.50"), _d("-14.50")), Row(_d("-5.50"), _d("-20.00"))]
+    assert _settle(None, "-20.00", overdrawn, closing_open=True) == (None, _d("-20.00"))
+
+
+def test_both_signs_open_are_settled_together() -> None:
+    rows = [Row(_d("-4.50"))]
+    both = _settle("-410.00", "-405.50", rows, opening_open=True, closing_open=True)
+    assert both == (_d("410.00"), _d("405.50"))
+    overdrawn = _settle("-15.50", "-20.00", rows, opening_open=True, closing_open=True)
+    assert overdrawn == (_d("-15.50"), _d("-20.00"))
+
+
+def test_an_open_sign_nothing_settles_is_no_balance() -> None:
+    rows = [Row(_d("-4.50"))]
+    # Nothing to check it against: neither reading is given.
+    assert _settle(None, "-405.50", rows, closing_open=True) == (None, None)
+    assert _settle("-410.00", None, rows, opening_open=True) == (None, None)
+    # Neither reading agrees with the rows: the sure balance stays.
+    assert _settle("410.00", "-300.00", rows, closing_open=True) == (_d("410.00"), None)
+    # No rows between two equal figures of opposite sign: both readings of
+    # the pair agree, so neither is given.
+    assert _settle("-50.00", "-50.00", [], opening_open=True, closing_open=True) == (None, None)
+    # The running balance contradicts the one reading the totals allow.
+    odd = [Row(_d("-4.50"), _d("77.00"))]
+    assert _settle("410.00", "-405.50", odd, closing_open=True) == (_d("410.00"), None)
