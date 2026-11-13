@@ -52,17 +52,24 @@ How :func:`read_header` works on a line:
    no digit, and none of :data:`NOT_A_DESCRIPTION` (a title such as
    ``DAILY ENDING BALANCE`` between ``Date`` and ``Amount`` heads a list
    of balances, not rows). Two unknown cells, and the line is no header.
-6. A line that names the **description** twice with a money heading
+6. A line that prints the **same description heading** twice (the same
+   words, whatever the letters' case) with a money or balance heading
    **between** the two (left to right, by where each heading starts; the
    headings may be cells or phrases of one cell) is no header: ``Date |
    Description | Amount | Description | Amount`` heads a grid of labels
    and their values (an account summary), and its lines are no rows. It
    is :func:`header_like`, so it ends the table above it. A table printed
-   across the page is found before this and is not meant. Two text
-   headings with no money heading between them (``Payee | Description``,
-   ``Details | Particulars | Code | Reference``, ``Transaction | Date |
-   Description``) are the text columns of one table: the first one named
-   is its description column and the line is a header.
+   across the page is found before this and is not meant. Text headings
+   in **different** words are the text columns of one table, with a
+   money heading between them (``Transaction | Amount | Details |
+   Balance``) or without (``Payee | Description``, ``Details |
+   Particulars | Code | Reference``): the first one named is its
+   description column and the line is a header. Known limits: a grid
+   whose labels are headed in words outside the vocabulary (``Item |
+   Amount | Item | Amount``), in two different words, or by a heading a
+   line above it stacks onto, is still read as a header; its lines are
+   then left to the reader's rule for summary lines between two balance
+   lines.
 7. The line is a header when it names a date, a description or check
    number, and a money column; else it may be a headless header
    (:func:`_headless`).
@@ -554,16 +561,17 @@ def across_groups(
 
 
 def _label_value_grid(headings: Sequence[tuple[Role, Cell]]) -> bool:
-    """The headings name a description, then a money column, then a
-    description again, left to right (module doc, 6)."""
-    seen = 0  # 1: a description; 2: a money heading right of it
-    for role, _ in sorted(headings, key=lambda heading: heading[1].x0):
+    """The headings name a description, then a column of figures, then the
+    same description again, left to right (module doc, 6)."""
+    figured: dict[str, bool] = {}  # a label -> a figure heading stands right of it
+    for role, cell in sorted(headings, key=lambda heading: heading[1].x0):
         if role == "description":
-            if seen == 2:
+            label = normalise(cell.text)
+            if figured.get(label):
                 return True
-            seen = 1
-        elif role in MONEY_ROLES and seen == 1:
-            seen = 2
+            figured.setdefault(label, False)
+        elif role in NUMERIC_ROLES:
+            figured = dict.fromkeys(figured, True)
     return False
 
 
@@ -573,8 +581,9 @@ def read_header(line: ViewLine, headers: Mapping[str, Role] = HEADERS) -> list[C
     A table printed across the page (:func:`across_start`) declares the
     columns of its first group and an ``across`` column from the second
     group on, when the first group is a header by itself; else it is none.
-    Any other line of headings that names the description twice with a
-    money heading between the two is none either (module doc, 6).
+    Any other line of headings that prints the same description heading
+    twice with a money or balance heading between the two is none either
+    (module doc, 6).
     """
     across = _across(line, headers)
     if across is not None:

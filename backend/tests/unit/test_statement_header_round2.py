@@ -61,11 +61,23 @@ def test_description_and_amount_pairs_are_no_header() -> None:
     one_cell = _line([("Date", 40.0), ("Description Amount Description Amount", 100.0)])
     assert read_header(one_cell) is None
     assert header_like(one_cell)
-    # Other words for the text column, and no figure after the second label:
-    # the money heading still stands between the two.
-    worded = _line([("Date", 40.0), ("Details", 100.0), ("Amount", 250.0), ("Particulars", 330.0)])
+    # The same label in other words and other letters, and no figure after
+    # the second one: a figure heading still stands between the two.
+    worded = _line([("Date", 40.0), ("DETAILS", 100.0), ("Amount", 250.0), ("Details", 330.0)])
     assert read_header(worded) is None
     assert header_like(worded)
+    # A balance between the two labels is a figure as well.
+    balance = _line(
+        [
+            ("Date", 40.0),
+            ("Description", 100.0),
+            ("Balance", 250.0),
+            ("Description", 330.0),
+            ("Amount", 500.0),
+        ]
+    )
+    assert read_header(balance) is None
+    assert header_like(balance)
     # Any money heading between them, and more figures beside each label.
     wide = _line(
         [
@@ -182,6 +194,52 @@ def test_text_headings_side_by_side_are_still_a_header(
     assert next(c.x0 for c in header if c.role == "description") == text_x0
 
 
+@pytest.mark.parametrize(
+    ("cells", "roles"),
+    [
+        pytest.param(
+            [
+                ("Date", 40.0),
+                ("Transaction", 100.0),
+                ("Amount", 250.0),
+                ("Details", 330.0),
+                ("Balance", 500.0),
+            ],
+            ["date", "description", "amount", "balance"],
+            id="transaction-amount-details-balance",
+        ),
+        pytest.param(
+            [("Date", 40.0), ("Details", 100.0), ("Amount", 250.0), ("Particulars", 330.0)],
+            ["date", "description", "amount"],
+            id="details-amount-particulars",
+        ),
+        pytest.param(
+            [
+                ("Date", 40.0),
+                ("Description", 100.0),
+                ("Debit", 250.0),
+                ("Transaction Description", 330.0),
+                ("Credit", 500.0),
+            ],
+            ["date", "description", "debit", "credit"],
+            id="description-debit-transaction-description-credit",
+        ),
+    ],
+)
+def test_two_text_columns_around_a_money_column_are_still_a_header(
+    cells: list[tuple[str, float]], roles: list[Role]
+) -> None:
+    """The negative of the grid rule: a table that prints a second text
+    column right of a money column names it in other words (``Transaction``
+    and ``Details``). Only the same label printed twice heads a grid. The
+    header reads as it always did, the first text heading being the
+    description column."""
+    header = read_header(_line(cells))
+    assert header is not None
+    assert [c.role for c in header] == roles
+    assert next(c.x0 for c in header if c.role == "description") == 100.0
+
+
 def test_two_date_headings_are_still_a_header() -> None:
     line = _line(
         [
@@ -272,6 +330,13 @@ def test_rule_glyph_header_is_read() -> None:
         ("amount", "Amount (EUR)I"),
         ("balance", "Balance (EUR)I"),
     ]
+
+
+def test_a_bar_behind_a_heading_without_a_unit() -> None:
+    """A guard: a bar is no letter, so ``Amount|`` reads as ``Amount`` (it
+    did before the glyph rule); a letter there makes another word."""
+    assert heading_role("Amount|") == "amount"
+    assert heading_role("AmountI") is None
 
 
 def test_a_letter_after_a_heading_is_no_unit() -> None:
