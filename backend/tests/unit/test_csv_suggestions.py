@@ -23,6 +23,7 @@ from app.ingestion.parsers.structured import (
     EXACT,
     HEADER_SEARCH_ROWS,
     SUBSTRING,
+    SUGGEST_SAMPLE_ROWS,
     WORD,
     MappingSuggestion,
     _match_level,
@@ -1417,3 +1418,236 @@ def test_a_balance_printed_once_a_day_reconciles() -> None:
     newest = _table([list(table.rows[0]), *(list(r) for r in reversed(table.rows[1:]))])
     assert [r[3] for r in newest.rows[1:]] == ["4250.65", "4317.05", "", "", "1555.40", ""]
     assert from_table(newest, suggestion.spec).balance_mismatches == []
+
+
+# ---------------------------------------------------------------------------
+# A day/month tie that the file itself resolves is no guess
+# ---------------------------------------------------------------------------
+
+#: Month first: 3 and 9 February, 4 and 11 March. Day first: 2 March,
+#: 2 September, 3 April, 3 November. No day is above 12, the days are not
+#: the months and neither component is constant: the cells settle nothing.
+TIED_DATES = ["02/03/2026", "02/09/2026", "03/04/2026", "03/11/2026"]
+
+
+def _dates(table: Table, suggestion: MappingSuggestion) -> list[date]:
+    return [t.posted_date for t in from_table(table, suggestion.spec).transactions]
+
+
+def _dated(dates: list[str], today: date | None = None) -> tuple[Table, MappingSuggestion]:
+    table = _extracted(layouts.checking_dated(dates))
+    suggestion = suggest_mapping(table, today=today)
+    assert suggestion is not None
+    assert suggestion.sign_evidence == "balance"  # the date is the only question
+    return table, suggestion
+
+
+def test_same_day_under_both_orders_is_no_guess() -> None:
+    table, suggestion = _dated(["1/1/2026", "2/2/2026", "3/3/2026"])
+    assert suggestion.doubts == ()
+    assert (suggestion.confident, suggestion.score) == (True, 1.0)
+    assert suggestion.spec.date_format == "MM/DD/YYYY"
+    assert _dates(table, suggestion) == [date(2026, 1, 1), date(2026, 2, 2), date(2026, 3, 3)]
+    # One row where the day is not the month, and the orders differ again.
+    _, mixed = _dated(["1/1/2026", "2/2/2026", "3/4/2026"])
+    assert mixed.doubts == ("date_order_guessed",)
+
+
+def test_constant_component_is_the_month() -> None:
+    days = (1, 2, 3, 5, 6, 8, 9, 10)
+    table, suggestion = _dated([f"06/{day:02d}/2026" for day in days])
+    assert suggestion.doubts == ()
+    assert (suggestion.confident, suggestion.score) == (True, 1.0)
+    assert suggestion.spec.date_format == "MM/DD/YYYY"
+    assert _dates(table, suggestion) == [date(2026, 6, day) for day in days]
+    # Three distinct days are the least that say so.
+    _, three = _dated(["06/01/2026", "06/01/2026", "06/04/2026", "06/09/2026"])
+    assert (three.doubts, three.spec.date_format) == ((), "MM/DD/YYYY")
+    # The sample cannot tell day from month and best_date_format still says so:
+    # the rules above belong to the cash suggestion, read over the whole table.
+    assert best_date_format(f"06/{day:02d}/2026" for day in days) == ("MM/DD/YYYY", 8, True)
+
+
+def test_two_rows_stay_held() -> None:
+    _, suggestion = _dated(["06/01/2026", "06/02/2026"])
+    assert suggestion.doubts == ("date_order_guessed",)
+    assert not suggestion.confident
+    assert suggestion.spec.date_format == "MM/DD/YYYY"  # month first, as before
+    assert suggestion.score == 0.9
+
+
+@pytest.mark.parametrize(
+    "dates",
+    [
+        # The 5th of January, February and March, or three days of May: the
+        # second component is constant, so the first would be the day. The
+        # order is only ever taken as proven the way it would be guessed
+        # (month first); day first needs a cell that reads no other way.
+        ["01/05/2026", "02/05/2026", "03/05/2026"],
+        ["06/01/2026", "06/01/2026", "06/02/2026", "06/02/2026"],  # one month, two days
+        ["01/05/2026", "01/06/2026", "02/05/2026", "02/06/2026"],  # two values of each
+        ["06/01/2025", "06/02/2026", "06/03/2026"],  # June of two years is not one month
+    ],
+    ids=["same-day-three-months", "two-days", "two-by-two", "two-years"],
+)
+def test_same_day_of_several_months_stays_held(dates: list[str]) -> None:
+    _, suggestion = _dated(dates)
+    assert suggestion.doubts == ("date_order_guessed",)
+    assert suggestion.spec.date_format == "MM/DD/YYYY"
+
+
+@pytest.mark.parametrize(
+    ("headers", "dates", "date_format", "expected"),
+    [
+        (
+            # Post Date is the date column and fits both orders; a
+            # transaction on the 30th says which.
+            ("Transaction Date", "Post Date"),
+            [
+                ("01/30/2026", "02/02/2026"),
+                ("02/03/2026", "02/04/2026"),
+                ("03/04/2026", "03/05/2026"),
+                ("03/08/2026", "03/09/2026"),
+            ],
+            "MM/DD/YYYY",
+            [date(2026, 2, 2), date(2026, 2, 4), date(2026, 3, 5), date(2026, 3, 9)],
+        ),
+        (
+            ("Transaction Date", "Post Date"),
+            [
+                ("30/01/2026", "02/02/2026"),
+                ("03/02/2026", "04/02/2026"),
+                ("04/03/2026", "05/03/2026"),
+                ("08/03/2026", "09/03/2026"),
+            ],
+            "DD/MM/YYYY",
+            [date(2026, 2, 2), date(2026, 2, 4), date(2026, 3, 5), date(2026, 3, 9)],
+        ),
+        (
+            # Transaction Date is the date column; a settlement on the 13th decides.
+            ("Transaction Date", "Settlement Date"),
+            [
+                ("02/03/2026", "02/05/2026"),
+                ("02/11/2026", "02/13/2026"),
+                ("03/04/2026", "03/06/2026"),
+                ("03/09/2026", "03/11/2026"),
+            ],
+            "MM/DD/YYYY",
+            [date(2026, 2, 3), date(2026, 2, 11), date(2026, 3, 4), date(2026, 3, 9)],
+        ),
+    ],
+    ids=["post-date-by-transaction-date", "day-first", "transaction-date-by-settlement-date"],
+)
+def test_unambiguous_second_date_column_decides(
+    headers: tuple[str, str],
+    dates: list[tuple[str, str]],
+    date_format: str,
+    expected: list[date],
+) -> None:
+    table = _extracted(layouts.export_with_two_date_columns(dates, headers=headers))
+    suggestion = _suggested(table)
+    assert suggestion.spec.date_column == (1 if headers[1] == "Post Date" else 0)
+    assert suggestion.doubts == ()
+    assert suggestion.spec.date_format == date_format
+    assert _dates(table, suggestion) == expected
+
+
+def test_a_second_date_column_that_fits_both_orders_decides_nothing() -> None:
+    dates = [
+        ("02/03/2026", "02/04/2026"),
+        ("02/09/2026", "02/10/2026"),
+        ("03/04/2026", "03/05/2026"),
+    ]
+    suggestion = _suggested(_extracted(layouts.export_with_two_date_columns(dates)))
+    assert suggestion.doubts == ("date_order_guessed",)
+    # Nor does one whose cells do not agree with each other.
+    mixed = [
+        ("01/30/2026", "02/02/2026"),
+        ("30/01/2026", "02/04/2026"),
+        ("03/04/2026", "03/05/2026"),
+    ]
+    suggestion = _suggested(_extracted(layouts.export_with_two_date_columns(mixed)))
+    assert suggestion.doubts == ("date_order_guessed",)
+    # A column of dates under a header that names no date is not asked.
+    unnamed = layouts.export_with_two_date_columns(
+        [("01/30/2026", "02/02/2026"), ("02/13/2026", "02/04/2026"), ("03/04/2026", "03/05/2026")],
+        headers=("Reference", "Post Date"),
+    )
+    assert _suggested(_extracted(unnamed)).doubts == ("date_order_guessed",)
+
+
+def test_reading_that_dates_rows_after_upload_is_rejected() -> None:
+    # Uploaded on 20 March: day first would date rows in April, September and November.
+    table, suggestion = _dated(TIED_DATES, today=date(2026, 3, 20))
+    assert suggestion.doubts == ()
+    assert suggestion.spec.date_format == "MM/DD/YYYY"
+    assert _dates(table, suggestion)[-1] == date(2026, 3, 11)
+    # The same cells written day first (3 and 9 February, 4 and 11 March).
+    swapped = ["/".join((d, m, y)) for m, d, y in (cell.split("/") for cell in TIED_DATES)]
+    table, suggestion = _dated(swapped, today=date(2026, 3, 20))
+    assert suggestion.doubts == ()
+    assert suggestion.spec.date_format == "DD/MM/YYYY"
+    assert _dates(table, suggestion) == [
+        date(2026, 2, 3),
+        date(2026, 2, 9),
+        date(2026, 3, 4),
+        date(2026, 3, 11),
+    ]
+    # A row dated the day after the upload is the same day somewhere else on
+    # the globe: it does not rule its reading out.
+    _, eve = _dated(TIED_DATES, today=date(2026, 3, 10))
+    assert (eve.doubts, eve.spec.date_format) == ((), "MM/DD/YYYY")
+
+
+@pytest.mark.parametrize(
+    "today",
+    [None, date(2026, 12, 31), date(2026, 2, 5)],
+    ids=["no-upload-day", "both-in-the-past", "both-after-upload"],
+)
+def test_an_upload_day_that_rules_out_neither_or_both_orders_decides_nothing(
+    today: date | None,
+) -> None:
+    _, suggestion = _dated(TIED_DATES, today=today)
+    assert suggestion.doubts == ("date_order_guessed",)
+    assert suggestion.spec.date_format == "MM/DD/YYYY"
+
+
+def test_proofs_of_the_date_order_that_disagree_decide_nothing() -> None:
+    # The transaction on the 28th says month first. The upload day says day
+    # first: month first dates the postings up to 2 May, after the upload,
+    # and day first dates none later than 5 February.
+    dates = [
+        ("02/28/2026", "03/01/2026"),
+        ("03/30/2026", "04/01/2026"),
+        ("04/30/2026", "05/02/2026"),
+    ]
+    table = _extracted(layouts.export_with_two_date_columns(dates))
+    suggestion = suggest_mapping(table, today=date(2026, 3, 20))
+    assert suggestion is not None
+    assert suggestion.doubts == ("date_order_guessed",)
+    assert suggestion.spec.date_format == "MM/DD/YYYY"
+    # Days of one month that are all after the upload, whichever way they are
+    # read: the month is not taken as proven for a file that cannot be right.
+    _, june = _dated(["06/07/2026", "06/08/2026", "06/09/2026"], today=date(2026, 5, 20))
+    assert june.doubts == ("date_order_guessed",)
+
+
+def test_the_rows_below_the_sample_count_too() -> None:
+    sample = [f"06/{1 + index // 17:02d}/2026" for index in range(204)]  # 1 to 12 June
+    assert len(sample) > SUGGEST_SAMPLE_ROWS
+    # A row on the 13th, below the rows the roles are assigned from, reads one way only.
+    _, suggestion = _dated([*sample, "06/13/2026", "06/14/2026"])
+    assert (suggestion.doubts, suggestion.spec.date_format) == ((), "MM/DD/YYYY")
+    assert suggestion.parsed_rows == 206
+    # Rows of July down there: the first component is not constant after all.
+    _, suggestion = _dated([*sample, "07/01/2026", "07/02/2026"])
+    assert suggestion.doubts == ("date_order_guessed",)
+
+
+def test_card_file_is_still_held_for_its_sign() -> None:
+    table = _extracted(layouts.card_positive_purchases(low_days=True))
+    suggestion = _suggested(table)
+    assert suggestion.spec.date_format == "MM/DD/YYYY"
+    assert suggestion.doubts == ("sign_unverified",)  # the dates are proven, the sign is not
+    assert not suggestion.confident
+    assert suggestion.sign_evidence is None

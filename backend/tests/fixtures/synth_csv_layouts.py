@@ -54,11 +54,22 @@ Words, shapes and rows that are not transactions:
   ``14-Aug-25`` dates.
 * :func:`checking_with_daily_balance` - a running balance printed on the
   last row of each day only.
+
+Dates whose day/month order is the question:
+
+* :func:`checking_dated` - a checking export with one row per given date
+  cell, signed amounts and a balance that reconciles (nothing else about it
+  is in doubt).
+* :func:`export_with_two_date_columns` - two date columns beside
+  ``Description``, ``Debit`` and ``Credit``.
+* :func:`card_positive_purchases` with ``low_days`` - the card export dated
+  on nine days of one month, none above the 12th.
 """
 
 from __future__ import annotations
 
 from collections.abc import Sequence
+from decimal import Decimal
 from typing import Final
 
 Row = tuple[str, ...]
@@ -112,9 +123,16 @@ def _file(header: Row, rows: Sequence[Row], *, delimiter: str = ",") -> bytes:
     return ("\r\n".join(lines) + "\r\n").encode("utf-8")
 
 
-def card_positive_purchases() -> bytes:
-    """``Date,Description,Amount``: eight purchases positive, one payment negative."""
-    return _file(("Date", "Description", "Amount"), CARD_ROWS)
+def card_positive_purchases(*, low_days: bool = False) -> bytes:
+    """``Date,Description,Amount``: eight purchases positive, one payment negative.
+
+    ``low_days`` dates the rows ``03/01/2026`` to ``03/09/2026``: one month,
+    and no day that only one day/month order reads.
+    """
+    rows: Sequence[Row] = CARD_ROWS
+    if low_days:
+        rows = [(f"03/{day:02d}/2026", *row[1:]) for day, row in enumerate(CARD_ROWS, start=1)]
+    return _file(("Date", "Description", "Amount"), rows)
 
 
 def card_with_type_column() -> bytes:
@@ -413,3 +431,50 @@ def checking_with_daily_balance() -> bytes:
         ("2026-07-08", "Brightwater Utilities", "-66.40", "4250.65"),
     ]
     return _file(("Date", "Description", "Amount", "Balance"), rows)
+
+
+#: (description, amount as printed) of :func:`checking_dated`, repeated as
+#: often as there are dates: money out negative, a salary every sixth row.
+DATED_ROWS: Final[tuple[tuple[str, str], ...]] = (
+    ("Willow Court Rent", "-1210.00"),
+    ("Harbor Lane Grocery", "-68.45"),
+    ("Northgate Fuel Stop", "-42.90"),
+    ("Tin Roof Diner", "-27.15"),
+    ("Brightwater Utilities", "-61.30"),
+    ("Marlow Design Payroll", "2840.00"),
+)
+#: The balance before the first row of :func:`checking_dated`.
+DATED_OPENING: Final = Decimal("2975.20")
+
+
+def checking_dated(dates: Sequence[str]) -> bytes:
+    """``Date,Description,Amount,Balance``: one row per cell of ``dates``, as printed.
+
+    The amounts are signed and every balance is the sum so far, so the sign
+    is proven and the date column is the only thing left to doubt.
+    """
+    balance = DATED_OPENING
+    rows = []
+    for index, cell in enumerate(dates):
+        payee, amount = DATED_ROWS[index % len(DATED_ROWS)]
+        balance += Decimal(amount)
+        rows.append((cell, payee, amount, str(balance)))
+    return _file(("Date", "Description", "Amount", "Balance"), rows)
+
+
+def export_with_two_date_columns(
+    dates: Sequence[tuple[str, str]],
+    *,
+    headers: tuple[str, str] = ("Transaction Date", "Post Date"),
+) -> bytes:
+    """``<headers>,Description,Debit,Credit``: one row per pair of date cells, as printed.
+
+    The debit and credit columns prove the sign, whatever the header says
+    about a card.
+    """
+    rows = []
+    for index, (first, second) in enumerate(dates):
+        payee, amount = DATED_ROWS[index % len(DATED_ROWS)]
+        debit, credit = (amount[1:], "") if amount.startswith("-") else ("", amount)
+        rows.append((first, second, payee, debit, credit))
+    return _file((*headers, "Description", "Debit", "Credit"), rows)

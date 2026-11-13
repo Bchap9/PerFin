@@ -15,13 +15,13 @@ from __future__ import annotations
 import uuid
 from collections.abc import Iterator
 from dataclasses import dataclass, field, replace
-from datetime import date
+from datetime import UTC, date, datetime
 from decimal import Decimal
 from pathlib import Path
 from typing import Any
 
 import pytest
-from sqlalchemy import func, select
+from sqlalchemy import func, select, update
 from sqlalchemy.orm import Session
 
 from app.auth.models import GrantLevel, HouseholdRole
@@ -1691,3 +1691,59 @@ def test_an_account_chosen_for_one_name_takes_only_that_names_rows(env: Env) -> 
     assert left.kind is ReviewKind.UNKNOWN_ACCOUNT
     assert (left.payload["group"], left.payload["transactions"]) == (1, 4)
     assert env.document(document_id).status is DocumentStatus.NEEDS_REVIEW
+
+
+# ---------------------------------------------------------------------------
+# The day a file arrived and its day/month order
+# ---------------------------------------------------------------------------
+
+#: Month first: 3 and 9 February, 4 and 11 March. Day first: 2 March,
+#: 2 September, 3 April, 3 November.
+TIED_DATES = ("02/03/2026", "02/09/2026", "03/04/2026", "03/11/2026")
+
+
+def _received(env: Env, data: bytes, account: Account, on: date) -> uuid.UUID:
+    """Upload ``data`` for ``account`` as if it had arrived ``on`` that day, then ingest it."""
+    document_id = env.upload(data, account=account, name="export.csv")
+    for db in env.db():
+        db.execute(
+            update(Document)
+            .where(Document.id == document_id)
+            .values(created_at=datetime(on.year, on.month, on.day, 9, 30, tzinfo=UTC))
+        )
+    assert env.run(INGEST_JOB_TYPE), "the upload queued no ingest job"
+    return document_id
+
+
+def test_a_date_order_that_dates_rows_after_the_upload_is_not_the_files(env: Env) -> None:
+    """Uploaded on 20 March: the rows cannot be of April, September and November."""
+    account = env.ledger.account(env.household_id, type=AccountType.CHECKING)
+    document_id = _received(env, layouts.checking_dated(TIED_DATES), account, date(2026, 3, 20))
+    assert env.document(document_id).status is DocumentStatus.PROCESSED, env.open_reviews(
+        document_id
+    )
+    assert [t.posted_date for t in env.transactions(account)] == [
+        date(2026, 2, 3),
+        date(2026, 2, 9),
+        date(2026, 3, 4),
+        date(2026, 3, 11),
+    ]
+    (mapping,) = _mappings(env)
+    assert mapping.spec["date_format"] == "MM/DD/YYYY"
+    with Actors.open(env.settings, env.factories) as actors:
+        owner = actors.login(env.owner)
+        preview = owner.get(f"{API}/imports/{document_id}/preview").json()
+    assert preview["suggestion"]["doubts"] == []  # the editor is told the same
+
+
+def test_a_date_order_the_upload_day_cannot_settle_waits_for_a_person(env: Env) -> None:
+    """Uploaded in December, both orders are in the past: the order is still a guess."""
+    account = env.ledger.account(env.household_id, type=AccountType.CHECKING)
+    document_id = _received(env, layouts.checking_dated(TIED_DATES), account, date(2026, 12, 20))
+    assert env.document(document_id).status is DocumentStatus.NEEDS_REVIEW
+    (item,) = env.open_reviews(document_id)
+    assert item.payload["reason"] == "mapping_required"
+    assert item.payload["auto_import"] == "not_confident"
+    assert item.payload["suggestion"]["doubts"] == ["date_order_guessed"]
+    assert env.transactions(account) == []
+    assert _mappings(env) == []

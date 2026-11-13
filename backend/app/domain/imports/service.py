@@ -145,6 +145,7 @@ import json
 import uuid
 from collections.abc import Collection, Sequence
 from dataclasses import dataclass, field
+from datetime import UTC, date
 from decimal import Decimal
 from typing import TYPE_CHECKING, Any, Final, Literal, cast
 
@@ -1454,7 +1455,11 @@ def _import_table(
         # fits): asked for again rather than read as a cash ledger.
         saved, spec = None, None
     if saved is None or spec is None:
-        suggestion = None if choice.ambiguous else suggest_table_mapping(table)
+        suggestion = (
+            None
+            if choice.ambiguous
+            else suggest_table_mapping(table, received_on=_received_on(run.document))
+        )
         held = "mapping_ambiguous" if choice.ambiguous else _held(run, result, suggestion)
         if held is None and suggestion is not None and suggestion.spec.mode == "activity":
             # A brokerage layout whose actions are mostly unknown: a person
@@ -1502,7 +1507,7 @@ def _import_table(
         # whenever it meets a liability account or a file whose sign the
         # suggestion doubts, unless the person chose it.
         on_trust = saved.sign_unverified and mapping_id is None
-        fresh = suggest_mapping(table) if on_trust else None
+        fresh = suggest_mapping(table, today=_received_on(run.document)) if on_trust else None
         doubted = fresh is not None and "sign_unverified" in fresh.doubts
         if _sign_held(on_trust, targets, doubted) is not None:
             _mapping_review(run, table, choice, fresh, "sign_unverified")
@@ -1558,9 +1563,21 @@ def _import_table(
         run.document.institution_id = mapping.institution_id
 
 
-def suggest_table_mapping(table: Table) -> MappingSuggestion | None:
-    """The mapping editor's suggestion: an activity mapping for a brokerage layout, else cash."""
-    return suggest_activity_mapping(table) or suggest_mapping(table)
+def _received_on(document: Document) -> date | None:
+    """The day (UTC) the document was uploaded: no row of it is dated later."""
+    received = document.created_at
+    return received.astimezone(UTC).date() if received is not None else None
+
+
+def suggest_table_mapping(
+    table: Table, *, received_on: date | None = None
+) -> MappingSuggestion | None:
+    """The mapping editor's suggestion: an activity mapping for a brokerage layout, else cash.
+
+    ``received_on`` is the day the file arrived, which settles a day/month
+    order that would date rows after it (:func:`suggest_mapping`).
+    """
+    return suggest_activity_mapping(table) or suggest_mapping(table, today=received_on)
 
 
 def spec_digest(spec: MappingSpec) -> str:
@@ -2213,7 +2230,7 @@ def preview(
             visible=_visible(principal),
         )
         matched = choice.mapping.id if choice.mapping is not None else None
-        suggested = suggest_table_mapping(tables[0])
+        suggested = suggest_table_mapping(tables[0], received_on=_received_on(document))
     return ImportPreview(
         document_id=document.id,
         status=document.status,

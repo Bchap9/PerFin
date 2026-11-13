@@ -68,7 +68,7 @@ import unicodedata
 from collections import Counter
 from collections.abc import Iterable, Sequence
 from dataclasses import dataclass, field, replace
-from datetime import date
+from datetime import date, timedelta
 from decimal import Decimal, InvalidOperation
 from typing import Final
 
@@ -1218,7 +1218,9 @@ def best_date_format(values: Iterable[str]) -> tuple[DateFormat | None, int, boo
 
     Ties go to the earlier format of :data:`DATE_FORMATS` (month first
     before day first), so the third value says the day/month order is a
-    guess (every day of the sample is 12 or less).
+    guess (every day of the sample is 12 or less). The cash suggestion asks
+    the rest of the table before it calls that a guess
+    (:func:`_settled_date_format`).
     """
     sample = [v.strip() for v in values if v.strip()][:SUGGEST_SAMPLE_ROWS]
     best: DateFormat | None = None
@@ -1231,6 +1233,121 @@ def best_date_format(values: Iterable[str]) -> tuple[DateFormat | None, int, boo
         elif count and count == best_count:
             tied = True
     return best, best_count, tied
+
+
+#: The month-first formats and the day-first format that reads the same
+#: cells whenever no day is above 12 (the ties of :func:`best_date_format`).
+_DAY_FIRST_TWIN: Final[dict[str, DateFormat]] = {
+    "MM/DD/YYYY": "DD/MM/YYYY",
+    "MM/DD/YY": "DD/MM/YY",
+    "MM-DD-YYYY": "DD-MM-YYYY",
+}
+#: Distinct days a date column shows within its one month before that month
+#: is taken as proven (:func:`_settled_date_format`). Two rows prove nothing.
+DATE_ORDER_MIN_DAYS: Final = 3
+#: A row may be dated the day after the upload day (UTC): it is that day
+#: already east of Greenwich. Anything later was not in the file's past.
+_UPLOAD_SLACK: Final = timedelta(days=1)
+
+
+_Readings = list[tuple[date | None, date | None]]
+
+
+def _order_readings(
+    body: Sequence[Sequence[str]], column: int, month_first: str, day_first: str
+) -> tuple[_Readings, list[str]]:
+    """Each cell of ``column`` as (month first, day first), and the cells neither order reads."""
+    readings: _Readings = []
+    others: list[str] = []
+    for row in body:
+        cell = (_cell(row, column) or "").strip()
+        if not cell:
+            continue
+        pair = (_parse_date(cell, month_first), _parse_date(cell, day_first))
+        if pair == (None, None):
+            others.append(cell)
+        else:
+            readings.append(pair)
+    return readings, others
+
+
+def _one_way(readings: _Readings) -> tuple[bool, bool]:
+    """Whether a cell reads month first only, and whether one reads day first only."""
+    return (
+        any(day is None for _, day in readings),
+        any(month is None for month, _ in readings),
+    )
+
+
+def _settled_date_format(table: Table, spec: MappingSpec, today: date | None) -> DateFormat | None:
+    """The day/month order the file itself proves for a tied date column (None: a guess).
+
+    ``spec`` reads the date column month first and its sample fits day
+    first as well (:func:`best_date_format`). The whole table is asked, not
+    the sample. Proofs, any of which settles the order unless two disagree:
+
+    * a cell of the date column that only one order reads (a day above 12
+      below the sample);
+    * another column under a header that names a date, whose cells are
+      dates of the same form, with a cell only one order reads (a ``Post
+      Date`` beside the ``Transaction Date``): one file writes its dates
+      one way;
+    * ``today``, the day the file was received: an order that dates a row
+      after it (:data:`_UPLOAD_SLACK`) while the other dates none is not
+      the file's.
+
+    Without a proof, two readings of the cells that are no guess:
+
+    * both orders give the same day for every cell (``1/1``, ``2/2``,
+      ``3/3``): there is nothing to choose;
+    * read month first, every row is of one month of one year and at least
+      :data:`DATE_ORDER_MIN_DAYS` distinct days: an export covers the days
+      of a month, not the same day of as many months. Only the order that
+      would be guessed anyway is confirmed this way; the mirror image (a
+      constant second component) stays a guess, since it is also what one
+      monthly payment looks like written month first.
+
+    A date column that mixes in dates of another form, or whose rows are
+    dated after ``today`` whichever way they are read, stays a guess.
+    """
+    month_first = spec.date_format
+    day_first = _DAY_FIRST_TWIN.get(month_first)
+    if day_first is None:
+        return None
+    header = table.rows[spec.skip_rows]
+    body = table.rows[spec.skip_rows + 1 :]
+    readings, others = _order_readings(body, spec.date_column, month_first, day_first)
+    if any(_shape(cell) == "d" for cell in others):
+        return None
+    by_month, by_day = _one_way(readings)
+    for column, name in enumerate(_role_names(header)):
+        if column == spec.date_column or not _match_level(name, ROLE_WORDS["date"]):
+            continue
+        beside, rest = _order_readings(body, column, month_first, day_first)
+        if beside and len(beside) >= ROLE_FIT_MIN * (len(beside) + len(rest)):
+            month_only, day_only = _one_way(beside)
+            by_month, by_day = by_month or month_only, by_day or day_only
+    both = [(month, day) for month, day in readings if month is not None and day is not None]
+    late_month_first = late_day_first = False
+    if today is not None:
+        limit = today + _UPLOAD_SLACK
+        late_month_first = any(month > limit for month, _ in both)
+        late_day_first = any(day > limit for _, day in both)
+        if late_month_first != late_day_first:
+            by_month, by_day = by_month or late_day_first, by_day or late_month_first
+    if by_month or by_day:
+        if by_month and by_day:
+            return None
+        return month_first if by_month else day_first
+    if not both or late_month_first:
+        return None
+    if all(month == day for month, day in both):
+        return month_first
+    months = {(month.year, month.month) for month, _ in both}
+    days = {month.day for month, _ in both}
+    if len(months) == 1 and len(days) >= DATE_ORDER_MIN_DAYS:
+        return month_first
+    return None
 
 
 def _looks_like_account(text: str) -> bool:
@@ -1694,7 +1811,7 @@ def _read_suggested(
     return spec, statements, False
 
 
-def suggest_mapping(table: Table) -> MappingSuggestion | None:
+def suggest_mapping(table: Table, *, today: date | None = None) -> MappingSuggestion | None:
     """A deterministic guess at the mapping of ``table`` and how confident it is.
 
     The header is looked for in the first :data:`HEADER_SEARCH_ROWS` rows
@@ -1722,8 +1839,14 @@ def suggest_mapping(table: Table) -> MappingSuggestion | None:
     best candidate is then read in full with :func:`from_table_grouped` to
     count the rows that read (and, with a running balance, which sign
     reconciles); the trailing rows after the last readable one are footers.
-    The doubts about the sign and the kind of table are described on
-    :class:`MappingSuggestion`. No model of any kind (ADR-0007).
+    A date column whose sample fits month first and day first alike is
+    read month first and is a doubt (``date_order_guessed``) unless the
+    table itself settles the order (:func:`_settled_date_format`: a cell
+    or a second date column only one order reads, ``today``, the day the
+    file was received, which no row is dated after, the same day either
+    way, or the days of one month). The doubts about the sign and the kind
+    of table are described on :class:`MappingSuggestion`. No model of any
+    kind (ADR-0007).
     """
     if len(table.rows) < 2:
         return None
@@ -1734,7 +1857,13 @@ def suggest_mapping(table: Table) -> MappingSuggestion | None:
             best = found
     if best is None:
         return None
-    spec, statements, balance_agrees = _read_suggested(table, best.spec)
+    chosen, date_order_guessed = best.spec, best.date_order_guessed
+    if date_order_guessed:
+        settled = _settled_date_format(table, chosen, today)
+        if settled is not None:
+            chosen = chosen.model_copy(update={"date_format": settled})
+            date_order_guessed = False
+    spec, statements, balance_agrees = _read_suggested(table, chosen)
     header = table.rows[spec.skip_rows]
     rows = [t.row for s in statements for t in s.transactions if t.row is not None]
     skipped = sorted(r for s in statements for r in s.skipped_rows)
@@ -1777,7 +1906,7 @@ def suggest_mapping(table: Table) -> MappingSuggestion | None:
         doubts.append("no_rows")
     if failed:
         doubts.append("rows_unreadable")
-    if best.date_order_guessed:
+    if date_order_guessed:
         doubts.append("date_order_guessed")
     if _indicator_doubtful(table, spec, rows):
         doubts.append("indicator_values_unknown")
@@ -1795,7 +1924,7 @@ def suggest_mapping(table: Table) -> MappingSuggestion | None:
         doubts.append("investment_columns")
     readable = len(rows) / (len(rows) + len(failed)) if rows else 0.0
     quality = sum(p.level / EXACT for p in required) / len(required)
-    score = round(quality * readable * (0.9 if best.date_order_guessed else 1.0), 3)
+    score = round(quality * readable * (0.9 if date_order_guessed else 1.0), 3)
     reasons = tuple(
         RoleReason(role, pick.column, MATCH_NAMES[pick.level], pick.fit)
         for role, pick in sorted(best.picks.items(), key=lambda item: item[1].column)
