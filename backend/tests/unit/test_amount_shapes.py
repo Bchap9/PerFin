@@ -121,6 +121,9 @@ def test_footnote_mark_after_the_figure(text: str, value: str) -> None:
         "5 .0",
         "12 34.00",
         "1,23.00",
+        "1,23,45.00",
+        ".",
+        ".5",
         "(5.00",
         # One mark, one space: no more of either.
         "642.18**",
@@ -138,6 +141,86 @@ def test_footnote_mark_after_the_figure(text: str, value: str) -> None:
 )
 def test_still_not_amounts(text: str) -> None:
     assert read_amount(text) is None
+
+
+@pytest.mark.parametrize(
+    ("text", "value"),
+    [
+        (".15", "0.15"),
+        ("-.30", "-0.30"),
+        ("$.45", "0.45"),
+        (".81 CR", "0.81"),
+        ("(.30)", "-0.30"),
+        (".30-", "-0.30"),
+        ("- $.07", "-0.07"),
+        (".15*", "0.15"),
+        # A figure with its unit reads the same with the flag.
+        ("0.15", "0.15"),
+        ("1,480.25", "1480.25"),
+    ],
+)
+def test_cents_without_a_zero(text: str, value: str) -> None:
+    amount = read_amount(text, bare_cents=True)
+    assert amount is not None
+    assert amount.value == Decimal(value)
+    # Only a reader that asks for the shape gets it.
+    if text not in ("0.15", "1,480.25"):
+        assert read_amount(text) is None
+
+
+def test_cents_without_a_zero_keep_their_marks() -> None:
+    credit = read_amount(".81 CR", bare_cents=True)
+    assert credit is not None
+    assert credit.credit is True
+    symbol = read_amount("$.45", bare_cents=True)
+    assert symbol is not None
+    assert symbol.symbol == "$"
+    minus = read_amount("-.30", bare_cents=True)
+    assert minus is not None
+    assert minus.negative_marked
+    assert not minus.sign_detached
+
+
+@pytest.mark.parametrize(
+    "text", [".", ".5", ".155", "..15", ". 15", ".15.", "x.15", "(.30", ",.15", "1,.15", "- -.15"]
+)
+def test_cents_without_a_zero_are_still_two_digits_after_a_point(text: str) -> None:
+    assert read_amount(text, bare_cents=True) is None
+
+
+def test_find_amounts_reads_no_cents_without_a_zero() -> None:
+    assert find_amounts("build .15 of 3") == []
+    assert find_amounts("version .15 and $ .45 and - $.30") == []
+    assert [a.value for a in find_amounts("rate .15 fee 2.00")] == [Decimal("2.00")]
+
+
+@pytest.mark.parametrize(
+    ("text", "value"),
+    [
+        ("1,14,964.36", "114964.36"),
+        ("12,34,567.00", "1234567.00"),
+        ("80,305.69", "80305.69"),
+        ("-$2,05,110.40", "-205110.40"),
+        ("3,10,00,000.00 CR", "31000000.00"),
+    ],
+)
+def test_lakh_grouping(text: str, value: str) -> None:
+    amount = read_amount(text)
+    assert amount is not None
+    assert amount.value == Decimal(value)
+
+
+def test_find_amounts_reads_lakh_grouping() -> None:
+    line = "Opening Balance 1,14,964.36 Closing Balance 80,305.69"
+    assert [a.value for a in find_amounts(line)] == [Decimal("114964.36"), Decimal("80305.69")]
+
+
+@pytest.mark.parametrize(
+    "text", ["1,23.00", "1,23,45.00", "123,45,678.00", "1,234,56.00", "1,2,345.00", "1,23,4567.00"]
+)
+def test_grouping_that_is_neither_kind(text: str) -> None:
+    assert read_amount(text) is None
+    assert read_amount(text, bare_cents=True) is None
 
 
 def test_find_amounts_joins_a_lone_symbol() -> None:
