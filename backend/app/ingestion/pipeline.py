@@ -85,7 +85,7 @@ from __future__ import annotations
 import uuid
 from collections.abc import Callable, Iterable, Sequence
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import date, datetime
 from typing import Any, Final, Protocol
 
 from sqlalchemy import func, select
@@ -120,7 +120,7 @@ from app.domain.loans.statement_import import import_loan_statement
 from app.domain.tax.ingest import import_tax_forms
 from app.ingestion.children import document_depth, receive_children
 from app.ingestion.classify.fingerprints import builtin_fingerprints
-from app.ingestion.classify.service import classify_document
+from app.ingestion.classify.service import FIELD_THRESHOLD, classify_document
 from app.ingestion.intake.sniff import SNIFF_BYTES, FileType, sniff
 from app.ingestion.match.accounts import importable_account_ids, match_account
 from app.ingestion.match.receipts import apply_receipt
@@ -470,6 +470,38 @@ def _parse_hints(document: Document) -> dict[str, str | None]:
     return hints
 
 
+def _period_hint(document: Document) -> tuple[date, date, float] | None:
+    """The period the classifier read from a printed label, with its confidence.
+
+    None for a period inferred from row or line dates (the parsers read
+    those themselves), for one below the classifier's field threshold, and
+    for anything that is not two ISO days in order.
+    """
+    facts = document.confidence
+    if not isinstance(facts, dict):
+        return None
+    period, fields = facts.get("period"), facts.get("fields")
+    if not isinstance(period, dict) or not isinstance(fields, dict):
+        return None
+    if period.get("inferred") is not False:
+        return None
+    confidence = fields.get("period")
+    if isinstance(confidence, bool) or not isinstance(confidence, (int, float)):
+        return None
+    if confidence < FIELD_THRESHOLD:
+        return None
+    start, end = period.get("start"), period.get("end")
+    if not isinstance(start, str) or not isinstance(end, str):
+        return None
+    try:
+        first, last = date.fromisoformat(start), date.fromisoformat(end)
+    except ValueError:
+        return None
+    if first > last:
+        return None
+    return first, last, float(confidence)
+
+
 def _unlink_classified_account(document: Document) -> None:
     """Undo the account the classifier matched (``fields.account``); an uploader's choice stays.
 
@@ -592,6 +624,8 @@ def _parse_document(
     With nothing learned and no answer the document is read as without a model.
     """
     hints = _parse_hints(document)
+    period = _period_hint(document)
+    received = document.created_at.date() if document.created_at is not None else None
     template = _learned_template(db, document)
     pages = result
 
@@ -605,6 +639,8 @@ def _parse_document(
             date_order=hints.get("date_order"),
             template=template,
             vocabulary=words,
+            period=period,
+            not_after=received,
         )
 
     result = parse_with(None)

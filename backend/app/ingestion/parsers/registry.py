@@ -33,6 +33,10 @@ one extraction (:func:`parse_extraction`):
    its anchors fill the period, the account's last four digits and the
    balances (:func:`_with_template`).
 
+**Hints on the view.** The period the classifier read from a printed label
+and the day the file arrived are put on the view every parser reads
+(``DocumentView.hints``), so ``DocumentParser.parse`` keeps its signature.
+
 The chosen parser's statements (and brokerage ``investments``) replace any
 an earlier parser run left in the result (``source_format`` ``pdf``/``image``);
 structured statements from the sandbox (OFX, QFX, QIF) are never touched. What happened
@@ -44,9 +48,11 @@ pages with no new upload or extraction (:func:`reparse`).
 
 from __future__ import annotations
 
+from dataclasses import replace
+from datetime import date
 from typing import Final
 
-from app.ingestion.parsers.base import DocumentParser, DocumentView, ParseOutcome
+from app.ingestion.parsers.base import DocumentParser, DocumentView, ParseOutcome, ViewHints
 from app.ingestion.parsers.brokerage import BROKERAGE_PARSERS
 from app.ingestion.parsers.confidence import DEFAULT_THRESHOLD
 from app.ingestion.parsers.institutions import INSTITUTION_PARSERS
@@ -203,15 +209,29 @@ def parse_extraction(
     date_order: str | None = None,
     template: LayoutTemplate | None = None,
     vocabulary: Vocabulary | None = None,
+    period: tuple[date, date, float] | None = None,
+    not_after: date | None = None,
 ) -> ExtractResult:
     """``result`` with the document parsers' statements and :class:`ParseInfo`.
+
+    ``period`` (first day, last day, confidence) is the statement period the
+    classifier read from a printed label and ``not_after`` the day the file
+    arrived; both reach every parser on the view
+    (:class:`~app.ingestion.parsers.base.ViewHints`).
 
     ``vocabulary``: the local model's suggested kinds for words a brokerage
     parser could not type on an earlier run (:mod:`app.ingestion.parsers.vocabulary`,
     ADR-0010); the words still untyped are in ``ParseInfo.unknown_actions``
     / ``unknown_headings``.
     """
-    view = DocumentView.from_result(result)
+    view = replace(
+        DocumentView.from_result(result),
+        hints=ViewHints(
+            period=period[:2] if period is not None else None,
+            period_confidence=period[2] if period is not None else 0.0,
+            not_after=not_after,
+        ),
+    )
     scores = _without_receipt({p.name: p.detect(view) for p in PARSERS}, kind)
     chosen = _hinted(scores, parser_name=parser_name, institution=institution, kind=kind)
     if chosen is None:

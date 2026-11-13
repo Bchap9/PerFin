@@ -19,13 +19,20 @@ the pages fit (0..1); :meth:`DocumentParser.parse` returns a
 :class:`DocumentView` is the parsers' read-only view of the pages: lines in
 reading order, each split into **cells** (runs of words separated by less
 than a column gap), with the page, box and the lowest OCR word confidence.
+It also carries what is known about the document beyond its pages: the day
+the PDF says it was made (``created``) and :class:`ViewHints`, the
+classifier's printed period and the day the file arrived. A parser may use
+them to settle what the pages leave open (a year no row prints); they are
+never a reason to read a line differently.
 """
 
 from __future__ import annotations
 
+import re
 from abc import ABC, abstractmethod
 from collections.abc import Sequence
 from dataclasses import dataclass, field
+from datetime import date
 from statistics import median
 from typing import ClassVar, Final, Literal
 
@@ -49,6 +56,49 @@ CELL_GAP_FACTOR: Final = 0.9
 MAX_LINES: Final = 200_000
 
 ParserKind = Literal["statement", "payslip", "receipt", "tax_form"]
+
+#: A PDF creation date: ``D:YYYYMMDDHHmmSS...`` (the ``D:`` is optional).
+_CREATED: Final = re.compile(r"(?:D:)?(\d{4})(\d{2})(\d{2})")
+#: No statement PerFin reads was made before this year (a zeroed clock is not a date).
+_CREATED_MIN_YEAR: Final = 1990
+
+
+def created_day(text: str | None) -> date | None:
+    """The day of a PDF creation date (``DocumentMeta.created``), else None.
+
+    ``D:YYYYMMDD...`` or ``YYYYMMDD...``, a real calendar day of 1990 or
+    later. The time and its zone are ignored: the day as the file's maker
+    wrote it.
+    """
+    if not text:
+        return None
+    match = _CREATED.match(text.strip())
+    if match is None:
+        return None
+    year, month, day = (int(part) for part in match.groups())
+    if year < _CREATED_MIN_YEAR:
+        return None
+    try:
+        return date(year, month, day)
+    except ValueError:
+        return None
+
+
+@dataclass(frozen=True)
+class ViewHints:
+    """What the worker knows about a document besides its pages.
+
+    Set by :func:`app.ingestion.parsers.registry.parse_extraction`; empty
+    when the parsers run without a classified document (a re-parse, a test).
+    """
+
+    #: The statement period the classifier read from a printed label
+    #: (first and last day), never one inferred from row dates.
+    period: tuple[date, date] | None = None
+    #: The classifier's confidence in ``period`` (0..1); 0.0 without one.
+    period_confidence: float = 0.0
+    #: The day the file arrived: nothing it prints happened after it.
+    not_after: date | None = None
 
 
 @dataclass(frozen=True)
@@ -186,6 +236,10 @@ class DocumentView:
     #: The document's own title and author (PDF metadata), normalised; an
     #: institution may name itself only there (its name on page 1 is a logo).
     metadata: tuple[str, ...] = ()
+    hints: ViewHints = ViewHints()
+    #: The day the PDF says it was made (:func:`created_day`); None when it
+    #: does not say, or for an image.
+    created: date | None = None
 
     @classmethod
     def from_result(cls, result: ExtractResult) -> DocumentView:
@@ -219,7 +273,18 @@ class DocumentView:
             truncated=result.truncated,
             page_count=len(result.pages),
             metadata=metadata,
+            created=created_day(meta.created) if meta is not None else None,
         )
+
+    @property
+    def ceiling(self) -> date | None:
+        """The latest day anything on the pages can be dated, when known.
+
+        The earlier of the day the PDF was made and the day the file
+        arrived (``hints.not_after``); None when neither is known.
+        """
+        known = [day for day in (self.created, self.hints.not_after) if day is not None]
+        return min(known) if known else None
 
     def head_text(self, pages: int = 1) -> str:
         """Normalised text of the first ``pages`` pages (for fingerprints)."""
