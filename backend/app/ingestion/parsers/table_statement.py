@@ -160,6 +160,28 @@ are read the same way:
    ledger convention) is checked further (:func:`totals_disagree`): the
    rows' money in must be its credits and their money out its charges, or
    the statement does not reconcile (warning ``summary_totals_mismatch``).
+
+   **Section totals.** An undated line of a table that starts with
+   ``total``, holds one amount and names no other span of time
+   (:data:`OTHER_SPAN_WORDS`, a four-digit year: ``Total fees charged in
+   2026``) is the total of the section whose rows it follows: the first one
+   per section, never one of pending rows. It is still no row. A section
+   whose rows do not add up to it (:func:`sections_off`) holds a statement
+   that would reconcile (warning ``section_total_mismatch``). On a
+   statement that does not reconcile and prints no running balance, only
+   the rows of those sections are in doubt, when what they lack is the
+   whole difference (:func:`rows_of_sections_in_doubt`). A total says how
+   much, never which way: one that agrees raises no status and vouches for
+   no row.
+
+   **Newest first.** Rows printed from the latest day back to the earliest
+   (:func:`app.ingestion.reconcile.newest_first`) are put back in the order
+   they happened before anything is built from them, so the running
+   balances agree and the transactions come out oldest first (warning
+   ``rows_newest_first``). Only where the order is one table's: the rows
+   print a running balance, or all stand in one section (three titled
+   tables of one row each, the latest first, are not a statement printed
+   backwards).
 6. **Several accounts.** When the pages name two or more accounts that each
    have a transaction table (:func:`app.ingestion.parsers.accounts.segment`:
    account headings, the account index), each account's lines are one
@@ -249,7 +271,14 @@ from app.ingestion.parsers.text import (
     read_date,
     symbol_currency,
 )
-from app.ingestion.reconcile import TOLERANCE, Row, doubtful_rows, reconcile
+from app.ingestion.reconcile import (
+    TOLERANCE,
+    Row,
+    doubtful_rows,
+    newest_first,
+    reconcile,
+    section_mismatches,
+)
 from app.ingestion.sandbox.protocol import (
     Balance,
     ExtractedTransaction,
@@ -604,6 +633,12 @@ _IN_WORDS: Final = frozenset({"deposits", "credits", "additions", "payments"})
 SECTION_WORDS: Final = _IN_WORDS | _OUT_WORDS
 #: Lines above a header searched for its section's title.
 TITLE_LINES_ABOVE: Final = 2
+#: Words (normalised) that make a ``Total ...`` line the total of another
+#: span of time than the statement's: never the total of the rows above it.
+OTHER_SPAN_WORDS: Final = ("year to date", "ytd", "this year", "last year", "previous year")
+#: A year printed on a line (``Total fees charged in 2026``), not a figure
+#: (``$2,026.00``, ``2026.00``).
+_YEAR_WORD: Final = re.compile(r"(?<![\d.,$])(?:19|20)\d{2}(?![\d.,]*\d)")
 
 
 class SectionTitle(NamedTuple):
@@ -700,6 +735,9 @@ class _Summary:
     carried: int = 0
     #: Date-led lines under a section title and no header (counted, not read).
     headerless: int = 0
+    #: The total printed after a section's rows (``Total deposits``), by the
+    #: section's number (:attr:`_Row.section`): the first one per section.
+    section_totals: dict[int, Amount] = field(default_factory=dict)
 
 
 @dataclass
@@ -1349,6 +1387,8 @@ class TableStatementParser(DocumentParser):
         waiting: list[tuple[ViewLine, bool]] = []
         # The page a section title was printed on with no header after it yet.
         titled: int | None = None
+        # The section of the last dated line of a table that is not pending.
+        dated_section: int | None = None
 
         def runs_on(found: SectionTitle, page: int) -> bool:
             """``found`` names the section being read once more: marked
@@ -1442,6 +1482,11 @@ class TableStatementParser(DocumentParser):
                     held.append(last)
                     waiting.append((line, True))
                     continue
+                if not pending and dated_section == section:
+                    total = self._total_line(line, norm)
+                    if total is not None:
+                        # The first total after the section's rows is its total.
+                        summary.section_totals.setdefault(section, total)
                 if figures:
                     loose.append((line.page, line.bbox))
                 last = self._not_a_row(line, norm, cells, summary, last, scan, columns)
@@ -1475,6 +1520,8 @@ class TableStatementParser(DocumentParser):
                     settle(dated=True)
                 anchor = None if pending else row
                 continue
+            if not pending:
+                dated_section = section
             if row.amount is None and row.debit is None and row.credit is None:
                 if pending:
                     continue
@@ -1530,6 +1577,21 @@ class TableStatementParser(DocumentParser):
             section=section,
             carried=carried,
         )
+
+    @staticmethod
+    def _total_line(line: ViewLine, norm: str) -> Amount | None:
+        """The figure of a total line (module doc, "Section totals"): the
+        line starts with ``total``, holds exactly one amount and names no
+        other span of time (:data:`OTHER_SPAN_WORDS`, a four-digit year)."""
+        if not norm.startswith("total"):
+            return None
+        padded = f" {norm} "
+        if any(f" {words} " in padded for words in OTHER_SPAN_WORDS):
+            return None
+        if _YEAR_WORD.search(line.text[:MAX_LINE]) is not None:
+            return None
+        amounts = find_amounts(line.text)
+        return amounts[0] if len(amounts) == 1 else None
 
     def _undated_figures(self, line: ViewLine, norm: str, cells: Mapping[Role, list[Cell]]) -> int:
         """How many figures an undated line of a table has in its money
@@ -2243,9 +2305,17 @@ class TableStatementParser(DocumentParser):
                 dates = [None if d is not None and d > anchor[0] else d for d in dates]
         if anchor is not None:
             period = anchored_period(*anchor, [d for d in dates if d is not None])
+        if newest_first(dates) and (
+            any(row.balance is not None for row in rows) or len({row.section for row in rows}) == 1
+        ):
+            # Printed from the latest day back: read in the order it happened.
+            rows, dates = rows[::-1], dates[::-1]
+            outcome.warnings.append("rows_newest_first")
         transactions: list[ExtractedTransaction] = []
         fields: list[dict[str, float]] = []
         ledger_rows: list[Row] = []
+        # The section of each ledger row: one list with ``ledger_rows``.
+        ledger_sections: list[int] = []
         for row, posted in zip(rows, dates, strict=True):
             amount = self._signed(row)
             if posted is None or amount is None:
@@ -2267,6 +2337,7 @@ class TableStatementParser(DocumentParser):
             memo = row_memo(row)
             fields.append(score)
             ledger_rows.append(Row(amount, self._ledger_balance(row.balance)))
+            ledger_sections.append(row.section)
             transactions.append(
                 ExtractedTransaction(
                     posted=posted,
@@ -2297,6 +2368,12 @@ class TableStatementParser(DocumentParser):
             # The summary's own credits and charges do not match the rows'.
             result = result.model_copy(update={"status": "mismatch"})
             outcome.warnings.append("summary_totals_mismatch")
+        off = sections_off(ledger_rows, ledger_sections, summary.section_totals)
+        if off:
+            # A section's rows are not its printed total: never a clean read.
+            outcome.warnings.append("section_total_mismatch")
+            if result.status == "ok":
+                result = result.model_copy(update={"status": "mismatch"})
         for index in result.running_mismatches:
             fields[index]["amount"] = min(fields[index]["amount"], conf.CONTRADICTED)
         if result.status == "ok" and any(r.balance is not None for r in ledger_rows):
@@ -2311,6 +2388,13 @@ class TableStatementParser(DocumentParser):
             doubted = list(range(len(fields)))
             if result.status == "mismatch":
                 doubted = doubtful_rows(opening, ledger_rows, result.difference)
+                if len(doubted) == len(ledger_rows):
+                    # Nothing says which rows: the sections that do not add
+                    # up do, when what they lack is the whole difference.
+                    narrowed = rows_of_sections_in_doubt(
+                        ledger_rows, ledger_sections, summary.section_totals, off, result.difference
+                    )
+                    doubted = narrowed or doubted
                 result = result.model_copy(update={"doubtful": doubted})
             for index in doubted:
                 fields[index]["reconciliation"] = cap
@@ -2438,6 +2522,75 @@ def totals_disagree(
     money_in = sum((r.amount for r in rows if r.amount > 0), Decimal(0))
     money_out = -sum((r.amount for r in rows if r.amount < 0), Decimal(0))
     return abs(money_in - credits) > TOLERANCE or abs(money_out - charges) > TOLERANCE
+
+
+def _section_sum(rows: Sequence[Row], sections: Sequence[int], section: int) -> Decimal:
+    return sum(
+        (row.amount for row, owner in zip(rows, sections, strict=True) if owner == section),
+        Decimal(0),
+    )
+
+
+def sections_off(
+    rows: Sequence[Row], sections: Sequence[int], totals: Mapping[int, Amount]
+) -> list[int]:
+    """The sections whose rows do not add up to the total printed after them.
+
+    :func:`app.ingestion.reconcile.section_mismatches` on the magnitudes of
+    the totals, less one case: a table of money in and money out whose first
+    total is the total of one side (``Total debits`` then ``Total credits``
+    under one table) agrees when that side adds up to it.
+    """
+    printed = {section: abs(total.value) for section, total in totals.items()}
+    out: list[int] = []
+    for section in section_mismatches(rows, sections, printed):
+        amounts = [
+            row.amount for row, owner in zip(rows, sections, strict=True) if owner == section
+        ]
+        money_in = sum((a for a in amounts if a > 0), Decimal(0))
+        money_out = -sum((a for a in amounts if a < 0), Decimal(0))
+        one_side = (
+            money_in
+            and money_out
+            and any(abs(side - printed[section]) <= TOLERANCE for side in (money_in, money_out))
+        )
+        if not one_side:
+            out.append(section)
+    return out
+
+
+def rows_of_sections_in_doubt(
+    rows: Sequence[Row],
+    sections: Sequence[int],
+    totals: Mapping[int, Amount],
+    off: Sequence[int],
+    difference: Decimal | None,
+) -> list[int]:
+    """Indices of the rows of the sections ``off`` when they alone are in
+    doubt on a statement that does not reconcile; ``[]`` when every row is.
+
+    Only with both balances known (``difference``) and no running balance
+    printed (a printed balance says more: :func:`doubtful_rows`), and only
+    when the sections explain the statement: it balances and a section does
+    not add up, or what the sections lack of their totals, each in the
+    direction of its rows, is the whole difference. A total that agrees
+    vouches for no row (rows all read with the wrong sign still add up to
+    it): a difference the sections do not explain leaves every row in doubt.
+    """
+    if not off or difference is None or any(row.balance is not None for row in rows):
+        return []
+    if abs(difference) > TOLERANCE:
+        lacking = Decimal(0)
+        for section in off:
+            read = _section_sum(rows, sections, section)
+            if not read:
+                # No rows, or rows that cancel: which way the rest went is unknown.
+                return []
+            gap = abs(totals[section].value) - abs(read)
+            lacking += gap if read > 0 else -gap
+        if abs(difference + lacking) > TOLERANCE:
+            return []
+    return [index for index, owner in enumerate(sections) if owner in off]
 
 
 #: Words on a card statement's first page (the generic card parser's cue),

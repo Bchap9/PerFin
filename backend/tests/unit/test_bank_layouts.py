@@ -28,6 +28,12 @@ the date above it; a line with a figure that cannot be read between two
 rows, a row above the first share and the date-led lines of a titled section
 without a header are counted. Summary lines under an ordinary table stay
 what they were: no rows, and nothing counted.
+
+And totals and order: the total a section prints is compared with the rows
+read under it (a section that does not add up holds the statement and names
+its rows; it never vouches for one), totals of the year are no section's
+total, and a statement printed newest first is read oldest first, so its
+running balances agree.
 """
 
 from __future__ import annotations
@@ -1755,3 +1761,309 @@ def test_a_row_of_the_share_above_is_never_the_title() -> None:
     rows.remove(_SECOND_TITLE)
     outcome = _parse(rows)
     assert _shares(outcome) == [("PRIMARY SHARE", "0000"), (None, None)]
+
+
+# -- section totals, and rows printed newest first ------------------------------
+
+
+def _doubtful(statement: Statement) -> list[int]:
+    assert statement.reconciliation is not None
+    return list(statement.reconciliation.doubtful or [])
+
+
+def test_section_totals_that_agree_change_nothing() -> None:
+    result = _read(synth.sectioned_unsigned_checking())
+    statement = _only(result)
+    assert _status(statement) == "ok"
+    assert "section_total_mismatch" not in _warnings(result)
+    assert "rows_newest_first" not in _warnings(result)
+    assert not any("reconciliation" in t.low_confidence for t in statement.transactions)
+    # The three totals were read, each for the section of its rows.
+    parser = TableStatementParser()
+    view = DocumentView.from_result(
+        extract_pdf(synth.sectioned_unsigned_checking(), OPTIONS, "pdf")
+    )
+    rows, summary = parser._collect(parser.prepare(view.lines))[:2]
+    assert {number: total.value for number, total in summary.section_totals.items()} == {
+        rows[0].section: Decimal("2159.50"),
+        rows[3].section: Decimal("1418.15"),
+        rows[8].section: Decimal("12.00"),
+    }
+
+
+def test_a_section_that_does_not_add_up_is_named() -> None:
+    result = _read(synth.section_total_off())
+    statement = _only(result)
+    assert _rows(statement) == synth.EXPECTED_ROWS["section_total_off"]
+    assert _status(statement) == "mismatch"
+    assert _warnings(result).count("section_total_mismatch") == 1
+    # Three deposits, the four withdrawals printed, the fee.
+    assert _doubtful(statement) == [3, 4, 5, 6]
+    in_doubt = ["reconciliation" in t.low_confidence for t in statement.transactions]
+    assert in_doubt == [False] * 3 + [True] * 4 + [False]
+    assert _skipped(result) == 0
+
+
+def test_year_to_date_totals_are_not_section_checks() -> None:
+    result = _read(synth.year_to_date_totals())
+    statement = _only(result)
+    assert _parser(statement) == "card_statement_generic"
+    assert _rows(statement) == synth.EXPECTED_ROWS["year_to_date_totals"]
+    assert [t.type for t in statement.transactions] == [None] * 4 + ["fee"]
+    assert _status(statement) == "ok"
+    assert "section_total_mismatch" not in _warnings(result)
+    assert _skipped(result) == 0
+
+
+def test_newest_first_statement_reconciles() -> None:
+    result = _read(synth.newest_first_checking())
+    statement = _only(result)
+    expected = synth.EXPECTED_ROWS["newest_first_checking"]
+    assert _status(statement) == "ok"
+    assert statement.reconciliation is not None
+    assert statement.reconciliation.running_mismatches == []
+    assert _warnings(result).count("rows_newest_first") == 1
+    assert statement.transactions[0].posted == min(row[0] for row in expected)
+    # Oldest first, the two rows of the first day in the order they happened.
+    assert _rows(statement) == expected
+    assert _balances(statement) == synth.EXPECTED_BALANCES["newest_first_checking"]
+    assert _skipped(result) == 0
+
+
+def test_oldest_first_statement_is_not_reversed() -> None:
+    stmt = synth_pdf_statements.generic_statement(days=28)
+    result = _read(synth_pdf_statements.generic_pdf(stmt))
+    statement = _only(result)
+    assert "rows_newest_first" not in _warnings(result)
+    posted = [t.posted for t in statement.transactions]
+    assert len(posted) >= 3
+    assert posted == sorted(posted)
+    assert _status(statement) == "ok"
+
+
+def _total(label: str, amount: str) -> list[tuple[str, float]]:
+    return [(label, 62.0), (amount, 500.0)]
+
+
+def _reconciliation(outcome: ParseOutcome) -> tuple[str, list[int]]:
+    result = _one(outcome).reconciliation
+    assert result is not None
+    return result.status, list(result.doubtful or [])
+
+
+_BALANCES = [[("Beginning Balance 1,000.00", 62.0)], [("Ending Balance 1,150.00", 62.0)]]
+_TWO_SECTIONS = [
+    [("Deposits", 62.0)],
+    HEADER,
+    _row(5, "Salary", "900.00"),
+    _row(6, "Refund", "50.00"),
+    _total("Total deposits", "950.00"),
+    [("Withdrawals", 62.0)],
+    HEADER,
+    _row(7, "Rent", "700.00"),
+    _row(8, "Fuel", "100.00"),
+]
+
+
+def test_a_total_that_disagrees_holds_a_statement_that_balances() -> None:
+    # The rows add up to the closing balance; the withdrawals do not add up to
+    # their total (a row read under the wrong title, or a figure misread).
+    outcome = _parse([*_BALANCES, *_TWO_SECTIONS, _total("Total withdrawals", "810.00")])
+    assert _amounts(outcome) == [Decimal("900.00"), Decimal("50.00"), -700, -100]
+    assert outcome.warnings.count("section_total_mismatch") == 1
+    assert _reconciliation(outcome) == ("mismatch", [2, 3])
+
+
+def test_totals_that_agree_vouch_for_no_row() -> None:
+    # Every total agrees and the balances do not: a total says how much, never
+    # which way, so every row stays in doubt.
+    lines = [
+        [("Beginning Balance 1,000.00", 62.0)],
+        [("Ending Balance 1,000.00", 62.0)],
+        *_TWO_SECTIONS,
+        _total("Total withdrawals", "800.00"),
+    ]
+    outcome = _parse(lines)
+    assert "section_total_mismatch" not in outcome.warnings
+    assert _reconciliation(outcome) == ("mismatch", [0, 1, 2, 3])
+
+
+def test_a_gap_that_is_not_the_whole_difference_leaves_every_row_in_doubt() -> None:
+    # The withdrawals are 40.00 short of their total; the statement is off by
+    # 300.00. Something else is wrong too: no section is cleared.
+    lines = [
+        [("Beginning Balance 1,000.00", 62.0)],
+        [("Ending Balance 850.00", 62.0)],
+        *_TWO_SECTIONS,
+        _total("Total withdrawals", "840.00"),
+    ]
+    outcome = _parse(lines)
+    assert outcome.warnings.count("section_total_mismatch") == 1
+    assert _reconciliation(outcome) == ("mismatch", [0, 1, 2, 3])
+
+
+def test_the_one_row_that_is_the_whole_difference_still_wins() -> None:
+    # A deposit of 100.00 too many under a total of 950.00: the row whose
+    # amount is the difference is in doubt alone, as without totals.
+    lines = [
+        *_BALANCES,
+        [("Deposits", 62.0)],
+        HEADER,
+        _row(5, "Salary", "900.00"),
+        _row(6, "Refund", "50.00"),
+        _row(6, "Stub", "100.00"),
+        _total("Total deposits", "950.00"),
+        [("Withdrawals", 62.0)],
+        HEADER,
+        _row(7, "Rent", "700.00"),
+        _row(8, "Fuel", "100.00"),
+        _total("Total withdrawals", "800.00"),
+    ]
+    outcome = _parse(lines)
+    assert outcome.warnings.count("section_total_mismatch") == 1
+    assert _reconciliation(outcome) == ("mismatch", [2])
+
+
+@pytest.mark.parametrize(
+    "label",
+    [
+        "Total fees year to date",
+        "Total fees year-to-date",
+        "Total fees YTD",
+        "Total fees this year",
+        "Total fees last year",
+        "Total fees previous year",
+        "Total fees charged in 2026",
+        "Total fees 2025",
+    ],
+)
+def test_a_total_of_another_span_of_time_is_no_section_total(label: str) -> None:
+    outcome = _parse(
+        [*_BALANCES, *_TWO_SECTIONS, _total(label, "36.00"), _total("Total withdrawals", "800.00")]
+    )
+    assert "section_total_mismatch" not in outcome.warnings
+    assert _reconciliation(outcome)[0] == "ok"
+
+
+@pytest.mark.parametrize(
+    "line",
+    [
+        # Two figures, a count and no figure: none is one total.
+        [("Total", 62.0), ("36.00", 430.0), ("810.00", 500.0)],
+        [("Total items 4", 62.0)],
+        [("Subtotal", 62.0), ("36.00", 500.0)],
+        [("Totals are shown in US dollars", 62.0)],
+    ],
+)
+def test_lines_that_are_no_total_line(line: list[tuple[str, float]]) -> None:
+    outcome = _parse([*_BALANCES, *_TWO_SECTIONS, line])
+    assert "section_total_mismatch" not in outcome.warnings
+    assert _reconciliation(outcome)[0] == "ok"
+    assert len(_one(outcome).transactions) == 4
+
+
+def test_only_the_first_total_of_a_section_counts() -> None:
+    outcome = _parse(
+        [
+            *_BALANCES,
+            *_TWO_SECTIONS,
+            _total("Total withdrawals", "800.00"),
+            _total("Total service charges", "36.00"),
+        ]
+    )
+    assert "section_total_mismatch" not in outcome.warnings
+    assert _reconciliation(outcome)[0] == "ok"
+
+
+def test_a_total_of_one_side_of_a_mixed_table_is_no_mismatch() -> None:
+    # One table of money in and out, then the total of each side: the first
+    # is the money out, not what the rows add up to.
+    lines = [
+        *_BALANCES,
+        HEADER,
+        _row(5, "Salary", "900.00"),
+        _row(6, "Refund", "50.00"),
+        _row(7, "Rent", "-700.00"),
+        _row(8, "Fuel", "-100.00"),
+        _total("Total debits", "800.00"),
+        _total("Total credits", "950.00"),
+    ]
+    outcome = _parse(lines)
+    assert "section_total_mismatch" not in outcome.warnings
+    assert _reconciliation(outcome)[0] == "ok"
+    # Neither side's sum, nor the net: the table does not add up to it.
+    outcome = _parse([*lines[:-2], _total("Total debits", "815.00")])
+    assert outcome.warnings.count("section_total_mismatch") == 1
+    assert _reconciliation(outcome) == ("mismatch", [0, 1, 2, 3])
+
+
+def test_a_total_under_pending_rows_is_ignored() -> None:
+    outcome = _parse(
+        [
+            *_BALANCES,
+            *_TWO_SECTIONS,
+            _total("Total withdrawals", "800.00"),
+            [("Pending transactions", 62.0)],
+            _row(9, "Hold", "25.00"),
+            _total("Total pending", "99.00"),
+        ]
+    )
+    assert outcome.pending_items == 1
+    assert "section_total_mismatch" not in outcome.warnings
+    assert _reconciliation(outcome)[0] == "ok"
+
+
+def _balance_row(day: int, payee: str, amount: str, balance: str) -> list[tuple[str, float]]:
+    return [(f"01/{day:02d}/2026", 62.0), (payee, 150.0), (amount, 430.0), (balance, 520.0)]
+
+
+_BALANCE_HEADER = [("Date", 62.0), ("Description", 150.0), ("Amount", 430.0), ("Balance", 520.0)]
+
+
+def test_newest_first_rows_without_summary_balances_give_the_right_ones() -> None:
+    outcome = _parse(
+        [
+            _BALANCE_HEADER,
+            _balance_row(9, "Fuel", "-100.00", "1,150.00"),
+            _balance_row(7, "Rent", "-700.00", "1,250.00"),
+            _balance_row(5, "Salary", "900.00", "1,950.00"),
+        ]
+    )
+    statement = _one(outcome)
+    assert _amounts(outcome) == [Decimal("900.00"), Decimal("-700.00"), Decimal("-100.00")]
+    assert _balances(statement) == (Decimal("1050.00"), Decimal("1150.00"))
+    assert _reconciliation(outcome)[0] == "ok"
+    assert outcome.warnings.count("rows_newest_first") == 1
+
+
+def test_sections_in_descending_order_are_not_a_newest_first_statement() -> None:
+    # One row per table, the tables from the latest day to the earliest: the
+    # order of the sections, not of a statement printed backwards.
+    outcome = _parse(
+        [
+            *_BALANCES,
+            [("Fees", 62.0)],
+            HEADER,
+            _row(28, "Service charge", "10.00"),
+            [("Withdrawals", 62.0)],
+            HEADER,
+            _row(15, "Rent", "740.00"),
+            [("Deposits", 62.0)],
+            HEADER,
+            _row(5, "Salary", "900.00"),
+        ]
+    )
+    assert "rows_newest_first" not in outcome.warnings
+    assert _amounts(outcome) == [Decimal("-10.00"), Decimal("-740.00"), Decimal("900.00")]
+    assert _reconciliation(outcome)[0] == "ok"
+
+
+def test_two_rows_or_one_day_show_no_order() -> None:
+    outcome = _parse(
+        [
+            _BALANCE_HEADER,
+            _balance_row(9, "Fuel", "-100.00", "1,150.00"),
+            _balance_row(7, "Rent", "-700.00", "1,250.00"),
+        ]
+    )
+    assert "rows_newest_first" not in outcome.warnings

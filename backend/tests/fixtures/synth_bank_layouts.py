@@ -726,7 +726,8 @@ def _total_line(c: canvas.Canvas, y: float, label: str, rows: Sequence[ExpectedR
     return y - 26
 
 
-def _sectioned_unsigned(*, continued_title: bool) -> bytes:
+def _sectioned_unsigned(*, continued_title: bool, omit: ExpectedRow | None = None) -> bytes:
+    """``omit`` is a withdrawal left off the page; the totals and balances count it."""
     buf = io.BytesIO()
     c = canvas.Canvas(buf, pagesize=letter)
     closing = _running(_SECTION_OPENING, _SECTION_ROWS)[-1]
@@ -743,7 +744,8 @@ def _sectioned_unsigned(*, continued_title: bool) -> bytes:
     )
     y = _unsigned_table(c, y - 15, "DEPOSITS AND ADDITIONS", _SECTION_DEPOSITS)
     y = _total_line(c, y, "Total Deposits and Additions", _SECTION_DEPOSITS)
-    _unsigned_table(c, y, "ELECTRONIC WITHDRAWALS", _SECTION_WITHDRAWALS[:_SECTION_SPLIT])
+    first = [row for row in _SECTION_WITHDRAWALS[:_SECTION_SPLIT] if row != omit]
+    _unsigned_table(c, y, "ELECTRONIC WITHDRAWALS", first)
     c.showPage()
     _line(c, 750, [(40, bank)], size=14, bold=True)
     _line(c, 750, [(380, "Page 2 of 2")])
@@ -752,7 +754,7 @@ def _sectioned_unsigned(*, continued_title: bool) -> bytes:
         c,
         716,
         "ELECTRONIC WITHDRAWALS (continued)" if continued_title else None,
-        _SECTION_WITHDRAWALS[_SECTION_SPLIT:],
+        [row for row in _SECTION_WITHDRAWALS[_SECTION_SPLIT:] if row != omit],
     )
     y = _total_line(c, y, "Total Electronic Withdrawals", _SECTION_WITHDRAWALS)
     y = _unsigned_table(c, y, "FEES", _SECTION_FEES)
@@ -769,6 +771,17 @@ def sectioned_unsigned_checking() -> bytes:
 def sectioned_repeat_without_title() -> bytes:
     """The same; page 2 starts with the header alone."""
     return _sectioned_unsigned(continued_title=False)
+
+
+#: The withdrawal :func:`section_total_off` does not print.
+SECTION_ROW_OFF: Final = _SECTION_WITHDRAWALS[1]
+
+
+def section_total_off() -> bytes:
+    """:func:`sectioned_unsigned_checking` without :data:`SECTION_ROW_OFF`:
+    the withdrawals printed no longer add up to their total, nor the
+    statement to its closing balance."""
+    return _sectioned_unsigned(continued_title=True, omit=SECTION_ROW_OFF)
 
 
 #: As the ledger keeps them: a purchase is money out, the payment and the refund money in.
@@ -959,6 +972,125 @@ def titled_sections_without_headers() -> bytes:
     return buf.getvalue()
 
 
+# -- totals of sections, totals of the year, and rows printed newest first ------
+
+_NEWEST_OPENING: Final = _d("3,206.71")
+#: Oldest first, as a correct reading returns them; the page prints them reversed.
+_NEWEST_ROWS: Final[tuple[ExpectedRow, ...]] = (
+    (date(2026, 8, 3), _d("-1,120.00"), "Rent Fallowmead Housing"),
+    (date(2026, 8, 3), _d("-36.48"), "Card Purchase Brindlewood Grocer"),
+    (date(2026, 8, 4), _d("1,980.00"), "Payroll Osierbank Ceramics"),
+    (date(2026, 8, 5), _d("-22.10"), "Card Purchase Tallowgate Cafe"),
+    (date(2026, 8, 6), _d("-84.63"), "Bill Pay Harrowdene Water"),
+    (date(2026, 8, 7), _d("-50.00"), "ATM Cash Wickerby Square"),
+    (date(2026, 8, 10), _d("-17.95"), "Card Purchase Plumtree News"),
+    (date(2026, 8, 11), _d("140.00"), "Mobile Deposit"),
+    (date(2026, 8, 12), _d("-63.27"), "Card Purchase Elmscott Pharmacy"),
+    (date(2026, 8, 13), _d("-129.40"), "Bill Pay Ravensmoor Electric"),
+    (date(2026, 8, 14), _d("-41.86"), "Card Purchase Brindlewood Grocer"),
+    (date(2026, 8, 17), _d("-250.00"), "Transfer To Savings 2290"),
+    (date(2026, 8, 18), _d("1,980.00"), "Payroll Osierbank Ceramics"),
+    (date(2026, 8, 19), _d("-58.12"), "Card Purchase Stonechat Fuel"),
+    (date(2026, 8, 20), _d("-33.00"), "Card Purchase Kiln Lane Bistro"),
+    (date(2026, 8, 21), _d("-95.74"), "Bill Pay Marrowfield Mobile"),
+    (date(2026, 8, 24), _d("27.30"), "Refund Elmscott Pharmacy"),
+    (date(2026, 8, 25), _d("-12.99"), "Card Purchase Plumtree News"),
+    (date(2026, 8, 27), _d("-76.05"), "Card Purchase Brindlewood Grocer"),
+    (date(2026, 8, 31), _d("-9.00"), "Monthly Service Charge"),
+)
+
+
+def newest_first_checking() -> bytes:
+    """Twenty rows with their running balance, the last day at the top."""
+    buf = io.BytesIO()
+    c = canvas.Canvas(buf, pagesize=letter)
+    balances = _running(_NEWEST_OPENING, _NEWEST_ROWS)
+    _head(
+        c,
+        "Skelwith Dale Bank",
+        "8846",
+        "08/01/2026 - 08/31/2026",
+        _NEWEST_OPENING,
+        balances[-1],
+    )
+    _line(
+        c,
+        650,
+        [(40, "Date"), (110, "Description"), (-470, "Amount"), (-550, "Balance")],
+        size=8,
+    )
+    printed = list(zip(_NEWEST_ROWS, balances, strict=True))[::-1]
+    _rows(
+        c,
+        636,
+        [
+            [
+                (40, posted.strftime("%m/%d/%Y")),
+                (110, payee),
+                (-470, f"{amount:,.2f}"),
+                (-550, _money(balance)),
+            ]
+            for (posted, amount, payee), balance in printed
+        ],
+    )
+    c.save()
+    return buf.getvalue()
+
+
+#: As the ledger keeps them: purchases and the fee are money out, the payment money in.
+_YTD_PAYMENTS: Final[tuple[ExpectedRow, ...]] = (
+    (date(2026, 10, 6), _d("412.60"), "PAYMENT RECEIVED - THANK YOU"),
+)
+_YTD_PURCHASES: Final[tuple[ExpectedRow, ...]] = (
+    (date(2026, 10, 4), _d("-73.15"), "ASHGROVE GARDEN CENTRE"),
+    (date(2026, 10, 12), _d("-28.40"), "FERNDOWN BOOKSHOP"),
+    (date(2026, 10, 21), _d("-116.92"), "TARNSIDE OUTDOOR SUPPLY"),
+)
+_YTD_FEES: Final[tuple[ExpectedRow, ...]] = ((date(2026, 10, 9), _d("-29.00"), "LATE PAYMENT FEE"),)
+_YTD_ROWS: Final = (*_YTD_PAYMENTS, *_YTD_PURCHASES, *_YTD_FEES)
+_YTD_PREVIOUS: Final = _d("441.60")
+#: The year's figures under the fee table: neither is the period's.
+YTD_TOTAL_LINES: Final = (
+    ("Total fees charged in 2026", "$87.00"),
+    ("Total interest charged in 2026", "$18.44"),
+)
+
+
+def year_to_date_totals() -> bytes:
+    """A card statement: the fee table is followed by the totals of the year."""
+    buf = io.BytesIO()
+    c = canvas.Canvas(buf, pagesize=letter)
+    charges = -sum((a for _, a, _ in _YTD_ROWS if a < 0), Decimal(0))
+    credits = sum((a for _, a, _ in _YTD_ROWS if a > 0), Decimal(0))
+    owed = _YTD_PREVIOUS - credits + charges
+    _line(c, 750, [(40, "Garthmoor Platinum Visa")], size=14, bold=True)
+    _line(c, 750, [(380, "Account Number: ******2754")])
+    _line(c, 736, [(380, "Billing Period: 10/01/2026 - 10/31/2026")])
+    _line(c, 60, [(40, _FOOTER)], size=7)
+    y = _rows(
+        c,
+        700,
+        [
+            [(40, "Previous Balance"), (-300, f"${_money(_YTD_PREVIOUS)}")],
+            [(40, "Payments and Credits"), (-300, f"-${_money(credits)}")],
+            [(40, "New Charges"), (-300, f"+${_money(charges)}")],
+            [(40, "New Balance"), (-300, f"${_money(owed)}")],
+            [(40, "Minimum Payment Due"), (-300, "$25.00")],
+            [(40, "Credit Limit"), (-300, "$5,500.00")],
+        ],
+    )
+    y -= 15
+    for title, rows in (
+        ("Payments and Credits", _YTD_PAYMENTS),
+        ("Purchases", _YTD_PURCHASES),
+        ("Fees Charged", _YTD_FEES),
+    ):
+        y = _unsigned_table(c, y, title, rows) - 13
+    _rows(c, y + 13, [[(40, label), (-560, figure)] for label, figure in YTD_TOTAL_LINES])
+    c.save()
+    return buf.getvalue()
+
+
 EXPECTED_ROWS: Final[dict[str, list[ExpectedRow]]] = {
     "left_heading_right_figures": list(_LEFT_ROWS),
     "tight_date_checking": list(_TIGHT_ROWS),
@@ -977,6 +1109,9 @@ EXPECTED_ROWS: Final[dict[str, list[ExpectedRow]]] = {
     "date_once_per_day": list(_DAILY_ROWS),
     "summary_lines_under_table": list(_UNDER_ROWS),
     "titled_sections_without_headers": list(_HEADERLESS_WITHDRAWALS),
+    "section_total_off": [row for row in _SECTION_ROWS if row != SECTION_ROW_OFF],
+    "newest_first_checking": list(_NEWEST_ROWS),
+    "year_to_date_totals": list(_YTD_ROWS),
 }
 
 #: ``(opening, closing)`` of the builders that are about balances.
@@ -991,6 +1126,7 @@ EXPECTED_BALANCES: Final[dict[str, tuple[Decimal, Decimal]]] = {
         _SECTION_OPENING,
         _running(_SECTION_OPENING, _SECTION_ROWS)[-1],
     ),
+    "newest_first_checking": (_NEWEST_OPENING, _running(_NEWEST_OPENING, _NEWEST_ROWS)[-1]),
 }
 
 #: Per share of :func:`shares_opening_under_deposit`: ``(last4, opening, closing, rows)``.
