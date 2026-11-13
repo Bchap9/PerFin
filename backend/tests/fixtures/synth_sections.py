@@ -53,6 +53,26 @@ Accounts told apart by their summaries only:
 * :func:`summary_printed_twice`: one account whose summary is printed again
   at the head of page 2, with the same figures, over the rest of its rows.
 
+What the first page's summary names:
+
+* :func:`card_named_by_its_summary`: a card that prints no card word at all
+  (no ``credit card``, ``card ending``, ``credit limit``, ``minimum
+  payment``). Its summary is the card's equation (``Previous Balance``,
+  ``Payments and Credits``, ``Purchases``, ``New Balance``) over ``Date |
+  Description | Amount``: five purchases printed without a sign and one
+  payment with a minus. The figures add up read as a bank statement too,
+  with every sign the wrong way round.
+* :func:`loan_bill_with_activity`: a lender's bill, no statement of a
+  deposit account: ``Total Amount Due``, ``Payment Due Date`` and ``Current
+  Principal Balance``, a table ``Date | Activity | Amount`` of two lines
+  and a payment coupon. It prints no opening or closing balance.
+* :func:`member_statement_with_a_loan_share`: the three shares of
+  :func:`tests.fixtures.synth_bank_layouts.credit_union_member_statement`
+  drawn again, with a fourth sub-account ``AUTO LOAN ID 0060`` under them
+  that prints a ``Principal Balance`` and an ``Amount Due`` and has no
+  table. The only deposit labels on the page are the dated ``Beginning
+  Balance`` and ``Ending Balance`` lines inside the shares' tables.
+
 :data:`EXPECTED_ROWS` gives, per builder, the rows a correct reading returns
 (``(posted, amount, payee)``, money out negative).
 """
@@ -66,9 +86,14 @@ from decimal import Decimal
 from typing import Final
 
 from reportlab.lib.pagesizes import letter
+from reportlab.pdfbase.pdfmetrics import stringWidth
 from reportlab.pdfgen import canvas
 
 from tests.fixtures.synth_bank_layouts import (
+    _FOOTER,
+    _MEMBER_SHARES,
+    _MEMBER_TEXT_X,
+    MEMBER_PERIOD,
     ExpectedRow,
     _d,
     _head,
@@ -630,6 +655,162 @@ def summary_printed_twice() -> bytes:
     return buf.getvalue()
 
 
+# -- what the first page's summary names ------------------------------------------
+
+_EQUATION_PREVIOUS: Final = _d("412.60")
+_EQUATION_PAYMENT: Final[ExpectedRow] = (
+    date(2026, 9, 12),
+    _d("300.00"),
+    "PAYMENT RECEIVED - THANK YOU",
+)
+_EQUATION_PURCHASES: Final[tuple[ExpectedRow, ...]] = (
+    (date(2026, 9, 3), _d("-46.25"), "FELLFOOT IRONMONGER"),
+    (date(2026, 9, 8), _d("-18.90"), "DRYBECK DAIRY"),
+    (date(2026, 9, 15), _d("-132.40"), "CRAGSIDE CYCLES"),
+    (date(2026, 9, 21), _d("-7.49"), "MOSSDALE PARKING"),
+    (date(2026, 9, 27), _d("-61.36"), "HAWTHWAITE GROCER"),
+)
+#: The rows in the order printed: by date, the payment among the purchases.
+_EQUATION_ROWS: Final = tuple(sorted((*_EQUATION_PURCHASES, _EQUATION_PAYMENT)))
+#: What the card owes at the end of :func:`card_named_by_its_summary`.
+EQUATION_NEW_BALANCE: Final = (
+    _EQUATION_PREVIOUS - _EQUATION_PAYMENT[1] + _total(_EQUATION_PURCHASES)
+)
+
+
+def card_named_by_its_summary() -> bytes:
+    """A card known by its summary alone: purchases unsigned, the payment minus."""
+    buf = io.BytesIO()
+    c = canvas.Canvas(buf, pagesize=letter)
+    purchases = _total(_EQUATION_PURCHASES)
+    _top(c, "Hobbleshaw Finance", "3085", "09/01/2026 - 09/30/2026")
+    _rows(
+        c,
+        700,
+        [
+            [(40, "Previous Balance"), (-300, f"${_money(_EQUATION_PREVIOUS)}")],
+            [(40, "Payments and Credits"), (-300, f"-${_money(_EQUATION_PAYMENT[1])}")],
+            [(40, "Purchases"), (-300, f"${_money(purchases)}")],
+            [(40, "New Balance"), (-300, f"${_money(EQUATION_NEW_BALANCE)}")],
+        ],
+    )
+    _line(c, 620, [(40, "Date"), (110, "Description"), (-500, "Amount")], size=8)
+    _rows(
+        c,
+        606,
+        [
+            [
+                (40, posted.strftime("%m/%d/%Y")),
+                (110, payee),
+                # A purchase is printed bare, money that came off with a minus.
+                (-500, _money(amount) if amount < 0 else f"-{_money(amount)}"),
+            ]
+            for posted, amount, payee in _EQUATION_ROWS
+        ],
+    )
+    c.save()
+    return buf.getvalue()
+
+
+def loan_bill_with_activity() -> bytes:
+    """A lender's bill with a short activity table and a payment coupon."""
+    buf = io.BytesIO()
+    c = canvas.Canvas(buf, pagesize=letter)
+    _line(c, 750, [(40, "Skelmergh Motor Finance")], size=14, bold=True)
+    _line(c, 750, [(380, "Loan Number: ******7714")])
+    _line(c, 736, [(380, "Statement Date: 10/20/2026")])
+    _line(c, 60, [(40, _FOOTER)], size=7)
+    _rows(
+        c,
+        700,
+        [
+            [(40, "Total Amount Due"), (-300, "$318.42")],
+            [(40, "Payment Due Date"), (-300, "11/15/2026")],
+            [(40, "Current Principal Balance"), (-300, "$9,640.18")],
+        ],
+    )
+    _line(c, 630, [(40, "Date"), (110, "Activity"), (-500, "Amount")], size=8)
+    _rows(
+        c,
+        616,
+        [
+            [(40, "10/05/2026"), (110, "Payment Received - Thank You"), (-500, "318.42")],
+            [(40, "10/12/2026"), (110, "Insurance Adjustment"), (-500, "12.50")],
+        ],
+    )
+    _line(c, 300, [(40, "Detach and return this coupon with your payment")], size=8)
+    _rows(
+        c,
+        282,
+        [
+            [(40, "Loan Number"), (-300, "******7714")],
+            [(40, "Total Amount Due"), (-300, "$318.42")],
+            [(40, "Amount Enclosed"), (-300, "$ __________")],
+        ],
+    )
+    c.save()
+    return buf.getvalue()
+
+
+def member_statement_with_a_loan_share() -> bytes:
+    """Three shares, each a table with dated balance lines, and a loan's two figures."""
+    buf = io.BytesIO()
+    c = canvas.Canvas(buf, pagesize=letter)
+    _line(c, 750, [(40, "Rushmere Lakes Credit Union")], size=14, bold=True)
+    _line(c, 750, [(380, "Statement For: 04/01/2026 - 04/30/2026")])
+    _line(c, 738, [(380, "Member Number: ******6172")])
+    _line(c, 60, [(40, _FOOTER)], size=7)
+    start, end = (day.strftime("%m/%d") for day in MEMBER_PERIOD)
+    y = 700.0
+    for title, _, _, opening, rows in _MEMBER_SHARES:
+        balances = _running(opening, rows)
+        _line(c, y, [(40, title[0])], size=11, bold=True)
+        if len(title) > 1:
+            _line(c, y, [(330, title[1]), (-550, title[2])])
+        _line(
+            c,
+            y - 16,
+            [
+                # 4 points apart: the two headings are one cell.
+                (40, "Date"),
+                (40 + stringWidth("Date", "Helvetica", 8) + 4, "Transaction Description"),
+                (-400, "Withdrawal"),
+                (-470, "Deposit"),
+                (-550, "Balance"),
+            ],
+            size=8,
+        )
+        y = _rows(
+            c,
+            y - 29,
+            [
+                [(40, start), (_MEMBER_TEXT_X, "Beginning Balance"), (-550, _money(opening))],
+                *(
+                    [
+                        (40, posted.strftime("%m/%d")),
+                        (_MEMBER_TEXT_X, payee),
+                        (-400 if amount < 0 else -470, _money(amount)),
+                        (-550, _money(balance)),
+                    ]
+                    for (posted, amount, payee), balance in zip(rows, balances, strict=True)
+                ),
+                [(40, end), (_MEMBER_TEXT_X, "Ending Balance"), (-550, _money(balances[-1]))],
+            ],
+        )
+        y -= 17
+    _line(c, y, [(40, "AUTO LOAN ID 0060")], size=11, bold=True)
+    _rows(
+        c,
+        y - 16,
+        [
+            [(40, "Principal Balance"), (-300, "8,412.60")],
+            [(40, "Amount Due"), (-300, "265.00")],
+        ],
+    )
+    c.save()
+    return buf.getvalue()
+
+
 EXPECTED_ROWS: Final[dict[str, list[ExpectedRow]]] = {
     "headerless_sections_checking": [*_CHECKING_DEPOSITS, *_CHECKING_WITHDRAWALS],
     "headerless_total_off": list(_CHECKING_WITHDRAWALS),
@@ -644,4 +825,5 @@ EXPECTED_ROWS: Final[dict[str, list[ExpectedRow]]] = {
         *_TITLED_CHECK_ROWS,
     ],
     "summary_printed_twice": list(_TWICE_ROWS),
+    "card_named_by_its_summary": list(_EQUATION_ROWS),
 }

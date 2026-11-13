@@ -16,6 +16,7 @@ a title that says money in.
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from datetime import date
 from decimal import Decimal
 
@@ -23,7 +24,7 @@ import pytest
 
 from app.ingestion.extract.pdf import extract_pdf
 from app.ingestion.parsers.base import Cell, DocumentView, ParseOutcome, ViewLine
-from app.ingestion.parsers.registry import parse_extraction
+from app.ingestion.parsers.registry import PARSERS, parse_extraction
 from app.ingestion.parsers.statement_lines import MAX_LED_WORDS
 from app.ingestion.parsers.table_statement import (
     HEADERLESS_GAP,
@@ -31,6 +32,7 @@ from app.ingestion.parsers.table_statement import (
     TableStatementParser,
 )
 from app.ingestion.sandbox.protocol import ExtractOptions, ExtractResult, Statement
+from tests.fixtures import synth_bank_layouts
 from tests.fixtures import synth_sections as synth
 
 OPTIONS = ExtractOptions(previews=False, ocr=False)
@@ -904,3 +906,128 @@ def test_a_sentence_over_a_summary_names_no_account() -> None:
     assert _statuses(outcome) == ["ok", "ok"]
     assert [s.account.name for s in outcome.statements] == ["CHECKING", None]
     assert [s.account.account_type for s in outcome.statements] == ["checking", None]
+
+
+# -- what the first page's summary names: a card, a loan bill ---------------------
+
+
+def _parser(result: ExtractResult) -> str | None:
+    assert result.parse is not None
+    return result.parse.parser.name if result.parse.parser is not None else None
+
+
+def _scores(result: ExtractResult) -> dict[str, float]:
+    assert result.parse is not None
+    return {score.name: score.score for score in result.parse.scores}
+
+
+def test_card_without_a_card_word_is_read_as_a_card() -> None:
+    result = _read(synth.card_named_by_its_summary())
+    assert _parser(result) == "card_statement_generic"
+    statement = _only(result)
+    assert statement.account.account_type == "creditcard"
+    assert _rows(statement) == synth.EXPECTED_ROWS["card_named_by_its_summary"]
+    amounts = [t.amount for t in statement.transactions]
+    # Five purchases are money out; the payment, printed with a minus, is money in.
+    assert sum(1 for amount in amounts if amount < 0) == 5
+    assert [amount for amount in amounts if amount > 0] == [Decimal("300.00")]
+    assert _status(statement) == "ok"
+    assert statement.ledger_balance is not None
+    assert abs(statement.ledger_balance.amount) == synth.EQUATION_NEW_BALANCE
+    assert _skipped(result) == 0
+
+
+@pytest.mark.parametrize(
+    "builder",
+    [
+        synth_bank_layouts.sectioned_unsigned_checking,
+        synth_bank_layouts.checking_with_card_note,
+        synth.headerless_sections_checking,
+    ],
+)
+def test_checking_summary_is_no_card(builder: Callable[[], bytes]) -> None:
+    result = _read(builder())
+    assert _parser(result) == "statement_generic"
+    assert _scores(result)["card_statement_generic"] == 0.0
+    assert _only(result).account.account_type != "creditcard"
+
+
+def test_loan_bill_is_declined_by_the_statement_parsers() -> None:
+    result = _read(synth.loan_bill_with_activity())
+    scores = _scores(result)
+    assert scores["statement_generic"] == 0.0
+    assert scores["card_statement_generic"] == 0.0
+    assert result.statements == []
+    assert _parser(result) not in {"statement_generic", "card_statement_generic"}
+
+
+def test_member_statement_with_a_loan_share_is_still_read() -> None:
+    result = _read(synth.member_statement_with_a_loan_share())
+    assert _parser(result) == "statement_generic"
+    assert [(s.account.name, s.account.last4) for s in result.statements] == [
+        ("PRIMARY SHARE", "0000"),
+        ("SHARE DRAFT", "0040"),
+        ("HOLIDAY CLUB", "0050"),
+    ]
+    assert [len(s.transactions) for s in result.statements] == [2, 6, 1]
+    for statement, (_, _, _, closing, rows) in zip(
+        result.statements, synth_bank_layouts.EXPECTED_MEMBER, strict=True
+    ):
+        assert _rows(statement) == rows
+        assert _status(statement) == "ok"
+        assert statement.ledger_balance is not None
+        assert statement.ledger_balance.amount == closing
+    assert _skipped(result) == 0
+
+
+LOAN_SHARE = [[("Principal Balance 8,412.60", 62.0)], [("Amount Due 265.00", 62.0)]]
+
+
+def _generic_scores(view: DocumentView) -> tuple[float, float]:
+    return TableStatementParser().detect(view), CardStatementParser().detect(view)
+
+
+def test_a_loan_bill_s_summary_stops_both_generic_parsers() -> None:
+    view = _pages([[*LOAN_SHARE, HEADER, ROW]])
+    assert _generic_scores(view) == (0.0, 0.0)
+    # The same table without the bill's labels is a statement's.
+    assert TableStatementParser().detect(_pages([[HEADER, ROW]])) > 0
+    # Either label alone names no bill.
+    for line in LOAN_SHARE:
+        assert TableStatementParser().detect(_pages([[line, HEADER, ROW]])) > 0
+    # A parser written for one institution keeps its own fingerprint's word.
+    named = next(p for p in PARSERS if isinstance(p, TableStatementParser) and p.fingerprints)
+    lines = [[(phrase, 62.0)] for phrase in named.fingerprints]
+    assert named.detect(_pages([[*lines, *LOAN_SHARE, HEADER, ROW]])) == 1.0
+
+
+@pytest.mark.parametrize(
+    "line",
+    [
+        "Beginning Balance 1,250.00",
+        "Share Savings Ending Balance 1,450.52",
+        "Total Deposits 200.52",
+        "2 Deposits 200.52",
+    ],
+)
+def test_a_deposit_summary_beside_a_loan_is_no_loan_bill(line: str) -> None:
+    view = _pages([[[(line, 62.0)], *LOAN_SHARE, HEADER, ROW]])
+    assert TableStatementParser().detect(view) > 0
+
+
+def test_a_dated_balance_line_of_a_table_beside_a_loan_is_no_loan_bill() -> None:
+    table = [
+        HEADER,
+        [("01/01/2026", 62.0), ("Beginning Balance", 150.0), ("100.00", 500.0)],
+        ROW,
+        [("Jan 31", 62.0), ("Ending Balance", 150.0), ("95.50", 500.0)],
+    ]
+    assert TableStatementParser().detect(_pages([[*LOAN_SHARE, *table]])) > 0
+    # The label has to lead the line's words: a payee that holds it does not.
+    payee = [("01/09/2026", 62.0), ("Refund of ending balance fee", 150.0), ("2.00", 500.0)]
+    assert TableStatementParser().detect(_pages([[*LOAN_SHARE, HEADER, ROW, payee]])) == 0.0
+
+
+def test_a_loan_s_labels_after_page_one_stop_nothing() -> None:
+    view = _pages([[HEADER, ROW], LOAN_SHARE])
+    assert TableStatementParser().detect(view) > 0

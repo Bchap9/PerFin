@@ -482,6 +482,7 @@ from app.ingestion.parsers.statement_header import (
     read_header,
     stack_headers,
 )
+from app.ingestion.parsers.statement_kind import card_summary, loan_bill
 from app.ingestion.parsers.statement_lines import (
     MAX_LED_WORDS,
     TOTAL_WORDS,
@@ -1284,14 +1285,46 @@ class TableStatementParser(DocumentParser):
         hits = sum(1 for phrase in self.fingerprints if f" {normalise(phrase)} " in head)
         return hits / len(self.fingerprints)
 
+    def cue_lines(self, view: DocumentView) -> tuple[list[ViewLine], list[ViewLine]]:
+        """The lines of page 1 that say what the document is, of at most
+        :data:`CARD_CUE_WORDS` words: those outside the transaction rows
+        (:meth:`summary_lines`), and the rest (rows and their wraps)."""
+        page_one = self.prepare([line for line in view.lines if line.page <= 1])
+        summary = self.summary_lines(page_one)
+        outside = {id(line) for line in summary}
+        short = [line for line in page_one if len(line.text.split()) <= CARD_CUE_WORDS]
+        return (
+            [line for line in short if id(line) in outside],
+            [line for line in short if id(line) not in outside],
+        )
+
+    def reads_loan_bill(self, view: DocumentView) -> bool:
+        """Page 1 is a loan's bill
+        (:func:`~app.ingestion.parsers.statement_kind.loan_bill` on its
+        summary lines): its activity table is no account's transactions.
+
+        A deposit account's label vetoes it from inside a table as well: a
+        member statement prints each share's ``Beginning Balance`` and
+        ``Ending Balance`` as dated lines of the share's table and a loan's
+        principal and amount due beside them. A row's line is asked without
+        its date (:func:`_undated`), and only for the veto: a payee names
+        no bill.
+        """
+        summary, rows = self.cue_lines(view)
+        lines = [line.norm for line in summary]
+        return loan_bill(lines) and loan_bill([*lines, *(_undated(line.norm) for line in rows)])
+
     def detect(self, view: DocumentView) -> float:
-        """Generic: 0.4 with a table. A parser written for one institution
+        """Generic: 0.4 with a table, and 0.0 for a loan's bill
+        (:meth:`reads_loan_bill`), table or not. A parser written for one institution
         needs **every** phrase of its fingerprint on page 1 (1.0 with a
         table, 0.54 without): one of them (``current account statement``,
         ``card ending in``) is what any bank or issuer prints, and its
         statement is not this institution's."""
         table = self.has_table(view)
         if not self.fingerprints:
+            if self.reads_loan_bill(view):
+                return 0.0
             return 0.4 if table else 0.0
         if self.fingerprint_score(view) < 1.0:
             return 0.0
@@ -4299,6 +4332,19 @@ DEPOSIT_WORD_LEAD: Final = 2
 DEPOSIT_TITLE_WORDS: Final = 3
 
 
+def _undated(norm: str) -> str:
+    """``norm`` (a normalised line) without the date it starts with: its
+    leading figures and month names (``04 01 beginning balance 1 250 00``,
+    ``jan 31 ending balance 95 50``)."""
+    words = norm.split()
+    start = 0
+    while start < len(words) and (
+        words[start].isdigit() or month_day(f"{words[start]} 1", "mon_d") is not None
+    ):
+        start += 1
+    return " ".join(words[start:])
+
+
 def names_deposit_account(text: str) -> bool:
     """``text`` (a line as printed) names a deposit account or its totals:
     a title or a label (``Checking Summary``, ``Premier Savings 1,204.00``,
@@ -4319,11 +4365,16 @@ class CardStatementParser(TableStatementParser):
 
     Detected (0.45, above ``statement_generic``) when page 1 has a table and,
     outside its rows on lines of at most :data:`CARD_CUE_WORDS` words, a card
-    word (:data:`CARD_VOCABULARY`) or two of the weak ones
-    (:data:`WEAK_CARD_VOCABULARY`), and no such line names a deposit account
-    (:data:`DEPOSIT_ACCOUNT_WORDS`, :func:`names_deposit_account`: a line
-    that only mentions one, as a card paid from a checking account prints,
-    vetoes nothing).
+    word (:data:`CARD_VOCABULARY`), two of the weak ones
+    (:data:`WEAK_CARD_VOCABULARY`) or a card's summary
+    (:func:`~app.ingestion.parsers.statement_kind.card_summary`: ``Payments
+    and Credits``, ``Purchases`` and ``New Balance`` each at the start of a
+    line; a card that prints no card word is known by it, and read as a bank
+    statement its figures would add up with every sign the wrong way round),
+    and no such line names a deposit account (:data:`DEPOSIT_ACCOUNT_WORDS`,
+    :func:`names_deposit_account`: a line that only mentions one, as a card
+    paid from a checking account prints, vetoes nothing). A loan's bill is
+    not read (:meth:`TableStatementParser.reads_loan_bill`).
     """
 
     name: ClassVar[str] = "card_statement_generic"
@@ -4333,16 +4384,15 @@ class CardStatementParser(TableStatementParser):
     def detect(self, view: DocumentView) -> float:
         if self.fingerprints:
             return super().detect(view)
-        page_one = self.prepare([line for line in view.lines if line.page <= 1])
-        cues = [
-            line
-            for line in self.summary_lines(page_one)
-            if len(line.text.split()) <= CARD_CUE_WORDS
-        ]
+        cues, _ = self.cue_lines(view)
         if any(names_deposit_account(line.text) for line in cues):
             return 0.0
+        if self.reads_loan_bill(view):
+            return 0.0
         short = [f" {line.norm} " for line in cues]
-        strong = any(f" {word} " in text for text in short for word in CARD_VOCABULARY)
+        strong = any(
+            f" {word} " in text for text in short for word in CARD_VOCABULARY
+        ) or card_summary([line.norm for line in cues])
         # Each weak word once (``Card Member`` and ``Cardmember`` are one).
         weak = len(
             {
