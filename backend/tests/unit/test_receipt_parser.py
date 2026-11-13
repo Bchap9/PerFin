@@ -19,7 +19,7 @@ import pytest
 from app.ingestion.extract.eml import extract_eml
 from app.ingestion.extract.pdf import extract_pdf
 from app.ingestion.parsers import receipt as rp
-from app.ingestion.parsers.base import DocumentView
+from app.ingestion.parsers.base import DocumentView, ViewLine
 from app.ingestion.parsers.registry import MIN_SCORE, PARSERS, parse_extraction
 from app.ingestion.sandbox.protocol import ExtractOptions, Receipt
 from tests.fixtures import synth_receipts as sr
@@ -167,6 +167,117 @@ def test_label_and_amount_on_separate_lines() -> None:
     )
     assert receipt.subtotal == Decimal("23.01")
     assert receipt.adds_up is True
+
+
+def test_amounts_printed_above_their_labels() -> None:
+    receipt = rp.read_receipt(sr.amounts_above_labels_lines(), threshold=THRESHOLD)
+    assert receipt is not None
+    assert receipt.subtotal == Decimal("41.20")
+    assert receipt.tax == Decimal("3.30")
+    assert receipt.total == Decimal("44.50")
+    assert receipt.adds_up is True
+    assert receipt.confidence["total"] == 1.0
+    assert [line.amount for line in receipt.lines] == [
+        Decimal("18.40"),
+        Decimal("4.80"),
+        Decimal("18.00"),
+    ]
+    assert receipt.purchase_date == date(2026, 3, 14)
+
+
+def _paired(lines: list[ViewLine], pairing: rp.Pairing) -> dict[str, list[Decimal]]:
+    """The amounts each lettered line holds after ``_typed`` paired the lines."""
+    return {
+        entry.line.text: [money.value for money in entry.money]
+        for entry in rp._typed(lines, pairing=pairing)
+        if any(ch.isalpha() for ch in entry.line.text)
+    }
+
+
+def test_the_reading_that_adds_up_wins() -> None:
+    # Every amount exactly midway between two labels: the nearest line is a
+    # tie, which goes to the line below, and that reading finds no total.
+    lines = sr.amounts_above_labels_lines(lift=1.0)
+    nearest = _paired(lines, "nearest")
+    assert nearest["SUBTOTAL"] == [Decimal("3.30")]
+    assert nearest["TAX"] == [Decimal("44.50")]
+    assert nearest["TOTAL"] == []
+    receipt = rp.read_receipt(lines, threshold=THRESHOLD)
+    assert receipt is not None
+    assert (receipt.subtotal, receipt.tax, receipt.total) == (
+        Decimal("41.20"),
+        Decimal("3.30"),
+        Decimal("44.50"),
+    )
+    assert receipt.adds_up is True
+
+
+def test_no_pairing_adds_up_keeps_the_reading_below() -> None:
+    # 5.00 above "Subtotal", 23.01 below it, and a total neither agrees with.
+    text = "SHOP\n2026-02-09\nNOTEBOOK 23.01\n5.00\nSubtotal\n23.01\nTAX 1.15\nTOTAL DUE 99.99\n"
+    lines = rp.view_lines_from_text(text)
+    assert _paired(lines, "above")["Subtotal"] == [Decimal("5.00")]
+    receipt = _read(text)
+    assert receipt.subtotal == Decimal("23.01")
+    assert receipt.total == Decimal("99.99")
+    assert receipt.adds_up is False
+    assert "total" in receipt.low_confidence
+
+
+def test_nearest_takes_no_amount_farther_than_a_line_and_a_half() -> None:
+    lines = [
+        sr.placed_line(0, 0.0, "9.00"),
+        sr.placed_line(1, 4 * sr.LINE_HEIGHT, "SUBTOTAL"),
+        sr.placed_line(2, 5 * sr.LINE_HEIGHT, "TAX", "0.70"),
+    ]
+    assert _paired(lines, "nearest")["SUBTOTAL"] == []
+    close = [sr.placed_line(0, 2.5 * sr.LINE_HEIGHT, "9.00"), *lines[1:]]
+    assert _paired(close, "nearest")["SUBTOTAL"] == [Decimal("9.00")]
+
+
+def test_an_amount_line_is_given_to_one_label_only() -> None:
+    lines = [
+        sr.placed_line(0, 0.0, "SUBTOTAL"),
+        sr.placed_line(1, sr.LINE_HEIGHT, "9.00"),
+        sr.placed_line(2, 2 * sr.LINE_HEIGHT, "TAX"),
+    ]
+    for pairing in ("below", "nearest"):
+        assert _paired(lines, pairing) == {"SUBTOTAL": [Decimal("9.00")], "TAX": []}
+    assert _paired(lines, "above") == {"SUBTOTAL": [], "TAX": [Decimal("9.00")]}
+
+
+def test_a_line_with_words_or_on_another_page_is_no_amount_line() -> None:
+    worded = [
+        sr.placed_line(0, 0.0, "GIFT BAG", "9.00"),
+        sr.placed_line(1, sr.LINE_HEIGHT, "SUBTOTAL"),
+        sr.placed_line(2, 2 * sr.LINE_HEIGHT, "CARD FEE", "0.70"),
+    ]
+    other_page = [
+        sr.placed_line(0, 0.0, "9.00", page=1),
+        sr.placed_line(1, sr.LINE_HEIGHT, "SUBTOTAL", page=2),
+    ]
+    for pairing in ("nearest", "above"):
+        assert _paired(worded, pairing)["SUBTOTAL"] == []
+        assert _paired(other_page, pairing)["SUBTOTAL"] == []
+
+
+def test_a_receipt_that_adds_up_reads_as_before(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Pairing below is tried first and kept when its figures add up, so the
+    receipts of both accuracy sets read as they do with that pairing alone."""
+    specs = [*sr.tuning_specs(), *sr.held_out_specs()]
+    views = [rp.view_lines_from_text(sr.receipt_text(spec)) for spec in specs]
+    now = [rp.read_receipt(lines, threshold=THRESHOLD) for lines in views]
+    monkeypatch.setattr(rp, "_PAIRINGS", ("below",))
+    before = [rp.read_receipt(lines, threshold=THRESHOLD) for lines in views]
+    assert now == before
+    for spec, receipt in zip(sr.tuning_specs(), now, strict=False):
+        assert receipt is not None
+        assert receipt.adds_up is True, spec.seed
+        assert (receipt.subtotal, receipt.tax, receipt.total) == (
+            spec.subtotal,
+            spec.tax,
+            spec.total,
+        ), spec.seed
 
 
 @pytest.mark.parametrize(

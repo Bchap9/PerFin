@@ -23,6 +23,10 @@ every pattern runs on single lines cut to :data:`MAX_LINE` characters.
   1.0; a labelled one that cannot be checked :data:`conf.UNCHECKED`; one
   that contradicts the other figures :data:`conf.GUESSED`. A missing
   subtotal or tax is derived from the others (:data:`conf.DERIVED`).
+  A label whose amount OCR put on a line of its own takes the amount-only
+  line below it; when that reading does not add up, the nearest such line
+  (above or below) and then the line above are tried, and the first set
+  that adds up is kept (:func:`_best_reading`).
 * **Date**: every date format of :mod:`app.ingestion.classify.dates` plus
   ``14-MAR-26``; a labelled date ("Date", "Order date") or one printed next
   to a time wins over others; a date whose own lead-in says expiry, return
@@ -90,6 +94,12 @@ MAX_RECEIPT_PAGES: Final = 2
 UNWORDED_TWO_PAGE_SCORE: Final = 0.3
 #: Header lines the merchant is looked for in.
 HEADER_LINES: Final = 8
+#: How a keyword line without an amount is paired with an amount-only line,
+#: in the order :func:`read_receipt` tries them.
+Pairing = Literal["below", "nearest", "above"]
+_PAIRINGS: tuple[Pairing, ...] = ("below", "nearest", "above")
+#: The farthest amount-only line the ``nearest`` pairing takes, in line heights.
+PAIRING_REACH: Final = 1.5
 MAX_CANDIDATES: Final = 5
 MAX_ITEMS: Final = 200
 #: Score of an email body's detection needed to read it as a receipt.
@@ -381,7 +391,52 @@ def _kind(label: str, has_money: bool, plain: str = "") -> tuple[Kind, bool]:
     return ("item" if sum(ch.isalpha() for ch in label) >= 2 else "other"), False
 
 
-def _typed(lines: Iterable[ViewLine]) -> list[_Line]:
+def _amount_only(entry: _Line) -> bool:
+    return bool(entry.money) and sum(ch.isalpha() for ch in entry.label) < 2
+
+
+def _apart(a: ViewLine, b: ViewLine) -> float | None:
+    """The vertical distance between the centres of two lines (None: no cells)."""
+    if not a.cells or not b.cells:
+        return None
+    (_, a0, _, a1), (_, b0, _, b1) = a.bbox, b.bbox
+    return abs((a0 + a1) / 2 - (b0 + b1) / 2)
+
+
+def _amount_line(out: Sequence[_Line], index: int, pairing: Pairing) -> _Line | None:
+    """The amount-only line the amountless keyword line ``out[index]`` takes."""
+    entry = out[index]
+    after = out[index + 1] if index + 1 < len(out) else None
+    if pairing == "below":
+        return after if after is not None and _amount_only(after) else None
+    before = out[index - 1] if index else None
+    # The line below first: it keeps a tie.
+    near = [
+        other
+        for other in (after, before)
+        if other is not None and _amount_only(other) and other.line.page == entry.line.page
+    ]
+    if pairing == "above":
+        return before if before in near else None
+    reach = PAIRING_REACH * entry.line.height
+    best: tuple[float, _Line] | None = None
+    for other in near:
+        gap = _apart(entry.line, other.line)
+        if gap is not None and gap <= reach and (best is None or gap < best[0]):
+            best = (gap, other)
+    return best[1] if best is not None else None
+
+
+def _typed(lines: Iterable[ViewLine], *, pairing: Pairing = "below") -> list[_Line]:
+    """The lines with their amounts and kinds.
+
+    A keyword whose amount OCR put on a line of its own ("Subtotal" /
+    "107.65") takes the amounts of an adjacent amount-only line: the line
+    ``below`` it, the line ``above`` it on the same page, or the ``nearest``
+    of the two (by the distance between line centres, the line below on a
+    tie, none farther than :data:`PAIRING_REACH` line heights). An amount
+    line is given to one label only.
+    """
     out: list[_Line] = []
     for line in lines:
         money = _money_in(line.cells)
@@ -393,16 +448,17 @@ def _typed(lines: Iterable[ViewLine]) -> list[_Line]:
                 money = implied
                 kind, strong = _kind(label, True, plain)
         out.append(_Line(line, label, money, kind, strong, plain))
-    # A keyword whose amount OCR put on the next line ("Subtotal" / "107.65").
-    for index in range(len(out) - 1):
-        entry, following = out[index], out[index + 1]
-        if entry.money or not following.money or sum(ch.isalpha() for ch in following.label) >= 2:
+    for index, entry in enumerate(out):
+        if entry.money:
             continue
         kind, strong = _kind(entry.label, True, entry.plain)
         if kind in ("item", "other"):
             continue
-        entry.money, entry.kind, entry.strong = following.money, kind, strong
-        following.money, following.kind = [], "other"
+        source = _amount_line(out, index, pairing)
+        if source is None:
+            continue
+        entry.money, entry.kind, entry.strong = source.money, kind, strong
+        source.money, source.kind = [], "other"
     return out
 
 
@@ -876,16 +932,22 @@ def _scale(value: float, ocr: float | None) -> float:
     return conf.scaled(value, ocr)
 
 
-def read_receipt(
-    view_lines: Sequence[ViewLine],
-    *,
-    threshold: float,
-    source: Literal["pages", "email_body"] = "pages",
-    sender: str | None = None,
-    sent: date | None = None,
-) -> Receipt | None:
-    """The receipt on ``view_lines`` (None: no total found)."""
-    typed = _typed(view_lines[:MAX_RECEIPT_LINES])
+@dataclass
+class _Reading:
+    """What one pairing of labels and amount lines reads (:func:`_typed`)."""
+
+    typed: list[_Line]
+    currency: str | None
+    currency_conf: float
+    header: list[tuple[str, float | None]]
+    found_date: _DateFound | None
+    time: str | None
+    items: list[ReceiptLine]
+    totals: _Totals
+
+
+def _reading(view_lines: Sequence[ViewLine], pairing: Pairing) -> _Reading:
+    typed = _typed(view_lines, pairing=pairing)
     money = [m for t in typed for m in t.money]
     currency, currency_conf = _find_currency(typed, money)
     header = _merchant_lines(typed)
@@ -896,6 +958,40 @@ def read_receipt(
     start = max(date_index + 1, 1 if header else 0)
     items = _items(typed, start)
     totals = _solve(typed, items)
+    return _Reading(typed, currency, currency_conf, header, found_date, time, items, totals)
+
+
+def _best_reading(view_lines: Sequence[ViewLine]) -> _Reading:
+    """The first pairing whose figures add up; the first pairing when none does.
+
+    Amounts below their labels are tried first, so a receipt that adds up
+    that way reads as it always did; a pairing that does not add up is never
+    preferred to it.
+    """
+    first: _Reading | None = None
+    for pairing in _PAIRINGS:
+        reading = _reading(view_lines, pairing)
+        if reading.totals.adds_up:
+            return reading
+        first = first or reading
+    if first is None:  # pragma: no cover - _PAIRINGS is never empty
+        return _reading(view_lines, "below")
+    return first
+
+
+def read_receipt(
+    view_lines: Sequence[ViewLine],
+    *,
+    threshold: float,
+    source: Literal["pages", "email_body"] = "pages",
+    sender: str | None = None,
+    sent: date | None = None,
+) -> Receipt | None:
+    """The receipt on ``view_lines`` (None: no total found)."""
+    reading = _best_reading(view_lines[:MAX_RECEIPT_LINES])
+    typed, items, totals = reading.typed, reading.items, reading.totals
+    currency, currency_conf = reading.currency, reading.currency_conf
+    header, found_date, time = reading.header, reading.found_date, reading.time
     if totals.total is None:
         return None
     payment, last4_conf = _find_payment(typed)

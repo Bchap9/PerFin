@@ -37,6 +37,8 @@ from PIL import Image, ImageDraw, ImageFilter, ImageFont
 from reportlab.lib.pagesizes import A4, letter
 from reportlab.pdfgen import canvas
 
+from app.ingestion.parsers.base import Cell, ViewLine
+
 CENT: Final = Decimal("0.01")
 
 #: Fictional merchants: printed name, the payee name a household would use.
@@ -547,3 +549,51 @@ def bill_text(kind: BillKind) -> str:
     and figures are invented.
     """
     return _BILLS[kind]
+
+
+# -- receipts whose amounts OCR put on their own lines -------------------------
+
+LINE_HEIGHT: Final = 10.0
+LINE_PITCH: Final = 20.0
+
+
+def placed_line(index: int, top: float, *texts: str, page: int = 1) -> ViewLine:
+    """One parser line of height :data:`LINE_HEIGHT` whose top edge is at ``top``."""
+    cells = tuple(
+        Cell(
+            text=text,
+            x0=150.0 * position,
+            y0=top,
+            x1=150.0 * position + 80.0,
+            y1=top + LINE_HEIGHT,
+        )
+        for position, text in enumerate(texts)
+    )
+    return ViewLine(page=page, index=index, cells=cells, text=" ".join(texts), height=LINE_HEIGHT)
+
+
+def amounts_above_labels_lines(*, lift: float = 0.5) -> list[ViewLine]:
+    """A receipt whose totals block prints each amount on its own line above its label.
+
+    Curled thermal paper does this to OCR: ``41.20`` sits ``lift`` line
+    heights above ``SUBTOTAL``, ``3.30`` above ``TAX`` and ``44.50`` above
+    ``TOTAL``, the labels :data:`LINE_PITCH` apart. With the default each
+    amount is nearer the label below it (half a line height) than the label
+    above it (one and a half); ``lift=1.0`` puts every amount exactly midway
+    between two labels. The shop and the figures are invented, and the three
+    items add up to the subtotal.
+    """
+    rows: list[tuple[float, tuple[str, ...]]] = [
+        (0.0, ("ALDERWICK PANTRY",)),
+        (LINE_PITCH, ("2026-03-14",)),
+        (2 * LINE_PITCH, ("COFFEE BEANS", "18.40")),
+        (3 * LINE_PITCH, ("OAT MILK", "4.80")),
+        (4 * LINE_PITCH, ("BREAD", "18.00")),
+    ]
+    first_label = 6 * LINE_PITCH
+    totals = (("SUBTOTAL", "41.20"), ("TAX", "3.30"), ("TOTAL", "44.50"))
+    for position, (label, amount) in enumerate(totals):
+        top = first_label + position * LINE_PITCH
+        rows.append((top - lift * LINE_HEIGHT, (amount,)))
+        rows.append((top, (label,)))
+    return [placed_line(index, top, *texts) for index, (top, texts) in enumerate(rows)]
