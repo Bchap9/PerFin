@@ -14,10 +14,17 @@ the stored pages, in the worker:
   -B on consecutive pages) gives one form each; identical copies of a form
   (Copy B, C, 2 on one sheet) are kept once. Two headings of different
   forms on one line open two sections side by side, cut at the second
-  heading's left edge: each reads only the cells on its side. A mention is
+  heading's left edge: each reads only the cells on its side. A later
+  heading on that page that fits inside one of those columns starts its
+  form in that column only: the forms on its left stay open, the columns
+  on its right are read by nobody until a heading opens them again (their
+  rows could be the older form's or the new form's second column). A
+  heading wider than its column, several headings on a line or a heading
+  on another page start a new layout. A mention is
   no heading: a contents line (it ends in a page number and holds no
   amount), a line naming three or more forms, a ``Form <type>`` inside
-  parentheses.
+  parentheses, a year and a type followed by words other than the form's
+  title (``2024 1099-INT corrections were issued separately``).
 * **Tax year**: the year a heading starts with, else ``Tax year 2025``,
   ``For calendar year 2025`` or the year printed on the section's side of
   the heading line.
@@ -32,7 +39,10 @@ the stored pages, in the worker:
   apart from its label (``1a`` | ``Total ordinary dividends``) is read with
   it when the two together are the label; its
   amount is the first amount below it in its column (up to the next label)
-  or right after it on the same line. W-2 box 12 (``12a``..``12d``: code and
+  or right after it on the same line. A cell that says the box is empty
+  (``NONE``, ``N/A``, a dash) ends that search, and a label printed with
+  dot leaders is read from its own line only: the next amount down the
+  page (a description line, a total) is not the box. W-2 box 12 (``12a``..``12d``: code and
   amount) is stored per code (``12_D``); a text box with an amount sibling
   ``<id>t`` (W-2 box 14, 1098 box 10 "Other") stores the sum of its lines.
   1095-A Part III (lines 21-33, columns A/B/C) is a table; 1095-B/C covered
@@ -146,6 +156,8 @@ _BOX12_RE: Final = re.compile(r"^12\s?[a-d]\b")
 #: Printed before a box id on some forms (normalised).
 _BOX_PREFIX: Final = "box "
 _CODE_RE: Final = re.compile(r"^[A-Z]{1,2}$")
+#: Printed in place of an amount: the box is empty.
+_NO_AMOUNT: Final = frozenset({"none", "n/a", "na", "nil", "-", "--", "---", "\u2013", "\u2014"})
 _PART3_RE: Final = re.compile(r"^(2[1-9]|3[0-3])\b")
 #: Tokens kept by :func:`redact_identity` besides the vocabulary.
 _BOX_ID_TOKEN: Final = re.compile(r"^\d{1,2}[A-Za-z]?$")
@@ -216,11 +228,22 @@ class _FormInfo:
     year_heading: re.Pattern[str] = re.compile(r"(?!)")
     #: Box ids that can stand alone in a cell (lower case, at most three characters).
     short_ids: frozenset[str] = frozenset()
+    #: The first word of the form's title (normalised).
+    title_word: str = ""
 
     def heading_year(self, cell: Cell) -> int | None:
-        """The year ``cell`` starts with when it is a year-first heading of this form."""
-        match = self.year_heading.match(normalise(_PARENTHESISED.sub(" ", cell.text)))
+        """The year ``cell`` starts with when it is a year-first heading of this form.
+
+        After the year and the type the cell ends or goes on with the form's
+        title: ``2024 1099-INT corrections were issued separately`` is a
+        sentence, ``2025 W-2 and EARNINGS SUMMARY`` another document's line.
+        """
+        text = normalise(_PARENTHESISED.sub(" ", cell.text))
+        match = self.year_heading.match(text)
         if match is None or not _YEAR_MIN <= int(match.group(1)) <= _YEAR_MAX:
+            return None
+        rest = text[match.end() :].split()
+        if rest and rest[0] != self.title_word:
             return None
         return int(match.group(1))
 
@@ -260,6 +283,7 @@ def _forms_of(form_set: FormSet) -> list[_FormInfo]:
                 type_norm,
                 year_heading,
                 short_ids,
+                (normalise(form.title).split() or [""])[0],
             )
         )
     # Longest form type first ("1098 e" before "1098").
@@ -365,11 +389,17 @@ class _Section:
     #: The section's side of the page: it reads cells whose left edge is in ``x0 <= x < x1``.
     x0: float = float("-inf")
     x1: float = float("inf")
+    #: ``(page, index)`` of the lines that print dot leaders on the section's side.
+    led: set[tuple[int, int]] = field(default_factory=set)
 
-    def add(self, line: ViewLine) -> None:
+    def add(self, line: ViewLine, raw: ViewLine) -> None:
+        """Take ``line`` (``raw`` cut at its dot leaders): the cells on the section's side."""
         clipped = _clip(line, self.x0, self.x1)
-        if clipped is not None:
-            self.lines.append(clipped)
+        if clipped is None:
+            return
+        self.lines.append(clipped)
+        if any(self.x0 <= c.x0 < self.x1 and _LEADER.search(c.text) for c in raw.cells):
+            self.led.add((line.page, line.index))
 
 
 def _clip(line: ViewLine, x0: float, x1: float) -> ViewLine | None:
@@ -427,30 +457,72 @@ def _headings(line: ViewLine, forms: Sequence[_FormInfo]) -> list[tuple[_FormInf
     return sorted(found.values(), key=lambda pair: pair[1].x0)
 
 
+def _column_of(
+    columns: Sequence[_Section | None],
+    bounds: Sequence[tuple[float, float]],
+    page: int | None,
+    line: ViewLine,
+    heads: Sequence[tuple[_FormInfo, Cell]],
+) -> int | None:
+    """The column a lone heading opens in on a page of side-by-side forms.
+
+    None when the line starts a new layout: no columns are open, it is on
+    another page, it holds several headings, or its heading is wider than
+    the column it starts in.
+    """
+    if len(bounds) < 2 or len(heads) != 1 or line.page != page:
+        return None
+    cell = heads[0][1]
+    for position, (x0, x1) in enumerate(bounds):
+        if x0 <= cell.x0 < x1:
+            return position if cell.x1 <= x1 else None
+    return None
+
+
 def _sections(view: DocumentView, forms: Sequence[_FormInfo]) -> list[_Section]:
     sections: list[_Section] = []
-    current: list[_Section] = []
-    before: list[ViewLine] = []
+    #: The open section of each column, left to right; None: nobody reads that column.
+    columns: list[_Section | None] = []
+    bounds: list[tuple[float, float]] = []
+    page: int | None = None
+    before: list[tuple[ViewLine, ViewLine]] = []
     for raw in view.lines:
         line = _split_line(raw)
         heads = _headings(line, forms)
-        if heads:
-            lead = before if not sections else []
-            before = []
-            current = []
-            for position, (info, cell) in enumerate(heads):
-                x0 = cell.x0 if position else float("-inf")
-                x1 = heads[position + 1][1].x0 if position + 1 < len(heads) else float("inf")
-                section = _Section(info, [], _clip(line, x0, x1) or line, cell, x0, x1)
-                for each in (*lead, line):
-                    section.add(each)
-                current.append(section)
-            sections.extend(current)
-        elif current:
-            for section in current:
-                section.add(line)
-        else:
-            before.append(line)
+        if not heads:
+            if not bounds:
+                before.append((line, raw))
+            for section in columns:
+                if section is not None:
+                    section.add(line, raw)
+            continue
+        position = _column_of(columns, bounds, page, line, heads)
+        if position is not None:
+            # A heading inside one column. The forms on its left go on; what
+            # is printed on its right may be an older form's rows or this
+            # form's second column, so nobody reads it until a heading opens
+            # that column again.
+            info, cell = heads[0]
+            x0, x1 = bounds[position]
+            section = _Section(info, [], _clip(line, x0, x1) or line, cell, x0, x1)
+            columns[position:] = [section, *([None] * (len(bounds) - position - 1))]
+            sections.append(section)
+            for each in columns[: position + 1]:
+                if each is not None:
+                    each.add(line, raw)
+            continue
+        lead = before if not sections else []
+        before = []
+        columns, bounds, page = [], [], line.page
+        for position, (info, cell) in enumerate(heads):
+            x0 = cell.x0 if position else float("-inf")
+            x1 = heads[position + 1][1].x0 if position + 1 < len(heads) else float("inf")
+            section = _Section(info, [], _clip(line, x0, x1) or line, cell, x0, x1)
+            for each_line, each_raw in (*lead, (line, raw)):
+                section.add(each_line, each_raw)
+            columns.append(section)
+            bounds.append((x0, x1))
+            sections.append(section)
     return sections
 
 
@@ -502,20 +574,37 @@ def _amount_of(cell: Cell) -> Decimal | None:
     return amount.value if amount is not None else None
 
 
+def _says_no_amount(cell: Cell) -> bool:
+    return cell.text.strip().lower() in _NO_AMOUNT
+
+
 def _labelled_amount(
-    lines: Sequence[ViewLine], index: int, cell: Cell, info: _FormInfo
+    lines: Sequence[ViewLine], index: int, cell: Cell, info: _FormInfo, *, same_line: bool = False
 ) -> tuple[Decimal, Cell] | None:
+    """The amount of the box labelled by ``cell``: right after it, else below it.
+
+    A cell that says the box is empty (``NONE``) ends the search: amounts
+    further down belong to something else. ``same_line``: the label is
+    printed with dot leaders, which lead to its amount on the same line or
+    to nothing.
+    """
     line = lines[index]
     after = [c for c in line.cells if c.x0 > cell.x1]
     if after and not info.is_label(after[0]):
         value = _amount_of(after[0])
         if value is not None:
             return value, after[0]
+        if _says_no_amount(after[0]):
+            return None
+    if same_line:
+        return None
     for _, cells in _below(lines, index, cell, info, limit=_MAX_BELOW):
         for candidate in cells:
             value = _amount_of(candidate)
             if value is not None:
                 return value, candidate
+            if _says_no_amount(candidate):
+                return None
     return None
 
 
@@ -748,7 +837,8 @@ def _read_boxes(section: _Section) -> _Read:
                 continue
             box = label.box
             if box.kind is BoxKind.AMOUNT and box.id in stored and box.id not in read.boxes:
-                found = _labelled_amount(lines, index, cell, info)
+                led = (line.page, line.index) in section.led
+                found = _labelled_amount(lines, index, cell, info, same_line=led)
                 if found is not None:
                     read.put(box.id, found[0], found[1])
             elif box.kind is BoxKind.TEXT and f"{box.id}t" in stored:
