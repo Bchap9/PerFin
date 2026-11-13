@@ -101,6 +101,10 @@ The flow (INGESTION.md "Parse", "Match and deduplicate", "Commit"):
      the digits); ``remember`` on it re-reads the group's last four digits
      from the stored table (:func:`stored_group_last4`), and an item whose
      mapping spec has changed since is stale (:func:`group_item_current`).
+     The account a person puts one of those statements on is remembered
+     for the document by the statement's digest (:func:`_group_key`), so
+     the statements of a table split by account *names*, which no digits
+     match, can be answered one after the other.
    * Deduplication (``app.ingestion.match.dedupe``): exact ``import_hash``
      matches are skipped, near matches (same date and amount) are imported as
      ``review_state = pending`` with a ``possible_duplicate`` review item.
@@ -176,6 +180,7 @@ from app.domain.documents.models import (
     DocumentStatus,
     IngestJob,
     IngestStage,
+    ReviewItem,
     ReviewItemState,
     ReviewKind,
 )
@@ -1210,6 +1215,38 @@ def _import_statements(run: _Run, result: ExtractResult, *, account_id: uuid.UUI
             record_statement(run.db, run.document, account, facts)
 
 
+class _GroupFacts(BaseModel):
+    """One account's rows of a multi-account table as read, for :func:`_group_key`."""
+
+    kind: Literal["table_group"] = "table_group"
+    last4: str | None
+    name: str | None
+    #: (row, date, amount) of every transaction of the group.
+    rows: list[tuple[int, str, str]]
+
+
+def _group_key(parsed: ParsedStatement) -> str:
+    """The digest of one statement of a multi-account table as read (``statement_answers``).
+
+    Like a statement's key it is of the statement exactly as read: its
+    account (last four digits or name), and the row, date and amount of
+    each transaction. The same stored table read with the same mapping
+    gives the same key, so the account a person put the group on is found
+    again by every later run; read with another mapping the group is asked
+    about anew. Only the digest is ever stored, never the name.
+    """
+    return statement_key(
+        _GroupFacts(
+            last4=parsed.last4,
+            name=parsed.account_name,
+            rows=[
+                (t.row if t.row is not None else -1, t.posted_date.isoformat(), str(t.amount))
+                for t in parsed.transactions
+            ],
+        )
+    )
+
+
 @dataclass
 class _Target:
     """One statement of a table and the account it goes to (None: not known)."""
@@ -1230,7 +1267,16 @@ def _table_targets(
     account_id: uuid.UUID | None,
     group: int | None = None,
 ) -> list[_Target]:
-    """The account of each statement of a table (module doc, CSV/TSV)."""
+    """The account of each statement of a table (module doc, CSV/TSV).
+
+    A statement of a multi-account table goes to the account the run
+    assigns to it (the Accounts dialog), else the one chosen for it on
+    this run (``account_id`` with ``group``), else the one an earlier
+    answer put it on (:func:`_group_key`, ``statement_answers``), else the
+    one its digits match. Without the third, a file split by account
+    names could never be finished one question at a time: answering one
+    name would raise the other again.
+    """
     if spec.account_column is None:
         target = (
             run.assigned.get(("table", 0))
@@ -1254,6 +1300,8 @@ def _table_targets(
         account: Account | None = None
         candidates: tuple[uuid.UUID, ...] = ()
         assigned = run.assigned.get(("group", index))
+        if assigned is None and not (chosen is not None and index in takes):
+            assigned = run.answers.account("statement", _group_key(parsed))
         if assigned is not None:
             account = _usable_account(run, assigned)
             if account is not None:
@@ -2053,18 +2101,20 @@ def _placed(
     item: dict[str, Any],
     payload: ApplyMappingJob,
     imported_into: Collection[str],
+    mapping_id: str | None = None,
 ) -> dict[str, Any]:
     """Where the re-run put the statement an ``unknown_account`` item asked about.
 
     The account the run assigned to it (the Accounts dialog's assignment,
     or the account chosen for that statement), when the run imported into
     that account: recorded with the statement's key so later imports of
-    the document put it there again (``statement_answers``). Empty for an
-    item about anything else (a group of a table, an unparsed file).
+    the document put it there again (``statement_answers``). The same for
+    a statement of a multi-account table (:func:`_placed_group`). Empty
+    for an item about anything else (an unparsed file).
     """
     index = item.get("statement")
     if not isinstance(index, int) or isinstance(index, bool):
-        return {}
+        return _placed_group(db, document, result, item, payload, imported_into, mapping_id)
     investment = item.get("investment") is True
     target: Literal["statement", "investment"] = "investment" if investment else "statement"
     account_id = next(
@@ -2079,6 +2129,73 @@ def _placed(
     if not 0 <= index < len(statements):
         return {}
     return placement(target, statement_key(statements[index]), account_id)
+
+
+def _placed_group(
+    db: Session,
+    document: Document,
+    result: ExtractResult,
+    item: dict[str, Any],
+    payload: ApplyMappingJob,
+    imported_into: Collection[str],
+    mapping_id: str | None,
+) -> dict[str, Any]:
+    """Where the re-run put the group of a table an ``unknown_account`` item asked about.
+
+    ``item`` names the group by its index under the mapping it was raised
+    with (``group``, ``mapping_id``, ``spec_digest``). The placement is
+    recorded when the run read the table with that very mapping
+    (``mapping_id``, unchanged since), an account was assigned to or
+    chosen for that group, and the run imported into it. The key is the
+    group's digest (:func:`_group_key`); a table group and a bank
+    statement share the ``statement`` target, their digests never meet.
+    """
+    group = item.get("group")
+    if not isinstance(group, int) or isinstance(group, bool):
+        return {}
+    if mapping_id is None or item.get("mapping_id") != mapping_id:
+        return {}
+    account_id = next(
+        (a.account_id for a in payload.assignments if a.target == "group" and a.index == group),
+        payload.account_id if payload.group == group else None,
+    )
+    if account_id is None or str(account_id) not in imported_into:
+        return {}
+    spec = _item_spec(db, document, item)
+    tables = with_layout_tables(result).tables
+    if spec is None or not tables:
+        return {}
+    readable = [s for s in from_table_grouped(tables[0], spec) if s.transactions]
+    if not 0 <= group < len(readable):
+        return {}
+    return placement("statement", _group_key(readable[group]), account_id)
+
+
+def _resolved_for(db: Session, document: Document, job_id: uuid.UUID | None) -> list[ReviewItem]:
+    """The ``unknown_account`` items the review queue resolved by queueing this very job.
+
+    "Use this account" resolves its item at once and records the job that
+    carries the choice out (``app.domain.review.service``). Where that job
+    put the item's statement is added to the resolution when the job has
+    run, as for the items it finds open (:func:`_placed`).
+    """
+    if job_id is None:
+        return []
+    rows = db.execute(
+        select(ReviewItem)
+        .where(
+            ReviewItem.household_id == document.household_id,
+            ReviewItem.document_id == document.id,
+            ReviewItem.state == ReviewItemState.RESOLVED,
+            ReviewItem.kind == ReviewKind.UNKNOWN_ACCOUNT,
+        )
+        .with_for_update()
+    ).scalars()
+    return [
+        item
+        for item in rows
+        if isinstance(item.resolution, dict) and item.resolution.get("job_id") == str(job_id)
+    ]
 
 
 def run_apply_job(
@@ -2125,8 +2242,28 @@ def run_apply_job(
         item.resolved_by = payload.requested_by
         item.resolution = {
             **resolution,
-            **_placed(db, document, result, item.payload or {}, payload, imported_into),
+            **_placed(
+                db,
+                document,
+                result,
+                item.payload or {},
+                payload,
+                imported_into,
+                resolution["mapping_id"],
+            ),
         }
+    for item in _resolved_for(db, document, job_id):
+        placed = _placed(
+            db,
+            document,
+            result,
+            item.payload or {},
+            payload,
+            imported_into,
+            resolution["mapping_id"],
+        )
+        if placed:
+            item.resolution = {**(item.resolution or {}), **placed}
     db.flush()
     status = DocumentStatus.NEEDS_REVIEW if _open_items(db, document) else DocumentStatus.PROCESSED
     db.add(

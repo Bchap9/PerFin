@@ -1702,6 +1702,53 @@ def test_an_account_chosen_for_one_name_takes_only_that_names_rows(env: Env) -> 
 TIED_DATES = ("02/03/2026", "02/09/2026", "03/04/2026", "03/11/2026")
 
 
+@pytest.mark.parametrize("remember", [False, True])
+def test_names_answered_one_after_the_other_finish_the_document(env: Env, remember: bool) -> None:
+    """Each name is asked about once: an answer is kept when the next one is given."""
+    document_id = env.ingest(layouts.aggregator_two_accounts(), name="all-accounts.csv")
+    accounts = [
+        env.ledger.account(env.household_id, type=AccountType.CHECKING),
+        env.ledger.account(env.household_id, type=AccountType.SAVINGS),
+    ]
+    for group, account in enumerate(accounts):
+        items = {item.payload["group"]: item for item in env.open_reviews(document_id)}
+        assert sorted(items) == [0, 1][group:]  # the group answered before is not asked again
+        resolved = _resolve(env, items[group], account, remember=remember)
+        assert resolved.status_code == 200, resolved.text
+        env.run(APPLY_MAPPING_JOB_TYPE)
+    assert env.open_reviews(document_id) == []
+    assert env.document(document_id).status is DocumentStatus.PROCESSED
+    assert _amounts(env.transactions(accounts[0])) == _named_rows("Everyday Checking")
+    assert _amounts(env.transactions(accounts[1])) == _named_rows("Rewards Card")
+    assert _ledger_rows(env) == len(layouts.TWO_ACCOUNT_ROWS)
+    # The names stay in the file: the answers are kept by a digest, not by the name.
+    resolutions = str([item.resolution for item in env.reviews(document_id)])
+    assert "Everyday" not in resolutions
+    assert "Rewards" not in resolutions
+    # Importing the document again asks nothing.
+    with Actors.open(env.settings, env.factories) as actors:
+        owner = actors.login(env.owner)
+        again = owner.post(f"{API}/imports/{document_id}/apply-mapping", json={})
+        assert again.status_code == 202, again.text
+    env.run(APPLY_MAPPING_JOB_TYPE)
+    assert env.open_reviews(document_id) == []
+    assert _ledger_rows(env) == len(layouts.TWO_ACCOUNT_ROWS)
+
+
+def test_digits_inside_an_account_name_never_pick_an_account(env: Env) -> None:
+    """``Pot 12 of 34`` is a name: an unrelated account ending 1234 gets none of its rows."""
+    other = env.ledger.account(env.household_id, type=AccountType.CHECKING, number_last4="1234")
+    names = ["Pot 12 of 34", "Everyday Checking"] * 3
+    document_id = env.ingest(layouts.aggregator_named_accounts(names), name="all-accounts.csv")
+    assert env.transactions(other) == []
+    assert _ledger_rows(env) == 0
+    items = sorted(env.open_reviews(document_id), key=lambda item: item.payload["group"])
+    assert [(item.kind, item.payload["reason"]) for item in items] == [
+        (ReviewKind.UNKNOWN_ACCOUNT, "account_not_found")
+    ] * 2
+    assert [found.name for found in _detected(env, document_id)] == names[:2]
+
+
 def _received(env: Env, data: bytes, account: Account, on: date) -> uuid.UUID:
     """Upload ``data`` for ``account`` as if it had arrived ``on`` that day, then ingest it."""
     document_id = env.upload(data, account=account, name="export.csv")

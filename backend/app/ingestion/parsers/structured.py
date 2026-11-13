@@ -16,15 +16,16 @@ original file.
 * :func:`from_table`: a CSV/TSV table read with a :class:`MappingSpec`
   (columns, date format, sign convention, decimal separator). Rows that do not
   parse (blank amounts, a date in another form) are skipped and reported by
-  row number; the unreadable rows after the table's last readable row whose
-  date cell is no date are footers (totals, closing lines), listed apart and
-  not reported. The running-balance column, when mapped, gives the closing
+  row number; a few unreadable rows after the table's last readable row
+  that hold no transaction are footers (totals, closing lines:
+  :func:`_split_footers`), listed apart and not reported. The
+  running-balance column, when mapped, gives the closing
   balance and a reconciliation check (each printed balance must equal the
   one printed before plus the amounts of the rows since, so a balance
   printed once a day reconciles too). A debit or credit cell keeps its printed sign: a
   negative debit is money in and a negative credit money out (a reversal),
-  unless that column prints every amount negative
-  (:func:`_printed_negative`). An empty currency cell is the
+  unless that column prints its amounts negative, where a positive cell is
+  the reversal (:func:`_printed_negative`). An empty currency cell is the
   account's currency; any
   other cell that is not a three-letter code makes the row unreadable. A row
   with at most one filled cell (the disclaimer paragraphs and "Date
@@ -36,12 +37,14 @@ original file.
   counted and not imported (:func:`_read_rows`).
 * :func:`from_table_grouped`: a multi-account table (``account_column``)
   as one statement per account, each carrying only the **last four digits**
-  of its account cell (:func:`cell_last4`), so the importer matches it like
-  an OFX statement. The text of a number cell is used for grouping in
-  memory and never kept. A column of account *names* (``Everyday
-  Checking``, ``Rewards Card``: an aggregator's export) groups the same
-  way, by the folded name; such a statement carries its ``account_name``
-  and no last four, so the importer asks which account each one is.
+  of the number in its account cell (:func:`account_cell_last4`), so the
+  importer matches it like an OFX statement. The text of a number cell is
+  used for grouping in memory and never kept. A column of account *names*
+  (``Everyday Checking``, ``Rewards Card``, ``Pot 12 of 34``: an
+  aggregator's export) groups the same way, by the folded name; such a
+  statement carries its ``account_name`` and no last four, so the importer
+  asks which account each one is. Digits are never gathered across the
+  words of a name into a last four.
 * :func:`header_fingerprint`: the identity of a table layout, so a saved
   mapping is found again for the next file with the same header.
 * :func:`suggest_mapping`: a deterministic guess at the mapping (no model of
@@ -155,8 +158,9 @@ class ParsedStatement:
     #: "Date downloaded" line, a row without a date and an amount): not
     #: reported as skipped.
     note_rows: list[int] = field(default_factory=list)
-    #: Unreadable table rows after the table's last readable row whose date
-    #: cell is no date (totals, closing lines): not reported as skipped.
+    #: The few unreadable table rows after the table's last readable row
+    #: that hold no transaction (totals, closing lines): not reported as
+    #: skipped (:func:`_split_footers`).
     footer_rows: list[int] = field(default_factory=list)
     #: Table rows whose date cell says ``Pending``: not yet a transaction,
     #: neither imported nor reported, only counted.
@@ -248,7 +252,7 @@ def _shape(cell: str) -> str:
         return "e"
     if any(_parse_date(text, fmt) is not None for fmt in DATE_FORMATS):
         return "d"
-    if parse_cell_amount(text, ".") is not None or parse_cell_amount(text, ",") is not None:
+    if _amount(text, ".") is not None or _amount(text, ",") is not None:
         return "n"
     return "t"
 
@@ -364,8 +368,9 @@ _STRIP: Final = re.compile("[\\s\u00a0\u202f'\u2019$\u20ac\u00a3\u00a5\u20b9]|[A
 _PLAIN_DECIMAL: Final = re.compile(r"^\d+(?:\.\d+)?$")
 #: A currency written in letters: one to three letters, each with or without
 #: a dot after it (``zł``, ``Kč``, ``лв.``, the dotted abbreviations of the
-#: Arabic script).
-_LETTERS: Final = r"(?:[^\W\d_]\.?){1,3}"
+#: Arabic script). The ordinal indicators are letters to Unicode and are left
+#: out: ``N\u00ba 12`` is a number twelve, not twelve of a currency.
+_LETTERS: Final = r"(?:[^\W\d_\u00aa\u00ba]\.?){1,3}"
 _LETTERED_BEFORE: Final = re.compile(rf"^(?P<sign>[-+(]?)\s*(?P<letters>{_LETTERS})\s*(?=[-+]?\d)")
 _LETTERED_AFTER: Final = re.compile(rf"(?<=\d)\s*(?P<letters>{_LETTERS})(?P<sign>[-)]*)$")
 #: Signs of a hundredth or a thousandth of a currency (cent, mill, pfennig):
@@ -394,17 +399,29 @@ def _without_lettered_currency(value: str) -> str:
     return kept
 
 
-def parse_cell_amount(text: str, decimal_separator: str) -> Decimal | None:
-    """A signed amount from a table cell, or None when it is not one.
+def parse_cell_amount(
+    text: str,
+    decimal_separator: str,
+    *,
+    places: int = AMOUNT_PLACES,
+    round_long: bool = False,
+) -> Decimal | None:
+    """A signed number from a table cell, or None when it is not one.
 
     Accepts ``1,234.56`` / ``1.234,56`` (by ``decimal_separator``), a leading
     ``+``/``-``, ``(12.34)`` and ``12.34-`` as negatives, currency symbols,
     a leading or trailing ISO code, a currency written in letters of another
     script with its direction marks (:func:`_without_lettered_currency`),
-    spaces and apostrophes. More than
-    :data:`~app.core.money.AMOUNT_PLACES` decimals are rounded half-even to
-    that many, as the OFX reader does: one cell an export computed (an
-    average, a conversion) does not make its row unreadable.
+    spaces and apostrophes.
+
+    A cell with more than ``places`` decimals is not read (None), unless
+    ``round_long``: then it is rounded half-even to ``places``, as the OFX
+    reader rounds money, and a cell that is not zero and would round to
+    zero is not read. Only the cash reader of this module rounds
+    (:func:`_amount`): one cell an export computed (an average, a
+    conversion) does not make its row unreadable. Every other caller reads
+    a cell exactly or not at all, so a share quantity printed with more
+    decimals than money has is never silently shortened.
     """
     value = text.strip()
     if value.startswith("'"):  # the import-side formula guard (C7)
@@ -440,9 +457,17 @@ def parse_cell_amount(text: str, decimal_separator: str) -> Decimal | None:
     if negative:
         amount = -amount
     exponent = amount.as_tuple().exponent
-    if isinstance(exponent, int) and -exponent > AMOUNT_PLACES:
-        return quantize(amount)
+    if isinstance(exponent, int) and -exponent > places:
+        if not round_long:
+            return None
+        rounded = quantize(amount, places)
+        return rounded if rounded or not amount else None
     return amount
+
+
+def _amount(text: str, decimal_separator: str) -> Decimal | None:
+    """A money cell as the cash reader takes it: long decimals rounded to what is kept."""
+    return parse_cell_amount(text, decimal_separator, round_long=True)
 
 
 def _cell(row: Sequence[str], column: int | None) -> str | None:
@@ -468,12 +493,13 @@ def _row_amount(
     negative debit is a credit and a negative credit a debit, which is also
     how a lone ``Inflow`` column of negative cells is money out. The
     columns named in ``printed_negative`` (:func:`_printed_negative`) print
-    every amount negative and are read by magnitude.
+    their amounts negative: there the minus sign is the column's notation
+    and a positive cell is the reversal.
     """
     sep = spec.decimal_separator
     if spec.amount_column is not None:
         raw = _cell(row, spec.amount_column)
-        amount = parse_cell_amount(raw, sep) if raw is not None else None
+        amount = _amount(raw, sep) if raw is not None else None
         if amount is None:
             return None
         if spec.indicator_column is not None:
@@ -483,8 +509,8 @@ def _row_amount(
         return -amount if spec.sign is Sign.OUTFLOW_POSITIVE else amount
     debit_raw = _text(row, spec.debit_column)
     credit_raw = _text(row, spec.credit_column)
-    debit = parse_cell_amount(debit_raw, sep) if debit_raw else None
-    credit = parse_cell_amount(credit_raw, sep) if credit_raw else None
+    debit = _amount(debit_raw, sep) if debit_raw else None
+    credit = _amount(credit_raw, sep) if credit_raw else None
     if (debit_raw and debit is None) or (credit_raw and credit is None):
         return None
     if debit is None and credit is None:
@@ -492,42 +518,67 @@ def _row_amount(
     money_out = debit or Decimal(0)
     money_in = credit or Decimal(0)
     if "debit" in printed_negative:
-        money_out = abs(money_out)
+        money_out = -money_out
     if "credit" in printed_negative:
-        money_in = abs(money_in)
+        money_in = -money_in
     return money_in - money_out
 
 
-def _printed_negative(table: Table, spec: MappingSpec) -> frozenset[str]:
-    """Which of a debit and a credit column print every amount as a negative number.
+def _column_signs(table: Table, spec: MappingSpec) -> dict[str, tuple[int, int]]:
+    """How many cells of the debit and of the credit column read negative and positive.
 
-    Some exports write a withdrawal as ``-25.00`` under ``Amount Debit``:
-    the minus is the column's notation, not a reversal. A column counts
-    when its cells that read hold at least one negative amount and no
-    positive one; its cells are then read by magnitude. That is never said
-    of a lone credit column: negative cells under a lone ``Inflow`` header
-    are money out, the minus sign being all that says which way.
+    Keyed ``debit`` / ``credit``. A lone credit column is left out: negative
+    cells under a lone ``Inflow`` header are money out, the minus sign being
+    all that says which way (:func:`_printed_negative`).
     """
     columns: list[tuple[str, int]] = []
     if spec.debit_column is not None:
         columns.append(("debit", spec.debit_column))
         if spec.credit_column is not None:
             columns.append(("credit", spec.credit_column))
-    found: set[str] = set()
+    counts: dict[str, tuple[int, int]] = {}
     for name, column in columns:
-        negative = positive = False
+        negative = positive = 0
         for index in _body_rows(table, spec):
             raw = _text(table.rows[index], column)
-            amount = parse_cell_amount(raw, spec.decimal_separator) if raw else None
-            if amount is None:
-                continue
-            negative = negative or amount < 0
-            positive = positive or amount > 0
-            if positive:
-                break
-        if negative and not positive:
-            found.add(name)
-    return frozenset(found)
+            amount = _amount(raw, spec.decimal_separator) if raw else None
+            if amount is not None and amount < 0:
+                negative += 1
+            elif amount:
+                positive += 1
+        counts[name] = (negative, positive)
+    return counts
+
+
+def _printed_negative(table: Table, spec: MappingSpec) -> frozenset[str]:
+    """Which of a debit and a credit column print their amounts as negative numbers.
+
+    Some exports write a withdrawal as ``-25.00`` under ``Amount Debit``:
+    the minus is the column's notation, not a reversal. A column counts
+    when more of its cells read negative than positive; the few positive
+    cells of such a column are then the reversals. One positive cell never
+    turns every other row of the file round. That is never said of a lone
+    credit column (:func:`_column_signs`).
+    """
+    return frozenset(
+        name
+        for name, (negative, positive) in _column_signs(table, spec).items()
+        if negative > positive
+    )
+
+
+def _notation_unsettled(table: Table, spec: MappingSpec) -> bool:
+    """Whether a debit or credit column mixes signs with half its cells or more negative.
+
+    Then the minus sign is read as the column's notation and the positive
+    cells as reversals (:func:`_printed_negative`), or, at a tie, the other
+    way round: either way it is a reading a person confirms
+    (``sign_unverified``).
+    """
+    return any(
+        positive and negative >= positive
+        for negative, positive in _column_signs(table, spec).values()
+    )
 
 
 def _currency(row: Sequence[str], spec: MappingSpec) -> str | bool | None:
@@ -560,31 +611,100 @@ def cell_last4(text: str | None) -> str | None:
 ACCOUNT_NAME_MAX: Final = 80
 
 
+#: A word in an account cell: two letters or more (a run of ``x`` is a mask).
+_ACCOUNT_WORD: Final = re.compile(r"[^\W\d_]{2,}")
+_MASK: Final = "*#xX"
+
+
+def _account_parts(text: str) -> tuple[list[str], list[str]]:
+    """An account cell as its words and the stretches between them.
+
+    ``Checking ...7788`` is the word ``Checking`` and the stretch
+    `` ...7788``; ``Pot 12 of 34`` is two words and three stretches, none
+    of which is a number; ``0000 1111 2222 3456`` and ``Z2xxxxxxxx`` have no
+    word and are one stretch.
+    """
+    words: list[str] = []
+    stretches: list[str] = []
+    start = 0
+    for match in _ACCOUNT_WORD.finditer(text):
+        if not match[0].strip("xX"):
+            continue
+        stretches.append(text[start : match.start()])
+        words.append(match[0])
+        start = match.end()
+    stretches.append(text[start:])
+    return words, stretches
+
+
+def _digits(text: str) -> str:
+    return "".join(c for c in text if c.isdigit())
+
+
+def account_cell_last4(text: str | None) -> str | None:
+    """The last four digits of the number in an account cell (None: it holds no number).
+
+    Unlike :func:`cell_last4`, digits are never gathered across words: the
+    number is the last stretch between the cell's words that has four
+    digits or more (:func:`_account_parts`). ``Pot 12 of 34`` and ``529
+    Plan 1`` are names and give None, where digits scraped from the whole
+    cell would make up a last four no account has, or one that an
+    unrelated account happens to have.
+    """
+    if not text:
+        return None
+    _, stretches = _account_parts(text)
+    for stretch in reversed(stretches):
+        digits = _digits(stretch)
+        if len(digits) >= 4:
+            return digits[-4:]
+    return None
+
+
 def _account_key(row: Sequence[str], column: int) -> tuple[str | None, str]:
-    """How rows are grouped by account: (the last four digits, "") else (None, the folded text).
+    """The group of a row's account: (last four digits, folded words) or (None, folded text).
 
     The folded text is the cell case-folded with its blanks collapsed, so
-    ``Everyday Checking`` and ``everyday  checking`` are one account.
+    ``Everyday Checking`` and ``everyday  checking`` are one account. The
+    words beside a number keep two accounts apart whose numbers end alike
+    (``Trip 2027`` and ``Taxes 2027``, a share and a draft account of one
+    member number): :func:`from_table_grouped` then matches neither by
+    those digits.
     """
     value = _cell(row, column) or ""
-    found = cell_last4(value)
-    return (found, "") if found is not None else (None, _header_cell(value))
+    found = account_cell_last4(value)
+    if found is None:
+        return None, _header_cell(value)
+    words, _ = _account_parts(value)
+    return found, " ".join(word.casefold() for word in words)
 
 
 def _account_name(text: str | None) -> str | None:
     """An account cell as the account's name (None: a number, a masked number, nothing).
 
-    A name has fewer than four digits (else the cell is a number and only
-    its last four are kept), is not shaped like a masked number
-    (``Z2xxxxxxxx``) and has letters. Blanks are collapsed and a leading
-    formula guard dropped.
+    A name has a word (:func:`_account_parts`). Its stretches of more than
+    four digits are left out, so a name never carries an account number,
+    and a cell with a masked number (``AB12xxxx``, ``Checking ****1234``)
+    is no name at all. Blanks are collapsed and a leading formula guard
+    dropped.
     """
     value = _SPACE.sub(" ", (text or "").strip().removeprefix("'")).strip()
-    if not value or cell_last4(value) is not None or _looks_like_account(value):
+    words, stretches = _account_parts(value)
+    if not words:
         return None
-    if sum(1 for c in value if c.isalpha() and c not in "xX") < 2:
-        return None
-    return value[:ACCOUNT_NAME_MAX]
+    kept = [stretches[0]]
+    for word, stretch in zip(words, stretches[1:], strict=True):
+        kept += [word, stretch]
+    for index in range(0, len(kept), 2):
+        stretch = kept[index]
+        digits = len(_digits(stretch))
+        masks = sum(c in _MASK for c in stretch)
+        if masks and digits and digits + masks >= 4:
+            return None
+        if digits > 4:
+            kept[index] = " "
+    name = _SPACE.sub(" ", "".join(kept)).strip()
+    return name[:ACCOUNT_NAME_MAX] or None
 
 
 def _body_rows(table: Table, spec: MappingSpec) -> range:
@@ -691,9 +811,7 @@ def _read_rows(
         line = index
         if spec.balance_column is not None:
             raw_balance = _text(row, spec.balance_column)
-            balance = (
-                parse_cell_amount(raw_balance, spec.decimal_separator) if raw_balance else None
-            )
+            balance = _amount(raw_balance, spec.decimal_separator) if raw_balance else None
             balances.append((index, posted, amount, balance))
     _append_continuations(parsed, continued)
     if parsed.transactions:
@@ -730,29 +848,73 @@ def _append_continuations(parsed: ParsedStatement, continued: list[tuple[int, in
     parsed.note_rows.sort()
 
 
+#: A table ends in at most this many footer lines. More unreadable rows than
+#: that after the last readable one are not a footer (a second section laid
+#: out differently, rows the mapping does not read): all are reported.
+FOOTER_ROWS_MAX: Final = 5
+
+
+def _footer_like(row: Sequence[str], spec: MappingSpec, width: int) -> bool:
+    """Whether an unreadable row holds no transaction (a total, a closing line).
+
+    Its date cell is no date in any form (a date of another form is a
+    transaction that did not read), and one of:
+
+    * it has fewer cells than any row that read (``width``);
+    * none of its amount cells reads as an amount;
+    * its date cell holds a label and every other filled cell is a figure
+      (``Total,,-141.60``).
+
+    A row with an amount and a description is reported even without a date
+    (an item not booked yet, a date cell that says ``Processing``): it may
+    be money that moved.
+    """
+    label = (_cell(row, spec.date_column) or "").strip()
+    if label and _shape(label) == "d":
+        return False
+    if len(row) < width:
+        return True
+    sep = spec.decimal_separator
+    figures = [
+        _text(row, column)
+        for column in (spec.amount_column, spec.debit_column, spec.credit_column)
+        if column is not None
+    ]
+    if not any(raw and _amount(raw, sep) is not None for raw in figures):
+        return True
+    return bool(label) and all(
+        _amount(cell, sep) is not None
+        for column, cell in enumerate(row)
+        if column != spec.date_column and cell.strip()
+    )
+
+
 def _split_footers(table: Table, spec: MappingSpec, statements: Sequence[ParsedStatement]) -> None:
     """Move the unreadable rows that trail the table from ``skipped_rows`` to ``footer_rows``.
 
     A footer is an unreadable row after the last readable row of the whole
-    table (not of its own account's rows) whose date cell is no date: a
-    total, a closing line. A trailing row that has a date is a transaction
-    that did not read and stays reported. A table without any readable row
-    has no footer: every row stays reported.
+    table (not of its own account's rows) that holds no transaction
+    (:func:`_footer_like`): a total, a closing line. There are at most
+    :data:`FOOTER_ROWS_MAX` of them: when more rows than that trail the
+    table and look like footers, none is one. Every other trailing row
+    stays reported, as does every row of a table without any readable row.
     """
-    last = max((t.row for s in statements for t in s.transactions if t.row is not None), default=-1)
-    if last < 0:
+    read = [t.row for s in statements for t in s.transactions if t.row is not None]
+    if not read:
+        return
+    last = max(read)
+    width = min(len(table.rows[index]) for index in read)
+    footers = {
+        index
+        for parsed in statements
+        for index in parsed.skipped_rows
+        if index > last and _footer_like(table.rows[index], spec, width)
+    }
+    if not footers or len(footers) > FOOTER_ROWS_MAX:
         return
     for parsed in statements:
-        footers = [
-            index
-            for index in parsed.skipped_rows
-            if index > last
-            and parse_cell_date(_cell(table.rows[index], spec.date_column) or "", spec.date_format)
-            is None
-        ]
-        if footers:
-            parsed.footer_rows = footers
-            parsed.skipped_rows = [index for index in parsed.skipped_rows if index not in footers]
+        parsed.footer_rows = [index for index in parsed.skipped_rows if index in footers]
+        parsed.skipped_rows = [index for index in parsed.skipped_rows if index not in footers]
 
 
 def from_table(table: Table, spec: MappingSpec) -> ParsedStatement:
@@ -768,7 +930,7 @@ def from_table(table: Table, spec: MappingSpec) -> ParsedStatement:
     if spec.account_column is not None and parsed.transactions:
         column = spec.account_column
         found = {
-            cell_last4(_cell(table.rows[t.row], column))
+            account_cell_last4(_cell(table.rows[t.row], column))
             for t in parsed.transactions
             if t.row is not None
         }
@@ -803,13 +965,17 @@ def preamble_last4(table: Table, spec: MappingSpec) -> str | None:
 def from_table_grouped(table: Table, spec: MappingSpec) -> list[ParsedStatement]:
     """One statement per account of a multi-account table (``spec.account_column``).
 
-    Rows are grouped by the last four digits of the account cell (cells with
-    fewer digits by their folded text, so two unnamed accounts stay apart),
-    in the order the accounts first appear among the readable rows; each
+    Rows are grouped by the last four digits of the number in the account
+    cell and the words beside it (:func:`_account_key`; cells without a
+    number by their folded text, so two unnamed accounts stay apart), in
+    the order the accounts first appear among the readable rows; each
     group is read like :func:`from_table` and carries only ``last4`` (the
     text of a number cell is never kept). A group of cells that are a name,
     not a number, carries ``account_name`` (the cell of its first readable
-    row, :func:`_account_name`) and no ``last4``. Unreadable rows are
+    row, :func:`_account_name`) and no ``last4``; so do groups whose
+    numbers end in the same four digits under different words: those
+    digits say which account for neither, and each is asked about.
+    Unreadable rows are
     reported in their account's group; those of no group with a readable row
     (footers, totals) in the first group, like the note rows and the
     pending rows; the ones that trail the whole table are footers
@@ -828,6 +994,7 @@ def from_table_grouped(table: Table, spec: MappingSpec) -> list[ParsedStatement]
         row = table.rows[index]
         if any(cell.strip() for cell in row):
             rows.setdefault(_account_key(row, column), []).append(index)
+    shared = Counter(key[0] for key in rows if key[0] is not None)
     groups: list[tuple[int, ParsedStatement]] = []
     orphans: list[int] = []
     notes: list[int] = []
@@ -839,7 +1006,7 @@ def from_table_grouped(table: Table, spec: MappingSpec) -> list[ParsedStatement]
             notes.extend(parsed.note_rows)
             pending.extend(parsed.pending_rows)
             continue
-        parsed.last4 = key[0]
+        parsed.last4 = key[0] if key[0] is not None and shared[key[0]] == 1 else None
         first = parsed.transactions[0].row
         if parsed.last4 is None and first is not None:
             parsed.account_name = _account_name(_cell(table.rows[first], column))
@@ -1057,16 +1224,25 @@ INFLOW_WORDS: Final = frozenset(
 #: *signed* amount they are evidence for the sign convention
 #: (:func:`_correlate`); they never sign an unsigned amount, because
 #: ``Payment`` is money in on a card and money out of a checking account.
-TYPE_OUTFLOW_WORDS: Final = frozenset({"purchase", "sale", "fee", "payment sent"})
-TYPE_INFLOW_WORDS: Final = frozenset({"payment", "refund", "return"})
+TYPE_OUTFLOW_WORDS: Final = frozenset({"purchase", "fee", "payment sent"})
+TYPE_INFLOW_WORDS: Final = frozenset({"payment", "refund"})
+#: Type words that mean the opposite to a card holder and to a seller: a
+#: ``Sale`` is a purchase on a card statement and money in on a seller's own
+#: ledger, a ``Return`` the reverse. They tell a column of type words from
+#: any other column, and are compared with the signs only under a header
+#: that names a card (:func:`names_card`).
+CARD_OUTFLOW_WORDS: Final = frozenset({"sale"})
+CARD_INFLOW_WORDS: Final = frozenset({"return"})
 _DIRECTION: Final = OUTFLOW_WORDS | INFLOW_WORDS
-_ANY_OUTFLOW: Final = OUTFLOW_WORDS | TYPE_OUTFLOW_WORDS
-_ANY_INFLOW: Final = INFLOW_WORDS | TYPE_INFLOW_WORDS
+_ANY_OUTFLOW: Final = OUTFLOW_WORDS | TYPE_OUTFLOW_WORDS | CARD_OUTFLOW_WORDS
+_ANY_INFLOW: Final = INFLOW_WORDS | TYPE_INFLOW_WORDS | CARD_INFLOW_WORDS
 #: Share of a column's cells that must be direction or type words for the
 #: column to be read as one when its header does not name it.
 DIRECTION_FIT_MIN: Final = 0.9
-#: Direction words and signs are compared on at least this many rows, and
-#: prove a sign convention when this share of them agree.
+#: Direction words and signs are compared on at least this many rows.
+#: Transaction-type words prove a sign convention when this share of them
+#: agree, overall and among the words of each direction; plain direction
+#: words (``debit``/``credit``) only when every row agrees.
 CORRELATION_MIN_ROWS: Final = 4
 CORRELATION_AGREE_MIN: Final = 0.95
 
@@ -1091,11 +1267,14 @@ _ACCOUNT_CELL: Final = re.compile(r"[A-Za-z0-9*#.\- ]{4,34}")
 #: *type*) must never split a file.
 ACCOUNT_NAME_HEADERS: Final = frozenset({"account", "account name", "source account"})
 #: A column of names is an account column when it holds this many distinct
-#: names, each on at least :data:`ACCOUNT_NAME_REPEATS` rows: one person's
-#: accounts are few and each has several rows; payees are many or seen once.
+#: names and at least :data:`ACCOUNT_NAME_SHARE` of its rows carry a name
+#: that stands on :data:`ACCOUNT_NAME_REPEATS` rows or more: one person's
+#: accounts are few and have several rows each, though one of them may have
+#: a single row in the period; payees are many or mostly seen once.
 ACCOUNT_NAMES_MIN: Final = 2
 ACCOUNT_NAMES_MAX: Final = 20
 ACCOUNT_NAME_REPEATS: Final = 2
+ACCOUNT_NAME_SHARE: Final = 0.6
 _SETTLEMENT_DATE: Final = re.compile(
     r"settle|value|effective|due|valut|wertstell|valeur|valor|rente"
 )
@@ -1167,12 +1346,15 @@ class MappingSuggestion:
     A sign on trust is the doubt ``sign_unverified`` when the header names
     a card export (:func:`names_card`), when every amount has the same
     sign, or when more rows are money in than money out (a card export
-    lists purchases as positive); under a header that names a card a
-    running balance is no proof either (a card's balance is what is owed,
-    which adds up with purchases read as money in).
+    lists purchases as positive); a running balance is no proof either under a header that names
+    a card or when it has most rows as money in (a card's balance is what
+    is owed, which adds up with purchases read as money in); nor is a debit
+    or credit column that mixes signs, most of them negative
+    (:func:`_notation_unsettled`).
     ``indicator_contradicts_sign``: direction
-    words and signs disagree row to row, or agree with each other against
-    the running balance. ``investment_columns``: the header names a
+    words and signs disagree row to row (plain ``debit``/``credit`` words
+    on any row), or agree with each other against the running balance.
+    ``investment_columns``: the header names a
     security, a quantity and a price (:func:`names_trades`), so the rows are
     trades, not a cash ledger. A table without a header row
     (``spec.has_header`` False, every reason's match ``content``) has
@@ -1180,7 +1362,7 @@ class MappingSuggestion:
     from their shapes (:func:`_headerless`), which only a running balance
     can prove (``sign_evidence`` ``balance``); such a balance is
     ``sign_unverified`` all the same when it has most rows as money in, the
-    way the balance owed on a card adds up. Reasons carry roles, column
+    way the balance owed on a card adds up, or every amount of one sign. Reasons carry roles, column
     indexes, match kinds and shares only, never cell text.
     """
 
@@ -1275,6 +1457,9 @@ _DAY_FIRST_TWIN: Final[dict[str, DateFormat]] = {
 #: Distinct days a date column shows within its one month before that month
 #: is taken as proven (:func:`_settled_date_format`). Two rows prove nothing.
 DATE_ORDER_MIN_DAYS: Final = 3
+#: Rows an order must date after the upload day before it is ruled out: one
+#: row dated ahead is as likely a payment the bank lists as scheduled.
+DATE_ORDER_MIN_LATE: Final = 2
 #: A row may be dated the day after the upload day (UTC): it is that day
 #: already east of Greenwich. Anything later was not in the file's past.
 _UPLOAD_SLACK: Final = timedelta(days=1)
@@ -1322,9 +1507,11 @@ def _settled_date_format(table: Table, spec: MappingSpec, today: date | None) ->
       dates of the same form, with a cell only one order reads (a ``Post
       Date`` beside the ``Transaction Date``): one file writes its dates
       one way;
-    * ``today``, the day the file was received: an order that dates a row
-      after it (:data:`_UPLOAD_SLACK`) while the other dates none is not
-      the file's.
+    * ``today``, the day the file was received: an order that dates
+      :data:`DATE_ORDER_MIN_LATE` rows or more after it
+      (:data:`_UPLOAD_SLACK`) while the other dates none is not the file's.
+      One row dated ahead rules nothing out (a scheduled payment), and
+      keeps the order a guess.
 
     Without a proof, two readings of the cells that are no guess:
 
@@ -1335,7 +1522,10 @@ def _settled_date_format(table: Table, spec: MappingSpec, today: date | None) ->
       of a month, not the same day of as many months. Only the order that
       would be guessed anyway is confirmed this way; the mirror image (a
       constant second component) stays a guess, since it is also what one
-      monthly payment looks like written month first.
+      monthly payment looks like written month first. So does a run of
+      days without a gap that each have as many rows as the others
+      (``01/01`` to ``01/10``, one row each): that is what one row a month
+      on the 1st looks like written day first (:func:`_regular_run`).
 
     A date column that mixes in dates of another form, or whose rows are
     dated after ``today`` whichever way they are read, stays a guess. A
@@ -1360,26 +1550,38 @@ def _settled_date_format(table: Table, spec: MappingSpec, today: date | None) ->
             month_only, day_only = _one_way(beside)
             by_month, by_day = by_month or month_only, by_day or day_only
     both = [(month, day) for month, day in readings if month is not None and day is not None]
-    late_month_first = late_day_first = False
+    late_month_first = late_day_first = 0
     if today is not None:
         limit = today + _UPLOAD_SLACK
-        late_month_first = any(month > limit for month, _ in both)
-        late_day_first = any(day > limit for _, day in both)
-        if late_month_first != late_day_first:
-            by_month, by_day = by_month or late_day_first, by_day or late_month_first
+        late_month_first = sum(1 for month, _ in both if month > limit)
+        late_day_first = sum(1 for _, day in both if day > limit)
+        if not late_month_first and late_day_first >= DATE_ORDER_MIN_LATE:
+            by_month = True
+        if not late_day_first and late_month_first >= DATE_ORDER_MIN_LATE:
+            by_day = True
     if by_month or by_day:
         if by_month and by_day:
             return None
         return month_first if by_month else day_first
-    if not both or late_month_first:
+    if not both or late_month_first or late_day_first:
         return None
     if all(month == day for month, day in both):
         return month_first
     months = {(month.year, month.month) for month, _ in both}
-    days = {month.day for month, _ in both}
-    if len(months) == 1 and len(days) >= DATE_ORDER_MIN_DAYS:
+    days = Counter(month.day for month, _ in both)
+    if len(months) == 1 and len(days) >= DATE_ORDER_MIN_DAYS and not _regular_run(days):
         return month_first
     return None
+
+
+def _regular_run(days: Counter[int]) -> bool:
+    """Whether ``days`` (rows per day of one month) are a run without a gap, as many rows on each.
+
+    A month of an account's rows has days without any and days with
+    several. One row on each day in turn is the shape of a schedule: read
+    day first, the same cells are one row a month.
+    """
+    return max(days) - min(days) + 1 == len(days) and len(set(days.values())) == 1
 
 
 def _looks_like_account(text: str) -> bool:
@@ -1395,20 +1597,24 @@ def _looks_like_account(text: str) -> bool:
 def _is_money(text: str) -> bool:
     if _shape(text) == "d":
         return False
-    return parse_cell_amount(text, ".") is not None or parse_cell_amount(text, ",") is not None
+    return _amount(text, ".") is not None or _amount(text, ",") is not None
 
 
 def _names_accounts(cells: Sequence[str]) -> bool:
-    """Whether the non-empty ``cells`` are a few account names, each on several rows.
+    """Whether the non-empty ``cells`` are a few account names, most rows under one that repeats.
 
     Between :data:`ACCOUNT_NAMES_MIN` and :data:`ACCOUNT_NAMES_MAX` distinct
     values (case-folded, blanks collapsed, as :func:`from_table_grouped`
-    groups them), every one on at least :data:`ACCOUNT_NAME_REPEATS` rows.
+    groups them), and at least :data:`ACCOUNT_NAME_SHARE` of the cells hold
+    a value seen on :data:`ACCOUNT_NAME_REPEATS` rows or more. An account
+    with one row among accounts that repeat is split off like the others:
+    left in, its row and theirs would be read as one account's.
     """
     counts = Counter(_header_cell(cell) for cell in cells)
-    return ACCOUNT_NAMES_MIN <= len(counts) <= ACCOUNT_NAMES_MAX and all(
-        count >= ACCOUNT_NAME_REPEATS for count in counts.values()
-    )
+    repeated = sum(count for count in counts.values() if count >= ACCOUNT_NAME_REPEATS)
+    return ACCOUNT_NAMES_MIN <= len(
+        counts
+    ) <= ACCOUNT_NAMES_MAX and repeated >= ACCOUNT_NAME_SHARE * len(cells)
 
 
 def _role_fit(role: str, values: list[str], header: str = "") -> float:
@@ -1785,7 +1991,7 @@ def _debit_credit_pair(
 
     def holds(row: Sequence[str], column: int) -> bool:
         raw = _cell(row, column)
-        return bool(raw and parse_cell_amount(raw, separator))
+        return bool(raw and _amount(raw, separator))
 
     for left, right in combinations(columns, 2):
         filled = [(holds(row, left), holds(row, right)) for row in body]
@@ -1946,7 +2152,7 @@ def _headerless(table: Table) -> _Candidate | None:
 def _signed(values: Iterable[str], separator: str) -> bool:
     """Whether any of the amount cells ``values`` is negative."""
     for value in values:
-        amount = parse_cell_amount(value, separator) if value.strip() else None
+        amount = _amount(value, separator) if value.strip() else None
         if amount is not None and amount < 0:
             return True
     return False
@@ -1969,7 +2175,7 @@ def _indicator_doubtful(table: Table, spec: MappingSpec, rows: Iterable[int]) ->
         if word not in _DIRECTION:
             return True
         raw = _cell(row, spec.amount_column)
-        amount = parse_cell_amount(raw, spec.decimal_separator) if raw is not None else None
+        amount = _amount(raw, spec.decimal_separator) if raw is not None else None
         if amount is not None and amount < 0:
             return True
     return False
@@ -1987,7 +2193,9 @@ class _Correlation:
     strong: bool = False
 
 
-def _correlate(table: Table, spec: MappingSpec, column: int, rows: Iterable[int]) -> _Correlation:
+def _correlate(
+    table: Table, spec: MappingSpec, column: int, rows: Iterable[int], *, card: bool = False
+) -> _Correlation:
     """Compare the direction words of ``column`` with the signs of the amounts on ``rows``.
 
     A row votes for "positive is money out" when an outflow word stands
@@ -1996,10 +2204,17 @@ def _correlate(table: Table, spec: MappingSpec, column: int, rows: Iterable[int]
     do not vote. When plain direction words of both directions occur
     (``debit``/``credit``, ``withdrawal``/``deposit``) only they vote;
     otherwise the transaction-type words do too (``purchase``, ``payment``,
-    ``fee``, ``refund``). With at least :data:`CORRELATION_MIN_ROWS` votes
-    and both directions present, :data:`CORRELATION_AGREE_MIN` of them
-    agreeing proves that convention and anything less is a contradiction;
-    fewer rows or one direction alone prove nothing.
+    ``fee``, ``refund``; ``sale`` and ``return`` only when ``card``: the
+    header names a card, :data:`CARD_OUTFLOW_WORDS`).
+
+    With at least :data:`CORRELATION_MIN_ROWS` votes and both directions
+    present, a convention is proven when the votes agree on it: every vote
+    of plain direction words, or :data:`CORRELATION_AGREE_MIN` of the type
+    words, counted over all rows and over the rows of each direction apart.
+    Anything less is a contradiction: one refund printed negative among
+    unsigned amounts must not make the one payment beside ``CR`` money out
+    because forty purchases outvote it. Fewer rows or one direction alone
+    prove nothing.
     """
     if spec.amount_column is None:
         return _Correlation()
@@ -2007,29 +2222,40 @@ def _correlate(table: Table, spec: MappingSpec, column: int, rows: Iterable[int]
     for index in rows:
         row = table.rows[index]
         raw = _cell(row, spec.amount_column)
-        amount = parse_cell_amount(raw, spec.decimal_separator) if raw is not None else None
+        amount = _amount(raw, spec.decimal_separator) if raw is not None else None
         if amount:
             pairs.append((_header_cell(_cell(row, column) or ""), amount > 0))
     plain = [(word in OUTFLOW_WORDS, positive) for word, positive in pairs if word in _DIRECTION]
     strong = any(out for out, _ in plain) and any(not out for out, _ in plain)
+    outflow = _ANY_OUTFLOW if card else _ANY_OUTFLOW - CARD_OUTFLOW_WORDS
+    inflow = _ANY_INFLOW if card else _ANY_INFLOW - CARD_INFLOW_WORDS
     votes = (
         plain
         if strong
-        else [
-            (word in _ANY_OUTFLOW, positive)
-            for word, positive in pairs
-            if word in _ANY_OUTFLOW | _ANY_INFLOW
-        ]
+        else [(word in outflow, positive) for word, positive in pairs if word in outflow | inflow]
     )
-    both = any(out for out, _ in votes) and any(not out for out, _ in votes)
-    if len(votes) < CORRELATION_MIN_ROWS or not both:
+    # Each direction's rows as votes for "positive is money out".
+    sides = [[out == positive for out, positive in votes if out is side] for side in (True, False)]
+    if len(votes) < CORRELATION_MIN_ROWS or not all(sides):
         return _Correlation(strong=strong)
-    outflow_positive = sum(1 for out, positive in votes if out == positive) / len(votes)
-    if outflow_positive >= CORRELATION_AGREE_MIN:
+    least = 1.0 if strong else CORRELATION_AGREE_MIN
+    shares = [sum(group) / len(group) for group in (*sides, sides[0] + sides[1])]
+    if all(share >= least for share in shares):
         return _Correlation(Sign.OUTFLOW_POSITIVE, strong=strong)
-    if 1 - outflow_positive >= CORRELATION_AGREE_MIN:
+    if all(1 - share >= least for share in shares):
         return _Correlation(Sign.INFLOW_POSITIVE, strong=strong)
     return _Correlation(contradicts=True, strong=strong)
+
+
+def _mostly_inflow(amounts: Iterable[Decimal]) -> bool:
+    """Whether more of the ``amounts`` are money in than money out.
+
+    That is the shape of a card export that lists its purchases as positive
+    amounts, and of the balance owed on a card, which adds up with the
+    purchases read as money in.
+    """
+    signs = [amount > 0 for amount in amounts if amount]
+    return 2 * sum(signs) > len(signs)
 
 
 def _sign_says_nothing(amounts: Sequence[Decimal]) -> bool:
@@ -2037,11 +2263,9 @@ def _sign_says_nothing(amounts: Sequence[Decimal]) -> bool:
 
     Every amount of one sign says nothing about which way the money went,
     and more rows of money in than of money out is the shape of a card
-    export that lists its purchases as positive amounts.
+    export (:func:`_mostly_inflow`).
     """
-    positive = sum(1 for amount in amounts if amount > 0)
-    negative = sum(1 for amount in amounts if amount < 0)
-    return positive == 0 or positive > negative
+    return not any(amount > 0 for amount in amounts) or _mostly_inflow(amounts)
 
 
 def _balances_agree(statements: list[ParsedStatement]) -> bool:
@@ -2093,7 +2317,8 @@ def suggest_mapping(table: Table, *, today: date | None = None) -> MappingSugges
     are three-letter codes, an indicator holds direction words such as
     ``DR``/``CR``, an account column several account-number-like values
     or, under a header that is exactly ``Account``, ``Account Name`` or
-    ``Source Account``, a few names that each repeat: :func:`_role_fit`);
+    ``Source Account``, a few names most rows of which repeat:
+    :func:`_role_fit`);
     an empty column never takes one. A column of direction words is also
     found by its cells alone (:func:`_direction_column`). Beside unsigned
     amounts it is the indicator that signs each row; beside amounts that
@@ -2112,8 +2337,8 @@ def suggest_mapping(table: Table, *, today: date | None = None) -> MappingSugges
     read month first and is a doubt (``date_order_guessed``) unless the
     table itself settles the order (:func:`_settled_date_format`: a cell
     or a second date column only one order reads, ``today``, the day the
-    file was received, which no row is dated after, the same day either
-    way, or the days of one month). The doubts about the sign and the kind
+    file was received, which the file's rows are not dated after, the same
+    day either way, or the days of one month). The doubts about the sign and the kind
     of table are described on :class:`MappingSuggestion`. When no row is a
     header, the table is read from the shapes of its columns
     (:func:`_headerless`): a suggestion with ``has_header`` False that is a
@@ -2147,9 +2372,10 @@ def suggest_mapping(table: Table, *, today: date | None = None) -> MappingSugges
     footer = sum(1 for r in (*skipped, *trailing) if r > last)
     accounts = sum(1 for s in statements if s.transactions) or 1
     amounts = [t.amount for s in statements for t in s.transactions]
+    card = names_card(header)
     correlation = _Correlation()
     if best.direction is not None and spec.indicator_column is None:
-        correlation = _correlate(table, spec, best.direction, rows)
+        correlation = _correlate(table, spec, best.direction, rows, card=card)
     against_balance = (
         balance_agrees and correlation.sign is not None and correlation.sign is not spec.sign
     )
@@ -2194,15 +2420,21 @@ def suggest_mapping(table: Table, *, today: date | None = None) -> MappingSugges
         doubts.append("indicator_values_unknown")
     if against_balance or (correlation.contradicts and (correlation.strong or not balance_agrees)):
         doubts.append("indicator_contradicts_sign")
-    card = names_card(header)
     one_sided = _sign_says_nothing(amounts)
     if rows and (
         (evidence is None and (card or one_sided))
         # A card's running balance is what is owed: it adds up with
         # purchases read as money in, so it proves nothing about a card.
-        # Without a header no word says "card": a balance that has most
-        # rows as money in is that shape, and is not believed either.
-        or (evidence == "balance" and (card or (one_sided and not spec.has_header)))
+        # Not every card export has a header word that says "card": a
+        # balance that has most rows as money in is that shape, and is not
+        # believed either (without a header, nor one with every amount of
+        # one sign).
+        or (
+            evidence == "balance"
+            and (card or _mostly_inflow(amounts) or (one_sided and not spec.has_header))
+        )
+        # A debit or credit column that mixes signs, most of them negative.
+        or _notation_unsettled(table, spec)
     ):
         doubts.append("sign_unverified")
     if names_trades(header):

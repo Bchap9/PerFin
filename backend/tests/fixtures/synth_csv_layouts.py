@@ -30,6 +30,17 @@ so a test runs it through the real delimited extractor or the upload path.
 * :func:`export_with_payee_and_category` - no account column; a ``Payee``
   and a ``Category`` column of a few repeated values.
 
+* :func:`card_unsigned_with_direction_words` - unsigned amounts beside a
+  column of direction words, with one refund printed as a negative amount.
+* :func:`seller_ledger_with_type_column` - a seller's own ledger: ``Sale``
+  rows are money in and ``Refund`` rows money out.
+* :func:`card_with_balance_owed` - a card export under plain headers with a
+  running balance of what is owed.
+* :func:`debit_column_printed_negative` - an ``Amount Debit`` column that
+  prints its amounts negative, with or without one positive cell.
+* :func:`aggregator_named_accounts` - an ``Account`` column of the given
+  names (names with digits in them, an account seen once).
+
 Words, shapes and rows that are not transactions:
 
 * :func:`export_dated_under` - the date column under another name
@@ -54,6 +65,8 @@ Words, shapes and rows that are not transactions:
   ``14-Aug-25`` dates.
 * :func:`checking_with_daily_balance` - a running balance printed on the
   last row of each day only.
+* :func:`export_with_trailing_rows` - readable rows followed by the given
+  rows (a second section, unposted items, totals).
 
 Dates whose day/month order is the question:
 
@@ -131,6 +144,13 @@ TWO_ACCOUNT_ROWS: Final[tuple[tuple[str, str, str, str], ...]] = (
 )
 
 
+#: The days of :func:`card_positive_purchases` with ``low_days``: none above
+#: the 12th, two purchases on one day and days without any, as a month of
+#: card use has them (one row on each day in turn is also what one row a
+#: month looks like written day first).
+LOW_DAYS: Final = (1, 2, 2, 4, 5, 7, 8, 9, 11)
+
+
 def _file(header: Row, rows: Sequence[Row], *, delimiter: str = ",") -> bytes:
     lines = [delimiter.join(cells) for cells in (header, *rows)]
     return ("\r\n".join(lines) + "\r\n").encode("utf-8")
@@ -139,12 +159,14 @@ def _file(header: Row, rows: Sequence[Row], *, delimiter: str = ",") -> bytes:
 def card_positive_purchases(*, low_days: bool = False) -> bytes:
     """``Date,Description,Amount``: eight purchases positive, one payment negative.
 
-    ``low_days`` dates the rows ``03/01/2026`` to ``03/09/2026``: one month,
-    and no day that only one day/month order reads.
+    ``low_days`` dates the rows on :data:`LOW_DAYS` of March 2026: one
+    month, and no day that only one day/month order reads.
     """
     rows: Sequence[Row] = CARD_ROWS
     if low_days:
-        rows = [(f"03/{day:02d}/2026", *row[1:]) for day, row in enumerate(CARD_ROWS, start=1)]
+        rows = [
+            (f"03/{day:02d}/2026", *row[1:]) for day, row in zip(LOW_DAYS, CARD_ROWS, strict=True)
+        ]
     return _file(("Date", "Description", "Amount"), rows)
 
 
@@ -238,6 +260,107 @@ def checking_signed_no_balance() -> bytes:
         ("2026-08-27", "Brightwater Utilities", "-63.80"),
     ]
     return _file(("Date", "Description", "Amount"), rows)
+
+
+def card_unsigned_with_direction_words(words: tuple[str, str] = ("DR", "CR")) -> bytes:
+    """``Date,Description,Amount,<header>``: unsigned amounts, a word for the direction.
+
+    Thirty-nine purchases beside the first of ``words``, one refund printed
+    as a negative amount beside that same word, and one payment beside the
+    second. ``words`` are the money-out and the money-in word; with
+    ``Purchase``/``Payment`` the column is headed ``Type``, else ``DR/CR``.
+    """
+    out, into = words
+    rows: list[Row] = [
+        (
+            f"2026-0{3 + index // 28}-{1 + index % 28:02d}",
+            f"SYNTHETIC SHOP {index}",
+            f"{index + 4}.15",
+            out,
+        )
+        for index in range(39)
+    ]
+    rows.append(("2026-04-12", "SYNTHETIC SHOP 3 REFUND", "-7.15", out))
+    rows.append(("2026-04-14", "PAYMENT RECEIVED THANK YOU", "480.00", into))
+    header = "Type" if out == "Purchase" else "DR/CR"
+    return _file(("Date", "Description", "Amount", header), rows)
+
+
+def seller_ledger_with_type_column(header: str = "Description") -> bytes:
+    """``Date,<header>,Type,Amount``: five ``Sale`` rows positive, five ``Refund`` rows negative.
+
+    The account's own point of view: a sale is money in. ``header`` renames
+    the description column (``Merchant``: a header that names a card).
+    """
+    figures = (
+        "38.00",
+        "52.50",
+        "-38.00",
+        "17.25",
+        "24.00",
+        "-24.00",
+        "69.90",
+        "-9.00",
+        "-4.50",
+        "-6.75",
+    )
+    rows = [
+        (
+            f"2026-03-{2 + index * 2:02d}",
+            f"Synthetic order {1400 + index}",
+            "Refund" if amount.startswith("-") else "Sale",
+            amount,
+        )
+        for index, amount in enumerate(figures)
+    ]
+    return _file(("Date", header, "Type", "Amount"), rows)
+
+
+def card_with_balance_owed() -> bytes:
+    """``Date,Description,Amount,Balance`` of :data:`CARD_ROWS`: the balance is what is owed.
+
+    No header word names a card. The balance goes up with a purchase and
+    down with the payment, so it adds up with the purchases read as money in.
+    """
+    owed = Decimal("412.90")
+    rows = []
+    for day, text, amount in CARD_ROWS:
+        owed += Decimal(amount)
+        rows.append((day, text, amount, str(owed)))
+    return _file(("Date", "Description", "Amount", "Balance"), rows)
+
+
+def debit_column_printed_negative(*, reversal: bool = False) -> bytes:
+    """``Date,Description,Amount Debit,Amount Credit``: nine withdrawals printed negative.
+
+    One deposit stands in the credit column. ``reversal`` adds a row with a
+    positive cell in the debit column.
+    """
+    rows: list[Row] = [
+        (f"2026-03-{day:02d}", f"SYNTHETIC SHOP {day}", f"-{day + 10}.40", "")
+        for day in range(1, 10)
+    ]
+    rows.append(("2026-03-10", "Marlow Design Payroll", "", "900.00"))
+    if reversal:
+        rows.append(("2026-03-11", "Reversal SYNTHETIC SHOP 3", "13.40", ""))
+    return _file(("Date", "Description", "Amount Debit", "Amount Credit"), rows)
+
+
+def aggregator_named_accounts(names: Sequence[str]) -> bytes:
+    """``Date,Account,Description,Amount``: one row per cell of ``names``, in that order.
+
+    Every fourth row is money in, the others money out.
+    """
+    rows = [
+        (
+            f"2026-03-{index + 1:02d}",
+            name,
+            f"SYNTHETIC PAYEE {index}",
+            "140.00" if index % 4 == 3 else f"-{index + 11}.30",
+        )
+        for index, name in enumerate(names)
+    ]
+    return _file(("Date", "Account", "Description", "Amount"), rows)
 
 
 def aggregator_two_accounts(header: str = "Account") -> bytes:
@@ -444,6 +567,15 @@ def checking_with_daily_balance() -> bytes:
         ("2026-07-08", "Brightwater Utilities", "-66.40", "4250.65"),
     ]
     return _file(("Date", "Description", "Amount", "Balance"), rows)
+
+
+def export_with_trailing_rows(trailing: Sequence[Row], *, readable: int = 6) -> bytes:
+    """``Date,Description,Amount``: ``readable`` rows of money out, then ``trailing`` as given."""
+    rows: list[Row] = [
+        (f"2026-03-{day:02d}", f"SYNTHETIC SHOP {day}", f"-{day + 20}.10")
+        for day in range(1, readable + 1)
+    ]
+    return _file(("Date", "Description", "Amount"), [*rows, *trailing])
 
 
 #: (description, amount as printed) of :func:`checking_dated`, repeated as
