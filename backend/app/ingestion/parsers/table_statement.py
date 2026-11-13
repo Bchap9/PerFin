@@ -884,6 +884,10 @@ SECTION_TITLE_LINES: Final = 3
 _LAST4_DIGITS: Final = 4
 _MIN_SECTIONS: Final = 2
 TITLE_MAX: Final = 200
+#: What a cell of a column of markers says of the amount left of it
+#: (normalised; True: money in). The same words ``read_amount`` reads after
+#: a figure.
+OWN_COLUMN_MARKERS: Final[Mapping[str, bool]] = {"cr": True, "dr": False, "db": False}
 
 
 def section_name(title: str | None) -> tuple[str | None, str | None]:
@@ -1732,11 +1736,15 @@ class TableStatementParser(DocumentParser):
             description = ["CHECK", number]
         rule = title.rule if title is not None else None
         used = [c for role_cells in cells.values() for c in role_cells]
+        amount = self._amount(cells.get("amount"))
+        marker = self._own_column_marker(cells, line)
+        if amount is not None and marker is not None:
+            amount = replace(amount, credit=marker)
         return _Row(
             page=line.page,
             date_text=date_text,
             description=description,
-            amount=self._amount(cells.get("amount")),
+            amount=amount,
             debit=self._amount(cells.get("debit")),
             credit=self._amount(cells.get("credit")),
             balance=self._amount(cells.get("balance")),
@@ -1749,6 +1757,43 @@ class TableStatementParser(DocumentParser):
             section=section,
             carried=carried,
         )
+
+    def _own_column_marker(
+        self, cells: Mapping[Role, list[Cell]], line: ViewLine | None = None
+    ) -> bool | None:
+        """What a marker printed in a column of its own says of the row's
+        amount (``Amount | DC``: ``410.00 | DB``): True for ``CR``, False for
+        ``DR`` and ``DB``, None when there is none.
+
+        The marker is the nearest cell right of the amount in a column no
+        heading word names, and is nothing but the marker (``Dr. Office`` is
+        a category). It is the amount's only when the amount prints none of
+        its own and no figure stands between the two: a marker behind
+        another figure is that figure's (``410.00 | 9,590.00 | CR``), in a
+        column or, on ``line``, in none. A row with a debit or a credit
+        column has its direction already.
+        """
+        if cells.get("debit") or cells.get("credit"):
+            return None
+        figure = cells.get("amount")
+        amount = self._amount(figure)
+        if not figure or amount is None or amount.credit is not None:
+            return None
+        edge = max(c.x1 for c in figure)
+        right = [c for c in cells.get("other", []) if c.x0 >= edge]
+        if not right:
+            return None
+        cell = min(right, key=lambda c: c.x0)
+        credit = OWN_COLUMN_MARKERS.get(normalise(cell.text))
+        if credit is None:
+            return None
+        printed = [c for role_cells in cells.values() for c in role_cells]
+        if line is not None:
+            printed += line.cells
+        between = (c for c in printed if c.x0 >= edge and c.x1 <= cell.x0)
+        if any(read_amount(c.text) is not None for c in between):
+            return None
+        return credit
 
     def _across_entries(self, cells: Sequence[Cell], date_text: str) -> int:
         """How many entries ``cells`` hold: the cells right of the left group
