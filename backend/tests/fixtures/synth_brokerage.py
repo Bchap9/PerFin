@@ -24,6 +24,11 @@ person.
   ``BUYSTOCK``, ``SELLSTOCK``, ``INCOME``, ``REINVEST``, ``INVEXPENSE``,
   ``INVBANKTRAN``) and ``INVBAL``; with ``plan`` also the 401(k) aggregates
   a retirement plan's download carries (``INV401K``, ``INV401KBAL``).
+* :func:`ofx_debt_position`, :func:`ofx_debt_position_per_unit`,
+  :func:`ofx_option_position`, :func:`ofx_truncated_values` and
+  :func:`ofx_option_trades` are small fixed OFX files (SGML, one invented
+  account) for the two prices OFX does not quote per unit: a bond's, per 100
+  of face value, and an option's, per share of a contract.
 * :func:`listed_twice` prints one holding as two positions on the same day
   at two prices, as a plan lists one per contribution source.
 * Tampering (SECURITY.md C12): ``"extra_row"`` prints a forged buy the cash
@@ -659,3 +664,119 @@ def ofx_investment(
         "CHARSET:1252\nCOMPRESSION:NONE\nOLDFILEUID:NONE\nNEWFILEUID:NONE\n\n"
         f"<OFX>{body}</OFX>\n"
     ).encode("ascii")
+
+
+# ---------------------------------------------------------------------------
+# OFX prices that are not per unit (bonds per 100, options per share)
+# ---------------------------------------------------------------------------
+
+#: Invented account and instruments of the small files below (CUSIP-shaped ids).
+SMALL_ACCOUNT: Final = "555000316642"
+DEBT_CUSIP: Final = "ZZ0000E58"
+OPTION_CUSIP: Final = "ZZ0000F66"
+_SMALL_DAY: Final = date(2026, 10, 30)
+
+
+def _small_secid(cusip: str) -> str:
+    return f"<SECID><UNIQUEID>{cusip}</UNIQUEID><UNIQUEIDTYPE>CUSIP</UNIQUEIDTYPE></SECID>"
+
+
+def _small_position(aggregate: str, cusip: str, units: str, price: str, value: str) -> str:
+    return (
+        f"<{aggregate}><INVPOS>{_small_secid(cusip)}<HELDINACCT>CASH</HELDINACCT>"
+        f"<POSTYPE>LONG</POSTYPE><UNITS>{units}</UNITS><UNITPRICE>{price}</UNITPRICE>"
+        f"<MKTVAL>{value}</MKTVAL><DTPRICEASOF>{_ofx_date(_SMALL_DAY)}</DTPRICEASOF>"
+        f"</INVPOS></{aggregate}>"
+    )
+
+
+def _small_ofx(*, positions: str = "", activity: str = "", seclist: str = "") -> bytes:
+    """One ``INVSTMTRS`` of the invented account around the given aggregates."""
+    start = _SMALL_DAY.replace(day=1)
+    lists = (
+        f"<INVTRANLIST><DTSTART>{_ofx_date(start)}</DTSTART>"
+        f"<DTEND>{_ofx_date(_SMALL_DAY)}</DTEND>{activity}</INVTRANLIST>"
+    )
+    if positions:
+        lists += f"<INVPOSLIST>{positions}</INVPOSLIST>"
+    body = (
+        "<SIGNONMSGSRSV1><SONRS><STATUS><CODE>0</CODE><SEVERITY>INFO</SEVERITY></STATUS>"
+        f"<DTSERVER>{_ofx_date(_SMALL_DAY)}</DTSERVER><LANGUAGE>ENG</LANGUAGE>"
+        f"<FI><ORG>{INSTITUTION}</ORG><FID>9105</FID></FI></SONRS></SIGNONMSGSRSV1>"
+        "<INVSTMTMSGSRSV1><INVSTMTTRNRS><TRNUID>1</TRNUID>"
+        "<STATUS><CODE>0</CODE><SEVERITY>INFO</SEVERITY></STATUS>"
+        f"<INVSTMTRS><DTASOF>{_ofx_date(_SMALL_DAY)}</DTASOF><CURDEF>USD</CURDEF>"
+        f"<INVACCTFROM><BROKERID>placeholder.example</BROKERID>"
+        f"<ACCTID>{SMALL_ACCOUNT}</ACCTID></INVACCTFROM>{lists}"
+        "</INVSTMTRS></INVSTMTTRNRS></INVSTMTMSGSRSV1>"
+    )
+    if seclist:
+        body += f"<SECLISTMSGSRSV1><SECLIST>{seclist}</SECLIST></SECLISTMSGSRSV1>"
+    return (
+        "OFXHEADER:100\nDATA:OFXSGML\nVERSION:102\nSECURITY:NONE\nENCODING:USASCII\n"
+        "CHARSET:1252\nCOMPRESSION:NONE\nOLDFILEUID:NONE\nNEWFILEUID:NONE\n\n"
+        f"<OFX>{body}</OFX>\n"
+    ).encode("ascii")
+
+
+def _debt_info() -> str:
+    return (
+        f"<DEBTINFO><SECINFO>{_small_secid(DEBT_CUSIP)}"
+        "<SECNAME>Sample Township 4.1% Note 2031</SECNAME></SECINFO>"
+        "<PARVALUE>1000.00</PARVALUE><DEBTTYPE>COUPON</DEBTTYPE></DEBTINFO>"
+    )
+
+
+def ofx_debt_position() -> bytes:
+    """A bond the way OFX defines it: 25,000 of face value priced per 100."""
+    return _small_ofx(
+        positions=_small_position("POSDEBT", DEBT_CUSIP, "25000", "98.750", "24687.50"),
+        seclist=_debt_info(),
+    )
+
+
+def ofx_debt_position_per_unit() -> bytes:
+    """The same bond from a broker that quotes the price of one unit of face value."""
+    return _small_ofx(
+        positions=_small_position("POSDEBT", DEBT_CUSIP, "25000", "0.98750", "24687.50"),
+        seclist=_debt_info(),
+    )
+
+
+def ofx_option_position(shperctrct: int | None = 100) -> bytes:
+    """Two option contracts priced per share; ``shperctrct`` ``None`` leaves the size out."""
+    size = "" if shperctrct is None else f"<SHPERCTRCT>{shperctrct}</SHPERCTRCT>"
+    info = (
+        f"<OPTINFO><SECINFO>{_small_secid(OPTION_CUSIP)}"
+        "<SECNAME>PBXB Dec 18 2026 45 Call</SECNAME></SECINFO>"
+        "<OPTTYPE>CALL</OPTTYPE><STRIKEPRICE>45.00</STRIKEPRICE>"
+        f"<DTEXPIRE>20261218120000</DTEXPIRE>{size}</OPTINFO>"
+    )
+    return _small_ofx(
+        positions=_small_position("POSOPT", OPTION_CUSIP, "2", "3.40", "680.00"),
+        seclist=info,
+    )
+
+
+def ofx_truncated_values() -> bytes:
+    """Two stock positions; the first value is the product cut (not rounded) to the cent."""
+    return _small_ofx(
+        positions=(
+            _small_position("POSSTOCK", BY_SYMBOL["PBXB"].cusip, "41.263", "19.8700000", "819.89")
+            + _small_position("POSSTOCK", BY_SYMBOL["PBXD"].cusip, "12", "50.00", "600.00")
+        )
+    )
+
+
+def ofx_option_trades() -> bytes:
+    """One ``BUYOPT`` of two contracts at 1.85 a share; the file has no ``SECLIST``."""
+    trade = (
+        "<BUYOPT><INVBUY><INVTRAN><FITID>PBO-1</FITID>"
+        f"<DTTRADE>{_ofx_date(_SMALL_DAY - timedelta(days=9))}</DTTRADE>"
+        "<MEMO>Bought to open</MEMO></INVTRAN>"
+        f"{_small_secid(OPTION_CUSIP)}<UNITS>2</UNITS><UNITPRICE>1.85</UNITPRICE>"
+        "<COMMISSION>0.65</COMMISSION><TOTAL>-370.65</TOTAL>"
+        "<SUBACCTSEC>CASH</SUBACCTSEC><SUBACCTFUND>CASH</SUBACCTFUND></INVBUY>"
+        "<OPTBUYTYPE>BUYTOOPEN</OPTBUYTYPE></BUYOPT>"
+    )
+    return _small_ofx(activity=trade)
