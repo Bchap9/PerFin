@@ -18,8 +18,23 @@ period, an opening and a closing balance and rows that reconcile:
   figure in both money columns of every row, one of them a zero
   (``$250.00 | -$0.00``).
 
+And statements whose balances are printed where a reader may take them for
+something else:
+
+* :func:`summary_table_balances`: a summary box under the header ``Date |
+  Description | Amount`` whose two dated lines are the ``Beginning Balance``
+  and the ``Ending Balance``, then the transactions under the same header.
+* :func:`summary_label_wrapped`: ``Beginning Balance on`` and its date on two
+  lines, the figure to their right half-way between the two: three lines.
+* :func:`previous_statement_balance_first`: a summary that starts with
+  ``Previous Statement Balance`` and ends, three lines on, with ``New
+  Balance``.
+* :func:`shares_opening_under_deposit`: two shares of one credit union
+  member, each ``Beginning Balance`` figure printed under ``Deposit``.
+
 :data:`EXPECTED_ROWS` gives, per builder, the rows a correct reading returns
-(``(posted, amount, payee)``, money out negative).
+(``(posted, amount, payee)``, money out negative); :data:`EXPECTED_BALANCES`
+the opening and closing balance of the builders that are about balances.
 """
 
 from __future__ import annotations
@@ -55,10 +70,8 @@ def _money(value: Decimal) -> str:
 def _head(
     c: canvas.Canvas, bank: str, last4: str, period: str, opening: Decimal, closing: Decimal
 ) -> None:
-    """The top of every statement here: who, which account, when, the two balances."""
-    _line(c, 750, [(40, bank)], size=14, bold=True)
-    _line(c, 750, [(380, f"Account Number: ******{last4}")])
-    _line(c, 736, [(380, f"Statement Period: {period}")])
+    """The top of most statements here: who, which account, when, the two balances."""
+    _top(c, bank, last4, period)
     _rows(
         c,
         700,
@@ -67,6 +80,13 @@ def _head(
             [(40, "Ending Balance"), (-300, f"${_money(closing)}")],
         ],
     )
+
+
+def _top(c: canvas.Canvas, bank: str, last4: str, period: str) -> None:
+    """Who, which account and when; the balances are the builder's own business."""
+    _line(c, 750, [(40, bank)], size=14, bold=True)
+    _line(c, 750, [(380, f"Account Number: ******{last4}")])
+    _line(c, 736, [(380, f"Statement Period: {period}")])
     _line(c, 60, [(40, _FOOTER)], size=7)
 
 
@@ -261,9 +281,204 @@ def zero_placeholder_columns() -> bytes:
     return buf.getvalue()
 
 
+# -- balances printed where a reader may take them for something else ------------
+
+_BOX_OPENING: Final = _d("1,204.50")
+_BOX_ROWS: Final[tuple[ExpectedRow, ...]] = (
+    (date(2026, 2, 3), _d("-58.12"), "POS Purchase Thistle Lane Grocery"),
+    (date(2026, 2, 6), _d("1,730.00"), "Direct Deposit Harrow Mill Works"),
+    (date(2026, 2, 10), _d("-945.00"), "Rent Osprey Terrace Homes"),
+    (date(2026, 2, 17), _d("-71.36"), "Glenmoor Water Online Pmt"),
+    (date(2026, 2, 20), _d("-25.00"), "ATM Withdrawal Station Road"),
+    (date(2026, 2, 26), _d("210.00"), "Mobile Deposit"),
+)
+_SIGNED_HEADER: Final = [(40, "Date"), (110, "Description"), (-500, "Amount")]
+
+
+def _signed_rows(c: canvas.Canvas, y: float, rows: Sequence[ExpectedRow]) -> None:
+    """A ``Date | Description | Amount`` table: its header at ``y``, signed amounts."""
+    _line(c, y, _SIGNED_HEADER, size=8)
+    _rows(
+        c,
+        y - 14,
+        [
+            [(40, posted.strftime("%m/%d/%Y")), (110, payee), (-500, f"{amount:,.2f}")]
+            for posted, amount, payee in rows
+        ],
+    )
+
+
+def summary_table_balances() -> bytes:
+    """The two balances as dated lines of a summary box with the table's own header."""
+    buf = io.BytesIO()
+    c = canvas.Canvas(buf, pagesize=letter)
+    closing = _running(_BOX_OPENING, _BOX_ROWS)[-1]
+    _top(c, "Hollowbrook Community Bank", "7418", "02/01/2026 - 02/28/2026")
+    _line(c, 706, [(40, "Account Summary")], size=11, bold=True)
+    _line(c, 690, _SIGNED_HEADER, size=8)
+    _rows(
+        c,
+        676,
+        [
+            [(40, "02/01/2026"), (110, "Beginning Balance"), (-500, f"${_money(_BOX_OPENING)}")],
+            [(40, "02/28/2026"), (110, "Ending Balance"), (-500, f"${_money(closing)}")],
+        ],
+    )
+    _line(c, 630, [(40, "Account Activity")], size=11, bold=True)
+    _signed_rows(c, 614, _BOX_ROWS)
+    c.save()
+    return buf.getvalue()
+
+
+_WRAP_OPENING: Final = _d("3,061.75")
+_WRAP_ROWS: Final[tuple[ExpectedRow, ...]] = (
+    (date(2026, 8, 4), _d("-112.40"), "POS Purchase Birchgate Pharmacy"),
+    (date(2026, 8, 7), _d("2,015.00"), "Direct Deposit Lowmoor Textiles"),
+    (date(2026, 8, 12), _d("-1,320.00"), "Rent Fernhill Court Lettings"),
+    (date(2026, 8, 19), _d("-48.95"), "Ashdown Broadband Autopay"),
+    (date(2026, 8, 27), _d("-80.00"), "ATM Withdrawal Market Cross"),
+)
+
+
+def summary_label_wrapped() -> bytes:
+    """``Beginning Balance on`` / its figure / its date as three lines 5 points apart."""
+    buf = io.BytesIO()
+    c = canvas.Canvas(buf, pagesize=letter)
+    closing = _running(_WRAP_OPENING, _WRAP_ROWS)[-1]
+    _top(c, "Stonecrop Mutual Bank", "6027", "08/01/2026 - 08/31/2026")
+    _line(c, 705, [(40, "Beginning Balance on")])
+    _line(c, 700, [(-300, f"${_money(_WRAP_OPENING)}")])
+    _line(c, 695, [(40, "August 1, 2026")])
+    _line(c, 672, [(40, "Ending Balance"), (-300, f"${_money(closing)}")])
+    _signed_rows(c, 640, _WRAP_ROWS)
+    c.save()
+    return buf.getvalue()
+
+
+_PREVIOUS_OPENING: Final = _d("640.15")
+_PREVIOUS_ROWS: Final[tuple[ExpectedRow, ...]] = (
+    (date(2026, 10, 2), _d("1,480.00"), "Direct Deposit Wexcombe Joinery"),
+    (date(2026, 10, 6), _d("-610.00"), "Rent Sorrel Bank Cottages"),
+    (date(2026, 10, 13), _d("-93.27"), "POS Purchase Dunmere Farm Shop"),
+    (date(2026, 10, 21), _d("75.00"), "Transfer From Savings"),
+    (date(2026, 10, 28), _d("-134.60"), "Pellbrook Gas Online Pmt"),
+)
+
+
+def previous_statement_balance_first() -> bytes:
+    """``Previous Statement Balance`` first, ``New Balance`` three lines later."""
+    buf = io.BytesIO()
+    c = canvas.Canvas(buf, pagesize=letter)
+    closing = _running(_PREVIOUS_OPENING, _PREVIOUS_ROWS)[-1]
+    money_in = sum((a for _, a, _ in _PREVIOUS_ROWS if a > 0), Decimal(0))
+    money_out = sum((a for _, a, _ in _PREVIOUS_ROWS if a < 0), Decimal(0))
+    _top(c, "Sedgewick Savings Association", "1953", "10/01/2026 - 10/31/2026")
+    _rows(
+        c,
+        700,
+        [
+            [(40, "Previous Statement Balance"), (-300, f"${_money(_PREVIOUS_OPENING)}")],
+            [(40, "Total Deposits"), (-300, f"${_money(money_in)}")],
+            [(40, "Total Withdrawals"), (-300, f"${_money(money_out)}")],
+            [(40, "New Balance"), (-300, f"${_money(closing)}")],
+        ],
+    )
+    _signed_rows(c, 630, _PREVIOUS_ROWS)
+    c.save()
+    return buf.getvalue()
+
+
+#: ``(title, last four digits, opening, rows)`` of each share of the member.
+_SHARES: Final[tuple[tuple[str, str, Decimal, tuple[ExpectedRow, ...]], ...]] = (
+    (
+        "REGULAR SAVINGS - ID 0001",
+        "0001",
+        _d("3,200.00"),
+        (
+            (date(2026, 6, 9), _d("150.00"), "Transfer From Share 0009"),
+            (date(2026, 6, 30), _d("0.71"), "Dividend Paid"),
+        ),
+    ),
+    (
+        "EVERYDAY CHECKING - ID 0009",
+        "0009",
+        _d("968.30"),
+        (
+            (date(2026, 6, 4), _d("-61.05"), "POS Debit AMBERLEY GREENGROCER"),
+            (date(2026, 6, 9), _d("-150.00"), "Transfer To Share 0001"),
+            (date(2026, 6, 16), _d("1,405.00"), "ACH Deposit TALLOWFIELD PAYROLL"),
+        ),
+    ),
+)
+
+
+def shares_opening_under_deposit() -> bytes:
+    """Two shares of one member; each opening figure sits under ``Deposit``."""
+    buf = io.BytesIO()
+    c = canvas.Canvas(buf, pagesize=letter)
+    _line(c, 750, [(40, "Meadowlark Members Credit Union")], size=14, bold=True)
+    _line(c, 750, [(380, "Statement Period: 06/01/2026 - 06/30/2026")])
+    _line(c, 738, [(380, "Member Number: ******8834")])
+    _line(c, 60, [(40, _FOOTER)], size=7)
+    y = 700.0
+    for title, _, opening, rows in _SHARES:
+        balances = _running(opening, rows)
+        _line(c, y, [(40, title)], size=11, bold=True)
+        _line(
+            c,
+            y - 16,
+            [
+                (40, "Trans Date"),
+                (110, "Transaction Description"),
+                (-400, "Withdrawal"),
+                (-470, "Deposit"),
+                (-550, "Balance"),
+            ],
+            size=8,
+        )
+        y = _rows(
+            c,
+            y - 29,
+            [
+                [(40, "06/01"), (110, "Beginning Balance"), (-470, _money(opening))],
+                *(
+                    [
+                        (40, posted.strftime("%m/%d")),
+                        (110, payee),
+                        (-400 if amount < 0 else -470, _money(amount)),
+                        (-550, _money(balance)),
+                    ]
+                    for (posted, amount, payee), balance in zip(rows, balances, strict=True)
+                ),
+                [(40, "06/30"), (110, "Ending Balance"), (-550, _money(balances[-1]))],
+            ],
+        )
+        y -= 17
+    c.save()
+    return buf.getvalue()
+
+
 EXPECTED_ROWS: Final[dict[str, list[ExpectedRow]]] = {
     "left_heading_right_figures": list(_LEFT_ROWS),
     "tight_date_checking": list(_TIGHT_ROWS),
     "tight_date_one_money_column": list(_ONE_ROWS),
     "zero_placeholder_columns": list(_ZERO_ROWS),
+    "summary_table_balances": list(_BOX_ROWS),
+    "summary_label_wrapped": list(_WRAP_ROWS),
+    "previous_statement_balance_first": list(_PREVIOUS_ROWS),
 }
+
+#: ``(opening, closing)`` of the builders that are about balances.
+EXPECTED_BALANCES: Final[dict[str, tuple[Decimal, Decimal]]] = {
+    "summary_table_balances": (_BOX_OPENING, _running(_BOX_OPENING, _BOX_ROWS)[-1]),
+    "summary_label_wrapped": (_WRAP_OPENING, _running(_WRAP_OPENING, _WRAP_ROWS)[-1]),
+    "previous_statement_balance_first": (
+        _PREVIOUS_OPENING,
+        _running(_PREVIOUS_OPENING, _PREVIOUS_ROWS)[-1],
+    ),
+}
+
+#: Per share of :func:`shares_opening_under_deposit`: ``(last4, opening, closing, rows)``.
+EXPECTED_SHARES: Final[list[tuple[str, Decimal, Decimal, list[ExpectedRow]]]] = [
+    (last4, opening, _running(opening, rows)[-1], list(rows)) for _, last4, opening, rows in _SHARES
+]

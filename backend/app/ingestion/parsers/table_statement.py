@@ -23,8 +23,11 @@ are read the same way:
    amount.
 2. **Rows.** Every later line is split into cells; each cell goes to the
    column it overlaps most. A line with a date in the date column and an
-   amount is a transaction; a dated line whose description is an opening or
-   closing label is the table's own balance row; a following line with only
+   amount is a transaction; a dated line whose description starts with an
+   opening or closing label is a balance line whatever column its figure
+   is in (:meth:`TableStatementParser._balance_row`: the balance column,
+   else the rightmost money column), never a transaction: the first
+   opening and the last closing one are the statement's; a following line with only
    description text (and foreign-column text) continues the previous row's
    memo (wrapped text, a category line); a ``CR``/``DR`` alone in the
    amount column of that line marks the row's amount, as one after the
@@ -57,6 +60,13 @@ are read the same way:
 3. **Summary.** Outside the rows: the statement period (``Statement period``,
    ``Billing period``...), the account's last four digits (a masked number
    or "ending in"), the currency, and the opening/closing balances by label.
+   The longest label on a line is the one printed: ``statement balance``
+   inside ``Previous Statement Balance`` closes nothing, and a closing
+   label after ``previous``, ``last`` or ``prior`` is another statement's.
+   A label printed without its figure (``Beginning Balance on`` over its
+   date) takes the figure printed alone on the line next to it, the next
+   one first, at most a line and a half away (confidence
+   ``confidence.DERIVED``), when no balance was read after its label.
    Every labelled line is a period candidate (a label alone on its line
    offers the next line), tried in order until one reads, so a label that
    matches something else first ("Change from last period") blocks
@@ -258,6 +268,15 @@ STUB_MARKERS: Final = (
 #: A word before a statement date label that makes it another statement's
 #: date (``Next Closing Date``).
 OTHER_STATEMENT_WORDS: Final = frozenset({"next", "upcoming", "following"})
+#: Words before a closing label that make it the statement before's
+#: (``Previous Ending Balance``).
+EARLIER_STATEMENT_WORDS: Final = frozenset({"previous", "last", "prior"})
+#: Words a balance label may be followed by on a line that leaves its figure
+#: to the line beside it (``Beginning Balance on``, ``Ending Balance as of``):
+#: a longer line is a sentence.
+LABEL_TAIL_WORDS: Final = 3
+#: Line heights between a label and the figure printed beside it.
+ADJACENT_LINES: Final = 1.5
 #: A marker after a row's date (``January 9 *``: a processing date).
 _DATE_MARKS: Final = " *\u2020"
 #: How far left of the date heading a cell may start and still begin with the
@@ -467,6 +486,9 @@ class _Summary:
     closing: Amount | None = None
     opening_in_table: bool = False
     closing_in_table: bool = False
+    #: The balance is the figure alone on the line beside its label.
+    opening_adjacent: bool = False
+    closing_adjacent: bool = False
     period: PeriodCandidates = field(default_factory=PeriodCandidates)
     last4: str | None = None
     currency: str | None = None
@@ -569,6 +591,10 @@ class TableStatementParser(DocumentParser):
         "starting balance",
         "balance brought forward",
         "balance forward",
+        "previous statement balance",
+        "last statement balance",
+        "balance last statement",
+        "prior balance",
     )
     closing_labels: ClassVar[tuple[str, ...]] = (
         "ending balance",
@@ -576,6 +602,7 @@ class TableStatementParser(DocumentParser):
         "new balance",
         "statement balance",
         "balance carried forward",
+        "balance this statement",
     )
     period_labels: ClassVar[tuple[str, ...]] = (
         "statement period",
@@ -858,20 +885,41 @@ class TableStatementParser(DocumentParser):
             return False
         return not find_amounts(line.text) or any(norm.startswith(f" {m} ") for m in found)
 
-    def _label_amount(self, line: ViewLine, labels: Sequence[str]) -> Amount | None:
-        for label in labels:
-            end = label_end(line.text, label)
-            if end is None:
-                continue
-            amounts = find_amounts(line.text[end:])
-            if amounts:
-                return amounts[0]
+    def _label_amount(
+        self,
+        line: ViewLine,
+        labels: Sequence[str],
+        *,
+        inside: Sequence[str] = (),
+        earlier: bool = False,
+    ) -> Amount | None:
+        """The first amount after one of ``labels`` on ``line``, the longest first.
+
+        A match lying inside a match of one of ``inside`` is no match
+        (``statement balance`` in ``Previous Statement Balance``); with
+        ``earlier``, neither is one after ``previous``, ``last`` or ``prior``.
+        """
+        text = line.text[:MAX_LINE]
+        outer = [match.span() for label in inside for match in _label_pattern(label).finditer(text)]
+        for label in sorted(labels, key=len, reverse=True):
+            for match in _label_pattern(label).finditer(text):
+                start, end = match.span()
+                if any(s <= start and end <= e for s, e in outer):
+                    continue
+                before = text[:start].split()
+                if earlier and before and normalise(before[-1]) in EARLIER_STATEMENT_WORDS:
+                    continue
+                amounts = find_amounts(text[end:])
+                if amounts:
+                    return amounts[0]
         return None
 
     def _scan_summary(self, line: ViewLine, summary: _Summary) -> None:
         if summary.opening is None:
             summary.opening = self._label_amount(line, self.opening_labels)
-        closing = self._label_amount(line, self.closing_labels)
+        closing = self._label_amount(
+            line, self.closing_labels, inside=self.opening_labels, earlier=True
+        )
         if closing is not None and summary.closing is None:
             summary.closing = closing
         if summary.credits_total is None:
@@ -1062,15 +1110,17 @@ class TableStatementParser(DocumentParser):
             amount = self._amount(cells.get("amount"))
             debit = self._amount(cells.get("debit"))
             credit = self._amount(cells.get("credit"))
+            balance_row = self._balance_row(desc_norm, cells)
+            if balance_row is not None:
+                # A balance line, whatever column its figure is in: never a row.
+                kind, figure = balance_row
+                if kind == "opening":
+                    if figure is not None and summary.opening is None:
+                        summary.opening, summary.opening_in_table = figure, True
+                elif figure is not None:
+                    summary.closing, summary.closing_in_table = figure, True
+                continue
             if amount is None and debit is None and credit is None:
-                if any(desc_norm.startswith(lbl) for lbl in self.opening_labels):
-                    if balance is not None and summary.opening is None:
-                        summary.opening, summary.opening_in_table = balance, True
-                    continue
-                if any(desc_norm.startswith(lbl) for lbl in self.closing_labels):
-                    if balance is not None:
-                        summary.closing, summary.closing_in_table = balance, True
-                    continue
                 if pending:
                     continue
                 skipped += 1
@@ -1097,7 +1147,79 @@ class TableStatementParser(DocumentParser):
                 foreign=[c.text for c in cells.get("foreign", [])],
             )
             rows.append(last)
+        self._adjacent_balances(lines, summary)
         return rows, summary, pending_items, skipped, found_header
+
+    def _balance_row(
+        self, desc_norm: str, cells: Mapping[Role, list[Cell]]
+    ) -> tuple[Literal["opening", "closing"], Amount | None] | None:
+        """The kind and figure of a dated line whose description starts with
+        an opening or closing label: the balance cell when it reads, else
+        the rightmost money cell that reads (``Beginning Balance`` printed
+        under ``Amount`` or ``Deposit``)."""
+        kind: Literal["opening", "closing"]
+        if any(desc_norm.startswith(label) for label in self.opening_labels):
+            kind = "opening"
+        elif any(desc_norm.startswith(label) for label in self.closing_labels):
+            kind = "closing"
+        else:
+            return None
+        figure = self._amount(cells.get("balance"))
+        if figure is None:
+            roles: tuple[Role, ...] = ("amount", "debit", "credit")
+            money = sorted(
+                (cell for role in roles for cell in cells.get(role, [])),
+                key=lambda cell: cell.x0,
+                reverse=True,
+            )
+            figure = next((a for c in money if (a := read_amount(c.text)) is not None), None)
+        return kind, figure
+
+    def _label_alone(self, line: ViewLine) -> Literal["opening", "closing"] | None:
+        """The balance a line names without printing its figure: it starts
+        with the label, a few words at most follow, and it holds no amount."""
+        norm = line.norm
+        for kind, labels in (("opening", self.opening_labels), ("closing", self.closing_labels)):
+            for label in labels:
+                if norm != label and not norm.startswith(f"{label} "):
+                    continue
+                tail = len(norm.split()) - len(label.split())
+                if tail <= LABEL_TAIL_WORDS and not find_amounts(line.text):
+                    return "opening" if kind == "opening" else "closing"
+        return None
+
+    def _adjacent_balances(self, lines: Sequence[ViewLine], summary: _Summary) -> None:
+        """Balances printed beside their label, for those no label gave.
+
+        A label line without a figure takes the amount of an amount-only
+        line (one cell, an amount) that is its neighbour in line order on
+        its page, the tops at most :data:`ADJACENT_LINES` line heights
+        apart: the next line first, else the one before.
+        """
+        if summary.opening is not None and summary.closing is not None:
+            return
+        for index, line in enumerate(lines):
+            kind = self._label_alone(line)
+            if kind is None or getattr(summary, kind) is not None:
+                continue
+            for other in (index + 1, index - 1):
+                if not 0 <= other < len(lines):
+                    continue
+                beside = lines[other]
+                if (
+                    beside.page != line.page
+                    or len(beside.cells) != 1
+                    or abs(beside.bbox[1] - line.bbox[1]) > ADJACENT_LINES * line.height
+                ):
+                    continue
+                figure = read_amount(beside.text)
+                if figure is None:
+                    continue
+                if kind == "opening":
+                    summary.opening, summary.opening_adjacent = figure, True
+                else:
+                    summary.closing, summary.closing_adjacent = figure, True
+                break
 
     def _not_a_row(
         self,
@@ -1359,14 +1481,13 @@ class TableStatementParser(DocumentParser):
     # -- accounts without a number ----------------------------------------------
 
     def _opening_row(self, cells: Mapping[Role, list[Cell]]) -> Amount | None:
-        """The balance of an opening-balance row (``04/01 Beginning Balance 812.44``)."""
-        money: tuple[Role, ...] = ("amount", "debit", "credit")
-        if any(self._amount(cells.get(role)) is not None for role in money):
-            return None
+        """The balance of an opening-balance row (``04/01 Beginning Balance
+        812.44``), in the balance column or a money column (:meth:`_balance_row`)."""
         description = normalise(" ".join(c.text for c in cells.get("description", [])))
-        if not any(description.startswith(label) for label in self.opening_labels):
+        found = self._balance_row(description, cells)
+        if found is None or found[0] != "opening":
             return None
-        return self._amount(cells.get("balance"))
+        return found[1]
 
     def _section_title(self, lines: Sequence[ViewLine], below: int, floor: int) -> int | None:
         """The index of the title over line ``below``: the nearest line of words above it."""
@@ -1616,8 +1737,11 @@ class TableStatementParser(DocumentParser):
         statement_conf: dict[str, float] = {}
         opening = self._ledger_balance(summary.opening)
         closing = self._ledger_balance(summary.closing)
-        statement_conf["opening_balance"] = self.base if opening is not None else conf.MISSING
-        statement_conf["closing_balance"] = self.base if closing is not None else conf.MISSING
+        # A figure read beside its label, not after it, is believed a little less.
+        opening_conf = min(self.base, conf.DERIVED) if summary.opening_adjacent else self.base
+        closing_conf = min(self.base, conf.DERIVED) if summary.closing_adjacent else self.base
+        statement_conf["opening_balance"] = opening_conf if opening is not None else conf.MISSING
+        statement_conf["closing_balance"] = closing_conf if closing is not None else conf.MISSING
         if ledger_rows and opening is None and ledger_rows[0].balance is not None:
             opening = ledger_rows[0].balance - ledger_rows[0].amount
             statement_conf["opening_balance"] = conf.DERIVED
