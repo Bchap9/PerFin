@@ -53,6 +53,26 @@ const DOUBTS: ReadonlyMap<string, string> = new Map([
   ],
   ["no_rows", "No row could be read with it."],
   [
+    "no_header",
+    "The file has no header row, so the columns were worked out from the values alone.",
+  ],
+  [
+    "indicator_values_unknown",
+    "The debit/credit column has a value PerFin does not know, or the amounts beside it already carry a sign.",
+  ],
+  [
+    "indicator_contradicts_sign",
+    "The debit/credit words and the plus and minus signs of the amounts do not agree on every row.",
+  ],
+  [
+    "sign_unverified",
+    "Nothing in the file proves whether a positive amount is money in or money out. Find a row you recognise and check the sign.",
+  ],
+  [
+    "investment_columns",
+    "The file has a security, a quantity and a price column, so its rows look like trades, not money in and out.",
+  ],
+  [
     "activity_type_unknown",
     "Some rows have an action PerFin does not know yet; they are skipped and listed in the review queue.",
   ],
@@ -70,6 +90,9 @@ export function SuggestionNote({ suggestion }: { suggestion: Suggestion }) {
       ? ` across ${String(suggestion.accounts)} accounts`
       : "";
   const activity = suggestion.sign_evidence === "activity";
+  const source = suggestion.spec.has_header
+    ? "the header names"
+    : "the values in them";
   return (
     <div className="ledger-muted" role="status" aria-label="Suggested mapping">
       <p>
@@ -77,8 +100,8 @@ export function SuggestionNote({ suggestion }: { suggestion: Suggestion }) {
           ? "This looks like a brokerage activity export, so it is read as investment activity (buys, sells, dividends, cash). "
           : null}
         {suggestion.confident
-          ? "PerFin filled in the columns from the header names."
-          : "PerFin guessed the columns from the header names; check them."}{" "}
+          ? `PerFin filled in the columns from ${source}.`
+          : `PerFin guessed the columns from ${source}; check them.`}{" "}
         ({read}
         {failed}
         {accounts}.)
@@ -90,7 +113,9 @@ export function SuggestionNote({ suggestion }: { suggestion: Suggestion }) {
           ))}
         </ul>
       ) : null}
-      {suggestion.sign_evidence === null && !activity ? (
+      {suggestion.sign_evidence === null &&
+      !activity &&
+      !suggestion.doubts.includes("sign_unverified") ? (
         <p>
           Check the sign: nothing in the file proves whether positive amounts
           are money in or money out.
