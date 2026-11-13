@@ -9,6 +9,7 @@ parsed with the classifier's hint, as the worker does.
 
 from __future__ import annotations
 
+from dataclasses import replace
 from datetime import date
 from decimal import Decimal
 
@@ -19,8 +20,10 @@ from app.ingestion.extract.common import ExtractFailure
 from app.ingestion.extract.ofx import extract_ofx
 from app.ingestion.extract.pdf import extract_pdf
 from app.ingestion.parsers import confidence
+from app.ingestion.parsers.base import Cell, DocumentView, ViewLine
 from app.ingestion.parsers.brokerage import (
     ACTIVITY_TYPES,
+    BrokerageStatementParser,
     activity_type,
     expand_action,
     option_symbol,
@@ -166,6 +169,32 @@ def test_unknown_broker_is_read_by_the_generic_parser() -> None:
     for row in statement.activity:
         assert row.confidence == confidence.GENERIC
         assert row.low_confidence == []
+
+
+@pytest.mark.parametrize(
+    "added",
+    ["Currency Forward Contracts", "currency for the period", "Currency: XQZ", "Currency: usd"],
+)
+def test_a_word_after_currency_is_not_the_accounts_currency(added: str) -> None:
+    extracted = extract_pdf(synth.placeholder_pdf(synth.brokerage_statement()), OPTIONS, "pdf")
+    view = DocumentView.from_result(extracted)
+    parser = BrokerageStatementParser()
+    alone = parser.parse(view, threshold=0.85).investments
+    assert [s.account.currency for s in alone] == [None]  # the pages print no currency
+
+    # The same pages with one more line above the rest.
+    top = min(line.bbox[1] for line in view.lines if line.page == 1)
+    extra = ViewLine(
+        page=1,
+        index=0,
+        cells=(Cell(added, 40.0, top - 20.0, 40.0 + 6.0 * len(added), top - 10.0),),
+        text=added,
+        height=10.0,
+    )
+    lines = (extra, *(replace(line, index=line.index + 1) for line in view.lines))
+    found = parser.parse(replace(view, lines=lines), threshold=0.85).investments
+    assert [s.account.currency for s in found] == [None]
+    assert [len(s.activity) for s in found] == [len(s.activity) for s in alone]
 
 
 @pytest.mark.parametrize(

@@ -84,6 +84,7 @@ from app.ingestion.parsers.base import (
     ParseOutcome,
     ViewLine,
 )
+from app.ingestion.parsers.currency import stated_currency
 from app.ingestion.parsers.loan_periodic import (
     LoanRead,
     is_periodic,
@@ -155,7 +156,6 @@ _INSIDE: Final[dict[str, tuple[tuple[str, int], ...]]] = {
 }
 MONEY_FIELDS: Final = ("principal", "interest", "escrow", "fees", "total", "previous", "balance")
 _DATE_TOKEN: Final = re.compile(r"\d{1,4}[/.-]\d{1,2}[/.-]\d{2,4}")
-_CURRENCY: Final = re.compile(r"\bcurrency\s*:?\s*([A-Z]{3})\b", re.IGNORECASE)
 #: Labels a loan number follows (normalised).
 _NUMBER_LABELS: Final = ("loan number", "loan no", "account number", "account no")
 
@@ -258,7 +258,7 @@ class LoanStatementParser(DocumentParser):
             lender = first.text.strip()[:200] or None
             cells["lender"] = list(first.cells)
         currency = next(
-            (m[1].upper() for line in view.lines if (m := _CURRENCY.search(line.text)) is not None),
+            (code for line in view.lines if (code := stated_currency(line.text)) is not None),
             None,
         )
         outcome = ParseOutcome()

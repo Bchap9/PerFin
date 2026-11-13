@@ -66,6 +66,7 @@ from app.ingestion.parsers.base import (
     ParseOutcome,
     ViewLine,
 )
+from app.ingestion.parsers.currency import stated_currency
 from app.ingestion.parsers.labelled_cells import (
     LabelPair,
     PeriodColumn,
@@ -147,7 +148,6 @@ _NOT_A_NAME: Final = (
 #: A row label naming the period (the values row under a line of labels).
 _CURRENT_ROWS: Final = frozenset({"current", "this period", "current period", "this pay period"})
 _DATE_TOKEN: Final = re.compile(r"\d{1,4}[/.-]\d{1,2}[/.-]\d{2,4}")
-_CURRENCY: Final = re.compile(r"\bcurrency\s*:?\s*([A-Z]{3})\b", re.IGNORECASE)
 _EVERYWHERE: Final = float("inf")
 
 Slot = Literal["gross", "net", "deductions"]
@@ -425,9 +425,8 @@ class PayslipParser(DocumentParser):
             elif employer is None and line.index == 0 and not any(w in norm for w in VOCABULARY):
                 employer = line.text.strip()[:200] or None
                 cells["employer"] = list(line.cells)
-            match = _CURRENCY.search(line.text)
-            if match is not None and currency is None:
-                currency = match[1].upper()
+            if currency is None:
+                currency = stated_currency(line.text)
             end = label_end(line.text, "pay period")
             if end is not None and period is None:
                 found = find_dates(line.text[end:], styles)

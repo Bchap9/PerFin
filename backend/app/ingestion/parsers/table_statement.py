@@ -332,6 +332,7 @@ from app.ingestion.parsers.base import (
     join_cells,
 )
 from app.ingestion.parsers.blocks import unfold_blocks
+from app.ingestion.parsers.currency import stated_currency
 from app.ingestion.parsers.statement_header import HEADERS as HEADERS
 from app.ingestion.parsers.statement_header import MONEY_ROLES as MONEY_ROLES
 from app.ingestion.parsers.statement_header import NUMERIC_ROLES as NUMERIC_ROLES
@@ -474,7 +475,6 @@ UNLABELLED_RANGE_DAYS: Final = 100
 UNLABELLED_RANGE_LEAD: Final = 5
 
 #: ``Currency: CAD``; the code in capitals (``currency are`` is no code).
-_CURRENCY: Final = re.compile(r"\b(?i:currency)\s*:?\s*([A-Z]{3})\b")
 #: Line separators between the two dates of a period.
 _RANGE: Final = re.compile(r"\s(?:to|through|until|-|\u2013)\s", re.IGNORECASE)
 
@@ -1330,9 +1330,7 @@ class TableStatementParser(DocumentParser):
         if summary.last4 is None:
             summary.last4 = summary_last4(line.text)
         if summary.currency is None:
-            match = _CURRENCY.search(line.text)
-            if match is not None:
-                summary.currency = match[1].upper()
+            summary.currency = stated_currency(line.text)
 
     def _scan_dates(self, line: ViewLine, summary: _Summary) -> None:
         """Statement date and previous statement date candidates on ``line``."""

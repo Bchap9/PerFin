@@ -842,6 +842,25 @@ def test_a_row_that_does_not_read_leaves_its_account_without_a_value() -> None:
     assert second.total_value is not None
 
 
+@pytest.mark.parametrize(
+    ("cell", "read"), [("USD", 2), ("usd", 2), ("", 2), ("ABC", 1), ("US$", 1)]
+)
+def test_a_currency_cell_is_a_known_code_or_the_row_is_not_read(cell: str, read: int) -> None:
+    table = _table(
+        [
+            ["Ticker", "Security Name", "Shares", "Share Price", "Total Value", "Currency"],
+            ["SGRX", "SYNTHETIC GROWTH INDEX FUND", "10", "5.00", "50.00", "USD"],
+            ["SVAL", "SYNTHETIC VALUE INDEX ETF", "2", "80.00", "160.00", cell],
+        ]
+    )
+    found = read_positions_table(table, received_on=DAY)
+    assert found is not None
+    (statement,) = found.statements
+    assert len(statement.positions) == read
+    assert found.skipped == 2 - read
+    assert statement.account.currency == "USD"
+
+
 def test_percentages_that_do_not_add_up_fail_the_total_check() -> None:
     account = PositionsAccount("Z40001111", "Individual", (GROWTH, BOND), Decimal("100.00"))
     table = _extract(positions_csv_bytes([account]))

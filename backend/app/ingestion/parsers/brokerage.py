@@ -237,6 +237,7 @@ from app.ingestion.parsers.base import (
     join_cells,
 )
 from app.ingestion.parsers.blocks import unfold_blocks
+from app.ingestion.parsers.currency import stated_currency
 from app.ingestion.parsers.table_statement import (
     PeriodCandidates,
     PeriodRead,
@@ -434,7 +435,6 @@ _SYMBOL: Final = re.compile(r"[A-Z][A-Z0-9.]{0,9}")
 _PAREN_SYMBOL: Final = re.compile(r"\(([A-Z][A-Z0-9.]{0,9})\)")
 _CUSIP: Final = re.compile(r"[0-9A-Z]{8}[0-9]")
 _RATIO: Final = re.compile(r"\b(\d{1,6})(?:\s?-?\s?for\s?-?\s?|\s?:\s?)(\d{1,6})\b", re.IGNORECASE)
-_CURRENCY: Final = re.compile(r"\bcurrency\s*:?\s*([A-Z]{3})\b", re.IGNORECASE)
 #: A date at the end of a (normalised) header cell: ``ending market value oct 31 2026``.
 _TRAILING_DATE: Final = re.compile(
     r"(?:\sas\sof)?\s(?:[a-z]{3,9}\s\d{1,2}\s\d{4}|\d{1,2}\s\d{1,2}\s\d{2,4}|\d{4}\s\d{1,2}\s\d{1,2})$"
@@ -2611,9 +2611,7 @@ class BrokerageStatementParser(DocumentParser):
         if summary.last4 is None:
             summary.last4 = summary_last4(line.text, masked_digits=False)
         if summary.currency is None:
-            match = _CURRENCY.search(line.text)
-            if match is not None:
-                summary.currency = match[1].upper()
+            summary.currency = stated_currency(line.text)
 
     @staticmethod
     def _cash_line(amounts: Sequence[Amount], summary: _Summary, rest: str = "") -> None:

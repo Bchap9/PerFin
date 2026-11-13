@@ -129,6 +129,7 @@ from app.ingestion.parsers.brokerage import (
     reconcile_investment,
 )
 from app.ingestion.parsers.brokerage_table import account_type_for
+from app.ingestion.parsers.currency import known_currency
 from app.ingestion.parsers.structured import HEADER_SEARCH_ROWS, cell_last4
 from app.ingestion.parsers.text import normalise
 from app.ingestion.sandbox.protocol import (
@@ -244,7 +245,6 @@ TOTAL_SYMBOLS: Final = frozenset(
 #: The total row that sums every account of the file.
 _GRAND_TOTAL: Final = "grand total"
 _SYMBOL: Final = re.compile(r"[A-Za-z0-9.^/:_-]{1,32}")
-_CURRENCY: Final = re.compile(r"[A-Z]{3}")
 _BLANKS: Final = frozenset({"", "n/a", "na", "--", "-"})
 _DOWNLOADED: Final = re.compile(r"date\s+downloaded\s*:?\s*(?P<day>\S+)", re.IGNORECASE)
 _AS_OF: Final = re.compile(r"\bas\s+of\b", re.IGNORECASE)
@@ -722,8 +722,9 @@ class _Reader:
     def read(self, row: Sequence[str], block: _Block | None = None) -> _Row | None:
         """One data row: a position, cash, or None (it could not be read)."""
         key, last4, name = self.account(row, block)
-        currency = _cell(row, self.col("currency")).upper() or None
-        if currency is not None and _CURRENCY.fullmatch(currency) is None:
+        printed = _cell(row, self.col("currency"))
+        currency = known_currency(printed)
+        if printed and currency is None:
             return None
         base = _Row(
             key=key,

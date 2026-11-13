@@ -140,7 +140,8 @@ suggestion for a recognised header.
 
 A group's currency is its rows' currency column when they agree; a row in
 another currency than the rest of its group is skipped (``currency_mixed``),
-an empty cell is the account's currency.
+an empty cell is the account's currency. A filled cell that is not an ISO
+code PerFin knows (``currency.known_currency``) makes its row unreadable.
 
 **Scoring and holding (the choice made here).** An activity export prints no
 positions, no cash balances and no totals, so there is nothing to reconcile:
@@ -193,6 +194,7 @@ from app.ingestion.parsers.brokerage import (
     reconcile_investment,
     split_ratio,
 )
+from app.ingestion.parsers.currency import known_currency
 from app.ingestion.parsers.structured import (
     HEADER_SEARCH_ROWS,
     MappingSuggestion,
@@ -344,7 +346,6 @@ _DOLLAR_FIRST: Final = re.compile(r"[-+(]?\$")
 REQUIRED_ROLES: Final = ("date", "action", "amount")
 SECURITY_ROLES: Final = ("symbol", "quantity")
 _SYMBOL: Final = re.compile(r"[A-Za-z0-9.^/:_-]{1,32}")
-_CURRENCY: Final = re.compile(r"[A-Z]{3}")
 
 
 @dataclass(frozen=True)
@@ -868,8 +869,9 @@ class _Reader:
         ):
             self.out.skipped += 1
             return None
-        currency = _cell(row, self.col("currency")).upper() or None
-        if currency is not None and _CURRENCY.fullmatch(currency) is None:
+        printed = _cell(row, self.col("currency"))
+        currency = known_currency(printed)
+        if printed and currency is None:
             self.out.skipped += 1
             return None
         settle_text = _trade_date_text(_cell(row, self.col("settle")))

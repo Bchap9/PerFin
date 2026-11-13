@@ -281,6 +281,7 @@ def test_unknown_actions_are_skipped_and_counted_never_guessed() -> None:
         _row("DIVIDEND RECEIVED SYNTHETIC GROWTH INDEX ETF (SGRX)", amount="n/a"),
         _row("DIVIDEND RECEIVED SYNTHETIC GROWTH INDEX ETF (SGRX)", amount="1", run="soon"),
         _row("DIVIDEND RECEIVED SYNTHETIC GROWTH INDEX ETF (SGRX)", amount="1", currency="US$"),
+        _row("DIVIDEND RECEIVED SYNTHETIC GROWTH INDEX ETF (SGRX)", amount="1", currency="ABC"),
         _row("STOCK SPLIT SYNTHETIC GROWTH INDEX ETF (SGRX)", amount="0", quantity="5"),
     ],
     ids=[
@@ -290,6 +291,7 @@ def test_unknown_actions_are_skipped_and_counted_never_guessed() -> None:
         "bad-amount",
         "bad-date",
         "bad-currency",
+        "unknown-currency",
         "split-without-ratio",
     ],
 )
@@ -370,6 +372,25 @@ def test_a_guessed_date_order_marks_every_row_low_confidence() -> None:
     for activity in found.statements[0].activity:
         assert activity.low_confidence == ["trade_date"]
         assert activity.confidence == conf.GUESSED
+
+
+def test_a_currency_cell_that_is_no_known_code_makes_the_row_unreadable() -> None:
+    # Three capital letters are not enough: the cell must be a currency
+    # PerFin knows, or the row is skipped and counted like any malformed cell.
+    found = read_activity_table(
+        _with(
+            _row("DIVIDEND RECEIVED SYNTHETIC (SGRX)", amount="2.00", currency="ABC"),
+            _row("DIVIDEND RECEIVED SYNTHETIC (SGRX)", amount="3.00", currency="ABC"),
+            _row("DIVIDEND RECEIVED SYNTHETIC (SGRX)", amount="4.00", currency="usd"),
+        )
+    )
+    assert found is not None
+    assert (found.rows, found.skipped) == (1, 2)
+    assert "rows_unreadable" in found.warnings
+    assert "currency_mixed" not in found.warnings
+    (statement,) = found.statements
+    assert statement.account.currency == "USD"
+    assert [a.amount for a in statement.activity] == [Decimal("4.00")]
 
 
 def test_a_row_in_another_currency_than_its_account_is_skipped() -> None:
