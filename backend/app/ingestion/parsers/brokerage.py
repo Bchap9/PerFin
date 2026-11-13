@@ -8,7 +8,9 @@ Two halves (INGESTION.md "Brokerage statements", SECURITY.md C12):
 
   - **positions**: quantity x unit price = market value for every position
     that prints all three, within half a unit of the price's last printed
-    decimal times the quantity, plus :data:`~app.ingestion.reconcile.TOLERANCE`;
+    decimal times the quantity, plus :data:`PRODUCT_SLACK` (one cent: a feed
+    may cut the product to the cent instead of rounding it). Every sum of
+    printed amounts below keeps :data:`~app.ingestion.reconcile.TOLERANCE`;
   - **holdings_total**: the positions' market values add up to the
     holdings total the statement prints;
   - **cash**: opening cash + the activity's cash effects = closing cash
@@ -301,6 +303,11 @@ from app.ingestion.sandbox.protocol import (
 # ---------------------------------------------------------------------------
 
 
+#: What a printed market value may differ from quantity x price by, beyond the
+#: price's own rounding: a value cut (not rounded) to the cent is up to a cent off.
+PRODUCT_SLACK: Final = Decimal("0.01")
+
+
 def _price_unit(price: Decimal) -> Decimal:
     """Half a unit of the last decimal the price was given with."""
     exponent = price.as_tuple().exponent
@@ -321,7 +328,7 @@ def position_value(position: InvestmentPosition) -> Decimal | None:
 def _position_agrees(quantity: Decimal, price: Decimal, value: Decimal, scale: int) -> bool:
     """quantity x price / ``scale`` = value, within the price's rounding (module doc)."""
     expected = quantity * price / scale
-    allowed = TOLERANCE + abs(quantity) * _price_unit(price) / scale
+    allowed = PRODUCT_SLACK + abs(quantity) * _price_unit(price) / scale
     return abs(expected - value) <= allowed
 
 

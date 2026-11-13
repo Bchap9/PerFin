@@ -378,6 +378,25 @@ def test_position_tolerance_follows_the_printed_price_precision() -> None:
     assert check.position_mismatches == [0]
 
 
+def test_a_value_cut_to_the_cent_agrees() -> None:
+    # 41.263 x 19.87 = 819.89581: a feed that cuts the value to the cent prints 819.89.
+    cut = InvestmentStatement(
+        source_format="ofx", positions=[_position("41.263", "19.8700000", "819.89")]
+    )
+    check = reconcile_investment(cut)
+    assert check.status == "ok"
+    assert check.position_mismatches == []
+
+
+def test_more_than_a_cent_is_still_a_mismatch() -> None:
+    off = InvestmentStatement(
+        source_format="ofx", positions=[_position("41.263", "19.8700000", "819.87")]
+    )
+    check = reconcile_investment(off)
+    assert check.status == "mismatch"
+    assert check.position_mismatches == [0]
+
+
 def test_nothing_to_check_is_unavailable() -> None:
     statement = InvestmentStatement(
         source_format="ofx",
