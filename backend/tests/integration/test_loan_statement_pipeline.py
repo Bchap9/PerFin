@@ -21,6 +21,9 @@ Statements come from ``tests/fixtures/synth_loans.py`` (an invented lender).
   payment, no review item, its balance kept on the statement date (none when
   that date is before the loan began). One whose amount due does not add up
   is still held.
+* A loan bill is a loan document, never a receipt: an auto-loan bill records
+  its payment; a bill listing several loans, which the parser does not read,
+  waits as ``unparsed``/``loan_unreadable`` with the parser's warning.
 """
 
 from __future__ import annotations
@@ -50,6 +53,7 @@ from app.domain.documents.models import (
     DocumentStatus,
     ReviewItem,
     ReviewItemState,
+    ReviewKind,
 )
 from app.domain.documents.schemas import INGEST_JOB_TYPE
 from app.domain.loans.models import Loan, LoanPayment
@@ -346,3 +350,46 @@ def test_statement_without_a_payment_dated_before_the_loan_keeps_no_balance(env:
     assert document.account_id == account.id
     assert env.payments(loan) == []
     assert _statement_snapshots(env, account) == []
+
+
+def _open_items(env: Env, document: Document) -> list[ReviewItem]:
+    items: list[ReviewItem] = env.query(
+        select(ReviewItem).where(ReviewItem.document_id == document.id)
+    )
+    return [item for item in items if item.state is ReviewItemState.OPEN]
+
+
+def test_bill_of_several_loans_says_so(env: Env) -> None:
+    document = env.ingest(synth.student_loan_bill_pdf(), "student-bill.pdf")
+    assert document.status is DocumentStatus.NEEDS_REVIEW
+    [item] = _open_items(env, document)
+    assert item.kind is ReviewKind.UNPARSED
+    assert item.payload["reason"] == "loan_unreadable"
+    assert item.payload["parser"] == "loan_statement_generic"
+    assert "loan_bill_several_loans" in item.payload["warnings"]
+    assert env.query(select(LoanPayment)) == []
+
+
+def test_auto_loan_bill_is_a_loan_document_not_a_receipt(env: Env) -> None:
+    account, loan = env.loan(
+        last4=synth.AUTO_LAST4,
+        principal_original="24000.00",
+        rate="0.0549",
+        term_months=60,
+        origination_date=date(2024, 9, 15),
+        payment_amount="455.20",
+        payment_day=15,
+        escrow_amount=None,
+    )
+    document = env.ingest(synth.auto_loan_bill_pdf(), "auto-bill.pdf")
+    assert (document.parser_version or "").startswith("loan_statement_generic/")
+    assert document.kind is DocumentKind.STATEMENT
+    assert document.account_id == account.id
+    [payment] = env.payments(loan)
+    assert (payment.paid_on, payment.principal, payment.interest) == (
+        date(2026, 3, 14),
+        Decimal("371.85"),
+        Decimal("83.35"),
+    )
+    assert all(item.kind is not ReviewKind.RECEIPT_MATCH for item in _open_items(env, document))
+    assert (document.extraction or {}).get("parse", {}).get("receipt") is None

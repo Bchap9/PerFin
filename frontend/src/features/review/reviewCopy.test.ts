@@ -76,6 +76,10 @@ const REASONS: readonly [ReviewItem["kind"], string][] = [
   ["low_confidence_field", "loan_rate_differs"],
   ["low_confidence_field", "investment_date_out_of_range"],
   ["low_confidence_field", "year_assumed"],
+  ["unparsed", "receipt_unreadable"],
+  ["unparsed", "payslip_unreadable"],
+  ["unparsed", "tax_form_unreadable"],
+  ["unparsed", "loan_unreadable"],
 ];
 
 describe("review explanations", () => {
@@ -96,6 +100,43 @@ describe("review explanations", () => {
     expect(found.title).toBe("Nothing to import");
     expect(found.what).toBe("This file has no rows to import.");
     expect(found.steps.join(" ")).not.toContain("Map columns");
+  });
+
+  it.each([
+    "receipt_unreadable",
+    "payslip_unreadable",
+    "tax_form_unreadable",
+    "loan_unreadable",
+  ])("%s names what the document is and sends nobody to the mapping editor", (reason) => {
+    const found = explain(
+      item("unparsed", { reason, parser: "any", warnings: [] }),
+    );
+    expect(found.title).not.toBe("Could not be read");
+    expect(found.title).not.toBe("Nothing to import");
+    expect(found.steps.join(" ")).toContain("ismiss");
+    expect(found.steps.join(" ")).not.toContain("Map columns");
+    expect(found.steps.join(" ")).not.toContain("Teach PerFin");
+  });
+
+  it("says of a bill that lists several loans that PerFin does not read those yet", () => {
+    const several = explain(
+      item("unparsed", {
+        reason: "loan_unreadable",
+        parser: "loan_statement_generic",
+        warnings: ["loan_bill_several_loans"],
+      }),
+    );
+    expect(several.what).toContain("several loans");
+    expect(several.steps.join(" ")).toContain("Record a payment");
+    const one = explain(
+      item("unparsed", {
+        reason: "loan_unreadable",
+        parser: "loan_statement_generic",
+        warnings: [],
+      }),
+    );
+    expect(one.what).not.toContain("several loans");
+    expect(one.steps.join(" ")).toContain("Record a payment");
   });
 
   it("says of a document's pages that no dated rows were found on them", () => {

@@ -19,6 +19,7 @@ from decimal import Decimal
 
 import pytest
 
+from app.domain.review.layout import unread_kind
 from app.ingestion.classify.service import classify_extraction
 from app.ingestion.extract.pdf import extract_pdf
 from app.ingestion.parsers import confidence as conf
@@ -34,7 +35,14 @@ from app.ingestion.parsers.labelled_cells import (
 from app.ingestion.parsers.payslip import PayslipParser
 from app.ingestion.parsers.registry import parse_extraction
 from app.ingestion.parsers.text import read_amount
-from app.ingestion.sandbox.protocol import ExtractOptions, Payslip
+from app.ingestion.sandbox.protocol import (
+    ExtractOptions,
+    ExtractResult,
+    ParseInfo,
+    ParserRef,
+    Payslip,
+    Statement,
+)
 from tests.fixtures import synth_payslips as payslips
 from tests.fixtures import synth_pdf_statements as statements
 
@@ -539,3 +547,28 @@ def test_a_heading_starting_with_employer_is_no_employer() -> None:
     assert _payslip(_hand_view(lines)).employer == "Initech Example Ltd"
     lines[3] = _row(3, ("Employer: Sample Works Co", 40.0))
     assert _payslip(_hand_view(lines)).employer == "Sample Works Co"
+
+
+# ---------------------------------------------------------------------------
+# A document its parser was chosen for and read nothing from
+# ---------------------------------------------------------------------------
+
+
+def _chosen(name: str, kind: str, **read: object) -> ExtractResult:
+    ref = ParserRef.model_validate({"name": name, "version": "1", "kind": kind})
+    info = ParseInfo.model_validate({"parser": ref, "threshold": conf.DEFAULT_THRESHOLD, **read})
+    return ExtractResult(kind="pdf", ok=True, parse=info)
+
+
+def test_unread_kind() -> None:
+    unread = _chosen("payslip_basic", "payslip")
+    assert unread_kind(unread) == "payslip"
+    assert unread_kind(_chosen("payslip_basic", "payslip", payslip=Payslip())) is None
+    statement = Statement(source_format="pdf")
+    assert unread_kind(unread.model_copy(update={"statements": [statement]})) is None
+    assert unread_kind(_chosen("receipt_basic", "receipt")) == "receipt"
+    assert unread_kind(_chosen("tax_forms", "tax_form")) == "tax_form"
+    assert unread_kind(_chosen("loan_statement_generic", "statement")) == "loan"
+    # A statement parser that read nothing is the column mapper's business, as before.
+    assert unread_kind(_chosen("table_statement", "statement")) is None
+    assert unread_kind(ExtractResult(kind="pdf", ok=True)) is None

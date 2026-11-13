@@ -471,6 +471,60 @@ const COPY: Readonly<Record<string, Copy>> = {
     what: "This file is waiting to be imported.",
     steps: ["Try “Process again”."],
   }),
+  "unparsed:receipt_unreadable": () => ({
+    title: "Receipt could not be read",
+    what: "This looks like a receipt, but PerFin could not read its total.",
+    why: "A faded print, a cut-off photo or a fold over the figures leaves the words and loses the amounts. PerFin never guesses an amount, so nothing was recorded or matched.",
+    steps: [
+      "Open the document (its name above) and look at it.",
+      "If the purchase is already in your transactions, use “Attach to…” on the document's page to keep the receipt with it.",
+      "If you can take a clearer picture (flat, well lit, the whole receipt), upload that one.",
+      "Dismiss this item to keep the document as it is.",
+    ],
+  }),
+  "unparsed:payslip_unreadable": () => ({
+    title: "Payslip could not be read",
+    what: "This looks like a payslip, but PerFin could not read its pay figures.",
+    why: "It found the words of a payslip and no gross or net pay it could trust. PerFin never guesses a figure, so nothing was recorded from it.",
+    steps: [
+      "Open the document (its name above) and look at it.",
+      "If it is a scan or a photo and your payroll service offers the payslip as a PDF download, upload that instead.",
+      "Dismiss this item to keep the document as it is. The pay itself still shows in the account it was paid into once that account's statement is imported.",
+    ],
+  }),
+  "unparsed:tax_form_unreadable": () => ({
+    title: "Tax form could not be read",
+    what: "This looks like a tax form, but PerFin could not read any amount in its boxes.",
+    why: "The form may be blank, a page of instructions, or a scan whose figures did not come through. PerFin never guesses a box, so no amounts were stored for the tax year.",
+    steps: [
+      "Open the document (its name above) and look at it.",
+      "If it is a blank form or instructions, dismiss this item.",
+      "If it is a scan or a photo and the issuer offers the form as a PDF download, upload that instead.",
+      "Otherwise dismiss this item to keep the document as it is. Its amounts are not in PerFin, so read them from the document itself when you file.",
+    ],
+  }),
+  "unparsed:loan_unreadable": (item) =>
+    payloadIds(item, "warnings").includes("loan_bill_several_loans")
+      ? {
+          title: "A bill for several loans",
+          what: "This is a loan bill that lists several loans. PerFin does not read bills like this yet, so nothing was recorded from it.",
+          why: "The bill prints one payment for all its loans together, and PerFin cannot tell which part went to which loan.",
+          steps: [
+            "Open the document (its name above) and look at what was paid on each loan.",
+            "For each loan you track, open it under Loans, go to Payments and use “Record a payment”.",
+            "Dismiss this item once you are done.",
+          ],
+        }
+      : {
+          title: "Loan document could not be read",
+          what: "This looks like a loan statement or bill, but PerFin could not read a payment or a balance from it.",
+          why: "PerFin never guesses a payment's split or a balance, so nothing was recorded from it.",
+          steps: [
+            "Open the document (its name above) and look at it.",
+            "If it reports a payment, open the loan under Loans, go to Payments and use “Record a payment”.",
+            "Dismiss this item once you are done, or if it is a notice with no payment on it.",
+          ],
+        },
   // -- low_confidence_field --------------------------------------------------
   "low_confidence_field:year_assumed": (item) => {
     const year = payloadNumber(item, "year");

@@ -25,6 +25,7 @@ invented name, address, account, control, policy and state id numbers).
 from __future__ import annotations
 
 import csv
+import dataclasses
 import io
 import uuid
 import zipfile
@@ -44,7 +45,15 @@ from app.core.settings import Settings
 from app.db.queue import enqueue
 from app.db.rls import set_context
 from app.domain.documents.blobstore import LocalFSBlobStore
-from app.domain.documents.models import Blob, Document, DocumentKind, DocumentStatus
+from app.domain.documents.models import (
+    Blob,
+    Document,
+    DocumentKind,
+    DocumentStatus,
+    ReviewItem,
+    ReviewItemState,
+    ReviewKind,
+)
 from app.domain.documents.schemas import INGEST_JOB_TYPE
 from app.domain.tax.models import (
     ChecklistOrigin,
@@ -386,3 +395,27 @@ def test_unregistered_tax_documents_keep_no_identity(
     detail = env.owner.get(f"{API}/documents/{document.id}")
     assert detail.status_code == 200
     _assert_no_identity(detail.text, "the document")
+
+
+def test_blank_tax_form_says_so(env: Env, admin_engine: Engine) -> None:
+    """A form drawn with its labels and no amount: nothing to store, nothing to map."""
+    blank = dataclasses.replace(synth.synth_form("1099-INT", seed=5), amounts={})
+    document = env.ingest(synth.form_pdf(blank), "blank-1099-int.pdf")
+    assert document.status is DocumentStatus.NEEDS_REVIEW
+    assert env.query(select(TaxFormData).where(TaxFormData.document_id == document.id)) == []
+    items: list[ReviewItem] = env.query(
+        select(ReviewItem).where(ReviewItem.document_id == document.id)
+    )
+    opened = [item for item in items if item.state is ReviewItemState.OPEN]
+    assert [(item.kind, item.payload.get("reason")) for item in opened] == [
+        (ReviewKind.UNPARSED, "tax_form_unreadable")
+    ]
+    assert opened[0].payload["parser"] == "tax_forms"
+    assert "no_tax_form_boxes" in opened[0].payload["warnings"]
+    # The stored pages are still redacted, and none of them is offered as a table to map.
+    stored = str(document.extraction).lower()
+    assert "interest income" in stored
+    _assert_no_identity(stored, "the stored extraction")
+    _assert_no_identity(_database_text(admin_engine), "the database")
+    preview = env.owner.get(f"{API}/imports/{document.id}/preview")
+    _assert_no_identity(preview.text, "the import preview")

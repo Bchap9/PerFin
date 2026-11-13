@@ -12,6 +12,7 @@ Receipts come from ``tests/fixtures/synth_receipts.py``.
 from __future__ import annotations
 
 import dataclasses
+import io
 import logging
 import uuid
 from collections.abc import Iterator
@@ -22,6 +23,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+from reportlab.pdfgen import canvas
 from sqlalchemy import select
 
 from app.auth.principal import Principal, apply_rls_context
@@ -311,3 +313,43 @@ def test_two_candidate_transactions_leave_the_choice_to_a_person(
         str(second.id),
     }
     assert LAST4 not in without_ids(item.payload)
+
+
+def _faded_receipt_pdf() -> bytes:
+    """What OCR leaves of a faded print: the words of a receipt and none of its amounts."""
+    out = io.BytesIO()
+    pdf = canvas.Canvas(out, pagesize=(226, 400), invariant=1)
+    y = 370.0
+    pdf.setFont("Helvetica-Bold", 12)
+    pdf.drawString(20, y, "CORNER PANTRY")
+    pdf.setFont("Helvetica", 8)
+    for text in (
+        "14 Sample Lane",
+        "Thank you",
+        "OAT MILK",
+        "RYE BREAD",
+        "GREEN TEA",
+        "SUBTOTAL",
+        "TAX",
+        "TOTAL",
+        "Thank you for shopping",
+    ):
+        y -= 16
+        pdf.drawString(20, y, text)
+    pdf.showPage()
+    pdf.save()
+    return out.getvalue()
+
+
+def test_unreadable_receipt_says_so(env: Env, store: LocalFSBlobStore) -> None:
+    doc_id = env.upload(_faded_receipt_pdf(), "faded.pdf", store)
+    document = env.document(doc_id)
+    assert document.status is DocumentStatus.NEEDS_REVIEW
+    opened = [item for item in env.items(doc_id) if item.state is ReviewItemState.OPEN]
+    assert [(item.kind, item.payload.get("reason")) for item in opened] == [
+        (ReviewKind.UNPARSED, "receipt_unreadable")
+    ]
+    assert opened[0].payload["parser"] == "receipt_basic"
+    assert "no_receipt_total" in opened[0].payload["warnings"]
+    assert all(item.payload.get("reason") != "mapping_required" for item in env.items(doc_id))
+    assert env.links(doc_id) == []
