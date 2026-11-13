@@ -18,7 +18,8 @@ quantifiers, so a crafted page cannot make matching expensive.
   two positive figures). :attr:`Amount.sign_detached` says the sign stood a
   space away: on a summary line it may be the separator after a label
   (``Ending Balance - $992.50``), which only the reader of that line can
-  tell.
+  tell (:func:`separator_sign`; :func:`after_label` for a reader that
+  cannot check the sign against anything).
 * :func:`read_date` for one :data:`DateStyle`; :func:`guess_numeric_style`
   tells ``DD/MM`` from ``MM/DD`` from the values themselves (a day above 12)
   and says when it cannot. Yearless styles (``MM/DD``, ``DD/MM``,
@@ -33,7 +34,7 @@ from __future__ import annotations
 
 import re
 from collections.abc import Iterable
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import date, timedelta
 from decimal import Decimal, InvalidOperation
 from typing import Final, Literal
@@ -223,6 +224,42 @@ def find_amounts(text: str) -> list[Amount]:
         out.append(amount)
         index += used
     return out
+
+
+#: A minus printed as a token of its own.
+_LONE_MINUS: Final = frozenset({"-", "\u2212"})
+
+
+def separator_sign(amount: Amount, cells: Iterable[str]) -> bool:
+    """The minus of ``amount``, read after a label on a line of ``cells``
+    (their texts), may be a separator and no sign: it stood apart from the
+    figure (``Ending Balance - $992.50``) and not in the figure's own cell
+    (a cell reading ``- $20.00`` prints a sign). ``CR``, ``DR`` or ``DB``
+    after the figure says the direction whatever the dash is."""
+    if not (amount.sign_detached and amount.negative_marked) or amount.credit is not None:
+        return False
+    for text in cells:
+        alone = read_amount(text)
+        if alone is not None and alone.sign_detached and alone.value == amount.value:
+            return False
+    return True
+
+
+def after_label(text: str, cells: Iterable[str]) -> list[Amount]:
+    """:func:`find_amounts` of ``text``, what a line of ``cells`` prints after
+    a label, for a reader with nothing to check a sign against: a dash that
+    starts ``text`` and stands apart from the first figure
+    (:func:`separator_sign`) is the label's separator, and the figure is
+    read without it (``Net Pay - $1,840.25`` is pay, not a debt). A reader
+    that can check the sign asks :func:`separator_sign` and decides."""
+    amounts = find_amounts(text)
+    tokens = text[:MAX_LINE].split()
+    if amounts and tokens and tokens[0] in _LONE_MINUS and separator_sign(amounts[0], cells):
+        first = amounts[0]
+        amounts[0] = replace(
+            first, value=abs(first.value), negative_marked=False, sign_detached=False
+        )
+    return amounts
 
 
 def _year(text: str) -> int | None:

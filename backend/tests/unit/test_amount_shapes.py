@@ -14,7 +14,17 @@ from decimal import Decimal
 
 import pytest
 
-from app.ingestion.parsers.text import find_amounts, read_amount, read_date
+from app.ingestion.parsers import payslip
+from app.ingestion.parsers.base import Cell, ViewLine
+from app.ingestion.parsers.brokerage import BrokerageStatementParser
+from app.ingestion.parsers.brokerage import _Summary as BrokerageSummary
+from app.ingestion.parsers.text import (
+    after_label,
+    find_amounts,
+    read_amount,
+    read_date,
+    separator_sign,
+)
 
 
 @pytest.mark.parametrize(("text", "value"), [("4,120.00 DB", "4120.00"), ("75.10Db", "75.10")])
@@ -220,3 +230,82 @@ def test_month_name_date_with_four_digit_year_reads_as_before() -> None:
     assert read_date("03-Nov-025", "d_mon_y") is None
     assert read_date("03-Xyz-25", "d_mon_y") is None
     assert read_date("31-Feb-25", "d_mon_y") is None
+
+
+# -- a dash between a label and its figure, for the readers of labelled lines ----
+
+
+def _line(*cells: tuple[str, float]) -> ViewLine:
+    built = tuple(Cell(text, x0, 100.0, x0 + 5.0 * len(text), 109.0) for text, x0 in cells)
+    return ViewLine(
+        page=1, index=0, cells=built, text=" ".join(text for text, _ in cells), height=9.0
+    )
+
+
+def test_a_sign_standing_apart_after_a_label_may_be_a_separator() -> None:
+    (apart,) = find_amounts("Closing figure - $992.50")
+    assert separator_sign(apart, ["Closing figure - $992.50"])
+    assert separator_sign(apart, ["Closing figure -", "$992.50"])
+    # In the figure's own cell the dash is the figure's sign.
+    assert not separator_sign(apart, ["Closing figure", "- $992.50"])
+    (joined,) = find_amounts("Closing figure -$992.50")
+    assert not separator_sign(joined, ["Closing figure -$992.50"])
+    (marked,) = find_amounts("Closing figure - $992.50 DR")
+    assert not separator_sign(marked, ["Closing figure - $992.50 DR"])
+    (plus,) = find_amounts("Closing figure + $992.50")
+    assert not separator_sign(plus, ["Closing figure + $992.50"])
+
+
+def test_after_label_reads_the_first_dash_as_a_separator() -> None:
+    line = _line(("Closing figure - $992.50 - $10.00", 62.0))
+    first, second = after_label(line.text[len("Closing figure") :], [c.text for c in line.cells])
+    assert (first.value, first.negative_marked, first.sign_detached) == (
+        Decimal("992.50"),
+        False,
+        False,
+    )
+    # Only the dash that follows the label: a later one is its figure's sign.
+    assert second.value == Decimal("-10.00")
+    own = _line(("Closing figure", 62.0), ("- $992.50", 300.0))
+    (kept,) = after_label(own.text[len("Closing figure") :], [c.text for c in own.cells])
+    assert kept.value == Decimal("-992.50")
+    (signed,) = after_label(" -$992.50", ["Closing figure -$992.50"])
+    assert signed.value == Decimal("-992.50")
+    assert after_label(" no figure here", ["Closing figure no figure here"]) == []
+
+
+@pytest.mark.parametrize(
+    ("text", "value"),
+    [
+        ("Net Pay - $1,840.25", "1840.25"),
+        ("Net Pay: $1,840.25", "1840.25"),
+        ("Net Pay -$1,840.25", "-1840.25"),
+    ],
+)
+def test_a_payslip_label_with_a_dash_is_not_negative_pay(text: str, value: str) -> None:
+    assert payslip._amount(_line((text, 62.0)), "net pay") == Decimal(value)
+
+
+def test_a_payslip_figure_signed_in_its_own_cell_keeps_its_sign() -> None:
+    line = _line(("Net Pay", 62.0), ("- $18.40", 300.0))
+    assert payslip._amount(line, "net pay") == Decimal("-18.40")
+
+
+def test_a_brokerage_summary_label_with_a_dash_is_not_a_negative_balance() -> None:
+    parser = BrokerageStatementParser()
+    summary = BrokerageSummary()
+    parser._scan_summary(_line(("Ending cash balance - $2,310.40", 62.0)), summary)
+    parser._scan_summary(_line(("Total holdings value - $48,120.00", 62.0)), summary)
+    assert summary.cash_closing is not None
+    assert summary.cash_closing.value == Decimal("2310.40")
+    assert summary.positions_value is not None
+    assert summary.positions_value.value == Decimal("48120.00")
+    # A sign on the figure, or in the figure's own cell, is a sign.
+    summary = BrokerageSummary()
+    parser._scan_summary(_line(("Ending cash balance -$310.40", 62.0)), summary)
+    assert summary.cash_closing is not None
+    assert summary.cash_closing.value == Decimal("-310.40")
+    summary = BrokerageSummary()
+    parser._scan_summary(_line(("Ending cash balance", 62.0), ("- $310.40", 300.0)), summary)
+    assert summary.cash_closing is not None
+    assert summary.cash_closing.value == Decimal("-310.40")
