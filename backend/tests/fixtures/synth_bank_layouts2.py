@@ -10,6 +10,16 @@ and rows that reconcile:
   DC | Balance``: every amount is printed without a sign and the column
   ``DC`` says which way it went (``DB`` on five rows, ``CR`` on three); a
   running balance on every row.
+* :func:`summary_grid_with_counts`: a block ``Account Summary`` over the
+  header ``Date | Description | Amount`` holding a dated ``Beginning
+  Balance`` line, two undated count lines (``6 Credits This Period``, ``9
+  Debits This Period``) and a dated ``Ending Balance`` line: no line of it
+  is a transaction. Two titled tables follow with the six and the nine rows.
+* :func:`brought_forward_dated_once`: ``Date | Description | Paid out | Paid
+  in | Balance``; a dated ``Balance brought forward`` line, then nine rows
+  over four days with the date printed once per day (the first day's date
+  is the one on the brought-forward line), and a dated ``Balance carried
+  forward`` line under the last of them.
 
 :data:`EXPECTED_ROWS` gives, per builder, the rows a correct reading returns
 (``(posted, amount, payee)``, money out negative).
@@ -24,7 +34,16 @@ from typing import Final
 from reportlab.lib.pagesizes import letter
 from reportlab.pdfgen import canvas
 
-from tests.fixtures.synth_bank_layouts import ExpectedRow, _d, _head, _money, _running
+from tests.fixtures.synth_bank_layouts import (
+    ExpectedRow,
+    _d,
+    _head,
+    _money,
+    _running,
+    _top,
+    _total,
+    _unsigned_table,
+)
 from tests.fixtures.synth_unseen_layouts import _line, _rows
 
 # -- a credit or debit marker in a column of its own ----------------------------
@@ -87,6 +106,135 @@ def marker_column_checking() -> bytes:
     return buf.getvalue()
 
 
+# -- a summary block that looks like a table: two balance lines, counts between --
+
+_GRID_OPENING: Final = _d("2,104.35")
+_GRID_CREDITS: Final[tuple[ExpectedRow, ...]] = (
+    (date(2026, 9, 2), _d("1,200.00"), "Payroll Deposit Marrowby Looms"),
+    (date(2026, 9, 9), _d("310.00"), "Transfer From Savings"),
+    (date(2026, 9, 14), _d("145.50"), "Mobile Deposit"),
+    (date(2026, 9, 18), _d("96.25"), "Refund Hobbleton Outfitters"),
+    (date(2026, 9, 23), _d("88.00"), "Cash Deposit Branch 12"),
+    (date(2026, 9, 29), _d("30.25"), "Rebate Tansyfield Co-op"),
+)
+_GRID_DEBITS: Final[tuple[ExpectedRow, ...]] = (
+    (date(2026, 9, 1), _d("-640.00"), "Rent Curlewmere Court"),
+    (date(2026, 9, 4), _d("-212.40"), "Card Purchase Stonechat Grocers"),
+    (date(2026, 9, 8), _d("-118.75"), "Bill Pay Eddlestone Power"),
+    (date(2026, 9, 11), _d("-96.10"), "Card Purchase Furzeholt Hardware"),
+    (date(2026, 9, 15), _d("-84.00"), "ATM Cash Wicket Lane"),
+    (date(2026, 9, 19), _d("-73.25"), "Card Purchase Pipitwood Cafe"),
+    (date(2026, 9, 22), _d("-66.00"), "Bill Pay Skerrowick Water"),
+    (date(2026, 9, 25), _d("-55.00"), "Card Purchase Gorsedown Books"),
+    (date(2026, 9, 28), _d("-75.00"), "Transfer To Savings"),
+)
+_GRID_ROWS: Final = (*_GRID_CREDITS, *_GRID_DEBITS)
+#: The words the two count lines of the summary block end with.
+GRID_COUNT_WORDS: Final = "This Period"
+
+
+def summary_grid_with_counts() -> bytes:
+    """A summary block under a table header, then the two tables it counts."""
+    buf = io.BytesIO()
+    c = canvas.Canvas(buf, pagesize=letter)
+    closing = _running(_GRID_OPENING, _GRID_ROWS)[-1]
+    _top(c, "Dunnockvale Community Bank", "2946", "09/01/2026 - 09/30/2026")
+    _line(c, 706, [(40, "Account Summary")], size=10, bold=True)
+    _line(c, 690, [(40, "Date"), (110, "Description"), (-560, "Amount")], size=8)
+    y = _rows(
+        c,
+        677,
+        [
+            [(40, "09/01/2026"), (110, "Beginning Balance"), (-560, _money(_GRID_OPENING))],
+            [
+                (110, f"{len(_GRID_CREDITS)} Credits {GRID_COUNT_WORDS}"),
+                (-560, _money(_total(_GRID_CREDITS))),
+            ],
+            [
+                (110, f"{len(_GRID_DEBITS)} Debits {GRID_COUNT_WORDS}"),
+                (-560, _money(_total(_GRID_DEBITS))),
+            ],
+            [(40, "09/30/2026"), (110, "Ending Balance"), (-560, _money(closing))],
+        ],
+    )
+    y = _unsigned_table(c, y - 20, "DEPOSITS AND ADDITIONS", _GRID_CREDITS)
+    _unsigned_table(c, y - 13, "ELECTRONIC WITHDRAWALS", _GRID_DEBITS)
+    c.save()
+    return buf.getvalue()
+
+
+# -- a dated brought-forward line over rows that print their date once per day --
+
+_FORWARD_OPENING: Final = _d("1,618.92")
+_FORWARD_ROWS: Final[tuple[ExpectedRow, ...]] = (
+    (date(2026, 10, 1), _d("-52.30"), "Card Purchase Linnetshaw Bakery"),
+    (date(2026, 10, 1), _d("-420.00"), "Standing Order Ravelstoke Lettings"),
+    (date(2026, 10, 9), _d("1,705.00"), "Salary Coldharrow Potteries"),
+    (date(2026, 10, 9), _d("-36.48"), "Direct Debit Whinfell Mobile"),
+    (date(2026, 10, 9), _d("-20.00"), "Cash Machine Ropewalk"),
+    (date(2026, 10, 16), _d("-114.07"), "Card Purchase Sallowby Grocers"),
+    (date(2026, 10, 16), _d("60.00"), "Transfer From Saver"),
+    (date(2026, 10, 27), _d("-81.15"), "Direct Debit Thornaby Energy"),
+    (date(2026, 10, 27), _d("-150.00"), "Transfer To Saver"),
+)
+#: The day printed on the ``Balance brought forward`` line.
+_FORWARD_DAY: Final = date(2026, 10, 1)
+
+
+def brought_forward_dated_once() -> bytes:
+    """Nine rows over four days; the first day's date is on the line above them."""
+    buf = io.BytesIO()
+    c = canvas.Canvas(buf, pagesize=letter)
+    balances = _running(_FORWARD_OPENING, _FORWARD_ROWS)
+    _head(
+        c,
+        "Merlewood Building Society",
+        "8057",
+        "10/01/2026 - 10/31/2026",
+        _FORWARD_OPENING,
+        balances[-1],
+    )
+    _line(
+        c,
+        650,
+        [
+            (40, "Date"),
+            (110, "Description"),
+            (-400, "Paid out"),
+            (-470, "Paid in"),
+            (-550, "Balance"),
+        ],
+        size=8,
+    )
+    lines: list[list[tuple[float, str]]] = [
+        [
+            (40, _FORWARD_DAY.strftime("%m/%d/%Y")),
+            (110, "Balance brought forward"),
+            (-550, _money(_FORWARD_OPENING)),
+        ]
+    ]
+    printed: date | None = _FORWARD_DAY
+    for (posted, amount, payee), balance in zip(_FORWARD_ROWS, balances, strict=True):
+        cells: list[tuple[float, str]] = []
+        if posted != printed:
+            cells.append((40, posted.strftime("%m/%d/%Y")))
+            printed = posted
+        cells += [
+            (110, payee),
+            (-400 if amount < 0 else -470, _money(amount)),
+            (-550, _money(balance)),
+        ]
+        lines.append(cells)
+    lines.append(
+        [(40, "10/31/2026"), (110, "Balance carried forward"), (-550, _money(balances[-1]))]
+    )
+    _rows(c, 636, lines)
+    c.save()
+    return buf.getvalue()
+
+
 EXPECTED_ROWS: Final[dict[str, list[ExpectedRow]]] = {
     "marker_column_checking": [row for row, _ in _MARKER_ROWS],
+    "summary_grid_with_counts": list(_GRID_ROWS),
+    "brought_forward_dated_once": list(_FORWARD_ROWS),
 }

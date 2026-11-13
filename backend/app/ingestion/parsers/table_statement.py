@@ -102,7 +102,13 @@ are read the same way:
    table ends are rows only when the statement has :data:`MIN_CARRIED`
    such rows already, and otherwise what they always were: summary lines
    under the table. Their date scores at most ``confidence.DERIVED``
-   (warning ``dates_carried``).
+   (warning ``dates_carried``). A dated balance line (``Balance carried
+   forward``) makes rows of the candidates above it as a dated row does,
+   unless their chain starts right under a balance line: the lines
+   **between two balance lines** (``Beginning Balance``, ``6 Credits This
+   Period``, ``Ending Balance``) are a summary and never rows, however many
+   dates the statement carried before; under ``Balance brought forward``
+   they are rows once a dated transaction row follows them.
    **Found and not read.** Any other undated line with a figure in a money
    column that a dated row follows (two figures in one column, a line too
    far below the row above) is counted as skipped, as is each date-led
@@ -115,6 +121,11 @@ are read the same way:
    (``Date | Balance``), up to the next title, block title or header:
    such a line may have been a row's wrapped text, and the lines after it
    rows. Figures by day under it have no words and are not counted.
+   **A table that reads no row.** When a table ends (at the header of the
+   next one, at a line of heading words that is no header we read, at the
+   end) without one row read under its header, its undated lines with a
+   figure in a money column are counted as skipped: with a row or more
+   they stay what they were (counted when a dated row follows them).
    **Titles.** The line printed over a header on its page (the title of
    the next table) and the title of a block (:func:`block_title`) are
    never the wrapped text of the row above them.
@@ -800,6 +811,9 @@ class _Row:
     #: How many subtotals were printed in the row's section before it (a
     #: ``Total ...`` line with more rows of the section after it).
     part: int = 0
+    #: A dated balance line (``Beginning Balance``: never a row itself), or a
+    #: candidate whose chain of undated lines starts right under one.
+    balance_line: bool = False
 
 
 @dataclass
@@ -1530,6 +1544,8 @@ class TableStatementParser(DocumentParser):
         # The page on which the header of a table we do not read ended ours,
         # until a title, a block title or a header we read.
         unread: int | None = None
+        # Rows read since the header of the table being read.
+        table_rows = 0
 
         def runs_on(found: SectionTitle, page: int) -> bool:
             """``found`` names the section being read once more: marked
@@ -1547,17 +1563,24 @@ class TableStatementParser(DocumentParser):
             else:
                 self._scan_summary(line, summary)
 
-        def settle(*, dated: bool) -> None:
-            """A dated row follows the lines held back (``dated``), or the table ends."""
-            nonlocal skipped, row_page
-            promote = bool(held) and (dated or summary.carried >= MIN_CARRIED)
+        def settle(*, dated: bool, summary_block: bool = False, ended: bool = False) -> None:
+            """A dated row follows the lines held back (``dated``), a balance
+            line closes the block another balance line opened
+            (``summary_block``: its lines are never rows), or the section
+            ends; ``ended``: the table does (a table that read no row counts
+            its other lines with a figure)."""
+            nonlocal skipped, row_page, table_rows
+            promote = bool(held) and not summary_block and (dated or summary.carried >= MIN_CARRIED)
             if promote:
                 rows.extend(held)
                 summary.carried += len(held)
                 row_page = held[-1].page
-            if dated:
+                table_rows += len(held)
+            if dated or (ended and table_rows == 0):
                 skipped += len(loose)
                 summary.skipped_boxes.extend(loose)
+            if ended:
+                table_rows = 0
             queued = list(waiting)
             held.clear()
             loose.clear()
@@ -1589,14 +1612,14 @@ class TableStatementParser(DocumentParser):
                     title = None
                     section += 1
                 if section != before:
-                    settle(dated=False)
+                    settle(dated=False, ended=True)
                 columns, pending, last, anchor, titled = header, False, None, None, None
                 found_header, unread = True, None
                 continue
             norm = line.norm
             if columns is not None and self._header_like(line):
                 # The header of a table we do not read ("Date | Balance"): ours ends.
-                settle(dated=False)
+                settle(dated=False, ended=True)
                 columns, last, anchor = None, None, None
                 unread = line.page
             if columns is None:
@@ -1628,9 +1651,12 @@ class TableStatementParser(DocumentParser):
             if not date_text or not self._date_shaped(date_text):
                 figures = 0 if pending else self._undated_figures(line, norm, cells)
                 if figures == 1 and self._carries(line, cells, anchor) and anchor is not None:
-                    last = anchor = self._row(
+                    candidate = self._row(
                         line, cells, anchor.date_text, title, section, carried=True
                     )
+                    # A chain that starts at a balance line stays one.
+                    candidate.balance_line = anchor.balance_line
+                    last = anchor = candidate
                     last.part = subtotals.get(section, 0)
                     held.append(last)
                     waiting.append((line, True))
@@ -1687,8 +1713,14 @@ class TableStatementParser(DocumentParser):
                     summary.closing_sign_open = False
                 if not pending:
                     # A dated line of the table: the undated rows above it
-                    # are of the day printed over them, as before a dated row.
-                    settle(dated=True)
+                    # are of the day printed over them, as before a dated
+                    # row. Not those that follow a balance line themselves:
+                    # between two balance lines stands a summary (``6
+                    # Credits This Period``), and only a dated transaction
+                    # row says otherwise.
+                    block = bool(held) and held[0].balance_line
+                    settle(dated=not block, summary_block=block)
+                row.balance_line = True
                 anchor = None if pending else row
                 continue
             if not pending:
@@ -1710,11 +1742,13 @@ class TableStatementParser(DocumentParser):
             row_page = line.page
             if pending:
                 pending_items += 1
+                table_rows += 1
                 last = anchor = None
                 continue
             last = anchor = row
             rows.append(row)
-        settle(dated=False)
+            table_rows += 1
+        settle(dated=False, ended=True)
         self._adjacent_balances(lines, summary)
         return rows, summary, pending_items, skipped, found_header
 

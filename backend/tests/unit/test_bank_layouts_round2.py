@@ -7,6 +7,12 @@ the same marker printed after the figure does. Beside it the cells that
 must sign nothing: a category that starts with ``Dr.``, a marker printed
 left of the amount, and a marker with another figure between it and the
 amount (the marker is that figure's).
+
+Lines between two balance lines: a summary block printed under a header
+(``Beginning Balance``, two count lines, ``Ending Balance``) gives no row,
+while the undated rows under a dated ``Balance brought forward`` line still
+take its date once a dated row follows them. A table that reads no row at
+all counts its lines with a figure.
 """
 
 from __future__ import annotations
@@ -191,3 +197,116 @@ def test_a_marker_behind_another_figure_is_not_taken() -> None:
     assert parser._own_column_marker(cells) is None
     del cells["balance"]
     assert parser._own_column_marker(cells) is False
+
+
+# -- lines between two balance lines; a table that reads no row -----------------
+
+HEADER = [("Date", 62.0), ("Description", 150.0), ("Amount", 500.0)]
+
+
+def _warnings(result: ExtractResult) -> list[str]:
+    assert result.parse is not None
+    return list(result.parse.warnings)
+
+
+def test_lines_between_two_balance_lines_are_not_rows() -> None:
+    result = _read(synth.summary_grid_with_counts())
+    statement = _only(result)
+    assert len(statement.transactions) == 15
+    assert not [
+        t.payee for t in statement.transactions if synth.GRID_COUNT_WORDS in (t.payee or "")
+    ]
+    assert _rows(statement) == synth.EXPECTED_ROWS["summary_grid_with_counts"]
+    assert statement.reconciliation is not None
+    assert statement.reconciliation.status == "ok"
+    assert "dates_carried" not in _warnings(result)
+    assert result.parse is not None
+    assert result.parse.skipped_lines == 0
+
+
+def test_undated_rows_after_a_brought_forward_line_are_still_carried() -> None:
+    result = _read(synth.brought_forward_dated_once())
+    statement = _only(result)
+    assert len(statement.transactions) == 9
+    assert _rows(statement) == synth.EXPECTED_ROWS["brought_forward_dated_once"]
+    assert statement.reconciliation is not None
+    assert statement.reconciliation.status == "ok"
+    assert _warnings(result).count("dates_carried") == 1
+    assert result.parse is not None
+    assert result.parse.skipped_lines == 0
+
+
+def test_a_table_that_reads_no_row_counts_its_lines() -> None:
+    outcome = _parse(
+        [
+            HEADER,
+            [("Service charges", 150.0), ("12.00", 500.0)],
+            [("Interest earned", 150.0), ("0.42", 500.0)],
+            [("Overdraft items", 150.0), ("35.00", 500.0)],
+        ]
+    )
+    assert [t for s in outcome.statements for t in s.transactions] == []
+    assert outcome.skipped_lines == 3
+    assert outcome.skipped_regions == [
+        (1, (150.0, 114.0, 525.0, 123.0)),
+        (1, (150.0, 128.0, 520.0, 137.0)),
+        (1, (150.0, 142.0, 525.0, 151.0)),
+    ]
+
+
+def test_a_table_that_reads_no_row_counts_its_lines_at_the_next_header() -> None:
+    outcome = _parse(
+        [
+            HEADER,
+            [("Service charges", 150.0), ("12.00", 500.0)],
+            [("Interest earned", 150.0), ("0.42", 500.0)],
+            HEADER,
+            [("01/05/2026", 62.0), ("Coffee", 150.0), ("-4.50", 500.0)],
+            # Under a table with a row, a line nothing dated follows is what
+            # it was: a line of the summary, not counted.
+            [("Average balance", 150.0), ("95.50", 500.0)],
+        ]
+    )
+    assert _amounts(outcome) == [("Coffee", Decimal("-4.50"))]
+    assert outcome.skipped_lines == 2
+
+
+def test_candidates_under_a_balance_line_wait_for_a_dated_row() -> None:
+    carried = [
+        [("01/05/2026", 62.0), ("Coffee", 150.0), ("-4.50", 500.0)],
+        [("Bakery", 150.0), ("-3.00", 500.0)],
+        [("Tea", 150.0), ("-2.00", 500.0)],
+        [("01/09/2026", 62.0), ("Refund", 150.0), ("9.25", 500.0)],
+    ]
+    block = [
+        [("01/31/2026", 62.0), ("Beginning Balance", 150.0), ("100.00", 500.0)],
+        [("2 Credits This Period", 150.0), ("9.25", 500.0)],
+        [("3 Debits This Period", 150.0), ("9.50", 500.0)],
+        [("01/31/2026", 62.0), ("Ending Balance", 150.0), ("99.75", 500.0)],
+    ]
+    # Two rows of the statement took the date above them already: the lines
+    # between the two balance lines are still no rows.
+    outcome = _parse([HEADER, *carried, *block])
+    assert [payee for payee, _ in _amounts(outcome)] == ["Coffee", "Bakery", "Tea", "Refund"]
+    assert outcome.skipped_lines == 0
+    # Candidates that start at a transaction row are rows when a balance
+    # line follows them, as when a dated row does.
+    outcome = _parse(
+        [
+            HEADER,
+            [("01/02/2026", 62.0), ("Balance brought forward", 150.0), ("100.00", 500.0)],
+            [("Stamps", 150.0), ("-1.00", 500.0)],
+            *carried,
+            [("Toner", 150.0), ("-7.00", 500.0)],
+            [("01/31/2026", 62.0), ("Balance carried forward", 150.0), ("91.75", 500.0)],
+        ]
+    )
+    assert _amounts(outcome) == [
+        ("Stamps", Decimal("-1.00")),
+        ("Coffee", Decimal("-4.50")),
+        ("Bakery", Decimal("-3.00")),
+        ("Tea", Decimal("-2.00")),
+        ("Refund", Decimal("9.25")),
+        ("Toner", Decimal("-7.00")),
+    ]
+    assert outcome.skipped_lines == 0
