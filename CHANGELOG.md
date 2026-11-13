@@ -146,8 +146,9 @@ What remains (details in docs/ROADMAP.md):
   review item the mapping editor answers.
 - **Bank and card PDF statements are read by new rules** (INGESTION.md
   "Parse", "Bank and card statement layouts"; `statement_generic` and
-  `card_statement_generic` are version 7, the institution parsers
-  version 5). The entries below and under "Fixed" say what changed. A
+  `card_statement_generic` were version 7 with these rules, the
+  institution parsers version 5; see "Parser versions" below for the
+  current ones). The entries below and under "Fixed" say what changed. A
   document already stored keeps the rows it was imported with; "Process
   again" reads it with the current rules, so its rows, its period and
   whether it waits in review may differ from the first reading.
@@ -221,8 +222,18 @@ What remains (details in docs/ROADMAP.md):
   `tax_forms/2`, `payslip_basic/2`, `loan_statement_generic/2`,
   `brokerage_activity_table/2`, `brokerage_positions_table/2`,
   `brokerage_statement_generic/9`, `placeholder_brokerage/7`,
-  `fidelity_investments_statement/8`. A stored document keeps what it
-  read until "Process again".
+  `fidelity_investments_statement/8`, `layout_template/3` (a taught
+  layout), `statement_generic/8`, `card_statement_generic/8`, the
+  institution parsers `/6` and the OFX extractor `ofx/3`. Two causes
+  reach further than the entries that name them. The amount reader all
+  PDF and image parsers share now also reads a `DB` marker and a
+  currency symbol or sign printed apart from its figure, so a payslip,
+  loan statement, receipt, tax form, brokerage statement or taught
+  layout can read an amount it used to miss. And a currency is taken
+  from the page only when it is an ISO code PerFin knows, bank and card
+  statements included. A stored document of any of these kinds keeps
+  what it read; "Process again" reads it with the current rules, which
+  can change its figures, its rows and whether it waits in review.
 
 ### Fixed
 
@@ -430,6 +441,13 @@ What remains (details in docs/ROADMAP.md):
   the nearest amount-only line and the line above, and keeps the first
   reading whose figures add up; an item's price is never taken for a tax
   or a total.
+- **A savings line is not added back into a derived tax or subtotal.**
+  A receipt that printed "you saved 20.98" under a subtotal equal to its
+  total got a tax of 20.98, and one whose items and tax added up to the
+  total got a subtotal raised by the saving. A derived figure now allows
+  for the tip and the discount only when the sum that added up used
+  them; when nothing adds up, a figure derived through a tip or a
+  discount is marked low confidence.
 - **A currency is an ISO code PerFin knows.** The word after "currency"
   was taken as the currency whatever it was (`currency for the period`
   gave `FOR`). It is read only when printed as three capital letters that

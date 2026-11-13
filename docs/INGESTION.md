@@ -280,7 +280,7 @@ QIF since Phase 2; PDF, images (with OCR), EML, ZIP and XLSX since Phases
     extractor did not read").
 
   OFX investment statements (`INVSTMTRS`, `extract/ofx_invest.py`, extractor
-  `ofx/2`) are read from the same hardened tree: positions (`INVPOSLIST`),
+  `ofx/3`) are read from the same hardened tree: positions (`INVPOSLIST`),
   activity (`INVTRANLIST`: buys, sells, income, reinvestments, expenses,
   transfers, splits, cash `INVBANKTRAN`), closing cash (`INVBAL/AVAILCASH`)
   and the `SECLIST` names. Two kinds of security are not priced per unit
@@ -815,8 +815,8 @@ a child answering with parser output is `bad_output`.
     sub-accounts of a member statement.
 
   Parser versions are part of `document.parser_version`
-  (`statement_generic/7`, `card_statement_generic/7`, the institution
-  parsers `/5`). A document stored by an earlier version keeps its rows
+  (`statement_generic/8`, `card_statement_generic/8`, the institution
+  parsers `/6`). A document stored by an earlier version keeps its rows
   until it is read again; "Process again" reads it with the current
   rules, which can change its rows, its period and whether it waits in
   review.
@@ -1703,7 +1703,11 @@ table; never a PDF's page table) before it looks for a column mapping:
   `You Sold Opening Transaction`, `Sell Short`) does. A closing with
   nothing open or larger than what is open, an expiry against a short
   that is not proven, and a `Buy to Close` of an option the rows do not
-  leave written are skipped and counted, never read as a trade. A
+  leave written are skipped and counted, never read as a trade. One
+  reading the rows cannot settle is kept as the likelier one: a plain
+  `Buy` of an option followed by its `Expired` row reads as a held
+  option expiring worthless, though the buy could have closed a short
+  opened before the export's first row. A
   written option then stays out of the lot engine ("Brokerage
   statements", the short-position rule): the rest of the export imports.
 - **Accounts**: one `InvestmentStatement` per last four digits of the
@@ -2535,7 +2539,12 @@ when it scores at least 0.5):
   included) subtotal = total. A figure whose currency symbol OCR read as a
   leading digit (`8116.83` for `£116.83`) and digits whose decimal point was
   lost (`6778` on a TOTAL line) are tried only as variants that make the set
-  consistent, never on their own. A missing subtotal or tax is derived.
+  consistent, never on their own. A missing subtotal or tax is derived,
+  with the tip and the discount the set that added up used: a "you saved"
+  line the sum did not need is a note and is not added back (with no set
+  that adds up, every printed tip and discount is allowed for, and a
+  figure derived through one is scored 0.8, below the threshold: whether
+  it was in the total is a guess).
 - Date: every format of `classify/dates.py` plus `14-MAR-26`; a labelled
   date or one next to a time first; a line that says expiry, valid,
   return by, due date or the like gives a date only where a date label in the
@@ -2869,7 +2878,7 @@ the document page.
   and a dated line without an amount is skipped with its box recorded. The
   anchors give the period (yearless row dates take its year), the account's
   last four digits and the balances, and the statement is reconciled and
-  scored like a parser's (parser `layout_template/2`), so a template that
+  scored like a parser's (parser `layout_template/3`), so a template that
   misreads a statement is held back the same way. A template without
   tables only fills a parser's statement (the period always; the account
   and balances when there is one statement). Then the normal import runs.

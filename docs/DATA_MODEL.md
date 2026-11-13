@@ -807,8 +807,11 @@ Notes on structured imports (`app/domain/imports/`, Phase 2):
   `computed`, `difference`, `currency`; never importable as read),
   `investment_opening_basis_unknown` (`securities`; `costed_at: "price"`
   for a statement's holding opened at its price),
-  `investment_short_position` (`positions`: symbol, name, quantity, value;
-  `lines_left_out`),
+  `investment_short_position` (`positions`: `symbol`, `name`, `quantity`,
+  `market_value`, `page`; `lines_left_out`; `from_activity: true` when no
+  printed position is negative and the statement's own trades write an
+  option, whose `positions` entry then carries its lowest running units
+  with `market_value` and `page` null),
   `position_mismatch` (`securities`: `history`/`reported` units),
   `investment_lot_conflict` (`code`), `investment_out_of_order`
   (`rows`), `investment_same_name_securities` (`names`) and

@@ -548,7 +548,12 @@ class InvestmentReconciliation(_Strict):
     holdings + closing cash = the reported account value; ``index_value``
     (a document of several accounts): the account value printed on the
     account's own pages = the one the document's account index prints for
-    it. ``checks`` lists those that could run, ``failed`` those that did not
+    it. A retirement plan statement
+    (``app.ingestion.parsers.plan_statement``) has two of its own:
+    ``roll_forward``: on the total row, beginning balance + the movement
+    columns = ending balance; ``roll_forward_rows``: every fund row adds up
+    the same way and the rows' ending balances add up to the total's.
+    ``checks`` lists those that could run, ``failed`` those that did not
     hold.
     """
 
