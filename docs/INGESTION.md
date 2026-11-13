@@ -205,7 +205,8 @@ QIF since Phase 2; PDF, images (with OCR), EML, ZIP and XLSX since Phases
   `ocr_disabled_after_crash`). In the last case the pipeline opens an
   `unparsed` item (`ocr_failed`) and the document ends `needs_review`
   whatever was imported from its text layers; an import re-run (an account
-  chosen, a mapping applied) does not resolve that item. Any other sandbox
+  chosen, a mapping applied, the rows of a table taught in "Teach PerFin")
+  does not resolve that item. Any other sandbox
   error fails the document as before, and when both retries crash the
   first crash is the error reported.
 - Previews (`render.py`): every page (up to `max_preview_pages`) rendered to
@@ -1828,7 +1829,18 @@ same database transaction.
   (`source`: `table` or `pages`), and the mapping editor is not offered.
   The test for a dated row is deliberately wide (any date shape, with or
   without a year, beside a second cell with a digit), so a page table
-  that might be mappable is offered as before.
+  that might be mappable is offered as before. Two limits of these tests
+  as they stand:
+  - Only a table of a header row and no other row says `no_rows`. A
+    header row followed by a "Total" row or a "No transactions" line is
+    two rows: it is asked about like any other table (`mapping_required`,
+    the mapping editor), although no mapping reads a transaction from it.
+  - The page-table test reads a date within one cell. It does not
+    recognise a month and a day printed in separate cells (`Jan` | `15`,
+    `01` | `15`), nor a date of numbers separated by spaces (`15 01 2026`,
+    `2026 01 15`; `15 Jan 2026` is recognised). A page table whose rows
+    are all dated that way waits as `no_rows` with no mapping editor,
+    although it holds transactions.
 - **Records the extractor did not read.** The OFX, QFX and QIF extractors
   count the records they could not read in `transaction_skipped:<n>`
   warnings ("Extract"). The importer adds them up (`records_skipped`;
@@ -2218,7 +2230,10 @@ the document page.
   document (`unparsed`) or an unknown account once the taught rows are
   imported; a new institution once it is set or the layout remembered; a
   low-confidence item once a fact it names changed (the period for a
-  period item, the balances for a balance item). A fact that does not
+  period item, the balances for a balance item). An `ocr_failed` item
+  (scanned pages OCR never read) is the exception to the imported rows: it
+  stays open until the person answers it or the document is read again
+  through the pipeline. A fact that does not
   answer the item (an institution or an account set without rows imported
   for an unknown account, anything for a possible duplicate), a note or an
   ignored line leaves it open (warning `item_left_open`).
@@ -2545,7 +2560,9 @@ upload, `scan` when ClamAV is configured, `extract` through the real sandbox,
 `classify`, `parse` (per bank statement and per brokerage account its last
 four digits, printed name, type, subtype and pages; the bank statements'
 period and row counts; the brokerage accounts' period, positions and
-activity counts, figures and reconciliation), and with `--household` a `match` read in a
+activity counts, figures and reconciliation; per table the suggested
+mapping, with the day/month order settled against today's date as an
+import settles it against the day of the upload), and with `--household` a `match` read in a
 rolled-back `READ ONLY` transaction). Nothing is written to the blob store or the
 database; previews and child documents are summarised, not printed.
 

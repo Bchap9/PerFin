@@ -282,7 +282,10 @@ class StatementAccount(_Strict):
     institution: Annotated[str, Field(max_length=200)] | None = None
     #: The account's subtype the document prints (``traditional_ira``,
     #: ``education_529``; ``app.domain.accounts.subtypes``), read by the
-    #: worker's document parsers from an account's name or index group.
+    #: worker's document parsers from an account's name or index group. The
+    #: sandbox child sets one value: ``401k``, for an OFX investment
+    #: statement that carries ``INV401K`` or ``INV401KBAL``
+    #: (``app.ingestion.extract.ofx_invest``).
     subtype: Code | None = None
 
 

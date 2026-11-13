@@ -692,7 +692,9 @@ closed only when the teaching answers it: a `reconciliation_*` item when
 the statement now reconciles (its pending rows confirmed, as `/correct`
 does); any item when the document is read again through the pipeline
 (`rerun: "pipeline"`); an `unparsed` or `unknown_account` item when the
-taught rows are imported (`rerun: "import"`); a `new_institution` item when
+taught rows are imported (`rerun: "import"`; never an `unparsed` item with
+reason `ocr_failed`, which only the person or the pipeline answers); a
+`new_institution` item when
 the institution is set or the layout remembered; a `low_confidence_field`
 item when a fact named by its `field`/`fields` changed (the period, the
 balances, the institution, the account); otherwise (a fact that does not
