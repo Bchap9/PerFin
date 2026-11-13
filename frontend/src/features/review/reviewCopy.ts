@@ -955,6 +955,28 @@ const COPY: Readonly<Record<string, Copy>> = {
       "Check for a missing sale or transfer in the account's activity and add it.",
     ],
   }),
+  "low_confidence_field:plan_statement_does_not_add_up": (item) => {
+    const currency = payloadString(item, "currency");
+    const printed = payloadString(item, "printed");
+    const computed = payloadString(item, "computed");
+    const figures =
+      printed !== null && computed !== null
+        ? ` It prints an ending balance of ${money(printed, currency)}; its figures come to ${money(computed, currency)}.`
+        : "";
+    const checked = payloadString(item, "status") === "mismatch";
+    return {
+      title: "Plan statement not recorded",
+      what: checked
+        ? `This plan statement's beginning balance plus the period's changes is not its ending balance, so no balance was recorded.${figures}`
+        : "This plan statement's ending balance could not be checked against its beginning balance, the period's changes and its dates, so no balance was recorded.",
+      why: "PerFin records a plan's balance only when the statement's own figures confirm it.",
+      steps: [
+        "Compare the totals with the statement (“Show document”).",
+        "Enter the balance on the account yourself if the statement is right.",
+        "Dismiss this item.",
+      ],
+    };
+  },
 };
 
 /** The explanation of an item (falls back to the kind's own words). */

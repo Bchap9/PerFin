@@ -802,6 +802,9 @@ Notes on structured imports (`app/domain/imports/`, Phase 2):
   `investment_figures_differ` (a statement imported whole whose own totals
   disagree: `failed`, `differences`, `sections`; a notice, it does not keep
   the document in `needs_review`),
+  `plan_statement_does_not_add_up` (a 401(k) plan statement whose balance
+  was not recorded: `status`, `failed`, `period_stated`, `printed`,
+  `computed`, `difference`, `currency`; never importable as read),
   `investment_opening_basis_unknown` (`securities`; `costed_at: "price"`
   for a statement's holding opened at its price),
   `investment_short_position` (`positions`: symbol, name, quantity, value;

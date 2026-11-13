@@ -226,6 +226,27 @@ statements"). Per statement:
    (:func:`opening_value`: only from an account-value summary that adds up
    to the closing value recorded), so an account's history starts with its
    first statement's opening value rather than its closing one.
+
+**A balance and nothing else** (a statement of one of
+:data:`~app.ingestion.parsers.base.BALANCE_ONLY_PARSERS` with no positions
+and no activity: a 401(k) plan statement in the roll-forward layout,
+``app.ingestion.parsers.plan_statement``). Steps 1 and 2 apply (the
+account, the overlap guard); none of steps 3 to 8 does, because there is
+nothing to write but the balance (:func:`_commit_balance`). When the
+statement's own check held (``roll_forward``, ``roll_forward_rows``), its
+period is stated (``statement_records.period_stated``) and its dates are
+in range, the printed ending total is the account's ``statement`` balance
+snapshot on the period's last day, the opening balance is recorded under
+step 9's rule, the statement is recorded for the overlap guard and the
+audit row (``investment.import``) carries ``"balance_only": true``. No
+security, holding, lot, price, investment transaction or ledger row is
+written. Otherwise nothing is written and one ``low_confidence_field``
+item (:data:`PLAN_DOES_NOT_ADD_UP`) names the account, its currency, the
+check's ``status`` and ``failed`` list, and the ``printed`` ending total,
+what the statement's figures come to (``computed``) and their
+``difference`` where known. It cannot be imported as read
+(:func:`acceptable_as_read`): a balance that its own statement does not
+vouch for is entered by hand.
 """
 
 from __future__ import annotations
@@ -253,6 +274,7 @@ from app.domain.accounts.models import Account, AccountType, BalanceSource
 from app.domain.documents.models import Document, ReviewKind
 from app.domain.imports.statement_answers import StatementAnswers, statement_key
 from app.domain.imports.statement_records import (
+    StatementFacts,
     check_overlap,
     investment_facts,
     record_statement,
@@ -270,6 +292,7 @@ from app.domain.investments.models import (
 )
 from app.domain.investments.service import cost_method, replay_position
 from app.ingestion.match.accounts import match_account
+from app.ingestion.parsers.base import BALANCE_ONLY_PARSERS
 from app.ingestion.parsers.brokerage import position_value, reconcile_investment
 from app.ingestion.parsers.positions_table import is_positions_snapshot
 from app.ingestion.parsers.vocabulary import SUGGESTED_DOUBT
@@ -2430,6 +2453,112 @@ def opening_value(
     return statement.period_start - timedelta(days=1), first
 
 
+#: A balance-only statement (a 401(k) plan statement) whose own figures do
+#: not vouch for its ending balance; nothing was recorded. Not answerable
+#: "import as read".
+PLAN_DOES_NOT_ADD_UP: Final = "plan_statement_does_not_add_up"
+
+
+def _balance_only(statement: InvestmentStatement) -> bool:
+    """A statement that is an account's balance and nothing else (module doc)."""
+    return (
+        statement.parser is not None
+        and statement.parser.name in BALANCE_ONLY_PARSERS
+        and not statement.positions
+        and not statement.activity
+    )
+
+
+def _commit_balance(
+    ctx: _Context,
+    statement: InvestmentStatement,
+    account: Account,
+    check: InvestmentReconciliation,
+    *,
+    index: int,
+    facts: StatementFacts,
+) -> bool:
+    """Record the balance a balance-only statement prints; False: nothing was written.
+
+    Written only when the statement's own check held, its period is stated
+    and its dates are in range (module doc). Otherwise one item says that
+    no balance was recorded.
+    """
+    db = ctx.db
+    printed = statement.total_value.amount if statement.total_value is not None else None
+    on = statement.as_of
+    dated = all(d is None or in_business_range(d) for d in _statement_dates(statement))
+    if printed is None or on is None or check.status != "ok" or not facts.stated or not dated:
+        computed = check.total_value
+        ctx.review(
+            ReviewKind.LOW_CONFIDENCE_FIELD,
+            {
+                "reason": PLAN_DOES_NOT_ADD_UP,
+                "field": "reconciliation",
+                "account_id": str(account.id),
+                "currency": account.currency,
+                "statement": index,
+                "parser": _parser(statement),
+                "status": check.status,
+                "failed": list(check.failed),
+                "period_stated": facts.stated and dated,
+                "printed": _money_text(printed) if printed is not None else None,
+                "computed": _money_text(computed) if computed is not None else None,
+                "difference": (
+                    _money_text(computed - printed)
+                    if computed is not None and printed is not None
+                    else None
+                ),
+            },
+        )
+        return False
+    accounts_repo.upsert_snapshot(
+        db,
+        account,
+        on,
+        to_storage(printed),
+        BalanceSource.STATEMENT,
+        source_document_id=ctx.document.id,
+    )
+    ctx.result.snapshots += 1
+    before = opening_value(statement, printed, check.tolerance)
+    if before is not None and all(
+        # As for a brokerage statement (step 9): only where nothing else is
+        # known of the days from the one before the period to its end.
+        s.as_of_date == before[0]
+        and s.source is BalanceSource.STATEMENT
+        and s.source_document_id == ctx.document.id
+        for s in accounts_repo.list_snapshots(db, account, before[0], on - timedelta(days=1))
+    ):
+        accounts_repo.upsert_snapshot(
+            db,
+            account,
+            before[0],
+            to_storage(before[1]),
+            BalanceSource.STATEMENT,
+            source_document_id=ctx.document.id,
+        )
+        ctx.result.snapshots += 1
+    emit(db, ctx.household_id, "balance.updated", {"account_id": str(account.id)})
+    audit(
+        db,
+        action="investment.import",
+        target_type="document",
+        target_id=ctx.document.id,
+        after={
+            "account_id": str(account.id),
+            "balance_only": True,
+            "activity": 0,
+            "opening_positions": 0,
+            "positions": 0,
+            "transaction_ids": [],
+        },
+        household_id=ctx.household_id,
+        user_id=ctx.user_id,
+    )
+    return True
+
+
 def _value_holds(check: InvestmentReconciliation, *, accepted: bool) -> bool:
     """The statement's holdings and closing cash may be the account's balance.
 
@@ -2570,6 +2699,14 @@ def import_investment_statements(
             ctx.result.overlaps += 1
             continue
         check = statement.reconciliation or reconcile_investment(statement)
+        if _balance_only(statement):
+            # A plan statement: the balance or nothing (module doc).
+            if _commit_balance(ctx, statement, account, check, index=index, facts=facts):
+                ctx.result.statements += 1
+                record_statement(db, document, account, facts)
+            else:
+                ctx.result.held += 1
+            continue
         accepted = answered.as_read("investment", key, account.id)
         kept = _held(
             ctx,

@@ -64,6 +64,19 @@ What remains (details in docs/ROADMAP.md):
   remembered for the document, so they can be answered one after the
   other. A payee or category column never splits a file.
 
+- **A 401(k) plan statement records the plan's balance** (INGESTION.md
+  "Retirement plan statements"). A quarterly plan statement in the
+  roll-forward layout (one row of dollars per fund under `Beginning
+  Balance`, the period's changes and `Ending Balance`, with a `Total` row)
+  had no reader. It now gives the retirement account its ending balance on
+  the period's last day, and its beginning balance on the day before the
+  period, when beginning plus the changes is ending on the total row and on
+  every fund row. It writes no holdings and no transactions: the statement
+  prints dollars, not units. One that does not add up, prints no period or
+  prints one that reads two ways records nothing and waits in review
+  (`plan_statement_does_not_add_up`); a document of several plans is not
+  read.
+
 ### Changed
 
 - **A file's sign is proven or the file waits** (INGESTION.md "The sign is

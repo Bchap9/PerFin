@@ -61,6 +61,7 @@ from app.ingestion.parsers.confidence import DEFAULT_THRESHOLD
 from app.ingestion.parsers.institutions import INSTITUTION_PARSERS
 from app.ingestion.parsers.loan_statement import LoanStatementParser
 from app.ingestion.parsers.payslip import PayslipParser
+from app.ingestion.parsers.plan_statement import RetirementPlanParser
 from app.ingestion.parsers.receipt import ReceiptParser
 from app.ingestion.parsers.table_statement import CardStatementParser, TableStatementParser
 from app.ingestion.parsers.tax_forms import TaxFormParser
@@ -92,6 +93,7 @@ PARSERS: Final[tuple[DocumentParser, ...]] = (
     TaxFormParser(),
     *(cls() for cls in INSTITUTION_PARSERS),
     *(cls() for cls in BROKERAGE_PARSERS),
+    RetirementPlanParser(),
     LoanStatementParser(),
     PayslipParser(),
     ReceiptParser(),

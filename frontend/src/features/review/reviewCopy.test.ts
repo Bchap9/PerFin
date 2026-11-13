@@ -80,6 +80,7 @@ const REASONS: readonly [ReviewItem["kind"], string][] = [
   ["unparsed", "payslip_unreadable"],
   ["unparsed", "tax_form_unreadable"],
   ["unparsed", "loan_unreadable"],
+  ["low_confidence_field", "plan_statement_does_not_add_up"],
 ];
 
 describe("review explanations", () => {
@@ -623,6 +624,35 @@ describe("what the import says about rows and accounts", () => {
     );
     expect(several.what).toContain("2 options the account did not hold");
     expect(several.what).toContain("their 5 trades were left out");
+  });
+
+  it("says a plan statement that does not add up recorded no balance", () => {
+    const found = explain(
+      item("low_confidence_field", {
+        reason: "plan_statement_does_not_add_up",
+        currency: "USD",
+        status: "mismatch",
+        failed: ["roll_forward"],
+        printed: "32190.00",
+        computed: "32290.00",
+        difference: "100.00",
+      }),
+    );
+    expect(found.title).toBe("Plan statement not recorded");
+    expect(found.what).toContain("no balance was recorded");
+    expect(found.what).toContain("$32,190.00");
+    expect(found.what).toContain("$32,290.00");
+    expect(found.steps.join(" ")).not.toContain("Import as read");
+    const unchecked = explain(
+      item("low_confidence_field", {
+        reason: "plan_statement_does_not_add_up",
+        status: "unavailable",
+        printed: null,
+        computed: null,
+      }),
+    );
+    expect(unchecked.what).toContain("could not be checked");
+    expect(unchecked.what).toContain("no balance was recorded");
   });
 
   it("explains a value the account list prints differently", () => {

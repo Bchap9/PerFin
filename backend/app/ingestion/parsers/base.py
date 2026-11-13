@@ -57,6 +57,21 @@ MAX_LINES: Final = 200_000
 
 ParserKind = Literal["statement", "payslip", "receipt", "tax_form"]
 
+#: Parsers whose investment statement is an account's balance and nothing
+#: else: no positions and no activity, ``total_value`` on ``as_of``
+#: (``app.ingestion.parsers.plan_statement``).
+BALANCE_ONLY_PARSERS: Final = frozenset({"retirement_plan_statement"})
+
+
+def balance_read(statement: InvestmentStatement) -> bool:
+    """``statement`` is a balance-only parser's and names a balance."""
+    return (
+        statement.parser is not None
+        and statement.parser.name in BALANCE_ONLY_PARSERS
+        and statement.total_value is not None
+    )
+
+
 #: A PDF creation date: ``D:YYYYMMDDHHmmSS...`` (the ``D:`` is optional).
 _CREATED: Final = re.compile(r"(?:D:)?(\d{4})(\d{2})(\d{2})")
 #: No statement PerFin reads was made before this year (a zeroed clock is not a date).
@@ -339,7 +354,7 @@ class ParseOutcome:
             and not self.loan
             and not self.tax_forms
             and not any(s.transactions for s in self.statements)
-            and not any(i.positions or i.activity for i in self.investments)
+            and not any(i.positions or i.activity or balance_read(i) for i in self.investments)
         )
 
 

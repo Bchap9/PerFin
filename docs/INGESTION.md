@@ -1730,6 +1730,89 @@ column mapping:
   whose rows reads an `unparsed` item (`positions_unreadable`). A mapping
   chosen explicitly for a run still imports the table as a cash ledger.
 
+#### Retirement plan statements
+
+A 401(k) plan's quarterly statement prints no units and no prices. It
+prints one row of dollars per fund, often the same money again per
+contribution source, under a header such as `By Investment | Beginning
+Balance | Earnings/Fees | Contributions | Withdrawals | Transfers | Ending
+Balance`, and a `Total` row (the roll-forward layout).
+
+- **What it becomes (decision).** The **balance of the retirement account
+  and nothing else**: the plan's ending balance on the period's last day as
+  a `statement` balance snapshot and, when the statement's own figures add
+  up, the beginning balance on the day before the period (the existing
+  opening-value rule of "Brokerage statements", step 9). No holdings, no
+  lots, no prices, no investment transactions, no ledger transactions. A
+  holding in PerFin is the lot engine's cache: it needs units and a cost
+  per unit, and this table prints dollars. Writing the dollars as units at
+  a price of 1 would report a gain of zero for ever and raise
+  `position_mismatch` whenever the market falls.
+- **Parser** (`app/ingestion/parsers/plan_statement.py`,
+  `retirement_plan_statement`, version 1, kind `statement`): scores 0.65
+  when a line names `beginning balance` and, after it, `ending balance`
+  with at least one movement column between them and nothing between them
+  but movement columns (contributions, earnings, earnings/fees, gain/loss,
+  withdrawals, distributions, transfers, forfeitures, fees), and no figure
+  on the line; otherwise 0. A bank summary headed `Beginning Balance |
+  Deposits | Withdrawals | Ending Balance` is not one, nor is a sentence
+  naming both balances. A table with a column the parser does not know is
+  not read at all.
+- **Rows**: a name followed by figures with two decimals (parentheses are
+  negative, a lone dash is zero). As many figures as columns are taken in
+  order; fewer are placed under the header whose centre is nearest, each
+  column at most once and in the printed order (a blank cell is zero). A
+  line with figures that is no such row is counted (`lines_skipped`),
+  never guessed. `Sub Total` rows are skipped; only the row named `Total`
+  (`Totals`, `Grand Total`, `Account Total`, `Plan Total`) is the total, so
+  a fund called "Total Market ..." is a fund. A table goes on over a page
+  break when its header is printed again.
+- **Checks** (`InvestmentReconciliation.checks`, each comparison within
+  half a cent): `roll_forward`, on the total row beginning plus the
+  movement columns is ending; `roll_forward_rows`, every row adds up the
+  same way and the rows' ending balances add up to the total's. Columns
+  are added as printed; when the total row does not add up that way, the
+  columns headed withdrawals, distributions, fees and forfeitures are
+  subtracted instead, and the convention under which the total row adds up
+  is used for every row.
+- **Several tables**: a second roll-forward table with the same ending
+  total is the same money by source and is ignored. One with another
+  ending total means several plans or participants in one document:
+  nothing is read (warning `plan_statement_several_accounts`) and the
+  document waits as any unread document does. No total row: nothing can be
+  recorded (warning `plan_statement_no_total`).
+- **Kept** in `extraction.investments`: one `InvestmentStatement` with
+  `account_type` `retirement`, the institution from the document's first
+  line, the period from a `for period:` / `statement period:` label
+  (`as_of` is its last day), no positions, no activity, `total_value` (the
+  printed ending total) and the total row as `figures` of the group
+  `account_value` (opening, one item per movement column as it counts,
+  closing). No account or participant number is read. A numeric period
+  that reads two ways (`01/02/2026 - 03/04/2026`) is kept with a
+  confidence below any threshold.
+- **Commit** (`statement_import._commit_balance`): the statement names no
+  account digits, so it lands on the account the document was uploaded
+  for or classified as; otherwise an `unknown_account` item
+  (`account_not_found`, proposing a retirement account) asks, and the
+  chosen account takes it on the re-run. The account must be of type
+  brokerage or retirement, and the statement-level duplicate guard
+  applies. The balance is recorded only when both checks
+  held, the period is stated and its dates are in range; the audit row
+  `investment.import` then carries `balance_only: true`. Otherwise nothing
+  is written and one `low_confidence_field` item,
+  `plan_statement_does_not_add_up`, gives the printed ending total, what
+  the figures come to and the difference. It cannot be answered "Import as
+  read": a balance its own statement does not vouch for is entered by hand.
+- **Limits**: the Investments page shows no funds for the plan.
+  Contributions, earnings, fees and withdrawals are not transactions (the
+  salary deferral is on the payslip; the employer match appears only in
+  the balance). Vesting is not recorded: the balance stored is the ending
+  balance, not the vested balance. One plan account per document. A header
+  printed over two lines, whole-dollar figures and tables with other
+  columns (loan repayments, rollovers) are not read. A per-fund balance
+  needs a table of its own in the data model and is left to a later
+  package.
+
 #### Loan statements (Phase 5)
 
 A loan or mortgage statement is one payment and the balances around it,

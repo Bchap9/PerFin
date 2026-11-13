@@ -74,7 +74,11 @@ from app.domain.investments.models import (
     Price,
     Security,
 )
-from app.domain.investments.statement_import import LINES_HELD, OPENING_MEMO
+from app.domain.investments.statement_import import (
+    LINES_HELD,
+    OPENING_MEMO,
+    acceptable_as_read,
+)
 from app.domain.investments.statement_import import RECONCILIATION_FAILED as RECONCILIATION
 from app.domain.review import service as review_service
 from app.domain.review.schemas import (
@@ -91,6 +95,7 @@ from app.workers.handlers import ingest
 from tests.fixtures import synth_brokerage as synth
 from tests.fixtures import synth_fidelity as fid
 from tests.fixtures import synth_fidelity_report as fidr
+from tests.fixtures import synth_plan_statement as plan
 from tests.fixtures.factories import Factories, UserRecord
 from tests.fixtures.imports import run_jobs
 from tests.fixtures.ledger import LedgerFactories
@@ -125,7 +130,12 @@ class Env:
         )
 
     def ingest(
-        self, data: bytes, filename: str, *, uploader: UserRecord | None = None
+        self,
+        data: bytes,
+        filename: str,
+        *,
+        uploader: UserRecord | None = None,
+        account_id: uuid.UUID | None = None,
     ) -> uuid.UUID:
         principal = self.principal(uploader)
         with self.factories.transaction() as db:
@@ -138,7 +148,7 @@ class Env:
                 chunks=iter([data]),
                 max_bytes=MAX,
                 filename=filename,
-                account_id=None,
+                account_id=account_id,
             )
         assert run_jobs(self.factories, self.household_id, INGEST_JOB_TYPE, done=self.done)
         return received.document_id
@@ -2072,3 +2082,154 @@ def test_ofx_bond_position_price_is_one_units(env: Env) -> None:
     assert env.holdings(account) == [(synth.DEBT_CUSIP, Decimal(25000))]
     (price,) = env.query(select(Price))
     assert price.close == Decimal("0.98750")
+
+
+# -- 401(k) plan statements: the balance and nothing else ------------------------
+
+
+def _plan_account(env: Env) -> Account:
+    institution = env.ledger.institution(env.household_id, name=plan.INSTITUTION)
+    return env.ledger.account(
+        env.household_id,
+        type=AccountType.RETIREMENT,
+        currency="USD",
+        institution_id=institution.id,
+        name="Workplace plan",
+    )
+
+
+def _nothing_but_balances(env: Env, account: Account) -> None:
+    assert env.holdings(account) == []
+    assert env.txns(account) == []
+    assert env.cash_rows(account) == []
+    assert env.query(select(Lot).where(Lot.account_id == account.id)) == []
+
+
+def test_plan_statement_records_the_balance_and_no_holdings(env: Env) -> None:
+    """A roll-forward statement prints dollars per fund: the plan's balance is what it gives."""
+    account = _plan_account(env)
+    document_id = env.ingest(plan.plan_statement_pdf(), "plan.pdf", account_id=account.id)
+
+    document = env.document(document_id)
+    assert document.status is DocumentStatus.PROCESSED, env.open_reviews(document_id)
+    assert document.kind is DocumentKind.STATEMENT
+    assert document.parser_version == "retirement_plan_statement/1"
+    assert (document.period_start, document.period_end) == plan.PERIOD
+    assert document.account_id == account.id
+    snapshots = env.snapshots(account)
+    assert {s.as_of_date: s.balance for s in snapshots} == {
+        date(2026, 3, 31): plan.CLOSING,
+        date(2025, 12, 31): plan.OPENING,
+    }
+    assert {(s.source, s.source_document_id) for s in snapshots} == {
+        (BalanceSource.STATEMENT, document_id)
+    }
+    _nothing_but_balances(env, account)
+    (record,) = env.query(select(StatementRecord).where(StatementRecord.document_id == document_id))
+    assert (record.kind, record.outcome, record.total_value) == (
+        "investment",
+        "imported",
+        plan.CLOSING,
+    )
+    (audited,) = _audits(env, "investment.import")
+    assert audited["balance_only"] is True
+    assert (audited["activity"], audited["positions"]) == (0, 0)
+
+    # Again from the stored pages: the same two days, nothing added.
+    _rerun(env, document_id)
+    assert env.document(document_id).status is DocumentStatus.PROCESSED
+    assert len(env.snapshots(account)) == 2
+    _nothing_but_balances(env, account)
+
+
+def test_plan_statement_asks_for_its_account_and_lands_on_the_one_chosen(env: Env) -> None:
+    """A plan statement prints no account digits: a person says which account it is."""
+    account = _plan_account(env)
+    document_id = env.ingest(plan.plan_statement_pdf(), "plan.pdf")
+
+    (item,) = env.open_reviews(document_id)
+    assert (item.payload["reason"], item.payload["account_type"]) == (
+        "account_not_found",
+        "retirement",
+    )
+    assert env.snapshots(account) == []
+
+    _choose(env, document_id, account)
+    assert env.document(document_id).status is DocumentStatus.PROCESSED, env.open_reviews(
+        document_id
+    )
+    assert {s.as_of_date: s.balance for s in env.snapshots(account)} == {
+        date(2026, 3, 31): plan.CLOSING,
+        date(2025, 12, 31): plan.OPENING,
+    }
+    _nothing_but_balances(env, account)
+
+
+def test_the_same_quarter_from_another_file_is_held_as_the_same_statement(env: Env) -> None:
+    """The statement guard covers a plan statement like any other."""
+    account = _plan_account(env)
+    env.ingest(plan.plan_statement_pdf(), "plan.pdf", account_id=account.id)
+    again = env.ingest(
+        plan.plan_statement_pdf(by_source=False), "plan-again.pdf", account_id=account.id
+    )
+
+    assert env.reasons(again) == {"statement_overlap"}
+    assert len(env.snapshots(account)) == 2
+
+
+def test_plan_statement_that_does_not_add_up_records_nothing(env: Env) -> None:
+    """The total row's own figures disagree: no balance, and no way to import it as read."""
+    account = _plan_account(env)
+    document_id = env.ingest(
+        plan.plan_statement_pdf(tamper=True), "plan.pdf", account_id=account.id
+    )
+
+    assert env.document(document_id).status is DocumentStatus.NEEDS_REVIEW
+    (item,) = env.open_reviews(document_id)
+    assert item.kind is ReviewKind.LOW_CONFIDENCE_FIELD
+    payload = item.payload
+    assert payload["reason"] == "plan_statement_does_not_add_up"
+    assert (payload["account_id"], payload["currency"]) == (str(account.id), "USD")
+    assert (payload["status"], payload["failed"]) == ("mismatch", ["roll_forward"])
+    assert Decimal(payload["printed"]) == plan.CLOSING
+    assert Decimal(payload["computed"]) == plan.CLOSING + Decimal("100.00")
+    assert Decimal(payload["difference"]) == Decimal("100.00")
+    assert acceptable_as_read(payload) is False
+    assert env.snapshots(account) == []
+    _nothing_but_balances(env, account)
+    assert (
+        env.query(select(StatementRecord).where(StatementRecord.document_id == document_id)) == []
+    )
+    assert _audits(env, "investment.import") == []
+
+
+def test_plan_statement_with_a_period_in_doubt_records_nothing(env: Env) -> None:
+    """The figures add up; the day they are for reads two ways: no balance is dated by a guess."""
+    account = _plan_account(env)
+    document_id = env.ingest(
+        plan.plan_statement_pdf(period="01/02/2026 - 03/04/2026"),
+        "plan.pdf",
+        account_id=account.id,
+    )
+
+    (item,) = env.open_reviews(document_id)
+    payload = item.payload
+    assert payload["reason"] == "plan_statement_does_not_add_up"
+    assert (payload["status"], payload["failed"]) == ("ok", [])
+    assert payload["period_stated"] is False
+    assert env.snapshots(account) == []
+    _nothing_but_balances(env, account)
+
+
+def test_plan_statement_of_two_plans_records_nothing(env: Env) -> None:
+    """Two plans in one document: which balance is whose is not guessed."""
+    account = _plan_account(env)
+    document_id = env.ingest(
+        plan.plan_statement_pdf(second_plan=True), "plans.pdf", account_id=account.id
+    )
+
+    assert env.document(document_id).status is DocumentStatus.NEEDS_REVIEW
+    assert env.snapshots(account) == []
+    _nothing_but_balances(env, account)
+    (log,) = env.parse_logs(document_id)
+    assert "plan_statement_several_accounts" in json.dumps(log)
