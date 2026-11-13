@@ -25,6 +25,14 @@ and the next payment due. Loan numbers are invented and printed masked
   columns), with the payment itself as a row of *Transaction Activity* and
   a coupon to detach at the foot. Its loan number is printed in full
   (invented; only its last four digits may leave a parser).
+* :func:`auto_loan_bill_pdf` draws a two-page bill of the fictional
+  *Placeholder Auto Finance*: no words ``loan statement`` anywhere, the
+  principal balance printed **above** its label, the payment as a bare row
+  (date, ``Payment Received. Thank you!``, amount) and its split on page 2
+  under ``PAYMENT ALLOCATION``.
+* :func:`student_loan_bill_pdf` draws a one-page bill that lists two loans
+  in one table (``Loan Seq | Program | Int Rate | Balance | ...``): a bill
+  of several loans, which the parser must not read as one.
 """
 
 from __future__ import annotations
@@ -433,6 +441,108 @@ def periodic_statement_pdf(
     c.drawString(320, y, f"Due Date {_us(stmt.due_date)}")
     c.setFont(FONT, 8)
     c.drawString(left, 60, "Synthetic test document. Placeholder Home Lending is fictional.")
+    c.showPage()
+    c.save()
+    return buf.getvalue()
+
+
+AUTO_LENDER: Final = "Placeholder Auto Finance"
+#: Printed in full on the auto-loan bill (invented).
+AUTO_ACCOUNT_NUMBER: Final = "300044171234"
+AUTO_LAST4: Final = "1234"
+STUDENT_LENDER: Final = "Placeholder Education Lending"
+
+
+def _footer(c: canvas.Canvas, lender: str) -> None:
+    c.setFont(FONT, 8)
+    c.drawString(72, 60, f"Synthetic test document. {lender} is fictional.")
+
+
+def auto_loan_bill_pdf() -> bytes:
+    """A two-page auto-loan bill (module doc); every figure is invented.
+
+    The payment adds up (371.85 + 83.35 = 455.20) and is the row of
+    2026-03-14; the amount due next is the same 455.20, on 2026-04-15.
+    """
+    buf = io.BytesIO()
+    c = canvas.Canvas(buf, pagesize=letter)
+    left = 72
+    c.setFont(BOLD, 14)
+    c.drawString(left, 750, AUTO_LENDER)
+    c.setFont(BOLD, 12)
+    c.drawString(left, 730, "Account Statement")
+    c.setFont(FONT, 10)
+    c.drawString(left, 704, f"Account number {AUTO_ACCOUNT_NUMBER}")
+    c.setFont(BOLD, 12)
+    c.drawString(left, 664, "$18,250.40")
+    c.setFont(FONT, 9)
+    c.drawString(left, 650, "CURRENT PRINCIPAL BALANCE")
+    c.setFont(FONT, 10)
+    c.drawString(left, 610, "Payment Due Date")
+    c.drawString(260, 610, "04/15/2026")
+    c.drawString(left, 594, "Total Amount Due")
+    c.drawString(260, 594, "$455.20")
+    c.drawString(left, 550, "03/14/2026")
+    c.drawString(160, 550, "Payment Received. Thank you!")
+    c.drawRightString(520, 550, "$455.20")
+    _footer(c, AUTO_LENDER)
+    c.showPage()
+    c.setFont(BOLD, 11)
+    c.drawString(left, 750, "PAYMENT ALLOCATION")
+    c.setFont(FONT, 10)
+    y = 730
+    for label, value in (("Principal", "$371.85"), ("Interest", "$83.35"), ("Total", "$455.20")):
+        c.drawString(left, y, label)
+        c.drawRightString(300, y, value)
+        y -= 16
+    _footer(c, AUTO_LENDER)
+    c.showPage()
+    c.save()
+    return buf.getvalue()
+
+
+def student_loan_bill_pdf() -> bytes:
+    """A one-page student-loan bill listing two loans (module doc); invented figures."""
+    buf = io.BytesIO()
+    c = canvas.Canvas(buf, pagesize=letter)
+    left = 72
+    c.setFont(BOLD, 14)
+    c.drawString(left, 750, STUDENT_LENDER)
+    c.setFont(BOLD, 12)
+    c.drawString(left, 730, "Installment Bill")
+    columns = (left, 232, 392)
+    c.setFont(BOLD, 8)
+    for x, label in zip(
+        columns,
+        (
+            "Date Last Payment Received",
+            "Principal Paid Since Last Statement",
+            "Interest Paid Since Last Statement",
+        ),
+        strict=True,
+    ):
+        c.drawString(x, 690, label)
+    c.setFont(FONT, 10)
+    for x, value in zip(columns, ("02/27/2026", "$61.75", "$40.25"), strict=True):
+        c.drawString(x, 676, value)
+    table = (72, 130, 250, 320, 400, 480)
+    c.setFont(BOLD, 8)
+    for x, label in zip(
+        table,
+        ("Loan Seq", "Program", "Int Rate", "Balance", "Amount Past Due", "Current Amount Due"),
+        strict=True,
+    ):
+        c.drawString(x, 630, label)
+    c.setFont(FONT, 10)
+    y = 614
+    for row in (
+        ("1", "Subsidized", "4.250%", "$6,200.00", "$0.00", "$64.10"),
+        ("2", "Unsubsidized", "5.500%", "$9,150.00", "$0.00", "$98.40"),
+    ):
+        for x, value in zip(table, row, strict=True):
+            c.drawString(x, y, value)
+        y -= 16
+    _footer(c, STUDENT_LENDER)
     c.showPage()
     c.save()
     return buf.getvalue()

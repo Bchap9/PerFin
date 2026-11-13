@@ -17,6 +17,9 @@ Statements come from ``tests/fixtures/synth_loans.py`` (an invented lender).
 * A printed rate that differs from the loan's raises ``loan_rate_differs``.
 * A periodic statement (next payment, last month, year to date) records last
   month's payment on the day its activity row says, never another column.
+* A periodic statement that reports no payment in its period is filed: no
+  payment, no review item, its balance kept on the statement date. One whose
+  amount due does not add up is still held.
 """
 
 from __future__ import annotations
@@ -281,3 +284,46 @@ def test_periodic_statement_records_last_months_payment(env: Env) -> None:
     assert [(s.as_of_date, s.balance) for s in statement] == [
         (date(2026, 3, 2), Decimal("-182440.17"))
     ]
+
+
+def _periodic_loan(env: Env) -> tuple[Account, Loan]:
+    return env.loan(
+        last4=synth.PERIODIC_LAST4,
+        principal_original="200000.00",
+        rate="0.05",
+        origination_date=date(2021, 6, 1),
+        payment_amount="1172.25",
+        escrow_amount="301.50",
+    )
+
+
+def _statement_snapshots(env: Env, account: Account) -> list[tuple[date, Decimal]]:
+    found: list[BalanceSnapshot] = env.query(
+        select(BalanceSnapshot).where(
+            BalanceSnapshot.account_id == account.id,
+            BalanceSnapshot.source == BalanceSource.STATEMENT,
+        )
+    )
+    return [(s.as_of_date, s.balance) for s in found]
+
+
+def test_statement_without_a_payment_files_the_balance(env: Env) -> None:
+    account, loan = _periodic_loan(env)
+    document = env.ingest(synth.periodic_statement_pdf(variant="no_payment"), "no-payment.pdf")
+    assert env.reasons(document) == set()
+    assert document.status is DocumentStatus.PROCESSED
+    assert document.kind is DocumentKind.STATEMENT
+    assert document.account_id == account.id
+    assert env.payments(loan) == []
+    assert _statement_snapshots(env, account) == [(date(2026, 3, 20), Decimal("-182440.17"))]
+    assert env.balance(account, date(2026, 3, 20)) == Decimal("-182440.17")
+
+
+def test_statement_without_a_payment_that_does_not_add_up_is_held(env: Env) -> None:
+    account, loan = _periodic_loan(env)
+    data = synth.periodic_statement_pdf(variant="no_payment", tamper="due")
+    document = env.ingest(data, "no-payment-tampered.pdf")
+    assert document.status is DocumentStatus.NEEDS_REVIEW
+    assert env.reasons(document) == {"loan_reconciliation_failed"}
+    assert env.payments(loan) == []
+    assert _statement_snapshots(env, account) == []

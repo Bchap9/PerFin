@@ -18,6 +18,13 @@ RLS context. Per statement:
    (``loan_reconciliation_failed`` / ``loan_low_confidence``) naming the
    fields. So does a statement in another currency (``loan_currency_mismatch``)
    or paid outside the loan's life (``loan_payment_out_of_range``).
+   **No payment in the period** is not a doubt: a statement that prints no
+   day paid, a principal and an interest paid of zero, no doubtful field
+   and a next amount due that adds up (the ``amount_due`` check) is filed.
+   No payment is written (``no_payment`` in the summary); its principal
+   balance, when it and the statement date were read, becomes a
+   ``statement`` snapshot on the statement date (a date before the loan
+   began or after today is left out).
 3. **Payment**: a ``loan_payment`` with the split and ``source_document_id``.
    Reprocessing the same document replaces its payment; a payment already
    recorded for the loan on the same day with the same principal and interest
@@ -138,6 +145,15 @@ def import_loan_statement(db: Session, document: Document, stmt: LoanStatement) 
             "fields": list(stmt.low_confidence),
         }
     elif (
+        stmt.paid_on is None
+        and stmt.principal == ZERO
+        and stmt.interest == ZERO
+        and not stmt.low_confidence
+        and "amount_due" in reconciliation.checks
+    ):
+        _file_without_payment(db, document, loan, stmt, outcome)
+        return outcome
+    elif (
         stmt.low_confidence
         or stmt.paid_on is None
         or stmt.principal is None
@@ -154,6 +170,37 @@ def import_loan_statement(db: Session, document: Document, stmt: LoanStatement) 
         return outcome
     _record(db, document, loan, stmt, (stmt.paid_on, stmt.principal, stmt.interest), outcome)
     return outcome
+
+
+def _file_without_payment(
+    db: Session, document: Document, loan: Loan, stmt: LoanStatement, outcome: LoanImport
+) -> None:
+    """A statement that reports no payment in its period: its balance, no payment."""
+    outcome.summary["no_payment"] = True
+    day, balance = stmt.statement_date, stmt.balance
+    if day is None or balance is None:
+        return
+    if day < loan.origination_date or day > clock.utcnow().date():
+        return
+    account = accounts_repo.get_account(db, loan.household_id, loan.account_id, lock=True)
+    if account is None:  # pragma: no cover - the foreign key cascades
+        return
+    accounts_repo.upsert_snapshot(
+        db,
+        account,
+        day,
+        (1 if account.is_asset else -1) * balance,
+        BalanceSource.STATEMENT,
+        source_document_id=document.id,
+    )
+    sync_balance(db, loan)
+    emit(
+        db,
+        loan.household_id,
+        "loan.updated",
+        {"loan_id": str(loan.id), "account_id": str(loan.account_id)},
+    )
+    outcome.summary["balance_on"] = day.isoformat()
 
 
 def _record(

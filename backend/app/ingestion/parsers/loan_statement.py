@@ -1,10 +1,23 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """A generic loan and mortgage statement parser: one payment's split and the balances.
 
-Recognised by its vocabulary (``mortgage statement``, ``loan statement``)
-or, without it, by at least four loan labels (``principal balance``,
-``escrow``, ``interest rate``, ``payment received``, ``next payment
-due``...). Two layouts, each with its own reader:
+Recognised by its vocabulary on page 1 (``mortgage statement``, ``loan
+statement``) or, without it (a loan bill headed ``Account Statement``), by
+at least four loan labels (:data:`LABELS`: ``principal balance``,
+``escrow``, ``interest rate``, ``payment received``, ``payment
+allocation``...) of which one is about the principal
+(:data:`PRINCIPAL_LABELS`): a card statement prints a payment due date, a
+payment received, an amount past due and an interest rate too, and no
+principal. Labels are counted over all pages, each once; a label printed
+only inside a longer one (``principal balance`` in ``current principal
+balance``) is not counted beside it.
+
+A bill that lists several loans in one table
+(:func:`~app.ingestion.parsers.loan_periodic.lists_several_loans`) is not
+one loan's statement: nothing is read and the warning is
+``loan_bill_several_loans``.
+
+Two layouts, each with its own reader:
 
 * **The payment receipt** (:func:`_read_lines`): labelled lines ("Interest
   1,276.04"; the amount is the last one on the line):
@@ -23,7 +36,10 @@ due``...). Two layouts, each with its own reader:
   year's so far. It is read by section and by column
   (:mod:`app.ingestion.parsers.loan_periodic`): the payment is last month's
   column, dated by its row of the activity table; a year-to-date figure,
-  the next payment's split and the due date are never the payment.
+  the next payment's split and the due date are never the payment. A loan
+  bill with a ``Payment Allocation`` block is read by the same reader: the
+  block is the payment, dated by its ``date | Payment received | amount``
+  row.
 
 Both read ``Interest rate`` (a percentage, stored as a fraction; the tail of
 a number OCR split, ``4, 75%``, is no rate), the lender (a ``Lender:`` line,
@@ -71,6 +87,7 @@ from app.ingestion.parsers.base import (
 from app.ingestion.parsers.loan_periodic import (
     LoanRead,
     is_periodic,
+    lists_several_loans,
     named_lender,
     read_last4,
     read_periodic,
@@ -102,7 +119,40 @@ LABELS: Final = (
     "next payment due",
     "total payment received",
     "loan number",
+    "outstanding principal",
+    "current principal balance",
+    "unpaid principal",
+    "principal paid",
+    "interest paid",
+    "payoff",
+    "payment due date",
+    "payment allocation",
+    "past payments breakdown",
+    "explanation of amount due",
+    "date last payment received",
+    "loan seq",
+    "int rate",
+    "amount past due",
 )
+#: Labels only a loan prints. Without the vocabulary one of them must be there.
+PRINCIPAL_LABELS: Final = (
+    "principal balance",
+    "outstanding principal",
+    "current principal balance",
+    "unpaid principal",
+    "principal paid",
+    "loan seq",
+    "escrow",
+)
+#: Per label, the longer labels it is part of and where it starts in each.
+_INSIDE: Final[dict[str, tuple[tuple[str, int], ...]]] = {
+    label: tuple(
+        (longer, at)
+        for longer in LABELS
+        if longer != label and (at := f" {longer} ".find(f" {label} ")) >= 0
+    )
+    for label in LABELS
+}
 MONEY_FIELDS: Final = ("principal", "interest", "escrow", "fees", "total", "previous", "balance")
 _DATE_TOKEN: Final = re.compile(r"\d{1,4}[/.-]\d{1,2}[/.-]\d{2,4}")
 _CURRENCY: Final = re.compile(r"\bcurrency\s*:?\s*([A-Z]{3})\b", re.IGNORECASE)
@@ -134,6 +184,28 @@ def _starts(norm: str, prefixes: tuple[str, ...]) -> bool:
     return any(norm == p or norm.startswith(f"{p} ") for p in prefixes)
 
 
+def labels_in(text: str) -> set[str]:
+    """The :data:`LABELS` printed in ``text`` (normalised), each once.
+
+    An occurrence inside a longer label printed there (``payment received``
+    in ``total payment received``) is that longer label's, not its own.
+    """
+    padded = f" {text} "
+    found: set[str] = set()
+    for label in LABELS:
+        needle = f" {label} "
+        start = padded.find(needle)
+        while start >= 0:
+            if not any(
+                start - at >= 0 and padded.startswith(f" {longer} ", start - at)
+                for longer, at in _INSIDE[label]
+            ):
+                found.add(label)
+                break
+            start = padded.find(needle, start + 1)
+    return found
+
+
 def _last_amount(line: ViewLine) -> tuple[Decimal | None, str | None]:
     amounts = find_amounts(line.text)
     if not amounts:
@@ -150,8 +222,9 @@ class LoanStatementParser(DocumentParser):
     def detect(self, view: DocumentView) -> float:
         head = f" {view.head_text()} "
         vocabulary = any(f" {word} " in head for word in VOCABULARY)
-        labels = sum(1 for label in LABELS if f" {label} " in head)
-        if not vocabulary and labels < 4:
+        found = labels_in(" ".join(line.norm for line in view.lines))
+        labels = len(found)
+        if not vocabulary and (labels < 4 or found.isdisjoint(PRINCIPAL_LABELS)):
             return 0.0
         return round(min(1.0, (0.6 if vocabulary else 0.2) + 0.1 * labels), 4)
 
@@ -172,6 +245,9 @@ class LoanStatementParser(DocumentParser):
     def parse(
         self, view: DocumentView, *, threshold: float, date_order: str | None = None
     ) -> ParseOutcome:
+        if lists_several_loans(view):
+            # One account with several loans is not one loan's statement.
+            return ParseOutcome(warnings=["loan_bill_several_loans"])
         styles = self._styles(view)
         periodic = is_periodic(view)
         read = read_periodic(view, styles) if periodic else _read_lines(view, styles)

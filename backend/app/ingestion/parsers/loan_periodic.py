@@ -45,6 +45,21 @@ this reader works on cells (:mod:`app.ingestion.parsers.labelled_cells`):
    No day paid is looked for, a labelled one is dropped (it belongs to an
    earlier period) and the warning is ``loan_no_payment_in_period``.
 
+A **loan bill** (an auto or personal loan's) prints the same things with
+fewer words, and two more rules read it:
+
+8. **Payment allocation**: under the heading ``Payment Allocation`` the
+   parts and the total are the payment made, one figure a label. A label
+   with two figures there is not read (``loan_columns_unknown``); a header
+   naming a year-to-date column under it makes it a *paid* section (rule 3).
+9. **A bare payment row**: a line outside any activity table that starts
+   with a date, says ``payment`` (and nothing of rule 6's list) and prints
+   exactly one amount is a payment received; rule 6 picks the day paid
+   among such rows as it does among a table's.
+
+A bill that lists **several loans** (:func:`lists_several_loans`) is not one
+loan's statement: nothing of it is read.
+
 Nothing is guessed: a label is read only as the whole of its cell, the
 first reading of a field stands, and a figure whose column cannot be told
 stays unread. :mod:`app.ingestion.parsers.loan_statement` checks what is
@@ -78,13 +93,14 @@ from app.ingestion.parsers.table_statement import STUB_MARKERS, label_end
 from app.ingestion.parsers.text import DateStyle, find_amounts, find_dates, normalise
 from app.ingestion.reconcile import TOLERANCE
 
-Kind = Literal["account", "due", "paid", "activity"]
+Kind = Literal["account", "due", "paid", "allocation", "activity"]
 
 #: Section headings (normalised, the whole cell) and the section each starts.
 HEADINGS: Final[dict[str, Kind]] = {
     "explanation of amount due": "due",
     "explanation of payment amount": "due",
     "past payments breakdown": "paid",
+    "payment allocation": "allocation",
     "transaction activity": "activity",
     "account activity": "activity",
     "account information": "account",
@@ -243,12 +259,40 @@ def is_periodic(view: DocumentView) -> bool:
 
     A line heads a year-to-date column beside another column, or a cell is
     one of the headings only this layout prints (those of the *due* and the
-    *paid* section).
+    *paid* section, and a bill's ``Payment Allocation``).
     """
     for line in view.lines:
         if _year_to_date_header(line):
             return True
-        if any(_heading(cell) in ("due", "paid") for cell in line.cells):
+        if any(_heading(cell) in ("due", "paid", "allocation") for cell in line.cells):
+            return True
+    return False
+
+
+def lists_several_loans(view: DocumentView) -> bool:
+    """``view`` is a bill that lists several loans in one table.
+
+    A header line naming ``Loan Seq``, or ``Int Rate`` beside ``Balance``
+    (and printing no figure itself), directly followed on its page by two or
+    more rows: lines that print a percentage when the header names the rate,
+    an amount otherwise. A total line is no row and ends the table.
+    """
+    lines = view.lines
+    for at, line in enumerate(lines):
+        norm = f" {line.norm} "
+        rated = " int rate " in norm
+        if not (" loan seq " in norm or (rated and " balance " in norm)):
+            continue
+        if PERCENT.search(line.text) is not None or find_amounts(line.text):
+            continue
+        rows = 0
+        for row in lines[at + 1 :]:
+            if row.page != line.page or row.norm.startswith(("total", "subtotal")):
+                break
+            if not (PERCENT.search(row.text) is not None if rated else find_amounts(row.text)):
+                break
+            rows += 1
+        if rows >= 2:
             return True
     return False
 
@@ -372,18 +416,22 @@ def _nearest(cell: Cell, table: dict[str, tuple[float, float]]) -> str:
 
 
 def _payment_row(
-    cells: Sequence[Cell], line: ViewLine, region: _Region, styles: tuple[DateStyle, ...]
+    cells: Sequence[Cell],
+    line: ViewLine,
+    table: dict[str, tuple[float, float]] | None,
+    styles: tuple[DateStyle, ...],
 ) -> _PaymentRow | None:
-    """The payment received that a table row prints, else None.
+    """The payment received that a row prints, else None.
 
-    The description says ``payment`` and nothing that makes it a charge or
-    a correction; the amount stands in the payments column (``amount`` when
-    the table has no such column), not in the charges one.
+    The row starts with a date; its description says ``payment`` and
+    nothing that makes it a charge or a correction. In a ``table`` the
+    amount stands in the payments column (``amount`` when the table has no
+    such column), not in the charges one. With no table (a bare row, None)
+    the row prints exactly one amount.
     """
-    table = region.table or {}
     day = _starts_with_date(cells[0], styles)
-    wanted = "payments" if "payments" in table else "amount"
-    if day is None or wanted not in table:
+    wanted = "payments" if table and "payments" in table else "amount"
+    if day is None or (table is not None and wanted not in table):
         return None
     pairs = label_pairs(_part(line, cells))
     words = normalise(" ".join(pair.label.text for pair in pairs)).split()
@@ -391,9 +439,18 @@ def _payment_row(
         return None
     if any(word.startswith(_NOT_A_PAYMENT) for word in words):
         return None
-    for cell in (cell for pair in pairs for cell in pair.amounts):
-        amount = amount_of(cell)
-        if amount is not None and _nearest(cell, table) == wanted:
+    amounts = [
+        (cell, amount)
+        for pair in pairs
+        for cell in pair.amounts
+        if (amount := amount_of(cell)) is not None
+    ]
+    if table is None:
+        if len(amounts) != 1:
+            return None
+        return _PaymentRow(day, abs(amounts[0][1].value), tuple(cells))
+    for cell, amount in amounts:
+        if _nearest(cell, table) == wanted:
             return _PaymentRow(day, abs(amount.value), tuple(cells))
     return None
 
@@ -604,6 +661,16 @@ class _Reader:
             cell = self._value(at, label, amounts) if name is not None else None
             if name is not None and cell is not None and self._money(read.money, name, cell):
                 self._keep(name, [label, cell])
+        elif region.kind == "allocation":
+            name = _PAID_LABELS.get(norm)
+            if name is None or not amounts:
+                return
+            if len(amounts) != 1:
+                # Two figures after a label and no header saying what they are.
+                self.warn("loan_columns_unknown")
+                return
+            if self._money(read.money, name, amounts[0]):
+                self._keep(name, [label, amounts[0]])
         else:
             name = _PAID_LABELS.get(norm)
             if name is None or region.unknown or not amounts:
@@ -648,11 +715,15 @@ class _Reader:
                 if not inside or _starts_with_date(inside[0], self.styles) is None:
                     continue
                 taken.update(id(cell) for cell in inside)
-                row = _payment_row(inside, line, region, self.styles)
+                row = _payment_row(inside, line, region.table, self.styles)
                 if row is not None:
                     self.rows.append(row)
             rest = [c for c in line.cells if id(c) not in taken and id(c) not in heads]
             if not rest:
+                continue
+            bare = _payment_row(rest, line, None, self.styles)
+            if bare is not None:
+                self.rows.append(bare)
                 continue
             for pair in label_pairs(_part(line, rest)):
                 self._label(at, line, pair.label, pair.amounts)

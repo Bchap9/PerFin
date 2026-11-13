@@ -26,6 +26,7 @@ from app.ingestion.parsers.loan_statement import (
 from app.ingestion.parsers.registry import parse_extraction, reparse
 from app.ingestion.sandbox.protocol import ExtractOptions, ExtractResult, LoanStatement
 from tests.fixtures import synth_loans as synth
+from tests.fixtures.synth_card_statement import card_pdf, card_statement
 from tests.fixtures.synth_pdf_statements import sample_national_pdf, sample_national_statement
 
 OPTIONS = ExtractOptions(previews=False, ocr=False)
@@ -228,3 +229,96 @@ def test_last_four_of_a_number_printed_in_full(printed: str, last4: str | None) 
     assert loan is not None
     assert loan.last4 == last4
     assert "0004417755" not in loan.model_dump_json()
+
+
+def _pdf_view(data: bytes) -> DocumentView:
+    result = extract_pdf(data, OPTIONS, "pdf")
+    assert result.ok, result.error
+    return DocumentView.from_result(result)
+
+
+def test_loan_bills_are_detected() -> None:
+    parser = LoanStatementParser()
+    assert parser.detect(_pdf_view(synth.auto_loan_bill_pdf())) >= 0.6
+    assert parser.detect(_pdf_view(synth.student_loan_bill_pdf())) >= 0.6
+    assert parser.detect(_pdf_view(card_pdf(card_statement()))) == 0.0
+    assert parser.detect(_pdf_view(sample_national_pdf(sample_national_statement()))) == 0.0
+
+
+def _paged_view(*pages: tuple[str, ...]) -> DocumentView:
+    lines: list[ViewLine] = []
+    for number, texts in enumerate(pages, start=1):
+        for text in texts:
+            at = len(lines)
+            cell = Cell(text, 72.0, 40.0 + 16 * at, 400.0, 50.0 + 16 * at)
+            lines.append(ViewLine(number, at, (cell,), text, 10.0))
+    return DocumentView(
+        lines=tuple(lines), source_format="pdf", truncated=False, page_count=len(pages)
+    )
+
+
+def test_labels_count_on_every_page_and_need_a_principal_label() -> None:
+    parser = LoanStatementParser()
+    # What a card statement prints: four loan labels, none of them about principal.
+    card = ("Payment due date 04/15/2026", "Payment received 455.20", "Amount past due 0.00")
+    assert parser.detect(_paged_view(card, ("Interest rate 19.99%",))) == 0.0
+    # The same with a principal label on page 2 is a loan bill.
+    loan = _paged_view(card, ("Interest rate 6.5%", "Unpaid principal 18,250.40"))
+    assert parser.detect(loan) == 0.7
+    # Three labels and a principal label are too few.
+    assert parser.detect(_paged_view(card[:2], ("Escrow 301.50",))) == 0.0
+
+
+def test_a_label_inside_a_longer_label_is_counted_once() -> None:
+    parser = LoanStatementParser()
+    # "principal balance" only inside "current principal balance", "payment
+    # received" only inside "date last payment received": four labels, not six.
+    view = _paged_view(
+        (
+            "Current principal balance 18,250.40",
+            "Date last payment received 03/14/2026",
+            "Int rate 6.5%",
+            "Payoff 18,301.10",
+        )
+    )
+    assert parser.detect(view) == 0.6
+    # A vocabulary phrase counts on page 1 only.
+    assert parser.detect(_paged_view(("Escrow 301.50",), ("Mortgage Statement",))) == 0.0
+    assert parser.detect(_paged_view(("Mortgage Statement", "Escrow 301.50"))) == 0.7
+
+
+def test_bill_of_several_loans_reads_nothing_and_says_so() -> None:
+    view = _pdf_view(synth.student_loan_bill_pdf())
+    outcome = LoanStatementParser().parse(view, threshold=confidence.DEFAULT_THRESHOLD)
+    assert outcome.empty
+    assert outcome.loan is None
+    assert outcome.warnings == ["loan_bill_several_loans"]
+    # Through the registry no other parser makes a receipt or a statement of it.
+    result = _parse(synth.student_loan_bill_pdf())
+    assert result.parse is not None
+    assert result.parse.parser is not None
+    assert result.parse.parser.name == "loan_statement_generic"
+    assert result.parse.loan is None
+    assert result.parse.receipt is None
+    assert result.statements == []
+    assert "loan_bill_several_loans" in result.parse.warnings
+
+
+@pytest.mark.parametrize(
+    ("header", "rows", "several"),
+    [
+        ("Loan Seq Program Balance", ("1 Subsidized 6,200.00", "2 Unsubsidized 9,150.00"), True),
+        ("Program Int Rate Balance", ("Subsidized 4.25% 6,200.00", "Other 5.5% 9,150.00"), True),
+        # One loan and its total line: a bill of one loan.
+        ("Loan Seq Program Balance", ("1 Subsidized 6,200.00", "Total 6,200.00"), False),
+        # "Int rate" with no balance beside it heads no table of loans.
+        ("Int Rate 4.25%", ("Principal 243.00", "Interest 1,276.03"), False),
+    ],
+)
+def test_several_loans_need_a_header_and_two_rows(
+    header: str, rows: tuple[str, ...], several: bool
+) -> None:
+    view = _text_view(*_RECEIPT_LINES, header, *rows)
+    outcome = LoanStatementParser().parse(view, threshold=confidence.DEFAULT_THRESHOLD)
+    assert (outcome.loan is None) is several
+    assert ("loan_bill_several_loans" in outcome.warnings) is several

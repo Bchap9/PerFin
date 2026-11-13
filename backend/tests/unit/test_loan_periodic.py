@@ -383,3 +383,99 @@ def test_a_scanned_statement_scales_each_field_by_its_own_cells() -> None:
     doubtful = LoanStatementParser().parse(scan(0.40), threshold=confidence.DEFAULT_THRESHOLD).loan
     assert doubtful is not None
     assert doubtful.low_confidence == ["balance"]
+
+
+def test_auto_loan_bill_is_read() -> None:
+    view = _view(synth.auto_loan_bill_pdf())
+    assert is_periodic(view)
+    outcome = LoanStatementParser().parse(view, threshold=confidence.DEFAULT_THRESHOLD)
+    loan = outcome.loan
+    assert loan is not None
+    assert outcome.warnings == []
+    assert loan.lender == synth.AUTO_LENDER
+    assert (loan.principal, loan.interest, loan.total) == (
+        Decimal("371.85"),
+        Decimal("83.35"),
+        Decimal("455.20"),
+    )
+    assert loan.paid_on == date(2026, 3, 14)
+    assert loan.balance == Decimal("18250.40")
+    assert loan.next_due_date == date(2026, 4, 15)
+    assert loan.last4 == synth.AUTO_LAST4
+    assert synth.AUTO_ACCOUNT_NUMBER not in loan.model_dump_json()
+    assert loan.reconciliation is not None
+    assert (loan.reconciliation.status, loan.reconciliation.checks) == ("ok", ["parts"])
+    assert loan.low_confidence == []
+
+
+def test_payment_allocation_reads_one_figure_a_label() -> None:
+    rows = [
+        [(72.0, "Payment Allocation")],
+        [(72.0, "Principal"), (200.0, "$371.85")],
+        [(72.0, "Interest"), (200.0, "$83.35")],
+        [(72.0, "Late Charges"), (200.0, "$10.00")],
+        [(72.0, "Total"), (200.0, "$465.20")],
+    ]
+    view = _lines(rows)
+    assert is_periodic(view)
+    read = read_periodic(view, FULL_STYLES)
+    assert read.money == {
+        "principal": Decimal("371.85"),
+        "interest": Decimal("83.35"),
+        "fees": Decimal("10.00"),
+        "total": Decimal("465.20"),
+    }
+    assert read.due == {}
+    assert read.warnings == []
+
+
+def test_payment_allocation_with_two_figures_a_label_is_not_read() -> None:
+    # Nothing says which of the two figures is the payment's.
+    rows = [
+        [(72.0, "Payment Allocation")],
+        [(72.0, "Principal"), (200.0, "$371.85"), (300.0, "$2,444.91")],
+        [(72.0, "Interest"), (200.0, "$83.35"), (300.0, "$4,588.59")],
+    ]
+    read = read_periodic(_lines(rows), FULL_STYLES)
+    assert read.money == {}
+    assert read.warnings == ["loan_columns_unknown"]
+
+
+_ALLOCATION = [
+    [(72.0, "Payment Allocation")],
+    [(72.0, "Principal"), (200.0, "$371.85")],
+    [(72.0, "Interest"), (200.0, "$83.35")],
+    [(72.0, "Total"), (200.0, "$455.20")],
+]
+
+
+def test_a_bare_payment_row_gives_the_day_paid() -> None:
+    row = [(72.0, "03/14/2026"), (160.0, "Payment Received. Thank you!"), (400.0, "$455.20")]
+    read = read_periodic(_lines([row, *_ALLOCATION]), FULL_STYLES)
+    assert read.dates == {"paid_on": date(2026, 3, 14)}
+    assert read.warnings == []
+
+
+@pytest.mark.parametrize(
+    "row",
+    [
+        # Not a payment received: a due notice, a fee, a reversal, a purchase.
+        [(72.0, "04/15/2026"), (160.0, "Payment due"), (400.0, "$455.20")],
+        [(72.0, "03/14/2026"), (160.0, "Late payment fee"), (400.0, "$455.20")],
+        [(72.0, "03/14/2026"), (160.0, "Payment reversal"), (400.0, "$455.20")],
+        [(72.0, "03/14/2026"), (160.0, "Service contract"), (400.0, "$455.20")],
+        # No date first, or two amounts and nothing to say which was paid.
+        [(72.0, "Payment Received"), (160.0, "03/14/2026"), (400.0, "$455.20")],
+        [(72.0, "03/14/2026"), (160.0, "Payment Received"), (300.0, "$455.20"), (400.0, "$455.20")],
+    ],
+)
+def test_other_rows_are_no_payment(row: list[tuple[float, str]]) -> None:
+    read = read_periodic(_lines([row, *_ALLOCATION]), FULL_STYLES)
+    assert "paid_on" not in read.dates
+
+
+def test_a_bare_payment_row_of_another_amount_gives_no_date() -> None:
+    row = [(72.0, "03/14/2026"), (160.0, "Payment Received"), (400.0, "$400.00")]
+    read = read_periodic(_lines([row, *_ALLOCATION]), FULL_STYLES)
+    assert "paid_on" not in read.dates
+    assert read.warnings == ["loan_payment_row_mismatch"]
