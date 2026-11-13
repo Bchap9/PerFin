@@ -188,7 +188,8 @@ const MAPPING_REQUIRED: ReturnType<Copy> = {
 
 /**
  * A suggestion's doubt that has its own question, most telling first: what
- * kind of table it is, then words against signs, then a sign nothing proves.
+ * kind of table it is (trades; no header row, so every column is a reading
+ * of its values), then words against signs, then a sign nothing proves.
  * The mapping editor is the answer to each.
  */
 const MAPPING_DOUBTS: readonly (readonly [string, ReturnType<Copy>])[] = [
@@ -202,6 +203,20 @@ const MAPPING_DOUBTS: readonly (readonly [string, ReturnType<Copy>])[] = [
         "Open “Map columns” and choose “Investment activity” if these are buys and sells; name the action, symbol, quantity and price columns.",
         "If the rows really are cash movements, keep the cash mapping and check the amount column and its sign.",
         "Save; the file is imported right away.",
+      ],
+    },
+  ],
+  [
+    "no_header",
+    {
+      title: "No header row",
+      what: "This file has no header row that names its columns, so PerFin worked out which column is the date, which the amount and which the description from the values alone.",
+      why: "Without column names nothing confirms that reading: two columns of numbers can be taken for each other, money out for money in, or the rows of several accounts for one account's, so the file waits for you to check it.",
+      steps: [
+        "Open “Map columns”; the columns are filled in with what PerFin read.",
+        "Check the date and the amount columns against a row you recognise, and that “Positive amounts are” is set the right way.",
+        "If the file lists more than one account, set the column that tells them apart to “Account number (several accounts)”.",
+        "Save; the file is imported right away and later files with the same columns are read the same way.",
       ],
     },
   ],

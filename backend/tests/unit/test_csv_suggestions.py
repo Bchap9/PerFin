@@ -1651,3 +1651,191 @@ def test_card_file_is_still_held_for_its_sign() -> None:
     assert suggestion.doubts == ("sign_unverified",)  # the dates are proven, the sign is not
     assert not suggestion.confident
     assert suggestion.sign_evidence is None
+
+
+# ---------------------------------------------------------------------------
+# A table without a header gets a suggestion
+# ---------------------------------------------------------------------------
+
+
+def _columns(suggestion: MappingSuggestion) -> dict[str, int]:
+    return {r.role: r.column for r in suggestion.reasons}
+
+
+def test_headerless_table_with_reconciling_balance_is_confident() -> None:
+    table = _extracted(layouts.headerless_with_balance())
+    suggestion = _suggested(table)
+    spec = suggestion.spec
+    assert (spec.has_header, spec.skip_rows) == (False, 0)
+    # The check numbers are numbers too: only the debit, credit and balance add up.
+    assert _columns(suggestion) == {"date": 0, "payee": 2, "debit": 3, "credit": 4, "balance": 5}
+    assert {r.match for r in suggestion.reasons} == {"content"}
+    assert suggestion.doubts == ()
+    assert suggestion.confident
+    assert suggestion.sign_evidence == "balance"
+    assert spec.date_format == "MM/DD/YYYY"
+    # The first line is a transaction, not a header: every row reads.
+    assert (suggestion.parsed_rows, suggestion.failed_rows, suggestion.footer_rows) == (8, (), 0)
+    amounts = _read(table, spec)
+    assert amounts[:3] == [Decimal("2840.00"), Decimal("-1210.00"), Decimal("-74.60")]
+    (statement,) = from_table_grouped(table, spec)
+    assert statement.balance_mismatches == []
+    assert statement.closing_balance is not None
+    assert statement.closing_balance.amount == Decimal("4516.35")
+    assert suggestion.score == 1.0
+
+
+def test_headerless_signed_amount_is_suggested_not_confident() -> None:
+    table = _extracted(layouts.headerless_five_quoted_columns())
+    suggestion = _suggested(table)
+    spec = suggestion.spec
+    assert (spec.has_header, spec.skip_rows) == (False, 0)
+    # The asterisk column and the empty one take no role.
+    assert _columns(suggestion) == {"date": 0, "amount": 1, "payee": 4}
+    assert suggestion.doubts == ("no_header",)
+    assert not suggestion.confident
+    assert suggestion.sign_evidence is None
+    assert suggestion.summary()["doubts"] == ["no_header"]
+    assert (spec.date_format, spec.sign) == ("MM/DD/YYYY", Sign.INFLOW_POSITIVE)
+    assert suggestion.parsed_rows == len(layouts.HEADERLESS_SIGNED_ROWS)
+    (statement,) = from_table_grouped(table, spec)
+    first = statement.transactions[0]
+    assert (first.posted_date, first.amount) == (date(2026, 9, 2), Decimal("-1210.00"))
+    assert first.raw_payee == layouts.HEADERLESS_SIGNED_ROWS[0][2]
+    assert 0 < suggestion.score < 1
+
+
+def test_headerless_with_direction_cell_uses_it() -> None:
+    table = _extracted(layouts.headerless_with_direction_cell())
+    suggestion = _suggested(table)
+    spec = suggestion.spec
+    assert spec.has_header is False
+    assert _columns(suggestion) == {"date": 0, "payee": 1, "amount": 3, "indicator": 4}
+    assert spec.outflow_values == ["debit"]
+    assert suggestion.sign_evidence == "indicator"
+    amounts = _read(table, spec)
+    assert (amounts[0], amounts[5]) == (Decimal("-1210.00"), Decimal("2840.00"))
+    # The words decide the sign; that the fourth column is the amount is
+    # still read from its shape alone, so a person looks before it imports.
+    assert suggestion.doubts == ("no_header",)
+    # Amounts that carry their own sign are compared with the words instead.
+    signed_table = _extracted(layouts.headerless_with_direction_cell(signed=True))
+    signed = _suggested(signed_table)
+    assert _columns(signed) == {"date": 0, "payee": 1, "amount": 3}
+    assert signed.spec.indicator_column is None
+    assert (signed.spec.sign, signed.sign_evidence) == (
+        Sign.OUTFLOW_POSITIVE,
+        "indicator_correlation",
+    )
+    assert signed.doubts == ("no_header",)
+    assert _read(signed_table, signed.spec) == amounts
+
+
+def test_headerless_export_of_two_accounts_is_never_read_as_one_on_its_own() -> None:
+    """No header says which column of names is the account: a person does."""
+    rows = [
+        [day, account, text, amount.removeprefix("-"), "debit" if amount[0] == "-" else "credit"]
+        for day, account, text, amount in layouts.TWO_ACCOUNT_ROWS
+    ]
+    suggestion = _suggested(_table(rows))
+    assert suggestion.sign_evidence == "indicator"
+    assert suggestion.spec.account_column is None
+    assert suggestion.accounts == 1
+    assert suggestion.doubts == ("no_header",)
+    assert not suggestion.confident
+
+
+def test_one_row_file_gets_no_suggestion() -> None:
+    row = ["09/02/2026", "-1210.00", "*", "", "WILLOW COURT RENT"]
+    assert suggest_mapping(_table([row])) is None
+    # A title line above it does not make it a table either.
+    assert suggest_mapping(_table([["Synthetic export"], row])) is None
+    # Two transactions are the least a column's shape can be read from.
+    second = ["09/15/2026", "2840.00", "*", "", "MARLOW DESIGN PAYROLL"]
+    two = _suggested(_table([row, second]))
+    assert two.doubts == ("no_header",)
+    assert two.parsed_rows == 2
+
+
+def test_a_first_row_of_words_nothing_knows_is_never_read_as_data() -> None:
+    rows = [
+        ["Paivamaara", "Summa", "Selite"],
+        ["09/14/2026", "-48.15", "HARBOR LANE GROCERY"],
+        ["09/15/2026", "-12.00", "TIN ROOF DINER"],
+        ["09/16/2026", "250.00", "MARLOW DESIGN PAYROLL"],
+    ]
+    # An unknown header is still a header: its words may say what the shapes cannot.
+    assert suggest_mapping(_table(rows)) is None
+    # A column that mixes dates and words is not the date column.
+    assert suggest_mapping(_table([*rows[1:], ["n/a", "-3.00", "SILVER FERN CAFE"]])) is None
+
+
+def test_headerless_balance_owed_is_not_taken_for_an_accounts_balance() -> None:
+    """A card's balance owed adds up with the purchases read as money in."""
+    table = _extracted(layouts.headerless_card_with_balance_owed())
+    suggestion = _suggested(table)
+    assert not suggestion.confident
+    assert "sign_unverified" in suggestion.doubts
+    assert suggestion.parsed_rows == len(layouts.CARD_ROWS)
+
+
+def test_headerless_balance_that_two_readings_fit_proves_no_column() -> None:
+    rows = []
+    balance = Decimal("900.00")
+    for day, (_, amount) in enumerate(layouts.DATED_ROWS, start=13):
+        balance += Decimal(amount)
+        # The amount is printed twice (as booked and as converted).
+        rows.append([f"2026-09-{day}", "Synthetic payee", amount, amount, str(balance)])
+    suggestion = _suggested(_table(rows))
+    assert suggestion.doubts == ("no_header",)
+    assert suggestion.sign_evidence is None
+    assert suggestion.spec.balance_column is None
+    assert suggestion.spec.amount_column == 2
+
+
+def test_headerless_debit_and_credit_columns_without_a_balance_are_a_guess() -> None:
+    rows = [
+        [day, text, debit, credit]
+        for day, _, text, debit, credit in layouts.HEADERLESS_BALANCE_ROWS
+    ]
+    suggestion = _suggested(_table(rows))
+    spec = suggestion.spec
+    assert (spec.debit_column, spec.credit_column, spec.balance_column) == (2, 3, None)
+    # Which of the two is the money out is the usual order, not a fact of the file.
+    assert suggestion.doubts == ("no_header",)
+    assert suggestion.sign_evidence is None
+    assert not suggestion.confident
+
+
+def test_headerless_whole_numbers_are_not_the_amount_beside_priced_cells() -> None:
+    rows = [
+        [day, str(70412 + index), text, amount]
+        for index, (day, amount, text) in enumerate(layouts.HEADERLESS_SIGNED_ROWS)
+    ]
+    suggestion = _suggested(_table(rows))
+    assert _columns(suggestion) == {"date": 0, "payee": 2, "amount": 3}
+    assert suggestion.doubts == ("no_header",)
+
+
+def test_headerless_day_month_tie_is_still_a_guess() -> None:
+    rows = [
+        [day, amount, text]
+        for day, (text, amount) in zip(
+            ("02/03/2026", "02/09/2026", "03/04/2026", "03/11/2026", "04/05/2026", "04/12/2026"),
+            layouts.DATED_ROWS,
+            strict=True,
+        )
+    ]
+    suggestion = _suggested(_table(rows))
+    assert suggestion.doubts == ("no_header", "date_order_guessed")
+    assert suggestion.spec.date_format == "MM/DD/YYYY"
+    # The day the file arrived settles it for a table without a header too.
+    settled = suggest_mapping(_table(rows), today=date(2026, 4, 20))
+    assert settled is not None
+    assert settled.doubts == ("no_header",)
+
+
+def test_a_table_with_a_header_is_never_read_as_headerless() -> None:
+    suggestion = _suggested(_extracted(layouts.checking_with_running_balance()))
+    assert (suggestion.spec.has_header, suggestion.doubts) == (True, ())
+    assert {r.match for r in suggestion.reasons} == {"exact"}

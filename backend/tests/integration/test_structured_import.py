@@ -1747,3 +1747,90 @@ def test_a_date_order_the_upload_day_cannot_settle_waits_for_a_person(env: Env) 
     assert item.payload["suggestion"]["doubts"] == ["date_order_guessed"]
     assert env.transactions(account) == []
     assert _mappings(env) == []
+
+
+# ---------------------------------------------------------------------------
+# A table without a header gets a suggestion
+# ---------------------------------------------------------------------------
+
+
+def test_headerless_export_opens_a_prefilled_mapping(env: Env) -> None:
+    """Signed amounts and no header: the columns are offered, never imported on a guess."""
+    data = layouts.headerless_five_quoted_columns()
+    account = env.ledger.account(env.household_id, type=AccountType.CHECKING)
+    document_id = env.ingest(data, account=account, name="export.csv")
+    assert env.document(document_id).status is DocumentStatus.NEEDS_REVIEW
+    (item,) = env.open_reviews(document_id)
+    assert item.kind is ReviewKind.UNPARSED
+    assert item.payload["reason"] == "mapping_required"
+    assert item.payload["auto_import"] == "not_confident"
+    assert item.payload["suggestion"]["confident"] is False
+    assert item.payload["suggestion"]["doubts"] == ["no_header"]
+    assert item.payload["suggestion"]["parsed_rows"] == len(layouts.HEADERLESS_SIGNED_ROWS)
+    suggested = item.payload["suggested_spec"]
+    assert suggested["has_header"] is False
+    assert (suggested["date_column"], suggested["amount_column"], suggested["payee_column"]) == (
+        0,
+        1,
+        4,
+    )
+    assert env.transactions(account) == []
+    assert _mappings(env) == []
+    with Actors.open(env.settings, env.factories) as actors:
+        owner = actors.login(env.owner)
+        preview = owner.get(f"{API}/imports/{document_id}/preview").json()
+        # The mapping editor opens with the same reading.
+        assert preview["suggested_spec"] == suggested
+        assert preview["suggestion"]["doubts"] == ["no_header"]
+        assert {r["match"] for r in preview["suggestion"]["roles"]} == {"content"}
+        # The person saves it as it is; the file is imported with it.
+        cells = extract_delimited(data, ExtractOptions(), "csv").tables[0].rows
+        with env.factories.transaction() as db:
+            set_context(db, env.household_id)
+            make_import_mapping(db, env.household_id, spec=suggested, rows=cells)
+        applied = owner.post(
+            f"{API}/review/{item.id}/resolve", json={"kind": "unparsed", "action": "apply_mapping"}
+        )
+        assert applied.status_code == 200, applied.text
+    env.run(APPLY_MAPPING_JOB_TYPE)
+    assert _amounts(env.transactions(account)) == sorted(
+        (date(int(day[6:]), int(day[:2]), int(day[3:5])), Decimal(amount))
+        for day, amount, _ in layouts.HEADERLESS_SIGNED_ROWS
+    )
+
+
+def test_headerless_export_with_a_reconciling_balance_imports_on_its_own(env: Env) -> None:
+    data = layouts.headerless_with_balance()
+    account = env.ledger.account(env.household_id, type=AccountType.CHECKING)
+    document_id = env.ingest(data, account=account, name="export.csv")
+    assert env.document(document_id).status is DocumentStatus.PROCESSED, env.open_reviews(
+        document_id
+    )
+    rows = env.transactions(account)
+    assert len(rows) == len(layouts.HEADERLESS_BALANCE_ROWS)
+    assert sum(t.amount for t in rows) == Decimal("4516.35") - layouts.HEADERLESS_OPENING
+    assert sum(1 for t in rows if t.amount < 0) == 6
+    (mapping,) = _mappings(env)
+    assert mapping.spec["has_header"] is False
+    assert (mapping.spec["debit_column"], mapping.spec["credit_column"]) == (3, 4)
+    assert mapping.spec["balance_column"] == 5
+    assert mapping.sign_unverified is False
+    # A mapping saved without a header is not named after the first transaction.
+    assert mapping.name == "No header, 6 columns"
+    assert "PAYROLL" not in _trail(env)
+    # The next file of the same shape is read with the saved mapping.
+    second = env.ingest(data.replace(b"/2026", b"/2025"), account=account, name="older.csv")
+    assert env.document(second).status is DocumentStatus.PROCESSED, env.open_reviews(second)
+    assert len(_mappings(env)) == 1
+    assert len(env.transactions(account)) == 2 * len(layouts.HEADERLESS_BALANCE_ROWS)
+
+
+def test_headerless_card_export_is_never_imported_on_its_balance_owed(env: Env) -> None:
+    """Into an empty household: purchases are not income because the balance owed adds up."""
+    document_id = env.ingest(layouts.headerless_card_with_balance_owed(), name="card.csv")
+    assert _accept_proposals(env, document_id) == []
+    assert _ledger_rows(env) == 0
+    (item,) = env.open_reviews(document_id)
+    assert item.payload["reason"] == "mapping_required"
+    assert "sign_unverified" in item.payload["suggestion"]["doubts"]
+    assert _mappings(env) == []

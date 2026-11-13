@@ -35,6 +35,10 @@ The flow (INGESTION.md "Parse", "Match and deduplicate", "Commit"):
      card export may list purchases as positive). A table of securities
      trades (``investment_columns``) and direction words that contradict
      the signs (``indicator_contradicts_sign``) are never confident either. A
+     table without a header row is read from the shapes of its columns
+     and waits (``no_header``) unless a running balance proves which
+     columns hold the money; the mapping saved for it is named by its
+     column count, never after its first row. A
      statement whose account is not known yet still gets its own
      ``account_required``/``unknown_account`` item, and the mapping saved
      from a suggestion on trust is marked ``sign_unverified``: whenever it
@@ -1370,15 +1374,24 @@ def _unique_name(run: _Run, base: str) -> str:
 
 
 def _save_suggested(run: _Run, table: Table, suggestion: MappingSuggestion) -> ImportMapping | None:
-    """Save the suggestion as a household mapping for the table's header (None: not saved)."""
+    """Save the suggestion as a household mapping for the table's header (None: not saved).
+
+    Without a header row the row at ``skip_rows`` is the first transaction:
+    the mapping is named by the table's column count, never by those cells.
+    """
     spec = suggestion.spec
     fingerprint = spec_fingerprint(table, spec)
     if fingerprint is None:  # pragma: no cover - a confident suggestion has a header row
         return None
     actor = run.user_id or run.document.uploaded_by
+    name = (
+        _suggested_name(table.rows[spec.skip_rows])
+        if spec.has_header
+        else f"No header, {table.column_count} columns"
+    )
     mapping = ImportMapping(
         household_id=run.household_id,
-        name=_unique_name(run, _suggested_name(table.rows[spec.skip_rows])),
+        name=_unique_name(run, name),
         header_fingerprint=fingerprint,
         spec=spec.model_dump(mode="json"),
         created_by=actor,

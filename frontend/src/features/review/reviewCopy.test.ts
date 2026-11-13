@@ -94,6 +94,7 @@ describe("review explanations", () => {
       "Positive amounts are",
     ],
     ["investment_columns", "Trades, not a cash ledger", "Investment activity"],
+    ["no_header", "No header row", "Positive amounts are"],
   ])(
     "asks the question of a mapping suggestion's doubt: %s",
     (doubt, title, word) => {
@@ -124,6 +125,19 @@ describe("review explanations", () => {
       }),
     );
     expect(found.title).toBe("Money in or money out?");
+  });
+
+  it("asks about the columns of a file without a header before its sign", () => {
+    // Nothing named the columns, so "PerFin found the columns" is not yet true.
+    const found = explain(
+      item("unparsed", {
+        reason: "mapping_required",
+        auto_import: "not_confident",
+        suggestion: { confident: false, doubts: ["no_header", "sign_unverified"] },
+      }),
+    );
+    expect(found.title).toBe("No header row");
+    expect(found.what).toContain("no header row");
   });
 
   it("keeps the general words for the other doubts, and names trades first", () => {

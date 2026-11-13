@@ -512,7 +512,8 @@ class SuggestionRole(_Output):
     ]
     column: int
     #: How the header named the role (``content``: it did not, the column's
-    #: cells are direction words).
+    #: cells are direction words, or the table has no header row and every
+    #: column was read from the shape of its cells).
     match: Literal["exact", "word", "substring", "content"]
     #: Share of the column's non-empty sample cells that fit the role (0-1).
     fit: float
@@ -531,7 +532,10 @@ class MappingSuggestionOut(_Output):
     rows of money in than of money out), ``indicator_contradicts_sign``
     (direction words and the amounts' signs disagree) and
     ``investment_columns`` (a security, a quantity and a price column:
-    trades, not a cash ledger). ``activity_type_unknown`` is a brokerage
+    trades, not a cash ledger) and ``no_header`` (the table has no header
+    row, ``spec.has_header`` is false, and its columns were read from the
+    shapes of their cells with no running balance to prove them).
+    ``activity_type_unknown`` is a brokerage
     activity suggestion with actions PerFin does not type.
     ``sign_evidence`` is ``activity`` for an activity-mode suggestion
     (amounts keep their own signs), else ``debit_credit``, ``indicator``,
@@ -566,7 +570,8 @@ class ImportPreview(_Output):
     warnings: list[str]
     #: The saved mapping whose fingerprint matches the table (visible to the caller).
     matched_mapping_id: uuid.UUID | None
-    #: A guess from the header names and cell shapes, for the mapping editor.
+    #: A guess from the header names and cell shapes (from the shapes
+    #: alone for a table without a header row), for the mapping editor.
     suggested_spec: MappingSpec | None
     #: The same guess with its confidence and per-role reasons.
     suggestion: MappingSuggestionOut | None

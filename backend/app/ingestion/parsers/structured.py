@@ -56,8 +56,11 @@ original file.
   direction words that go with the amounts' signs) or, taken on trust, it
   is a doubt for a table that looks like a card export or whose amounts say
   nothing (``sign_unverified``); a table of securities trades is never a
-  confident cash ledger (``investment_columns``). :func:`suggest_spec` is
-  its spec alone, for the mapping editor.
+  confident cash ledger (``investment_columns``). A table without a header
+  row is read from the shapes of its columns (:func:`_headerless`): the
+  suggestion fills the mapping editor and is a doubt (``no_header``) unless
+  a running balance proves which columns hold the money.
+  :func:`suggest_spec` is its spec alone, for the mapping editor.
 """
 
 from __future__ import annotations
@@ -66,15 +69,17 @@ import hashlib
 import re
 import unicodedata
 from collections import Counter
-from collections.abc import Iterable, Sequence
+from collections.abc import Iterable, Iterator, Sequence
 from dataclasses import dataclass, field, replace
 from datetime import date, timedelta
 from decimal import Decimal, InvalidOperation
+from itertools import combinations, permutations
 from typing import Final
 
 from app.core.money import AMOUNT_PLACES, MAX_ABS_AMOUNT, quantize
 from app.domain.imports.schemas import (
     DATE_FORMATS,
+    MAX_COLUMN,
     OUTFLOW_VALUES_MAX,
     DateFormat,
     MappingSpec,
@@ -1114,6 +1119,25 @@ _QUALIFIER: Final = re.compile(rf"\s*\({_PART}[^()]*\)$")
 #: service's export); on its own it is no amount word.
 _GROSS_HEADERS: Final = ("gross", "fee", "net")
 
+#: Rows with two or more cells a table without a header row needs before
+#: its columns are read from their shapes (:func:`_headerless`).
+HEADERLESS_MIN_ROWS: Final = 2
+#: With more columns of numbers than this, no running balance is looked for
+#: among them: the ways to read them grow with the cube of their count.
+HEADERLESS_MONEY_MAX: Final = 6
+#: Printed balances that must each be the one before plus the amounts since,
+#: for a running balance to prove which columns of numbers hold the money.
+HEADERLESS_BALANCE_CHECKS: Final = 2
+#: Leading rows a reading of the columns is tried on before the whole table.
+HEADERLESS_SCREEN_ROWS: Final = 8
+#: The header-match share of a score when no header named the columns and
+#: nothing proved them (an exact header counts 1).
+HEADERLESS_QUALITY: Final = 0.5
+#: A cell printed the way money is: a decimal or thousands mark before a
+#: digit, or a currency sign. A column of whole numbers (check numbers,
+#: references) beside such cells is not where the amounts are looked for.
+_PRICED: Final = re.compile("[.,]\\d|[$\u20ac\u00a3\u00a5]")
+
 
 @dataclass(frozen=True)
 class RoleReason:
@@ -1150,8 +1174,14 @@ class MappingSuggestion:
     words and signs disagree row to row, or agree with each other against
     the running balance. ``investment_columns``: the header names a
     security, a quantity and a price (:func:`names_trades`), so the rows are
-    trades, not a cash ledger. Reasons carry roles, column indexes, match
-    kinds and shares only, never cell text.
+    trades, not a cash ledger. A table without a header row
+    (``spec.has_header`` False, every reason's match ``content``) has
+    ``no_header`` in place of ``header_not_exact``: its columns were read
+    from their shapes (:func:`_headerless`), which only a running balance
+    can prove (``sign_evidence`` ``balance``); such a balance is
+    ``sign_unverified`` all the same when it has most rows as money in, the
+    way the balance owed on a card adds up. Reasons carry roles, column
+    indexes, match kinds and shares only, never cell text.
     """
 
     spec: MappingSpec
@@ -1308,14 +1338,16 @@ def _settled_date_format(table: Table, spec: MappingSpec, today: date | None) ->
       monthly payment looks like written month first.
 
     A date column that mixes in dates of another form, or whose rows are
-    dated after ``today`` whichever way they are read, stays a guess.
+    dated after ``today`` whichever way they are read, stays a guess. A
+    table without a header row has no second column *named* a date, so
+    that proof is not looked for.
     """
     month_first = spec.date_format
     day_first = _DAY_FIRST_TWIN.get(month_first)
     if day_first is None:
         return None
-    header = table.rows[spec.skip_rows]
-    body = table.rows[spec.skip_rows + 1 :]
+    header = table.rows[spec.skip_rows] if spec.has_header else ()
+    body = table.rows[_body_rows(table, spec).start :]
     readings, others = _order_readings(body, spec.date_column, month_first, day_first)
     if any(_shape(cell) == "d" for cell in others):
         return None
@@ -1605,6 +1637,9 @@ class _Candidate:
     #: A column of direction or type words beside *signed* amounts: it is not
     #: in the spec (the amounts sign themselves) but is compared with them.
     direction: int | None = None
+    #: The table has no header row and nothing proves the reading of its
+    #: columns (:func:`_headerless`): the doubt ``no_header``.
+    no_header: bool = False
 
 
 def _candidate(table: Table, skip: int) -> _Candidate | None:
@@ -1672,6 +1707,240 @@ def _candidate(table: Table, skip: int) -> _Candidate | None:
         return None
     rank = sum(p.level + p.fit for p in picks.values())
     return _Candidate(spec, picks, tied, rank, direction)
+
+
+def _money_readings(fields: dict[str, object], money: Sequence[int]) -> Iterator[MappingSpec]:
+    """Every way the ``money`` columns can be an amount and a balance, or a debit, a credit and one.
+
+    An amount is tried with either sign convention, a debit and a credit
+    column in either order.
+    """
+    for balance in money:
+        rest = [column for column in money if column != balance]
+        for amount in rest:
+            for sign in Sign:
+                yield MappingSpec.model_validate(
+                    {**fields, "amount_column": amount, "sign": sign, "balance_column": balance}
+                )
+        for debit, credit in permutations(rest, 2):
+            yield MappingSpec.model_validate(
+                {
+                    **fields,
+                    "debit_column": debit,
+                    "credit_column": credit,
+                    "balance_column": balance,
+                }
+            )
+
+
+def _balance_adds_up(parsed: ParsedStatement, checks: int) -> bool:
+    """Whether every row read and at least ``checks`` printed balances agree, none disagreeing."""
+    return (
+        bool(parsed.transactions)
+        and not parsed.skipped_rows
+        and parsed.balance_checks >= checks
+        and not parsed.balance_mismatches
+    )
+
+
+def _balance_proven(
+    table: Table, fields: dict[str, object], money: Sequence[int], first: int
+) -> MappingSpec | None:
+    """The one reading of the ``money`` columns whose running balance adds up (None: none, several).
+
+    Each reading (:func:`_money_readings`) is tried on the first
+    :data:`HEADERLESS_SCREEN_ROWS` rows, in the file's order and reversed
+    (a file may list its newest row first), and the ones that hold there
+    are read over the whole table: every row must read and at least
+    :data:`HEADERLESS_BALANCE_CHECKS` balances agree, none disagreeing.
+    Swapping a debit and a credit column, or the sign, turns every amount
+    round, so a balance that adds up tells those apart. Two readings that
+    both add up (a column printed twice, a column of zeros) prove neither.
+    """
+    head = [row for row in table.rows[first : first + SUGGEST_SAMPLE_ROWS] if _filled(row) == 2]
+    head = head[:HEADERLESS_SCREEN_ROWS]
+    samples = [table.model_copy(update={"rows": rows}) for rows in (head, head[::-1])]
+    proven: MappingSpec | None = None
+    for reading in _money_readings({**fields, "skip_rows": 0}, money):
+        if not any(_balance_adds_up(from_table(sample, reading), 0) for sample in samples):
+            continue
+        spec = reading.model_copy(update={"skip_rows": first})
+        if _balance_adds_up(from_table(table, spec), HEADERLESS_BALANCE_CHECKS):
+            if proven is not None:
+                return None
+            proven = spec
+    return proven
+
+
+def _debit_credit_pair(
+    body: Sequence[Sequence[str]], columns: Sequence[int], separator: str
+) -> tuple[int, int] | None:
+    """The first two of ``columns`` that never both hold an amount on one row, each on some.
+
+    That is the shape of a debit and a credit column (an empty cell or a
+    zero in the one the row does not use). Which of the two is the money
+    out is not in the shape: the left one is taken, as most exports print
+    it, and the suggestion stays a doubt.
+    """
+
+    def holds(row: Sequence[str], column: int) -> bool:
+        raw = _cell(row, column)
+        return bool(raw and parse_cell_amount(raw, separator))
+
+    for left, right in combinations(columns, 2):
+        filled = [(holds(row, left), holds(row, right)) for row in body]
+        if (
+            not any(a and b for a, b in filled)
+            and any(a for a, _ in filled)
+            and any(b for _, b in filled)
+        ):
+            return left, right
+    return None
+
+
+def _guessed_money(
+    fields: dict[str, object],
+    body: Sequence[Sequence[str]],
+    cells: Sequence[Sequence[str]],
+    money: Sequence[int],
+    found: _Pick | None,
+    separator: str,
+) -> MappingSpec:
+    """The reading of a headerless table's ``money`` columns that nothing proves.
+
+    ``cells`` are the non-empty sample cells of each column and ``found``
+    the column of direction words, if any (:func:`_headerless`, which says
+    how the columns are chosen).
+    """
+    priced = [c for c in money if any(_PRICED.search(v) for v in cells[c])] or list(money)
+    amount = priced[0]
+    if found is None:
+        pair = _debit_credit_pair(body, priced, separator)
+        if pair is None:
+            return MappingSpec.model_validate({**fields, "amount_column": amount})
+        return MappingSpec.model_validate(
+            {**fields, "debit_column": pair[0], "credit_column": pair[1]}
+        )
+    outflow = sorted({v for v in cells[found.column] if v.casefold() in OUTFLOW_WORDS})
+    if not outflow or _signed(cells[amount], separator):
+        # Signed amounts sign themselves; type words never sign an amount.
+        return MappingSpec.model_validate({**fields, "amount_column": amount})
+    return MappingSpec.model_validate(
+        {
+            **fields,
+            "amount_column": amount,
+            "indicator_column": found.column,
+            "outflow_values": outflow[:OUTFLOW_VALUES_MAX],
+        }
+    )
+
+
+def _headerless(table: Table) -> _Candidate | None:
+    """The mapping of a table without a header row, read from its columns' shapes (None: no fit).
+
+    Used only when no row names a date and a money column
+    (:func:`_candidate`). The rows are read from the first one with two
+    filled cells, which must be among the first :data:`HEADER_SEARCH_ROWS`;
+    at least :data:`HEADERLESS_MIN_ROWS` such rows are needed. A column is
+    judged by all its non-empty sample cells, so a first row of words (a
+    header no role word knows) fits no shape and gives no suggestion: its
+    words may say what the shapes cannot.
+
+    * The **date** column is the first whose cells all read in one date
+      format and that is filled on at least :data:`ROLE_FIT_MIN` of the rows.
+    * **Money** columns are those whose cells all fit money. With two to
+      :data:`HEADERLESS_MONEY_MAX` of them and one column of dates, the
+      reading whose running balance adds up is taken, when exactly one does
+      (:func:`_balance_proven`): an amount and a balance, or a debit, a
+      credit and a balance. That proves the columns and the sign.
+    * Otherwise the reading is a guess (``no_header``): the amount is
+      looked for among the columns printed as money (:data:`_PRICED`; all
+      of them when none is). Two that never share a row are the debit and
+      the credit column (:func:`_debit_credit_pair`), else the first is
+      the amount. No balance column is guessed.
+    * A column of **direction** words (:func:`_direction_column`) signs an
+      unsigned amount as the indicator, or is compared with the signs of a
+      signed one, as under a header (:func:`_candidate`). It decides the
+      sign and the reading stays a guess all the same. A table with such
+      a column is as a rule an aggregator's export of several accounts,
+      and without a header its column of account names cannot be told
+      from a category or a payee: read on its own, the accounts would be
+      merged into one. And a mapping saved for a table without a header is
+      found again by the shapes of a first row alone
+      (:func:`header_fingerprint`), where an indicator reads every word it
+      does not know as money in; a mapping with a balance column at least
+      reports the rows that do not add up.
+    * The **description** is the column with the most text among the rest.
+
+    No account column is read from shapes: account numbers, references and
+    check numbers look alike, and so do account names and categories.
+    """
+    first = next(
+        (i for i, row in enumerate(table.rows[:HEADER_SEARCH_ROWS]) if _filled(row) == 2), None
+    )
+    if first is None:
+        return None
+    body = [row[:MAX_COLUMN] for row in _data_rows(table.rows[first : first + SUGGEST_SAMPLE_ROWS])]
+    if len(body) < HEADERLESS_MIN_ROWS:
+        return None
+    cells = [
+        [row[column].strip() for row in body if column < len(row) and row[column].strip()]
+        for column in range(max(len(row) for row in body))
+    ]
+    dated = [
+        column
+        for column, values in enumerate(cells)
+        if values and best_date_format(values)[1] == len(values)
+    ]
+    date_column = next(
+        (column for column in dated if len(cells[column]) >= ROLE_FIT_MIN * len(body)), None
+    )
+    money = [
+        column for column, values in enumerate(cells) if values and all(map(_is_money, values))
+    ]
+    if date_column is None or not money:
+        return None
+    date_format, _, tied = best_date_format(cells[date_column])
+    separator = guess_decimal_separator(v for column in money for v in cells[column])
+    found = _direction_column(body, {*dated, *money})
+    fields: dict[str, object] = {
+        "skip_rows": first,
+        "has_header": False,
+        "date_column": date_column,
+        "date_format": date_format,
+        "decimal_separator": separator,
+    }
+    picks = {"date": _Pick(date_column, CONTENT, round(len(cells[date_column]) / len(body), 3))}
+    taken = {*dated, *money} | ({found.column} if found is not None else set())
+    text = [
+        (sum(map(len, values)), -column, fit)
+        for column, values in enumerate(cells)
+        if column not in taken and (fit := _role_fit("payee", values)) >= ROLE_FIT_MIN
+    ]
+    if text:
+        _, negated, fit = max(text)  # the most text, the leftmost on a tie
+        fields["payee_column"] = -negated
+        picks["payee"] = _Pick(-negated, CONTENT, round(fit, 3))
+    proven: MappingSpec | None = None
+    if len(dated) == 1 and 2 <= len(money) <= HEADERLESS_MONEY_MAX:
+        proven = _balance_proven(table, fields, money, first)
+    spec = proven
+    if spec is None:
+        spec = _guessed_money(fields, body, cells, money, found, separator)
+    direction: int | None = None
+    if found is not None and spec.indicator_column is not None:
+        picks["indicator"] = found
+    elif (
+        found is not None
+        and spec.amount_column is not None
+        and _signed(cells[spec.amount_column], separator)
+    ):
+        direction = found.column
+    for role in ("amount", "debit", "credit", "balance"):
+        column = spec.columns()[role]
+        if column is not None:
+            picks[role] = _Pick(column, CONTENT, 1.0)
+    return _Candidate(spec, picks, tied, 0.0, direction, no_header=proven is None)
 
 
 def _signed(values: Iterable[str], separator: str) -> bool:
@@ -1845,8 +2114,11 @@ def suggest_mapping(table: Table, *, today: date | None = None) -> MappingSugges
     or a second date column only one order reads, ``today``, the day the
     file was received, which no row is dated after, the same day either
     way, or the days of one month). The doubts about the sign and the kind
-    of table are described on :class:`MappingSuggestion`. No model of any
-    kind (ADR-0007).
+    of table are described on :class:`MappingSuggestion`. When no row is a
+    header, the table is read from the shapes of its columns
+    (:func:`_headerless`): a suggestion with ``has_header`` False that is a
+    doubt (``no_header``) unless a running balance proves the columns. No
+    model of any kind (ADR-0007).
     """
     if len(table.rows) < 2:
         return None
@@ -1856,6 +2128,8 @@ def suggest_mapping(table: Table, *, today: date | None = None) -> MappingSugges
         if found is not None and (best is None or found.rank > best.rank):
             best = found
     if best is None:
+        best = _headerless(table)
+    if best is None:
         return None
     chosen, date_order_guessed = best.spec, best.date_order_guessed
     if date_order_guessed:
@@ -1864,7 +2138,7 @@ def suggest_mapping(table: Table, *, today: date | None = None) -> MappingSugges
             chosen = chosen.model_copy(update={"date_format": settled})
             date_order_guessed = False
     spec, statements, balance_agrees = _read_suggested(table, chosen)
-    header = table.rows[spec.skip_rows]
+    header: Sequence[str] = table.rows[spec.skip_rows] if spec.has_header else ()
     rows = [t.row for s in statements for t in s.transactions if t.row is not None]
     skipped = sorted(r for s in statements for r in s.skipped_rows)
     trailing = [r for s in statements for r in (*s.note_rows, *s.footer_rows)]
@@ -1879,8 +2153,13 @@ def suggest_mapping(table: Table, *, today: date | None = None) -> MappingSugges
     against_balance = (
         balance_agrees and correlation.sign is not None and correlation.sign is not spec.sign
     )
-    if spec.debit_column is not None and spec.credit_column is not None:
-        evidence: str | None = "debit_credit"
+    evidence: str | None
+    if not spec.has_header and spec.amount_column is None:
+        # No header says which column is the debits: a running balance
+        # that adds up does (:func:`_balance_proven`), or nothing.
+        evidence = None if best.no_header else "balance"
+    elif spec.debit_column is not None and spec.credit_column is not None:
+        evidence = "debit_credit"
     elif spec.debit_column is not None:
         # A lone column whose cells carry signs is a signed amount under
         # another name: its header proves nothing.
@@ -1900,7 +2179,10 @@ def suggest_mapping(table: Table, *, today: date | None = None) -> MappingSugges
         best.picks[r] for r in ("amount", "debit", "credit") if r in best.picks
     ]
     doubts: list[str] = []
-    if any(p.level != EXACT for p in required):
+    if not spec.has_header:
+        if best.no_header:
+            doubts.append("no_header")
+    elif any(p.level != EXACT for p in required):
         doubts.append("header_not_exact")
     if not rows:
         doubts.append("no_rows")
@@ -1913,17 +2195,23 @@ def suggest_mapping(table: Table, *, today: date | None = None) -> MappingSugges
     if against_balance or (correlation.contradicts and (correlation.strong or not balance_agrees)):
         doubts.append("indicator_contradicts_sign")
     card = names_card(header)
+    one_sided = _sign_says_nothing(amounts)
     if rows and (
-        (evidence is None and (card or _sign_says_nothing(amounts)))
+        (evidence is None and (card or one_sided))
         # A card's running balance is what is owed: it adds up with
         # purchases read as money in, so it proves nothing about a card.
-        or (evidence == "balance" and card)
+        # Without a header no word says "card": a balance that has most
+        # rows as money in is that shape, and is not believed either.
+        or (evidence == "balance" and (card or (one_sided and not spec.has_header)))
     ):
         doubts.append("sign_unverified")
     if names_trades(header):
         doubts.append("investment_columns")
     readable = len(rows) / (len(rows) + len(failed)) if rows else 0.0
-    quality = sum(p.level / EXACT for p in required) / len(required)
+    if spec.has_header:
+        quality = sum(p.level / EXACT for p in required) / len(required)
+    else:
+        quality = HEADERLESS_QUALITY if best.no_header else 1.0
     score = round(quality * readable * (0.9 if date_order_guessed else 1.0), 3)
     reasons = tuple(
         RoleReason(role, pick.column, MATCH_NAMES[pick.level], pick.fit)

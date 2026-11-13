@@ -64,6 +64,19 @@ Dates whose day/month order is the question:
   ``Description``, ``Debit`` and ``Credit``.
 * :func:`card_positive_purchases` with ``low_days`` - the card export dated
   on nine days of one month, none above the 12th.
+
+Tables without a header row (the first line is the first transaction):
+
+* :func:`headerless_five_quoted_columns` - five quoted cells a row: a date,
+  a signed amount, an asterisk, an empty cell and the description.
+* :func:`headerless_with_balance` - a date, a check number, a description,
+  a debit, a credit and a running balance that reconciles.
+* :func:`headerless_card_with_balance_owed` - a date, a description, a
+  purchase, a payment and the balance *owed*, which adds up with the
+  purchases read as money in.
+* :func:`headerless_with_direction_cell` - a date, a description, a
+  category, an amount, ``debit``/``credit`` and the account's name; the
+  amounts unsigned, or signed the aggregator's way (money out positive).
 """
 
 from __future__ import annotations
@@ -478,3 +491,112 @@ def export_with_two_date_columns(
         debit, credit = (amount[1:], "") if amount.startswith("-") else ("", amount)
         rows.append((first, second, payee, debit, credit))
     return _file((*headers, "Description", "Debit", "Credit"), rows)
+
+
+# ---------------------------------------------------------------------------
+# Tables without a header row
+# ---------------------------------------------------------------------------
+
+
+def _rows(rows: Sequence[Row], *, quoted: bool = False) -> bytes:
+    """``rows`` as a file with no header line (every cell in double quotes when ``quoted``)."""
+    lines = [",".join(f'"{cell}"' if quoted else cell for cell in cells) for cells in rows]
+    return ("\r\n".join(lines) + "\r\n").encode("utf-8")
+
+
+#: (date, amount as printed, description): seven rows of money out, one of money in.
+HEADERLESS_SIGNED_ROWS: Final[tuple[tuple[str, str, str], ...]] = (
+    ("09/02/2026", "-1210.00", "WILLOW COURT RENT ONLINE TRANSFER REF 0041"),
+    ("09/04/2026", "-48.15", "PURCHASE AUTHORIZED ON 09/03 HARBOR LANE GROCERY CARD 0000"),
+    ("09/09/2026", "-39.60", "PURCHASE AUTHORIZED ON 09/08 NORTHGATE FUEL STOP CARD 0000"),
+    ("09/15/2026", "2840.00", "MARLOW DESIGN PAYROLL DIRECT DEPOSIT"),
+    ("09/17/2026", "-27.35", "PURCHASE AUTHORIZED ON 09/16 TIN ROOF DINER CARD 0000"),
+    ("09/21/2026", "-61.02", "BRIGHTWATER UTILITIES BILL PAYMENT"),
+    ("09/24/2026", "-18.99", "PURCHASE AUTHORIZED ON 09/23 PAPER KITE BOOKS CARD 0000"),
+    ("09/28/2026", "-14.85", "PURCHASE AUTHORIZED ON 09/27 LANTERN STREET PHARMACY CARD 0000"),
+)
+
+
+def headerless_five_quoted_columns() -> bytes:
+    """No header; ``"date","amount","*","","description"`` with every cell quoted."""
+    return _rows(
+        [(day, amount, "*", "", text) for day, amount, text in HEADERLESS_SIGNED_ROWS],
+        quoted=True,
+    )
+
+
+#: (date, check number, description, debit, credit): six rows of money out
+#: (two of them checks) and two of money in.
+HEADERLESS_BALANCE_ROWS: Final[tuple[tuple[str, str, str, str, str], ...]] = (
+    ("09/01/2026", "", "MARLOW DESIGN PAYROLL", "", "2840.00"),
+    ("09/02/2026", "1041", "CHECK WILLOW COURT RENT", "1210.00", ""),
+    ("09/04/2026", "", "HARBOR LANE GROCERY", "74.60", ""),
+    ("09/09/2026", "", "NORTHGATE FUEL STOP", "45.10", ""),
+    ("09/14/2026", "1042", "CHECK BRIGHTWATER UTILITIES", "66.40", ""),
+    ("09/15/2026", "", "MARLOW DESIGN PAYROLL", "", "2840.00"),
+    ("09/19/2026", "", "TIN ROOF DINER", "33.25", ""),
+    ("09/26/2026", "", "LANTERN STREET PHARMACY", "14.85", ""),
+)
+#: The balance before the first row of :func:`headerless_with_balance`.
+HEADERLESS_OPENING: Final = Decimal("280.55")
+
+
+def headerless_with_balance() -> bytes:
+    """No header; ``date, check no, description, debit, credit, balance`` that reconciles."""
+    balance = HEADERLESS_OPENING
+    rows = []
+    for day, check, text, debit, credit in HEADERLESS_BALANCE_ROWS:
+        balance += Decimal(credit or "0") - Decimal(debit or "0")
+        rows.append((day, check, text, debit, credit, str(balance)))
+    return _rows(rows)
+
+
+#: What was owed before the first row of :func:`headerless_card_with_balance_owed`.
+HEADERLESS_OWED: Final = Decimal("412.90")
+
+
+def headerless_card_with_balance_owed() -> bytes:
+    """No header; ``date, description, purchase, payment, balance owed`` (:data:`CARD_ROWS`).
+
+    The balance is what the holder owes: it goes up with a purchase and
+    down with a payment, the mirror image of an account's balance.
+    """
+    owed = HEADERLESS_OWED
+    rows = []
+    for day, text, amount in CARD_ROWS:
+        owed += Decimal(amount)
+        purchase, payment = ("", amount[1:]) if amount.startswith("-") else (amount, "")
+        rows.append((day, text, purchase, payment, str(owed)))
+    return _rows(rows)
+
+
+#: The category beside each row of :data:`AGGREGATOR_ROWS`.
+HEADERLESS_CATEGORIES: Final = (
+    "Housing",
+    "Groceries",
+    "Utilities",
+    "Dining",
+    "Transport",
+    "Income",
+    "Shopping",
+    "Groceries",
+    "Home",
+    "Shopping",
+)
+
+
+def headerless_with_direction_cell(*, signed: bool = False) -> bytes:
+    """No header; ``date, description, category, amount, debit|credit, account``.
+
+    The amounts carry no sign (the word beside them says which way the
+    money went). ``signed`` prints them the aggregator's way instead:
+    ``debit`` rows positive, ``credit`` rows negative.
+    """
+    account = "Everyday Checking"
+    rows = [
+        (day, text, category, amount if signed else amount.removeprefix("-"), word, account)
+        for (day, text, amount, word), category in zip(
+            AGGREGATOR_ROWS, HEADERLESS_CATEGORIES, strict=True
+        )
+    ]
+    return _rows(rows)
