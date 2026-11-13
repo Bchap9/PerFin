@@ -50,9 +50,11 @@ Every other row must give
   printed ``10/14/2026 as of 10/10/2026`` is read as its first date, the
   trade date (:func:`_trade_date_text`); the second is dropped and decides
   nothing, the day/month order included. When no day is above 12 the order
-  is a guess (``date_order_guessed``), unless the whole header is a known
-  US broker layout and the amounts are written ``$`` first: then the dates
-  are month first (:func:`_date_format`),
+  is a guess (``date_order_guessed``), unless the header's filled cells are
+  exactly a known US broker header (:func:`whole_layout`; a layout known by
+  its first cells only, or a known header with one more column, is not) and
+  the amounts are written ``$`` first: then the dates are month first
+  (:func:`_date_format`),
 * an action :func:`activity_type` types (``YOU BOUGHT``, ``REINVESTMENT ...
   (Cash)``, ``DIVIDEND RECEIVED``, ``Electronic Funds Transfer Paid``, ...;
   ``TRANSFERRED FROM/TO`` is a transfer of units when the row names a security
@@ -66,10 +68,16 @@ Every other row must give
 
   A broker that prints a reinvested dividend as two rows gives the income
   first (``Reinvest Dividend``: no quantity, cash in) and the purchase second
-  (``Reinvest Shares``: units, cash out). The row typed ``reinvest`` with no
-  quantity and an amount above zero is that income leg and is read as a
-  ``dividend`` of its security. With no quantity and no cash coming in it
-  proves neither leg and is skipped like any reinvestment without units.
+  (``Reinvest Shares``: units, cash out). The row typed ``reinvest`` with an
+  empty quantity cell and an amount above zero is that income leg and is
+  read as a ``dividend`` of its security. With no quantity and no cash
+  coming in it proves neither leg and is skipped like any reinvestment
+  without units; so is one whose quantity cell is filled but gives no units
+  (``n/a``, ``0``), which may be the purchase on an export that prints
+  amounts unsigned. The other way round, a row typed ``dividend`` whose
+  action says reinvest in its first words (``Div Reinvest``, ``Qual Div
+  Reinvest``) and that carries units is the purchase of a broker printing
+  the reinvestment as one row: it is read as a ``reinvest``.
 
   **Options.** A symbol cell that names an option (``ZZOP 03/20/2026 45.00
   C``, or the OCC form; :func:`~app.ingestion.parsers.brokerage.
@@ -77,8 +85,8 @@ Every other row must give
   class ``option``; its name is the description, else the cell as printed.
   ``Buy to Open``, ``Sell to Close``, ``Sell to Open`` and ``Buy to Close``
   are typed by their first word. One contract is 100 shares: when the
-  amount is nearer to quantity x price x 100 than to quantity x price the
-  price is stored per contract (price x 100), else as printed
+  amount before fees is nearer to quantity x price x 100 than to quantity x
+  price the price is stored per contract (price x 100), else as printed
   (:func:`_contract_price`). An ``Expired`` or ``Assigned`` row of an option
   says that a position closed, not which way: once an account's rows are
   read (:func:`_close_options`) it becomes a ``sell`` when the account's
@@ -89,6 +97,16 @@ Every other row must give
   nothing here says which way. So is a ``Buy to Close``/``Buy to Cover``
   of an option the other rows do not leave written: it closes a short this
   export never opened and is never read as a purchase.
+
+  Only rows of the export prove what is open. A sale that closes by its
+  own words (``Sell to Close``, ``You Sold Closing Transaction``) takes
+  what the rows before it bought and never leaves the option written: the
+  rest was bought before the export's first row. A plain ``Sell`` with
+  nothing held may write the option or sell contracts bought earlier, so
+  the short it leaves is not proven; only a sale that opens by its own
+  words (``Sell to Open``, ``You Sold Opening Transaction``, ``Sell
+  Short``) proves one. An expiry is a ``buy`` only against a proven short;
+  against an unproven one it is skipped and counted.
 
   A row missing any of these is skipped and counted (``skipped``). Quantities
   are printed signed (a sale is negative); the statement carries them positive
@@ -168,6 +186,7 @@ from app.ingestion.parsers.brokerage import (
     QUANTITY_TYPES,
     SECURITY_TYPES,
     activity_type,
+    expand_action,
     guess_asset_class,
     is_cusip,
     option_symbol,
@@ -286,6 +305,8 @@ HEADERS: Final[Mapping[str, Role]] = {
     "accrued interest": "other",
 }
 #: Header rows (their first normalised cells) that name the broker who wrote them.
+#: A header whose filled cells are exactly one of these is a whole known
+#: header (:func:`whole_layout`).
 LAYOUT_INSTITUTIONS: Final[Mapping[tuple[str, ...], str]] = {
     ("run date", "account", "account number", "action", "symbol"): "Fidelity Investments",
     ("run date", "action", "symbol", "description", "type"): "Fidelity Investments",
@@ -534,6 +555,18 @@ def layout_institution(table: Table, row: int) -> str | None:
     return None
 
 
+def whole_layout(table: Table, row: int) -> bool:
+    """Whether the filled cells of the header row ``row`` are exactly a known broker header.
+
+    Stricter than :func:`layout_institution`, which names the broker from the
+    first cells: a header with one more column is another export.
+    """
+    if row >= len(table.rows):
+        return False
+    cells = tuple(normalise(c.removeprefix("'")) for c in table.rows[row])
+    return tuple(c for c in cells if c) in LAYOUT_INSTITUTIONS
+
+
 def header_from_spec(spec: MappingSpec) -> Header:
     """The header an activity-mode mapping names (its ``skip_rows`` row, its columns)."""
     columns: dict[Role, int] = {}
@@ -588,15 +621,36 @@ class _Row:
     currency: str | None
     activity: InvestmentActivity
     #: An option row that closes a position: ``expiry`` (``Expired``,
-    #: ``Assigned``: its direction is settled by :func:`_close_options`) or
-    #: ``cover`` (``Buy to Close``: kept only when a short is open).
-    closes: Literal["expiry", "cover"] | None = None
+    #: ``Assigned``: its direction is settled by :func:`_close_options`),
+    #: ``cover`` (``Buy to Close``: kept only when a short is open) or ``sale``
+    #: (``Sell to Close``: never leaves the option written).
+    closes: Literal["expiry", "cover", "sale"] | None = None
+    #: An option sale that writes the option by its own words (``Sell to Open``).
+    opens: bool = False
 
 
 #: Actions that close an option whichever way it was open (the row's own sign says nothing).
 EXPIRY_WORDS: Final = ("expired", "assigned")
 #: Actions that buy back a written option, by their own words.
 COVER_WORDS: Final = ("buy to close", "buy to cover")
+#: Actions that sell a held option, by their own words.
+CLOSING_SALE_WORDS: Final = (
+    "sell to close",
+    "sold to close",
+    "you sold closing transaction",
+    "sold closing transaction",
+)
+#: Actions that write an option, by their own words.
+OPENING_SALE_WORDS: Final = (
+    "sell to open",
+    "sold to open",
+    "you sold opening transaction",
+    "sold opening transaction",
+    "sell short",
+    "sold short",
+)
+#: How far into a dividend's action the word ``reinvest`` makes it a reinvestment.
+REINVEST_WITHIN: Final = 5
 #: Shares one option contract stands for.
 CONTRACT_SIZE: Final = 100
 
@@ -609,25 +663,34 @@ def _is_option(security: SecurityRef | None) -> bool:
     return security is not None and security.asset_class == "option"
 
 
-def _contract_price(quantity: Decimal, price: Decimal, amount: Decimal) -> Decimal:
+def _contract_price(
+    quantity: Decimal, price: Decimal, amount: Decimal, fees: Decimal, *, sale: bool
+) -> Decimal:
     """An option's price per contract: ``price`` x 100 when the amount says it was per share.
 
-    The amount (fees included) is compared with quantity x price and with
-    quantity x price x 100; the nearer one tells how the price was printed.
-    A tie (an amount of zero and a price of zero) keeps the printed price.
+    The amount before fees (a sale's proceeds plus its fees, a purchase's
+    cost less its fees) is compared with quantity x price and with quantity
+    x price x 100; the nearer one tells how the price was printed. A tie
+    keeps the printed price.
     """
     value = quantity * price
-    cash = abs(amount)
-    if abs(cash - value * CONTRACT_SIZE) < abs(cash - value):
+    gross = amount + fees if sale else abs(amount) - fees
+    if abs(gross - value * CONTRACT_SIZE) < abs(gross - value):
         return price * CONTRACT_SIZE
     return price
+
+
+def _says_reinvest(action: str) -> bool:
+    """Whether one of the action's first words is ``reinvest``/``reinvestment``/``reinvested``."""
+    words = expand_action(normalise(action)).split()[:REINVEST_WITHIN]
+    return any(word.startswith("reinvest") for word in words)
 
 
 #: Units a row adds to (or takes from) what the account holds of its security.
 _UNITS_IN: Final = frozenset({"buy", "reinvest", "transfer_in"})
 _UNITS_OUT: Final = frozenset({"sell", "transfer_out"})
-#: On one day: openings and plain trades first, then a buy to close, then an expiry.
-_CLOSE_ORDER: Final[Mapping[str | None, int]] = {None: 0, "cover": 1, "expiry": 2}
+#: On one day: openings and plain trades first, then a closing trade, then an expiry.
+_CLOSE_ORDER: Final[Mapping[str | None, int]] = {None: 0, "cover": 1, "sale": 1, "expiry": 2}
 
 
 def _close_options(rows: list[_Row], out: ActivityTable) -> list[_Row]:
@@ -639,10 +702,18 @@ def _close_options(rows: list[_Row], out: ActivityTable) -> list[_Row]:
     * an ``expiry`` row (``Expired``, ``Assigned``) of a held option is a
       ``sell``, of a written one a ``buy``, moving the open units toward
       zero. With nothing open, or more contracts than are open, it is
-      dropped and counted in ``skipped``;
+      dropped and counted in ``skipped``; so is the expiry of a short no
+      row proves (below);
     * a ``cover`` row (``Buy to Close``, ``Buy to Cover``) stays a ``buy``
       when the option is written, else it is dropped and counted: the short
-      it closes was opened before the export's first row.
+      it closes was opened before the export's first row. It never leaves
+      the option held;
+    * a ``sale`` row (``Sell to Close``) takes from what is held and never
+      leaves the option written: what it sells beyond the rows before it
+      was bought before the export's first row;
+    * any other sale that takes the units below zero leaves a short that is
+      proven only when the row opens by its own words (``Sell to Open``):
+      a plain ``Sell`` may as well have sold contracts bought earlier.
 
     Rows keep their order; other securities are not looked at.
     """
@@ -657,12 +728,14 @@ def _close_options(rows: list[_Row], out: ActivityTable) -> list[_Row]:
             continue
         indices.sort(key=lambda i: (rows[i].activity.trade_date, _CLOSE_ORDER[rows[i].closes]))
         net = Decimal(0)
+        #: Whether the short that is open (``net`` below zero) was written by a row's own words.
+        proven = True
         for index in indices:
             row = rows[index]
             activity = row.activity
             units = activity.quantity or Decimal(0)
             if row.closes == "expiry":
-                if units <= 0 or net == 0 or units > abs(net):
+                if units <= 0 or net == 0 or units > abs(net) or (net < 0 and not proven):
                     dropped.add(index)
                     continue
                 kind: InvestmentActivityType = "sell" if net > 0 else "buy"
@@ -672,11 +745,20 @@ def _close_options(rows: list[_Row], out: ActivityTable) -> list[_Row]:
                 if net >= 0:
                     dropped.add(index)
                     continue
-                net += units
+                net = min(net + units, Decimal(0))
+            elif row.closes == "sale":
+                if net < 0:
+                    proven = False  # the rows disagree: nothing here says which way
+                else:
+                    net = max(net - units, Decimal(0))
             elif activity.type in _UNITS_IN:
                 net += units
             elif activity.type in _UNITS_OUT:
+                if net >= 0 and units > net:
+                    proven = row.opens
                 net -= units
+            if net >= 0:
+                proven = True
     out.skipped += len(dropped)
     return [row for index, row in enumerate(rows) if index not in dropped]
 
@@ -735,11 +817,14 @@ class _Reader:
         amount = parse_cell_amount(amount_text, self.separator) if amount_text else None
         action = _cell(row, self.col("action"))
         option = _is_option(security)
-        closes: Literal["expiry", "cover"] | None = None
-        if option and _starts(normalise(action), EXPIRY_WORDS):
+        words = normalise(action)
+        closes: Literal["expiry", "cover", "sale"] | None = None
+        if option and _starts(words, EXPIRY_WORDS):
             closes = "expiry"
-        elif option and _starts(normalise(action), COVER_WORDS):
+        elif option and _starts(words, COVER_WORDS):
             closes = "cover"
+        elif option and _starts(words, CLOSING_SALE_WORDS):
+            closes = "sale"
         # An expiry's direction is not its own sign's to give: ``sell`` stands
         # in until the account's rows are read (:func:`_close_options`).
         kind: InvestmentActivityType | None = (
@@ -763,7 +848,15 @@ class _Reader:
         ):
             amount = Decimal(0)  # a transfer of units, or an expiry, moves no cash
         quantity = abs(signed) if signed is not None and signed != 0 else None
-        if kind == "reinvest" and quantity is None and amount is not None and amount > 0:
+        if kind == "dividend" and quantity is not None and _says_reinvest(action):
+            # The purchase of a reinvestment printed as one row (module doc, "Rows").
+            kind = "reinvest"
+        elif (
+            kind == "reinvest"
+            and not _cell(row, self.col("quantity"))
+            and amount is not None
+            and amount > 0
+        ):
             # The income leg of a reinvestment printed as two rows (module doc, "Rows").
             kind = "dividend"
         ratio = split_ratio(name or _cell(row, self.col("action"))) if kind == "split" else None
@@ -783,11 +876,11 @@ class _Reader:
         settle = parse_cell_date(settle_text, self.date_format) if settle_text else None
         price = self.number(row, "price")
         unit_price = abs(price) if price is not None and price != 0 else None
-        if option and unit_price is not None and quantity is not None:
-            unit_price = _contract_price(quantity, unit_price, amount)
         fees = abs(self.number(row, "commission") or Decimal(0)) + abs(
             self.number(row, "fees") or Decimal(0)
         )
+        if option and unit_price is not None and quantity is not None:
+            unit_price = _contract_price(quantity, unit_price, amount, fees, sale=kind == "sell")
         try:
             activity = InvestmentActivity(
                 type=kind,
@@ -815,6 +908,7 @@ class _Reader:
             currency,
             activity,
             closes,
+            opens=option and kind == "sell" and _starts(words, OPENING_SALE_WORDS),
         )
 
 
@@ -839,9 +933,9 @@ def _date_format(
 
     A tie between month first and day first (no day above 12) is no guess
     when two independent signs say the file is a US broker's: its whole
-    header is a known layout (:data:`LAYOUT_INSTITUTIONS`) and its amounts
-    are written ``$`` first (:func:`_dollar_first`). Either alone leaves
-    the order a guess, and so does any other tie.
+    header is a known one (:func:`whole_layout`) and its amounts are
+    written ``$`` first (:func:`_dollar_first`). Either alone leaves the
+    order a guess, and so does any other tie.
     """
     roles: tuple[Role, ...] = ("date", "settle")
     values = [_trade_date_text(_cell(r, header.columns.get(role))) for r in body for role in roles]
@@ -849,7 +943,7 @@ def _date_format(
     if (
         tied
         and found in US_TIE_FORMATS
-        and layout_institution(table, header.row) is not None
+        and whole_layout(table, header.row)
         and _dollar_first([_cell(r, header.columns.get("amount")) for r in body])
     ):
         tied = False

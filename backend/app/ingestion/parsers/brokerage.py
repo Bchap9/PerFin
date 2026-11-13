@@ -581,6 +581,9 @@ ACTIVITY_TYPES: Final[Mapping[str, InvestmentActivityType]] = {
     "credit interest": "interest",
     "margin interest": "fee",
     "margin interest paid": "fee",
+    # Interest the account pays, not earns (a debit balance, a margin loan).
+    "interest charged": "fee",
+    "interest on debit": "fee",
     "advisory fee": "fee",
     "advisor fee": "fee",
     "management fee": "fee",
@@ -657,6 +660,30 @@ ACTION_ABBREVIATIONS: Final[Mapping[str, str]] = {
     "cap": "capital",
     "yr": "year",
 }
+#: What may follow ``Int``/``Div``/``Divs`` at the start of an action for it to be
+#: an abbreviation. Before any other word it is the start of a name (``Int
+#: Business Example Corp``) and stays as printed (:func:`expand_action`).
+ABBREVIATION_FOLLOWERS: Final = frozenset(
+    {
+        "adj",
+        "adjustment",
+        "charged",
+        "credit",
+        "credited",
+        "distribution",
+        "earned",
+        "income",
+        "on",
+        "paid",
+        "payment",
+        "received",
+        "reinvest",
+        "reinvested",
+        "reinvestment",
+        "reversal",
+    }
+)
+_LEADING_ABBREVIATIONS: Final = frozenset({"int", "div", "divs"})
 #: Words a broker puts before ``dividend``/``cash dividend`` that do not change
 #: what the row is (``Pr Yr Cash Div``, ``Special Non Qual Div``).
 DIVIDEND_QUALIFIERS: Final = frozenset(
@@ -693,12 +720,24 @@ def expand_action(norm: str) -> str:
     management fee``; ``special non qual div`` -> ``dividend``. A token of
     :data:`ACTION_ABBREVIATIONS` is replaced only as a whole token; ``pr`` is
     ``prior`` only before ``yr``/``year``; ``int`` before a lone ``l`` is
-    what is left of ``Int'l`` (a fund's name) and stays. Leading
+    what is left of ``Int'l`` (a fund's name) and stays, and so does ``int``,
+    ``div`` or ``divs`` as the first word before a word that is not one of
+    :data:`ABBREVIATION_FOLLOWERS` (a security's name standing where an
+    action would: ``Div Example Fund``). Leading
     :data:`DIVIDEND_QUALIFIERS` are dropped only when ``dividend`` or ``cash
     dividend`` follows them, and ``non`` only as part of ``non qualified``
     (``Non Dividend Distribution`` is no dividend). Anything else is
     returned as it came.
     """
+
+    def names(word: str, following: str) -> bool:
+        # The first word of a security's name, not an abbreviation.
+        return (
+            word in _LEADING_ABBREVIATIONS
+            and bool(following)
+            and following not in ABBREVIATION_FOLLOWERS
+        )
+
     tokens = norm.split()
     for index, word in enumerate(tokens):
         following = tokens[index + 1] if index + 1 < len(tokens) else ""
@@ -707,7 +746,7 @@ def expand_action(norm: str) -> str:
                 tokens[index] = "prior"
         elif word == "int" and following == "l":
             continue
-        elif word in ACTION_ABBREVIATIONS:
+        elif word in ACTION_ABBREVIATIONS and not (index == 0 and names(word, following)):
             tokens[index] = ACTION_ABBREVIATIONS[word]
     lead = 0
     while lead < len(tokens) and tokens[lead] in DIVIDEND_QUALIFIERS:

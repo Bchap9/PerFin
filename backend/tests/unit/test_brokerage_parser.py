@@ -397,6 +397,52 @@ def test_more_than_a_cent_is_still_a_mismatch() -> None:
     assert check.position_mismatches == [0]
 
 
+@pytest.mark.parametrize(
+    ("value", "status"),
+    [
+        # 10 x 1.2349900 = 12.3499: 0.99 of a cent under it agrees, 1.99 cents does not.
+        ("12.34", "ok"),
+        ("12.33", "mismatch"),
+        # Over it: 1.01 cents agrees with nothing either.
+        ("12.37", "mismatch"),
+        # 41.263 x 19.87 = 819.89581: 1.58 cents under it.
+        ("819.88", "mismatch"),
+    ],
+)
+def test_the_slack_on_quantity_times_price_is_one_cent(value: str, status: str) -> None:
+    position = (
+        _position("41.263", "19.8700000", value)
+        if value.startswith("8")
+        else _position("10", "1.2349900", value)
+    )
+    check = reconcile_investment(InvestmentStatement(source_format="ofx", positions=[position]))
+    assert check.status == status
+
+
+@pytest.mark.parametrize(
+    "text",
+    ["Int Charged", "Interest Charged", "Int On Debit Balance", "Interest on Debit Balance"],
+)
+def test_interest_the_account_is_charged_is_a_fee(text: str) -> None:
+    assert activity_type(text) == "fee"
+
+
+@pytest.mark.parametrize(
+    ("text", "kind"),
+    [
+        ("Int", "interest"),
+        ("Div", "dividend"),
+        ("Int Adj", "interest"),
+        ("Int Income", "interest"),
+        ("Div Adjustment", "dividend"),
+        ("Div Reinvest", "dividend"),
+        ("Div Received", "dividend"),
+    ],
+)
+def test_a_leading_abbreviation_before_an_action_word_is_expanded(text: str, kind: str) -> None:
+    assert activity_type(text) == kind
+
+
 def test_nothing_to_check_is_unavailable() -> None:
     statement = InvestmentStatement(
         source_format="ofx",
@@ -517,6 +563,10 @@ def test_expansion_leaves_known_phrases_alone() -> None:
         "Prior Year Adjustment",
         "Pr Example Holdings",
         "Special Example Fund",
+        # A name that starts with what could be an abbreviation is still a name.
+        "Int Business Example Corp",
+        "Div Example Fund",
+        "Divs Example Holdings",
     ],
 )
 def test_expansion_types_nothing_it_cannot_name(text: str) -> None:
