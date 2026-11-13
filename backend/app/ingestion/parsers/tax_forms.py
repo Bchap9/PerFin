@@ -108,7 +108,7 @@ from app.ingestion.parsers.text import normalise, read_amount
 from app.ingestion.sandbox.protocol import ExtractResult, LayoutTable, Page, TaxFormRead
 
 PARSER_NAME: Final = "tax_forms"
-PARSER_VERSION: Final = "1"
+PARSER_VERSION: Final = "2"
 REDACTED: Final = "***"
 
 #: Lines below a label searched for its amount.

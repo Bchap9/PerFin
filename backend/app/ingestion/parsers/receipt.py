@@ -86,7 +86,7 @@ from app.ingestion.sandbox.protocol import (
 )
 
 PARSER_NAME: Final = "receipt_basic"
-PARSER_VERSION: Final = "1"
+PARSER_VERSION: Final = "2"
 #: Receipts are short; a longer document is not read as one.
 MAX_RECEIPT_LINES: Final = 400
 #: A receipt is one page, sometimes two; a longer document is a statement, a

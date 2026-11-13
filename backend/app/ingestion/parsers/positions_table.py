@@ -145,7 +145,7 @@ from app.ingestion.sandbox.protocol import (
 )
 
 PARSER_NAME: Final = "brokerage_positions_table"
-PARSER_VERSION: Final = "1"
+PARSER_VERSION: Final = "2"
 #: Extraction kinds whose tables are read here (never a PDF's page table).
 TABLE_KINDS: Final = frozenset({"csv", "tsv", "xlsx"})
 #: Share of the data rows that must read for the table to be recognised.

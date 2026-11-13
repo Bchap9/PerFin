@@ -837,7 +837,10 @@ class LoanReconciliation(_Strict):
     """The loan statement checks (SECURITY.md C12; ``app.ingestion.parsers.loan_statement``).
 
     ``parts``: principal + interest + escrow + fees = the total paid;
-    ``balance``: previous principal balance - principal = new balance.
+    ``balance``: previous principal balance - principal = new balance;
+    ``amount_due``: on a periodic statement, the next payment's principal +
+    interest + escrow = the regular payment, and with the fees = the total
+    amount due (the next payment is checked, not kept).
     ``checks`` lists those that could run, ``failed`` those that did not hold.
     """
 

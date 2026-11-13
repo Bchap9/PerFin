@@ -283,7 +283,21 @@ QIF since Phase 2; PDF, images (with OCR), EML, ZIP and XLSX since Phases
   `ofx/2`) are read from the same hardened tree: positions (`INVPOSLIST`),
   activity (`INVTRANLIST`: buys, sells, income, reinvestments, expenses,
   transfers, splits, cash `INVBANKTRAN`), closing cash (`INVBAL/AVAILCASH`)
-  and the `SECLIST` names; a statement that carries `INV401K` or
+  and the `SECLIST` names. Two kinds of security are not priced per unit
+  in OFX and are rescaled, and no other kind ever is: a bond's
+  `UNITPRICE` is a percentage of par while its `UNITS` are face value, so
+  a `POSDEBT`, `BUYDEBT` or `SELLDEBT` is marked `price_per_100`; an
+  option's is the price of one share while its `UNITS` are contracts, so
+  a `POSOPT`, `BUYOPT` or `SELLOPT` carries the price of one contract
+  (`UNITPRICE` x `SHPERCTRCT` of the security's `OPTINFO`, else the trade
+  aggregate's own, else 100). Brokers do not all follow the definition,
+  so the value printed beside the price settles it: the rescaled reading
+  is kept only when its product is strictly nearer to `MKTVAL` (a
+  trade's `TOTAL`) than quantity x price as given, and the definition
+  applies when no value is printed. Debt and option trades name their
+  asset class when the file has no `SECLIST`. The contract size is folded
+  into the stored price; the protocol has no field for it. A statement
+  that carries `INV401K` or
   `INV401KBAL` is a `retirement` account of subtype `401k` (nothing inside
   those aggregates is read), any other a `brokerage` account; only the
   account's last four digits and
@@ -500,13 +514,15 @@ Produce structured records appropriate to the kind:
   (`tax_forms`, kind `tax_form`, first in the registry: a `Form <type>`
   heading with its box labels is unambiguous even on a bank's letterhead).
   It reads the forms of every registered jurisdiction form set
-  (`app.domain.tax.forms`; US: W-2, 1099-INT/DIV/B/MISC/NEC/R/G/SA, 1098,
+  (`app.domain.tax.forms`; US: W-2, 1099-INT/DIV/B/MISC/NEC/R/G/SA,
+  SSA-1099, 1098,
   1098-E, 1098-T, 1095-A/B/C): one form per `Form <type>` heading (a
   consolidated 1099 gives several, numbered per type; identical copies are
   kept once), the tax year (`Tax year 2025`, `For calendar year 2025`, or the
   year on the heading line), amount boxes by label (a cell starting with the
   box id and the first words of its label; the amount below it in its
-  column, or right after it), W-2 box 12 per code (`12_D`), the sum of the
+  column, or right after it; "Composite statements and the SSA-1099" below
+  has the other ways a heading and a box are printed), W-2 box 12 per code (`12_D`), the sum of the
   "Other" lines of W-2 box 14 (`14t`) and 1098 box 10 (`10t`, e.g. property
   tax), the 1095-A Part III monthly table, 1095-B/C covered months (`cov_<MON>`
   / `cov_ALL` from `X` marks under a month header) and 1095-C line 15, and
@@ -541,6 +557,46 @@ Produce structured records appropriate to the kind:
   (`tax_form_low_confidence` / `tax_form_unread`, field names only) and the
   document stays `needs_review`. Unit tests: `tests/unit/test_tax_form_parser.py`;
   end to end: `tests/integration/test_tax_form_pipeline.py`.
+
+  **Composite statements and the SSA-1099** (`tax_forms` version 2; the
+  module doc has every rule). A broker's composite 1099 heads its forms
+  with the year and the type and no word "Form", prints two forms side by
+  side, and joins label, dot leaders and amount in one string:
+  - *Headings.* A cell that starts with the year and the type (`2025
+    1099-DIV Dividends and Distributions`) is a heading and gives the tax
+    year, when the type is followed by the form's title or by nothing; a
+    year and a type followed by other words (`2025 1099-B Summary`, `2024
+    1099-INT corrections were issued separately`) is not. A mention is no
+    heading either: a contents line (it ends in a page number and holds no
+    amount), a line naming three or more forms, a `Form <type>` inside
+    parentheses.
+  - *Side by side.* Two headings of different forms on one line open two
+    sections, cut at the second heading's left edge; each reads only the
+    cells on its side. A later heading on that page that fits inside one
+    of those columns starts its form in that column only; the columns to
+    its right are read by nobody until a heading opens them again.
+  - *Boxes.* A cell is cut at every run of three or more dots, so `Total
+    ordinary dividends......1,840.25` is a label and its amount, and such
+    a label is read from its own line only (the next amount down the page
+    is not its box). A box id printed apart from its label (`1a` | `Total
+    ordinary dividends`) is read with it. The word `Box` before an id is
+    part of the label (`Box 3. Benefits Paid in 2025`); a box named inside
+    a sentence (`Description of Amount in Box 3`) is no label. A cell
+    that says the box is empty (`NONE`, `N/A`, a dash) ends the search
+    for its amount.
+  - *SSA-1099.* Boxes 3 to 6 are stored. Boxes 1, 2, 7 and 8 identify
+    the beneficiary and are never read, and the form has no issuer box,
+    so no issuer name is kept.
+  - *Detection.* 0.97 when any section of the document holds amount-box
+    labels of its form, 0.3 for a heading with none; identity labels are
+    not counted.
+  - *Redaction* keeps a word made of label, leaders and amount when each
+    piece would be kept, so the stored pages read the same on "Process
+    again".
+  - *Not read:* the right-hand boxes of a full-width form printed below a
+    side-by-side block when its short heading starts in the left column
+    (the form is stored with the boxes of its left side), and a right
+    column whose rows start left of its heading.
 - Payslip -> gross, net, deductions, period, employer.
 
 Parsers are versioned. Raw parser output is kept in `document.extraction` so a
@@ -815,13 +871,44 @@ a child answering with parser output is `bad_output`.
   that pin the date formats, sign convention, currency and institution name,
   so values read in their declared format score 1.0. Each claims a
   document only when every phrase of its fingerprint is on page 1.
-- **Payslip parser** (`payslip.py`, basic): employer, pay period, pay date,
+- **Payslip parser** (`payslip.py`, `payslip_basic` version 2, page 1
+  only): employer, pay period, pay date,
   earnings and deduction lines, gross, total deductions, net; checked
   `gross - deductions = net`. Kept in `extraction.parse.payslip`
   (`kind = payslip`, the period on the document); no ledger rows. One that
   does not add up is a `low_confidence_field` item
-  (`payslip_does_not_add_up`).
-- **Receipt parser** (`receipt.py`; "Receipts" below): merchant, date and
+  (`payslip_does_not_add_up`). How it reads what payroll services print
+  (cells and columns through `labelled_cells.py`, shared with the periodic
+  loan statement reader):
+  - *Current and year-to-date columns.* Under a header line naming them
+    (`Current | YTD`, `This Period | YTD`, in either order) a figure is
+    the one in the period's column, never the year-to-date one. A label
+    whose figures all stand outside the period's column is left unread, a
+    single figure under a lone `Year to Date` header included. A figure
+    under another header of that line (`Hours`, `Rate`) belongs to neither
+    column. A label naming the year so far (`YTD gross pay`) is never
+    read. With no header naming the columns the first figure after the
+    label is taken.
+  - *Blocks side by side.* A heading may be one cell of a wider line
+    (`PAY | Hours | Rate | Current | YTD | DEDUCTIONS | Current | YTD`):
+    the lines under it are split into blocks at each heading. Lines under
+    *Deductions* (*Taxes*, *Withholdings*) are deduction lines, those
+    under *Earnings* (*Payments*, *Pay*) earnings, down to the labelled
+    total; a line starting with `Total` is never a line item. With no
+    printed total the deductions total is the sum of the deduction lines.
+  - *Labels over values.* A line of two or more labels with no amount
+    takes each value from the cell under its label; a row naming the year
+    so far is skipped.
+  - *Period and employer.* `Pay period <date> - <date>`, else a start and
+    an end label (`Period Beginning` / `Period Ending`), both or neither.
+    The employer is the cell under an `EMPLOYER` heading, else what
+    follows the word when it is a cell of its own or a colon follows it
+    (never the rest of a heading such as `Employer Paid Benefits`), else
+    the first line of the page.
+  - The first reading of gross, net and the deductions total stands (a
+    second figure under the same label further down does not replace it).
+- **Receipt parser** (`receipt.py`, `receipt_basic` version 2; "Receipts"
+  below): merchant, date and
   time, subtotal, tax, tip, discount, total, item lines, payment method and
   card last four, currency, each with a confidence. Kept in
   `extraction.parse.receipt` (`kind = receipt`, the date as the period).
@@ -854,7 +941,13 @@ a child answering with parser output is `bad_output`.
   `PERFIN_INGEST_CONFIDENCE_THRESHOLD` (default 0.85, at least 0.5) are
   listed per row (`low_confidence`). A date carried from the row above
   and a balance read beside its label score at most 0.9; a date in an
-  assumed year scores 0.6.
+  assumed year scores 0.6. On a scanned payslip or loan statement each
+  field is scaled by the OCR confidence of its own cells
+  (`scaled_fields`: the lowest word confidence among the cells its label
+  and value were read from), so one garbled word elsewhere on the page
+  lowers no field it did not print. A value a check proved keeps its
+  score whatever OCR said: a payslip's gross, deductions and net that add
+  up, and the loan figures a passing check covers.
 - **Stored output**: parsed statements are `extraction.statements` with
   `source_format` `pdf`/`image`, each row with its `confidence`,
   `low_confidence`, `page` and `bbox` (region highlight), the statement with
@@ -924,11 +1017,27 @@ OFX `INVSTMTRS` in the sandbox or from a PDF/scan's pages in the worker.
   From`/`Transferred To` is a `transfer_in`/`transfer_out` when the row
   names a security and a non-zero quantity, else a cash `deposit`/
   `withdrawal`, and a transfer of units printed with no amount (`-`) moves
-  no cash. An unsigned amount takes the type's direction; a symbol is read
+  no cash. Brokers' abbreviations are written out first (`expand_action`,
+  whole tokens only): `Div`/`Divs` dividend, `Int` interest, `Mgmt`
+  management, `Qual` qualified, `Cap` capital, `Yr` year, and `Pr` prior
+  only before `Yr`; words that stand before a dividend without changing
+  what it is are dropped (`Pr Yr Cash Div`, `Special Non Qual Div`). So
+  `Qual Div` and `Cash Div` are dividends, `Bank Interest` is interest,
+  `ADR Mgmt Fee`, `Service Fee`, `NRA Withholding`, `Tax Withholding`,
+  `Interest Charged` and `Interest on Debit` (interest the account pays)
+  are fees, `Payment in Lieu` is a dividend and `Spin Off` a corporate
+  action. What is left of `Int'l` in a fund's name is not interest, `Int`
+  or `Div` before a word that is no action word starts a name (`Div
+  Example Fund`), and a `Non Dividend Distribution` is no dividend. A
+  movement between the account and a bank or another account
+  (`MoneyLink`, `Wire Sent`/`Received`, `Wire Funds`, `Internal
+  Transfer`, `Bank Transfer`, `Funds Paid`/`Received`, `Security
+  Transfer`) is named by its words and directed by the row's sign only:
+  without a sign it is not typed. An unsigned amount takes the type's direction; a symbol is read
   from its column (a valid CUSIP there is the CUSIP), from the
   description's first word when the row needs a security or the symbol is
   held, or from `(SYMBOL)` (beside a symbol column a name's first word is
-  never taken for a ticker: a bond's issuer). `brokerage_statement_generic` (version 8)
+  never taken for a ticker: a bond's issuer). `brokerage_statement_generic` (version 9)
   scores 0.5-0.7 when it sees these tables (above the bank parsers'
   0.4-0.45 for the same activity table); `placeholder_brokerage` pins the
   fictional Placeholder Brokerage (`MM/DD/YYYY`, USD) and needs the
@@ -1210,7 +1319,12 @@ OFX `INVSTMTRS` in the sandbox or from a PDF/scan's pages in the worker.
   number shaped like a date or a telephone number is none. Only four
   digits are kept.
 - **The currency** of a bank or card statement: a printed code
-  (`Currency: CAD`), else the symbol its amounts carry when that names one
+  (`Currency: CAD`; `parsers/currency.py`, `stated_currency`, used by the
+  statement, brokerage, payslip and loan parsers alike: the word
+  "currency" in any case, then three capital letters as printed that are
+  an active ISO 4217 code, so `currency for the period`, `Currency
+  Forward Contracts`, a lower-case word and a code PerFin does not know
+  name no currency), else the symbol its amounts carry when that names one
   currency (`£`, `€`), every symbol-bearing amount carries the same one and
   two amounts at least do (`symbol_currency`), else the layout's own. A
   dollar sign is no evidence. A statement in pounds is then proposed, and
@@ -1306,8 +1420,12 @@ OFX `INVSTMTRS` in the sandbox or from a PDF/scan's pages in the worker.
     so it is held, never imported silently. Only last four digits are kept.
 - **Reconciliation** (`reconcile_investment`, SECURITY.md C12), for every
   source: each position's quantity x price = market value (within half a
-  unit of the price's last printed decimal per unit plus 0.005; a price
-  per 100 of face value divided by 100), the positions add up to the
+  unit of the price's last printed decimal per unit plus one cent,
+  `PRODUCT_SLACK`: a feed that cuts the product to the cent instead of
+  rounding it is up to a cent off; a price
+  per 100 of face value divided by 100; the cent covers this product
+  only, and every sum of printed amounts below keeps the half-cent
+  tolerance), the positions add up to the
   printed holdings total, opening cash + activity = closing cash (no
   closing cash printed: the account value less the holdings), holdings +
   closing cash = the printed account value. Any
@@ -1391,7 +1509,19 @@ OFX `INVSTMTRS` in the sandbox or from a PDF/scan's pages in the worker.
   short position, so the position and the lines moving that security's
   units are left out of it whole (a short sale would read as selling units
   never held) and an `investment_short_position` notice says so
-  (`positions`, `lines_left_out`).
+  (`positions`, `lines_left_out`). A **written option** is short without
+  a printed position saying so (`_written_options`): an option (asset
+  class `option` on any of its rows) whose running units over the
+  statement's own rows fall below zero was sold without being held. Its
+  unit lines are left out in the same way, everything else of the
+  statement is imported, and the same notice says so with
+  `from_activity: true` and one `positions` entry per option with its
+  lowest running units ("Written option left out" in the review queue).
+  The count starts from the units the statement implies when it lists
+  positions (the listed units less what its rows add), else from what the
+  account's history from other documents holds. Only options: a share
+  sold before a statement's first row still opens at an unknown cost
+  basis. The rule sees one statement at a time.
   An `investment_figures_differ` item is a notice: the statement was
   imported whole, so it stays in the queue until seen and does not keep
   its document in `needs_review`. Real statements do not
@@ -1499,10 +1629,17 @@ table; never a PDF's page table) before it looks for a column mapping:
   `Deposit`/`Withdrawal` never qualifies), and at least half of its data
   rows have an action `activity_type` knows. Optional: settlement date,
   symbol (a valid CUSIP there is the CUSIP), description (the security's
-  name), quantity, price, commission, fees, currency, account number
+  name), quantity, price, commission, fees (also one `Fees & Comm` column
+  and its other wordings), currency, account number
   (`Account Number`, else an `Account` column whose cells carry digits).
 - **Rows**: one-cell rows (blank lines, disclaimer paragraphs, the "Date
-  downloaded" line) are notes. A row is typed by its action (`YOU BOUGHT`,
+  downloaded" line) are notes, and so is the export's total line (a total
+  label such as `Transactions Total` and figures only): it is not counted
+  as unread and takes no part in the typed share or the date format. A
+  date cell printed `10/14/2026 as of 10/10/2026` is read as its first
+  date, the trade date; the second decides nothing, the day/month order
+  included. A row is typed by its action (the action words and
+  abbreviations of "Brokerage statements" above; `YOU BOUGHT`,
   `YOU SOLD`, `REINVESTMENT ... (Cash)`, `DIVIDEND RECEIVED`, `INTEREST
   EARNED`, `LONG-TERM CAP GAIN`, `DIRECT DEPOSIT`, `Electronic Funds Transfer
   Received/Paid`, `FEE CHARGED`, `FOREIGN TAX PAID`, `CONTRIBUTION`,
@@ -1530,6 +1667,37 @@ table; never a PDF's page table) before it looks for a column mapping:
   leading `'`, SECURITY.md C7) is set aside only to recognise headers and
   actions and to parse dates and numbers: the security's name and the memo
   keep it, and a symbol that would be a formula is no symbol.
+- **Reinvested dividends**: a broker that prints a reinvestment as two
+  rows gives the income first (`Reinvest Dividend`: no quantity, cash in)
+  and the purchase second (`Reinvest Shares`: units, cash out). A row
+  typed reinvest with an empty quantity cell and an amount above zero is
+  that income leg and is read as a dividend of its security, so every
+  dividend is income and every reinvestment buys units. With no cash
+  coming in, or with a quantity cell that is filled and gives no units
+  (`n/a`, `0`), it proves neither leg and is skipped and counted. The
+  other way round, a row typed dividend whose action says reinvest in its
+  first words (`Div Reinvest`, `Qual Div Reinvest`) and that carries
+  units is the purchase of a broker printing one row: it is a reinvest.
+- **Options**: a symbol cell that names an option (`ZZOP 03/20/2026 45.00
+  C`, or the OCC form with or without its inner space) is the security
+  `ZZOP260320C00045000` with the asset class `option`. One contract is
+  100 shares: when the amount before fees is nearer to quantity x price x
+  100 than to quantity x price the price is stored per contract, else as
+  printed. `Buy to Open`, `Sell to Close`, `Sell to Open` and `Buy to
+  Close` are typed by their first word. An `Expired` or `Assigned` row
+  says that a position closed, not which way: it becomes a sale when the
+  account's other rows leave the option held and a buy when they leave it
+  written, whatever sign its quantity prints, and a blank amount is zero.
+  Only rows of the export prove what is open. A sale that closes by its
+  own words never leaves the option written; a plain `Sell` with nothing
+  held proves no short (it may sell contracts bought before the export's
+  first row); only a sale that opens by its own words (`Sell to Open`,
+  `You Sold Opening Transaction`, `Sell Short`) does. A closing with
+  nothing open or larger than what is open, an expiry against a short
+  that is not proven, and a `Buy to Close` of an option the rows do not
+  leave written are skipped and counted, never read as a trade. A
+  written option then stays out of the lot engine ("Brokerage
+  statements", the short-position rule): the rest of the export imports.
 - **Accounts**: one `InvestmentStatement` per last four digits of the
   account-number column (one statement without such a column), period =
   first to last trade date, no positions, no cash balances. Only the last
@@ -1550,7 +1718,14 @@ table; never a PDF's page table) before it looks for a column mapping:
   OFX with nothing to check. The parser's one possible guess, the
   day/month order of an all-numeric date column whose days are all 12 or
   less, marks every row `low_confidence` (`trade_date`, confidence 0.6), and
-  the statement is held (`investment_low_confidence`). `csv` is a
+  the statement is held (`investment_low_confidence`). The tie is no
+  guess, and is read month first, when the header's filled cells are
+  exactly a known US broker header (a layout known by its first cells
+  only, or a known header with one more column, is not enough) and the
+  amounts are written dollar-sign first; either sign alone, fewer than
+  four such amounts, or dashed dates leave it a guess. A filled currency
+  cell that is not an ISO code PerFin knows makes its row unreadable
+  (skipped and counted), as a malformed cell does. `csv` is a
   worker-only `source_format` (`WORKER_STATEMENT_FORMATS`): a sandbox child
   answering with it is `bad_output`.
 - **Commit**: `import_investment_statements` exactly as for an OFX
@@ -1603,7 +1778,7 @@ table; never a PDF's page table) before it looks for a column mapping:
   on its own. An account chosen in the review queue for an investment
   `unknown_account` item takes that item's statement only
   (`apply-mapping` `statement`). A document read this way records
-  `parser_version = brokerage_activity_table/1`, and the upload list offers
+  `parser_version = brokerage_activity_table/2`, and the upload list offers
   the review queue rather than the cash-ledger column mapping.
 
 #### Brokerage positions exports (CSV, TSV, XLSX)
@@ -1633,10 +1808,18 @@ column mapping:
   (also `11/11/2026`, `2026-11-11`) is the day the positions are valued.
   An export that prints none is dated the day the file was received (the
   run summary says `as_of_assumed`).
+  A title above the header that says `as of` a date dates the positions
+  when there is no download note.
 - **Rows**: one-cell rows (blank lines, the disclaimer paragraphs, the
-  download note) are notes. A row is the account's **cash** when its symbol
+  download note) are notes, and so is a row that repeats the header. A
+  row whose symbol cell is a total label (`Account Total`) is a **total**
+  whatever its other cells print: not a holding, not skipped, not part of
+  the share of rows that must read; it is counted (`total_rows`) and its
+  value is the account's printed total (below). A row is the account's
+  **cash** when its symbol
   ends in `**` (the core position: `SPAXX**`, `FCASH**`), reads `Pending
-  Activity`, or it has no quantity and a description that reads like cash
+  Activity`, starts with the word cash (`Cash & Cash Investments`), or it
+  has no quantity and a description that reads like cash
   (`HELD IN MONEY MARKET`): its value is part of the statement's closing
   cash, never a holding, as the PDF statement parser treats a core account.
   Any other row is a **position**: a security (the symbol; a CUSIP with a
@@ -1661,6 +1844,24 @@ column mapping:
   the statement's account and makes it a `retirement` account when it reads
   like one; the Fidelity header names the institution. Period and `as_of`
   are the one day of the download; there is no activity.
+- **Blocks, without an account-number column**: the table is read in
+  blocks, and rows of different blocks never share a statement. A block
+  starts at the header row, at every later header row (the same one
+  repeated, or another positions header without an account column, whose
+  columns then read the rows under it) and at a one-cell line that names
+  another account than the block it stands in. The nearest such line
+  above a block's rows names its account. A line names an account only
+  when it ends in an account number or a mask (`Roth IRA ...8820`):
+  digits are never gathered across words, and years, days, amounts,
+  telephone numbers and sentences name nothing. Rows that follow a
+  block's total row, or a one-cell line that prints a number or a mask
+  and is not read as an account, may be another account's: that block's
+  statement then names no account and carries no cash and no total
+  (warning `accounts_unclear`), so the importer asks whose it is instead
+  of matching it by digits. A table with one header and no such line is
+  one statement, as before. Not told apart: a second account under one
+  header introduced by a line with no digit and no mask (`Roth IRA`
+  alone) and no total row before it folds into the block above.
 - **What the export says about itself**: each position's quantity x price
   against its printed value (`positions`), and, when every valued row
   prints its **percent of account**, whether the rows are the whole
@@ -1670,7 +1871,15 @@ column mapping:
   percentages imply and the `total_value` check fails by the difference. A
   positions export has no activity, so a failed `positions` check is the
   fault of the positions that fail it and of nothing else: they carry the
-  `reconciliation` doubt and are named in `doubtful_positions`. An account
+  `reconciliation` doubt and are named in `doubtful_positions`. An
+  account whose rows end in a total row is checked against that instead:
+  the printed total is the statement's `total_value`, compared with the
+  holdings plus the cash rows. Total rows of one account that disagree (a
+  subtotal and a total) are no total, and a `Grand Total` is an account's
+  only when the file has one account. A total row of an account with no
+  cash row is kept only when the holdings add up to it; otherwise nothing
+  printed makes up the difference and it is not used (warning
+  `total_unchecked`). An account
   with a skipped row prints no cash and no total.
 - **Hold** (step 3 of "Brokerage statements"): a position whose value is
   not quantity x price waits (an `investment_lines_held` item listing it,
@@ -1724,9 +1933,9 @@ column mapping:
   units of the last export (`GET /investments/holdings` names that day per
   account, `positions_as_of`, and the app says the values are estimates).
   A document read this way records `parser_version =
-  brokerage_positions_table/1`; its run summary has `positions_table`
-  (statements, `as_of`, positions, cash rows, notes, skipped rows,
-  warnings); skipped rows raise one `lines_skipped` item, a table none of
+  brokerage_positions_table/2`; its run summary has `positions_table`
+  (statements, `as_of`, positions, cash rows, total rows, notes, skipped
+  rows, warnings, among them `accounts_unclear` and `total_unchecked`); skipped rows raise one `lines_skipped` item, a table none of
   whose rows reads an `unparsed` item (`positions_unreadable`). A mapping
   chosen explicitly for a run still imports the table as a cash ledger.
 
@@ -1823,17 +2032,82 @@ principal balance, interest rate as a fraction, next due date and amount,
 reconciliation, per-field confidence).
 
 - **Parser** (`app/ingestion/parsers/loan_statement.py`,
-  `loan_statement_generic`, kind `statement`): recognised by "mortgage
-  statement"/"loan statement" or at least four loan labels (principal
-  balance, escrow, interest rate, payment received, next payment due, total
-  payment received, loan number); reads labelled lines, the amount being
-  the last one on the line (year-to-date and escrow-balance lines are left
-  out). Synthetic layouts: `tests/fixtures/synth_loans.py`.
+  `loan_statement_generic`, version 2, kind `statement`): recognised by
+  "mortgage statement"/"loan statement" on page 1 or, without those words
+  (a loan bill headed `Account Statement`), by at least four loan labels
+  (principal balance, escrow, interest rate, payment received, payment
+  allocation, next payment due, total payment received, loan number) of
+  which one is about the principal: a card statement prints a payment due
+  date, a payment received and an interest rate too, and no principal.
+  Labels are counted over all pages, each once, and a label printed only
+  inside a longer one is not counted beside it. Two layouts, each with
+  its own reader; synthetic layouts: `tests/fixtures/synth_loans.py`.
+- **The payment receipt**: labelled lines, the amount being the last one
+  on the line (year-to-date and escrow-balance lines are left out).
+- **The periodic statement** (`loan_periodic.py`; the module doc has
+  every rule). The statement a servicer sends each month prints
+  principal, interest and escrow three times: for the next payment, for
+  last month and for the year so far. Only last month's column is a
+  payment made, so this layout is read by section and by column, never by
+  the last amount on a line:
+  - *Sections.* A heading cell starts a section that owns the labels
+    below it, from its left edge to the next heading on its line (blocks
+    printed side by side), down to the next heading: *amount due* (the
+    next payment), *paid* (a line naming a year-to-date column starts or
+    heads it), *activity* (a `Date | Description | Payments` header);
+    labels outside every section are *account* labels. Sections do not
+    carry over a page break. From a line saying to detach the coupon to
+    the end of its page nothing is read.
+  - *Columns.* In the paid section the parts and the total are the
+    payment, each from the period's column (`Paid Last Month`). A
+    year-to-date column is never read. A header naming it and exactly one
+    other column makes that other the period's, unless its words say it
+    is the next payment (`Amount Due`, `Current Payment`, `Next`,
+    `Billed`, `Scheduled`). With more than one unnamed column, a column
+    of the next payment, or no header saying what the figures are,
+    nothing is read (warning `loan_columns_unknown`). A paid figure
+    printed negative (a reversal) is not read.
+  - *The day paid* is the labelled day the last payment was received,
+    else a row of the activity table whose description says payment (and
+    not late, fee, due, reversal, returned, scheduled, pending, upcoming,
+    next or future) with its amount in the payments column, never one
+    dated after the statement date: the latest row of the payment's
+    total, else the latest row when all payment rows add up to it, else
+    none (warning `loan_payment_row_mismatch`).
+  - *The balance* is the printed outstanding principal; the previous
+    balance and the rate are read from the account labels, and a label
+    with no amount on its line takes the cell under it, else the one
+    over it.
+  - *Not stored:* the next payment's split, the regular payment and the
+    total amount due are used for the `amount_due` check only; the due
+    date is the next due date and never the day paid; no year-to-date
+    figure is kept anywhere.
+- **Loan bills** (auto and personal loans) are read by the same reader:
+  under a `Payment Allocation` heading the parts and the total are the
+  payment made, one figure a label (two figures: not read,
+  `loan_columns_unknown`), dated by a bare payment row (a line outside
+  any table that starts with a date, says payment and prints exactly one
+  amount). A bill that lists several loans in one table is not one loan's
+  statement: nothing is read (warning `loan_bill_several_loans`) and the
+  document waits as `loan_unreadable` ("Review queue").
+- **Both layouts** read the interest rate (a percentage, stored as a
+  fraction; the tail of a number OCR split, `4, 75%`, is no rate), the
+  lender (a `Lender:` line with its colon, else the first line), the loan
+  number's last four digits (`ending in 1234`, `XXXX1234`, or the end of
+  a number of six or more digits printed in full after its label; never
+  more than four are kept) and the currency.
 - **Reconciliation** (SECURITY.md C12): `parts` (principal + interest +
-  escrow + fees = total received) and `balance` (previous - principal =
-  new), within the reconciliation tolerance. Figures a check confirmed
+  escrow + fees = total received), `balance` (previous - principal =
+  new) and, on a periodic statement, `amount_due` (the next payment's
+  principal + interest + escrow = the regular payment, and with the fees
+  = the total amount due, whichever are printed), within the
+  reconciliation tolerance. Figures a check confirmed
   score 1.0, unchecked ones 0.8 (below the default threshold), all of a
-  statement that does not reconcile 0.5.
+  statement that does not reconcile 0.5. A periodic statement prints its
+  principal balance once with nothing to check it against: when the
+  statement reconciles it scores as a labelled value (0.95). On a scan
+  each field is scaled by the OCR confidence of its own cells
+  ("Confidence" above).
 - **Commit** (`app/domain/loans/statement_import.py`, called by the
   pipeline): the loan of the document's account, else the loan account
   with the last four digits (lender breaks ties) among those the uploader
@@ -1851,6 +2125,14 @@ reconciliation, per-field confidence).
   account's `computed` balances are rebuilt. A printed rate other than the
   rate in force raises `loan_rate_differs` (the payment is still recorded).
   Audit `loan.payment_import`; event `loan.updated` (with `account_id`).
+  **No payment in the period** is not a doubt: a statement that prints no
+  day paid, a principal and an interest paid of zero (warning
+  `loan_no_payment_in_period`), no doubtful field and a next amount due
+  that adds up (`amount_due`) is filed. No payment is written
+  (`no_payment` in the summary); its principal balance, when it and the
+  statement date were read, becomes a `statement` snapshot on the
+  statement date (a date before the loan began or after today is left
+  out).
 
 ### 6. Match and deduplicate
 - Each parsed transaction gets an `import_hash`. Existing rows with the same
@@ -2184,9 +2466,23 @@ document and is read on its own). The parser runs in the worker on the
 stored extraction, the matcher in the same transaction; neither sees file
 bytes or calls a model (ADR-0006, ADR-0007).
 
-**Parser** (`app/ingestion/parsers/receipt.py`, `receipt_basic`, chosen by
-detection or the classifier's `receipt` kind; a mail body is read when it
-scores at least 0.5):
+**Parser** (`app/ingestion/parsers/receipt.py`, `receipt_basic` version 2,
+chosen by detection or the classifier's `receipt` kind; a mail body is read
+when it scores at least 0.5):
+
+- **What is no receipt.** A total line does not make a document a
+  receipt. The parser scores 0 for a document of more than two pages
+  (`MAX_RECEIPT_PAGES`), for one that prints a statement word, and for
+  one that prints what a loan bill, a mortgage statement or an investment
+  statement prints beside its total and no till does (`principal
+  balance`, `interest rate`, `escrow`, `payoff`, `loan number`, `payment
+  due date`, `past due`, `payment allocation`, `account statement`,
+  `ending cash`, `vested balance`, ...). `year to date`, `due date` and
+  `account number` are left out of that list on purpose: loyalty totals,
+  invoices and store accounts print them on real receipts. A two-page
+  document with no receipt word scores at most 0.3, below the registry's
+  minimum, so it is a receipt only when the classifier says so. ("Choice"
+  under "Parse" has the rule for pages with a transaction table.)
 
 - Labels are folded for OCR (digits Tesseract confuses with letters inside
   words, `T0TAL` -> `total`; keywords OCR runs together, `AMOUNTDUE`; near
@@ -2194,7 +2490,17 @@ scores at least 0.5):
   an optional symbol or ISO code, minus/parentheses/trailing minus, a tax
   letter, OCR noise around them, or a colon that cannot be a time (`94:29`).
 - Lines are typed (subtotal, tax/VAT/GST, tip, discount, total, change,
-  tender, item); a keyword whose amount OCR put on the next line takes it.
+  tender, item); a keyword whose amount OCR put on a line of its own
+  takes the amount-only line below it. When that reading finds no
+  labelled total, is contradicted, or paired no label at all, the nearest
+  amount-only line (above or below, within a line and a half) and then
+  the line above are tried, and the first reading whose figures add up is
+  kept; when none does, the reading below stands, as before. So a receipt
+  whose paper curled (each amount half a line above its label) no longer
+  reads the subtotal as the tax. The amount under an unpriced item line
+  is that item's price and is never paired with the label below it, and a
+  reading below that nothing contradicts is kept, so no other pairing can
+  make the figures add up by reading a price as the tax.
   The **consistent set** is looked for: a total (strong labels such as
   "amount due" first, then the later line, then the card payment) for which
   subtotal + tax (+ tip - discount) = total, or the items add up, or (VAT
@@ -2203,8 +2509,14 @@ scores at least 0.5):
   lost (`6778` on a TOTAL line) are tried only as variants that make the set
   consistent, never on their own. A missing subtotal or tax is derived.
 - Date: every format of `classify/dates.py` plus `14-MAR-26`; a labelled
-  date or one next to a time first; expiry, return-by and due dates are
-  ignored; an ambiguous numeric date follows the currency (GBP, EUR and
+  date or one next to a time first; a line that says expiry, valid,
+  return by, due date or the like gives a date only where a date label in the
+  date's own lead-in, or a time beside it, marks it as the purchase date
+  (`EXP 06/12/26  DATE 03/14/2026` keeps its second date, `03/14/2026
+  11:42 AM  EXPIRES 06/12/26` its first), never the second date of a
+  range or an unmarked date in front of the word, and no date at all when
+  the word stands in front of none of them (`06/12/26 EXPIRY`); an
+  ambiguous numeric date follows the currency (GBP, EUR and
   other day-first currencies: `dmy`; USD/CAD: `mdy`) at 0.85, without one it
   is a guess (0.6). A mail without a date in its body takes the `Date`
   header (0.9).
@@ -2404,7 +2716,24 @@ Phases 3-4 implementation (`app/domain/review/assist.py`, `actions.py`,
   mapping editor and the importer as if it were a CSV table. A mapping
   saved from it (`POST /imports/mappings` with `document_id`) carries that
   header's fingerprint, so the next PDF of the same layout is imported by
-  it without a question. Receipts and payslips are excluded.
+  it without a question. Receipts and payslips are excluded, and so is
+  any document the receipt, payslip, tax-form or loan parser was chosen
+  for and read nothing from (next item).
+- **A document of a known kind that could not be read.** A PDF or image
+  whose pages the receipt, payslip, tax-form or loan parser was chosen
+  for, and from which it read nothing (`layout.unread_kind`: no receipt,
+  payslip, loan or tax form in the parse and no statement of any kind in
+  the result; when another parser read the pages after all, the
+  registry's fallback names that one and this does not apply), used to
+  wait as `no_records`, `no_rows` or, when a box of labels looked like a
+  table, `mapping_required`. It now waits as `unparsed` with the reason
+  `receipt_unreadable`, `payslip_unreadable`, `tax_form_unreadable` or
+  `loan_unreadable` (payload: `parser` and the parse `warnings`, which
+  say why), and its page tables are never offered to the mapping editor.
+  The review copy (`reviewCopy.ts`) says what the document looks like,
+  that nothing was recorded, and what to do; a `loan_unreadable` item
+  whose warnings hold `loan_bill_several_loans` says it is a bill for
+  several loans and points to "Record a payment" on each loan.
 - **Unknown owner.** The `unknown_owner` resolution with `remember` routes
   the drop-folder subfolder (see "Drop folder specifics").
 - **The review UI** (`frontend/src/features/review/ReviewTools.tsx`,

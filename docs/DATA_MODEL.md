@@ -843,7 +843,7 @@ household-consistent references):
   `FormDef` per form type; each form lists its boxes (`id`, `label`,
   `kind`: `amount`, `coded_amount`, `text`, `checkbox` or `identity`). `US`
   ships W-2, 1099-INT, 1099-DIV, 1099-B, 1099-MISC, 1099-NEC, 1099-R,
-  1099-G, 1099-SA, 1098, 1098-E, 1098-T and 1095-A/B/C. A new jurisdiction
+  1099-G, 1099-SA, SSA-1099, 1098, 1098-E, 1098-T and 1095-A/B/C. A new jurisdiction
   is a module in that package listed in its `_BUILTIN` (or `register(...)`).
   The service validates `jurisdiction`, `filing_status`, `expected_form` and
   `form_type` against the registry; the database checks their format only.

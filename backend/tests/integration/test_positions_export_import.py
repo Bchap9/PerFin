@@ -160,7 +160,7 @@ def test_positions_export_lands_as_holdings_with_cost_basis_on_each_account(env:
     assert document.status is DocumentStatus.PROCESSED, _items(env, document_id)
     assert document.account_id is None  # two accounts: linked to neither
     assert (document.period_start, document.period_end) == (DAY, DAY)
-    assert document.parser_version == "brokerage_positions_table/1"
+    assert document.parser_version == "brokerage_positions_table/2"
     for account, mine in ((taxable, synthetic[0]), (roth, synthetic[1])):
         assert _held(env, account) == _printed(mine), mine.name
         # The account's value: its holdings and the core position's cash.

@@ -2175,7 +2175,7 @@ class BrokerageStatementParser(DocumentParser):
     """
 
     name: ClassVar[str] = "brokerage_statement_generic"
-    version: ClassVar[str] = "8"
+    version: ClassVar[str] = "9"
     kind: ClassVar[Literal["statement", "payslip", "receipt"]] = "statement"
     display_name: ClassVar[str | None] = None
     #: Phrases on the first page that identify the institution (its name first).
@@ -4359,7 +4359,7 @@ class PlaceholderBrokerageParser(BrokerageStatementParser):
     """Placeholder Brokerage (fictional): ``MM/DD/YYYY``, USD, signed amounts."""
 
     name: ClassVar[str] = "placeholder_brokerage"
-    version: ClassVar[str] = "6"
+    version: ClassVar[str] = "7"
     institution: ClassVar[str | None] = "placeholder-brokerage-account"
     display_name: ClassVar[str | None] = "Placeholder Brokerage"
     fingerprints: ClassVar[tuple[str, ...]] = (
@@ -4415,7 +4415,7 @@ class FidelityStatementParser(BrokerageStatementParser):
     """
 
     name: ClassVar[str] = "fidelity_investments_statement"
-    version: ClassVar[str] = "7"
+    version: ClassVar[str] = "8"
     institution: ClassVar[str | None] = "fidelity-investments-statement"
     display_name: ClassVar[str | None] = "Fidelity Investments"
     fingerprints: ClassVar[tuple[str, ...]] = ("fidelity investments", "investment report")
