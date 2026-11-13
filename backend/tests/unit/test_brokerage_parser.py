@@ -20,7 +20,9 @@ from app.ingestion.extract.ofx import extract_ofx
 from app.ingestion.extract.pdf import extract_pdf
 from app.ingestion.parsers import confidence
 from app.ingestion.parsers.brokerage import (
+    ACTIVITY_TYPES,
     activity_type,
+    expand_action,
     read_number,
     reconcile_investment,
     split_ratio,
@@ -431,3 +433,71 @@ def test_activity_words_and_split_ratios() -> None:
     assert split_ratio("PBXB 3-for-1 stock split") == (Decimal(3), Decimal(1))
     assert split_ratio("reverse split 1:10") == (Decimal(1), Decimal(10))
     assert split_ratio("split") is None
+
+
+@pytest.mark.parametrize(
+    ("text", "kind"),
+    [
+        ("Pr Yr Cash Div", "dividend"),
+        ("Special Non Qual Div", "dividend"),
+        ("Non-Qualified Div", "dividend"),
+        ("Qual Div Reinvest", "dividend"),
+        ("MUNI EXEMPT INT EXAMPLE CITY BONDS", "interest"),
+        ("Long Term Cap Gain", "dividend"),
+        ("ADR Mgmt Fee", "fee"),
+        ("Service Fee", "fee"),
+        ("NRA Withholding", "fee"),
+        ("Bank Interest", "interest"),
+        ("Payment in Lieu", "dividend"),
+        ("Spin-off", "corporate_action"),
+    ],
+)
+def test_abbreviated_actions_are_expanded(text: str, kind: str) -> None:
+    assert activity_type(text) == kind
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "MoneyLink Transfer",
+        "MoneyLink Deposit",
+        "Wire Sent",
+        "Wire Received",
+        "Internal Transfer",
+        "Funds Received",
+    ],
+)
+def test_cash_movements_take_their_direction_from_the_amount(text: str) -> None:
+    assert activity_type(text, cash_sign=1) == "deposit"
+    assert activity_type(text, cash_sign=-1) == "withdrawal"
+    assert activity_type(text, cash_sign=0) is None
+
+
+def test_security_transfer_moves_units_by_sign() -> None:
+    assert activity_type("Security Transfer", moves_security=True, units_sign=-1) == "transfer_out"
+    assert activity_type("Security Transfer", moves_security=True, units_sign=1) == "transfer_in"
+
+
+def test_expansion_leaves_known_phrases_alone() -> None:
+    for key, kind in ACTIVITY_TYPES.items():
+        assert activity_type(key) == kind, key
+    assert activity_type("REINVESTMENT EXAMPLE FUND (EXMPL) (Cash)") == "reinvest"
+    assert expand_action("interest earned") == "interest earned"
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        # A fund's name standing in the action column names no action.
+        "Int'l Example Equity Fund",
+        "Example Mid Cap Fund",
+        # Not income: a distribution that is no dividend is not typed as one.
+        "Non Dividend Distribution",
+        # A qualifier with no dividend after it drops nothing.
+        "Prior Year Adjustment",
+        "Pr Example Holdings",
+        "Special Example Fund",
+    ],
+)
+def test_expansion_types_nothing_it_cannot_name(text: str) -> None:
+    assert activity_type(text) is None

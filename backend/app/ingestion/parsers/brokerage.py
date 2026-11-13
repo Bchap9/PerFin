@@ -547,6 +547,14 @@ ACTIVITY_TYPES: Final[Mapping[str, InvestmentActivityType]] = {
     "nonresident tax": "fee",
     "non resident tax": "fee",
     "foreign tax": "fee",
+    # Brokers' own action words (activity exports and statements).
+    "service fee": "fee",
+    "adr management fee": "fee",
+    "nra withholding": "fee",
+    "tax withholding": "fee",
+    "bank interest": "interest",
+    "payment in lieu": "dividend",
+    "spin off": "corporate_action",
 }
 #: Phrases naming a transfer whose type depends on what moved: ``(type when a
 #: security and a quantity are present, type for cash)``.
@@ -578,7 +586,34 @@ SIGNED_TYPES: Final[Mapping[str, tuple[InvestmentActivityType, InvestmentActivit
     "you exchanged": ("buy", "sell"),
     "assigned": ("buy", "sell"),
     "expired": ("buy", "sell"),
+    # Cash or units between this account and a bank or another account: the
+    # words name the movement, only the row's sign names its direction.
+    "moneylink": ("transfer_in", "transfer_out"),
+    "wire sent": ("transfer_in", "transfer_out"),
+    "wire received": ("transfer_in", "transfer_out"),
+    "wire funds": ("transfer_in", "transfer_out"),
+    "internal transfer": ("transfer_in", "transfer_out"),
+    "bank transfer": ("transfer_in", "transfer_out"),
+    "funds paid": ("transfer_in", "transfer_out"),
+    "funds received": ("transfer_in", "transfer_out"),
+    "security transfer": ("transfer_in", "transfer_out"),
 }
+#: Brokers' abbreviations in an action text, as whole tokens, written out
+#: (:func:`expand_action`). ``pr`` is ``prior`` only before ``yr``/``year``.
+ACTION_ABBREVIATIONS: Final[Mapping[str, str]] = {
+    "div": "dividend",
+    "divs": "dividend",
+    "int": "interest",
+    "mgmt": "management",
+    "qual": "qualified",
+    "cap": "capital",
+    "yr": "year",
+}
+#: Words a broker puts before ``dividend``/``cash dividend`` that do not change
+#: what the row is (``Pr Yr Cash Div``, ``Special Non Qual Div``).
+DIVIDEND_QUALIFIERS: Final = frozenset(
+    {"special", "prior", "year", "qualified", "non", "nonqualified", "ordinary"}
+)
 #: Account types an investment statement may take from the document (``account_kind``).
 INVESTMENT_KINDS: Final = frozenset({"brokerage", "retirement"})
 #: Types whose cash effect is an outflow when the amount is printed unsigned.
@@ -603,6 +638,40 @@ def split_ratio(text: str) -> tuple[Decimal, Decimal] | None:
     return new, old
 
 
+def expand_action(norm: str) -> str:
+    """A normalised action with abbreviations written out and dividend qualifiers dropped.
+
+    ``pr yr cash div`` -> ``cash dividend``; ``adr mgmt fee`` -> ``adr
+    management fee``; ``special non qual div`` -> ``dividend``. A token of
+    :data:`ACTION_ABBREVIATIONS` is replaced only as a whole token; ``pr`` is
+    ``prior`` only before ``yr``/``year``; ``int`` before a lone ``l`` is
+    what is left of ``Int'l`` (a fund's name) and stays. Leading
+    :data:`DIVIDEND_QUALIFIERS` are dropped only when ``dividend`` or ``cash
+    dividend`` follows them, and ``non`` only as part of ``non qualified``
+    (``Non Dividend Distribution`` is no dividend). Anything else is
+    returned as it came.
+    """
+    tokens = norm.split()
+    for index, word in enumerate(tokens):
+        following = tokens[index + 1] if index + 1 < len(tokens) else ""
+        if word == "pr":
+            if following in ("yr", "year"):
+                tokens[index] = "prior"
+        elif word == "int" and following == "l":
+            continue
+        elif word in ACTION_ABBREVIATIONS:
+            tokens[index] = ACTION_ABBREVIATIONS[word]
+    lead = 0
+    while lead < len(tokens) and tokens[lead] in DIVIDEND_QUALIFIERS:
+        if tokens[lead] == "non" and tokens[lead + 1 : lead + 2] != ["qualified"]:
+            break
+        lead += 1
+    rest = tokens[lead:]
+    if lead and (rest[:1] == ["dividend"] or rest[:2] == ["cash", "dividend"]):
+        tokens = rest
+    return " ".join(tokens)
+
+
 def activity_type(
     text: str,
     *,
@@ -616,7 +685,8 @@ def activity_type(
     ignored, so a broker's action text with the security and a trailing
     ``(Cash)``/``(Margin)`` is typed by its leading words
     (``REINVESTMENT EXAMPLE FUND (EXMPL) (Cash)`` -> ``reinvest``). It reads
-    a PDF's activity cell or a CSV's action column alike.
+    a PDF's activity cell or a CSV's action column alike. Brokers'
+    abbreviations are written out first (:func:`expand_action`).
 
     ``Transferred from``/``Transferred to`` (:data:`TRANSFER_TYPES`) is a
     ``transfer_in``/``transfer_out`` of units when ``moves_security`` (the
@@ -630,7 +700,7 @@ def activity_type(
     cash leaves: ``withdrawal``, else ``deposit``). Without a sign it is
     None: the direction is never guessed.
     """
-    norm = normalise(text)
+    norm = expand_action(normalise(text))
     best: InvestmentActivityType | None = None
     best_len = 0
 
