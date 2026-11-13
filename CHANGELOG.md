@@ -46,6 +46,148 @@ What remains (details in docs/ROADMAP.md):
   all three together and by digest (the scanned, signed image); the manual
   `edge` workflow points it at any existing release. `docs/UPGRADING.md`
   ("Versioning policy") explains what following it costs.
+- **A table without a header row gets a suggested mapping** (INGESTION.md
+  "Tables without a header row"). A CSV, TSV or XLSX in which no row names
+  a date and a money column got no suggestion and an empty mapping editor.
+  It is now read from the shapes of its columns. When exactly one reading
+  of its number columns has a running balance that adds up over the whole
+  table, the columns and the sign are proven and the file is imported;
+  otherwise the file waits with the new doubt `no_header` and the editor
+  filled in. A mapping saved from it is named `No header, N columns`,
+  never after the cells of its first transaction.
+- **A column of account names splits an export** (INGESTION.md
+  "Multi-account files"). An aggregator's export that tells its accounts
+  apart by an `Account`, `Account Name` or `Source Account` column of
+  names is imported as one statement per account; before, the rows of a
+  checking account and a card landed in one account. Each name raises its
+  own `unknown_account` item, and the account chosen for one is
+  remembered for the document, so they can be answered one after the
+  other. A payee or category column never splits a file.
+
+### Changed
+
+- **A file's sign is proven or the file waits** (INGESTION.md "The sign is
+  proven or the file waits"). A table whose signed amounts are read as
+  "positive is money in" on trust is no longer imported on its own when
+  its header names a card, every amount has one sign, or more rows are
+  money in than money out: it waits as `mapping_required` with the doubt
+  `sign_unverified` (card exports list purchases as positive; read the
+  other way every purchase was income). Direction and transaction-type
+  words that go with the signs now prove the convention
+  (`sign_evidence: indicator_correlation`); words that go against them
+  are the doubt `indicator_contradicts_sign`; a table with a security, a
+  quantity and a price column is `investment_columns` and is never read
+  as a cash ledger on its own. A running balance is no proof under a card
+  header or when it has most rows as money in. A saved mapping still on
+  trust is not used for a file whose own suggestion doubts the sign.
+  Files that were imported without a question before may now wait for
+  one answer in the mapping editor; the answer is saved with the mapping.
+- A table's proposed account is a credit card when the header names one,
+  has no type when the mapping's sign is on trust (a person chooses;
+  `AccountProposal.type` is nullable in the API) and is a checking
+  account otherwise. Before, every table was proposed as checking.
+- **OFX, QFX and QIF files that lost records wait in review.** The
+  extractors count every record they could not read (no readable date or
+  amount, a transaction nested where the reader does not look or left
+  outside its statement by a stray end tag, an investment activity of a
+  kind PerFin does not read, a last QIF record with no `^`) in one
+  `transaction_skipped:<n>` warning per statement, which replaces
+  `transaction_skipped_invalid_date_or_amount` and
+  `investment_activity_skipped_invalid`. The importer adds the counts up
+  and raises one `lines_skipped` item per document (`source:
+  extraction`), so the document ends `needs_review` instead of
+  `processed` with fewer rows than the file has records. An investment
+  OFX with margin interest, a return of capital or a journal entry now
+  waits this way; the rows that were read are imported as before.
+- A debit or credit cell of a table keeps its printed sign: a negative
+  debit is money in and a negative credit money out (a reversal), and a
+  lone `Inflow` column of negatives is money out. A column that prints
+  its amounts negative as a rule is still read by magnitude.
+- A PDF action that is found and cannot be cleared now refuses the
+  document (`malformed_pdf`); before, an error while clearing it was
+  skipped.
+- An OFX 2 file is decoded before it is parsed, like every other text
+  format, so one that holds a control byte such as DEL is refused
+  (`binary_content`) where the XML parser used to accept it.
+- An OFX `INVSTMTRS` that carries `INV401K` or `INV401KBAL` is proposed
+  as a retirement account (subtype 401(k)), not a brokerage account. A
+  document already stored gets the new type when it is extracted again.
+- The upload list links "Map columns" only for a file with an open
+  review item the mapping editor answers.
+
+### Fixed
+
+- **Text files the sniffer turned away or called plain text**
+  (INGESTION.md "Receive"). A CSV whose quoted cells hold the delimiter
+  (`"1,234.56"`) or run over several lines, and one whose long
+  descriptions continue on a row of their own under a preamble, are CSV.
+  OFX is recognised when `<OFX>` follows `KEY:VALUE` header lines in any
+  order and when it is the root under an XML declaration; QIF may open
+  with `#` comment lines; NUL padding at the very end of a file is
+  ignored. The whole-file markup scan and the control-byte rules are
+  unchanged, and no file accepted before is refused.
+- **OFX files open whatever their declaration says.** An OFX 2 file that
+  opens with `<?OFX` and no `<?xml` is read; a wrong or unknown declared
+  encoding (`USASCII`, `utf-16` on ASCII bytes) no longer fails or
+  crashes the extractor, and a correctly declared one-byte character set
+  (windows-1251, ISO-8859-x, KOI8) keeps its payees; an SGML body under an
+  XML declaration is read by the SGML reader; a value escaped twice by
+  its exporter is unescaped. DTDs and entities are refused on every
+  route as before, and damaged XML or a file cut short is still refused
+  rather than read in part.
+- **OFX transactions that were swallowed.** A value-less `<TRNTYPE>`,
+  `<FITID>` or `<NAME>` in an SGML file no longer takes the date and
+  amount after it (such a file imported no rows), and transactions
+  printed outside `BANKTRANLIST`, or in a second list, are read.
+- **CSV cells with trailing blanks or single quotes.** Blanks or tabs
+  between a closing quote and the delimiter no longer fail the file, and
+  a file whose cells are written `'like this'` is read without the
+  quotes. An apostrophe in a cell stays text, and the formula guard runs
+  on the unquoted values.
+- **PDFs with an unreadable cross-reference entry** (common in files
+  saved more than once) were refused as `malformed_pdf`. They are read,
+  and their active content is still removed: the module's own pass
+  disarms every action, including those numbered after the entry.
+- **A security listed twice in one statement** (a plan's position per
+  contribution source) failed the import on a duplicate price row. The
+  first price printed is the day's; a later one that differs is left out
+  and noted in the run summary (`investments.warnings:
+  duplicate_price_ignored`). The units of every position count.
+- **A day/month order the file proves is not a guess.** A date column
+  that fits both orders no longer holds the file when the table settles
+  it: a cell or a second date column only one order reads, one order
+  dating rows after the day the file arrived, the same day either way,
+  or at least three days of one month. Two rows, the same day of several
+  months and proofs that disagree stay held (`date_order_guessed`).
+- **More export layouts map on their own.** Header words `Created`,
+  `Datetime`, `Timestamp`, `Date Processed`, `Credit Amount`/`Debit
+  Amount`, a parenthesised qualifier (`Amount (total)`) and `Gross`
+  beside `Fee` and `Net`; dates with a zone offset after a blank,
+  `31Jan2026` and `31-Jan-26`; cash amounts with more than six decimals
+  (rounded half-even); a currency written in letters.
+- **Rows that are not transactions are not reported as unread.** A
+  one-cell row under a description continues it into the memo; a row
+  without a date and an amount is a note; a `Pending` row is counted and
+  not imported; up to five closing lines after the last readable row are
+  footers. A running balance printed once a day reconciles over the rows
+  since the balance before.
+- **A scan that crashes the OCR engine no longer fails the document.**
+  Tesseract's page layout analysis crashes natively on some scans and
+  took the sandbox child with it. The document is read again in a new
+  child without that analysis (`ocr_retried:single_block`) and, if that
+  crashes too, without OCR (`ocr_disabled_after_crash`): it then waits in
+  review with an `ocr_failed` item that an import re-run does not close.
+  Other sandbox errors fail the document as before.
+- **A file with nothing to import says so.** A table that is only a
+  header row, and a PDF or image whose page tables hold no dated row,
+  wait as `unparsed`/`no_rows` ("Nothing to import") instead of asking
+  for a column mapping.
+- A brokerage activity table none of whose rows reads
+  (`activity_unreadable`) leads to the mapping editor, whose preview no
+  longer fails on a brokerage activity suggestion.
+- The MCP leak test no longer fails about one run in 175: the item id in
+  its fixture is a constant, so its digits cannot contain a string the
+  test asserts absent.
 
 ## [1.0.0-rc.8] - 2026-11-12
 
