@@ -35,9 +35,10 @@ plain text. Rejected, whatever they are called:
 Text tables are told from prose by their delimiter counts
 (:func:`_delimited_type`): per logical record and outside double quotes when
 the text has quotes that pair up, so a quoted cell may hold the delimiter or
-run over several lines. OFX is known by its ``<OFX>`` element under a header
-of ``KEY:VALUE`` lines in any order, or directly under an XML declaration;
-QIF may open with ``#`` comment lines.
+run over several lines. OFX is known by its ``<OFX>`` element on a line of
+its own under a header of ``KEY:VALUE`` lines in any order (mail, whose
+headers have that shape, is tested first), or directly under an XML
+declaration; QIF may open with ``#`` comment lines.
 """
 
 from __future__ import annotations
@@ -398,15 +399,19 @@ def _delimited_type(text: bytes, *, window_full: bool) -> FileType:
 
 
 def _ofx_under_header(text: bytes) -> bool:
-    """``<OFX>`` in the window with nothing before it but ``KEY:VALUE`` header lines.
+    """``<OFX>`` opening a line of the window, with only ``KEY:VALUE`` header lines above it.
 
     The OFX 1.x header is a few such lines in no fixed order; some writers
-    leave ``OFXHEADER`` out or put another key first.
+    leave ``OFXHEADER`` out or put another key first. An ``<OFX>`` further
+    along a line (a cell of a table, say) is not the element.
     """
     tag = _OFX_TAG.search(text)
     if tag is None:
         return False
-    header = [line for line in text[: tag.start()].splitlines() if line.strip()]
+    above = text[: tag.start()].rstrip(b" \t")
+    if not above.endswith((b"\n", b"\r")):
+        return False
+    header = [line for line in above.splitlines() if line.strip()]
     return bool(header) and all(_OFX_HEADER_LINE.fullmatch(line) for line in header)
 
 
@@ -421,14 +426,15 @@ def _text_type(text: bytes, *, window_full: bool) -> FileType | Rejected:
         return FileType.QFX if _QFX_MARKER.search(text) else FileType.OFX
     if text.startswith(b"<"):
         return Rejected(RejectReason.MARKUP)
-    if _ofx_under_header(text):
-        return FileType.QFX if _QFX_MARKER.search(text) else FileType.OFX
     if _QIF_HEADER.match(_QIF_COMMENTS.sub(b"", text, count=1)):
         return FileType.QIF
     if _EML_HEADER.match(text):
         lowered = text.lower()
         if sum(marker in lowered for marker in _EML_REQUIRED) >= 2:
             return FileType.EML
+    # After the mail test: mail headers are KEY:VALUE lines too.
+    if _ofx_under_header(text):
+        return FileType.QFX if _QFX_MARKER.search(text) else FileType.OFX
     return _delimited_type(text, window_full=window_full)
 
 

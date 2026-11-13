@@ -319,6 +319,32 @@ def test_headers_that_only_look_like_ofx_or_qif(data: bytes, verdict: FileType) 
 
 
 @pytest.mark.parametrize(
+    ("data", "verdict"),
+    [
+        # Mail headers are KEY:VALUE lines too: mail stays mail, HTML body and all.
+        (b"Subject: Synthetic statement\nFrom: branch@bank.example\n<OFX>\n</OFX>\n", FileType.EML),
+        (
+            b"From: branch@bank.example\nSubject: Synthetic statement\n"
+            b"<OFX>\n<html><body><p>Synthetic</p></body></html>\n</OFX>\n",
+            FileType.EML,
+        ),
+        # <OFX> inside a line is a cell, not the element that opens the file's body.
+        (
+            b'DATA:OFXSGML,"<OFX>",12\nDATA:OFXSGML,"<OFX>",14\nDATA:OFXSGML,"<OFX>",15\n',
+            FileType.CSV,
+        ),
+        (b"DATA:OFXSGML\t<OFX>\t12\nDATA:OFXSGML\t<OFX>\t14\n", FileType.TSV),
+        (b"DATA:OFXSGML <OFX>\n</OFX>\n", FileType.TEXT),
+        # On a line of its own, indented or not, it is.
+        (b"DATA:OFXSGML\r\n  <OFX>\r\n</OFX>\r\n", FileType.OFX),
+        (b"DATA:OFXSGML\n\n<OFX><SIGNONMSGSRSV1></SIGNONMSGSRSV1></OFX>", FileType.OFX),
+    ],
+)
+def test_ofx_element_under_mail_headers_or_inside_a_line(data: bytes, verdict: FileType) -> None:
+    assert sniff(data) == verdict
+
+
+@pytest.mark.parametrize(
     "build",
     [
         cases.csv_quoted_decimal_commas,
