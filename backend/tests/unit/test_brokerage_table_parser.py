@@ -23,6 +23,7 @@ from app.ingestion.parsers import confidence as conf
 from app.ingestion.parsers.brokerage_table import (
     PARSER_NAME,
     PARSER_VERSION,
+    ActivityTable,
     find_header,
     read_activity_table,
 )
@@ -669,3 +670,224 @@ def test_a_row_named_total_with_text_is_not_a_total_line(row: list[str]) -> None
     assert found is not None
     assert found.notes == 0
     assert found.unknown_activity + found.skipped == 1
+
+
+# ---------------------------------------------------------------------------
+# Option symbols, expiries and assignments
+# ---------------------------------------------------------------------------
+
+_CALL = "ZZOP 03/20/2026 45.00 C"
+_CALL_OCC = "ZZOP260320C00045000"
+
+
+def _option(
+    action: str,
+    *,
+    symbol: str = _CALL,
+    quantity: str = "1",
+    price: str = "",
+    fees: str = "",
+    amount: str = "",
+    day: str = "10/14/2026",
+    name: str = "CALL SYNTHETIC OPTION CO $45 EXP 03/20/26",
+) -> list[str]:
+    """One option row of :data:`BROKER_HEADER`."""
+    return [day, action, symbol, name, quantity, price, fees, amount]
+
+
+def _option_table(*rows: list[str]) -> ActivityTable:
+    found = read_activity_table(_broker_table(*rows))
+    assert found is not None
+    return found
+
+
+def test_long_option_trades_read() -> None:
+    found = _option_table(
+        _option("Buy to Open", quantity="2", price="$1.85", fees="$0.65", amount="-$370.65"),
+        _option(
+            "Sell to Close",
+            quantity="2",
+            price="$2.40",
+            fees="$0.65",
+            amount="$479.35",
+            day="10/21/2026",
+        ),
+    )
+    (statement,) = found.statements
+    bought, sold = statement.activity
+    assert (bought.type, sold.type) == ("buy", "sell")
+    for activity in (bought, sold):
+        assert activity.security is not None
+        assert activity.security.symbol == _CALL_OCC
+        assert activity.security.asset_class == "option"
+        assert activity.security.name == "CALL SYNTHETIC OPTION CO $45 EXP 03/20/26"
+        assert activity.quantity == Decimal(2)
+        assert activity.fees == Decimal("0.65")
+    # One contract is 100 shares: the price is stored per contract.
+    assert (bought.unit_price, sold.unit_price) == (Decimal(185), Decimal(240))
+    assert (bought.amount, sold.amount) == (Decimal("-370.65"), Decimal("479.35"))
+    assert (found.rows, found.skipped, found.unknown_activity, found.warnings) == (2, 0, 0, [])
+
+
+@pytest.mark.parametrize("symbol", ["ZZOP 260320C00045000", "ZZOP260320C00045000"])
+def test_the_occ_form_names_the_same_option(symbol: str) -> None:
+    found = _option_table(
+        _option("Buy to Open", symbol=symbol, price="$1.85", amount="-$185.65", name="")
+    )
+    (activity,) = found.statements[0].activity
+    assert activity.security is not None
+    # Without a description the printed symbol is the security's name.
+    assert (activity.security.symbol, activity.security.name) == (_CALL_OCC, symbol)
+    assert activity.security.asset_class == "option"
+
+
+def test_an_option_price_printed_per_contract_is_kept() -> None:
+    found = _option_table(_option("Buy to Open", quantity="2", price="$185.00", amount="-$370.65"))
+    assert found.statements[0].activity[0].unit_price == Decimal(185)
+
+
+def test_a_share_price_is_never_multiplied() -> None:
+    # The amount is a hundred times quantity x price, but the row names a
+    # share, not an option: its price is kept as printed.
+    found = _option_table(_broker("Buy", quantity="1", price="$1.85", amount="-$185.00"))
+    assert found.statements[0].activity[0].unit_price == Decimal("1.85")
+
+
+@pytest.mark.parametrize("quantity", ["1", "-1"])
+@pytest.mark.parametrize("word", ["Expired", "EXPIRED CALL (ZZOP)", "Assigned"])
+def test_expiry_closes_what_is_open(word: str, quantity: str) -> None:
+    found = _option_table(
+        _option("Buy to Open", price="$1.85", fees="$0.65", amount="-$185.65"),
+        _option(word, quantity=quantity, day="03/20/2027"),
+    )
+    (statement,) = found.statements
+    assert [(a.type, a.quantity, a.amount) for a in statement.activity] == [
+        ("buy", Decimal(1), Decimal("-185.65")),
+        ("sell", Decimal(1), Decimal(0)),
+    ]
+    assert statement.activity[1].unit_price is None
+    assert (found.rows, found.skipped, found.unknown_activity, found.warnings) == (2, 0, 0, [])
+
+
+@pytest.mark.parametrize("quantity", ["1", "-1"])
+def test_expiry_of_a_written_option_buys_it_back(quantity: str) -> None:
+    found = _option_table(
+        _option("Sell to Open", price="$1.10", fees="$0.65", amount="$109.35"),
+        _option("Expired", quantity=quantity, day="03/20/2027"),
+    )
+    assert [(a.type, a.amount) for a in found.statements[0].activity] == [
+        ("sell", Decimal("109.35")),
+        ("buy", Decimal(0)),
+    ]
+    assert found.skipped == 0
+
+
+def test_expiry_is_placed_by_date_not_by_file_order() -> None:
+    # Newest first, as many exports are written.
+    found = _option_table(
+        _option("Expired", day="03/20/2027"),
+        _option("Buy to Open", price="$1.85", amount="-$185.00"),
+    )
+    assert [a.type for a in found.statements[0].activity] == ["buy", "sell"]
+    assert found.skipped == 0
+
+
+def test_expiry_with_nothing_open_is_counted() -> None:
+    found = _option_table(_option("Expired"))
+    assert (found.rows, found.skipped, found.unknown_activity) == (0, 1, 0)
+    assert found.statements == []
+    assert found.warnings == ["rows_unreadable"]
+
+
+def test_expiry_larger_than_what_is_open_is_counted() -> None:
+    found = _option_table(
+        _option("Buy to Open", price="$1.85", amount="-$185.00"),
+        _option("Expired", quantity="2", day="03/20/2027"),
+    )
+    assert [a.type for a in found.statements[0].activity] == ["buy"]
+    assert (found.rows, found.skipped) == (1, 1)
+    assert "rows_unreadable" in found.warnings
+
+
+def test_expiry_without_a_quantity_or_with_an_unreadable_amount_is_counted() -> None:
+    found = _option_table(
+        _option("Buy to Open", quantity="2", price="$1.85", amount="-$370.00"),
+        _option("Expired", quantity="", day="03/20/2027"),
+        _option("Expired", amount="n/a", day="03/20/2027"),
+    )
+    assert [a.type for a in found.statements[0].activity] == ["buy"]
+    assert (found.rows, found.skipped, found.unknown_activity) == (1, 2, 0)
+
+
+def test_expiry_of_one_option_does_not_close_another() -> None:
+    found = _option_table(
+        _option("Buy to Open", price="$1.85", amount="-$185.00"),
+        _option("Expired", symbol="ZZOP 06/19/2026 7.50 P", day="06/19/2027"),
+    )
+    assert [a.type for a in found.statements[0].activity] == ["buy"]
+    assert (found.rows, found.skipped) == (1, 1)
+
+
+def test_expired_on_a_share_row_keeps_its_own_sign() -> None:
+    # Not an option: the row is typed by its quantity's sign, as before.
+    found = _option_table(_BUY, _broker("Expired", quantity="-3", amount="$0.00"))
+    assert [a.type for a in found.statements[0].activity] == ["buy", "sell"]
+    assert found.skipped == 0
+
+
+def test_buy_to_close_with_no_short_open_is_counted() -> None:
+    found = _option_table(_option("Buy to Close", price="$0.40", fees="$0.65", amount="-$40.65"))
+    assert (found.rows, found.skipped, found.unknown_activity) == (0, 1, 0)
+    assert found.statements == []
+    assert found.warnings == ["rows_unreadable"]
+
+
+def test_buy_to_cover_of_a_long_option_is_counted_not_bought() -> None:
+    found = _option_table(
+        _option("Buy to Open", price="$1.85", amount="-$185.00"),
+        _option("Buy to Cover", price="$0.40", amount="-$40.00", day="10/21/2026"),
+    )
+    assert [(a.type, a.amount) for a in found.statements[0].activity] == [
+        ("buy", Decimal("-185.00"))
+    ]
+    assert (found.rows, found.skipped) == (1, 1)
+
+
+def test_written_option_rows_read_as_sell_then_buy() -> None:
+    found = _option_table(
+        _option("Sell to Open", price="$1.10", fees="$0.65", amount="$109.35"),
+        _option("Buy to Close", price="$0.40", fees="$0.65", amount="-$40.65", day="10/21/2026"),
+    )
+    (statement,) = found.statements
+    assert [(a.type, a.quantity, a.unit_price, a.amount) for a in statement.activity] == [
+        ("sell", Decimal(1), Decimal(110), Decimal("109.35")),
+        ("buy", Decimal(1), Decimal(40), Decimal("-40.65")),
+    ]
+    assert all(
+        a.security is not None and a.security.asset_class == "option" for a in statement.activity
+    )
+    assert (found.rows, found.skipped, found.warnings) == (2, 0, [])
+
+
+def test_a_written_option_opened_and_closed_on_one_day_reads_newest_first() -> None:
+    found = _option_table(
+        _option("Buy to Close", price="$0.40", amount="-$40.00"),
+        _option("Sell to Open", price="$1.10", amount="$110.00"),
+    )
+    assert sorted(a.type for a in found.statements[0].activity) == ["buy", "sell"]
+    assert (found.rows, found.skipped) == (2, 0)
+
+
+def test_closings_are_settled_per_account() -> None:
+    header = [*BROKER_HEADER, "Account Number"]
+    rows = [
+        [*_option("Buy to Open", price="$1.85", amount="-$185.00"), "X0001111"],
+        [*_option("Expired", day="03/20/2027"), "X0002222"],
+    ]
+    found = read_activity_table(_table([header, *rows]))
+    assert found is not None
+    # The option was bought in one account: the other's expiry closes nothing.
+    assert [(s.account.last4, [a.type for a in s.activity]) for s in found.statements] == [
+        ("1111", ["buy"])
+    ]
+    assert (found.rows, found.skipped) == (1, 1)

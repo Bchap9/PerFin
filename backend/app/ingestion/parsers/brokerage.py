@@ -463,6 +463,47 @@ def is_cusip(text: str) -> bool:
     return (10 - total % 10) % 10 == int(text[8])
 
 
+#: ``ROOT MM/DD/YYYY STRIKE C|P``: how a broker's export writes an option.
+_OPTION_PRINTED: Final = re.compile(
+    r"(?P<root>[A-Z]{1,6}) (?P<month>\d{1,2})/(?P<day>\d{1,2})/(?P<year>\d{4}) "
+    r"(?P<strike>\d{1,5}(?:\.\d{1,3})?) (?P<right>[CP])"
+)
+#: The OCC form: root, ``YYMMDD``, ``C``/``P``, the strike x 1000 as 8 digits
+#: (with or without the space(s) that pad the root).
+_OPTION_OCC: Final = re.compile(
+    r"(?P<root>[A-Z]{1,6}) ?(?P<year>\d{2})(?P<month>\d{2})(?P<day>\d{2})"
+    r"(?P<right>[CP])(?P<strike>\d{8})"
+)
+
+
+def option_symbol(text: str) -> str | None:
+    """The OCC symbol of an option named in a symbol cell, or None (not an option).
+
+    Reads ``ROOT MM/DD/YYYY STRIKE C|P`` (``ZZOP 03/20/2026 45.00 C``; the
+    strike with up to three decimals) and the OCC form itself, printed with
+    or without a space after the root (``ZZOP 260320C00045000``). The answer
+    is the OCC form without spaces: the root (1 to 6 letters), the expiry as
+    ``YYMMDD``, ``C`` or ``P``, and the strike times 1000 as 8 digits; at
+    most 21 letters and digits, so it always fits ``SecurityRef.symbol``.
+    An expiry that is no date of the calendar, or a strike of zero, names
+    no option.
+    """
+    folded = " ".join(text[:MAX_TOKEN].upper().split())
+    printed = _OPTION_PRINTED.fullmatch(folded)
+    match = printed or _OPTION_OCC.fullmatch(folded)
+    if match is None:
+        return None
+    year = int(match["year"]) + (0 if printed else 2000)
+    try:
+        expiry = date(year, int(match["month"]), int(match["day"]))
+    except ValueError:
+        return None
+    strike = Decimal(match["strike"]) * 1000 if printed else Decimal(match["strike"])
+    if strike <= 0 or not 2000 <= expiry.year <= 2099:
+        return None
+    return f"{match['root']}{expiry:%y%m%d}{match['right']}{int(strike):08d}"
+
+
 #: Normalised activity word -> type (the first word(s) of the activity cell).
 ACTIVITY_TYPES: Final[Mapping[str, InvestmentActivityType]] = {
     "buy": "buy",

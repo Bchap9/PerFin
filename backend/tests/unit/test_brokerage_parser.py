@@ -23,6 +23,7 @@ from app.ingestion.parsers.brokerage import (
     ACTIVITY_TYPES,
     activity_type,
     expand_action,
+    option_symbol,
     read_number,
     reconcile_investment,
     split_ratio,
@@ -501,3 +502,32 @@ def test_expansion_leaves_known_phrases_alone() -> None:
 )
 def test_expansion_types_nothing_it_cannot_name(text: str) -> None:
     assert activity_type(text) is None
+
+
+@pytest.mark.parametrize(
+    ("text", "symbol"),
+    [
+        ("ZZOP 03/20/2026 45.00 C", "ZZOP260320C00045000"),
+        ("ZZOP 260320C00045000", "ZZOP260320C00045000"),
+        ("ZZOP260320C00045000", "ZZOP260320C00045000"),
+        ("ZZOP 06/19/2026 7.50 P", "ZZOP260619P00007500"),
+        ("zzop 3/20/2026 45 c", "ZZOP260320C00045000"),
+        ("ZZOP 03/20/2026 0.125 P", "ZZOP260320P00000125"),
+        # A date that does not exist, a plain ticker, a name: no option.
+        ("ZZOP 02/30/2026 45.00 C", None),
+        ("ZZOP 261320C00045000", None),
+        ("ZZOP 03/20/2026 45.0001 C", None),
+        ("ZZOP 03/20/2026 0 C", None),
+        ("ZZOPQRS 03/20/2026 45.00 C", None),
+        ("ZZOP 03/20/2026 45.00 X", None),
+        ("SGRX", None),
+        ("SYNTHETIC GROWTH FUND", None),
+        ("", None),
+    ],
+)
+def test_option_symbol_forms(text: str, symbol: str | None) -> None:
+    assert option_symbol(text) == symbol
+    if symbol is not None:
+        # The OCC form always fits the statement's symbol field.
+        assert SecurityRef(symbol=symbol, asset_class="option").symbol == symbol
+        assert len(symbol) <= 21
