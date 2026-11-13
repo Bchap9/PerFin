@@ -31,6 +31,11 @@ and rows that reconcile:
   heading and, on the rows with a short one, overlaps ``Amount`` more than
   ``Category``. Charges are printed without a sign, the one payment with a
   minus.
+* :func:`amount_under_row_card`: a card. ``Date | Description | Amount``; on
+  two of its six rows the dated line prints the description only, one or
+  two lines under it give the purchase in its own currency and the rate
+  (``63.00 CAD``, ``1.28 Exchange Rate``), and the amount stands alone on
+  the line after those, under ``Amount``.
 
 :data:`EXPECTED_ROWS` gives, per builder, the rows a correct reading returns
 (``(posted, amount, payee)``, money out negative).
@@ -372,10 +377,75 @@ def two_dates_left_aligned() -> bytes:
     return buf.getvalue()
 
 
+# -- a card: the amount alone on a line under its row ---------------------------
+
+_UNDER_PREVIOUS: Final = _d("120.00")
+#: ``(row, lines printed between the dated line and the amount)``: with
+#: lines, the dated line prints no amount and the amount follows them alone.
+_UNDER_ROWS: Final[tuple[tuple[ExpectedRow, tuple[str, ...]], ...]] = (
+    ((date(2026, 11, 3), _d("-54.20"), "TEALBROOK MARKET"), ()),
+    (
+        (date(2026, 11, 6), _d("-49.22"), "CAFE HERONSGATE MONTREAL"),
+        ("63.00 CAD", "1.28 Exchange Rate"),
+    ),
+    ((date(2026, 11, 10), _d("120.00"), "PAYMENT RECEIVED - THANK YOU"), ()),
+    (
+        (date(2026, 11, 14), _d("-35.00"), "LIBRAIRIE ALDERWICK QUEBEC"),
+        ("44.80 CAD 1.28 Exchange Rate",),
+    ),
+    ((date(2026, 11, 19), _d("-41.75"), "SEDGEMOOR FUEL"), ()),
+    ((date(2026, 11, 25), _d("-18.30"), "WHINBURN PHARMACY"), ()),
+)
+#: Per row printed that way: its payee, its amount and the lines under it.
+AMOUNT_UNDER_ROW: Final = tuple(
+    (payee, amount, under) for (_, amount, payee), under in _UNDER_ROWS if under
+)
+
+
+def amount_under_row_card() -> bytes:
+    """Six card rows; two print their amount alone, under the rate lines."""
+    buf = io.BytesIO()
+    c = canvas.Canvas(buf, pagesize=letter)
+    rows = [row for row, _ in _UNDER_ROWS]
+    charges = -sum((a for _, a, _ in rows if a < 0), Decimal(0))
+    credits = sum((a for _, a, _ in rows if a > 0), Decimal(0))
+    owed = _UNDER_PREVIOUS - credits + charges
+    _line(c, 750, [(40, "Yarrowdale Travel Visa")], size=14, bold=True)
+    _line(c, 734, [(40, "Card ending in 9164")])
+    _line(c, 750, [(380, "Billing Period: 11/01/2026 - 11/30/2026")])
+    _line(c, 60, [(40, _FOOTER)], size=7)
+    _rows(
+        c,
+        700,
+        [
+            [(40, "Previous Balance"), (-300, f"${_money(_UNDER_PREVIOUS)}")],
+            [(40, "Payments and Credits"), (-300, f"-${_money(credits)}")],
+            [(40, "New Charges"), (-300, f"+${_money(charges)}")],
+            [(40, "New Balance"), (-300, f"${_money(owed)}")],
+            [(40, "Minimum Payment Due"), (-300, "$25.00")],
+        ],
+    )
+    _line(c, 618, [(40, "Date"), (110, "Description"), (-540, "Amount")], size=8)
+    lines: list[list[tuple[float, str]]] = []
+    for (posted, amount, payee), under in _UNDER_ROWS:
+        figure = f"${_money(amount)}" if amount < 0 else f"-${_money(amount)}"
+        dated: list[tuple[float, str]] = [(40, posted.strftime("%m/%d")), (110, payee)]
+        if not under:
+            lines.append([*dated, (-540, figure)])
+            continue
+        lines.append(dated)
+        lines.extend([(110, text)] for text in under)
+        lines.append([(-540, figure)])
+    _rows(c, 604, lines)
+    c.save()
+    return buf.getvalue()
+
+
 EXPECTED_ROWS: Final[dict[str, list[ExpectedRow]]] = {
     "marker_column_checking": [row for row, _ in _MARKER_ROWS],
     "summary_grid_with_counts": list(_GRID_ROWS),
     "brought_forward_dated_once": list(_FORWARD_ROWS),
     "amount_before_description_fused": list(_AMOUNT_FIRST_ROWS),
     "two_dates_left_aligned": [row for row, _ in _TWO_DATES_ROWS],
+    "amount_under_row_card": [row for row, _ in _UNDER_ROWS],
 }

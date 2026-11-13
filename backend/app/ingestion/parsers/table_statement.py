@@ -107,6 +107,19 @@ are read the same way:
    text unless it is the whole key or starts left of the description column
    (:meth:`TableStatementParser._heading_under_row`). A dated line without
    a readable amount is counted as skipped.
+   **The amount under its row.** In a table with exactly one money column,
+   a dated line with description text and no figure in a numeric column
+   takes the amount printed alone on one of the next
+   :data:`AMOUNT_BELOW_LINES` lines of its page (a card's purchase abroad:
+   ``63.00 CAD``, ``1.28 Exchange Rate``, ``$49.22``): a line whose whole
+   text reads as one amount and that stands under no other numeric
+   heading. The lines of words between the two are the row's memo. Any
+   other line ends the search (a dated line, a total, a balance label, a
+   title, a header, a line with a figure of its own in a numeric column,
+   one far below the line above it), and so does an amount that the
+   balance label printed alone under it takes; the row is then counted as
+   skipped
+   (:meth:`TableStatementParser._amount_below`).
    **A date printed once per day.** An undated line of a table with
    description text and exactly one figure in a money column, no total, no
    balance label and no section title, at most :data:`CARRY_LINES` line
@@ -486,6 +499,9 @@ FUSED_DATE_SLACK: Final = 25.0
 #: Line heights an undated row may start below the row above it and still
 #: take that row's date (a date printed once per day).
 CARRY_LINES: Final = 2.5
+#: The lines under a dated line without a figure among which the row's
+#: amount, printed alone, is looked for (the amount under its row).
+AMOUNT_BELOW_LINES: Final = 3
 #: Rows with a carried date a statement needs before undated lines at the
 #: end of a table are rows too (the layout is proven).
 MIN_CARRIED: Final = 2
@@ -1687,6 +1703,8 @@ class TableStatementParser(DocumentParser):
         unread: int | None = None
         # Rows read since the header of the table being read.
         table_rows = 0
+        # Lines read already as the memo and the amount of the row above.
+        taken: set[int] = set()
 
         def runs_on(found: SectionTitle, page: int) -> bool:
             """``found`` names the section being read once more: marked
@@ -1733,6 +1751,8 @@ class TableStatementParser(DocumentParser):
                     self._scan_summary(queued_line, summary)
 
         for index, line in enumerate(lines):
+            if index in taken:
+                continue
             header = self.columns(line)
             if header is not None:
                 before = section
@@ -1881,6 +1901,21 @@ class TableStatementParser(DocumentParser):
             if row.amount is None and row.debit is None and row.credit is None:
                 if pending:
                     continue
+                below = self._amount_below(lines, index, cells, columns)
+                if below is not None:
+                    # The amount printed alone under the row, and the lines
+                    # of words between the two (module doc).
+                    row.amount, used = below
+                    for at in used:
+                        row.bbox = (
+                            min(row.bbox[0], lines[at].bbox[0]),
+                            row.bbox[1],
+                            max(row.bbox[2], lines[at].bbox[2]),
+                            lines[at].bbox[3],
+                        )
+                    row.memo.extend(lines[at].text for at in used[:-1])
+                    taken.update(used)
+            if row.amount is None and row.debit is None and row.credit is None:
                 settle(dated=True)
                 skipped += 1
                 summary.skipped_boxes.append((line.page, line.bbox))
@@ -1976,6 +2011,92 @@ class TableStatementParser(DocumentParser):
         if any(read_amount(c.text) is not None for c in between):
             return None
         return credit
+
+    def _amount_below(
+        self,
+        lines: Sequence[ViewLine],
+        index: int,
+        cells: Mapping[Role, list[Cell]],
+        columns: Sequence[Column],
+    ) -> tuple[Amount, list[int]] | None:
+        """The amount printed alone under the dated line ``lines[index]``
+        (``cells``: no figure of its own), and the indexes of the lines read
+        for it, the amount's last (module doc, "The amount under its row").
+
+        Only in a table with exactly one money column that is not printed
+        across the page, for a line with description text and no figure in
+        any numeric column. None when one of the next
+        :data:`AMOUNT_BELOW_LINES` lines is anything but words before the
+        amount is found: nothing is read then and the row is counted as it
+        was.
+        """
+        money = [c.role for c in columns if c.role in MONEY_ROLES]
+        if len(money) != 1 or any(c.role == "across" for c in columns):
+            return None
+        if not any(ch.isalpha() for c in cells.get("description", []) for ch in c.text):
+            return None
+        numeric: tuple[Role, ...] = ("amount", "debit", "credit", "balance")
+        if any(self._amount(cells.get(role)) is not None for role in numeric):
+            return None
+        labels = (
+            *self.opening_labels,
+            *self.closing_labels,
+            *self.credit_total_labels,
+            *self.charge_total_labels,
+        )
+        above = lines[index]
+        used: list[int] = []
+        for at in range(index + 1, min(index + 1 + AMOUNT_BELOW_LINES, len(lines))):
+            line = lines[at]
+            if line.page != above.page or not line.cells:
+                return None
+            if line.bbox[1] - above.bbox[3] > CARRY_LINES * line.height:
+                return None
+            if self.columns(line) is not None or self._header_like(line):
+                return None
+            found = self._assign(line, columns)
+            amount = read_amount(line.text)
+            if amount is not None:
+                # Alone on its line; under ``Balance`` it would be a balance.
+                if any(role in NUMERIC_ROLES and role != money[0] for role in found):
+                    return None
+                if self._label_takes(lines, at):
+                    return None
+                return amount, [*used, at]
+            norm = line.norm
+            self._split_lead(found)
+            self._split_fused_date(found, columns)
+            described = normalise(" ".join(c.text for c in found.get("description", [])))
+            if (
+                self._dated(found)
+                or self._stray_date(found)
+                or self._range_led(line.text)
+                or self._date_led_amount(line)
+                or not any(ch.isalpha() for ch in line.text)
+                or any(self._amount(found.get(role)) is not None for role in numeric)
+                or any(norm.startswith(prefix.strip()) for prefix in self.skip_prefixes)
+                or any(norm.startswith(marker) for marker in self.pending_markers)
+                or any(norm.startswith(label) or described.startswith(label) for label in labels)
+                or self._title(line) is not None
+                or self._section(norm) is not None
+                or block_title(norm)
+            ):
+                return None
+            used.append(at)
+            above = line
+        return None
+
+    def _label_takes(self, lines: Sequence[ViewLine], index: int) -> bool:
+        """The amount alone on ``lines[index]`` is the figure of the balance
+        label printed alone under it (:meth:`_adjacent_balances`: a label
+        with no amount-only line after it takes the one before)."""
+        if index + 1 >= len(lines):
+            return False
+        label = lines[index + 1]
+        if label.page != lines[index].page or self._label_alone(label) is None:
+            return False
+        after = lines[index + 2] if index + 2 < len(lines) else None
+        return after is None or after.page != label.page or read_amount(after.text) is None
 
     def _across_entries(self, cells: Sequence[Cell], date_text: str) -> int:
         """How many entries ``cells`` hold: the cells right of the left group

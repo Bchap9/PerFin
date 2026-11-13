@@ -20,6 +20,12 @@ two dates in the date column the first is the row's; a category word that
 reaches under ``Amount`` is no part of the amount. Beside them what must
 stay as it was: ``CR`` alone under an amount, a fused cell with no amount
 word, a date with a word after it.
+
+The amount printed alone on a line under its row (a card's purchase abroad:
+the dated line, the foreign amount, the rate, then the amount) is the row's.
+Beside it what must stay unread: a total under such a row, a figure four
+lines down, a figure under a table with two money columns, and a figure
+that follows another dated line.
 """
 
 from __future__ import annotations
@@ -585,3 +591,202 @@ def test_a_figure_that_is_no_cents_is_still_no_amount() -> None:
     )
     assert _amounts(outcome) == [("Coffee", Decimal("4.50"))]
     assert outcome.skipped_lines == 4
+
+
+# -- the amount printed on a line of its own under its row ----------------------
+
+
+def _transactions(outcome: ParseOutcome) -> list[tuple[str | None, Decimal]]:
+    return [(t.payee, t.amount) for s in outcome.statements for t in s.transactions]
+
+
+def test_amount_on_a_line_under_its_row() -> None:
+    result = _read(synth.amount_under_row_card())
+    statement = _only(result)
+    assert len(statement.transactions) == 6
+    assert _rows(statement) == synth.EXPECTED_ROWS["amount_under_row_card"]
+    by_payee = {t.payee: t for t in statement.transactions}
+    assert len(synth.AMOUNT_UNDER_ROW) == 2
+    for payee, amount, under in synth.AMOUNT_UNDER_ROW:
+        assert by_payee[payee].amount == amount
+        memo = by_payee[payee].memo or ""
+        assert "Exchange Rate" in memo
+        for text in under:
+            assert text in memo
+    assert statement.reconciliation is not None
+    assert statement.reconciliation.status == "ok"
+    assert result.parse is not None
+    assert result.parse.skipped_lines == 0
+
+
+def test_an_amount_alone_under_a_hand_built_row_is_its_amount() -> None:
+    outcome = _parse(
+        [
+            HEADER,
+            [("01/05/2026", 62.0), ("Coffee", 150.0), ("-4.50", 500.0)],
+            [("01/06/2026", 62.0), ("Bakery abroad", 150.0)],
+            [("63.00 CAD", 150.0)],
+            [("1.28 Exchange Rate", 150.0)],
+            [("-49.22", 500.0)],
+            # The amount right under the dated line.
+            [("01/07/2026", 62.0), ("Tea", 150.0)],
+            [("-2.00", 500.0)],
+            [("01/08/2026", 62.0), ("Refund", 150.0), ("9.25", 500.0)],
+        ]
+    )
+    assert _amounts(outcome) == [
+        ("Coffee", Decimal("-4.50")),
+        ("Bakery abroad", Decimal("-49.22")),
+        ("Tea", Decimal("-2.00")),
+        ("Refund", Decimal("9.25")),
+    ]
+    assert outcome.skipped_lines == 0
+    (statement,) = outcome.statements
+    assert [t.memo for t in statement.transactions] == [
+        None,
+        "63.00 CAD 1.28 Exchange Rate",
+        None,
+        None,
+    ]
+
+
+def test_a_total_under_a_row_without_amount_is_not_its_amount() -> None:
+    outcome = _parse(
+        [
+            HEADER,
+            [("01/05/2026", 62.0), ("Coffee", 150.0)],
+            [("Total", 150.0), ("55.00", 500.0)],
+        ]
+    )
+    assert _transactions(outcome) == []
+    assert outcome.skipped_lines == 1
+    # Nor is a figure alone after a total, a balance label or a title.
+    for between in (
+        [("Total purchases", 150.0)],
+        [("Ending Balance", 150.0)],
+        [("Fees", 62.0)],
+        [("Pending", 150.0)],
+    ):
+        outcome = _parse(
+            [
+                HEADER,
+                [("01/04/2026", 62.0), ("Stamps", 150.0), ("-1.00", 500.0)],
+                [("01/05/2026", 62.0), ("Coffee", 150.0)],
+                between,
+                [("55.00", 500.0)],
+            ]
+        )
+        assert _transactions(outcome) == [("Stamps", Decimal("-1.00"))], between
+        assert outcome.skipped_lines == 1, between
+    # A figure alone under ``Balance`` is a balance, not the row's amount.
+    outcome = _parse(
+        [
+            [("Date", 62.0), ("Description", 150.0), ("Amount", 400.0), ("Balance", 500.0)],
+            [("01/04/2026", 62.0), ("Stamps", 150.0), ("-1.00", 400.0), ("99.00", 500.0)],
+            [("01/05/2026", 62.0), ("Coffee", 150.0)],
+            [("55.00", 500.0)],
+        ]
+    )
+    assert _transactions(outcome) == [("Stamps", Decimal("-1.00"))]
+    assert outcome.skipped_lines == 1
+    # A figure alone over a balance label printed alone is that balance.
+    outcome = _parse(
+        [
+            HEADER,
+            [("01/04/2026", 62.0), ("Stamps", 150.0), ("-1.00", 500.0)],
+            [("01/05/2026", 62.0), ("Coffee", 150.0)],
+            [("55.00", 500.0)],
+            [("Ending Balance", 150.0)],
+        ]
+    )
+    assert _transactions(outcome) == [("Stamps", Decimal("-1.00"))]
+    assert outcome.skipped_lines == 1
+    # With the label's own figure under it, the one above is the row's.
+    outcome = _parse(
+        [
+            HEADER,
+            [("01/04/2026", 62.0), ("Stamps", 150.0), ("-1.00", 500.0)],
+            [("01/05/2026", 62.0), ("Coffee", 150.0)],
+            [("-5.00", 500.0)],
+            [("Ending Balance", 150.0)],
+            [("94.00", 500.0)],
+        ]
+    )
+    assert _transactions(outcome) == [("Stamps", Decimal("-1.00")), ("Coffee", Decimal("-5.00"))]
+    assert outcome.skipped_lines == 0
+    # A line with words and a figure of its own under ``Amount`` is no
+    # second line of the row above: nothing is taken from under it.
+    outcome = _parse(
+        [
+            HEADER,
+            [("01/04/2026", 62.0), ("Stamps", 150.0), ("-1.00", 500.0)],
+            [("01/05/2026", 62.0), ("Coffee", 150.0)],
+            [("Service charge", 150.0), ("12.00", 500.0)],
+            [("55.00", 500.0)],
+        ]
+    )
+    assert ("Coffee", Decimal("55.00")) not in _transactions(outcome)
+    assert Decimal("55.00") not in {amount for _, amount in _transactions(outcome)}
+
+
+def test_a_figure_four_lines_down_is_not_taken() -> None:
+    def table(notes: int) -> list[list[tuple[str, float]]]:
+        return [
+            HEADER,
+            [("01/04/2026", 62.0), ("Stamps", 150.0), ("-1.00", 500.0)],
+            [("01/05/2026", 62.0), ("Coffee", 150.0)],
+            *([("see the note", 150.0)] for _ in range(notes)),
+            [("55.00", 500.0)],
+        ]
+
+    outcome = _parse(table(3))
+    assert _transactions(outcome) == [("Stamps", Decimal("-1.00"))]
+    assert outcome.skipped_lines == 1
+    # On the third line it is the row's.
+    outcome = _parse(table(2))
+    assert _transactions(outcome) == [("Stamps", Decimal("-1.00")), ("Coffee", Decimal("55.00"))]
+    assert outcome.skipped_lines == 0
+    # Not from far below the row, however few lines stand between them.
+    view = _view([*table(0)[:3], [("55.00", 500.0)]], step=40.0)
+    outcome = TableStatementParser().parse(view, threshold=0.85)
+    assert _transactions(outcome) == [("Stamps", Decimal("-1.00"))]
+    assert outcome.skipped_lines == 1
+
+
+def test_two_money_columns_take_no_amount_from_below() -> None:
+    outcome = _parse(
+        [
+            [("Date", 62.0), ("Description", 150.0), ("Debit", 400.0), ("Credit", 500.0)],
+            [("01/04/2026", 62.0), ("Stamps", 150.0), ("1.00", 400.0)],
+            [("01/05/2026", 62.0), ("Coffee", 150.0)],
+            [("4.50", 400.0)],
+        ]
+    )
+    assert _transactions(outcome) == [("Stamps", Decimal("-1.00"))]
+    assert outcome.skipped_lines == 1
+
+
+def test_a_dated_line_ends_the_wait() -> None:
+    outcome = _parse(
+        [
+            HEADER,
+            [("01/05/2026", 62.0), ("Coffee", 150.0)],
+            [("house blend", 150.0)],
+            [("01/06/2026", 62.0), ("Bakery", 150.0), ("-3.00", 500.0)],
+            [("-4.50", 500.0)],
+        ]
+    )
+    # The figure under the second row is neither row's amount.
+    assert _transactions(outcome) == [("Bakery", Decimal("-3.00"))]
+    assert outcome.skipped_lines == 1
+    # Two rows without a figure: the amount is the second one's only.
+    outcome = _parse(
+        [
+            HEADER,
+            [("01/05/2026", 62.0), ("Coffee", 150.0)],
+            [("01/06/2026", 62.0), ("Bakery", 150.0)],
+            [("-3.00", 500.0)],
+        ]
+    )
+    assert _transactions(outcome) == [("Bakery", Decimal("-3.00"))]
+    assert outcome.skipped_lines == 1
