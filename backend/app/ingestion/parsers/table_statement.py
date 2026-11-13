@@ -702,6 +702,12 @@ _SECTION_ID: Final = re.compile(
     r"[\s\u2013-]*(?:\b(?:id|share|suffix|sub|account|acct|number|no\.?)|#)\s*[:#]?\s*(\d{1,12})\s*$",
     re.IGNORECASE,
 )
+#: The number leading a section's title: ``ID 0040 - SHARE DRAFT``, ``Share 02: HOLIDAY CLUB``.
+_SECTION_ID_FIRST: Final = re.compile(
+    r"\s*(?:(?:id|share|suffix|sub|account|acct|no\.?)(?![a-z])|#)\s*[:#]?\s*(\d{1,12})"
+    r"\s*[-\u2013:]\s*(\S.*)",
+    re.IGNORECASE | re.DOTALL,
+)
 #: Lines above a table's header searched for the account's title.
 SECTION_TITLE_LINES: Final = 3
 #: Digits a title's number needs to stand for the account (its last four).
@@ -714,15 +720,23 @@ def section_name(title: str | None) -> tuple[str | None, str | None]:
     """``(printed name, last four digits)`` of a section's title.
 
     ``FREE CHECKING - ID 0010`` is ``("FREE CHECKING", "0010")``; a shorter
-    number (``Share 01``) names no account by itself and is dropped.
+    number (``Share 01``) names no account by itself and is dropped. The
+    number may come first, before a dash or a colon: ``ID 0040 - SHARE
+    DRAFT`` is ``("SHARE DRAFT", "0040")``.
     """
     if not title:
         return None, None
-    match = _SECTION_ID.search(title)
-    if match is None:
+    title = title[: TITLE_MAX * 2]
+    leading = _SECTION_ID_FIRST.fullmatch(title)
+    match = _SECTION_ID.search(title) if leading is None else None
+    if leading is not None:
+        name = leading[2].strip(" -\u2013:") or None
+        digits = leading[1]
+    elif match is not None:
+        name = title[: match.start()].strip(" -\u2013:") or None
+        digits = match[1]
+    else:
         return title.strip()[:TITLE_MAX] or None, None
-    name = title[: match.start()].strip(" -\u2013:") or None
-    digits = match[1]
     return (
         name[:TITLE_MAX] if name else None,
         digits[-_LAST4_DIGITS:] if len(digits) >= _LAST4_DIGITS else None,
@@ -1856,18 +1870,53 @@ class TableStatementParser(DocumentParser):
             return None
         return found[1]
 
+    def _title_cell(self, line: ViewLine) -> str | None:
+        """The text of ``line``'s first cell when it can name an account.
+
+        The first cell is judged, not the line: a title may have a figure
+        beside it (``PRIMARY SHARE ID 0000   Dividends Paid YTD: 4.12``). It
+        has a letter, holds no amount and starts with no date; the line is
+        no header; and it is no total, page or balance, period or
+        statement-date label (``Total dividends 4.12`` names nothing), nor a
+        label with its figure (``Dividends Paid YTD:   0.00``).
+        """
+        if not line.cells or self.columns(line) is not None:
+            return None
+        text = line.cells[0].text.strip()
+        if not any(c.isalpha() for c in text) or find_amounts(text):
+            return None
+        words = text.split()
+        if any(
+            len(words) >= size and self._date_shaped(" ".join(words[:size]).strip(_DATE_MARKS))
+            for size in range(LEAD_DATE_WORDS, 0, -1)
+        ):
+            return None
+        norm = normalise(text)
+        labels = (
+            *self.opening_labels,
+            *self.closing_labels,
+            *self.period_labels,
+            *self.statement_date_labels,
+        )
+        if any(norm.startswith(prefix.strip()) for prefix in self.skip_prefixes):
+            return None
+        if any(norm.startswith(label) for label in labels):
+            return None
+        if text.endswith(":") and any(
+            any(c.isdigit() for c in cell.text) and not any(c.isalpha() for c in cell.text)
+            for cell in line.cells[1:]
+        ):
+            return None
+        return text
+
     def _section_title(self, lines: Sequence[ViewLine], below: int, floor: int) -> int | None:
-        """The index of the title over line ``below``: the nearest line of words above it."""
+        """The index of the title over line ``below``: the nearest line above it
+        whose first cell can name an account (:meth:`_title_cell`)."""
         for index in range(below - 1, max(floor, below - 1 - SECTION_TITLE_LINES), -1):
             line = lines[index]
             if line.page != lines[below].page:
                 break
-            if (
-                any(c.isalpha() for c in line.text)
-                and not find_amounts(line.text)
-                and numeric_parts(line.cells[0].text) is None
-                and self.columns(line) is None
-            ):
+            if self._title_cell(line) is not None:
                 return index
         return None
 
@@ -1912,7 +1961,7 @@ class TableStatementParser(DocumentParser):
             top = head if head > floor else row
             title = self._section_title(lines, top, floor)
             bounds.append(title if title is not None else top)
-            titles.append(lines[title].text if title is not None else None)
+            titles.append(self._title_cell(lines[title]) if title is not None else None)
             floor = row
         sections: list[BalanceSection] = []
         for position, (_, head) in enumerate(starts):

@@ -1289,3 +1289,117 @@ def test_a_headerless_section_ends_with_its_page_and_at_a_block_title() -> None:
     assert outcome.skipped_lines == 1
     assert outcome.skipped_regions == [(1, (62.0, 114.0, 525.0, 123.0))]
     assert "rows_without_header:1" in outcome.warnings
+
+
+# -- share titles ---------------------------------------------------------------
+
+_FIRST_TITLE = [("PRIMARY SHARE ID 0000", 62.0), ("Dividends Paid YTD:", 330.0), ("4.12", 520.0)]
+_SECOND_TITLE = [("ID 0040 - SHARE DRAFT", 62.0), ("Dividends Paid YTD:", 330.0), ("0.00", 520.0)]
+
+
+def _titled_shares(
+    *,
+    first: list[tuple[str, float]] = _FIRST_TITLE,
+    second: list[tuple[str, float]] = _SECOND_TITLE,
+    between: tuple[list[tuple[str, float]], ...] = (),
+    under_title: tuple[list[tuple[str, float]], ...] = (),
+) -> list[list[tuple[str, float]]]:
+    """Two shares told apart by their opening rows: ``between`` is printed after
+    the first share's rows, ``under_title`` between the second title and its header."""
+    return [
+        first,
+        _SHARE_HEADER,
+        [("03/01/2026", 62.0), ("Beginning Balance", 150.0), ("100.00", 520.0)],
+        [("03/05/2026", 62.0), ("Deposit", 150.0), ("20.00", 450.0), ("120.00", 520.0)],
+        *between,
+        second,
+        *under_title,
+        _SHARE_HEADER,
+        [("03/01/2026", 62.0), ("Beginning Balance", 150.0), ("300.00", 520.0)],
+        [("03/07/2026", 62.0), ("Coffee", 150.0), ("4.50", 380.0), ("295.50", 520.0)],
+    ]
+
+
+def _shares(outcome: ParseOutcome) -> list[tuple[str | None, str | None]]:
+    return [(s.account.name, s.account.last4) for s in outcome.statements]
+
+
+_NAMED = [("PRIMARY SHARE", "0000"), ("SHARE DRAFT", "0040")]
+
+
+def test_a_title_with_a_figure_on_its_line_names_the_share() -> None:
+    outcome = _parse(_titled_shares())
+    assert "accounts_by_balance" in outcome.warnings
+    assert _shares(outcome) == _NAMED
+    assert [[t.payee for t in s.transactions] for s in outcome.statements] == [
+        ["Deposit"],
+        ["Coffee"],
+    ]
+    # The figure beside a title is no row and no skipped line.
+    assert outcome.skipped_lines == 0
+
+
+@pytest.mark.parametrize(
+    "total",
+    [
+        [("Total dividends 4.12", 62.0)],
+        [("Total dividends", 62.0), ("4.12", 520.0)],
+        [("Subtotal", 62.0), ("4.12", 520.0)],
+    ],
+    ids=["one-cell", "two-cells", "subtotal"],
+)
+@pytest.mark.parametrize("where", ["between", "under_title"])
+def test_a_total_line_is_never_a_share_title(total: list[tuple[str, float]], where: str) -> None:
+    outcome = _parse(_titled_shares(**{where: (total,)}))  # type: ignore[arg-type]
+    assert _shares(outcome) == _NAMED
+
+
+@pytest.mark.parametrize(
+    "line",
+    [
+        # Beside its label, not under the balance heading: a figure there is
+        # read as the running balance and the share below no longer starts over.
+        [("Beginning Balance", 62.0), ("300.00", 250.0)],
+        [("Ending Balance", 62.0), ("295.50", 520.0)],
+        [("Statement Period", 62.0), ("03/01/2026 - 03/31/2026", 330.0)],
+        [("Statement Date", 62.0), ("03/31/2026", 330.0)],
+        [("Page 2 of 3", 62.0)],
+        [("03/31/2026", 62.0), ("Summary of the share", 150.0)],
+        [("12.50", 62.0), ("Dividends", 150.0)],
+        # A label and its figure, as before: the label is no name.
+        [("Dividends Paid YTD:", 62.0), ("0.00", 520.0)],
+        [("Annual Percentage Yield Earned:", 62.0), ("0.05%", 520.0)],
+    ],
+    ids=[
+        "opening",
+        "closing",
+        "period",
+        "statement-date",
+        "page",
+        "date-first",
+        "amount-first",
+        "label-and-figure",
+        "label-and-rate",
+    ],
+)
+def test_a_labelled_line_under_a_title_is_not_the_title(line: list[tuple[str, float]]) -> None:
+    outcome = _parse(_titled_shares(under_title=(line,)))
+    assert _shares(outcome) == _NAMED
+
+
+def test_a_title_without_a_figure_is_named_as_before() -> None:
+    outcome = _parse(
+        _titled_shares(
+            first=[("REGULAR SAVINGS - ID 0001", 62.0)],
+            second=[("Share 02: HOLIDAY CLUB", 62.0)],
+        )
+    )
+    assert _shares(outcome) == [("REGULAR SAVINGS", "0001"), ("HOLIDAY CLUB", None)]
+
+
+def test_a_row_of_the_share_above_is_never_the_title() -> None:
+    # No title over the second share: the last row above it names nothing.
+    rows = _titled_shares()
+    rows.remove(_SECOND_TITLE)
+    outcome = _parse(rows)
+    assert _shares(outcome) == [("PRIMARY SHARE", "0000"), (None, None)]
