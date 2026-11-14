@@ -238,8 +238,8 @@ What remains (details in docs/ROADMAP.md):
   `brokerage_activity_table/2`, `brokerage_positions_table/2`,
   `brokerage_statement_generic/9`, `placeholder_brokerage/7`,
   `fidelity_investments_statement/8`, `layout_template/3` (a taught
-  layout), `statement_generic/8`, `card_statement_generic/8`, the
-  institution parsers `/6` and the OFX extractor `ofx/3`. Two causes
+  layout), `statement_generic/9`, `card_statement_generic/9`, the
+  institution parsers `/7` and the OFX extractor `ofx/3`. Two causes
   reach further than the entries that name them. The amount reader all
   PDF and image parsers share now also reads a `DB` marker and a
   currency symbol or sign printed apart from its figure, so a payslip,
@@ -371,12 +371,13 @@ What remains (details in docs/ROADMAP.md):
 - **No statement line disappears without a count.** Undated lines with
   a figure between dated rows, rows above the first account of a member
   statement, dated lines under a section title that has no header row
-  (`rows_without_header:<n>`), lines of a date, words and a figure after
-  a header of heading words that ended the table, and the entries of a
-  table printed two or three times across the page beyond its left group
-  (`table_across_unread:<n>`) are counted and raise the `lines_skipped`
-  item, so the document waits instead of ending `processed` with fewer
-  rows than it prints.
+  and whose total is not theirs (`rows_without_header:<n>`), lines of a
+  date, words and a figure after a header of heading words that ended
+  the table, the entries of a table printed across the page that do not
+  read (`table_across_unread:<n>`) and the undated lines with a figure
+  of a table that reads no row at all are counted and raise the
+  `lines_skipped` item, so the document waits instead of ending
+  `processed` with fewer rows than it prints.
 - **A dash after a balance label is not taken for a minus unread.**
   `Ending Balance - $992.50` is read as the rows say (positive when they
   add up to it, an overdraft when they end below zero); when nothing
@@ -386,6 +387,78 @@ What remains (details in docs/ROADMAP.md):
   carries a figure (`Dividends Paid YTD: 4.12`) or starts with the
   share's number (`ID 0040 - SHARE DRAFT`); a member statement of three
   shares is read as three accounts.
+- **A credit or debit marker in a column of its own** (INGESTION.md
+  "Bank and card statement layouts", as are the entries that follow). On
+  a statement that prints `CR` or `DB` in its own column beside unsigned
+  amounts (`Amount | DC`), the column was left unread and every amount
+  lost its direction. The row now takes the marker beside its amount.
+- **The lines of a summary block are never transactions.** A block under
+  a table header that prints a `Beginning Balance` line, count lines
+  (`6 Credits This Period`) and an `Ending Balance` line had its count
+  lines imported as rows. Lines between two balance lines are a summary;
+  under `Balance brought forward` they are rows when a dated row follows
+  or their running balances chain.
+- **A grid of labels and values is not a transaction table.** A line
+  that prints the same description heading twice with a money heading
+  between (`Description | Amount | Description | Amount`) is no header.
+  A column rule read as a letter behind a unit (`AMOUNT (EUR)I`) is
+  dropped.
+- **Amounts and dates that sit in the wrong column.** An amount printed
+  in one cell with its description under headings printed as one cell
+  is split off; the second of two dates under one date heading and a
+  short category printed left of its heading no longer end up in the
+  date or the amount.
+- **An amount printed on a line of its own under its row** (a card's
+  purchase abroad, with the foreign amount and the rate between the
+  two) is that row's amount; the lines between are its memo. Such a row
+  used to be counted as skipped.
+- **A balance label reads its own figure.** A label printed without a
+  figure no longer takes the figure of the next label on its line.
+- **Cents printed without a zero, and Indian grouping.** `.15` in a
+  money column of a statement table is fifteen cents; `1,14,964.36` is
+  read wherever an amount is.
+- **Sections printed with a title and no header row are read.** The
+  lines under a known title (`DEPOSITS & CREDITS`) that start with a
+  date and end with an amount are imported with the title's direction
+  when their printed total is theirs (`sections_without_header:<n>`),
+  over a page break too. A section whose total disagrees is counted,
+  not read, and the statement waits. A statement that prints no header
+  row anywhere is recognised as a statement.
+- **Tables printed across the page are read whole.** Every group of
+  `Number | Date Paid | Amount` printed two or three times side by side
+  is read by its own columns; only a group that does not read is
+  counted. Such a statement used to be held with its left group alone.
+- **A second listing of checks is not imported twice.** A table printed
+  across whose every row is already in the transaction table, by day
+  and amount, is dropped (`checks_listed_twice`). One check that is not
+  there keeps the whole list, and a statement that then does not add up
+  is held.
+- **A title printed with its total** (`Withdrawals / Debits | 5 items
+  totaling $912.40`) names its section, gives its direction and its
+  total, and is never a row. A printed minus under a "money in" title
+  stays a minus.
+- **Two accounts printed under one masked number are two statements.**
+  A checking and a savings account that share a masked number were read
+  as one statement that could not add up. They are split where each
+  account's summary starts (`accounts_by_summary`), each checked
+  against its own balances; PerFin asks which account each belongs to,
+  because the number says nothing. A summary printed again on a later
+  page starts no second account.
+- **A card that prints no card word is read as a card.** A statement
+  whose summary is `Payments and Credits`, `Purchases` and `New Balance`
+  was read with a bank account's signs, purchases as income, and its
+  figures added up that way. A checking statement that says `New
+  Balance` is still a checking statement.
+- **A loan bill is not read as a bank statement.** The activity table of
+  a lender's bill (a principal balance and an amount due on page 1) was
+  imported as bank transactions when the loan parser read nothing. The
+  bank and card parsers now leave it alone. A member statement that
+  lists a loan beside its share accounts is still read.
+- **Undated interest and fee lines of a card.** `Interest Charge on
+  Purchases 6.20` printed without a date over `TOTAL INTEREST FOR THIS
+  PERIOD 6.20` is a row dated on the period's last day when the
+  section's total needs it; year-to-date lines and zero lines are not,
+  and a bank statement's `Interest earned this period` never is.
 - **Brokers' action words type their rows** (INGESTION.md "Brokerage
   statements"). Abbreviations are written out (`Qual Div`, `Pr Yr Cash
   Div`, `ADR Mgmt Fee`, `Bank Int`), more fee, interest, dividend and

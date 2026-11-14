@@ -80,6 +80,29 @@ adding a layout. The design is in [INGESTION.md](INGESTION.md) ("Parse",
    `CR`/`DR`/`DB` and a debit or credit column always decide first. Give
    a direction only to a title whose rows all go one way, and add a
    fixture in which a signed row under that title keeps its printed sign.
+   **Where a new generic rule goes.** A rule every statement should
+   profit from belongs in the generic reader, not in a subclass. Row and
+   table work (what a line is once the columns are known, sections,
+   accounts, reconciliation) is in `table_statement.py`. Three modules
+   of pure functions sit beside it; each is tested on hand-built lines
+   or strings without a PDF, knows nothing of the others' subject, and
+   leaves the decision to its caller:
+
+   | Module | What belongs in it | What does not |
+   | --- | --- | --- |
+   | `statement_header.py` | What a line of headings names: `read_header` (fused headings, a second date, unknown columns, units), `stack_headers` (a header over several lines), `across_groups` (the column groups of a table printed across the page), the grid of labels and values that is no header | Anything about a row under the header |
+   | `statement_lines.py` | What one line is by its own shape, where no header says what the columns are: `led_row` (a date, words, an amount), `titled_total` and `items_total` (a title or a count printed with its total), `amount_only`; and `summary_starts` (where each account's summary starts in a run of lines) | Titles, labels, sections, pages: the caller tests balance and total labels before it asks, and decides whether a line becomes a row or a count |
+   | `statement_kind.py` | What the short summary lines of page 1 name, given normalised text: `card_summary` (a card's balance equation), `loan_bill` (a principal balance and an amount due), and the deposit labels that veto both | Reading a figure, choosing the lines, scoring: `detect` does that |
+
+   Amount shapes (signs, markers, grouping, cents without a zero) are in
+   `text.py` (`read_amount`, `find_amounts`), shared by every PDF parser:
+   a shape that could be something else outside a money column is read
+   only for a caller that asks (`bare_cents`). A rule that reads more
+   needs, in the same change, a fixture that must stay unread, and a line
+   that is found and not imported is counted (`skipped_lines`,
+   `skipped_regions`, a warning code), never dropped. Bump `version` in
+   `table_statement.py` and `institutions.py`, the pins in
+   `tests/unit/test_parser_versions.py`, and say so in the CHANGELOG.
 4. **Tests**: add the layout to `LAYOUTS` in
    `backend/tests/unit/test_statement_parsers.py`. The shared tests then
    require exact rows, balances, period, last four digits, currency, full

@@ -1172,7 +1172,7 @@ class TableStatementParser(DocumentParser):
     """Generic: any statement with a recognisable transaction table (module doc)."""
 
     name: ClassVar[str] = "statement_generic"
-    version: ClassVar[str] = "8"
+    version: ClassVar[str] = "9"
     kind: ClassVar[Literal["statement", "payslip"]] = "statement"
     #: The institution's name as accounts know it (account matching).
     display_name: ClassVar[str | None] = None

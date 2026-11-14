@@ -15,10 +15,10 @@ from app.ingestion.parsers.registry import PARSERS
 
 VERSIONS = {
     "tax_forms": "2",
-    "sample_national_checking": "6",
-    "example_fcu_share": "6",
-    "demo_card_services": "6",
-    "mock_savings_and_loan": "6",
+    "sample_national_checking": "7",
+    "example_fcu_share": "7",
+    "demo_card_services": "7",
+    "mock_savings_and_loan": "7",
     "placeholder_brokerage": "7",
     "fidelity_investments_statement": "8",
     "brokerage_statement_generic": "9",
@@ -26,8 +26,8 @@ VERSIONS = {
     "loan_statement_generic": "2",
     "payslip_basic": "2",
     "receipt_basic": "2",
-    "card_statement_generic": "8",
-    "statement_generic": "8",
+    "card_statement_generic": "9",
+    "statement_generic": "9",
 }
 
 
