@@ -187,8 +187,15 @@ are read the same way:
    ends with an amount and has words, yet is no such row (an amount with a
    balance beside it, of at most
    :data:`~app.ingestion.parsers.statement_lines.MAX_LED_WORDS` words), is
-   counted; a sentence, a dated balance or total line and a line of a date
-   and a figure (balances by day) are neither read nor counted. A document
+   counted, and so is one whose words start like a total's and are a
+   payee's (``Total Wine and More``: not every word is one of
+   :data:`TOTAL_LABEL_WORDS`); a sentence, a dated balance or total line
+   and a line of a date and a figure (balances by day) are neither read
+   nor counted. After the section's total such lines on its page, under no
+   title of their own, are counted too. Inside a table a dated sentence is
+   no row either, nor is a date and a figure with no words under a title
+   printed inside the table (``Fees`` and ``Deposits`` blocks under the
+   transaction table). A document
    with no header at all is a statement when a title has
    :data:`HEADERLESS_TABLE_ROWS` such rows after it on its page or the next
    (:meth:`TableStatementParser.lines_have_table`).
@@ -247,8 +254,9 @@ are read the same way:
    the number is blank): money out, as a row with a check number and no
    description is in any table, unless it prints ``CR``.
    **A second listing.** A table printed across the page whose **every**
-   row has a partner among the rows of the other tables, of the same day
-   and the same magnitude and each partner taken once, lists again what
+   row has a partner among the rows of the other tables, of the same day,
+   the same magnitude and the same direction and each partner taken once
+   (a deposit is no second print of a check), lists again what
    the transaction table already holds (``Summary of checks`` under a
    table with a ``Check No.`` column): its rows are dropped, none is
    counted, its section's total goes with them, and the statement gets
@@ -376,7 +384,11 @@ are read the same way:
    :data:`~app.ingestion.parsers.statement_lines.TOTAL_WORDS`) names the
    section as the title alone would, and its figure is the section's
    total whatever ``Total`` line follows the rows; ``Fees | 12.00`` with
-   no such word is a line of the summary and names nothing. Over a header
+   no such word is a line of the summary and names nothing, and neither
+   does a title with its total right under another title with a figure
+   (the count lines of a summary box, ``Deposits | 2 items | 250.00`` over
+   ``Withdrawals | 3 items | 120.00``: the table under the box is not the
+   last line's section). Over a header
    such a line is never a row of the table above it. A total
    with more dated rows of its section after it was a **subtotal** (a
    cardholder's, a branch's): it is dropped, and the first total after the
@@ -434,7 +446,10 @@ are read the same way:
    was printed, with a figure that is not the opening balance of the
    account above. The same summary printed again (the head of the next
    page, or after another account's) is the same account, and so is a
-   balance brought forward that equals the one carried forward before it.
+   balance brought forward that equals the one carried forward before it,
+   and a balance over the header of a later page that no closing figure
+   follows, or only the closing figure of the account above (``Balance
+   Forward``: no summary).
    Tried after 6 and 7, and only when two of the accounts hold a table.
    Each is one statement (warning ``accounts_by_summary``) named by its
    summary's title when that names a kind of account (``SAVINGS``), with no
@@ -622,6 +637,18 @@ LABEL_SMALL_WORDS: Final = frozenset(
 )  # fmt: skip
 #: Line heights between a label and the figure printed beside it.
 ADJACENT_LINES: Final = 1.5
+#: Words a total, page or ``continued`` line of a summary is made of when
+#: it is printed with a date (``01/31 Total fees this period``, ``Subtotal
+#: deposits and other credits``); with :data:`SECTION_WORDS` and
+#: :data:`~app.ingestion.parsers.statement_lines.TOTAL_WORDS`. Any other
+#: word makes the line a payee's (``Total Wine and More``).
+_TOTAL_LABEL_WORDS: Final = frozenset(
+    {
+        "total", "subtotal", "continued", "fee", "fees", "interest", "charge", "charges",
+        "charged", "paid", "earned", "purchases", "payments", "other", "and", "amount",
+        "balance", "activity", "transactions", "new", "in", "year", "ytd",
+    }
+)  # fmt: skip
 #: A marker after a row's date (``January 9 *``: a processing date).
 _DATE_MARKS: Final = " *\u2020"
 #: How far left of the date heading a cell may start and still begin with the
@@ -909,6 +936,9 @@ _IN_WORDS: Final = frozenset({"deposits", "credits", "additions", "payments"})
 #: known or not, or its total): a header under such a line is no page header
 #: printed again.
 SECTION_WORDS: Final = _IN_WORDS | _OUT_WORDS
+#: Every word a dated total line of a summary may hold (module doc,
+#: "Sections without a header").
+TOTAL_LABEL_WORDS: Final = _TOTAL_LABEL_WORDS | LABEL_SMALL_WORDS | SECTION_WORDS | TOTAL_WORDS
 #: Lines above a header searched for its section's title.
 TITLE_LINES_ABOVE: Final = 2
 #: Words (normalised) that make a ``Total ...`` line the total of another
@@ -1339,10 +1369,26 @@ class TableStatementParser(DocumentParser):
         principal and amount due beside them. A row's line is asked without
         its date (:func:`_undated`), and only for the veto: a payee names
         no bill.
+
+        Inside a table any balance label of ours vetoes it, when the line
+        is that label and no more than a balance line says after it
+        (:meth:`_label_only`): a share whose table opens with a dated
+        ``Previous Balance`` and ends with ``New Balance``. In a summary
+        those two are a loan's as well, and veto nothing there.
         """
         summary, rows = self.cue_lines(view)
         lines = [line.norm for line in summary]
-        return loan_bill(lines) and loan_bill([*lines, *(_undated(line.norm) for line in rows)])
+        if not loan_bill(lines):
+            return False
+        undated = [_undated(line.norm) for line in rows]
+        labels = (*self.opening_labels, *self.closing_labels)
+        if any(
+            f"{text} ".startswith(f"{label} ") and self._label_only(text[len(label) :])
+            for text in undated
+            for label in labels
+        ):
+            return False
+        return loan_bill([*lines, *undated])
 
     def detect(self, view: DocumentView) -> float:
         """Generic: 0.4 with a table, and 0.0 for a loan's bill
@@ -1950,9 +1996,15 @@ class TableStatementParser(DocumentParser):
         :data:`TITLE_LINES_ABOVE` lines before the header on its page that
         has letters and either no amount, when that line is a title, or its
         section's total beside a title (:meth:`_titled`). Any other line
-        with an amount is passed over."""
+        with an amount is passed over.
+
+        A title with its total right under another title with a figure is
+        the last count line of a summary box (``Deposits | 2 items |
+        250.00`` over ``Withdrawals | 3 items | 120.00``), and the table
+        under the box is not its section: no title."""
         header = lines[index]
-        for above in reversed(lines[max(0, index - TITLE_LINES_ABOVE) : index]):
+        for at in range(index - 1, max(0, index - TITLE_LINES_ABOVE) - 1, -1):
+            above = lines[at]
             if above.page != header.page:
                 break
             if not any(ch.isalpha() for ch in above.text):
@@ -1962,8 +2014,19 @@ class TableStatementParser(DocumentParser):
                 return None if found is None else (found, None)
             titled = self._titled(above)
             if titled is not None:
-                return titled
+                boxed = at > 0 and lines[at - 1].page == above.page
+                return None if boxed and self._title_with_figure(lines[at - 1]) else titled
         return None
+
+    def _title_with_figure(self, line: ViewLine) -> bool:
+        """A section title with one figure beside it that is not zero,
+        with a count or without (``Deposits | 250.00``, ``Deposits | 2
+        items | 250.00``): a line of a summary box. ``Checks | 0 items |
+        0.00`` is a section that printed no rows."""
+        found = titled_total(line)
+        if found is None or found[1].value == 0:
+            return False
+        return section_title(normalise(found[0]), self.section_titles) is not None
 
     def _section_line_above(self, lines: Sequence[ViewLine], index: int) -> bool:
         """The nearest line with letters among the :data:`TITLE_LINES_ABOVE`
@@ -2032,6 +2095,10 @@ class TableStatementParser(DocumentParser):
         # "Lines of the closing day"); the sections whose total was met.
         closing: list[tuple[_Row, ViewLine]] = []
         totalled: set[int] = set()
+        # The section being read started at a title printed inside the
+        # table, not over its header: what stands under it may be no part
+        # of the table (balances by day under ``Deposits``).
+        inner_title = False
 
         def runs_on(found: SectionTitle, page: int) -> bool:
             """``found`` names the section being read once more: marked
@@ -2214,6 +2281,7 @@ class TableStatementParser(DocumentParser):
                     settle(dated=False, ended=True)
                 columns, pending, last, anchor = header, False, None, None
                 found_header, unread, head = True, None, line
+                inner_title = False
                 across_header = any(c.role == "across" for c in header)
                 groups = across_groups(line, self.headers) if across_header else None
                 if not across_header:
@@ -2261,6 +2329,10 @@ class TableStatementParser(DocumentParser):
                         headerless.gap, headerless.under = 0, line
                     elif total is not None:
                         close_headerless(total)
+                        # What follows its total on the page under no title
+                        # is no line of the section: counted, as after the
+                        # header of a table we do not read.
+                        unread = line.page
                     else:
                         if self._memo_under(line, norm, headerless.under):
                             headerless.led[-1][2].append(line)
@@ -2280,12 +2352,13 @@ class TableStatementParser(DocumentParser):
                             if (
                                 self._found_not_read(line)
                                 and len(line.text.split()) <= MAX_LED_WORDS
-                                and not self._dated_total(line)
+                                and not self._dated_total_label(line)
                             ):
                                 # Starts with a date and ends with a figure
                                 # and is no row we can tell: counted (a
                                 # longer line is a sentence, a dated total
-                                # a line of the summary).
+                                # a line of the summary; ``Total Wine and
+                                # More`` is neither).
                                 skipped += 1
                                 summary.skipped_boxes.append((line.page, line.bbox))
                                 summary.headerless += 1
@@ -2293,10 +2366,11 @@ class TableStatementParser(DocumentParser):
                         if headerless.gap >= HEADERLESS_GAP:
                             close_headerless()
                 elif unread == line.page and self._found_not_read(line):
-                    # Words after a header that ended the table: the line
-                    # may have been a row's wrapped text (figures by day
-                    # under ``Date | Balance`` have no words, and a dated
-                    # balance line is the summary's). Counted.
+                    # Words after a header that ended the table, or after
+                    # the total of a section printed without one: the line
+                    # may have been a row (figures by day under ``Date |
+                    # Balance`` have no words, and a dated balance line is
+                    # the summary's). Counted.
                     skipped += 1
                     summary.skipped_boxes.append((line.page, line.bbox))
                     summary.headerless += 1
@@ -2391,7 +2465,17 @@ class TableStatementParser(DocumentParser):
                         release()
                         settle(dated=False)
                         section += 1
+                        inner_title = True
                     pending, title, anchor = False, found, None
+                continue
+            if len(line.text.split()) > MAX_LED_WORDS or (
+                inner_title and self._figures_only(cells, columns)
+            ):
+                # A sentence that starts with a date and ends with a figure
+                # (a notice under the table), or a date and a figure with no
+                # words under a title of its own (balances by day): no rows
+                # and, as outside a table, not counted.
+                last = anchor = None
                 continue
             # A dated line: the undated lines held for a total that did not
             # come are what they were.
@@ -2504,6 +2588,14 @@ class TableStatementParser(DocumentParser):
         settle(dated=False, ended=True)
         self._adjacent_balances(lines, summary)
         return rows, summary, pending_items, skipped, found_header
+
+    @staticmethod
+    def _figures_only(cells: Mapping[Role, list[Cell]], columns: Sequence[Column]) -> bool:
+        """A dated line of a table with a description column holds nothing
+        but its date and figures: no words, no check number."""
+        return any(column.role == "description" for column in columns) and all(
+            role == "date" or role in MONEY_ROLES for role, found in cells.items() if found
+        )
 
     # -- lines of the closing day -----------------------------------------------
 
@@ -2693,11 +2785,17 @@ class TableStatementParser(DocumentParser):
         )
         return normalise(" ".join(words[dated:]))
 
-    def _dated_total(self, line: ViewLine) -> bool:
+    def _dated_total_label(self, line: ViewLine) -> bool:
         """What follows the date ``line`` starts with is a total, a page or
-        a ``continued`` line (``01/31 | Total fees this period | 3.00``)."""
+        a ``continued`` line and nothing else (``01/31 | Total fees this
+        period | 3.00``): every word of it is one a summary's label is made
+        of (:data:`TOTAL_LABEL_WORDS`). A payee that starts like one
+        (``Total Wine and More``) is a line found and not read."""
         described = self._after_date(line.text)
-        return any(described.startswith(prefix.strip()) for prefix in self.skip_prefixes)
+        if not any(described.startswith(prefix.strip()) for prefix in self.skip_prefixes):
+            return False
+        words = [word for word in described.split() if any(ch.isalpha() for ch in word)]
+        return all(word in TOTAL_LABEL_WORDS for word in words)
 
     def _headerless_row(
         self,
@@ -3798,14 +3896,19 @@ class TableStatementParser(DocumentParser):
         The starts are those of
         :func:`~app.ingestion.parsers.statement_lines.summary_starts` over
         the lines outside a table (:meth:`_table_lines`); a line that starts
-        with a date is no opening line of a summary. Two kinds of
+        with a date is no opening line of a summary. Three kinds of
         start are no account of their own, and their lines go to the
         account they belong to: one whose opening figure is the closing
         figure last printed for the account before it (a balance carried
-        over the page), and one whose opening and closing figures are an
-        earlier account's (its summary printed again after another
-        account's). Two accounts or more must remain, and two of them hold
-        a table.
+        over the page), one that prints no closing figure of its own or
+        ends at a closing figure of the account before it (a running
+        balance printed over the header of the next page, ``Balance
+        Forward 905.00``: a summary says where its account ends as well as
+        where it starts, and not where the account above does), and one
+        whose opening and closing
+        figures are an earlier account's (its summary printed again after
+        another account's). Two accounts or more must remain, and two of
+        them hold a table.
         """
         inside = self._table_lines(lines)
 
@@ -3840,8 +3943,14 @@ class TableStatementParser(DocumentParser):
                     closings.append(figure.value)
             body = list(lines[start:end])
             before = found[-1] if found else None
-            if before is not None and before.closings and opened == before.closings[-1]:
-                # Brought forward what the account above carried forward.
+            if before is not None and (
+                not closings
+                or (before.closings and opened == before.closings[-1])
+                or closings[-1] in before.closings
+            ):
+                # Brought forward what the account above carried forward, or
+                # a balance of that account: no closing figure after it, or
+                # the one the account above closes at.
                 before.lines.extend(body)
                 before.closings.extend(closings)
                 continue
@@ -3949,15 +4058,17 @@ class TableStatementParser(DocumentParser):
     def _second_listings(self, rows: Sequence[_Row], dates: Sequence[date | None]) -> set[int]:
         """The indexes of the rows of every table printed across the page
         that is a second listing (module doc): **each** of its rows has a
-        partner of the same day and the same magnitude among the rows of
-        the other tables, no partner taken twice. A row without a date or
-        an amount has none, and one row without a partner keeps the whole
-        table. Tables are judged in the order printed; the rows of one
-        found to be a second listing are no partners for the next."""
+        partner of the same day, the same magnitude and the same direction
+        among the rows of the other tables, no partner taken twice (a
+        deposit of the day and size of a check paid is no second print of
+        the check). A row without a date or an amount has none, and one row
+        without a partner keeps the whole table. Tables are judged in the
+        order printed; the rows of one found to be a second listing are no
+        partners for the next."""
         keys: list[tuple[date, Decimal] | None] = []
         for row, posted in zip(rows, dates, strict=True):
             amount = self._signed(row)
-            keys.append(None if posted is None or amount is None else (posted, abs(amount)))
+            keys.append(None if posted is None or amount is None else (posted, amount))
         out: set[int] = set()
         for listing in sorted({row.listing for row in rows if row.listing}):
             own = [at for at, row in enumerate(rows) if row.listing == listing]

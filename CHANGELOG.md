@@ -429,21 +429,23 @@ What remains (details in docs/ROADMAP.md):
   is read by its own columns; only a group that does not read is
   counted. Such a statement used to be held with its left group alone.
 - **A second listing of checks is not imported twice.** A table printed
-  across whose every row is already in the transaction table, by day
-  and amount, is dropped (`checks_listed_twice`). One check that is not
-  there keeps the whole list, and a statement that then does not add up
+  across whose every row is already in the transaction table, by day,
+  amount and direction, is dropped (`checks_listed_twice`). One check
+  that is not there keeps the whole list, and a statement that then does not add up
   is held.
 - **A title printed with its total** (`Withdrawals / Debits | 5 items
   totaling $912.40`) names its section, gives its direction and its
   total, and is never a row. A printed minus under a "money in" title
-  stays a minus.
+  stays a minus. The count lines of a summary box (`Deposits | 2 items
+  | 250.00` over `Withdrawals | 3 items | 120.00`) name no section.
 - **Two accounts printed under one masked number are two statements.**
   A checking and a savings account that share a masked number were read
   as one statement that could not add up. They are split where each
   account's summary starts (`accounts_by_summary`), each checked
   against its own balances; PerFin asks which account each belongs to,
   because the number says nothing. A summary printed again on a later
-  page starts no second account.
+  page starts no second account, and neither does a balance carried to
+  the head of the next page.
 - **A card that prints no card word is read as a card.** A statement
   whose summary is `Payments and Credits`, `Purchases` and `New Balance`
   was read with a bank account's signs, purchases as income, and its

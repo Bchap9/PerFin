@@ -775,7 +775,9 @@ a child answering with parser output is `bad_output`.
     `CR`/`DR`/`DB`, dash or plus in front of the amount. A sentence that
     starts with a date and ends with a figure (more than thirty words), a
     dated balance or total line and a line of a date and a figure only
-    are neither read nor counted. A document with no header at all is a
+    are neither read nor counted, inside a table as well (a dated
+    sentence anywhere in it; a date and a figure with no words under a
+    title printed inside it). A document with no header at all is a
     statement when a title has three such rows after it.
   - *A title printed with its total.* A known section title printed with
     one figure and a total word beside it, on one of the two lines over a
@@ -783,7 +785,11 @@ a child answering with parser output is `bad_output`.
     section and gives its total, which is checked like a `Total ...`
     line; it is never a row of the table above. `N item(s) totaling X`
     printed alone is a section's total. A printed minus under a "money
-    in" title stays a minus.
+    in" title stays a minus. A title with its total right under another
+    title with a figure is the last count line of a summary box
+    (`Deposits | 2 items | 250.00` over `Withdrawals | 3 items |
+    120.00`) and names nothing: the table under the box is read by its
+    printed signs.
   - *Tables printed across the page.* Under `Number | Date Paid | Amount`
     printed two or three times side by side, every group is read by its
     own columns (`statement_header.across_groups`): a date and an amount
@@ -792,8 +798,9 @@ a child answering with parser output is `bad_output`.
     names only a check number, a date and an amount, every row is a
     check paid, its number printed or not.
   - *A second listing.* A table printed across whose **every** row has a
-    partner of the same day and the same magnitude among the rows of the
-    other tables, each partner taken once, lists again what the
+    partner of the same day, the same magnitude and the same direction
+    among the rows of the other tables, each partner taken once (a
+    deposit is no second print of a check), lists again what the
     transaction table already holds (`Summary of checks` under a table
     with a `Check No.` column): its rows are dropped, none is counted
     (warning `checks_listed_twice`). One row without a partner keeps the
@@ -890,7 +897,9 @@ a child answering with parser output is `bad_output`.
     table is never read as bank transactions. A deposit account's label
     (`Total Deposits`, `Share Savings Ending Balance`, a dated `Beginning
     Balance` line inside a table) lifts that guard: a member statement
-    that lists a loan beside its shares is still read.
+    that lists a loan beside its shares is still read. Inside a table
+    any dated balance line does (`Previous Balance`, `New Balance`); in
+    a summary those two are a loan's as well and lift nothing.
   - *What is counted.* A line that is found and not imported is counted
     in `skipped_lines`, with its box in `skipped_regions`, and raises the
     `lines_skipped` item, so the document waits instead of ending
@@ -899,7 +908,10 @@ a child answering with parser output is `bad_output`.
     a dated row follows and that is no carried-date row; rows above the
     first account or share (`rows_outside_account`); the date-led lines
     of a section without a header that is not read, because its total
-    disagrees or it has too few rows (`rows_without_header:<n>`), and
+    disagrees or it has too few rows (`rows_without_header:<n>`), a
+    line of such a section whose words start like a total's and are a
+    payee's (`Total Wine and More`), the date-led lines that follow a
+    section's total on its page under no title, and
     the same lines with words on them after a header of heading words
     that ended the table without being one PerFin reads (`Date |
     Balance`; figures by day under it have no words and are not counted,
@@ -929,8 +941,11 @@ a child answering with parser output is `bad_output`.
     it. The shared number names neither, so such a statement carries no
     last four digits and the importer asks which account each belongs to
     (`account_not_found`). A balance brought forward that equals the one
-    carried forward, and an account's summary printed once more on a
-    later page with the same figures, start no account.
+    carried forward, a balance printed over the header of a later page
+    with no closing figure after it but the account's own (`Balance
+    Forward`), and an
+    account's summary printed once more on a later page with the same
+    figures, start no account.
   - *Not read* (counted or held, never guessed): one field per line,
     decimal commas and month names other than English, description lines
     printed above their dated line, a headerless section whose lines

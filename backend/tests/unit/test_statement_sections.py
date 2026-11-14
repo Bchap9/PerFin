@@ -384,6 +384,101 @@ def test_a_dated_balance_line_under_an_unread_header_is_not_counted() -> None:
     assert outcome.skipped_lines == 1
 
 
+def test_a_payee_that_starts_like_a_total_is_counted_under_a_title() -> None:
+    # ``Total Vine`` is a shop, not a total: the line is no row we can tell
+    # from a total by its shape, and it does not vanish either.
+    shop = _led(3, "Total Vine and More", "45.00")
+    outcome = _parse(
+        [WITHDRAWALS, _led(2, "Rent share", "50.00"), shop, _led(4, "Grocer", "25.00")]
+    )
+    assert _amounts(outcome) == [Decimal("-50.00"), Decimal("-25.00")]
+    assert outcome.skipped_lines == 1
+    assert "rows_without_header:1" in outcome.warnings
+    # With the section's total printed, which the two other lines miss, all
+    # three lines are counted.
+    total = [("Total withdrawals", 62.0), ("120.00", 500.0)]
+    outcome = _parse(
+        [WITHDRAWALS, _led(2, "Rent share", "50.00"), shop, _led(4, "Grocer", "25.00"), total]
+    )
+    assert outcome.statements == []
+    assert outcome.skipped_lines == 3
+    assert "rows_without_header:3" in outcome.warnings
+    # A dated total of the summary is still neither a row nor counted.
+    for label in ("Total fees this period", "Subtotal", "Total deposits and other credits"):
+        outcome = _parse(
+            [DEPOSITS, _led(2, "Pay", "50.00"), _led(3, "Gift", "25.00"), _led(31, label, "3.00")]
+        )
+        assert _amounts(outcome) == [Decimal("50.00"), Decimal("25.00")]
+        assert outcome.skipped_lines == 0
+
+
+def test_date_led_lines_after_a_section_s_total_are_counted() -> None:
+    total = [("Total deposits", 62.0), ("75.00", 500.0)]
+    after = [_led(5, "Card purchase grocer", "12.00"), _led(6, "Card purchase fuel", "30.00")]
+    outcome = _parse([DEPOSITS, _led(2, "Pay", "50.00"), _led(3, "Gift", "25.00"), total, *after])
+    assert _amounts(outcome) == [Decimal("50.00"), Decimal("25.00")]
+    assert outcome.skipped_lines == 2
+    assert "rows_without_header:2" in outcome.warnings
+    # Under a title of their own they are a section, as anywhere.
+    outcome = _parse(
+        [DEPOSITS, _led(2, "Pay", "50.00"), _led(3, "Gift", "25.00"), total, WITHDRAWALS, *after]
+    )
+    assert _amounts(outcome) == [
+        Decimal("50.00"),
+        Decimal("25.00"),
+        Decimal("-12.00"),
+        Decimal("-30.00"),
+    ]
+    assert outcome.skipped_lines == 0
+    # On the next page nothing says they were rows of anything.
+    outcome = _parse([DEPOSITS, _led(2, "Pay", "50.00"), _led(3, "Gift", "25.00"), total], after)
+    assert _amounts(outcome) == [Decimal("50.00"), Decimal("25.00")]
+    assert outcome.skipped_lines == 0
+
+
+_SENTENCE = " ".join(["a charge of the kind the schedule names"] * 5)
+
+
+def test_dated_sentences_and_balances_by_day_under_a_table_are_not_rows() -> None:
+    # The plan's order: the headed table first, then ``Fees`` over dated
+    # sentences and ``Deposits`` over a date and a balance with no words.
+    assert len(_SENTENCE.split()) > MAX_LED_WORDS
+    table = [
+        [("Beginning Balance 1,000.00", 62.0)],
+        [("Ending Balance 880.00", 62.0)],
+        HEADER,
+        _led(2, "Rent share", "-50.00"),
+        _led(3, "Wine shop", "-45.00"),
+        _led(4, "Grocer", "-25.00"),
+    ]
+    notices = [[("Fees", 62.0)], *[[(f"01/0{d}/2026 {_SENTENCE} 12.00", 62.0)] for d in (1, 2, 3)]]
+    by_day = [
+        DEPOSITS,
+        *[[(f"01/0{d}/2026", 62.0), (f"1,0{d}0.00", 500.0)] for d in (1, 2, 3, 4, 5)],
+    ]
+    outcome = _parse([*table, *notices, *by_day])
+    assert _amounts(outcome) == [Decimal("-50.00"), Decimal("-45.00"), Decimal("-25.00")]
+    assert outcome.skipped_lines == 0
+    assert _status(_one(outcome)) == "ok"
+    # A row with words under a title printed inside the table is a row.
+    outcome = _parse([*table, DEPOSITS, _led(5, "Pay", "20.00")])
+    assert _amounts(outcome)[-1] == Decimal("20.00")
+    # So is a check that prints its number and no words, under ``Checks``.
+    checks = [("Date", 62.0), ("Check No.", 110.0), ("Description", 200.0), ("Amount", 500.0)]
+    outcome = _parse(
+        [
+            checks,
+            [("01/02/2026", 62.0), ("Rent share", 200.0), ("-50.00", 500.0)],
+            [("Checks", 62.0)],
+            [("01/03/2026", 62.0), ("3101", 110.0), ("20.00", 500.0)],
+        ]
+    )
+    assert _amounts(outcome) == [Decimal("-50.00"), Decimal("-20.00")]
+    # Without a title over them, a date and a figure are what they were.
+    outcome = _parse([HEADER, ROW, [("01/06/2026", 62.0), ("9.00", 500.0)]])
+    assert len(_one(outcome).transactions) == 2
+
+
 # -- tables printed across the page; a second listing ----------------------------
 
 
@@ -525,6 +620,50 @@ def test_a_partner_vouches_for_one_listed_check_only() -> None:
         ]
     )
     assert len(_one(outcome).transactions) == 2
+    assert "checks_listed_twice" not in outcome.warnings
+
+
+def test_a_deposit_of_the_same_day_and_size_is_no_partner_of_a_check() -> None:
+    main = [
+        _led(2, "Payroll", "500.00"),
+        _led(3, "Rent share", "-50.00"),
+        _led(5, "Transfer to savings", "-500.00"),
+    ]
+    checks = [
+        ("Number", 62.0),
+        ("Date", 120.0),
+        ("Amount", 180.0),
+        ("Number", 262.0),
+        ("Date", 320.0),
+        ("Amount", 380.0),
+    ]
+    first = [("3201", 62.0), ("01/02/2026", 120.0), ("500.00", 180.0)]
+    second = [("3202", 262.0), ("01/05/2026", 320.0), ("500.00", 380.0)]
+    # One check, paid on the day and for the amount of the payroll: money in
+    # is no second print of money out. The check is a row.
+    outcome = _parse(
+        [
+            [("Beginning Balance 1,000.00", 62.0)],
+            [("Ending Balance 450.00", 62.0)],
+            HEADER,
+            *main,
+            [("Checks Paid", 62.0)],
+            checks,
+            first,
+        ]
+    )
+    assert _amounts(outcome) == [
+        Decimal("500.00"),
+        Decimal("-50.00"),
+        Decimal("-500.00"),
+        Decimal("-500.00"),
+    ]
+    assert "checks_listed_twice" not in outcome.warnings
+    assert _status(_one(outcome)) == "ok"
+    # Two checks, one of them like the transfer out: the other has no
+    # partner, and the whole listing stays.
+    outcome = _parse([HEADER, *main, [("Checks Paid", 62.0)], checks, [*first, *second]])
+    assert len(_one(outcome).transactions) == 5
     assert "checks_listed_twice" not in outcome.warnings
 
 
@@ -698,6 +837,65 @@ def test_a_summary_line_with_a_figure_is_no_title() -> None:
         ]
     )
     assert _amounts(outcome) == [Decimal("50.00"), Decimal("25.00"), Decimal("15.00")]
+
+
+def _count_line(title: str, count: str, total: str) -> list[tuple[str, float]]:
+    return [(title, 62.0), (count, 300.0), (total, 500.0)]
+
+
+_SIGNED_ROWS = [
+    _led(2, "Payroll", "200.00"),
+    _led(3, "Rent share", "-50.00"),
+    _led(4, "Wine shop", "-45.00"),
+    _led(5, "Refund", "50.00"),
+    _led(6, "Grocer", "-25.00"),
+]
+
+
+@pytest.mark.parametrize("count", ["items", "items totaling"])
+@pytest.mark.parametrize("ending", [1, 3])
+def test_count_lines_of_a_summary_box_are_no_title(count: str, ending: int) -> None:
+    # ``Withdrawals | 3 items | 120.00`` is the last count line of the
+    # summary box, not the title of the one signed table under it.
+    box = [
+        [("Beginning Balance 1,000.00", 62.0)],
+        _count_line("Deposits", f"2 {count}", "250.00"),
+        _count_line("Withdrawals", f"3 {count}", "120.00"),
+    ]
+    box.insert(ending, [("Ending Balance 1,130.00", 62.0)])
+    outcome = _parse([*box, HEADER, *_SIGNED_ROWS])
+    assert _amounts(outcome) == [
+        Decimal("200.00"),
+        Decimal("-50.00"),
+        Decimal("-45.00"),
+        Decimal("50.00"),
+        Decimal("-25.00"),
+    ]
+    assert "section_total_mismatch" not in outcome.warnings
+    assert _status(_one(outcome)) == "ok"
+
+
+def test_a_title_with_its_total_under_a_balance_or_a_total_line_is_a_title() -> None:
+    title = _count_line("Withdrawals", "2 items totaling", "75.00")
+    rows = [_led(2, "Rent", "50.00"), _led(3, "Gas", "25.00")]
+    # Right under the summary's last line.
+    outcome = _parse(
+        [
+            [("Beginning Balance 1,000.00", 62.0)],
+            [("Ending Balance 925.00", 62.0)],
+            title,
+            HEADER,
+            *rows,
+        ]
+    )
+    assert _amounts(outcome) == [Decimal("-50.00"), Decimal("-25.00")]
+    assert _status(_one(outcome)) == "ok"
+    # Right under the total line of the section before.
+    deposits = _count_line("Deposits", "1 items totaling", "40.00")
+    total = [("Total deposits", 62.0), ("40.00", 500.0)]
+    outcome = _parse([deposits, HEADER, _led(1, "Pay", "40.00"), total, title, HEADER, *rows])
+    assert _amounts(outcome) == [Decimal("40.00"), Decimal("-50.00"), Decimal("-25.00")]
+    assert "section_total_mismatch" not in outcome.warnings
 
 
 def test_items_totaling_is_the_sections_total() -> None:
@@ -880,6 +1078,41 @@ def test_a_balance_carried_over_the_page_is_one_account() -> None:
     assert "accounts_by_summary" not in outcome.warnings
 
 
+@pytest.mark.parametrize(
+    "label", ["Balance Forward", "Previous Balance", "Balance Brought Forward"]
+)
+def test_a_balance_at_the_head_of_page_two_with_no_closing_is_one_account(label: str) -> None:
+    # A running balance printed over the header of page 2; nothing on page
+    # 1 carried that figure forward, and the block prints no closing
+    # figure of its own: the same account goes on.
+    first = [
+        [("Marrowfield Savings Bank", 62.0)],
+        [("Account Number: xxxx1234", 62.0)],
+        [("Statement Period 01/01/2026 to 01/31/2026", 62.0)],
+        [("Beginning Balance 1,000.00", 62.0)],
+        [("Ending Balance 880.00", 62.0)],
+        HEADER,
+        _dated(2, "Rent share", "-50.00"),
+        _dated(3, "Wine shop", "-45.00"),
+        [("Page 1 of 2", 62.0)],
+    ]
+    second = [[(f"{label} 905.00", 62.0)], HEADER, _dated(4, "Grocer", "-25.00")]
+    outcome = _parse(first, second)
+    statement = _one(outcome)
+    assert len(statement.transactions) == 3
+    assert statement.account.last4 == "1234"
+    assert _status(statement) == "ok"
+    assert "accounts_by_summary" not in outcome.warnings
+    assert all(not t.low_confidence for t in statement.transactions)
+    # Nor when the statement's closing balance is printed once more under
+    # the last row: the figure the first page's summary closes at.
+    outcome = _parse(first, [*second, [("Ending Balance 880.00", 62.0)]])
+    statement = _one(outcome)
+    assert len(statement.transactions) == 3
+    assert _status(statement) == "ok"
+    assert "accounts_by_summary" not in outcome.warnings
+
+
 def test_balance_lines_of_a_table_start_no_account() -> None:
     # Undated balance lines inside a table with a running balance, the
     # table's header printed again on page 2: one account.
@@ -1026,6 +1259,61 @@ def test_a_dated_balance_line_of_a_table_beside_a_loan_is_no_loan_bill() -> None
     # The label has to lead the line's words: a payee that holds it does not.
     payee = [("01/09/2026", 62.0), ("Refund of ending balance fee", 150.0), ("2.00", 500.0)]
     assert TableStatementParser().detect(_pages([[*LOAN_SHARE, HEADER, ROW, payee]])) == 0.0
+
+
+def _member_share(opening: str, closing: str) -> list[list[tuple[str, float]]]:
+    """A share's table whose first and last lines are dated balance lines."""
+
+    def line(day: int, text: str, amount: str, balance: str) -> list[tuple[str, float]]:
+        cells = [(f"01/{day:02d}/2026", 62.0), (text, 150.0)]
+        return [*cells, *([(amount, 400.0)] if amount else []), (balance, 500.0)]
+
+    return [
+        [("REGULAR SHARES ID 0001", 62.0)],
+        BALANCED,
+        line(1, opening, "", "1,000.00"),
+        line(5, "Payroll", "200.00", "1,200.00"),
+        line(9, "Transfer to loan", "-150.00", "1,050.00"),
+        line(31, closing, "", "1,050.00"),
+    ]
+
+
+_MEMBER_TOP = [
+    [("Harrowgill Lane Credit Union", 62.0)],
+    [("Member Number: xxxx4821", 62.0)],
+    [("Statement Period 01/01/2026 to 01/31/2026", 62.0)],
+]
+_MEMBER_LOAN = [
+    [("AUTO LOAN ID 0060", 62.0)],
+    [("Principal Balance 8,400.00", 62.0)],
+    [("Payment Due 02/09/2026 150.00", 62.0)],
+]
+
+
+@pytest.mark.parametrize(
+    ("opening", "closing"),
+    [("Previous Balance", "New Balance"), ("Prior Balance", "Statement Balance")],
+)
+def test_a_share_worded_previous_and_new_balance_under_a_loan_block_is_read(
+    opening: str, closing: str
+) -> None:
+    # The loan's block stands above the share's table on page 1, and the
+    # share's balance lines are dated lines of its table.
+    share = _member_share(opening, closing)
+    view = _pages([[*_MEMBER_TOP, *_MEMBER_LOAN, *share]])
+    assert TableStatementParser().detect(view) == 0.4
+    assert [p.name for p in PARSERS if p.detect(view) > 0] == ["statement_generic"]
+    statement = _one(TableStatementParser().parse(view, threshold=0.85))
+    assert [t.amount for t in statement.transactions] == [Decimal("200.00"), Decimal("-150.00")]
+    assert _status(statement) == "ok"
+    # The loan's block under the table changes nothing.
+    assert TableStatementParser().detect(_pages([[*_MEMBER_TOP, *share, *_MEMBER_LOAN]])) == 0.4
+
+
+def test_a_payee_that_starts_like_a_balance_label_beside_a_loan_vetoes_nothing() -> None:
+    payee = [("01/09/2026", 62.0), ("New Balance Outlet 114", 150.0), ("9.00", 500.0)]
+    view = _pages([[*_MEMBER_LOAN, HEADER, ROW, payee]])
+    assert _generic_scores(view) == (0.0, 0.0)
 
 
 def test_a_loan_s_labels_after_page_one_stop_nothing() -> None:

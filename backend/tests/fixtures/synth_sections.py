@@ -17,11 +17,11 @@ and, unless it says otherwise, rows that reconcile:
   Other Credits`` is the last line of page 1; its one line (two dates, the
   payment printed with a minus) and its total head page 2, then
   ``Purchases and Adjustments`` over five lines and its total.
-* :func:`dated_notices_under_a_title`: ``Fees`` over three sentences that
-  each start with a date and end with a figure (more than thirty words
-  each), ``Deposits`` over five lines of a date and a balance with no
-  words, then a headed table that reconciles. The blocks stand above the
-  table: under it they would be lines of the table, read by its columns.
+* :func:`dated_notices_under_a_title`: a headed table that reconciles,
+  then ``Fees`` over three sentences that each start with a date and end
+  with a figure (more than thirty words each) and ``Deposits`` over five
+  lines of a date and a balance with no words. The blocks stand under the
+  table, where its columns would read them: none of their lines is a row.
 
 Tables printed across the page, and titles printed with their totals:
 
@@ -321,13 +321,14 @@ def _notice_blocks(c: canvas.Canvas, y: float) -> float:
 
 
 def dated_notices_under_a_title() -> bytes:
-    """Two titled blocks of dated lines that are no rows, and a headed table."""
+    """A headed table, and under it two titled blocks of dated lines that are no rows."""
     buf = io.BytesIO()
     c = canvas.Canvas(buf, pagesize=letter)
     closing = _running(_NOTICE_OPENING, _NOTICE_ROWS)[-1]
     _head(c, "Brackenthwaite Bank", "5068", "11/01/2026 - 11/30/2026", _NOTICE_OPENING, closing)
-    y = _notice_blocks(c, 650)
-    _signed_rows(c, y - 26, _NOTICE_ROWS)
+    _signed_rows(c, 650, _NOTICE_ROWS)
+    # The table's header and its rows are 14 points apart.
+    _notice_blocks(c, 650 - 14 * (len(_NOTICE_ROWS) + 1) - 26)
     c.save()
     return buf.getvalue()
 
