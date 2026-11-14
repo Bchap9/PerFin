@@ -3032,7 +3032,7 @@ the document page.
   and a dated line without an amount is skipped with its box recorded. The
   anchors give the period (yearless row dates take its year), the account's
   last four digits and the balances, and the statement is reconciled and
-  scored like a parser's (parser `layout_template/3`), so a template that
+  scored like a parser's (parser `layout_template/4`), so a template that
   misreads a statement is held back the same way. A template without
   tables only fills a parser's statement (the period always; the account
   and balances when there is one statement). Then the normal import runs.

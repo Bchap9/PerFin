@@ -237,12 +237,13 @@ What remains (details in docs/ROADMAP.md):
   `tax_forms/2`, `payslip_basic/2`, `loan_statement_generic/2`,
   `brokerage_activity_table/2`, `brokerage_positions_table/2`,
   `brokerage_statement_generic/9`, `placeholder_brokerage/7`,
-  `fidelity_investments_statement/8`, `layout_template/3` (a taught
+  `fidelity_investments_statement/8`, `layout_template/4` (a taught
   layout), `statement_generic/9`, `card_statement_generic/9`, the
   institution parsers `/7` and the OFX extractor `ofx/3`. Two causes
   reach further than the entries that name them. The amount reader all
-  PDF and image parsers share now also reads a `DB` marker and a
-  currency symbol or sign printed apart from its figure, so a payslip,
+  PDF and image parsers share now also reads a `DB` marker, a
+  currency symbol or sign printed apart from its figure and thousands
+  grouped the Indian way (`1,14,964.36`), so a payslip,
   loan statement, receipt, tax form, brokerage statement or taught
   layout can read an amount it used to miss. And a currency is taken
   from the page only when it is an ISO code PerFin knows, bank and card
