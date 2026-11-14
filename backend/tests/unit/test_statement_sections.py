@@ -361,10 +361,20 @@ def test_a_title_with_three_led_rows_is_a_table() -> None:
     assert parser.detect(_pages([[DEPOSITS], [NOTE], rows])) == 0.0
 
 
-def test_a_dated_balance_line_under_an_unread_header_is_not_counted() -> None:
+@pytest.mark.parametrize(
+    "grid",
+    [
+        [("Date", 62.0), ("Balance", 500.0)],
+        # A grid of labels and values, which is no header of transactions.
+        [("Description", 62.0), ("Amount", 200.0), ("Description", 320.0), ("Amount", 500.0)],
+        [("Date", 62.0), ("Description", 150.0), ("Amount", 300.0), ("Description", 380.0)],
+    ],
+)
+def test_a_dated_balance_line_under_an_unread_header_is_not_counted(
+    grid: list[tuple[str, float]],
+) -> None:
     # A summary grid printed under the table: its header ends the table, and
     # its dated balance lines are lines of the summary, not rows left unread.
-    grid = [("Date", 62.0), ("Balance", 500.0)]
     outcome = _parse(
         [
             HEADER,
@@ -1028,6 +1038,46 @@ def test_hand_built_summaries_are_two_accounts() -> None:
     assert _statuses(outcome) == ["ok", "ok"]
     assert "accounts_by_summary" in outcome.warnings
     assert [s.account.name for s in outcome.statements] == ["CHECKING", "SAVINGS"]
+
+
+def test_a_section_without_a_header_is_read_inside_its_account() -> None:
+    # The first account prints its rows under titles and no header row; the
+    # second under a header. Each section is read for its own account and
+    # checked against that account's balances.
+    checking = [
+        *_summary("CHECKING SUMMARY", "100.00", "160.00"),
+        DEPOSITS,
+        _led(2, "Pay", "50.00"),
+        _led(3, "Gift", "25.00"),
+        _led(4, "Tip", "15.00"),
+        WITHDRAWALS,
+        _led(5, "Rent share", "20.00"),
+        _led(6, "Grocer", "5.00"),
+        _led(7, "Bus", "5.00"),
+    ]
+    outcome = _parse(checking, SAVINGS_PAGE)
+    assert [s.account.name for s in outcome.statements] == ["CHECKING", "SAVINGS"]
+    first, second = outcome.statements
+    assert [t.amount for t in first.transactions] == [
+        Decimal("50.00"),
+        Decimal("25.00"),
+        Decimal("15.00"),
+        Decimal("-20.00"),
+        Decimal("-5.00"),
+        Decimal("-5.00"),
+    ]
+    assert [t.payee for t in second.transactions] == ["Deposit", "Fee"]
+    assert _statuses(outcome) == ["ok", "ok"]
+    assert outcome.skipped_lines == 0
+    assert "accounts_by_summary" in outcome.warnings
+    assert "sections_without_header:2" in outcome.warnings
+    assert "rows_outside_account" not in outcome.warnings
+    # Rows under a title above the first summary belong to no account: counted.
+    loose = [DEPOSITS, _led(2, "Pay", "50.00"), _led(3, "Gift", "25.00"), _led(4, "Tip", "15.00")]
+    outcome = _parse([*loose, *CHECKING_PAGE], SAVINGS_PAGE)
+    assert [len(s.transactions) for s in outcome.statements] == [2, 2]
+    assert "rows_outside_account" in outcome.warnings
+    assert outcome.skipped_lines == 3
 
 
 def test_the_first_summary_printed_a_third_time_is_no_third_account() -> None:
