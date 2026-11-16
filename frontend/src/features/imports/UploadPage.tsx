@@ -112,7 +112,10 @@ function NextStep({ row, canWrite }: { row: DocumentRow; canWrite: boolean }) {
           {accountLabel(account)}
         </Link>
       )}
-      {row.kind === "statement" ? (
+      {/* Investment activity and holdings are not rows of the cash ledger. */}
+      {row.kind === "statement" &&
+      !readAsActivity(row) &&
+      !readAsPositions(row) ? (
         <Link to="/transactions" search={{ document: row.id }}>
           View the rows
         </Link>

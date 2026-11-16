@@ -168,6 +168,36 @@ describe("rows of one file", () => {
       expect(last?.search).toContain("q=market");
     });
     expect(screen.queryByRole("link", { name: "From one file" })).not.toBeInTheDocument();
+    // The filter went with its chip: applying the form does not bring it back.
+    await user.type(screen.getByLabelText("Search"), "s");
+    await user.click(screen.getByRole("button", { name: "Apply filters" }));
+    await waitFor(() => {
+      expect(api.callsTo("GET", "/api/v1/transactions").at(-1)?.search).toContain("q=markets");
+    });
+    expect(api.callsTo("GET", "/api/v1/transactions").at(-1)?.search).not.toContain("document=");
+    expect(screen.queryByRole("link", { name: "From one file" })).not.toBeInTheDocument();
+  });
+
+  it("Clear drops the file filter with the others", async () => {
+    const api = setup();
+    renderApp("/transactions?document=d-7&account=a-1");
+    const user = userEvent.setup();
+    await screen.findByLabelText("Category of Corner Market");
+    expect(screen.getByRole("link", { name: "From one file" })).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Clear" }));
+    await waitFor(() => {
+      const last = api.callsTo("GET", "/api/v1/transactions").at(-1);
+      expect(last?.search).not.toContain("document=");
+      expect(last?.search).not.toContain("account=");
+    });
+    expect(screen.queryByRole("link", { name: "From one file" })).not.toBeInTheDocument();
+    // Nothing is left in the draft to bring it back.
+    await user.type(screen.getByLabelText("Search"), "tram");
+    await user.click(screen.getByRole("button", { name: "Apply filters" }));
+    await waitFor(() => {
+      expect(api.callsTo("GET", "/api/v1/transactions").at(-1)?.search).toContain("q=tram");
+    });
+    expect(api.callsTo("GET", "/api/v1/transactions").at(-1)?.search).not.toContain("document=");
   });
 
   it("shows no chip and sends no document without one in the address", async () => {

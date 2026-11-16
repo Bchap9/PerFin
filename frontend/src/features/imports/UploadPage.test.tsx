@@ -209,6 +209,15 @@ describe("upload page", () => {
             // A file that is not a statement has no rows in the ledger.
             { ...doc("d-3", "processed", "till.jpg"), kind: "receipt" },
             { ...doc("d-4", "needs_review", "held.pdf"), account_id: "a-1" },
+            // Investment activity or holdings: none of it is in the cash ledger.
+            {
+              ...doc("d-5", "processed", "trades.csv"),
+              parser_version: "brokerage_activity_table/1",
+            },
+            {
+              ...doc("d-6", "processed", "holdings.csv"),
+              parser_version: "brokerage_positions_table/1",
+            },
           ],
           next_cursor: null,
         }),

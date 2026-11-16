@@ -549,6 +549,45 @@ describe("what a file imported", () => {
     ).toBeInTheDocument();
   });
 
+  it("offers no cash-ledger check or rows link for an investment statement", async () => {
+    fileApi([imported({ kind: "investment" })]);
+    renderApp("/documents/d-1");
+    const card = within(
+      await screen.findByRole("region", { name: "Imported from this file" }),
+    );
+    // Its rows are investment activity: the cash ledger holds none of them,
+    // and the reconcile view sums the cash ledger.
+    expect(card.getByText("9 rows")).toBeInTheDocument();
+    expect(card.queryByRole("link", { name: "9 rows" })).not.toBeInTheDocument();
+    expect(card.getByText("Not checked against a balance")).toBeInTheDocument();
+    expect(
+      card.queryByRole("button", { name: "Check against the statement" }),
+    ).not.toBeInTheDocument();
+  });
+
+  it("offers nothing to do with a quarantined file", async () => {
+    const api = fileApi([imported()], { quarantined: true, previewable: true });
+    renderApp("/documents/d-1");
+    await screen.findByRole("heading", { name: "march.pdf" });
+    // The delete action is still there, so the actions have been drawn.
+    expect(
+      await screen.findByRole("button", { name: "Delete" }),
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: "Process again" }),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: "Teach PerFin" }),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("region", { name: "Imported from this file" }),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: "Check against the statement" }),
+    ).not.toBeInTheDocument();
+    expect(api.callsTo("GET", "/api/v1/documents/:id/imported")).toHaveLength(0);
+  });
+
   it("links its open questions to the filtered queue", async () => {
     fileApi([imported()], { open_review_items: 3 });
     renderApp("/documents/d-1");
