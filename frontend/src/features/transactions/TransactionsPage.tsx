@@ -20,12 +20,14 @@ import { useToast } from "../../components/Toast";
 import { errorMessage } from "../../lib/api/client";
 import { formatDate, isIsoDate } from "../../lib/dates";
 import { accountLabel, useAccounts, useCanWrite } from "../accounts/api";
-import { canManageMembers, useAuthSession } from "../auth/session";
+import { AlwaysCategoriseDialog, RuleSavedNotice, type SavedRule } from "./AlwaysCategoriseDialog";
 import {
   autoPairTransfers,
+  canTeach,
   EMPTY_FILTERS,
   invalidateLedger,
   listTransactions,
+  merchantName,
   txKeys,
   useCategories,
   useCategorisationSummary,
@@ -42,9 +44,9 @@ import { CategoryCell, NotesCell, PayeeCell, rowLabel, TagsCell } from "./cells"
 import { DeleteTransactionDialog } from "./DeleteTransactionDialog";
 import { useEditTransaction } from "./optimistic";
 import { isSuggestion } from "./provenance";
-import { RememberCategoryDialog } from "./RememberCategoryDialog";
 import { RowActions, type RowAction } from "./RowActions";
 import { SplitEditor } from "./SplitEditor";
+import { dismissTeach, teachDismissed, TeachPrompt, type TeachOffer } from "./TeachPrompt";
 import { TransactionDialog } from "./TransactionDialog";
 import { TransferDialog } from "./TransferDialog";
 
@@ -97,10 +99,11 @@ export function TransactionsPage() {
   const [adding, setAdding] = useState(false);
   const [editing, setEditing] = useState<Transaction | null>(null);
   const [deleting, setDeleting] = useState<Transaction | null>(null);
-  const [remembering, setRemembering] = useState<Transaction | null>(null);
-  // Rules belong to owners and admins (POST /rules).
-  const { session } = useAuthSession();
-  const canMakeRules = canManageMembers(session?.household?.role);
+  // "Always categorise <merchant> as...": the dialog, the offer after a
+  // correction in the grid (one at a time) and the rule that was just saved.
+  const [always, setAlways] = useState<TeachOffer | { transaction: Transaction; categoryId?: undefined } | null>(null);
+  const [offer, setOffer] = useState<TeachOffer | null>(null);
+  const [savedRule, setSavedRule] = useState<SavedRule | null>(null);
   const edit = useEditTransaction();
   const findTransfers = useMutation({
     mutationFn: autoPairTransfers,
@@ -207,13 +210,14 @@ export function TransactionsPage() {
         setTransferring(row);
       },
     },
-    ...(canMakeRules && row.splits.length === 0 && (row.raw_payee ?? "").trim() !== ""
+    // A merchant rule is for members and above, which is everyone who has this menu.
+    ...(canTeach(row)
       ? [
           {
-            id: "remember",
-            label: "Always categorise like this…",
+            id: "always",
+            label: `Always categorise ${merchantName(row) ?? "this merchant"} as…`,
             onSelect: () => {
-              setRemembering(row);
+              setAlways({ transaction: row });
             },
           },
         ]
@@ -238,6 +242,14 @@ export function TransactionsPage() {
       },
     },
   ];
+
+  // A correction on a row that names a merchant may be worth a rule; the
+  // prompt asks the server and stays silent when it is not.
+  const offerRule = (row: Transaction, categoryId: string): void => {
+    if (canTeach(row) && !teachDismissed(row.merchant_key ?? "")) {
+      setOffer({ transaction: row, categoryId });
+    }
+  };
 
   const columns: TableColumn<Transaction>[] = [
     ...(canWrite
@@ -290,7 +302,14 @@ export function TransactionsPage() {
       id: "category",
       header: "Category",
       cell: (row) => (
-        <CategoryCell row={row} editable={editable(row)} label={rowLabel(row, payeeList)} categories={categoryList} ruleNames={ruleNames} />
+        <CategoryCell
+          row={row}
+          editable={editable(row)}
+          label={rowLabel(row, payeeList)}
+          categories={categoryList}
+          ruleNames={ruleNames}
+          onCategorised={offerRule}
+        />
       ),
     },
     {
@@ -471,6 +490,28 @@ export function TransactionsPage() {
           {counted("No category", summary.data?.uncategorised)}
         </Button>
       </div>
+      {savedRule === null ? null : (
+        <RuleSavedNotice
+          key={`${savedRule.result.rule.id}:${savedRule.result.rule.updated_at}`}
+          saved={savedRule}
+          onDone={() => {
+            setSavedRule(null);
+          }}
+        />
+      )}
+      {offer === null ? null : (
+        <TeachPrompt
+          offer={offer}
+          categories={categoryList}
+          onAlways={() => {
+            setAlways(offer);
+          }}
+          onDismiss={() => {
+            dismissTeach(offer.transaction.merchant_key ?? "");
+            setOffer(null);
+          }}
+        />
+      )}
       {selected.size > 0 ? (
         <BulkBar
           ids={[...selected]}
@@ -552,12 +593,18 @@ export function TransactionsPage() {
           }}
         />
       )}
-      {remembering === null ? null : (
-        <RememberCategoryDialog
-          transaction={remembering}
+      {always === null ? null : (
+        <AlwaysCategoriseDialog
+          transaction={always.transaction}
           categories={categoryList}
+          categoryId={always.categoryId}
           onClose={() => {
-            setRemembering(null);
+            setAlways(null);
+          }}
+          onSaved={(saved) => {
+            setSavedRule(saved);
+            // The merchant has its rule: the offer for it is answered.
+            setOffer((current) => (current?.transaction.merchant_key === always.transaction.merchant_key ? null : current));
           }}
         />
       )}

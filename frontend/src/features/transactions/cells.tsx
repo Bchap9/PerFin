@@ -51,7 +51,13 @@ export function CategoryCell({
   label,
   categories,
   ruleNames,
-}: CellProps & { categories: readonly Category[]; ruleNames?: ReadonlyMap<string, string> | undefined }) {
+  onCategorised,
+}: CellProps & {
+  categories: readonly Category[];
+  ruleNames?: ReadonlyMap<string, string> | undefined;
+  /** The server accepted a category the person chose for this row here (not a clearing). */
+  onCategorised?: ((row: Transaction, categoryId: string) => void) | undefined;
+}) {
   const edit = useEditTransaction();
   const accept = useAcceptSuggestion();
   if (row.splits.length > 0) {
@@ -69,7 +75,17 @@ export function CategoryCell({
         {...(placeholder === undefined ? {} : { placeholder })}
         value={row.category_id ?? ""}
         onChange={(event) => {
-          edit.mutate({ id: row.id, patch: { category_id: event.target.value === "" ? null : event.target.value } });
+          const chosen = event.target.value;
+          edit.mutate(
+            { id: row.id, patch: { category_id: chosen === "" ? null : chosen } },
+            {
+              onSuccess: () => {
+                if (chosen !== "") {
+                  onCategorised?.(row, chosen);
+                }
+              },
+            },
+          );
         }}
       />
     </span>
@@ -85,7 +101,14 @@ export function CategoryCell({
               aria-label={`Accept the suggestion for ${label}`}
               loading={accept.isPending}
               onClick={() => {
-                accept.mutate(row.id);
+                const accepted = row.suggested_category_id ?? "";
+                accept.mutate(row.id, {
+                  onSuccess: (result) => {
+                    if (result.changed > 0 && accepted !== "") {
+                      onCategorised?.(row, accepted);
+                    }
+                  },
+                });
               }}
             >
               Accept

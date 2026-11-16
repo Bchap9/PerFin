@@ -14,6 +14,9 @@ export type Job = Schemas["JobOut"];
 export type RuleExport = Schemas["RuleExport"];
 export type RuleImport = Schemas["RuleImport"];
 export type RuleImportMode = RuleImport["mode"];
+export type MerchantRulePreview = Schemas["MerchantRulePreview"];
+export type MerchantRuleSaved = Schemas["MerchantRuleOut"];
+export type RuleReverted = Schemas["RuleRevertOut"];
 
 export const ruleKeys = {
   list: [...queryRoots.rules, "list"],
@@ -52,6 +55,22 @@ export const exportRules = () => unwrap(api.GET("/api/v1/rules/export"));
  */
 export const importRules = (body: RuleImport, idempotencyKey: string) =>
   unwrap(api.POST("/api/v1/rules/import", { body, params: { header: { "Idempotency-Key": idempotencyKey } } }));
+
+/**
+ * What "always categorise this merchant as..." would do, counted on the
+ * server over the accounts the caller may edit. Nothing changes.
+ */
+export const previewMerchantRule = (body: Schemas["MerchantRulePreviewIn"]) => unwrap(api.POST("/api/v1/rules/merchant/preview", { body }));
+
+/**
+ * Make the rule of a transaction's merchant, or change the one it has.
+ * `apply_to_existing` also re-categorises the merchant's existing rows as a
+ * job; a category a person chose is never changed. Members may.
+ */
+export const createMerchantRule = (body: Schemas["MerchantRuleIn"]) => unwrap(api.POST("/api/v1/rules/merchant", { body }));
+
+/** Remove a rule and return the rows it categorised to undecided. */
+export const revertRule = (id: string) => unwrap(api.POST("/api/v1/rules/{rule_id}/revert", { params: { path: { rule_id: id } } }));
 
 export const getJob = (id: string) => unwrap(api.GET("/api/v1/jobs/{job_id}", { params: { path: { job_id: id } } }));
 

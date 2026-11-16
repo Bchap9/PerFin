@@ -478,7 +478,8 @@ describe("row actions menu", () => {
     const menu = screen.getByRole("menu", { name: "Actions for Corner Market" });
     expect(button).toHaveAttribute("aria-expanded", "true");
     expect(button).toHaveAttribute("aria-controls", menu.id);
-    expect(within(menu).getAllByRole("menuitem").map((item) => item.textContent)).toEqual(["Edit", "Split", "Link transfer", "Always categorise like this…", "Delete"]);
+    // The row names no merchant, so there is no "Always categorise ... as" (AlwaysCategoriseDialog.test.tsx).
+    expect(within(menu).getAllByRole("menuitem").map((item) => item.textContent)).toEqual(["Edit", "Split", "Link transfer", "Delete"]);
     expect(within(menu).getByRole("menuitem", { name: "Edit" })).toHaveFocus();
     await user.keyboard("{ArrowDown}");
     expect(within(menu).getByRole("menuitem", { name: "Split" })).toHaveFocus();
