@@ -3,11 +3,12 @@
  * Inbox, Needs you (`/inbox`, spec section 4): everything that waits on a
  * person, one card each, in the order that matters (`order.ts`).
  *
- * 1. The upload zone (today's uploader until it moves into the Inbox).
+ * 1. The upload zone: an Upload button, a drop zone and one row per file sent.
  * 2. The document cards, then the loose items (`GET /review/cards`).
  * 3. One card per subscription series that is suggested or has open changes.
  * 4. The suggested categories, and under them the rows with no category.
  * 5. Up to three offers to make a rule (not questions, so not counted).
+ * 6. Imported recently: where each finished file went.
  *
  * The cards that need an answer are one list, as many as
  * `GET /inbox/summary` counts. `?document=<id>` shows only that document's
@@ -26,7 +27,6 @@ import { queryRoots } from "../../lib/queryKeys";
 import { useInboxSummary } from "../../app/inboxSummary";
 import { useAccounts } from "../accounts/api";
 import { useAuthSession } from "../auth/session";
-import { UploadPage } from "../imports/UploadPage";
 import { useAction } from "../planning/useAction";
 import { listReviewCards, reviewKeys } from "../review/api";
 import { ReviewCardList } from "../review/ReviewPage";
@@ -42,6 +42,8 @@ import { bulkAction, useCategories, useCategorisationSummary } from "../transact
 import { inboxPageKeys, listRuleOffers, listSuggestedRows, listSuggestedSeries } from "./api";
 import { RuleOfferCard, SubscriptionCard, SuggestionsCard, type MerchantGroup } from "./cards";
 import { orderCards, subscriptionCards } from "./order";
+import { RecentImports } from "./RecentImports";
+import { UploadZone } from "./UploadZone";
 
 /** At most this many "Make it a rule" offers are shown. */
 const OFFERS_MAX = 3;
@@ -223,7 +225,7 @@ export function InboxPage() {
 
   return (
     <div className="inbox">
-      <UploadPage />
+      <UploadZone />
       <div className="inbox__needs">
         {everything ? null : (
           <p className="review-scope">
@@ -301,8 +303,8 @@ export function InboxPage() {
             ))}
           </ul>
         )}
-
       </div>
+      {everything ? <RecentImports /> : null}
     </div>
   );
 }

@@ -17,8 +17,7 @@ import { Table } from "../../components/Table";
 import { errorMessage } from "../../lib/api/client";
 import { formatDateTime } from "../../lib/dates";
 import { useCanWrite } from "../accounts/api";
-import { STATUS_LABELS } from "../imports/api";
-import { statusTone } from "../imports/UploadPage";
+import { STATUS_LABELS, statusTone } from "../imports/api";
 import { DeleteDocumentDialog } from "./DeleteDocumentDialog";
 import {
   docKeys,

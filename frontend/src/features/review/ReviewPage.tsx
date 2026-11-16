@@ -1,18 +1,19 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 /**
- * Review: one card per document that waits on a person, with its one next
- * action. `?document=<id>` shows only that document. Resolved and dismissed
- * items are listed one by one (the queue's history).
+ * The review queue on the Inbox.
  *
- * `ReviewCardList` is the card list alone, without the header and the "Show"
- * filter: the Inbox (`/inbox`) renders it in its own order.
+ * - `ReviewCardList`: one card per document that waits on a person, with its
+ *   one next action, then the loose items. Inbox, Needs you (`/inbox`)
+ *   renders it in its own order; `?document=<id>` keeps one document.
+ * - `ReviewHistory`: the items a person resolved or dismissed, one by one.
+ *   Inbox, History (`/inbox/history`) renders it.
  */
 import "../accounts/ledger.css";
 import "./review.css";
 
 import { useQuery } from "@tanstack/react-query";
-import { Link, useSearch } from "@tanstack/react-router";
-import { Fragment, useMemo, useState, type ReactNode } from "react";
+import { Link } from "@tanstack/react-router";
+import { useMemo, useState, type ReactNode } from "react";
 
 import { Card } from "../../components/Card";
 import { EmptyState } from "../../components/EmptyState";
@@ -21,6 +22,7 @@ import { PageHeader } from "../../components/PageHeader";
 import { Select } from "../../components/Select";
 import { Spinner } from "../../components/Spinner";
 import { errorMessage } from "../../lib/api/client";
+import { useSearchParam } from "../../lib/urlState";
 import {
   listReviewCards,
   listReviewItems,
@@ -28,7 +30,6 @@ import {
   type ReviewCard,
   type ReviewCards,
   type ReviewDocument,
-  type ReviewFilter,
 } from "./api";
 import {
   ClosedItem,
@@ -39,17 +40,6 @@ import {
 } from "./DocumentCard";
 
 export { DocumentLine, ExplanationBlock } from "./DocumentCard";
-
-const FILTERS: readonly { value: ReviewFilter; label: string }[] = [
-  { value: "open", label: "Open" },
-  { value: "resolved", label: "Resolved" },
-  { value: "dismissed", label: "Dismissed" },
-  { value: "all", label: "All" },
-];
-
-function isFilter(value: string): value is ReviewFilter {
-  return FILTERS.some((filter) => filter.value === value);
-}
 
 /** A document that waited on a person while this page was open, and where its card stood. */
 interface Waited {
@@ -79,15 +69,10 @@ type CardSort = (cards: readonly ReviewCard[]) => ReviewCard[];
  * documents that left the list while the page was open, and the loose items.
  * `documentId` keeps one document's card; `sort` orders the cards.
  */
-function useCardEntries(
-  documentId: string | null,
-  sort: CardSort | undefined,
-  enabled: boolean,
-) {
+function useCardEntries(documentId: string | null, sort: CardSort | undefined): Entry[] {
   const cards = useQuery({
     queryKey: reviewKeys.cards(),
     queryFn: () => listReviewCards(),
-    enabled,
   });
   const sorted = useMemo<ReviewCards | undefined>(
     () =>
@@ -110,7 +95,7 @@ function useCardEntries(
 
   const wanted = (id: string): boolean => documentId === null || documentId === id;
   const entries: Entry[] = [];
-  if (enabled && sorted !== undefined) {
+  if (sorted !== undefined) {
     const listed = new Set<string>();
     for (const card of sorted.cards) {
       listed.add(card.document.id);
@@ -119,6 +104,7 @@ function useCardEntries(
       }
       entries.push({
         key: card.action_item_id,
+        documentId: card.document.id,
         node: (
           <div className="review-entry">
             {card.open === 0 && seen.has(card.document.id) ? (
@@ -135,6 +121,7 @@ function useCardEntries(
     for (const entry of settled) {
       entries.splice(Math.min(entry.place, entries.length), 0, {
         key: `settled-${entry.document.id}`,
+        documentId: entry.document.id,
         node: <SettledCard document={entry.document} />,
       });
     }
@@ -144,13 +131,20 @@ function useCardEntries(
       }
     }
   }
-  return { cards, entries };
+  return entries;
 }
 
 /** One entry of the card list. */
 interface Entry {
   key: string;
+  /** The document of the card, so an upload row can point at it (`#inbox-document-<id>`). */
+  documentId?: string;
   node: ReactNode;
+}
+
+/** The anchor of a document's card on the Inbox, which an upload row links to. */
+export function documentAnchor(documentId: string): string {
+  return `inbox-document-${documentId}`;
 }
 
 /**
@@ -174,14 +168,18 @@ export function ReviewCardList({
   after?: readonly ReactNode[];
   empty?: ReactNode;
 }) {
-  const { entries } = useCardEntries(documentId, sort, true);
+  const entries = useCardEntries(documentId, sort);
   if (entries.length === 0 && after.length === 0) {
     return empty;
   }
   return (
     <ul className="review-list" aria-label={label}>
       {entries.map((entry) => (
-        <li key={entry.key} className="review-list__item">
+        <li
+          key={entry.key}
+          id={entry.documentId === undefined ? undefined : documentAnchor(entry.documentId)}
+          className="review-list__item"
+        >
           {entry.node}
         </li>
       ))}
@@ -190,46 +188,45 @@ export function ReviewCardList({
   );
 }
 
-export function ReviewPage() {
-  const search: Record<string, unknown> = useSearch({ strict: false });
-  const given: unknown = new Map(Object.entries(search)).get("document");
-  const documentId = typeof given === "string" && given !== "" ? given : null;
-  const [filter, setFilter] = useState<ReviewFilter>("open");
-  const showCards = filter === "open" || filter === "all";
-  const { cards, entries } = useCardEntries(documentId, undefined, showCards);
+/** The answered filters of the history, with the one shown by default first. */
+const HISTORY_FILTERS: readonly { value: "resolved" | "dismissed" | "all"; label: string }[] = [
+  { value: "resolved", label: "Resolved" },
+  { value: "dismissed", label: "Dismissed" },
+  { value: "all", label: "All" },
+];
+
+type HistoryFilter = (typeof HISTORY_FILTERS)[number]["value"];
+
+function historyFilter(value: string): HistoryFilter {
+  return HISTORY_FILTERS.find((filter) => filter.value === value)?.value ?? "resolved";
+}
+
+/**
+ * The queue's history (Inbox, History): the items a person resolved or
+ * dismissed, one by one, filtered by `?show=` (Resolved by default, Dismissed,
+ * All). Open items are never listed here: they are cards on Needs you.
+ * `documentId` keeps one document's items.
+ */
+export function ReviewHistory({ documentId }: { documentId: string | null }) {
+  const [shown, setShown] = useSearchParam("show", "resolved");
+  const filter = historyFilter(shown);
   const items = useQuery({
     queryKey: reviewKeys.list(filter, documentId),
     queryFn: () => listReviewItems(filter, documentId),
-    enabled: filter !== "open",
   });
-
-  const shown: ReactNode[] = entries.map((entry) => (
-    <Fragment key={entry.key}>{entry.node}</Fragment>
-  ));
-  if (filter !== "open" && items.data !== undefined) {
-    for (const item of items.data) {
-      if (item.state !== "open") {
-        shown.push(<ClosedItem key={item.id} item={item} />);
-      }
-    }
-  }
-  const pending =
-    (showCards && cards.isPending) || (filter !== "open" && items.isPending);
-  const failed = showCards && cards.isError ? cards.error : items.error;
+  const answered = (items.data ?? []).filter((item) => item.state !== "open");
 
   return (
     <div className="ledger-stack">
       <PageHeader
-        title="Review"
+        title="Answered and dismissed"
         actions={
           <Field label="Show">
             <Select
-              options={FILTERS}
+              options={HISTORY_FILTERS}
               value={filter}
               onChange={(event) => {
-                if (isFilter(event.target.value)) {
-                  setFilter(event.target.value);
-                }
+                setShown(historyFilter(event.target.value));
               }}
             />
           </Field>
@@ -238,26 +235,34 @@ export function ReviewPage() {
       {documentId === null ? null : (
         <p className="review-scope">
           Showing one file.{" "}
-          <Link to="/inbox/history" className="link-action">
+          <Link to="/inbox/history" search={filter === "resolved" ? {} : { show: filter }} className="link-action">
             Show every file
           </Link>
         </p>
       )}
-      {pending ? <Spinner label="Loading review items" /> : null}
-      {failed === null ? null : (
+      {items.isPending ? <Spinner label="Loading answered items" /> : null}
+      {items.isError ? (
         <p role="alert" className="ledger-error">
-          {errorMessage(failed)}
+          {errorMessage(items.error)}
         </p>
-      )}
-      {!pending && failed === null && shown.length === 0 ? (
+      ) : null}
+      {items.isSuccess && answered.length === 0 ? (
         <Card>
           <EmptyState
-            title="Nothing to review"
-            description="Items from imports that need a decision show up here."
+            title="Nothing here yet"
+            description="Questions you answer or dismiss on Needs you are kept here."
           />
         </Card>
       ) : null}
-      {shown}
+      {answered.length === 0 ? null : (
+        <ul className="review-list" aria-label="Answered items">
+          {answered.map((item) => (
+            <li key={item.id} className="review-list__item">
+              <ClosedItem item={item} />
+            </li>
+          ))}
+        </ul>
+      )}
     </div>
   );
 }

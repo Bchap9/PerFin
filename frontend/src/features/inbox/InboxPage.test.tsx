@@ -2,13 +2,16 @@
 import { screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 
+import { formatDate } from "../../lib/dates";
 import { expectNoAxeViolations } from "../../test/axe";
 import { authedSession, json, mockApi, renderApp, type Handler, type SessionOptions } from "../auth/testing";
 import type { LearnedCategory } from "../categories/api";
+import type { DocumentRow } from "../imports/api";
 import type { ReviewCard, ReviewItem } from "../review/api";
 import type { Subscription, SubscriptionEvent } from "../subscriptions/api";
 import { account, lookupHandlers, NOW, summary, tx } from "../transactions/fixtures";
 import type { Transaction } from "../transactions/api";
+import { recentImports } from "./RecentImports";
 
 // Invented fixtures: no real people, merchants or account numbers.
 
@@ -132,6 +135,7 @@ interface World {
   suggestions?: number;
   uncategorised?: number;
   offers?: LearnedCategory[];
+  documents?: DocumentRow[];
   extra?: Record<string, Handler>;
 }
 
@@ -145,7 +149,7 @@ function inboxApi(world: World = {}) {
   return mockApi({
     "GET /api/v1/auth/session": authedSession({ role: world.role ?? "member" }),
     ...lookupHandlers([account("a-1", "Everyday")]),
-    "GET /api/v1/documents": () => json({ items: [], next_cursor: null }),
+    "GET /api/v1/documents": () => json({ items: world.documents ?? [], next_cursor: null }),
     "GET /api/v1/review/cards": () => json({ cards, loose, next_cursor: null }),
     "GET /api/v1/subscriptions/events": () => json({ items: events, next_cursor: null, open: events.length }),
     "GET /api/v1/subscriptions": () =>
@@ -171,6 +175,36 @@ function inboxApi(world: World = {}) {
       }),
     ...world.extra,
   });
+}
+
+/** The day the Inbox tests of "Imported recently" run on. */
+const TODAY = "2026-11-16T12:00:00Z";
+
+/** A document in the library's list, finished `daysAgo` days before TODAY. */
+function listed(id: string, name: string, status: DocumentRow["status"], daysAgo = 1, extra: Partial<DocumentRow> = {}): DocumentRow {
+  const when = new Date(Date.parse(TODAY) - daysAgo * 86_400_000).toISOString();
+  return {
+    id,
+    status,
+    original_filename: name,
+    kind: "statement",
+    source: "upload",
+    size: 10,
+    mime_detected: "text/csv",
+    sha256: "0".repeat(64),
+    uploaded_by: null,
+    account_id: null,
+    institution_id: null,
+    period_start: null,
+    period_end: null,
+    tax_year: null,
+    parser_version: null,
+    error: null,
+    unchecked: false,
+    created_at: when,
+    updated_at: when,
+    ...extra,
+  };
 }
 
 function element(found: Element | null | undefined): HTMLElement {
@@ -398,10 +432,77 @@ describe("Inbox, Needs you", () => {
     await screen.findByRole("heading", { name: "Suggested categories" });
     await screen.findByRole("heading", { name: "Quill Notes" });
     await screen.findByRole("link", { name: "Always use Groceries for Corner Market…" });
-    // The cards only: the uploader above them is today's upload page until
-    // Task 8 replaces it (its "Recent uploads" card and table share a name).
-    const needs = container.querySelector(".inbox__needs");
-    expect(needs).not.toBeNull();
-    await expectNoAxeViolations(element(needs));
+    // The whole page: the upload zone, the cards and what was imported recently.
+    await expectNoAxeViolations(container);
+  });
+});
+
+describe("Inbox, imported recently", () => {
+  beforeEach(() => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date(TODAY));
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("recently imported names the account and marks unchecked reads", async () => {
+    inboxApi({
+      documents: [
+        listed("d-10", "everyday-october.csv", "processed", 1, {
+          account_id: "a-1",
+          period_start: "2026-10-01",
+          period_end: "2026-10-31",
+          unchecked: true,
+        }),
+        // An account the person cannot see is not named; the rows still are linked.
+        listed("d-11", "joint-october.pdf", "processed", 2, { account_id: "a-9" }),
+        // Investment activity is not in the cash ledger: no rows to link.
+        listed("d-12", "trades.csv", "processed", 3, { parser_version: "brokerage_activity_table/1" }),
+        // Still being read, waiting on a person, or older than two weeks: not here.
+        listed("d-13", "reading.pdf", "parsing", 0),
+        listed("d-14", "held.csv", "needs_review", 1, { account_id: "a-1" }),
+        listed("d-15", "old.csv", "processed", 20),
+      ],
+    });
+    renderApp("/inbox");
+    const recent = within(await screen.findByRole("region", { name: "Imported recently" }));
+    expect(await recent.findByRole("link", { name: "everyday-october.csv" })).toHaveAttribute(
+      "href",
+      "/inbox/documents/d-10",
+    );
+    expect(recent.getByRole("link", { name: "Everyday" })).toHaveAttribute("href", "/accounts/a-1");
+    expect(recent.getAllByRole("link", { name: "Everyday" })).toHaveLength(1);
+    expect(recent.getByText(`${String(formatDate("2026-10-01"))} to ${String(formatDate("2026-10-31"))}`)).toBeInTheDocument();
+    expect(recent.getAllByText("Not checked against a balance")).toHaveLength(1);
+    expect(recent.getByText("Read as investment activity")).toBeInTheDocument();
+    expect(
+      recent.getAllByRole("link", { name: /^View the rows/ }).map((link) => link.getAttribute("href")),
+    ).toEqual(["/transactions?document=d-10", "/transactions?document=d-11"]);
+    for (const name of ["reading.pdf", "held.csv", "old.csv"]) {
+      expect(recent.queryByText(name)).not.toBeInTheDocument();
+    }
+  });
+
+  it("a failed file says so", async () => {
+    inboxApi({ documents: [listed("d-20", "blurry-scan.png", "failed", 1)] });
+    renderApp("/inbox");
+    const recent = within(await screen.findByRole("region", { name: "Imported recently" }));
+    expect(await recent.findByRole("link", { name: "blurry-scan.png" })).toHaveAttribute("href", "/inbox/documents/d-20");
+    expect(recent.getByText("Could not be read")).toBeInTheDocument();
+    expect(recent.queryByRole("link", { name: /^View the rows/ })).not.toBeInTheDocument();
+  });
+
+  it("keeps the last ten finished in two weeks, newest first", () => {
+    const now = new Date(TODAY);
+    const rows = [
+      ...Array.from({ length: 12 }, (_, day) => listed(`d-${String(day)}`, `file-${String(day)}.csv`, "processed", day)),
+      listed("d-x", "rejected.csv", "rejected", 0),
+      listed("d-y", "edge.csv", "failed", 14.5),
+    ];
+    const kept = recentImports(rows, now);
+    expect(kept.map((row) => row.id)).toEqual(Array.from({ length: 10 }, (_, day) => `d-${String(day)}`));
+    expect(recentImports([listed("d-y", "edge.csv", "failed", 13.9)], now).map((row) => row.id)).toEqual(["d-y"]);
   });
 });
