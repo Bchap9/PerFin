@@ -58,7 +58,7 @@ from app.domain.transactions.schemas import AUTO_PAIR_JOB_TYPE
 from app.ingestion import pipeline
 from app.ingestion.extract.delimited import extract_delimited
 from app.ingestion.intake.upload import receive_upload
-from app.ingestion.sandbox.protocol import ExtractOptions, ExtractResult
+from app.ingestion.sandbox.protocol import ExtractedTransaction, ExtractOptions, ExtractResult
 from app.workers.handlers import ingest
 from tests.fixtures import synth_csv_layouts as layouts
 from tests.fixtures import synth_ofx_variants as ofx_variants
@@ -541,6 +541,52 @@ def test_qif_opening_balance_record_is_no_transaction(env: Env) -> None:
     ]
     assert env.document(document_id).status is DocumentStatus.PROCESSED
     assert env.open_reviews(document_id) == []
+
+
+def test_reading_a_qif_again_removes_the_opening_balance_row_of_qif_1(env: Env) -> None:
+    """A ledger imported by ``qif/1`` loses its opening balance row on "Process again"."""
+    account = env.ledger.account(env.household_id)
+    data = (
+        "!Type:Bank\n"
+        "D03/01/2026\nT500.00\nPOpening Balance\nL[Everyday]\n^\n"
+        "D03/14/2026\nT-12.40\nPHarbor Lane Bakery\n^\n"
+        "D03/19/2026\nT300.00\nPNorthfield Payroll\n^\n"
+    ).encode("ascii")
+    document_id = env.ingest(data, account=account, name="export.qif")
+    for db in env.db():
+        document = db.get(Document, document_id)
+        assert document is not None
+        current = ExtractResult.model_validate(document.extraction)
+        (statement,) = current.statements
+        opening = statement.opening_balance
+        assert opening is not None
+        assert opening.as_of is not None
+        # What qif/1 read: the opening balance as a transaction.
+        row = ExtractedTransaction(
+            posted=opening.as_of, amount=opening.amount, payee="Opening Balance"
+        )
+        earlier = current.model_copy(
+            update={
+                "statements": [
+                    statement.model_copy(
+                        update={
+                            "opening_balance": None,
+                            "transactions": [row, *statement.transactions],
+                        }
+                    )
+                ]
+            }
+        )
+        imports_service.import_extraction(db, document, earlier)
+    assert len(env.transactions(account)) == 3
+    for db in env.db():
+        document = db.get(Document, document_id)
+        assert document is not None
+        imports_service.import_extraction(db, document, current)
+    assert sorted(t.raw_payee or "" for t in env.transactions(account)) == [
+        "Harbor Lane Bakery",
+        "Northfield Payroll",
+    ]
 
 
 def test_qif_record_made_of_column_names_waits_for_review(env: Env) -> None:
