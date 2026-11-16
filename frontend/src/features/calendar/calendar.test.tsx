@@ -60,6 +60,8 @@ describe("calendar", () => {
     });
     renderApp("/plan/upcoming");
     const table = await screen.findByRole("table", { name: "Upcoming days" });
+    // The page is named after its tab.
+    expect(screen.getByRole("heading", { name: "Upcoming" })).toBeInTheDocument();
     expect(within(table).getAllByRole("row")).toHaveLength(2);
     expect(within(table).getByText("Streaming")).toBeInTheDocument();
     expect(within(table).getByText("$1,184.51")).toBeInTheDocument();
