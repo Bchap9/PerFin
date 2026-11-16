@@ -376,7 +376,7 @@ One migration, `0014` (`down_revision = "0013"`).
   category (check). Indexes on `(household_id, merchant_key)` and on the
   series link. Backfill: `legacy` for every row with a category or a split.
 - `scheduled_transaction`: `kind`, `kind_source`, `status`, `status_source`,
-  `merchant_key`, `first_seen_on`, `occurrences`, `confidence`,
+  `merchant_key`, `split_keys`, `first_seen_on`, `occurrences`, `confidence`,
   `last_amount`, `previous_amount`, `price_changed_on`, `ended_on`; a check
   ties `active` to `status`. Backfill from `active` and `origin`.
 - `rule` and `scheduled_transaction` gain `UNIQUE (household_id, id)` so the

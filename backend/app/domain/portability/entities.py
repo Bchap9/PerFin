@@ -82,6 +82,7 @@ SERIES_FACTS: Final = (
     "status",
     "status_source",
     "merchant_key",
+    "split_keys",
     "first_seen_on",
     "occurrences",
     "confidence",

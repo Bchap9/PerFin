@@ -543,6 +543,12 @@ class ScheduledTransaction(UUIDPk, Timestamps, HouseholdScoped, Base):
     )
     #: The merchant the series was found for (``transaction.merchant_key``).
     merchant_key: Mapped[str | None] = mapped_column(String(MERCHANT_KEY_MAX))
+    #: Other keys the series' rows went to when a re-key split its merchant
+    #: (``categorisation.service``): a person's "dismissed" or "ended" holds
+    #: there too (``recurring.service``).
+    split_keys: Mapped[list[str]] = mapped_column(
+        ARRAY(String(MERCHANT_KEY_MAX)), nullable=False, default=list, server_default=text("'{}'")
+    )
     first_seen_on: Mapped[date | None] = mapped_column(Date)
     #: Charges seen so far.
     occurrences: Mapped[int] = mapped_column(

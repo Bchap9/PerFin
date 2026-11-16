@@ -23,7 +23,8 @@ The three references are household-consistent (ADR-0008): a plain
 
 Columns added to ``scheduled_transaction``: ``kind`` and ``status`` with who
 set each (``kind_source``, ``status_source``), ``merchant_key``,
-``first_seen_on``, ``occurrences``, ``confidence``, ``last_amount``,
+``split_keys`` (the other keys its rows went to when a re-key split the
+merchant), ``first_seen_on``, ``occurrences``, ``confidence``, ``last_amount``,
 ``previous_amount``, ``price_changed_on`` and ``ended_on``. ``active`` stays
 and a check ties it to the status: ``active = (status IN ('active',
 'confirmed'))``.
@@ -64,6 +65,7 @@ from collections.abc import Sequence
 
 import sqlalchemy as sa
 from alembic import context, op
+from sqlalchemy.dialects import postgresql
 
 from app.db.rls import all_rls_ddl, table_grants_ddl
 
@@ -191,6 +193,7 @@ _SCHEDULE_COLUMNS: tuple[str, ...] = (
     "status",
     "status_source",
     "merchant_key",
+    "split_keys",
     "first_seen_on",
     "occurrences",
     "confidence",
@@ -285,6 +288,15 @@ def _upgrade_schedules() -> None:
         ),
     )
     op.add_column(table, sa.Column("merchant_key", sa.String(length=64), nullable=True))
+    op.add_column(
+        table,
+        sa.Column(
+            "split_keys",
+            postgresql.ARRAY(sa.String(length=64)),
+            server_default=sa.text("'{}'"),
+            nullable=False,
+        ),
+    )
     op.add_column(table, sa.Column("first_seen_on", sa.Date(), nullable=True))
     op.add_column(
         table,

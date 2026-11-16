@@ -619,6 +619,7 @@ SERIES_FACTS = (
     "status_source",
     "active",
     "merchant_key",
+    "split_keys",
     "first_seen_on",
     "occurrences",
     "confidence",
@@ -692,6 +693,8 @@ def plant_decisions(factories: Factories, rich: RichLedger) -> None:
         series.status_source = "person"
         series.active = False
         series.merchant_key = "streamwell"
+        # A re-key once split the merchant: the dismissal holds there too.
+        series.split_keys = ["streamwell plus"]
         series.first_seen_on = date(2025, 11, 9)
         series.occurrences = 5
         series.confidence = Decimal("0.8700")
@@ -857,6 +860,7 @@ def test_format_3_round_trips_provenance_memory_and_series_states(
         "status_source": "person",
         "active": False,
         "merchant_key": "streamwell",
+        "split_keys": ["streamwell plus"],
         "first_seen_on": date(2025, 11, 9),
         "occurrences": 5,
         "confidence": Decimal("0.8700"),
@@ -957,6 +961,7 @@ def test_a_format_2_archive_imports_with_legacy_sources(
         assert facts["kind_source"] == "detector"
         assert facts["occurrences"] == 0
         assert facts["merchant_key"] is None
+        assert facts["split_keys"] == []
         assert facts["last_amount"] is None
     assert after["memory"] == []
     assert refresh_jobs(factories, household(owner_b)) == [{"force": True}]

@@ -65,10 +65,12 @@ notification routed for ``subscription.<kind>`` and emits the live event
 ``subscription.changed`` (``account_id``, ``schedule_id``). Income is
 watched (it ends when it stops) but never announced: the sentences speak of
 subscriptions and bills. A series that is only suggested is announced when
-it is new and not otherwise. A series the detector of this release never saw
-a charge of (``occurrences == 0``, written by an earlier release) ends
-without an event. The first run of a household (``quiet``: it has no series
-with a merchant key yet) announces only what is new inside the window:
+it is new and not otherwise, unless it is a person's dismissed or ended
+series found again under another of its merchant's keys (``announce_new``).
+A series the detector of this release never saw a charge of (``occurrences
+== 0``, written by an earlier release) ends without an event. The first run
+of a household (``quiet``: it has no series with a merchant key yet)
+announces only what is new inside the window:
 series that stopped long ago are ended without a word.
 
 The view
@@ -630,6 +632,7 @@ def settle(
     *,
     quiet: bool,
     created: bool = False,
+    announce_new: bool = True,
     loose: Sequence[Charge] = (),
 ) -> list[SubscriptionEvent]:
     """Write what one detection run says changed about ``series`` (module doc).
@@ -639,7 +642,9 @@ def settle(
     the rows of the series (linked to it, or in the candidate); ``loose``
     are rows of the same group (the merchant, or the text of a series without
     a key), account and direction that belong to no series. ``as_of`` is the
-    account's data clock. ``created``: the series was written in this run.
+    account's data clock. ``created``: the series was written in this run;
+    without ``announce_new`` it is not announced as new (nor as a trial that
+    became a paid plan).
     ``quiet``: the household's first run (only what is new is announced).
     Returns the events stored now; the caller links the charge of a
     ``charged_after_end`` event to the series.
@@ -684,7 +689,7 @@ def settle(
     events = []
     counted = before in ACTIVE_STATUSES
     if created and candidate is not None:
-        if announced:
+        if announced and announce_new:
             events.extend(_first_seen(db, series, candidate, [*loose, *own], as_of))
     elif candidate is not None:
         _keep(events, _reprice(db, series, candidate, own, loud=loud and counted))

@@ -18,7 +18,7 @@ from __future__ import annotations
 import importlib
 import uuid
 from collections.abc import Iterator
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 from typing import Any
 
@@ -37,6 +37,8 @@ from app.domain.categorisation.cleanup import Cleaned
 from app.domain.categorisation.dictionary import Hit, Merchant
 from app.domain.categorisation.memory import Direction
 from app.domain.categorisation.models import MerchantMemory
+from app.domain.recurring import service as recurring
+from app.domain.recurring.models import SubscriptionEvent
 from app.domain.transactions import categories
 from app.domain.transactions.models import (
     Category,
@@ -746,6 +748,108 @@ def test_a_rule_does_not_follow_a_split_key_or_onto_a_merchant_that_has_its_rule
     [entry] = _audits(db, hh, "categorise.refresh")
     assert entry.after is not None
     assert (entry.after["rules_moved"], entry.after["series_moved"]) == (0, 0)
+
+
+def _monthly_charges(home: Home, raw_payee: str, key: str, months: int = 4) -> None:
+    """A charge of 50.00 on the 5th of January onward, keyed as an older release read it."""
+    for month in range(1, months + 1):
+        home.row(raw_payee, merchant_key=key, amount="-50.00", posted_date=date(2026, month, 5))
+
+
+def _series_of(db: Session, account_id: uuid.UUID) -> list[ScheduledTransaction]:
+    db.flush()
+    db.expire_all()
+    return list(
+        db.execute(
+            select(ScheduledTransaction)
+            .where(ScheduledTransaction.account_id == account_id)
+            .order_by(ScheduledTransaction.id)
+        ).scalars()
+    )
+
+
+def _alerts(db: Session, schedule_id: uuid.UUID) -> list[str]:
+    return [
+        event.kind
+        for event in db.execute(
+            select(SubscriptionEvent).where(SubscriptionEvent.schedule_id == schedule_id)
+        ).scalars()
+    ]
+
+
+def test_a_dismissed_series_follows_its_own_rows_not_a_stray_elsewhere(
+    db: Session, home: Home, known: dict[str, Merchant], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    hh = home.household_id
+    _store_state(db, hh, _versions())
+    old = "velvet picture house 03"
+    _monthly_charges(home, "VELVET PICTURE HOUSE 03", old)
+    dismissed = _series(db, home, old, "dismissed")
+    # The older release gave the same key to a row of another account that
+    # today's reads as another merchant, and to a line that now names nobody.
+    elsewhere = make_account(db, hh)
+    make_transaction(
+        db,
+        elsewhere,
+        raw_payee="CORNER GROCER 0417",
+        merchant_key=old,
+        created_at=T0,
+        updated_at=T0,
+    )
+    home.row("***", merchant_key=old)
+
+    _ship_a_release_that_renames_the_cinema(known, monkeypatch)
+    service.refresh(db, hh)
+    counts, _ = recurring.persist(db, hh, [home.account.id], date(2026, 4, 10))
+
+    # The series' own charges all read as the renamed merchant: so does the series,
+    # and the next detection finds the person's "not a subscription" there.
+    [kept] = _series_of(db, home.account.id)
+    assert kept.id == dismissed.id
+    assert (kept.merchant_key, kept.status, kept.status_source, kept.active) == (
+        RENAMED.key,
+        "dismissed",
+        "person",
+        False,
+    )
+    assert (counts.created, counts.skipped_dismissed) == (0, 1)
+
+
+@pytest.mark.parametrize("status", ["dismissed", "ended"])
+def test_a_dismissed_series_whose_own_rows_split_keeps_new_plans_from_returning(
+    db: Session,
+    home: Home,
+    known: dict[str, Merchant],
+    monkeypatch: pytest.MonkeyPatch,
+    status: str,
+) -> None:
+    hh = home.household_id
+    _store_state(db, hh, _versions())
+    old = "velvet picture house 03"
+    _monthly_charges(home, "VELVET PICTURE HOUSE 03", old)
+    dismissed = _series(db, home, old, status)
+    # A charge of the same account and direction that carried the key and is
+    # read as another merchant now: nobody can say which key the series means.
+    home.row("CORNER GROCER 0417", merchant_key=old)
+
+    _ship_a_release_that_renames_the_cinema(known, monkeypatch)
+    service.refresh(db, hh)
+
+    for _ in range(2):
+        recurring.persist(db, hh, [home.account.id], date(2026, 4, 10))
+        series = _series_of(db, home.account.id)
+        kept = next(row for row in series if row.id == dismissed.id)
+        assert (kept.status, kept.status_source, kept.active) == (status, "person", False)
+        # What detection finds under one of the keys the rows went to is only
+        # asked about, and nobody is told of a "new" subscription.
+        assert [
+            (row.merchant_key, row.status, row.active) for row in series if row.id != dismissed.id
+        ] == [(RENAMED.key, "suggested", False)]
+        assert all("new" not in _alerts(db, row.id) for row in series)
+    # The tombstone keeps the key it had and remembers where its rows went.
+    tombstone = db.get_one(ScheduledTransaction, dismissed.id)
+    assert tombstone.merchant_key == old
+    assert sorted(tombstone.split_keys) == sorted([RENAMED.key, GROCER.key])
 
 
 def test_dispatch_queues_only_households_behind(db: Session) -> None:

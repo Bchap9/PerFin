@@ -232,8 +232,12 @@ docs/UPGRADING.md "1.0.0-rc.10").
   accounts, never stated, because a wire may pay somebody else. When a
   later merchant list or clean-up renames a merchant, what
   was learned, the rules that name it and its recurring series follow the
-  new name; when that one merchant becomes two, a rule or a series that
-  named it stays with the old name and has to be made again. A format 2 archive written before migration `0009` (before
+  new name (a series follows its own account's charges, whatever a charge
+  of the same old name on another account is called now); when that one
+  merchant becomes two, a rule or a series that named it stays with the
+  old name and a rule has to be made again. A series you dismissed or
+  ended then still holds for both names: what is found under the other one
+  on that account is only suggested, without a "New" alert. A format 2 archive written before migration `0009` (before
   1.0.0-rc.3) is refused whole, as it already was (docs/UPGRADING.md).
   There is no category model, no merchant category code, no automatic
   payee, no merchant editor and no guess for the lines of a split.

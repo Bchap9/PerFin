@@ -152,7 +152,7 @@ _table(
     "payee_id category_id origin active last_seen_on kind kind_source status status_source "
     "first_seen_on occurrences confidence last_amount previous_amount price_changed_on ended_on",
     free_text="name",
-    denied={"merchant_key": R_MERCHANT_KEY},
+    denied={"merchant_key": R_MERCHANT_KEY, "split_keys": R_MERCHANT_KEY},
 )
 _deny_table(
     "merchant_memory",

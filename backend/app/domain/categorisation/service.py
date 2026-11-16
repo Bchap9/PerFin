@@ -251,6 +251,7 @@ def _add(total: Summary, part: Summary) -> None:
     total.changed_accounts |= part.changed_accounts
     total.memory_moved += part.memory_moved
     total.renamed.update(part.renamed)
+    total.renamed_at.update(part.renamed_at)
 
 
 def _renamed_conditions(
@@ -275,20 +276,35 @@ def _renamed_conditions(
     return out, moved
 
 
-def _follow_keys(
-    db: Session, household_id: uuid.UUID, renamed: Mapping[str, frozenset[str | None]]
-) -> tuple[int, int]:
+def _keys_of_series(
+    account_id: uuid.UUID, direction: Direction, key: str, summary: Summary
+) -> frozenset[str]:
+    """The keys a series' rows carried as ``key`` carry now; ``{key}`` when none did."""
+    return engine.keys_at(account_id, direction, key, summary.renamed_at) or frozenset({key})
+
+
+def _follow_keys(db: Session, household_id: uuid.UUID, summary: Summary) -> tuple[int, int]:
     """Carry merchant rules and recurring series over to their merchants' new keys.
 
-    After a pass that computed every merchant key again
-    (``Summary.renamed``, :func:`engine.key_now`): a rule's ``merchant``
-    condition and a series' ``merchant_key`` name the merchant as its rows
-    are keyed now, so "always categorise" keeps firing and a person's
-    decision about a series stays where the next detection looks for it.
-    Nothing else of the rule or the series is written. A merchant rule is
-    left as it is when the household already has one for the new key (the
-    earlier of two would win). Returns ``(rules, series)`` changed.
+    After a pass that computed every merchant key again: a rule's
+    ``merchant`` condition names the merchant as the household's rows are
+    keyed now (``Summary.renamed``, :func:`engine.key_now`), so "always
+    categorise" keeps firing. A merchant rule is left as it is when the
+    household already has one for the new key (the earlier of two would win).
+
+    A series lives on one account and is read for one direction: it follows
+    the rows of that account and direction that carried its key
+    (``Summary.renamed_at``, :func:`engine.keys_at`), whatever a row of the
+    same key elsewhere reads as now, so a person's decision about it stays
+    where the next detection looks for it. When those rows went to one key,
+    the series takes it; when they went to several, it keeps its key and
+    ``split_keys`` holds the others, where detection finds a person's
+    "dismissed" or "ended" too (``recurring.service``). Keys already in
+    ``split_keys`` follow their rows the same way. Nothing else of the rule
+    or the series is written. Returns ``(rules, series)`` that follow a new
+    key; a series that only gains ``split_keys`` is not counted.
     """
+    renamed = summary.renamed
     rules = list(
         db.execute(
             select(Rule)
@@ -325,10 +341,20 @@ def _follow_keys(
         .order_by(ScheduledTransaction.id)
         .with_for_update()
     ).scalars():
-        new = engine.key_now(cast(str, series.merchant_key), renamed)
-        if new is not None:
-            series.merchant_key = new
+        old = cast(str, series.merchant_key)
+        direction: Direction = "in" if series.amount_min >= 0 else "out"
+        keys = _keys_of_series(series.account_id, direction, old, summary)
+        if len(keys) == 1 and old not in keys:
+            [series.merchant_key] = keys
             series_moved += 1
+        held_now = {
+            key
+            for held_key in series.split_keys
+            for key in _keys_of_series(series.account_id, direction, held_key, summary)
+        }
+        split = sorted((keys | held_now) - {series.merchant_key})
+        if split != list(series.split_keys):
+            series.split_keys = split
     db.flush()
     return rules_moved, series_moved
 
@@ -374,7 +400,7 @@ def refresh(
     )
     rules_moved = series_moved = 0
     if rekey:
-        rules_moved, series_moved = _follow_keys(db, household_id, total.renamed)
+        rules_moved, series_moved = _follow_keys(db, household_id, total)
     seeded = 0
     if not before.memory_seeded:
         # After the keys: the seed counts ``legacy`` rows by their merchant key.

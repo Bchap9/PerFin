@@ -302,7 +302,11 @@ Kept out on purpose:
 and Reopen are recorded as yours, and detection never changes a state or a
 kind you set. A dismissed series does not come back, also not when its price
 changes (a different plan you start at the same merchant later is suggested
-again, and stays a suggestion until you decide). There is one factual
+again, and stays a suggestion until you decide), and not when a later
+merchant list or clean-up gives the merchant a new name: the series follows
+the charges of its own account. When the charges of a series you dismissed
+or ended now read as two merchants, what is found under either name on that
+account is only suggested, without a "New" alert. There is one factual
 exception: a confirmed series whose charges
 really stop is marked ended, and PerFin tells you. Deleting a found series
 from the Calendar now dismisses it instead of deleting it, which is why it
