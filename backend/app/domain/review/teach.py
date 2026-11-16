@@ -19,10 +19,13 @@ with a role per column, a line to ignore, or "Other — describe it").
    reconciled again, :func:`app.domain.review.actions.correct_balances`). A
    labelled table is read over the whole document
    (:func:`~app.ingestion.parsers.template.read_template`) and its statement
-   replaces what the parsers read in the stored extraction; when no row of
-   the document was imported yet it is imported (``apply-mapping`` job,
-   the normal importer: reconciliation, deduplication, account matching,
-   review items).
+   replaces what the parsers read in the stored extraction, and the
+   document is imported (``apply-mapping`` job, the normal importer:
+   reconciliation, deduplication, account matching, review items). When
+   rows of the document were imported before, the answer carries the
+   warning ``rows_already_imported``: the importer replaces the rows of
+   the earlier reading nobody touched and keeps and lists the others
+   (``app.domain.imports.service``, "A document read again").
 3. With ``remember``: stores a household fingerprint (``store_layout``:
    rules derived from the header, which must match the document) **with the
    learned template** (anchors, tables, ignored lines and notes; never a
@@ -758,16 +761,17 @@ def teach(
         rerun = "pipeline" if document.id in reprocessed else None
     elif taught.read:
         if _has_rows(db, document):
+            # Said so the dialog can tell: the import below replaces the
+            # rows of the earlier reading nobody touched and keeps the others.
             lesson.warnings.append("rows_already_imported")
-        else:
-            accepted = imports_service.request_apply(
-                db,
-                principal,
-                document.id,
-                ApplyMapping(account_id=body.account_id),
-                request=request,
-            )
-            rerun, job_id = "import", accepted.job_id
+        accepted = imports_service.request_apply(
+            db,
+            principal,
+            document.id,
+            ApplyMapping(account_id=body.account_id),
+            request=request,
+        )
+        rerun, job_id = "import", accepted.job_id
 
     tables_out = _tables_out(template, taught, lesson.order)
     out_item = None

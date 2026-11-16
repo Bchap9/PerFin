@@ -43,19 +43,25 @@ committed :func:`check_overlap` compares it with the account's records:
   (``apply-mapping``): that imports it, so a "same statement" answer can be
   taken back.
 
+* A re-read may move a statement's period (a first page read another way).
+  Its record is keyed by the period start, so the old one would stay as a
+  ghost: :func:`drop_stale_records` removes the document's records of an
+  account whose period start the run did not record again. The importer
+  calls it only for an account all of whose statements the run committed.
+
 Payloads and audit rows carry ids, dates, counts and the statement key (a
 digest) only.
 """
 
 from __future__ import annotations
 
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Collection, Mapping
 from dataclasses import dataclass
 from datetime import date
 from decimal import Decimal
 from typing import Any, Final, Literal
 
-from sqlalchemy import func, select
+from sqlalchemy import delete, func, select
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.orm import Session
 
@@ -337,3 +343,32 @@ def record_statement(
         )
     )
     return True
+
+
+def drop_stale_records(
+    db: Session,
+    document: Document,
+    account: Account,
+    kept_periods: Collection[date],
+    *,
+    kind: StatementKind = "bank",
+) -> int:
+    """Delete the document's records of ``account`` this run did not record; how many.
+
+    ``kept_periods`` are the period starts the run recorded for the account
+    and ``kind``. A record with another start is of an earlier reading of
+    the document (module doc); records of other documents, other accounts
+    and the other kind are never touched.
+    """
+    stale = delete(StatementRecord).where(
+        StatementRecord.household_id == account.household_id,
+        StatementRecord.account_id == account.id,
+        StatementRecord.document_id == document.id,
+        StatementRecord.kind == kind,
+        # A statement answered "same statement" is no reading of the rows.
+        StatementRecord.outcome == "imported",
+    )
+    if kept_periods:
+        stale = stale.where(StatementRecord.period_start.not_in(sorted(set(kept_periods))))
+    result = db.execute(stale.execution_options(synchronize_session="fetch"))
+    return int(getattr(result, "rowcount", 0) or 0)

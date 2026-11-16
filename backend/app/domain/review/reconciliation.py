@@ -63,8 +63,19 @@ must be one the caller may edit (``404`` otherwise, as for any account).
 * :func:`restore`: a removed row is put back from the stored statement,
   pending, with its original hash; ``404 tombstone-not-found`` for a
   tombstone that is not of this document's statements.
-* :func:`remove_earlier`: removes the rows an earlier reading left behind;
-  none is known yet, so it changes nothing.
+* :func:`remove_earlier`: removes the statement's rows an earlier reading
+  of the file left behind (:func:`earlier_rows`). The importer already
+  removed those nobody touched; these are the ones it kept because a person
+  had changed them. Each leaves a tombstone, like any row a person deletes,
+  and the ``earlier_rows_kept`` finding is closed when none is left.
+
+**Rows of an earlier reading** (:func:`earlier_rows`). A row of the account
+whose source is this document and whose ``import_hash`` (or alias) is not a
+hash of any statement of the document's current reading: the file was read
+again and the new reading has no such row. A row without an ``import_hash``
+(added by hand for the document) is never one. A document that also holds
+brokerage statements has none here: their cash rows are not bank statement
+rows, and nothing says which reading they are of.
 
 "Finish later" is no request: the findings stay open.
 
@@ -102,7 +113,7 @@ from app.domain.accounts.visibility import (
     get_visible_account,
 )
 from app.domain.documents.manage import can_edit_document, get_editable_document
-from app.domain.documents.models import Document
+from app.domain.documents.models import Document, ReviewItem, ReviewItemState, ReviewKind
 from app.domain.documents.schemas import Verification
 from app.domain.documents.service import get_visible_document
 from app.domain.imports import tombstones
@@ -124,6 +135,7 @@ from app.domain.review.schemas import (
     RemovedRow,
     StatementReconciliation,
 )
+from app.domain.transactions import service as transactions_service
 from app.domain.transactions.import_hash import HashInput, assign_import_hashes
 from app.domain.transactions.models import (
     MEMO_MAX,
@@ -133,6 +145,7 @@ from app.domain.transactions.models import (
     TransactionStatus,
 )
 from app.ingestion.parsers.base import DocumentView
+from app.ingestion.parsers.structured import ParsedStatement
 from app.ingestion.reconcile import TOLERANCE
 from app.ingestion.sandbox.protocol import ExtractedTransaction, ExtractResult, Statement
 
@@ -140,6 +153,10 @@ from app.ingestion.sandbox.protocol import ExtractedTransaction, ExtractResult, 
 ROWS_MAX: Final = 2000
 #: Row ids one cause names.
 CAUSE_ROWS_MAX: Final = 200
+
+#: Reason of the finding that lists the rows of an earlier reading the
+#: importer kept (``imports.service``; kind ``low_confidence_field``).
+EARLIER_KEPT: Final = "earlier_rows_kept"
 
 Period = tuple[date, date]
 
@@ -318,6 +335,98 @@ def _split(
             out[index].rows.append(row)
             out[index].hashes[row.id] = mine
     return out
+
+
+def reading_hashes(account: Account, statements: Sequence[ParsedStatement | Statement]) -> set[str]:
+    """Every hash the importer gives the rows of ``statements`` on ``account``.
+
+    Rows are numbered per statement, after those in another currency than
+    the account's are left out, as ``imports.service`` commits them.
+    """
+    out: set[str] = set()
+    for statement in statements:
+        if isinstance(statement, Statement):
+            out.update(value for value, _ in _hashed(statement, account))
+            continue
+        rows = [
+            t
+            for t in statement.transactions
+            if t.currency is None or t.currency == account.currency
+        ]
+        out.update(
+            assign_import_hashes(
+                account.id, [HashInput(t.posted_date, t.amount, t.raw_payee) for t in rows]
+            )
+        )
+    return out
+
+
+def earlier_rows_of(
+    db: Session,
+    document: Document,
+    account_id: uuid.UUID,
+    hashes: Collection[str],
+    *,
+    lock: bool = False,
+) -> list[Transaction]:
+    """The rows of ``document`` on the account that a reading with ``hashes`` does not hold.
+
+    Rows whose source is the document, that carry an ``import_hash``, and
+    of which neither that hash nor an alias is in ``hashes``; oldest first.
+    ``lock`` locks them for the caller's change.
+    """
+    statement = (
+        select(Transaction)
+        .where(
+            Transaction.household_id == document.household_id,
+            Transaction.account_id == account_id,
+            Transaction.source_document_id == document.id,
+            Transaction.import_hash.is_not(None),
+        )
+        .order_by(Transaction.posted_date, Transaction.id)
+    )
+    if lock:
+        statement = statement.with_for_update()
+    wanted = set(hashes)
+    aliased = {
+        transaction_id
+        for transaction_id, _ in repo.alias_transactions(
+            db, document.household_id, account_id, sorted(wanted)
+        )
+    }
+    return [
+        row
+        for row in db.execute(statement).scalars()
+        if row.import_hash not in wanted and row.id not in aliased
+    ]
+
+
+def earlier_rows(
+    db: Session,
+    document: Document,
+    account: Account,
+    statements: Sequence[ParsedStatement | Statement],
+) -> list[Transaction]:
+    """Rows of ``account`` an earlier reading of ``document`` left behind (module doc).
+
+    ``statements`` are the statements of the document's current reading for
+    the account; naming more of them only spares rows.
+    """
+    return earlier_rows_of(db, document, account.id, reading_hashes(account, statements))
+
+
+def _earlier_ids(
+    db: Session, document: Document, result: ExtractResult, account: Account
+) -> set[uuid.UUID]:
+    """The ids of the account's rows of an earlier reading, as the view names them.
+
+    Every stored bank statement of the document counts as the current
+    reading, whatever account it is on: a statement whose account is not
+    settled yet must not turn its rows into an earlier reading.
+    """
+    if result.investments:
+        return set()
+    return {row.id for row in earlier_rows(db, document, account, result.statements)}
 
 
 def statement_rows(
@@ -537,9 +646,13 @@ def _statement_out(
         difference = opening + total - closing
         status = "balanced" if abs(difference) <= TOLERANCE else "off"
     taken_out = tombstones.list_tombstones(db, account.household_id, account.id, list(group.read))
+    earlier = _earlier_ids(db, document, result, account)
     causes = rank_causes(
         difference,
-        [LedgerRow(row.id, row.posted_date, row.amount) for row in group.rows],
+        [
+            LedgerRow(row.id, row.posted_date, row.amount, earlier=row.id in earlier)
+            for row in group.rows
+        ],
         period=period,
         opening=opening,
         previous_closing=previous,
@@ -1023,6 +1136,37 @@ def restore(
     return _outcome(db, opened)
 
 
+def _close_earlier_items(
+    db: Session,
+    principal: Principal,
+    document: Document,
+    account_id: uuid.UUID,
+    resolution: dict[str, object],
+    *,
+    request: HTTPConnection | None,
+) -> int:
+    """Resolve the document's open ``earlier_rows_kept`` findings of the account."""
+    found = [
+        item
+        for item in db.execute(
+            select(ReviewItem)
+            .where(
+                ReviewItem.household_id == document.household_id,
+                ReviewItem.document_id == document.id,
+                ReviewItem.state == ReviewItemState.OPEN,
+                ReviewItem.kind == ReviewKind.LOW_CONFIDENCE_FIELD,
+            )
+            .order_by(ReviewItem.created_at, ReviewItem.id)
+            .with_for_update()
+        ).scalars()
+        if (item.payload or {}).get("reason") == EARLIER_KEPT
+        and (item.payload or {}).get("account_id") == str(account_id)
+    ]
+    for item in found:
+        service.close_item(db, principal, item, dict(resolution), request=request)
+    return len(found)
+
+
 def remove_earlier(
     db: Session,
     principal: Principal,
@@ -1031,9 +1175,42 @@ def remove_earlier(
     *,
     request: HTTPConnection | None,
 ) -> ReconcileOutcome:
-    """Remove the rows an earlier reading of the statement left behind.
+    """Remove the statement's rows an earlier reading of the file left behind.
 
-    No row is known to be from an earlier reading yet: the statement is
-    returned as it is.
+    Each goes the way a row a person deletes does (audited, with a
+    tombstone, so no later reading brings it back). When the account has no
+    such row left, its ``earlier_rows_kept`` finding is closed. A statement
+    that was confirmed as balanced and no longer is goes back to
+    ``unverified``. With nothing to remove the statement is returned as it is.
     """
-    return _outcome(db, _open(db, principal, document_id, body.statement))
+    opened = _open(db, principal, document_id, body.statement)
+    account, document = opened.account, opened.document
+    earlier = _earlier_ids(db, document, opened.result, account)
+    mine = [row.id for row in opened.group.rows if row.id in earlier]
+    for transaction_id in mine:
+        row = transactions_service.get_visible_transaction(
+            db, principal, transaction_id, need="edit", lock=True
+        )
+        transactions_service.delete_transaction(db, principal, row, request=request, tombstone=True)
+    db.flush()
+    closed = 0
+    if mine and not _earlier_ids(db, document, opened.result, account):
+        closed = _close_earlier_items(
+            db,
+            principal,
+            document,
+            account.id,
+            {"removed": len(mine), "account_id": str(account.id), "statement": body.statement},
+            request=request,
+        )
+    after = _again(db, opened)
+    record = after.placed.record
+    if (
+        mine
+        and record is not None
+        and record.verification == "reconciled"
+        and _view(db, after).status != "balanced"
+    ):
+        record.verification = "unverified"
+        db.flush()
+    return _outcome(db, opened, closed=closed)

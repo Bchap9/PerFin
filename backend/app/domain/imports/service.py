@@ -189,6 +189,26 @@ The flow (INGESTION.md "Parse", "Match and deduplicate", "Commit"):
      lots, holdings, prices, snapshot; held back when they do not
      reconcile); their cash deposits and withdrawals come back here as
      ledger rows.
+   * **A document read again** (reprocess, a re-run, a taught table): a
+     row a person deleted (an import tombstone) is not written again and is
+     counted (``tombstoned_rows``). Every row a run writes ends with
+     ``updated_at == created_at``, after the rules and payee defaults of
+     the import ran: that is "untouched since import". When the run has
+     committed every statement of the document for an account
+     (:func:`_finish_reading`), the rows this document produced there
+     earlier that the new reading no longer holds are removed when nobody
+     touched them (no tombstone; ``replaced_rows``), and kept and listed in
+     one ``low_confidence_field`` item (``earlier_rows_kept``: the account,
+     a count, transaction ids) otherwise (``kept_rows``); audited as
+     ``import.replace``. A new row that only resembled a row removed this
+     way is no near duplicate; a finding about rows that are all gone is
+     dismissed. The statement records of periods the run did not record
+     again are dropped. Nothing of this happens for an account a statement
+     of the document waits for (an overlap, a sign question, another
+     currency), nor for a document with a statement that has no account
+     yet or with brokerage statements. Rows without an ``import_hash``
+     (added by hand), rows of other documents and rows a person touched are
+     never removed here.
    * The document is ``processed`` when nothing is left open for it in the
      review queue, ``needs_review`` otherwise.
 
@@ -197,7 +217,8 @@ The flow (INGESTION.md "Parse", "Match and deduplicate", "Commit"):
    ``imports.apply_mapping`` (:func:`run_apply_job`), which runs step 2 again
    on the **stored** extraction (nothing is re-parsed) and resolves the
    review items it answered. Running it again is harmless: every row already
-   imported matches its hash.
+   imported matches its hash, and what an earlier reading left behind is
+   settled as above.
 
 Visibility (SECURITY.md F3): statements of a member's upload only match
 accounts the member can edit; a mapping tied to an account the caller cannot
@@ -212,7 +233,7 @@ import hashlib
 import json
 import re
 import uuid
-from collections.abc import Collection, Sequence
+from collections.abc import Callable, Collection, Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from datetime import UTC, date
 from decimal import Decimal
@@ -238,9 +259,11 @@ from app.domain.accounts.visibility import get_visible_account, visible_account_
 from app.domain.documents import repo as documents_repo
 from app.domain.documents.models import (
     Document,
+    DocumentLink,
     DocumentStatus,
     IngestJob,
     IngestStage,
+    LinkTarget,
     ReviewItem,
     ReviewItemState,
     ReviewKind,
@@ -283,6 +306,7 @@ from app.domain.imports.statement_records import (
     StatementFacts,
     bank_facts,
     check_overlap,
+    drop_stale_records,
     record_statement,
     table_facts,
 )
@@ -781,6 +805,16 @@ class ImportResult:
 
 
 @dataclass
+class _NearGroup:
+    """The near duplicates of one committed statement, held back to the end of the run."""
+
+    statement_index: int | None
+    #: The row written, the rows it resembles, and whether the row waits for
+    #: a doubt of its own as well.
+    rows: list[tuple[Transaction, list[uuid.UUID], bool]]
+
+
+@dataclass
 class _Run:
     db: Session
     document: Document
@@ -832,6 +866,28 @@ class _Run:
     #: balance that vouches for them: the ones shown as "not checked against
     #: a balance" (``statement_record.verification = unverified``).
     unverified_statements: int = 0
+    #: Rows the files carry that a person deleted (an import tombstone):
+    #: never written again.
+    tombstoned: int = 0
+    #: Rows of an earlier reading of the document the new reading no longer
+    #: holds: removed because nobody had touched them, or kept and listed.
+    replaced: int = 0
+    kept: int = 0
+    #: The hashes of every row this run read for an account (the document's
+    #: current reading of it), by account.
+    read: dict[uuid.UUID, set[str]] = field(default_factory=dict)
+    #: Period starts of the bank statements this run recorded, by account.
+    periods: dict[uuid.UUID, set[date]] = field(default_factory=dict)
+    #: Accounts a statement of the document was not committed to in this run
+    #: (held as an overlap, another currency, its sign waits for an answer).
+    waiting: set[uuid.UUID] = field(default_factory=set)
+    #: A statement of the document has no account yet, or the document holds
+    #: brokerage statements: nothing says which rows are an earlier reading.
+    unplaced: bool = False
+    #: Near duplicates whose finding waits for the end of the run, by
+    #: account: a candidate is a row of this very document, which the run
+    #: may still remove as an earlier reading (:func:`_replace_earlier`).
+    near_waiting: dict[uuid.UUID, list[_NearGroup]] = field(default_factory=dict)
     _payees: PayeeMatcher | None = None
     _payee_categories: dict[uuid.UUID, uuid.UUID] | None = None
     _categories: dict[str, uuid.UUID] | None = None
@@ -895,6 +951,9 @@ class _Run:
             "low_confidence": self.low_confidence,
             "statement_overlaps": self.overlaps,
             "unverified_statements": self.unverified_statements,
+            "replaced_rows": self.replaced,
+            "kept_rows": self.kept,
+            "tombstoned_rows": self.tombstoned,
             "accounts": [str(a) for a in self.accounts],
             "mapping_id": str(self.mapping_id) if self.mapping_id else None,
             "mapping_suggested": self.mapping_suggested,
@@ -1245,6 +1304,7 @@ def _commit_statement(
                 "account_currency": account.currency,
             },
         )
+        run.waiting.add(account.id)
         return None
     run.statements += 1
     if account.id not in run.accounts:
@@ -1274,6 +1334,9 @@ def _commit_statement(
         [HashInput(t.posted_date, t.amount, t.raw_payee) for t in rows],
     )
     run.duplicates += len(plan.exact)
+    # Rows a person deleted are in none of the plan's lists to write.
+    run.tombstoned += len(plan.removed)
+    run.read.setdefault(account.id, set()).update(plan.hashes)
     payees = run.payees() if plan.to_insert else None
     created: list[tuple[Transaction, bool]] = []
     split_lines: dict[int, list[dict[str, Any]]] = {}
@@ -1336,12 +1399,25 @@ def _commit_statement(
                 row.category_id = defaults[row.payee_id]
                 run.payee_categorised += 1
     positions = {index: position for position, index in enumerate(plan.to_insert)}
-    _near_duplicates_review(
-        run,
-        account,
-        [(created[positions[index]][0], candidates) for index, candidates in plan.near.items()],
-        statement_index=statement_index,
-    )
+    near = [
+        (
+            created[positions[index]][0],
+            list(candidates),
+            bool(rows[index].low_confidence) and not clean,
+        )
+        for index, candidates in plan.near.items()
+    ]
+    if _own_rows(run, account, [c for _, candidates, _ in near for c in candidates]):
+        # A row resembles a row of this very document: whether that one is
+        # an earlier reading is known when the run ends.
+        run.near_waiting.setdefault(account.id, []).append(_NearGroup(statement_index, near))
+    else:
+        _near_duplicates_review(
+            run,
+            account,
+            [(row, candidates) for row, candidates, _ in near],
+            statement_index=statement_index,
+        )
     run.imported += len(created)
     run.possible_duplicates += len(plan.near)
     _low_confidence_review(
@@ -1377,6 +1453,7 @@ def _commit_statement(
                 "count": len(ids),
                 "possible_duplicates": len(plan.near),
                 "duplicates": len(plan.exact),
+                "tombstoned": len(plan.removed),
                 "transaction_ids": [str(i) for i in ids[:IDS_MAX]],
             },
             household_id=run.household_id,
@@ -1393,8 +1470,42 @@ def _commit_statement(
                 "ids": [str(i) for i in ids[:IDS_MAX]],
             },
         )
+    # Rules and payee defaults ran as part of the import: the rows are as
+    # imported, untouched until a person changes one.
+    _mark_untouched(db, [row for row, _ in created])
     check = parsed.reconciliation
     return "reconciled" if check is not None and check.status == "ok" else "unverified"
+
+
+def _mark_untouched(db: Session, rows: Sequence[Transaction]) -> None:
+    """Set ``updated_at`` of ``rows`` to their ``created_at`` ("untouched since import").
+
+    Whatever the import itself did to a row (a rule, a payee's default
+    category) is flushed first, so the equal timestamps are the last write.
+    """
+    db.flush()
+    changed = [row for row in rows if row.updated_at != row.created_at]
+    for row in changed:
+        row.updated_at = row.created_at
+    if changed:
+        db.flush()
+
+
+def _own_rows(run: _Run, account: Account, candidates: Collection[uuid.UUID]) -> bool:
+    """One of ``candidates`` is a row this document produced on the account."""
+    if not candidates:
+        return False
+    found = run.db.execute(
+        select(Transaction.id)
+        .where(
+            Transaction.household_id == run.household_id,
+            Transaction.account_id == account.id,
+            Transaction.id.in_(sorted(set(candidates))),
+            Transaction.source_document_id == run.document.id,
+        )
+        .limit(1)
+    ).first()
+    return found is not None
 
 
 def _record_committed(
@@ -1407,6 +1518,8 @@ def _record_committed(
     counted for the run's summary (``unverified_statements``).
     """
     recorded = record_statement(run.db, run.document, account, facts, verification=verification)
+    if recorded and facts.kind == "bank" and facts.period_start is not None:
+        run.periods.setdefault(account.id, set()).add(facts.period_start)
     if (
         recorded
         and verification == "unverified"
@@ -1431,6 +1544,7 @@ def _guarded(
     )
     if verdict != "import":
         run.overlaps += 1
+        run.waiting.add(account.id)
         if account.id not in run.accounts:
             run.accounts.append(account.id)
         return False
@@ -1587,6 +1701,7 @@ def _import_statements(run: _Run, result: ExtractResult, *, account_id: uuid.UUI
             else:
                 account = _usable_account(run, match.account_id)
         if account is None:
+            run.unplaced = True
             run.review(
                 ReviewKind.UNKNOWN_ACCOUNT,
                 {
@@ -2133,15 +2248,19 @@ def _import_table(
     for place, item in enumerate(targets):
         if place in unsettled:
             # Only this account's rows wait; the others go on below.
+            _not_committed(run, item)
             _sign_review(run, table, choice, asked, item, whole=False, mapping=mapping)
             continue
         sign = answered.get(place)
         if sign is not None and sign is not spec.sign:
             reread = _read_with_sign(table, spec, item.parsed, sign)
             if reread is None:  # pragma: no cover - the sign never regroups rows
+                _not_committed(run, item)
                 _sign_review(run, table, choice, asked, item, whole=False, mapping=mapping)
                 continue
             item = replace(item, parsed=reread)
+        if item.account is None:
+            _not_committed(run, item)
         if item.account is None and item.group is None:
             run.review(
                 ReviewKind.UNKNOWN_ACCOUNT,
@@ -2188,6 +2307,14 @@ def _import_table(
     repo.mark_used(run.db, mapping)
     if run.document.institution_id is None and mapping.institution_id is not None:
         run.document.institution_id = mapping.institution_id
+
+
+def _not_committed(run: _Run, item: _Target) -> None:
+    """A statement of the table this run does not commit: no row of it is replaced."""
+    if item.account is None:
+        run.unplaced = True
+    else:
+        run.waiting.add(item.account.id)
 
 
 def _received_on(document: Document) -> date | None:
@@ -2490,6 +2617,202 @@ def _import_positions(run: _Run, positions: PositionsTable) -> None:
         run.document.period_start = run.document.period_end = positions.as_of
 
 
+# ---------------------------------------------------------------------------
+# A document read again: the rows of its earlier reading
+# ---------------------------------------------------------------------------
+
+#: Resolution of an open finding the run's own replacement answered.
+_SUPERSEDED: Final = {"action": "superseded", "by": "import.replace"}
+
+
+def _named_rows(payload: Mapping[str, Any]) -> set[str]:
+    """The transaction ids a review payload names (its own row, or the rows it lists)."""
+    named: set[str] = set()
+    own = payload.get("transaction_id")
+    if isinstance(own, str):
+        named.add(own)
+    for key in ("transactions", "rows"):
+        listed = payload.get(key)
+        if not isinstance(listed, list):
+            continue
+        for entry in listed:
+            found = entry.get("transaction_id") if isinstance(entry, dict) else None
+            if isinstance(found, str):
+                named.add(found)
+    return named
+
+
+def _supersede(run: _Run, answered: Callable[[ReviewItem], bool]) -> int:
+    """Dismiss the document's open findings ``answered`` picks; how many."""
+    found = [
+        item
+        for item in repo.open_review_items(
+            run.db, run.household_id, run.document.id, set(ReviewKind)
+        )
+        if answered(item)
+    ]
+    now = clock.utcnow()
+    for item in found:
+        item.state = ReviewItemState.DISMISSED
+        item.resolved_at = now
+        item.resolved_by = run.user_id
+        item.resolution = dict(_SUPERSEDED)
+    if found:
+        run.db.flush()
+        # The run's memory of what is open is read again.
+        run._open = None
+    return len(found)
+
+
+def _replace_earlier(run: _Run, account: Account) -> set[uuid.UUID]:
+    """Settle the rows an earlier reading of the document left on ``account``.
+
+    Called once per account, when every statement of the document for it was
+    committed by this run. An earlier row
+    (``app.domain.review.reconciliation.earlier_rows_of``: a row of this
+    document with a hash the run did not read) is **removed** when nobody
+    touched it: ``updated_at == created_at``, no transfer link, no document
+    attached. No tombstone is written: the row was never the person's to
+    delete, and a later reading that holds it again imports it. Every other
+    earlier row is **kept** and listed in one ``earlier_rows_kept`` finding
+    of the account (ids only, at most :data:`IDS_MAX`), which the reconcile
+    view answers. Audited as ``import.replace``. Returns the ids removed.
+
+    Never touched here: rows of another document, rows on another account,
+    rows without an ``import_hash`` (added by hand for the document).
+    """
+    # Imported here: the review package imports this module.
+    from app.domain.review.reconciliation import EARLIER_KEPT, earlier_rows_of
+
+    db = run.db
+    earlier = earlier_rows_of(db, run.document, account.id, run.read[account.id], lock=True)
+    attached: set[uuid.UUID] = set()
+    if earlier:
+        attached = set(
+            db.execute(
+                select(DocumentLink.target_id).where(
+                    DocumentLink.household_id == run.household_id,
+                    DocumentLink.target_type == LinkTarget.TRANSACTION,
+                    DocumentLink.target_id.in_([row.id for row in earlier]),
+                )
+            ).scalars()
+        )
+    removed: list[uuid.UUID] = []
+    kept: list[uuid.UUID] = []
+    for row in earlier:
+        untouched = (
+            row.updated_at == row.created_at
+            and row.transfer_group_id is None
+            and row.id not in attached
+        )
+        if untouched:
+            removed.append(row.id)
+            transactions_repo.delete_transaction(db, row)
+            db.expunge(row)
+        else:
+            kept.append(row.id)
+    run.replaced += len(removed)
+    run.kept += len(kept)
+    finding = {
+        "reason": EARLIER_KEPT,
+        "account_id": str(account.id),
+        "count": len(kept),
+        "transactions": [{"transaction_id": str(i)} for i in kept[:IDS_MAX]],
+    }
+    gone = {str(i) for i in removed}
+
+    def answered(item: ReviewItem) -> bool:
+        payload = item.payload or {}
+        if payload.get("reason") == EARLIER_KEPT:
+            # An earlier list of kept rows that no longer says what is kept.
+            return payload.get("account_id") == str(account.id) and payload != finding
+        named = _named_rows(payload)
+        # A finding about rows that are all gone with the earlier reading.
+        return bool(named) and named <= gone
+
+    _supersede(run, answered)
+    if kept:
+        run.review(ReviewKind.LOW_CONFIDENCE_FIELD, finding)
+    if removed or kept:
+        audit(
+            db,
+            action="import.replace",
+            target_type="document",
+            target_id=run.document.id,
+            after={
+                "account_id": account.id,
+                "replaced": len(removed),
+                "kept": len(kept),
+                "transaction_ids": [str(i) for i in removed[:IDS_MAX]],
+                "kept_ids": [str(i) for i in kept[:IDS_MAX]],
+            },
+            household_id=run.household_id,
+            user_id=run.user_id,
+        )
+    if removed:
+        emit(
+            db,
+            run.household_id,
+            "transaction.deleted",
+            {
+                "document_id": str(run.document.id),
+                "account_id": str(account.id),
+                "count": len(removed),
+                "ids": [str(i) for i in removed[:IDS_MAX]],
+            },
+        )
+    return set(removed)
+
+
+def _settle_near(run: _Run, account: Account, removed: Collection[uuid.UUID]) -> None:
+    """Raise the near-duplicate findings held back for ``account`` (``_Run.near_waiting``).
+
+    A row that resembled only rows the run has just removed as an earlier
+    reading (the same line, read with another description) is no duplicate
+    of anything: it is posted like its neighbours unless it waits for a
+    doubt of its own, and no finding is raised for it. A row that resembled
+    a row a person deleted (no candidate from the start) still waits.
+    """
+    released: list[Transaction] = []
+    for group in run.near_waiting.pop(account.id, []):
+        still: list[tuple[Transaction, list[uuid.UUID]]] = []
+        for row, candidates, doubted in group.rows:
+            left = [c for c in candidates if c not in removed]
+            if candidates and not left:
+                run.possible_duplicates -= 1
+                if not doubted:
+                    row.review_state = ReviewState.NONE
+                    released.append(row)
+                continue
+            still.append((row, left))
+        _near_duplicates_review(run, account, still, statement_index=group.statement_index)
+    _mark_untouched(run.db, released)
+
+
+def _finish_reading(run: _Run) -> None:
+    """After every statement of the run: replace earlier readings, account by account.
+
+    An account is settled only when the run committed a statement to it and
+    none of the document's statements for it waits (``_Run.waiting``), and
+    only when every statement of the document found its account
+    (``_Run.unplaced``): a statement that is held or unplaced may be the
+    one whose rows would look like an earlier reading. Then the rows of the
+    earlier reading go or are listed (:func:`_replace_earlier`) and the
+    statement records of periods the run did not record are dropped
+    (``statement_records.drop_stale_records``).
+    """
+    for account_id in list(run.read):
+        account = accounts_repo.get_account(run.db, run.household_id, account_id)
+        if account is None:  # pragma: no cover - the run has just written to it
+            continue
+        removed: set[uuid.UUID] = set()
+        if not run.unplaced and account_id not in run.waiting:
+            removed = _replace_earlier(run, account)
+            if account_id in run.periods:
+                drop_stale_records(run.db, run.document, account, run.periods[account_id])
+        _settle_near(run, account, removed)
+
+
 def _open_items(db: Session, document: Document) -> int:
     """The document's open items that wait on a person (a notice does not)."""
     return review_repo.open_items_of(db, document.household_id, document.id)
@@ -2612,6 +2935,10 @@ def import_extraction(
             if investment_account not in run.accounts:
                 run.accounts.append(investment_account)
         investments = done.summary()
+        # Brokerage cash rows are written from the lines a statement's own
+        # checks let through: what an earlier reading wrote is left alone.
+        run.unplaced = True
+    _finish_reading(run)
     if document.account_id is None and len(run.accounts) == 1:
         document.account_id = run.accounts[0]
     if document.institution_id is None and len(run.accounts) == 1:
