@@ -169,8 +169,9 @@ What remains (details in docs/ROADMAP.md):
   there was nothing a person could do about such a file but confirm it.
   A statement that reads cleanly and that nothing contradicts is now
   imported as posted and marked **"Not checked against a balance"** on
-  the uploads list and the document page. "Cleanly" is strict: every row
-  read without another doubt, no line or row skipped, no row more than
+  the uploads list and the document page. "Cleanly" is strict: no
+  balance read at all (one balance without the other is a doubt), a
+  period the statement prints, every row read without another doubt, no line or row skipped, no row more than
   ten days outside the period, no total on the page that disagrees with
   the rows, and an account of the kind the statement was read as. One
   doubt anywhere and the whole statement waits as before; a statement
@@ -421,6 +422,28 @@ What remains (details in docs/ROADMAP.md):
   what identifies the statement (its account digits, name and currency,
   not its figures), and an acceptance or a balance holds until a later
   reading changes a row of that account, which asks again.
+- **A statement with one balance, no printed period or a doubled row
+  is not imported unasked** (INGESTION.md "A clean read"). A page with an
+  ending balance and no beginning one, no period line and a row printed
+  over another (`05/10/13 07/10/12 Overdraft fee -35.00`) counted as a
+  statement with nothing to check and was posted. A clean read now needs
+  that no opening or closing balance was read at all, and that the period
+  was printed rather than taken from the rows' own dates. A table row
+  that prints a second date where its table prints one (no posting date
+  heading, and not a second date on every row within ten days of the
+  first), or a figure no column takes beside its amount, is a doubt on
+  that row. Such statements wait in Review with "Nothing to check
+  against", as before 1d. The statement parsers stay at the versions
+  this release already moved them to.
+- **A balance does not outlive its statement's check.** A PDF statement
+  that reconciled recorded its closing balance; when it was read again
+  and no longer added up, or a removed row was put back or rows of an
+  earlier reading were removed so that it no longer balanced, its record
+  went back to "not checked" while the balance stayed on the account.
+  That balance is now taken back, as "Accept as read" already did. A
+  balance from another file or typed by hand is never touched; OFX, QIF
+  and CSV files, which state their own balance, and a brokerage statement
+  whose printed account value holds, keep theirs.
 - **Card balances are entered as printed.** Correcting the balances of a
   card statement needed the figures negated by hand, and `1,204.18` was
   refused. The reconcile view takes them as the statement prints them.

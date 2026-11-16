@@ -723,7 +723,19 @@ a child answering with parser output is `bad_output`.
     grouping (`1,14,964.36`) is read everywhere. A cell of words that
     stands under a numeric heading and under another goes to the other
     (a short category left of its heading is no amount); of two dates
-    under one date heading the first is the row's; and where the header
+    under one date heading the first is the row's, and the second is its
+    posting date only where the table prints one: under a heading of its
+    own, or on every dated row of the section, each within ten days of
+    the row's first (`POSTING_LAG_DAYS`). A line that prints two dates in
+    a table that prints one (text laid over text: `05/10/13 07/10/12
+    Overdraft fee -35.00`; the second date in the date column, in a cell
+    no column takes left of the description, or with its year at the
+    start of the description) keeps its first date at confidence 0.7, so
+    the row is a doubt and its statement waits (warning
+    `second_date_unexplained:<rows>`). Two amounts under one money
+    heading read as no amount and the line is counted as skipped; a
+    figure of a row line that no column takes, beside the row's amount,
+    caps that amount at 0.7; and where the header
     prints two headings as one cell (`Amount Description`), an amount
     printed in one cell with its description is split off it.
   - *Words printed beside or over a row.* A notice printed up the margin
@@ -878,8 +890,10 @@ a child answering with parser output is `bad_output`.
     Balance - $992.50`) is a minus or only a separator: the reading the
     rows agree with is taken (the other balance and the rows' total, or
     the running balance beside the first or last row), and a balance
-    nothing settles is not given at all, so the statement is held
-    unreconciled instead of recorded with the wrong sign. `-$992.50`, and
+    nothing settles is not given at all (warning
+    `balance_sign_unsettled`), so the statement is held
+    unreconciled instead of recorded with the wrong sign, and is never
+    taken for one that printed no balance ("A clean read"). `-$992.50`, and
     `- $992.50` in a cell of its own, are negative as printed.
   - *Period and year.* The period is looked for in this order, each step
     only when those before it found nothing: (1) a labelled period (also
@@ -3010,6 +3024,19 @@ merely because it prints nothing to check. A PDF or image statement whose
 reconciliation is `unavailable` (no opening or closing balance, no running
 balance) is imported as **posted** when that is its only doubt:
 
+- **no balance was read at all**, neither an opening nor a closing one.
+  `unavailable` is also what one balance without the other is (an
+  `Ending balance` in a summary with no beginning balance): a balance the
+  statement printed and nothing could be checked against is a doubt, not
+  a silence. The same goes for a balance the parser withheld because
+  nothing settled its sign (warning `balance_sign_unsettled`,
+  `UNUSED_BALANCE_WARNINGS`);
+- **its period was printed**: the period's confidence
+  (`Statement.confidence["period"]`, carried to the importer as
+  `period_confidence`) is not below 0.85 (`confidence.DEFAULT_THRESHOLD`).
+  A period that is only the rows' own first and last day scores 0.7 at
+  most (`confidence.INFERRED`): nothing on the page then says which
+  statement this is or that its rows are dated right;
 - it has at least one row, and every row's `low_confidence` is empty or
   exactly `reconciliation`;
 - the importer skipped no row of it, no running balance disagrees, it was
@@ -3042,7 +3069,21 @@ plan statement whose roll-forward adds up), `accepted` (a person accepted
 it without balancing: "Accept as read", "Import as read") or `unverified`
 (everything else: a clean read, a statement still waiting, and every CSV,
 OFX and QIF import, which carry nothing to reconcile). Only `reconciled`
-writes a balance snapshot. An imported, `unverified` statement read from
+writes a balance snapshot from a PDF or image statement, and the balance
+does not outlive that: **no statement snapshot of a document remains for
+a bank or card statement record of a PDF or image that is `unverified`**
+(`statement_records.withdraw_snapshot`). When such a record falls back
+from `reconciled` (the document is read again and its reading no longer
+adds up, a removed row is put back, rows of an earlier reading are
+removed and the ledger no longer balances), the snapshot of that
+document, account and closing day is removed, as "Accept as read" does;
+a balance another document or a person recorded is never touched. Two
+cases are outside the invariant on purpose. A **structured file** (OFX,
+QFX, QIF, a CSV with a balance column) declares its balance itself: its
+record is always `unverified` and its snapshot stands. A **brokerage
+statement** whose cash activity check failed while holdings + closing
+cash is the printed account value records that value although its record
+is `unverified` (`_value_holds`, "Brokerage statements"). An imported, `unverified` statement read from
 a PDF or image is shown with the quiet marker **"Not checked against a
 balance"** (`unchecked` in `GET /documents` and
 `GET /documents/{id}/imported`; the uploads list and the document page),
