@@ -229,8 +229,12 @@
   font-size: var(--font-size-sm);
 }
 
-/* The account stays on the row at every width until the drawer (which also
-   shows it) exists; the plan then leaves it out of the row under 720px. */
+/* Under 720px the account leaves the row; the drawer shows it. */
+@media (max-width: 719px) {
+  .tx-col-account {
+    display: none;
+  }
+}
 
 /* ---- Notices --------------------------------------------------------------- */
 
@@ -285,4 +289,66 @@
 
 .tx-preview__counts {
   padding-inline-start: var(--space-5);
+}
+
+/* ---- The drawer -------------------------------------------------------------- */
+
+.tx-drawer {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+}
+
+.tx-drawer__headline {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: var(--space-2) var(--space-3);
+  margin: 0;
+  font-size: var(--font-size-2xl);
+}
+
+.tx-drawer__date {
+  color: var(--color-text-muted);
+  font-size: var(--font-size-sm);
+}
+
+.tx-drawer__facts {
+  display: grid;
+  gap: var(--space-2);
+  margin: 0;
+}
+
+.tx-drawer__facts > div {
+  display: grid;
+  grid-template-columns: 8rem 1fr;
+  gap: var(--space-2);
+}
+
+.tx-drawer__facts dt {
+  color: var(--color-text-muted);
+}
+
+.tx-drawer__facts dd {
+  margin: 0;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.tx-drawer__category,
+.tx-always {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+
+.tx-drawer__category p {
+  margin: 0;
+}
+
+.tx-drawer__actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
 }

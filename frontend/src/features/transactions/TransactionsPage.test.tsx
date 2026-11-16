@@ -12,6 +12,10 @@ function setup(role: SessionOptions["role"] = "owner", rows = [tx("x-1"), tx("x-
     "GET /api/v1/auth/session": authedSession({ role }),
     ...lookupHandlers(),
     "GET /api/v1/transactions": page(rows),
+    "GET /api/v1/transactions/:id": (call) => {
+      const row = rows.find((candidate) => call.path.endsWith(`/${candidate.id}`));
+      return row === undefined ? problem(404, "not-found") : json(row);
+    },
   });
 }
 
@@ -216,8 +220,9 @@ describe("transactions grid", () => {
     await user.keyboard("{ArrowUp}");
     expect(first).toHaveFocus();
     await user.keyboard("{ArrowDown}{Enter}");
-    const dialog = await screen.findByRole("dialog", { name: "Edit transaction" });
-    expect(within(dialog).getByLabelText("Description")).toHaveValue("ACME");
+    // Enter opens the row's drawer.
+    const drawer = await screen.findByRole("dialog", { name: "ACME" });
+    expect(within(drawer).getByText("Bank wrote")).toBeInTheDocument();
   });
 
   it("the category cell shows its source and confidence", async () => {
@@ -366,7 +371,8 @@ describe("transactions grid", () => {
     const grid = await screen.findByRole("table", { name: "Transactions" });
     await within(grid).findByText("Groceries");
     expect(screen.queryByRole("button", { name: /^Actions for/ })).not.toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: /^Open / })).not.toBeInTheDocument();
+    // A row still opens, to a drawer that only shows.
+    expect(screen.getByRole("button", { name: "Open Corner Market, Nov 1, 2026, -$42.10" })).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Add transaction" })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Find transfers" })).not.toBeInTheDocument();
     expect(screen.queryByRole("checkbox")).not.toBeInTheDocument();

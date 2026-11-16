@@ -7,11 +7,14 @@
  *
  * A row opens with its first cell's button (Table `rowLink`); Up and Down
  * move between those buttons, one of which is in the tab order at a time.
+ * Opening a row puts `?tx=<id>` in the address (pushed, so Back closes the
+ * drawer); `?always=<id>` opens the drawer for that row with "Always use…"
+ * ticked. Closing takes both out and gives focus back to the row.
  */
 import "../accounts/ledger.css";
 import "./transactions.css";
 
-import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useInfiniteQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { Link, useNavigate, useSearch } from "@tanstack/react-router";
 import { useEffect, useMemo, useRef, useState, type FormEvent, type KeyboardEvent } from "react";
 
@@ -31,11 +34,11 @@ import { errorMessage } from "../../lib/api/client";
 import { formatDate, isIsoDate } from "../../lib/dates";
 import { formatMoney } from "../../lib/money";
 import { accountLabel, useAccounts, useCanWrite } from "../accounts/api";
-import { AlwaysCategoriseDialog, RuleSavedNotice, type SavedRule } from "./AlwaysCategoriseDialog";
+import { AlwaysCategoriseDialog } from "./AlwaysCategoriseDialog";
+import { RuleSavedNotice, type SavedRule } from "./AlwaysSection";
 import {
   autoPairTransfers,
   canTeach,
-  getTransaction,
   invalidateLedger,
   merchantName,
   txKeys,
@@ -56,8 +59,8 @@ import { useEditTransaction } from "./optimistic";
 import { isSuggestion } from "./provenance";
 import { RowActions, type RowAction } from "./RowActions";
 import { SplitEditor } from "./SplitEditor";
-import { dismissTeach, teachDismissed, TeachPrompt, type TeachOffer } from "./TeachPrompt";
 import { TransactionDialog } from "./TransactionDialog";
+import { TransactionDrawer } from "./TransactionDrawer";
 import { TransferDialog } from "./TransferDialog";
 
 const REVIEW_STATES: readonly { value: ReviewState; label: string }[] = [
@@ -70,13 +73,15 @@ function reviewState(value: string): ReviewState | "" {
   return REVIEW_STATES.find((state) => state.value === value)?.value ?? "";
 }
 
-/**
- * `?always=<transaction id>`: "Make it a rule" on the learned page links here
- * to open "Always categorise <merchant> as..." for that transaction.
- */
-function linkedTransactionId(search: Record<string, unknown>): string | null {
-  const value = new Map(Object.entries(search)).get("always");
+/** A transaction id from the address: `tx` (the open drawer) or `always` (the drawer with "Always use…" ticked). */
+function idParam(search: Record<string, unknown>, key: "tx" | "always"): string | null {
+  const value = new Map(Object.entries(search)).get(key);
   return typeof value === "string" && value !== "" ? value : null;
+}
+
+/** The search without the drawer's keys: what is left when it closes. */
+function withoutDrawer(search: Record<string, unknown>): Record<string, unknown> {
+  return Object.fromEntries(Object.entries(search).filter(([name]) => name !== "tx" && name !== "always"));
 }
 
 const ROW_LINK = "button.table__row-link";
@@ -145,23 +150,13 @@ export function TransactionsPage() {
   }
   const moreSet = filters.payee !== "" || filters.tag !== "" || filters.reviewState !== "";
   const [moreOpen, setMoreOpen] = useState(moreSet);
-  // "Always categorise <merchant> as...": the dialog, the offer after a
-  // suggestion was accepted in the grid (one at a time) and the rule that was just saved.
-  const [always, setAlways] = useState<TeachOffer | { transaction: Transaction; categoryId?: undefined } | null>(null);
-  const [offer, setOffer] = useState<TeachOffer | null>(null);
+  // "Always categorise <merchant> as..." from the row menu, and the rule that was just saved there.
+  const [always, setAlways] = useState<Transaction | null>(null);
   const [savedRule, setSavedRule] = useState<SavedRule | null>(null);
-  // A link that names a transaction opens the dialog for it until it is
-  // closed: the row is asked for by id because it need not be on the first
-  // page of the grid. Closing also takes `always` out of the address, so a
-  // reload or the back button does not open it again.
-  const linkedId = canWrite ? linkedTransactionId(search) : null;
-  const [linkClosed, setLinkClosed] = useState(false);
-  const linked = useQuery({
-    queryKey: txKeys.one(linkedId ?? ""),
-    queryFn: () => getTransaction(linkedId ?? ""),
-    enabled: linkedId !== null && !linkClosed,
-  });
-  const linkedRow = linkClosed ? undefined : linked.data;
+  // The drawer: the row the address names. `tx` wins over `always`.
+  const txId = idParam(search, "tx");
+  const alwaysId = idParam(search, "always");
+  const drawerId = txId ?? alwaysId;
   const edit = useEditTransaction();
   const findTransfers = useMutation({
     mutationFn: autoPairTransfers,
@@ -207,9 +202,6 @@ export function TransactionsPage() {
   const counted = (label: string, count: number | undefined): string => (count === undefined ? label : `${label} (${String(count)})`);
 
   const editable = (row: Transaction): boolean => canWrite && accountsById.get(row.account_id)?.can_edit === true;
-  // The link opens the dialog only where the row's own menu would offer it.
-  const alwaysOpen =
-    always ?? (linkedRow !== undefined && canTeach(linkedRow) && editable(linkedRow) ? { transaction: linkedRow, categoryId: undefined } : null);
   const selectableRows = rows.filter(editable);
   const allSelected = selectableRows.length > 0 && selectableRows.every((row) => selected.has(row.id));
   const canAdd = canWrite && (accounts.data ?? []).some((account) => account.can_edit);
@@ -254,6 +246,26 @@ export function TransactionsPage() {
       moveFocus(next);
     }
   };
+  const openRow = (row: Transaction): void => {
+    activeRow.current = row.id;
+    void navigate({ to: "/transactions", search: (previous: Record<string, unknown>) => ({ ...withoutDrawer(previous), tx: row.id }) });
+  };
+  const closeDrawer = (): void => {
+    void navigate({ to: "/transactions", search: (previous: Record<string, unknown>) => withoutDrawer(previous), replace: true });
+  };
+  // When the drawer closes, focus goes back to its row (also when it was opened from a link).
+  const lastDrawer = useRef<string | null>(drawerId);
+  useEffect(() => {
+    const closed = lastDrawer.current;
+    lastDrawer.current = drawerId;
+    if (drawerId !== null || closed === null) {
+      return;
+    }
+    const button = gridRef.current?.querySelector<HTMLButtonElement>(`${ROW_LINK}[data-row="${CSS.escape(closed)}"]`);
+    if (button !== null && button !== undefined) {
+      moveFocus(button);
+    }
+  });
   const confirmRow = (row: Transaction): void => {
     edit.mutate(
       { id: row.id, patch: { review_state: "confirmed" } },
@@ -267,14 +279,14 @@ export function TransactionsPage() {
     );
   };
   const actionsFor = (row: Transaction): RowAction[] => [
-    // Until the drawer comes, a category is changed in the edit dialog.
+    // A category is changed in the drawer.
     ...(row.splits.length === 0
       ? [
           {
             id: "category",
             label: "Change category…",
             onSelect: () => {
-              setEditing(row);
+              openRow(row);
             },
           },
         ]
@@ -286,7 +298,7 @@ export function TransactionsPage() {
             id: "always",
             label: `Always categorise ${merchantName(row) ?? "this merchant"} as…`,
             onSelect: () => {
-              setAlways({ transaction: row });
+              setAlways(row);
             },
           },
         ]
@@ -340,14 +352,6 @@ export function TransactionsPage() {
     },
   ];
 
-  // An accepted suggestion on a row that names a merchant may be worth a
-  // rule; the prompt asks the server and stays silent when it is not.
-  const offerRule = (row: Transaction, categoryId: string): void => {
-    if (canTeach(row) && !teachDismissed(row.merchant_key ?? "")) {
-      setOffer({ transaction: row, categoryId });
-    }
-  };
-
   const columns: TableColumn<Transaction>[] = [
     ...(canWrite
       ? [
@@ -395,7 +399,6 @@ export function TransactionsPage() {
           label={rowLabel(row, payeeList)}
           categories={categoryList}
           ruleNames={ruleNames}
-          onCategorised={offerRule}
         />
       ),
     },
@@ -639,19 +642,6 @@ export function TransactionsPage() {
           }}
         />
       )}
-      {offer === null ? null : (
-        <TeachPrompt
-          offer={offer}
-          categories={categoryList}
-          onAlways={() => {
-            setAlways(offer);
-          }}
-          onDismiss={() => {
-            dismissTeach(offer.transaction.merchant_key ?? "");
-            setOffer(null);
-          }}
-        />
-      )}
       {selected.size > 0 ? (
         <BulkBar
           ids={[...selected]}
@@ -678,17 +668,13 @@ export function TransactionsPage() {
             columns={columns}
             rows={rows}
             rowKey={(row) => row.id}
-            rowLink={(row) =>
-              // Until the drawer comes, a row opens its edit dialog, so only a row the person may edit opens.
-              editable(row)
-                ? {
-                    label: openLabel(row, displayName(row, payeeList) ?? rowLabel(row, payeeList)),
-                    onOpen: () => {
-                      setEditing(row);
-                    },
-                  }
-                : null
-            }
+            rowLink={(row) => ({
+              // Every row opens its drawer; what may be changed there depends on the account.
+              label: openLabel(row, displayName(row, payeeList) ?? rowLabel(row, payeeList)),
+              onOpen: () => {
+                openRow(row);
+              },
+            })}
             empty={hasFilters(filters) ? "No transactions match. Clear the filters or try another search." : "No transactions yet."}
           />
         </div>
@@ -755,25 +741,18 @@ export function TransactionsPage() {
           }}
         />
       )}
-      {alwaysOpen === null ? null : (
+      {always === null ? null : (
         <AlwaysCategoriseDialog
-          transaction={alwaysOpen.transaction}
+          transaction={always}
           categories={categoryList}
-          categoryId={alwaysOpen.categoryId}
           onClose={() => {
             setAlways(null);
-            setLinkClosed(true);
-            if (linkedId !== null) {
-              const rest = Object.fromEntries(Object.entries(search).filter(([name]) => name !== "always"));
-              void navigate({ to: "/transactions", search: rest, replace: true });
-            }
           }}
-          onSaved={(saved) => {
-            setSavedRule(saved);
-            // The merchant has its rule: the offer for it is answered.
-            setOffer((current) => (current?.transaction.merchant_key === alwaysOpen.transaction.merchant_key ? null : current));
-          }}
+          onSaved={setSavedRule}
         />
+      )}
+      {drawerId === null ? null : (
+        <TransactionDrawer key={drawerId} transactionId={drawerId} alwaysOpen={txId === null || txId === alwaysId} onClose={closeDrawer} />
       )}
       {transferring === null ? null : (
         <TransferDialog
