@@ -332,8 +332,9 @@ phone.
   Settings is in the account menu. The drawer fills the screen, and panels
   that sit side by side on a desktop are stacked.
 - **Under 720 px**, lists that have a card layout switch to it:
-  transactions show the date, merchant and amount, with the category on a
-  second line; subscriptions, accounts and "Imported recently" do the same.
+  a transaction is two lines, the merchant and amount, then the date and
+  category, with its checkbox and row menu at the sides (the account and
+  how the category was decided are in the drawer); subscriptions, accounts and "Imported recently" do the same.
 - **From 820 to 1023 px** the rail shows only icons. Their names are still
   read out by a screen reader, and the Inbox count becomes a dot whose
   number is part of the link's name.

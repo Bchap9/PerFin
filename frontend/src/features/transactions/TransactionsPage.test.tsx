@@ -232,6 +232,17 @@ describe("filters in the address", () => {
 });
 
 describe("transactions grid", () => {
+  it("names each cell's part of the row, so a phone can lay a row out in two lines", async () => {
+    setup("owner");
+    renderApp("/transactions");
+    const row = await screen.findByRole("row", { name: /ACME/ });
+    // Still a table for screen readers: the column headers stay.
+    expect(screen.getByRole("columnheader", { name: "Merchant" })).toBeInTheDocument();
+    for (const part of ["select", "date", "merchant", "category", "account", "amount", "actions"]) {
+      expect(row.querySelector(`.tx-col-${part}`), part).not.toBeNull();
+    }
+  });
+
   it("lists rows and asks for more with a cursor", async () => {
     const api = setup("owner");
     let calls = 0;

@@ -367,6 +367,7 @@ export function TransactionsPage() {
       ? [
           {
             id: "select",
+            className: "tx-col-select",
             header: (
               <Checkbox
                 label={<span className="visually-hidden">Select all loaded transactions</span>}
@@ -397,11 +398,12 @@ export function TransactionsPage() {
           },
         ]
       : []),
-    { id: "date", header: "Date", rowHeader: true, className: "tx-nowrap", cell: (row) => formatDate(row.posted_date) ?? row.posted_date },
-    { id: "merchant", header: "Merchant", cell: (row) => <MerchantCell row={row} payees={payeeList} tags={tagList} /> },
+    { id: "date", header: "Date", rowHeader: true, className: "tx-nowrap tx-col-date", cell: (row) => formatDate(row.posted_date) ?? row.posted_date },
+    { id: "merchant", header: "Merchant", className: "tx-col-merchant", cell: (row) => <MerchantCell row={row} payees={payeeList} tags={tagList} /> },
     {
       id: "category",
       header: "Category",
+      className: "tx-col-category",
       cell: (row) => (
         <CategoryCell
           row={row}
@@ -418,7 +420,7 @@ export function TransactionsPage() {
       id: "amount",
       header: "Amount",
       align: "end",
-      className: "tx-nowrap",
+      className: "tx-nowrap tx-col-amount",
       cell: (row) => <MoneyText amount={row.amount.amount} currency={row.amount.currency} tone="signed" />,
     },
     ...(canWrite

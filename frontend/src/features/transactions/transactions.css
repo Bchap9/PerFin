@@ -241,10 +241,74 @@
   font-size: var(--font-size-sm);
 }
 
-/* Under 720px the account leaves the row; the drawer shows it. */
+/* Under 720px a row is two lines to glance at: merchant and amount, then
+   date and category, with the checkbox and the row menu at the sides. The
+   account and how a category was decided leave the row (the drawer shows
+   them). The table stays a table for screen readers. */
 @media (max-width: 719px) {
-  .tx-col-account {
+  .tx-grid .table tbody tr {
+    display: grid;
+    grid-template-columns: auto auto minmax(0, 1fr) auto auto;
+    grid-template-areas:
+      "select merchant merchant amount actions"
+      "select date category category actions";
+    align-items: center;
+    column-gap: var(--space-2);
+    row-gap: 0.125rem;
+    margin-bottom: var(--space-2);
+    padding: var(--space-2) var(--space-3);
+  }
+
+  .tx-grid .table tbody tr > td,
+  .tx-grid .table tbody tr > th {
+    display: block;
+    width: auto;
+    padding: 0;
+    border: 0;
+  }
+
+  .tx-grid .table tbody tr > [data-label]::before {
+    content: none;
+  }
+
+  .tx-grid .table .tx-col-account,
+  .tx-grid .cat-cell__why,
+  .tx-grid .tx-merchant__raw {
     display: none;
+  }
+
+  .tx-grid .tx-col-select {
+    grid-area: select;
+  }
+
+  .tx-grid .tx-col-merchant {
+    grid-area: merchant;
+    min-width: 0;
+    font-weight: 600;
+  }
+
+  .tx-grid .tx-col-amount {
+    grid-area: amount;
+    text-align: end;
+  }
+
+  .tx-grid .tx-col-actions {
+    grid-area: actions;
+  }
+
+  .tx-grid .tx-col-date {
+    grid-area: date;
+    color: var(--color-text-muted);
+    font-size: var(--font-size-sm);
+  }
+
+  .tx-grid .tx-col-date::after {
+    content: " \00b7";
+  }
+
+  .tx-grid .tx-col-category {
+    grid-area: category;
+    min-width: 0;
   }
 }
 
