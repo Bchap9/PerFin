@@ -84,6 +84,7 @@ describe("assets", () => {
     renderApp(`${HUB}?tab=valuations`);
     expect(await screen.findByRole("tab", { name: "Valuations", selected: true })).toBeInTheDocument();
     expect(await screen.findByRole("heading", { level: 2, name: "Asset details" })).toBeInTheDocument();
+    expect(within(screen.getByRole("region", { name: "Asset details" })).getByText("Family home")).toBeInTheDocument();
     expect(await screen.findByText("Appraisal")).toBeInTheDocument();
     expect(await screen.findByText(/Since the first value/)).toHaveTextContent("+$30,000.00 (+10.00%)");
     const user = userEvent.setup();

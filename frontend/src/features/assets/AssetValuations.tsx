@@ -214,6 +214,10 @@ export function AssetValuations({ assetId }: { assetId: string }) {
             >
               <dl className="wealth-figures">
                 <div>
+                  <dt>Name</dt>
+                  <dd>{asset.name}</dd>
+                </div>
+                <div>
                   <dt>Current value</dt>
                   <dd>{asset.current_value === null ? "No value yet" : <MoneyText amount={asset.current_value.value.amount} currency={asset.current_value.value.currency} tone="none" />}</dd>
                 </div>
