@@ -15,9 +15,18 @@ Deli`` over ``Corner Grocer``); a description naming two different payees
 side by side (``Transfer from A to B``) is no match.
 Names shorter than :data:`MIN_CONTAINED_CHARS` characters, or made of digits
 only, are compared exactly and never searched for inside a description
-(``BP``, ``7``). No model, no network, nothing learned behind the person's
-back: what is recognised is exactly the names and aliases they keep under
-"Categories, payees and tags".
+(``BP``, ``7``).
+
+A charge that came through a processor names two things (``PAYPAL
+*STREAMBOX``), and a store number hides a short name (``BP#5521044``). So
+when the whole description names nobody, or two payees, the same comparison
+is made with its **core**: what payee clean-up left of it, the merchant
+(``app.domain.categorisation.cleanup.clean``; the caller passes it). A short
+name still matches only a core it equals.
+
+No model, no network, nothing learned behind the person's back: what is
+recognised is exactly the names and aliases they keep under "Categories,
+payees and tags".
 """
 
 from __future__ import annotations
@@ -44,9 +53,19 @@ class PayeeMatcher:
             first = key.split(" ", 1)[0]
             self._by_first_word.setdefault(first, []).append((key, payee_id))
 
-    def match(self, raw_payee: str | None) -> uuid.UUID | None:
-        """The payee ``raw_payee`` names, or None (unknown, or two fit equally)."""
-        text = normalize_payee(raw_payee)
+    def match(self, raw_payee: str | None, *, core: str | None = None) -> uuid.UUID | None:
+        """The payee ``raw_payee`` names, or None (unknown, or two fit equally).
+
+        ``core``: the merchant clean-up read from ``raw_payee``; tried when
+        the whole text gives no answer (module doc).
+        """
+        found = self._named(normalize_payee(raw_payee))
+        if found is None and core:
+            found = self._named(normalize_payee(core))
+        return found
+
+    def _named(self, text: str) -> uuid.UUID | None:
+        """The payee the normalised ``text`` is, or contains as whole words."""
         if not text:
             return None
         exact = self._exact.get(text)

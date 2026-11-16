@@ -139,9 +139,14 @@ The flow (INGESTION.md "Parse", "Match and deduplicate", "Commit"):
      ``near_match`` for the one near match of a statement, one
      ``near_matches`` item listing them all (``count``, ``rows``) for two or
      more.
-   * The household's rules run on the new transactions
-     (``app.domain.rules.service.apply_rules_to``; categories that came from
-     the file, QIF ``L``, are protected). The closing balance (OFX
+   * The new transactions are handed to the categorisation engine
+     (``app.domain.categorisation.engine.categorise_rows``): each gets its
+     merchant key; a category that came from the file (QIF ``L``) is the
+     file's and protected; the household's rules run; what is still
+     undecided takes its payee's default category, what the household
+     taught, or the bundled dictionary's answer (a fact, or only a
+     suggestion). The engine's own writes leave ``updated_at`` alone and
+     the rows are marked untouched last. The closing balance (OFX
      ``LEDGERBAL``, the last running balance of a CSV) becomes a
      ``statement`` balance snapshot. The ingest worker then queues the
      transfer matcher for the document.
@@ -263,6 +268,7 @@ import hashlib
 import json
 import re
 import uuid
+from collections import Counter
 from collections.abc import Callable, Collection, Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from datetime import UTC, date
@@ -286,6 +292,7 @@ from app.db.queue import enqueue
 from app.domain.accounts import repo as accounts_repo
 from app.domain.accounts.models import LIABILITY_TYPES, Account, AccountType, BalanceSource
 from app.domain.accounts.visibility import get_visible_account, visible_account_filter
+from app.domain.categorisation import cleanup, engine
 from app.domain.documents import repo as documents_repo
 from app.domain.documents.models import (
     Document,
@@ -348,7 +355,6 @@ from app.domain.investments.statement_import import import_investment_statements
 from app.domain.loans.models import LoanPayment
 from app.domain.review import repo as review_repo
 from app.domain.review.layout import pages_without_rows, unread_kind, with_layout_tables
-from app.domain.rules.service import apply_rules_to
 from app.domain.transactions import repo as transactions_repo
 from app.domain.transactions.import_hash import HashInput, assign_import_hashes
 from app.domain.transactions.models import (
@@ -906,9 +912,15 @@ class _Run:
     pending_rows: int = 0
     skipped_currency: int = 0
     snapshots: int = 0
+    #: Rows a rule categorised, and rows that took their payee's default
+    #: category: the engine's counts for ``rule`` and ``payee``.
     rules_changed: int = 0
-    #: Rows that took their payee's default category.
     payee_categorised: int = 0
+    #: Rows the import gave a category, by how it was decided (``file``,
+    #: ``rule``, ``payee``, ``learned``, ``dictionary``, ``keyword``), and
+    #: rows given a suggestion only.
+    categorised: Counter[str] = field(default_factory=Counter)
+    suggested: int = 0
     review_items: int = 0
     statements: int = 0
     low_confidence: int = 0
@@ -981,7 +993,6 @@ class _Run:
     #: knows whether it changed a row (:func:`_settle_standing`).
     standing: dict[uuid.UUID, list[_Standing]] = field(default_factory=dict)
     _payees: PayeeMatcher | None = None
-    _payee_categories: dict[uuid.UUID, uuid.UUID] | None = None
     _categories: dict[str, uuid.UUID] | None = None
     _open: list[tuple[ReviewKind, dict[str, Any]]] | None = None
 
@@ -1016,11 +1027,6 @@ class _Run:
             self._payees = PayeeMatcher(repo.payee_lookup(self.db, self.household_id))
         return self._payees
 
-    def payee_categories(self) -> dict[uuid.UUID, uuid.UUID]:
-        if self._payee_categories is None:
-            self._payee_categories = repo.payee_default_categories(self.db, self.household_id)
-        return self._payee_categories
-
     def categories(self) -> dict[str, uuid.UUID]:
         if self._categories is None:
             self._categories = repo.category_lookup(self.db, self.household_id)
@@ -1038,6 +1044,8 @@ class _Run:
             "snapshots": self.snapshots,
             "rules_changed": self.rules_changed,
             "payee_categorised": self.payee_categorised,
+            "categorised": dict(sorted(self.categorised.items())),
+            "suggested": self.suggested,
             "review_items": self.review_items,
             "statements": self.statements,
             "low_confidence": self.low_confidence,
@@ -1530,7 +1538,12 @@ def _commit_statement(
             posted_date=txn.posted_date,
             amount=to_storage(txn.amount),
             currency=account.currency,
-            payee_id=payees.match(txn.raw_payee) if payees is not None else None,
+            payee_id=(
+                # Behind a processor the payee is found in the descriptor's core.
+                payees.match(txn.raw_payee, core=cleanup.clean(txn.raw_payee).core)
+                if payees is not None
+                else None
+            ),
             category_id=category_id,
             raw_payee=txn.raw_payee[:PAYEE_MAX] if txn.raw_payee else None,
             memo=txn.memo[:MEMO_MAX] if txn.memo else None,
@@ -1553,32 +1566,20 @@ def _commit_statement(
     db.flush()
     for position, lines in split_lines.items():
         transactions_repo.replace_splits(db, created[position][0], lines)
-    for protected in (False, True):
-        batch = [row for row, categorised in created if categorised is protected]
-        if batch:
-            outcome = apply_rules_to(
-                db,
-                run.household_id,
-                batch,
-                protect=("categorization",) if protected else (),
-                user_id=run.user_id,
-            )
-            run.rules_changed += outcome.changed
-    # What neither the file nor a rule categorised takes its payee's default
-    # category (set under "Categories, payees and tags").
-    defaults = run.payee_categories() if created else {}
-    open_rows = [
-        row
-        for row, categorised in created
-        if not categorised and row.category_id is None and row.payee_id in defaults
-    ]
-    if open_rows:
-        # A rule may have split a row: its lines carry the categories.
-        split = transactions_repo.splits_for(db, run.household_id, [row.id for row in open_rows])
-        for row in open_rows:
-            if row.payee_id is not None and not split.get(row.id):
-                row.category_id = defaults[row.payee_id]
-                run.payee_categorised += 1
+    # Keys, the file's categories, the household's rules, then a guess for
+    # what is still undecided (a payee's default, what was learned, the
+    # dictionary): one pass, whose own writes leave ``updated_at`` alone.
+    outcome = engine.categorise_rows(
+        db,
+        run.household_id,
+        [row for row, _ in created],
+        file_categorised={row.id for row, categorised in created if categorised},
+        user_id=run.user_id,
+    )
+    run.rules_changed += outcome.by_source["rule"]
+    run.payee_categorised += outcome.by_source["payee"]
+    run.categorised.update(outcome.by_source)
+    run.suggested += outcome.suggested
     positions = {index: position for position, index in enumerate(plan.to_insert)}
     near = [
         (
@@ -1645,7 +1646,8 @@ def _commit_statement(
                 "ids": [str(i) for i in ids[:IDS_MAX]],
             },
         )
-    # Rules and payee defaults ran as part of the import: the rows are as
+    # Rules ran as part of the import and moved ``updated_at`` where they
+    # changed a row (the engine's own writes never do): the rows are as
     # imported, untouched until a person changes one.
     _mark_untouched(db, [row for row, _ in created])
     if standing is not None:
@@ -1675,8 +1677,9 @@ def _write_snapshot(run: _Run, parsed: ParsedStatement, account: Account) -> Non
 def _mark_untouched(db: Session, rows: Sequence[Transaction]) -> None:
     """Set ``updated_at`` of ``rows`` to their ``created_at`` ("untouched since import").
 
-    Whatever the import itself did to a row (a rule, a payee's default
-    category) is flushed first, so the equal timestamps are the last write.
+    Whatever the import itself did to a row (a rule; the engine's guesses
+    are pinned writes) is flushed first, so the equal timestamps are the
+    last write.
     """
     db.flush()
     changed = [row for row in rows if row.updated_at != row.created_at]
