@@ -129,6 +129,10 @@ def test_wording_that_says_what_it_was_is_suggested(
         # An entry description of no telling word answers nothing.
         ("QUARRYVALE MGMT DES:PAYMENT ID:%1 CO ID:0000000003 PPD", "out"),
         ("QUARRYVALE INS DES:INS PREM ID:%1 CO ID:0000000004 PPD", "out"),
+        # A company that pulls money by ACH is paid; it is no cash.
+        ("QUARRYVALE HOLDINGS DES:WITHDRAWAL ID:%1 CO ID:0000000009 PPD", "out"),
+        ("QUARRYVALE HOLDINGS DES:CASH DEPOSIT ID:%1 CO ID:0000000009 PPD", "in"),
+        ("ORIG CO NAME:QUARRYVALE HOLDINGS CO ENTRY DESCR:WITHDRAWAL", "out"),
     ],
 )
 def test_ambiguous_wording_answers_nothing_wrong(raw: str, direction: Direction) -> None:

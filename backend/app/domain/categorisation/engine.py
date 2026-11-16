@@ -138,6 +138,10 @@ KEYWORD_DIRECTIONS: Final[Mapping[str, Direction]] = {
     "withdrawal": "out",
     "cash deposit": "in",
 }
+#: Categories a keyword in the entry description of a labelled ACH line
+#: (``DES:WITHDRAWAL``) never answers: a company is on the other end, so it is
+#: no cash at the counter.
+NOT_DESCRIBED: Final = frozenset({"transfers.cash"})
 
 #: Money that is not spending at a merchant, read from the descriptor's kind:
 #: ``(kind, direction) -> (default category key, confidence)``. A pair that is
@@ -397,12 +401,15 @@ def _described(identity: Identity) -> dictionary.KeywordHit | None:
     """A keyword in the entry description of a labelled ACH line (``DES:RENT``), or ``None``.
 
     Read only when the company's name holds none: "<name> DES:TUITION" is
-    tuition at a business no list knows.
+    tuition at a business no list knows. A word for cash answers nothing
+    there (:data:`NOT_DESCRIBED`): a company that pulls money by ACH
+    ("<name> DES:WITHDRAWAL") was paid, it handed out no cash.
     """
     for signal in sorted(identity.signals):
         prefix, _, described = signal.partition(":")
         if prefix == "descr" and described:
-            return dictionary.keyword(described, None)
+            hit = dictionary.keyword(described, None)
+            return None if hit is None or hit.category in NOT_DESCRIBED else hit
     return None
 
 
