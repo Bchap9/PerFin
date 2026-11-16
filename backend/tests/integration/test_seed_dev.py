@@ -211,7 +211,10 @@ def test_investment_accounts_are_funded_before_they_buy(admin_client: TestClient
             value["amount"]
         )
     assert len(held) == 2
-    balances = {a["id"]: Decimal(a["balance"]["amount"]) for a in items(admin_client, "/accounts")}
+    accounts: list[dict[str, Any]] = admin_client.get(
+        f"{API}/accounts", params={"limit": 200}
+    ).json()["items"]
+    balances = {a["id"]: Decimal(a["balance"]["amount"]) for a in accounts}
     for account_id, holdings_value in held.items():
         assert balances[account_id] >= holdings_value
 
