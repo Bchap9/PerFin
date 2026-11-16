@@ -221,7 +221,11 @@ class Reconciliation(_Strict):
     """Opening balance + transactions = closing balance (SECURITY.md C12).
 
     ``unavailable``: the statement states neither balance and has no running
-    balance to check against. Amounts are in the ledger sign convention.
+    balance to check against. That alone does not hold a statement: the
+    importer imports one that reads cleanly as posted and marks it
+    unverified, and holds one with any other doubt; ``mismatch`` (its own
+    figures contradict each other) always holds it. Amounts are in the
+    ledger sign convention.
     """
 
     status: Literal["ok", "mismatch", "unavailable"]

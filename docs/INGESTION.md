@@ -77,9 +77,17 @@ so "Process again" reads it. A file
 that writes `a, "b, c"` (a space between the delimiter and a quote) is read
 with the space after each delimiter skipped, so its quoted fields hold. A ZIP is expanded once
 inside the sandbox and each member becomes a document of its own (below).
-Auto-dedupe is
-not built: a byte-identical upload always becomes a `possible_duplicate`
-item (`payload.reason: same_content`, `duplicate_of` the earlier document).
+**The same bytes again are skipped** (`app/domain/documents/service.py`): a
+file whose SHA-256 the household already holds in a live document is
+recorded as `rejected` with `error = "duplicate"`, stays in quarantine and
+queues no job. It raises one `possible_duplicate` item with the reason
+`same_content_skipped` (`duplicate_of` the earlier document), which is a
+notice: it tells the person the copy was skipped and waits on no answer
+("OK" closes it). "Process again" on the copy
+(`POST /documents/{id}/reprocess`), or rejecting the notice, sends it
+through the pipeline anyway. A copy that is held for another reason (a
+drop-folder file whose owner is unknown) is not skipped: it waits with the
+earlier `same_content` item beside the hold's question, as before.
 
 ### 2. Scan (optional)
 If the ClamAV sidecar is enabled, the quarantined blob is scanned. Positive
@@ -926,9 +934,13 @@ a child answering with parser output is `bad_output`.
     any dated balance line does (`Previous Balance`, `New Balance`); in
     a summary those two are a loan's as well and lift nothing.
   - *What is counted.* A line that is found and not imported is counted
-    in `skipped_lines`, with its box in `skipped_regions`, and raises the
+    in `skipped_lines`, with its box in `skipped_regions`. While a
+    statement of the document does not reconcile it raises the
     `lines_skipped` item, so the document waits instead of ending
-    `processed` with fewer rows than it prints: a dated line without a
+    `processed` with fewer rows than it prints; on a document whose
+    statements all reconcile the balances vouch for the rows that were
+    read, and the count is only kept ("Review queue", "Lines nobody
+    read"). What is counted: a dated line without a
     readable amount; an undated line with a figure in a money column that
     a dated row follows and that is no carried-date row; rows above the
     first account or share (`rows_outside_account`); the date-led lines
@@ -999,11 +1011,12 @@ a child answering with parser output is `bad_output`.
     statement.
 
   Parser versions are part of `document.parser_version`
-  (`statement_generic/9`, `card_statement_generic/9`, the institution
-  parsers `/7`). A document stored by an earlier version keeps its rows
+  (`statement_generic/10`, `card_statement_generic/10`, the institution
+  parsers `/8`). A document stored by an earlier version keeps its rows
   until it is read again; "Process again" reads it with the current
   rules, which can change its rows, its period and whether it waits in
-  review.
+  review. Reading it again replaces the rows nobody touched and keeps the
+  others ("Match and deduplicate", "A document read again").
 - **Card statements of account** (`table_statement.py`, version 4, any
   institution): the layout of a charge or corporate card statement that
   prints a **statement date** and no period.
@@ -1100,7 +1113,10 @@ a child answering with parser output is `bad_output`.
   closing within less than one cent, and each printed running balance =
   previous + amount. A statement that has neither balances nor a running
   balance (`unavailable`) has every row capped below the threshold
-  (`reconciliation` field). One that does not reconcile (`mismatch`) has
+  (`reconciliation` field). The parser decides nothing more about it: the
+  importer imports such a statement as posted when that cap is its only
+  doubt, and holds it otherwise ("Commit", "A clean read"). One that does
+  not reconcile (`mismatch`) has
   only the rows left in doubt capped (`reconcile.doubtful_rows`,
   `Reconciliation.doubtful`): a row whose printed running balance is the
   previous balance plus its amount is vouched for (rows without a balance
@@ -1125,7 +1141,13 @@ a child answering with parser output is `bad_output`.
   `PERFIN_INGEST_CONFIDENCE_THRESHOLD` (default 0.85, at least 0.5) are
   listed per row (`low_confidence`). A date carried from the row above
   and a balance read beside its label score at most 0.9; a date in an
-  assumed year scores 0.6. On a scanned payslip or loan statement each
+  assumed year scores 0.6. A date more than ten days before the statement
+  period starts or after it ends (`PERIOD_GRACE_DAYS`,
+  `confidence.outside_period`; the table statement reader and a taught
+  layout) scores at most 0.7, so the row and its statement wait; within
+  those ten days it keeps its score, because a purchase of the last days
+  before a cycle is printed on the next statement and a row posted just
+  after the closing day on this one. On a scanned payslip or loan statement each
   field is scaled by the OCR confidence of its own cells
   (`scaled_fields`: the lowest word confidence among the cells its label
   and value were read from), so one garbled word elsewhere on the page
@@ -2383,7 +2405,12 @@ reconciliation, per-field confidence).
 ### 6. Match and deduplicate
 - Each parsed transaction gets an `import_hash`. Existing rows with the same
   hash are skipped; near-matches (same amount and date, different payee text)
-  are surfaced as `possible_duplicate`.
+  are surfaced as `possible_duplicate`: one near match of a statement is a
+  `near_match` item, two or more are **one** `near_matches` item (`count`,
+  and `rows`: per row its `transaction_id` and `candidates`, at most 50
+  listed), so a month entered by hand before its statement arrived is one
+  question with a list, not one question per row. A person still decides
+  each row; nothing is merged on its own.
 - Overlapping statement periods are expected (e.g. a pending transaction that
   posts in the next cycle) and handled by hash, not by date range.
 - **Same statement twice** (`app/domain/imports/statement_records.py`,
@@ -2416,6 +2443,54 @@ reconciliation, per-field confidence).
   and reprocessing stay idempotent, and a skipped statement stays skipped
   unless `apply-mapping` names its account in `allow_overlap` (that run
   only), which imports it (a "same statement" answer taken back).
+- **Rows a person deleted** (`app/domain/imports/tombstones.py`, table
+  `import_tombstone`; `app/ingestion/match/dedupe.py`). Deleting one
+  imported row (`DELETE /transactions/{id}`, the bulk `delete`, the
+  reconcile view) leaves a tombstone for its `import_hash` and for every
+  alias hash that stands for it: the account, the hash, the row's date and
+  amount, and never its payee. An incoming row whose hash has a tombstone
+  on the account is **removed** before anything else: it is not inserted,
+  it is neither an exact nor a near match, and it claims no existing row.
+  So a deleted row stays deleted when its document is read again and when
+  the same statement arrives as another file, and of two identical
+  purchases on one day (which differ by their running index in the hash)
+  the deleted one is neither imported again nor offered as a possible
+  duplicate of its twin. The run summary counts such rows
+  (`tombstoned_rows`). A hash holds the payee text, so the same row from
+  another file under **another spelling** has no tombstone of its own: a
+  row that matches no hash and no free existing row, on the date and with
+  the amount of a tombstone that no incoming hash matched, is imported
+  pending as a near match that names no live row (a `near_match` item with
+  empty `candidates`), because it may as well be a second purchase of that
+  amount that day and only a person can say. One tombstone holds one row.
+  Deleting a document with its data writes no tombstone (the file can be
+  uploaded again whole), nor does confirming a duplicate. A tombstone is
+  taken back in the reconcile view ("Put back").
+- **A document read again** (`_replace_earlier` in
+  `app/domain/imports/service.py`). "Process again", an `apply-mapping`
+  re-run and a taught table read the document anew; the new reading
+  replaces the old one instead of standing beside it. Every row an import
+  writes ends with `updated_at == created_at`, after the rules and payee
+  defaults of that import ran: that is "untouched since import", and every
+  later change (an edit, a confirmation, a bulk action, a rule run, a
+  transfer link) ends it. When a run has committed every statement of the
+  document for an account, the rows the document produced there earlier
+  whose hash the new reading no longer holds are **removed** when nobody
+  touched them (untouched, no transfer link, no document attached; no
+  tombstone, so a later reading that holds the row again imports it), and
+  **kept** otherwise and listed in one `low_confidence_field` item
+  `earlier_rows_kept` (`account_id`, `count`, `transactions`: ids, at most
+  50), which the reconcile view answers ("remove the earlier rows"). Audit
+  `import.replace` (ids and counts); run summary `replaced_rows` and
+  `kept_rows`. Never touched: rows of another document, rows on another
+  account, rows added by hand for the document (they have no hash).
+  Nothing is replaced for an account a statement of the document still
+  waits for, for a document with a statement that has no account yet, or
+  for a document that holds brokerage statements. A re-read that changes
+  the period leaves no record of the old one
+  (`statement_records.drop_stale_records`). Rows imported before this
+  rule existed that a rule changed during their import look touched: they
+  are kept and listed, never guessed at.
 - Transfer pairing runs across accounts.
 - Receipt -> transaction linking: match on amount, date within +/- 3 days,
   merchant alias. Confident match links the document; otherwise a review item
@@ -2436,6 +2511,20 @@ same database transaction.
   one. Only accounts the uploader may **edit** are candidates (owner/admin:
   all), so a member's file never lands in an account hidden from them. No
   match, or several, is an `unknown_account` review item.
+  **A statement that prints no digits** (`app/ingestion/match/accounts.py`;
+  many card and savings statements mask the whole number) is matched by its
+  institution: the one statement of a document whose institution is known
+  goes to the one open account of the household at that institution, on
+  the statement's side of the balance sheet. A bank statement is put only
+  on a checking or savings account and a card statement only on a credit
+  card; a sole brokerage, retirement, loan, mortgage, line-of-credit or
+  manual account is named as a candidate and never chosen, and so are
+  several accounts that fit. Digits that are printed and match no account
+  never fall back to the institution: a number the household does not have
+  is a new account. The Accounts dialog of a document
+  (`app/domain/imports/proposals.py`) does not use this rule yet, so for
+  such a statement it can still propose a new account where the importer
+  finds the existing one.
 - **CSV/TSV.** The header row's fingerprint (case, spacing and a
   formula-guard quote ignored; for headerless files the shape of the first
   row) is looked up in the household's saved `import_mapping`s, trying the
@@ -2572,8 +2661,12 @@ same database transaction.
   whose own suggestion doubts the sign (whatever the account, which also
   stops a mapping saved from a card export by an earlier release), the
   import waits as `mapping_required` (`auto_import: sign_unverified`)
-  until a person saves the mapping's spec in the editor or chooses the
-  mapping explicitly for the run. A suggestion whose only doubt is the
+  until a person says what a positive amount means ("Money in or money
+  out?", the `answer_sign` resolution: "Review queue"), saves the
+  mapping's spec in the editor or chooses the mapping explicitly for the
+  run. Only the statement of the liability account waits: the other
+  accounts of a multi-account export are imported, and the answer changes
+  no row of theirs. A suggestion whose only doubt is the
   sign waits with the same `auto_import: sign_unverified`; any other
   doubt is `not_confident`. The account proposed for a table
   (`app/domain/imports/proposals.py`) is a credit card when the header
@@ -2595,11 +2688,17 @@ same database transaction.
   answered. The next file with the same header is imported without asking.
   The review queue asks the question of the suggestion's doubt (trades,
   no header row, words against signs, a sign nothing proves; `reviewCopy.ts`),
-  each answered in the editor. The preview also carries a brokerage
+  each answered in the editor, except the sign, which is answered on the
+  card. The preview also carries a brokerage
   activity suggestion (its roles are in the response schema), so an
-  `activity_unreadable` item leads to the editor too. The upload list
-  links "Map columns" only for a file with an open item the editor
-  answers (`next_step: column_mapping`).
+  `activity_unreadable` item leads to the editor too. "Map columns" is
+  offered on the document's review card (`map_columns`); the upload list
+  no longer links it and instead links every file to its document, names
+  the account an imported file went to with a link to its rows, and says
+  "Not checked against a balance" where that applies. A table whose
+  header row stands above nothing but total lines (`Total`, `Totals`,
+  `Balance`, `Ending balance`, `Closing balance`, no date-shaped cell)
+  has no rows either (`header_only`).
 - **Nothing to import.** A table that is only a header row (`header_only`:
   an export of a date range without transactions), and a PDF or image no
   parser read whose page tables hold no dated row (`pages_without_rows`
@@ -2855,6 +2954,84 @@ rows it names and, with `confirm`, confirms the item's pending rows;
 `import_as_read` answers a brokerage statement held back by its figures
 ("Review queue" below). Dismissing remains possible.
 
+**One finding per cause.** A row whose only doubt is that its statement
+did not reconcile still waits pending, but only the statement's
+`reconciliation_failed` / `reconciliation_unavailable` item speaks for it:
+the `low_confidence` item lists the rows that have a doubt of their own
+and leaves `reconciliation` out of their fields (no such item when no such
+row is left). The reconciliation item carries `statement` (the statement's
+index), `statement_ref` (a reference that survives a corrected balance and
+a parser change; "Answers that last" below), `lines_skipped` and, when the
+balances agree with the rows while the document's own summary or a section
+total does not, `cause` (`summary_totals_mismatch`,
+`section_total_mismatch` or `rows_outside_account`).
+
+**A clean read is imported and marked** (`clean_read`,
+`CONTRADICTION_WARNINGS`; SECURITY.md C12). The policy is "import clean
+reads, flag quietly": a statement waits when something contradicts it, not
+merely because it prints nothing to check. A PDF or image statement whose
+reconciliation is `unavailable` (no opening or closing balance, no running
+balance) is imported as **posted** when that is its only doubt:
+
+- it has at least one row, and every row's `low_confidence` is empty or
+  exactly `reconciliation`;
+- the importer skipped no row of it, no running balance disagrees, it was
+  not truncated, its date order was not assumed, and no row was left out
+  for its currency;
+- the document's parse counted no skipped line and carries none of the
+  warnings `summary_totals_mismatch`, `section_total_mismatch`,
+  `rows_outside_account`;
+- it lands on an account of the side of the balance sheet it was read for
+  (`same_side`): a page not read as a card statement whose digits are a
+  credit card's waits, since the sign of its amounts is on trust.
+
+One doubt anywhere and the whole statement waits as before: no row of it
+is posted and the `reconciliation_unavailable` item is raised. A clean
+read raises no item, a row of it waits only as a near duplicate, and **no
+balance snapshot** is written from it. A statement whose check failed
+(`mismatch`) is never a clean read; OFX, QFX, QIF and CSV were never held
+for this and are not affected. A brokerage statement follows the same
+rule in `app/domain/investments/statement_import.py`: read from a PDF or
+image, reconciliation unavailable, a printed period, no position or line
+with another doubt, not truncated, no skipped line and no contradiction
+warning, it is imported whole; anything else holds it as before
+(`investment_low_confidence`).
+
+**How far a statement was checked** is kept on its record
+(`statement_record.verification`, DATA_MODEL.md): `reconciled` (its own
+balances agreed with its rows, at import or later in the reconcile view;
+for a brokerage statement, its figures agree and all of it was written; a
+plan statement whose roll-forward adds up), `accepted` (a person accepted
+it without balancing: "Accept as read", "Import as read") or `unverified`
+(everything else: a clean read, a statement still waiting, and every CSV,
+OFX and QIF import, which carry nothing to reconcile). Only `reconciled`
+writes a balance snapshot. An imported, `unverified` statement read from
+a PDF or image is shown with the quiet marker **"Not checked against a
+balance"** (`unchecked` in `GET /documents` and
+`GET /documents/{id}/imported`; the uploads list and the document page),
+and the run summary counts them (`unverified_statements`). To check one,
+open the document, choose "Check against the statement" beside it, type
+the opening and closing balance as printed and confirm ("Review queue",
+"The reconcile view").
+
+**Answers that last** (`app/domain/imports/statement_answers.py`,
+`_settle_standing`). A statement a person put on an account is remembered
+under its exact key and under a stable reference (`statement_ref`: a
+digest of the statement's target, account digits, account name, currency
+and its place among the document's statements with the same four; never
+the period, the rows, the balances or the parser version), so a corrected
+balance or a newer parser does not lose the account. "Import anyway" and
+"Import as read" stay on the exact key: a statement read differently is
+asked about again. A statement accepted in the reconcile view, or
+balanced there against the ledger, is not asked about again while a later
+import of the document changes no row of its account (none written, none
+removed as an earlier reading, none newly kept); a balanced one must
+still add up against the ledger rows. When the run changed a row, the
+statement is what its reading says again (`unverified`, with its item
+unless it is a clean read). An accepted statement becomes `reconciled`,
+with its balance recorded, only when the reading and the ledger rows both
+add up.
+
 **Payee and category of an imported row** (`app/domain/imports/payees.py`,
 `_commit_statement`). A row's description is kept as printed (`raw_payee`).
 Its payee is the household payee whose normalised name or alias the
@@ -2883,17 +3060,19 @@ the alternatives considered. Resolutions feed back:
   about a page the person may see) saves a fingerprint with "Remember this
   layout". The review flow does not offer this by itself after an
   institution is corrected.
-- A row the person recognises -> "Create a rule from this" on a
-  low-confidence item drafts a rule from the row. Correcting a category
-  does not offer one by itself.
+- A row the person recognises -> `GET /review/{id}/rule-draft` drafts a
+  rule from a row of a low-confidence item. The review page no longer
+  shows a button for it (rules are made from a transaction); correcting a
+  category does not offer one by itself.
 - Confirm a duplicate -> both hashes recorded as equivalent.
 - Assign an owner/account for a drop-folder file -> remember the subfolder
   mapping.
 
 Phase 2 implementation (`app/domain/review/`, API.md "Review notes"): the
 queue lists items of documents the caller can see; resolutions are typed
-per kind. `possible_duplicate`: a byte-identical file is confirmed
-(`rejected`, it stays in quarantine) or released into the pipeline; a near
+per kind. `possible_duplicate`: a byte-identical file that was held is
+confirmed (`rejected`, it stays in quarantine) or released into the
+pipeline (one that was skipped at upload is only a notice: "Receive"); a near
 match of an imported row is confirmed (the row is deleted and its
 `import_hash` kept for the surviving transaction: on that row when it has
 none, else as an `import_hash_alias`) or kept (`confirmed`).
@@ -2957,10 +3136,12 @@ Phases 3-4 implementation (`app/domain/review/assist.py`, `actions.py`,
   The review copy (`reviewCopy.ts`, "Which year?") names the year and
   asks the person to check it against the statement, then to confirm the
   rows or correct their dates.
-- **Create a rule from this.** `GET /review/{id}/rule-draft` returns a rule
+- **A rule from a row.** `GET /review/{id}/rule-draft` returns a rule
   pre-filled from one of the item's rows (payee text, account and sign;
   the row's category, else payee, else a review flag), validated by the
-  rules schema but not saved; it is created through `POST /rules`.
+  rules schema but not saved; it is created through `POST /rules`. The
+  endpoint stays; the review page stopped offering it with the cards
+  (below).
 - **PDF table column mapping.** A PDF or image that no parser read and
   that has page tables offers its largest table (same header across pages
   joined, cells formula-neutralised) to `GET /imports/{id}/preview`, the
@@ -2991,12 +3172,14 @@ Phases 3-4 implementation (`app/domain/review/assist.py`, `actions.py`,
 - **Unknown owner.** The `unknown_owner` resolution with `remember` routes
   the drop-folder subfolder (see "Drop folder specifics").
 - **The review UI** (`frontend/src/features/review/ReviewTools.tsx`,
-  `frontend/src/features/documents/PageViewer.tsx`): each item shows the
+  `frontend/src/features/documents/PageViewer.tsx`; since the cards, the
+  tools of an item are shown inside its document's card): an item that
+  lists rows shows the
   page image with the doubtful row's box highlighted (positions as
   percentages of the page, so they hold at any size; recognised words can
   be outlined), the other readings to pick ("Use date ...", a picked amount
   keeps the row's sign), "Confirm as read" / "Save corrections and
-  confirm", "Create a rule from this" (draft, then "Save this rule"),
+  confirm" (offered while a row of the item still waits),
   "Remember this layout" for a new institution (optionally re-reading files
   already received; the `new_institution` kind is resolved and shown but
   no code path raises it today, so in practice a layout is remembered
@@ -3011,6 +3194,140 @@ Phases 3-4 implementation (`app/domain/review/assist.py`, `actions.py`,
   was corrected and confirmed and a rule saved through this UI in headless
   Chrome against a live API and worker (Phases 3+4 finalization).
 
+Import 1d implementation (`app/domain/review/service.py`,
+`reconciliation.py`, `causes.py`; `frontend/src/features/review/`
+`DocumentCard.tsx`, `ReconcileView.tsx`; API.md "Review notes" and
+"Reconciliation notes"):
+
+- **One card per document.** Review items stay one row per finding
+  (resolutions and re-runs depend on that); `GET /review/cards` groups a
+  document's open items the caller may see into one card and names the
+  **one** thing to do next (`action`) and the item that asks for it
+  (`action_item_id`). The first rule an item meets wins, the oldest item
+  within a rule: where the rows go (`choose_account`, then
+  `choose_owner`), how they are read (`answer_sign`, then `map_columns`),
+  whether the file or a row is a copy (`confirm_duplicate`), whether the
+  statement adds up (`reconcile`), single rows (`check_rows`), a receipt's
+  transaction (`attach_receipt`), then a file that was not read: `teach`
+  (when its pages can be shown and nothing or no row was read),
+  `reprocess`, or only `acknowledge` (an encrypted or unsupported file, a
+  container nested too deep or left incomplete, and notices). A notice
+  (`same_content_skipped`, `investment_figures_differ`) never comes before
+  an item that waits on a person; `open` counts the items that wait,
+  `notices` the rest. The page shows the card with a section per finding
+  and only the control the action names; controls that did nothing are
+  gone (balance fields outside the reconcile view, the rule button,
+  "Process again" where reading again changes nothing, row tools on an
+  item that lists no rows). After the last answer the card stays and says
+  where the rows went. The rules of 1c hold: a document of a known kind
+  that could not be read is never offered the column mapper.
+- **The reconcile view** (`GET /documents/{id}/reconciliation`). A
+  statement is checked against the **ledger rows its document produced**,
+  not against the stored reading: the account's rows whose hash (or alias,
+  for a row that first came from another file) is a hash of one of the
+  stored statement's rows, plus the rows whose source is the document (a
+  row added by hand for it). The view shows the page beside the opening
+  balance, the rows' sum, opening + rows, the closing balance and the
+  difference, which follows every edit: an edited row changes the sum, a
+  deleted row leaves it and is listed under "Removed rows". Balances are
+  shown and typed **as printed**: thousands separators and one currency
+  symbol are accepted, and for a card or loan account a balance owed is
+  positive, as on paper. A row can be edited, have its sign flipped, be
+  removed (for good: a tombstone), added (a line the reader missed,
+  created with the document as its source) or put back. Up to nine kinds
+  of **likely cause** are named, most likely first
+  (`app/domain/review/causes.py`; ids, amounts and boxes only): rows of an
+  earlier reading, an opening balance that is not the previous statement's
+  closing, a removed row whose amount is the missing amount, a row equal
+  to the difference (`extra_row`), a row that is half of it
+  (`sign_flipped`), a same-day pair (`duplicated_row`), a fee or interest
+  line of that size printed on the page, transposed digits (a difference
+  that divides by nine), rows more than ten days outside the period, or
+  simply a missing amount. It has three exits:
+  - **Confirm and record the balance** (`.../reconciliation/confirm`),
+    offered only when the statement balances: its pending rows are
+    confirmed, its closing balance is recorded as a statement snapshot,
+    its record becomes `reconciled` and its findings are closed.
+  - **Accept as read** (`.../reconciliation/accept`), behind a question:
+    the rows are confirmed and the findings closed, the record becomes
+    `accepted`, and **no balance is recorded**; a balance this document
+    recorded when it was imported as reconciled is taken back. Refused for
+    a statement that balances (confirm it instead).
+  - **Finish later**: nothing is sent; the findings stay open and the rows
+    stay pending.
+
+  "Put back" (`.../reconciliation/restore`) takes a tombstone back: the row
+  returns pending, with its original hash. "Remove the rows of the earlier
+  reading" (`.../reconciliation/remove-earlier`) deletes the rows a re-read
+  kept because a person had changed them (each leaves a tombstone) and
+  closes the `earlier_rows_kept` item. Every action needs member or above
+  who may change the document **and** edit on the statement's account; a
+  viewer, or a member who may only view the account, reads the figures
+  and can change nothing. Neither exit is offered for a statement the
+  document imported nothing of (a second copy held as an overlap). The
+  view is opened from the card (`reconcile`) and, for any bank statement of
+  a document that was not balanced, from "Check against the statement" on
+  the document page: that is how a clean read is checked afterwards.
+- **Money in or money out?** (`unparsed` / `mapping_required` with
+  `auto_import: sign_unverified`; resolution `answer_sign` with
+  `positive_is`: `money_in` or `money_out`). A sign taken on trust holds
+  back only the statement of a liability account: the other accounts of a
+  multi-account export are imported and the suggested mapping is saved,
+  still on trust. Each held statement is one item (`account_id`, `group`,
+  `transactions`, `scope`, `mapping_id` when a mapping exists). When every
+  statement of the table waited (`scope: mapping`), the answer is the
+  layout's: it is saved on the item's mapping, or on one made from the
+  item's suggestion, which is then no longer on trust, so the question is
+  asked once per layout. A mapping that already read files, or that is
+  another account's, is never rewritten (other accounts' files were
+  imported with its sign): the answer is saved on a mapping of the item's
+  account instead, and refused (`422`) when the item names no account to
+  keep it for. When other accounts of the file were imported
+  (`scope: account`), the mapping is left alone and the answer is
+  remembered for that account of that document only. **No row already
+  imported is ever flipped**; the held rows are imported with the answered
+  sign.
+- **Several rows that may already be in PerFin** (`possible_duplicate` /
+  `near_matches`): one decision per listed row in one request
+  (`rows: [{transaction_id, decision, duplicate_of?}]`; without `rows`,
+  `decision` applies to every listed row). Rows left undecided keep the
+  item open, listing only them. A decision for a row the item does not
+  list is `422` and nothing is decided.
+- **Already uploaded** (`possible_duplicate` / `same_content_skipped`): a
+  notice. Confirm ("OK") closes it; reject ("Import it anyway") sends the
+  copy through the pipeline.
+- **Rows from an earlier reading** (`low_confidence_field` /
+  `earlier_rows_kept`): the rows a re-read kept because a person had
+  changed them ("Match and deduplicate", "A document read again"),
+  answered in the reconcile view. A list a person already answered is not
+  raised again.
+- **A held brokerage line corrected** (`low_confidence_field` with
+  `line_fixes` on an `investment_lines_held` / `investment_low_confidence`
+  item): the date, amount, units or kind a held line should read are typed
+  in, the stored statement is corrected and the document imported again,
+  so a line with nothing else in doubt is written. "Import the corrected
+  lines" is offered only once every other held line of the item is ticked
+  "Leave out", since sending it drops those for good.
+- **Lines nobody read** (`lines_skipped`). The parse item is raised only
+  while a statement of the document does not reconcile: balances that
+  agree vouch for the rows that were read, so a reconciled statement with
+  an unread line ends `processed` and keeps only the count
+  (`document.confidence.parse.skipped_lines`, `skipped_lines` in
+  `GET /documents/{id}/imported`, `lines_skipped` on the reconciliation
+  item and in the reconcile view, which marks the lines on the page). A
+  brokerage statement vouches for a skipped line only when its checks
+  cover the activity (cash and account value, or a plan's roll-forward).
+  A skipped line always keeps a statement from being a clean read. The
+  count of records an OFX, QFX or QIF extractor could not read (`source:
+  extraction`) is raised as before.
+- **Known gaps.** A row that resembles a row the person deleted waits as a
+  `near_match` with no candidates: it can be kept ("not a duplicate") but
+  there is no "remove it again" answer yet; delete the row from
+  Transactions instead. `GET /review/{id}` lists no transaction
+  alternatives for a `near_matches` item (its candidates are in
+  `payload.rows`). A partly decided `near_matches` item emits no review
+  event.
+
 ### Teaching PerFin a layout
 
 When no parser reads a statement, or reads it wrong, the person shows
@@ -3019,6 +3336,41 @@ PerFin where things are ("Teach PerFin", `POST /documents/{id}/teach`;
 offered from every review item about a page the person may see and from
 the document page.
 
+- **Preview first.** Before anything is saved the dialog shows what the
+  labels would read (`POST /documents/{id}/teach` with `preview: true`):
+  the first 50 rows in reading order with the table each came from, the
+  number of rows, whether they meet the balances and by how much they
+  differ, how many other waiting documents of the layout would be read
+  again, and the account the rows would go to. A preview writes nothing:
+  no document field, no stored extraction, no institution, no layout, no
+  review item, no job and no audit row. "Apply" is enabled only after a
+  preview of the current selections, account and institution; changing
+  any of them clears it.
+- **Direction, several tables, continued pages.** A transaction table
+  with a single amount column takes a **direction**: as printed (signed on
+  the page), money in, money out (an unsigned figure is spending; a
+  printed minus or bracket turns it back, so a refund in a withdrawals
+  table is money in), or a card's charges (the printed sign negated). A
+  printed `CR` or `DR` decides in every direction but "as printed". Debit
+  and credit columns say it themselves. A layout holds up to four
+  transaction tables and one holdings table (`Money received` and `Money
+  sent` printed as two tables); their rows make one statement in page
+  order. Tables are kept in the order the document prints them, whatever
+  order they were drawn in, and the text the line under a selection starts
+  with closes its table. A table can **continue** on pages that do not
+  repeat its header. When a table is a card's, the statement's balances
+  are amounts owed and are negated with the rows, so a card taught as a
+  payments table (money in) and a purchases table (card) reconciles.
+  Where only the order says which of two tables under the same headers a
+  header starts and that order is a guess (a header on a new page under a
+  table with no end text, or a section the statement left out this
+  month), the amounts of those rows are scored as guessed unless the
+  statement reconciles, and the outcome warns `table_order_guessed`: such
+  a reading waits, it is never a clean read. Rows dated with a month name
+  and no year take the year from the statement period; without a period
+  they are counted as skipped and the outcome warns `dates_without_year`.
+- **The account.** The dialog names the account of the file, starting on
+  the document's own; the rows of a taught table are imported into it.
 - **Selecting.** The page is shown; a click picks a word, a drag picks a
   box, and a list of the page's lines does the same from the keyboard (the
   chosen line is added with "Add this line", so moving through the list
@@ -3034,10 +3386,14 @@ the document page.
   the person types wins): the period, the institution (one of the
   household's, or created by name), the account and the balances are
   applied at once. A labelled table is read over the whole document and its
-  statement replaces what the parsers read in the stored extraction; when
-  no row of the document was imported yet, the normal import runs on it
-  (reconciliation, deduplication, account matching by the last four
-  digits, review items). Balances for a statement already imported go
+  statement replaces what the parsers read in the stored extraction; the
+  normal import then runs on it (reconciliation, deduplication, account
+  matching by the last four digits, review items). When rows of the
+  document were already imported, that import replaces the ones nobody
+  touched and keeps the others ("Match and deduplicate", "A document read
+  again"), and the answer still carries the warning
+  `rows_already_imported` so the dialog can say the earlier rows were
+  replaced. Balances for a statement already imported go
   through the same correction as `POST /review/{id}/correct`.
 - **Anchors, not values.** For each field PerFin derives an **anchor**: the
   label printed next to the value (`right`), above it (`below`), or, for an
@@ -3068,8 +3424,8 @@ the document page.
   label taught by mistake can be dropped by teaching the layout afresh.
 - **The review item.** The item the dialog was opened from is closed only
   when the teaching answers it: a held statement (`reconciliation_*`) once
-  it reconciles with the balances entered (its pending rows confirmed, like
-  "Check and accept"); any item once the document is read again through
+  it reconciles with the balances entered (its pending rows confirmed, as
+  confirming in the reconcile view does); any item once the document is read again through
   the pipeline (reprocessing raises afresh what is still wrong); an unread
   document (`unparsed`) or an unknown account once the taught rows are
   imported; a new institution once it is set or the layout remembered; a
@@ -3092,7 +3448,7 @@ the document page.
   and a dated line without an amount is skipped with its box recorded. The
   anchors give the period (yearless row dates take its year), the account's
   last four digits and the balances, and the statement is reconciled and
-  scored like a parser's (parser `layout_template/4`), so a template that
+  scored like a parser's (parser `layout_template/6`), so a template that
   misreads a statement is held back the same way. A template without
   tables only fills a parser's statement (the period always; the account
   and balances when there is one statement). Then the normal import runs.
@@ -3115,8 +3471,9 @@ the document page.
 
 Per-reason fixes in the review UI: cost basis per unit for opening
 positions with an unknown basis (`PATCH /investments/transactions/{id}`),
-opening/closing balance for statements that do not add up ("Check and
-accept": confirmed rows and a balance snapshot once it reconciles),
+the reconcile view for bank and card statements that do not add up
+(confirmed rows and a balance snapshot once it reconciles, or "Accept as
+read" without one),
 "Import as read" for brokerage statements held back by their figures (what
 did not add up is spelled out per check: positions, holdings total, cash,
 account value, with the difference; imported as printed, no balance
