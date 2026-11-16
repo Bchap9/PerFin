@@ -198,6 +198,10 @@ describe("document library", () => {
     expect(await screen.findByRole("link", { name: "march.pdf" })).toHaveAttribute("href", "/inbox/documents/d-1");
     expect(screen.getByRole("link", { name: "Upload files" })).toHaveAttribute("href", "/inbox#inbox-add-documents");
     expect(screen.getAllByRole("heading", { level: 1 })).toHaveLength(1);
+    // Under the Inbox heading and its Documents tab the library shows no
+    // second title or breadcrumbs; its heading stays for screen readers.
+    expect(screen.getByRole("heading", { level: 2, name: "Document library" })).toHaveClass("visually-hidden");
+    expect(screen.queryByRole("navigation", { name: "Breadcrumbs" })).not.toBeInTheDocument();
   });
 
   it("has no axe violations", async () => {
