@@ -774,7 +774,7 @@ describe("review queue", () => {
     });
     expect(
       await within(group).findByRole("link", { name: "march.ofx" }),
-    ).toHaveAttribute("href", "/documents/d-1");
+    ).toHaveAttribute("href", "/inbox/documents/d-1");
     expect(
       screen.getByRole("button", { name: "Import anyway" }),
     ).toBeInTheDocument();
@@ -841,7 +841,7 @@ describe("review queue", () => {
     const user = userEvent.setup();
     expect(
       await screen.findByRole("link", { name: "Map columns" }),
-    ).toHaveAttribute("href", "/documents/d-1/mapping");
+    ).toHaveAttribute("href", "/inbox/documents/d-1/mapping");
     const again = screen.getAllByRole("button", { name: "Process again" });
     await user.click(again[1] ?? again[0] ?? document.body);
     await waitFor(() => {
@@ -997,7 +997,7 @@ describe("review queue", () => {
     const link = await screen.findByRole("link", {
       name: "october-statement.pdf",
     });
-    expect(link).toHaveAttribute("href", "/documents/d-1");
+    expect(link).toHaveAttribute("href", "/inbox/documents/d-1");
     expect(
       screen.getByText(
         "None of your accounts matches the account number in this file.",
@@ -1873,7 +1873,7 @@ describe("review cards", () => {
     );
     expect(screen.getByRole("link", { name: "Open the file" })).toHaveAttribute(
       "href",
-      "/documents/d-1",
+      "/inbox/documents/d-1",
     );
     expect(screen.queryByText("Item resolved")).not.toBeInTheDocument();
     expect(screen.queryByText("Nothing to review")).not.toBeInTheDocument();

@@ -94,7 +94,7 @@ const SUGGESTED = series("s-1", "Lumen Streaming");
 const PRICE_UP: SubscriptionEvent = {
   id: "e-1",
   schedule_id: "s-2",
-  name: "Quill Notes",
+  name: "Inkwell Notes",
   kind: "price_changed",
   occurred_on: "2026-10-28",
   amount_before: money("-4.00"),
@@ -249,11 +249,11 @@ describe("Inbox, Needs you", () => {
     });
     renderApp("/inbox");
     const user = userEvent.setup();
-    const heading = await screen.findByRole("heading", { name: "Quill Notes" });
-    const quill = heading.closest("section");
-    expect(quill).not.toBeNull();
-    expect(within(element(quill)).getByText(/Price went from \$4\.00 to \$5\.00/)).toBeInTheDocument();
-    await user.click(screen.getByRole("button", { name: "Got it: Quill Notes" }));
+    const heading = await screen.findByRole("heading", { name: "Inkwell Notes" });
+    const inkwell = heading.closest("section");
+    expect(inkwell).not.toBeNull();
+    expect(within(element(inkwell)).getByText(/Price went from \$4\.00 to \$5\.00/)).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Got it: Inkwell Notes" }));
     await waitFor(() => {
       expect(api.callsTo("POST", "/api/v1/subscriptions/events/seen")[0]?.body).toEqual({ ids: ["e-1"] });
     });
@@ -353,7 +353,7 @@ describe("Inbox, Needs you", () => {
     });
     renderApp("/inbox");
     expect(await screen.findByRole("heading", { name: "Lumen Streaming" })).toBeInTheDocument();
-    expect(screen.getByRole("heading", { name: "Quill Notes" })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Inkwell Notes" })).toBeInTheDocument();
     expect(await screen.findByText("Groceries?")).toBeInTheDocument();
     const offer = await screen.findByRole("region", { name: "Always Groceries for Corner Market?" });
     expect(within(offer).getByText(/You chose Groceries for Corner Market 3 of 3 times/)).toBeInTheDocument();
@@ -364,7 +364,7 @@ describe("Inbox, Needs you", () => {
   });
 
   it("the number of cards that need an answer equals the summary's cards", async () => {
-    const changed = series("s-2", "Quill Notes", { open_events: 1 });
+    const changed = series("s-2", "Inkwell Notes", { open_events: 1 });
     const api = inboxApi({
       cards: [NOTE_OLD, MONEY_NEW],
       loose: [LOOSE],
@@ -376,7 +376,7 @@ describe("Inbox, Needs you", () => {
     });
     renderApp("/inbox");
     expect(await screen.findByRole("heading", { name: "Suggested categories" })).toBeInTheDocument();
-    expect(await screen.findByRole("heading", { name: "Quill Notes" })).toBeInTheDocument();
+    expect(await screen.findByRole("heading", { name: "Inkwell Notes" })).toBeInTheDocument();
     expect(await screen.findByRole("link", { name: "Always use Groceries for Corner Market…" })).toBeInTheDocument();
     const entries = await waitingCards();
     // 2 documents + 1 loose + 2 series + 1 suggestions card; the rule offer is not counted.
@@ -430,7 +430,7 @@ describe("Inbox, Needs you", () => {
     });
     const { container } = renderApp("/inbox");
     await screen.findByRole("heading", { name: "Suggested categories" });
-    await screen.findByRole("heading", { name: "Quill Notes" });
+    await screen.findByRole("heading", { name: "Inkwell Notes" });
     await screen.findByRole("link", { name: "Always use Groceries for Corner Market…" });
     // The whole page: the upload zone, the cards and what was imported recently.
     await expectNoAxeViolations(container);
@@ -460,6 +460,12 @@ describe("Inbox, imported recently", () => {
         listed("d-11", "joint-october.pdf", "processed", 2, { account_id: "a-9" }),
         // Investment activity is not in the cash ledger: no rows to link.
         listed("d-12", "trades.csv", "processed", 3, { parser_version: "brokerage_activity_table/1" }),
+        // Holdings are not either; they say so in their own words.
+        listed("d-16", "holdings.csv", "processed", 3, { parser_version: "brokerage_positions_table/1" }),
+        // A receipt is not a statement: it has no rows in the ledger.
+        listed("d-17", "till.jpg", "processed", 4, { kind: "receipt" }),
+        // A file that came without a name still has a row, and a link.
+        listed("d-18", "", "processed", 5, { original_filename: null }),
         // Still being read, waiting on a person, or older than two weeks: not here.
         listed("d-13", "reading.pdf", "parsing", 0),
         listed("d-14", "held.csv", "needs_review", 1, { account_id: "a-1" }),
@@ -477,9 +483,12 @@ describe("Inbox, imported recently", () => {
     expect(recent.getByText(`${String(formatDate("2026-10-01"))} to ${String(formatDate("2026-10-31"))}`)).toBeInTheDocument();
     expect(recent.getAllByText("Not checked against a balance")).toHaveLength(1);
     expect(recent.getByText("Read as investment activity")).toBeInTheDocument();
+    expect(recent.getByText("Read as investment holdings")).toBeInTheDocument();
+    expect(recent.getByRole("link", { name: "till.jpg" })).toHaveAttribute("href", "/inbox/documents/d-17");
+    expect(recent.getByRole("link", { name: "Unnamed file" })).toHaveAttribute("href", "/inbox/documents/d-18");
     expect(
       recent.getAllByRole("link", { name: /^View the rows/ }).map((link) => link.getAttribute("href")),
-    ).toEqual(["/transactions?document=d-10", "/transactions?document=d-11"]);
+    ).toEqual(["/transactions?document=d-10", "/transactions?document=d-11", "/transactions?document=d-18"]);
     for (const name of ["reading.pdf", "held.csv", "old.csv"]) {
       expect(recent.queryByText(name)).not.toBeInTheDocument();
     }

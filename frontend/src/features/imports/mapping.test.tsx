@@ -470,6 +470,12 @@ describe("mapping editor", () => {
         json({ document_id: "d-1", job_id: "j-1", state: "queued" }, 202),
     });
     const { router } = renderApp("/inbox/documents/d-1/mapping");
+    // Every place the editor sends the person, so a detour through an old
+    // path (which the redirects would hide) is seen.
+    const visited: string[] = [];
+    const stop = router.subscribe("onBeforeNavigate", (event) => {
+      visited.push(event.toLocation.pathname);
+    });
     const user = userEvent.setup();
     await user.selectOptions(
       await screen.findByLabelText("Column 1 holds"),
@@ -494,6 +500,9 @@ describe("mapping editor", () => {
     await waitFor(() => {
       expect(currentHref(router)).toBe("/inbox/documents/d-1");
     });
+    stop();
+    expect(visited).toContain("/inbox/documents/d-1");
+    expect(visited.filter((path) => !path.startsWith("/inbox/"))).toEqual([]);
   });
 
   it("sits under its document in the Inbox, with one h1 and no axe violations", async () => {

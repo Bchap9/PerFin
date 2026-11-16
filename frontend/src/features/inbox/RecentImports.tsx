@@ -19,9 +19,8 @@ import { formatDate } from "../../lib/dates";
 import { accountLabel, useAccounts, type Account } from "../accounts/api";
 import {
   importKeys,
+  investmentReading,
   listRecentDocuments,
-  readAsActivity,
-  readAsPositions,
   type DocumentRow,
 } from "../imports/api";
 
@@ -62,7 +61,8 @@ function periodText(row: DocumentRow): string | null {
 function RecentRow({ row, account }: { row: DocumentRow; account: Account | undefined }) {
   const name = row.original_filename ?? "Unnamed file";
   const period = periodText(row);
-  const investment = readAsActivity(row) || readAsPositions(row);
+  const reading = investmentReading(row);
+  const investment = reading !== null;
   return (
     <li className="recent-imports__row">
       <Link to="/inbox/documents/$documentId" params={{ documentId: row.id }} className="recent-imports__name">
@@ -78,7 +78,7 @@ function RecentRow({ row, account }: { row: DocumentRow; account: Account | unde
         )}
         {period === null ? null : <span>{period}</span>}
         {row.status === "processed" && investment ? (
-          <span>{readAsPositions(row) ? "Read as investment holdings" : "Read as investment activity"}</span>
+          <span>{reading}</span>
         ) : null}
         {row.status === "processed" && row.unchecked ? <QuietNote>Not checked against a balance</QuietNote> : null}
         {/* Investment activity and holdings, and files that are not statements, have no rows in the cash ledger. */}

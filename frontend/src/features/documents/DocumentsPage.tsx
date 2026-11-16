@@ -18,7 +18,7 @@ import { Table } from "../../components/Table";
 import { errorMessage } from "../../lib/api/client";
 import { formatDateTime } from "../../lib/dates";
 import { useCanWrite } from "../accounts/api";
-import { STATUS_LABELS, statusTone } from "../imports/api";
+import { investmentReading, STATUS_LABELS, statusTone } from "../imports/api";
 import { DeleteDocumentDialog } from "./DeleteDocumentDialog";
 import {
   docKeys,
@@ -178,7 +178,23 @@ export function DocumentsPage() {
                   </span>
                 ),
               },
-              { id: "kind", header: "Kind", cell: (row) => KIND_LABELS[row.kind] },
+              {
+                id: "kind",
+                header: "Kind",
+                cell: (row) => {
+                  // A brokerage export says how it was read, whatever its status.
+                  const reading = investmentReading(row);
+                  return reading === null ? (
+                    KIND_LABELS[row.kind]
+                  ) : (
+                    <span>
+                      {KIND_LABELS[row.kind]}
+                      <br />
+                      <span className="ledger-muted">{reading}</span>
+                    </span>
+                  );
+                },
+              },
               { id: "source", header: "Source", cell: (row) => SOURCE_LABELS[row.source] },
               {
                 id: "status",

@@ -468,7 +468,7 @@ export function UnknownOwnerTools({
       </p>
       {item.document_id === null ? null : (
         <Link
-          to="/documents/$documentId"
+          to="/inbox/documents/$documentId"
           params={{ documentId: item.document_id }}
           className="link-action"
         >

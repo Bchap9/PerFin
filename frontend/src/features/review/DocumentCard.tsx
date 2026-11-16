@@ -105,7 +105,7 @@ export function DocumentLine({
       : null;
   return (
     <p className="review-document">
-      <Link to="/documents/$documentId" params={{ documentId: document.id }}>
+      <Link to="/inbox/documents/$documentId" params={{ documentId: document.id }}>
         {document.original_filename ?? "Unnamed file"}
       </Link>
       <span className="ledger-muted">
@@ -258,7 +258,7 @@ function DuplicateBody({
         {otherId === null ? null : (
           <p>
             Imported from{" "}
-            <Link to="/documents/$documentId" params={{ documentId: otherId }}>
+            <Link to="/inbox/documents/$documentId" params={{ documentId: otherId }}>
               {other.data?.original_filename ?? "another file"}
             </Link>
             .
@@ -460,7 +460,7 @@ function SignControl({ item, actionable, trailing }: ControlProps) {
 function MapColumnsLink({ documentId }: { documentId: string }) {
   return (
     <Link
-      to="/documents/$documentId/mapping"
+      to="/inbox/documents/$documentId/mapping"
       params={{ documentId }}
       className="btn btn--primary btn--md"
     >
@@ -1666,7 +1666,7 @@ export function SettledLine({ document }: { document: ReviewDocument }) {
           View the rows
         </Link>
         <Link
-          to="/documents/$documentId"
+          to="/inbox/documents/$documentId"
           params={{ documentId: document.id }}
           className="link-action"
         >

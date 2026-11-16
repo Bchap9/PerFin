@@ -156,6 +156,29 @@ describe("document library", () => {
     expect(api.callsTo("DELETE", "/api/v1/documents/d-1")[0]?.search).toContain("with_data=true");
   });
 
+  it("marks a brokerage export in the library with how it was read, whatever its status", async () => {
+    mockApi({
+      "GET /api/v1/auth/session": authedSession({ role: "viewer" }),
+      "GET /api/v1/documents": () =>
+        json({
+          items: [
+            row("d-1", "trades.csv", { status: "needs_review", parser_version: "brokerage_activity_table/1" }),
+            row("d-2", "holdings.csv", { parser_version: "brokerage_positions_table/1" }),
+            row("d-3", "march.pdf"),
+          ],
+          next_cursor: null,
+        }),
+    });
+    renderApp("/inbox/documents");
+    const trades = await screen.findByRole("rowheader", { name: /trades\.csv/ });
+    const tradesRow = within(present(trades.closest("tr")));
+    expect(tradesRow.getByText("Read as investment activity")).toBeInTheDocument();
+    const holdingsRow = within(present(screen.getByRole("rowheader", { name: /holdings\.csv/ }).closest("tr")));
+    expect(holdingsRow.getByText("Read as investment holdings")).toBeInTheDocument();
+    const marchRow = within(present(screen.getByRole("rowheader", { name: /march\.pdf/ }).closest("tr")));
+    expect(marchRow.queryByText(/Read as investment/)).not.toBeInTheDocument();
+  });
+
   it("offers no delete to a viewer", async () => {
     mockApi({
       "GET /api/v1/auth/session": authedSession({ role: "viewer" }),
@@ -609,6 +632,35 @@ describe("what a file imported", () => {
       screen.queryByRole("button", { name: "Check against the statement" }),
     ).not.toBeInTheDocument();
     expect(api.callsTo("GET", "/api/v1/documents/:id/imported")).toHaveLength(0);
+  });
+
+  it("a waiting brokerage export says how it was read, next to its review link", async () => {
+    fileApi([], {
+      status: "needs_review",
+      parser_version: "brokerage_activity_table/1",
+      open_review_items: 2,
+    });
+    const { unmount } = renderApp("/inbox/documents/d-1");
+    const details = within(await screen.findByRole("region", { name: "Details" }));
+    expect(await details.findByText("Read as investment activity")).toBeInTheDocument();
+    expect(details.getByRole("link", { name: "2 item(s) to review" })).toHaveAttribute(
+      "href",
+      "/inbox?document=d-1",
+    );
+    unmount();
+    fileApi([], { status: "needs_review", parser_version: "brokerage_positions_table/1" });
+    renderApp("/inbox/documents/d-1");
+    const holdings = within(await screen.findByRole("region", { name: "Details" }));
+    expect(await holdings.findByText("Read as investment holdings")).toBeInTheDocument();
+    expect(holdings.queryByText("Read as investment activity")).not.toBeInTheDocument();
+  });
+
+  it("a file read as cash rows carries no investment marker", async () => {
+    fileApi([], { parser_version: "csv_mapped/1" });
+    renderApp("/inbox/documents/d-1");
+    const details = within(await screen.findByRole("region", { name: "Details" }));
+    expect(await details.findByText("Statement")).toBeInTheDocument();
+    expect(details.queryByText(/Read as investment/)).not.toBeInTheDocument();
   });
 
   it("the review link goes to the Inbox with the document", async () => {

@@ -210,6 +210,18 @@ export function readAsPositions(row: { parser_version: string | null }): boolean
   return row.parser_version?.startsWith("brokerage_positions_table/") ?? false;
 }
 
+/**
+ * How the server read a brokerage export, in words ("Read as investment
+ * activity" or "... holdings"), or null for anything else. Shown wherever the
+ * file is listed or opened, whatever its status, so a file that waits says it too.
+ */
+export function investmentReading(row: { parser_version: string | null }): string | null {
+  if (readAsPositions(row)) {
+    return "Read as investment holdings";
+  }
+  return readAsActivity(row) ? "Read as investment activity" : null;
+}
+
 export type DetectedAccount = Schemas["DetectedAccount"];
 export type DocumentAccounts = Schemas["DocumentAccounts"];
 export type AccountChoice = Schemas["AccountChoice"];

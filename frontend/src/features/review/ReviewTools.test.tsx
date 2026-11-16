@@ -486,6 +486,10 @@ describe("review tools", () => {
       name: "Assign this file",
     });
     expect(assign).toBeDisabled();
+    expect(screen.getByRole("link", { name: "Look at the file" })).toHaveAttribute(
+      "href",
+      "/inbox/documents/d-1",
+    );
     await user.selectOptions(
       await screen.findByLabelText("Whose file is it?"),
       "u-1",

@@ -21,7 +21,7 @@ import { useToast } from "../../components/Toast";
 import { errorMessage } from "../../lib/api/client";
 import { formatDate, formatDateTime } from "../../lib/dates";
 import { queryRoots } from "../../lib/queryKeys";
-import { STATUS_LABELS, statusTone } from "../imports/api";
+import { investmentReading, STATUS_LABELS, statusTone } from "../imports/api";
 import { DocumentAccountsDialog } from "../imports/DocumentAccountsDialog";
 import {
   getReconciliation,
@@ -395,6 +395,8 @@ export function DocumentDetailPage() {
     },
   });
   const title = doc?.original_filename ?? "Document";
+  // A brokerage export says how it was read, also while it waits on a person.
+  const reading = doc === undefined ? null : investmentReading(doc);
   return (
     <div className="ledger-stack">
       <PageHeader
@@ -416,7 +418,15 @@ export function DocumentDetailPage() {
           <Card title="Details">
             <dl>
               <dt>Kind</dt>
-              <dd>{KIND_LABELS[doc.kind]}</dd>
+              <dd>
+                {KIND_LABELS[doc.kind]}
+                {reading === null ? null : (
+                  <>
+                    {" "}
+                    <span className="ledger-muted">{reading}</span>
+                  </>
+                )}
+              </dd>
               <dt>Status</dt>
               <dd>
                 <Badge tone={statusTone(doc.status)}>
