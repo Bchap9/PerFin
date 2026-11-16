@@ -15,7 +15,7 @@ const history: BalanceHistory = {
     { date: "2026-03-31", balance: { amount: "150.00", currency: "USD" } },
   ],
   snapshots: [],
-} as BalanceHistory;
+};
 
 describe("BalanceChart", () => {
   it("draws the line in the series colour, not the text colour", () => {
