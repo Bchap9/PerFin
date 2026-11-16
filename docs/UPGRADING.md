@@ -298,6 +298,40 @@ need it ([PORTABILITY.md](PORTABILITY.md)).
 
 ## Notes for specific releases
 
+### 1.0.0 (not released yet)
+
+- **QIF files imported before are not changed by the upgrade.** A QIF
+  file's own `Opening Balance` record (or `Balance brought forward` and the
+  like) was imported as a transaction, and a record made only of column
+  names (`Description`, `Reference`, `Debit`) was posted quietly. 1.0.0
+  reads both differently (extractor `qif/2`), but only when a file is read
+  again: nothing is backfilled. To find them, open Inbox › Documents and
+  look for file names ending in `.qif`; open each one and choose "Process
+  again". The opening balance record then becomes the statement's opening
+  balance and its transaction is removed, unless somebody changed that
+  row: then it is kept and listed under "Rows from an earlier reading",
+  where it can be removed. A record of column names keeps its date and
+  amount and waits in the Inbox for review. A closing balance record is
+  left out and counted in the document's warnings.
+- **Some merchant keys clear themselves.** A line that leaves fewer than
+  three letters and digits (`E`, `XY #0042`) and bare cash wording
+  (`WITHDRAWAL`, `CASH DEPOSIT`, `TELLER DEPOSIT`, a line that starts with
+  `ATM`) no longer have a merchant key. Rows keyed before lose it in the
+  refresh the hourly `categorise.dispatch` job queues after the upgrade
+  (clean-up version 3, merchant list version 10); nothing needs to be run
+  by hand, and an admin's "Check again" (Settings, What PerFin learned)
+  runs it at once. Categories on those rows stay; what was learned under such a key
+  no longer answers, and the cash suggestion of a withdrawal or a cash
+  deposit stays. The same refresh suggests rent, water, sewer and tuition
+  for more lines, and the next daily detection then shows a recurring
+  series of such rows as a bill instead of "other", unless somebody set
+  its kind.
+- **An investment account's chart changes.** The balance history of a
+  brokerage or retirement account (`GET /accounts/{id}/balances`, the
+  account page's chart) is now cash plus holdings on each day, as the
+  account's balance and net worth already were; the response shape is the
+  same.
+
 ### 1.0.0-rc.11
 
 The redesign: six sections and Settings, one Inbox, a drawer per

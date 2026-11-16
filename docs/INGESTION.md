@@ -2804,7 +2804,20 @@ same database transaction.
   transaction row directly above it continues that description and is
   appended to the row's memo. A row whose date cell says `Pending` is not
   booked yet: counted (`pending_rows` in the run summary) and not
-  imported. At most five unreadable rows after the table's last readable
+  imported. A row whose cells are the header's column names again (an
+  export that prints the header on every page) is a note, counted as
+  `header_rows`. A row whose payee cell (the memo's when the payee's is
+  empty) is a balance phrase (`Opening balance`, `Closing balance`,
+  `app.ingestion.balance_lines`), with the other of the two empty or a
+  balance phrase too, is no transaction even with a date and a figure: it
+  is a note, counted as `balance_rows`, and the first opening balance row
+  gives the statement's opening balance (its balance cell when one is
+  mapped and reads, else its amount), proposed for a new account as of the
+  day before the row's date so that transactions on that day still count;
+  a closing balance row is dropped and stays on record only in the count.
+  `Opening balance fee`, or a memo of its own, is a transaction. A grouped
+  (multi-account) file's header and balance rows that belong to no group
+  are counted in its first group. At most five unreadable rows after the table's last readable
   row that hold no transaction (totals, closing lines) are footers
   (`footer_rows`), not reported; more than five are all reported. A cash
   amount with more than six decimals is rounded half-even to six, as OFX
