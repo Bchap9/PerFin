@@ -126,7 +126,7 @@ describe("export rules", () => {
       "GET /api/v1/rules/export": () => json(EXPORT),
       "GET /api/v1/rules": () => json({ items: RULES }),
     });
-    renderApp("/rules");
+    renderApp("/settings/rules");
     const user = userEvent.setup();
     await screen.findByRole("rowheader", { name: "Alpha" });
     await user.click(screen.getByRole("button", { name: "Export rules" }));
@@ -147,7 +147,7 @@ describe("export rules", () => {
       "GET /api/v1/rules/export": () => json(EXPORT),
       "GET /api/v1/rules": () => json({ items: [stored("r-1", "Alpha", 0, { redacted: true }), stored("r-2", "Beta", 1)] }),
     });
-    renderApp("/rules");
+    renderApp("/settings/rules");
     const user = userEvent.setup();
     await screen.findByRole("rowheader", { name: "Beta" });
     expect(screen.queryByRole("button", { name: "Import rules" })).not.toBeInTheDocument();
@@ -165,7 +165,7 @@ describe("export rules", () => {
         json({ type: "urn:perfin:problem:forbidden", title: "Forbidden", status: 403, detail: "You are not a member of a household." }, 403),
       "GET /api/v1/rules": () => json({ items: RULES }),
     });
-    renderApp("/rules");
+    renderApp("/settings/rules");
     const user = userEvent.setup();
     await screen.findByRole("rowheader", { name: "Alpha" });
     await user.click(screen.getByRole("button", { name: "Export rules" }));
@@ -187,7 +187,7 @@ describe("import rules", () => {
       },
       "GET /api/v1/rules": () => json({ items: rules }),
     });
-    renderApp("/rules");
+    renderApp("/settings/rules");
     const user = userEvent.setup();
     await user.click(await screen.findByRole("button", { name: "Import rules" }));
     const dialog = await screen.findByRole("dialog", { name: "Import rules" });
@@ -236,7 +236,7 @@ describe("import rules", () => {
           : json({ items: [stored("r-3", "Coffee", 0), stored("r-4", "Fuel", 1)] }, 201),
       "GET /api/v1/rules": () => json({ items: RULES }),
     });
-    renderApp("/rules");
+    renderApp("/settings/rules");
     const user = userEvent.setup();
     await user.click(await screen.findByRole("button", { name: "Import rules" }));
     const dialog = await screen.findByRole("dialog", { name: "Import rules" });
@@ -271,7 +271,7 @@ describe("import rules", () => {
       ...referenceHandlers(),
       "GET /api/v1/rules": () => json({ items: RULES }),
     });
-    renderApp("/rules");
+    renderApp("/settings/rules");
     const user = userEvent.setup();
     await user.click(await screen.findByRole("button", { name: "Import rules" }));
     const dialog = await screen.findByRole("dialog", { name: "Import rules" });

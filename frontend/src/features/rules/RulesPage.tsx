@@ -17,6 +17,7 @@ import { canManageMembers, useAuthSession } from "../auth/session";
 import { ErrorLine, PlanningPage, QueryState } from "../planning/PlanningPage";
 import { nameLookup, useAccounts, useCategories, usePayees, useTags } from "../planning/queries";
 import { useAction } from "../planning/useAction";
+import { RULES_INTRO } from "../settings/SettingsLayout";
 import { applyRules, deleteRule, listRules, movedOrder, reorderRules, revertRule, ruleKeys, updateRule, type Rule } from "./api";
 import { merchantRuleKey, parseRule } from "./builder";
 import { describeGroup, type Names } from "./describe";
@@ -182,7 +183,7 @@ export function RulesPage() {
       header: "Rule",
       rowHeader: true,
       cell: (rule) => (
-        <Link to="/rules/$ruleId" params={{ ruleId: rule.id }}>
+        <Link to="/settings/rules/$ruleId" params={{ ruleId: rule.id }}>
           {rule.name}
         </Link>
       ),
@@ -244,6 +245,7 @@ export function RulesPage() {
   return (
     <PlanningPage
       title="Rules"
+      breadcrumbs={[{ to: "/settings", label: "Settings" }, { label: "Rules" }]}
       actions={
         <>
           <ExportRulesButton rules={rules} />
@@ -255,12 +257,13 @@ export function RulesPage() {
           <Button disabled={rules.length === 0} onClick={() => { setApplying(true); }}>
             Apply to existing transactions
           </Button>
-          <Link to="/rules/new" className="btn btn--primary btn--md">
+          <Link to="/settings/rules/new" className="btn btn--primary btn--md">
             New rule
           </Link>
         </>
       }
     >
+      <p>{RULES_INTRO}</p>
       <p className="muted">Rules run top to bottom on every new transaction. Move a rule up to run it earlier.</p>
       <ErrorLine message={reorder.error ?? toggle.error} />
       <QueryState loading={query.isPending} error={query.error} label="rules">

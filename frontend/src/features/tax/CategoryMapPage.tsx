@@ -1,5 +1,10 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-/** Category to schedule/line hints for the accountant. A hint, not tax advice. */
+/**
+ * Category to schedule/line hints for the accountant. A hint, not tax advice.
+ * The "Tax hints" tab of Settings, Categories (`?tab=tax`), so it has no page
+ * header of its own. Saving and removing a hint is a member's; a viewer reads
+ * the hints.
+ */
 import { useQuery } from "@tanstack/react-query";
 import { Link } from "@tanstack/react-router";
 import { useState } from "react";
@@ -9,7 +14,8 @@ import { Card } from "../../components/Card";
 import { Input } from "../../components/Input";
 import { Table, type TableColumn } from "../../components/Table";
 import { queryRoots } from "../../lib/queryKeys";
-import { ErrorLine, PlanningPage, QueryState } from "../planning/PlanningPage";
+import { useCanWrite } from "../accounts/api";
+import { ErrorLine, QueryState } from "../planning/PlanningPage";
 import { useCategories, type Category } from "../planning/queries";
 import { useAction } from "../planning/useAction";
 import { deleteCategoryMap, listCategoryMap, putCategoryMap, taxKeys, type CategoryMapEntry } from "./api";
@@ -78,7 +84,15 @@ function MapRow({ category, entry }: { category: Category; entry: CategoryMapEnt
   );
 }
 
+function hintText(entry: CategoryMapEntry | undefined): string {
+  if (entry === undefined) {
+    return "No hint";
+  }
+  return entry.line === null ? entry.schedule : `${entry.schedule}, line ${entry.line}`;
+}
+
 export function CategoryMapPage() {
+  const canWrite = useCanWrite();
   const categories = useCategories();
   const map = useQuery({ queryKey: taxKeys.map(JURISDICTION), queryFn: () => listCategoryMap(JURISDICTION) });
   const entries = new Map((map.data ?? []).map((entry) => [entry.category_id, entry]));
@@ -91,25 +105,22 @@ export function CategoryMapPage() {
       header: "Schedule and line",
       cell: (row) => {
         const entry = entries.get(row.id);
+        if (!canWrite) {
+          return entry === undefined ? <span className="muted">{hintText(entry)}</span> : hintText(entry);
+        }
         return <MapRow key={`${row.id}:${entry?.schedule ?? ""}:${entry?.line ?? ""}`} category={row} entry={entry} />;
       },
     },
   ];
   return (
-    <PlanningPage title="Schedule hints" actions={
-        <Link to="/tax" className="btn btn--secondary btn--md">
-          Back to tax years
-        </Link>
-      }>
+    <Card title="Schedule hints" headingLevel={3}>
+      <p>
+        Maps a category to the schedule and line your accountant files it under. It is a hint for the roll-up and the export
+        of a <Link to="/reports/tax">tax year</Link>, not tax advice.
+      </p>
       <QueryState loading={categories.isPending || map.isPending} error={categories.error ?? map.error} label="schedule hints">
-        <Card title="Category to schedule">
-          <p>
-            Maps a category to the schedule and line your accountant files it under. It is a hint for the roll-up and the
-            export, not tax advice.
-          </p>
-          <Table caption="Schedule hints by category" captionHidden columns={columns} rows={rows} rowKey={(row) => row.id} />
-        </Card>
+        <Table caption="Schedule hints by category" captionHidden columns={columns} rows={rows} rowKey={(row) => row.id} />
       </QueryState>
-    </PlanningPage>
+    </Card>
   );
 }

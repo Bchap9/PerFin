@@ -1,0 +1,23 @@
+/* SPDX-License-Identifier: AGPL-3.0-or-later */
+/*
+ * Settings, Categories: the category tree's indent, one step per level
+ * (CategoriesPage.tsx sets indent-1 to indent-3; deeper levels keep the
+ * third step). A class, not a style attribute, because the CSP is
+ * style-src 'self'.
+ */
+
+.indent-1 {
+  padding-inline-start: 1.25rem;
+}
+
+.indent-2 {
+  padding-inline-start: 2.5rem;
+}
+
+.indent-3 {
+  padding-inline-start: 3.75rem;
+}
+
+.categories-tabs {
+  margin-top: var(--space-2);
+}

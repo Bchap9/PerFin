@@ -1,12 +1,39 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// Stage 3 bridge: lane S replaces this.
-import { useSearch } from "@tanstack/react-router";
-
+import { Tabs } from "../../components/Tabs";
+import { useTabParam } from "../../lib/urlState";
+import { SettingsPage } from "../settings/SettingsLayout";
 import { CategoryMapPage } from "../tax/CategoryMapPage";
-import { CategoriesPage } from "./CategoriesPage";
+import { CategoriesPanel, PayeesPanel, TagsPanel } from "./CategoriesPage";
 
-/** Settings, Categories (`/settings/categories`): today's categories page, or the tax hints for `?tab=tax`. */
+const TABS = ["categories", "payees", "tags", "tax"] as const;
+type Tab = (typeof TABS)[number];
+
+/**
+ * Settings, Categories (`/settings/categories`): the categories, payees, tags
+ * and each category's tax hint, one tab each, the tab in `?tab=` so a link
+ * (the old `/tax/mapping`, a tax year's "Edit tax hints") opens the right one.
+ */
 export function CategoriesSettingsPage() {
-  const search: Record<string, unknown> = useSearch({ strict: false });
-  return search["tab"] === "tax" ? <CategoryMapPage /> : <CategoriesPage />;
+  const [tab, setTab] = useTabParam<Tab>(TABS, "categories");
+  return (
+    <SettingsPage title="Categories">
+      <Tabs
+        label="Categories, payees, tags and tax hints"
+        className="categories-tabs"
+        selectedId={tab}
+        onSelect={(id) => {
+          const next = TABS.find((candidate) => candidate === id);
+          if (next !== undefined) {
+            setTab(next);
+          }
+        }}
+        tabs={[
+          { id: "categories", label: "Categories", content: <CategoriesPanel /> },
+          { id: "payees", label: "Payees", content: <PayeesPanel /> },
+          { id: "tags", label: "Tags", content: <TagsPanel /> },
+          { id: "tax", label: "Tax hints", content: <CategoryMapPage /> },
+        ]}
+      />
+    </SettingsPage>
+  );
 }

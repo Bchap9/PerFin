@@ -37,6 +37,7 @@ import { canManageMembers, useAuthSession } from "../auth/session";
 import { forgetLearned, listLearned, refreshCategorisation, type LearnedCategory } from "../categories/api";
 import { useAction } from "../planning/useAction";
 import { JobProgress } from "../rules/JobProgress";
+import { RULES_INTRO, SettingsPage } from "../settings/SettingsLayout";
 import { txKeys, useCategories, useCategorisationSummary } from "../transactions/api";
 import {
   deleteLayout,
@@ -260,7 +261,7 @@ function LayoutsCard({ canWrite }: { canWrite: boolean }) {
                 row.learned_from_document_id === null ? (
                   day(row.learned_at)
                 ) : (
-                  <Link to="/documents/$documentId" params={{ documentId: row.learned_from_document_id }}>
+                  <Link to="/inbox/documents/$documentId" params={{ documentId: row.learned_from_document_id }}>
                     {day(row.learned_at)}
                   </Link>
                 ),
@@ -358,7 +359,7 @@ function WordingCard({ canWrite }: { canWrite: boolean }) {
                 row.learned_from_document_id === null ? (
                   day(row.learned_at)
                 ) : (
-                  <Link to="/documents/$documentId" params={{ documentId: row.learned_from_document_id }}>
+                  <Link to="/inbox/documents/$documentId" params={{ documentId: row.learned_from_document_id }}>
                     {day(row.learned_at)}
                   </Link>
                 ),
@@ -585,7 +586,7 @@ function LearnedCategoriesCard({ canWrite }: { canWrite: boolean }) {
     return categories.data.find((category) => category.id === id)?.name ?? "A category that no longer exists";
   };
   return (
-    <Card title="Categories learned from you">
+    <Card title="Categories you taught">
       <p className="ledger-muted">
         Each time you choose a category for a transaction, PerFin counts it for that merchant and uses the most chosen one for
         the merchant&rsquo;s next transactions. Forgetting an entry changes no transaction.
@@ -620,7 +621,7 @@ function LearnedCategoriesCard({ canWrite }: { canWrite: boolean }) {
               cell: (row: LearnedCategory) => (
                 <span className="ledger-actions">
                   {row.rule_id === null ? null : (
-                    <Link to="/rules/$ruleId" params={{ ruleId: row.rule_id }} aria-label={`The rule for ${row.merchant}`}>
+                    <Link to="/settings/rules/$ruleId" params={{ ruleId: row.rule_id }} aria-label={`The rule for ${row.merchant}`}>
                       Has a rule
                     </Link>
                   )}
@@ -646,11 +647,9 @@ export function LearnedPage() {
   // The server lets owners and admins start a refresh; forgetting an entry is a member's.
   const canRefresh = canManageMembers(session?.household?.role);
   return (
-    <section aria-labelledby="page-title" className="ledger-stack">
-      <div className="page-header">
-        <h1 id="page-title">What PerFin has learned</h1>
-        <Link to="/documents">Back to documents</Link>
-      </div>
+    <SettingsPage title="What PerFin has learned">
+      <p>{RULES_INTRO}</p>
+      <div className="ledger-stack">
       <Card title="How files are recognised">
         <ul>
           <li>
@@ -672,7 +671,7 @@ export function LearnedPage() {
             suggested and you confirmed.
           </li>
           <li>
-            <strong>Categories</strong> through your <Link to="/rules">rules</Link>, what PerFin learned from the categories you
+            <strong>Categories</strong> through your <Link to="/settings/rules">rules</Link>, what PerFin learned from the categories you
             chose, and the merchant list that ships with PerFin.
           </li>
         </ul>
@@ -683,6 +682,7 @@ export function LearnedPage() {
       <LayoutsCard canWrite={canWrite} />
       <WordingCard canWrite={canWrite} />
       <MappingsCard canWrite={canWrite} />
-    </section>
+      </div>
+    </SettingsPage>
   );
 }

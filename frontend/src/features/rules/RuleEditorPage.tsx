@@ -4,6 +4,7 @@ import { Link, useNavigate } from "@tanstack/react-router";
 import { useMemo, useState } from "react";
 
 import { Button } from "../../components/Button";
+import type { Crumb } from "../../components/Breadcrumbs";
 import { Card } from "../../components/Card";
 import { queryRoots } from "../../lib/queryKeys";
 import { PlanningPage, QueryState, ErrorLine } from "../planning/PlanningPage";
@@ -79,7 +80,7 @@ function Editor({ ruleId, initial, conditionsEditable }: { ruleId: string | null
     }
     const done = await save.run();
     if (done !== undefined) {
-      await navigate({ to: "/rules" });
+      await navigate({ to: "/settings/rules" });
     }
   };
   // A rule whose conditions the builder cannot show is tested by id (as stored).
@@ -98,7 +99,7 @@ function Editor({ ruleId, initial, conditionsEditable }: { ruleId: string | null
         <Button variant="primary" loading={save.busy} onClick={() => void submit()}>
           Save rule
         </Button>
-        <Link to="/rules" className="btn btn--ghost btn--md">
+        <Link to="/settings/rules" className="btn btn--ghost btn--md">
           Cancel
         </Link>
       </div>
@@ -107,14 +108,14 @@ function Editor({ ruleId, initial, conditionsEditable }: { ruleId: string | null
   );
 }
 
+/** "Settings / Rules / <name>": the breadcrumbs back to the rules list replace the old "All rules" link. */
+function ruleCrumbs(name: string): Crumb[] {
+  return [{ to: "/settings", label: "Settings" }, { to: "/settings/rules", label: "Rules" }, { label: name }];
+}
+
 export function NewRulePage() {
   return (
-    <PlanningPage title="New rule">
-      <p>
-        <Link to="/rules" className="link-action link-action--back">
-          All rules
-        </Link>
-      </p>
+    <PlanningPage title="New rule" breadcrumbs={ruleCrumbs("New rule")}>
       <Editor ruleId={null} initial={emptyRule()} conditionsEditable />
     </PlanningPage>
   );
@@ -129,12 +130,7 @@ export function EditRulePage() {
     [rule],
   );
   return (
-    <PlanningPage title={rule?.name ?? "Rule"}>
-      <p>
-        <Link to="/rules" className="link-action link-action--back">
-          All rules
-        </Link>
-      </p>
+    <PlanningPage title={rule?.name ?? "Rule"} breadcrumbs={ruleCrumbs(rule?.name ?? "Rule")}>
       <QueryState loading={query.isPending} error={query.error} label="the rule">
         {rule === undefined || parsed === null ? null : rule.redacted ? (
           <Card>

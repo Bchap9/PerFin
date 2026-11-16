@@ -2,6 +2,7 @@
 import { screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 
+import { expectNoAxeViolations } from "../../test/axe";
 import { authedSession, json, mockApi, renderApp } from "../auth/testing";
 import { CAT_DINING, CAT_FOOD, PAYEE_CAFE, TAG_FUN, money, ownerSession, referenceHandlers } from "../planning/testing";
 
@@ -33,7 +34,7 @@ describe("rules list", () => {
       "GET /api/v1/rules": () => json({ items: RULES }),
       "POST /api/v1/rules/reorder": () => json({ items: [RULES[1], RULES[0]] }),
     });
-    renderApp("/rules");
+    renderApp("/settings/rules");
     const user = userEvent.setup();
     const table = await screen.findByRole("region", { name: "Rules in the order they run" });
     expect(within(table).getAllByRole("rowheader").map((cell) => cell.textContent)).toEqual(["Alpha", "Beta"]);
@@ -44,6 +45,29 @@ describe("rules list", () => {
       expect(api.callsTo("POST", "/api/v1/rules/reorder")).toHaveLength(1);
     });
     expect(api.callsTo("POST", "/api/v1/rules/reorder")[0]?.body).toEqual({ rule_ids: ["r-2", "r-1"] });
+  });
+
+  it("the intro says where rules are made", async () => {
+    mockApi({ ...ownerSession(), ...referenceHandlers(), "GET /api/v1/rules": () => json({ items: RULES }) });
+    renderApp("/settings/rules");
+    expect(
+      await screen.findByText(
+        "Rules are made where you work: in a transaction's panel or from an Inbox card. Here you can change their order, edit or undo them.",
+      ),
+    ).toBeInTheDocument();
+    expect(screen.getByRole("heading", { level: 1, name: "Settings" })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { level: 2, name: "Rules" })).toBeInTheDocument();
+    const crumbs = screen.getByRole("navigation", { name: "Breadcrumbs" });
+    expect(within(crumbs).getByRole("link", { name: "Settings" })).toHaveAttribute("href", "/settings");
+    expect(await screen.findByRole("link", { name: "Alpha" })).toHaveAttribute("href", "/settings/rules/r-1");
+    expect(screen.getByRole("link", { name: "New rule" })).toHaveAttribute("href", "/settings/rules/new");
+  });
+
+  it("has no axe violations", async () => {
+    mockApi({ ...ownerSession(), ...referenceHandlers(), "GET /api/v1/rules": () => json({ items: RULES }) });
+    const { container } = renderApp("/settings/rules");
+    await screen.findByRole("link", { name: "Alpha" });
+    await expectNoAxeViolations(container);
   });
 
   it("applies the rules to existing transactions and follows the job to the end", async () => {
@@ -68,7 +92,7 @@ describe("rules list", () => {
         });
       },
     });
-    renderApp("/rules");
+    renderApp("/settings/rules");
     const user = userEvent.setup();
     await user.click(await screen.findByRole("button", { name: "Apply to existing transactions" }));
     const dialog = await screen.findByRole("dialog", { name: "Apply rules to existing transactions" });
@@ -92,7 +116,7 @@ describe("undoing a rule", () => {
       "PATCH /api/v1/rules/:id": () => json(MERCHANT),
       "GET /api/v1/rules": () => json({ items: [MERCHANT] }),
     });
-    renderApp("/rules/r-3");
+    renderApp("/settings/rules/r-3");
     const user = userEvent.setup();
     expect(await screen.findByLabelText(/^Rule name/)).toHaveValue("Quiet Bean Coffee: Dining");
     // The condition is a row like any other, with the merchant in its field.
@@ -131,7 +155,7 @@ describe("undoing a rule", () => {
         return json({ rule_id: "r-3", reverted: 12, job_id: null });
       },
     });
-    renderApp("/rules");
+    renderApp("/settings/rules");
     const user = userEvent.setup();
     const table = await screen.findByRole("region", { name: "Rules in the order they run" });
     expect(await within(table).findByText("The merchant is quiet bean coffee")).toBeInTheDocument();
@@ -161,7 +185,7 @@ describe("undoing a rule", () => {
       "GET /api/v1/rules": () => json({ items: [...RULES, MERCHANT, rule("r-4", "Hidden", 3, { redacted: true })] }),
     });
     mockApi(handlers("admin"));
-    const admin = renderApp("/rules");
+    const admin = renderApp("/settings/rules");
     expect(await screen.findByRole("button", { name: "Undo Alpha" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Undo Quiet Bean Coffee: Dining" })).toBeInTheDocument();
     // A rule whose conditions are hidden from the caller is not theirs to undo.
@@ -169,13 +193,13 @@ describe("undoing a rule", () => {
     admin.unmount();
 
     mockApi(handlers("member"));
-    const member = renderApp("/rules");
+    const member = renderApp("/settings/rules");
     expect(await screen.findByRole("button", { name: "Undo Quiet Bean Coffee: Dining" })).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Undo Alpha" })).not.toBeInTheDocument();
     member.unmount();
 
     mockApi(handlers("viewer"));
-    renderApp("/rules");
+    renderApp("/settings/rules");
     await screen.findByRole("button", { name: "Delete Alpha" });
     expect(screen.queryByRole("button", { name: /^Undo / })).not.toBeInTheDocument();
   });
@@ -188,7 +212,7 @@ describe("undoing a rule", () => {
       "POST /api/v1/rules/:id/revert": () =>
         json({ type: "rule-not-revertible", title: "Forbidden", status: 403, detail: "Only an owner or administrator may undo this rule." }, 403),
     });
-    renderApp("/rules");
+    renderApp("/settings/rules");
     const user = userEvent.setup();
     await user.click(await screen.findByRole("button", { name: "Undo Quiet Bean Coffee: Dining" }));
     const dialog = await screen.findByRole("dialog", { name: "Undo rule" });
@@ -240,7 +264,7 @@ describe("rule editor", () => {
       "POST /api/v1/rules": () => json(rule("r-9", "Coffee", 2), 201),
       "GET /api/v1/rules": () => json({ items: [] }),
     });
-    renderApp("/rules/new");
+    renderApp("/settings/rules/new");
     const user = userEvent.setup();
     await user.type(await screen.findByLabelText(/^Rule name/), "Coffee");
     await user.type(screen.getByLabelText("Text 1"), "cafe");
@@ -274,7 +298,7 @@ describe("rule editor", () => {
 
   it("shows what is wrong instead of saving an incomplete rule", async () => {
     const api = mockApi({ ...ownerSession(), ...referenceHandlers() });
-    renderApp("/rules/new");
+    renderApp("/settings/rules/new");
     const user = userEvent.setup();
     await user.click(await screen.findByRole("button", { name: "Save rule" }));
     expect(await screen.findByText("Enter a name.")).toBeInTheDocument();
@@ -282,6 +306,17 @@ describe("rule editor", () => {
     expect(screen.getByText("Choose a category.")).toBeInTheDocument();
     expect(api.callsTo("POST", "/api/v1/rules")).toHaveLength(0);
     expect(screen.getByRole("button", { name: "Run test" })).toBeDisabled();
+  });
+
+  it("a rule's page sits under Settings and Rules in its breadcrumbs", async () => {
+    mockApi({ ...ownerSession(), ...referenceHandlers(), "GET /api/v1/rules/:id": () => json(rule("r-1", "Alpha", 0)) });
+    renderApp("/settings/rules/r-1");
+    expect(await screen.findByRole("heading", { level: 2, name: "Alpha" })).toBeInTheDocument();
+    const crumbs = screen.getByRole("navigation", { name: "Breadcrumbs" });
+    expect(within(crumbs).getByRole("link", { name: "Settings" })).toHaveAttribute("href", "/settings");
+    expect(within(crumbs).getByRole("link", { name: "Rules" })).toHaveAttribute("href", "/settings/rules");
+    expect(within(crumbs).getByText("Alpha")).toHaveAttribute("aria-current", "page");
+    expect(await screen.findByRole("link", { name: "Cancel" })).toHaveAttribute("href", "/settings/rules");
   });
 
   it("loads a stored rule into the builder", async () => {
@@ -296,7 +331,7 @@ describe("rule editor", () => {
           }),
         ),
     });
-    renderApp("/rules/r-1");
+    renderApp("/settings/rules/r-1");
     expect(await screen.findByLabelText(/^Rule name/)).toHaveValue("Alpha");
     expect(screen.getByLabelText("Match")).toHaveValue("any");
     expect(screen.getByLabelText("Condition 1")).toHaveValue("sign");
