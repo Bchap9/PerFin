@@ -2499,10 +2499,23 @@ reconciliation, per-field confidence).
   `app/domain/imports/service.py`). "Process again", an `apply-mapping`
   re-run and a taught table read the document anew; the new reading
   replaces the old one instead of standing beside it. Every row an import
-  writes ends with `updated_at == created_at`, after the rules and payee
-  defaults of that import ran: that is "untouched since import", and every
-  later change (an edit, a confirmation, a bulk action, a rule run, a
-  transfer link) ends it. When a run has committed every statement of the
+  writes ends with `updated_at == created_at`, after the categorisation
+  step of that import ran (`_mark_untouched` is the importer's last
+  write): that is "untouched since import", and every later change by a
+  person (an edit, a category chosen or cleared, an accepted suggestion, a
+  confirmation, a bulk action, a rule run on request, a transfer link)
+  ends it. What PerFin works out by itself afterwards does **not** end it:
+  a merchant key, a guessed category, a suggestion, a category taken back
+  when a rule is undone and the link to a subscription series are written
+  only through the pinned write
+  (`app.domain.categorisation.pinned.pinned_update`: one `UPDATE ... SET
+  ..., updated_at = updated_at` on the six provenance columns and
+  `category_id`, never through the ORM, whose `onupdate` would move the
+  timestamp). So a refresh after a new merchant list, or the nightly
+  subscription detection, never makes a row look touched, and a row that
+  only carries a guess is still replaced by a later reading
+  (CATEGORISATION.md; `tests/integration/test_ledger_models.py::test_pinned_update_keeps_updated_at`,
+  `tests/integration/test_import_categorisation.py`). When a run has committed every statement of the
   document for an account, the rows the document produced there earlier
   whose hash the new reading no longer holds are **removed** when nobody
   touched them (untouched, no transfer link, no document attached, no
@@ -2548,8 +2561,10 @@ reconciliation, per-field confidence).
   merchant alias. Confident match links the document; otherwise a review item
   "attach this receipt to…" with suggestions (implementation: "Receipts"
   below).
-- Rules engine runs on every new transaction for category, tags, renames,
-  splits.
+- Every new transaction goes through the categorisation step once
+  (`app.domain.categorisation.engine.categorise_rows`): the rules engine
+  for category, tags, renames and splits, then a guess for what is still
+  undecided ("Payee and category of an imported row" below).
 
 Implementation for structured formats (Phase 2; `app/domain/imports/`,
 `app/ingestion/parsers/structured.py`, `app/ingestion/match/`): the worker's
@@ -2839,8 +2854,11 @@ same database transaction.
   existing, unclaimed transaction on the same date with the same amount
   (other payee spelling, or typed by hand) is imported as `review_state =
   pending` with a `possible_duplicate` item naming the candidates.
-- **Commit.** New transactions carry `source_document_id`; the household's
-  rules run on them (categories from a QIF file are protected); QIF splits
+- **Commit.** New transactions carry `source_document_id`; they are
+  handed to the categorisation step, which runs the household's rules on
+  them and then guesses for what nobody decided (categories from a QIF
+  file or a category column are protected and marked `file`; "Payee and
+  category of an imported row" below); QIF splits
   that add up become `transaction_split`s; the closing balance becomes a
   `statement` balance snapshot; a statement in another currency than its
   account is not imported (`unknown_account`, `currency_mismatch`). The
@@ -3119,14 +3137,48 @@ Corner Grocer #204 Springfield IL Card 7731` is payee `Corner Grocer`, and
 payee's name is part of another's the longer wins (`Corner Grocer Deli`); a
 description naming two different payees side by side is no match; names
 under four characters or made of digits match only as the whole description.
-The category is, in this order: the file's own (QIF, a category column);
-what a rule sets; else the payee's **default category**
-(`payee.default_category_id`, edited under "Categories, payees and tags";
-a row a rule split is left alone). The run summary counts the last as
-`payee_categorised`. So naming a payee once, with its usual category and
-any odd spelling as an alias, categorises that merchant's rows on every
-later import, with no model involved and nothing learned that a person
-did not write down.
+When the whole description names nobody, the same comparison is made on
+what clean-up left of it (`PayeeMatcher.match_descriptor`,
+`app.domain.categorisation.cleanup`): only when clean-up stripped a
+processor prefix (`PAYPAL *NETFLIX` is the payee `Netflix`, `SQ *QB
+COFFEE` the payee with that alias), or when what is left **is** a payee's
+name; never for a line between people, a transfer or a card payment, and
+never when the line names another payee past the end of what was kept. A
+description naming two different payees still gets neither.
+
+**The categorisation step** (`engine.categorise_rows`, called once per
+statement from `_commit_statement`; CATEGORISATION.md has the order and
+the reasons). For the statement's new rows it: (1) computes and stores the
+merchant key from the description (`engine.identify`: clean-up, then the
+bundled merchant list; the description itself is never changed); (2)
+marks a category the file gave as `file`; (3) runs the household's
+enabled rules, as before, and marks what a rule categorised as `rule`
+with the rule's id; (4) for a row that still has no category and no
+split: the payee's **default category** (`payee.default_category_id`,
+edited under "Categories, payees and tags"; `payee`), else what the
+household's corrections taught for the merchant (`learned`), else the
+merchant list or the kind of line (`dictionary`), else a keyword
+(`keyword`). A guess of at least 0.80 becomes the row's category; a
+weaker one is stored as `suggested_category_id` only and the row stays
+uncategorised. A cheque, a deposit and a payment between people are never
+guessed. Every write of the step except the rules' is a pinned write, and
+`_mark_untouched` runs after it, so the row ends "untouched since import"
+whatever was guessed ("A document read again" above). The step makes no
+request to anything: the merchant list is a file in the image.
+
+The run summary gains `categorised` (an object: source to the number of
+rows that got their category that way, for example `{"dictionary": 41,
+"rule": 3, "payee": 2}`) and `suggested` (rows left with a suggestion).
+`payee_categorised` and `rules_changed` are kept and equal the `payee`
+and `rule` counts; `rules_changed` therefore counts rows a rule
+**categorised**, no longer rows a rule only tagged, renamed or flagged.
+One `transaction.categorise` audit row per run (counts by source, never a
+description or a merchant) and one `transaction.categorised` live event
+(`account_ids`, `count`). Naming a payee once, with its usual category
+and any odd spelling as an alias, still categorises that merchant's rows
+on every later import; what is new is that a household that has named
+nobody gets most of a first import categorised too, with no model
+involved and nothing sent anywhere.
 
 ## Review queue
 

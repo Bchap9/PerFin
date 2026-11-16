@@ -3564,7 +3564,7 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** Categorise, tag, untag, delete or confirm many transactions */
+        /** Categorise, tag, untag, delete, confirm or accept suggestions for many transactions */
         post: operations["post_bulk_api_v1_transactions_bulk_post"];
         delete?: never;
         options?: never;
@@ -5674,7 +5674,7 @@ export interface components {
              */
             enabled: boolean;
             /** Events */
-            events?: ("account_locked" | "recovery_code_used" | "mfa_reset" | "role_changed" | "new_device" | "review_waiting" | "tax_reminder" | "backup_failed" | "ai_client_created")[];
+            events?: ("account_locked" | "recovery_code_used" | "mfa_reset" | "role_changed" | "new_device" | "review_waiting" | "tax_reminder" | "backup_failed" | "ai_client_created" | "subscription_new" | "subscription_price_changed" | "subscription_missed" | "subscription_renewal")[];
             /** Name */
             name: string;
         };
@@ -5689,7 +5689,7 @@ export interface components {
             /** Enabled */
             enabled: boolean;
             /** Events */
-            events: ("account_locked" | "recovery_code_used" | "mfa_reset" | "role_changed" | "new_device" | "review_waiting" | "tax_reminder" | "backup_failed" | "ai_client_created")[];
+            events: ("account_locked" | "recovery_code_used" | "mfa_reset" | "role_changed" | "new_device" | "review_waiting" | "tax_reminder" | "backup_failed" | "ai_client_created" | "subscription_new" | "subscription_price_changed" | "subscription_missed" | "subscription_renewal")[];
             /**
              * Id
              * Format: uuid
@@ -5724,7 +5724,7 @@ export interface components {
             /** Enabled */
             enabled: boolean;
             /** Events */
-            events: ("account_locked" | "recovery_code_used" | "mfa_reset" | "role_changed" | "new_device" | "review_waiting" | "tax_reminder" | "backup_failed" | "ai_client_created")[];
+            events: ("account_locked" | "recovery_code_used" | "mfa_reset" | "role_changed" | "new_device" | "review_waiting" | "tax_reminder" | "backup_failed" | "ai_client_created" | "subscription_new" | "subscription_price_changed" | "subscription_missed" | "subscription_renewal")[];
             /**
              * Id
              * Format: uuid
@@ -5771,7 +5771,7 @@ export interface components {
             /** Enabled */
             enabled?: boolean | null;
             /** Events */
-            events?: ("account_locked" | "recovery_code_used" | "mfa_reset" | "role_changed" | "new_device" | "review_waiting" | "tax_reminder" | "backup_failed" | "ai_client_created")[] | null;
+            events?: ("account_locked" | "recovery_code_used" | "mfa_reset" | "role_changed" | "new_device" | "review_waiting" | "tax_reminder" | "backup_failed" | "ai_client_created" | "subscription_new" | "subscription_price_changed" | "subscription_missed" | "subscription_renewal")[] | null;
             /** Name */
             name?: string | null;
             /** Rotate Secret */
@@ -8629,7 +8629,7 @@ export interface components {
          * Pattern
          * @enum {string}
          */
-        Pattern: "weekly" | "biweekly" | "monthly" | "quarterly" | "annual";
+        Pattern: "weekly" | "biweekly" | "monthly" | "two_monthly" | "quarterly" | "half_yearly" | "annual";
         /** PayeeCondition */
         PayeeCondition: {
             /**
@@ -9216,6 +9216,8 @@ export interface components {
             category: string | null;
             /** Interval Count */
             interval_count: number;
+            /** Kind */
+            kind: string;
             /** Last Seen On */
             last_seen_on: string | null;
             /** Name */
@@ -9229,6 +9231,8 @@ export interface components {
             origin: string;
             /** Payee */
             payee: string | null;
+            /** Status */
+            status: string;
         };
         /**
          * RecurringExtraIn

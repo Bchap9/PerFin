@@ -6420,11 +6420,15 @@
                 "review_waiting",
                 "tax_reminder",
                 "backup_failed",
-                "ai_client_created"
+                "ai_client_created",
+                "subscription_new",
+                "subscription_price_changed",
+                "subscription_missed",
+                "subscription_renewal"
               ],
               "type": "string"
             },
-            "maxItems": 9,
+            "maxItems": 13,
             "title": "Events",
             "type": "array"
           },
@@ -6467,7 +6471,11 @@
                 "review_waiting",
                 "tax_reminder",
                 "backup_failed",
-                "ai_client_created"
+                "ai_client_created",
+                "subscription_new",
+                "subscription_price_changed",
+                "subscription_missed",
+                "subscription_renewal"
               ],
               "type": "string"
             },
@@ -6575,7 +6583,11 @@
                 "review_waiting",
                 "tax_reminder",
                 "backup_failed",
-                "ai_client_created"
+                "ai_client_created",
+                "subscription_new",
+                "subscription_price_changed",
+                "subscription_missed",
+                "subscription_renewal"
               ],
               "type": "string"
             },
@@ -6746,11 +6758,15 @@
                     "review_waiting",
                     "tax_reminder",
                     "backup_failed",
-                    "ai_client_created"
+                    "ai_client_created",
+                    "subscription_new",
+                    "subscription_price_changed",
+                    "subscription_missed",
+                    "subscription_renewal"
                   ],
                   "type": "string"
                 },
-                "maxItems": 9,
+                "maxItems": 13,
                 "type": "array"
               },
               {
@@ -15053,7 +15069,9 @@
           "weekly",
           "biweekly",
           "monthly",
+          "two_monthly",
           "quarterly",
+          "half_yearly",
           "annual"
         ],
         "title": "Pattern",
@@ -16678,6 +16696,13 @@
               "scheduled_transaction.interval_count"
             ]
           },
+          "kind": {
+            "title": "Kind",
+            "type": "string",
+            "x-ai-source": [
+              "scheduled_transaction.kind"
+            ]
+          },
           "last_seen_on": {
             "anyOf": [
               {
@@ -16728,6 +16753,13 @@
             "x-ai-source": [
               "payee.name"
             ]
+          },
+          "status": {
+            "title": "Status",
+            "type": "string",
+            "x-ai-source": [
+              "scheduled_transaction.status"
+            ]
           }
         },
         "required": [
@@ -16742,7 +16774,9 @@
           "amount_max",
           "origin",
           "active",
-          "last_seen_on"
+          "last_seen_on",
+          "kind",
+          "status"
         ],
         "title": "RecurringAi",
         "type": "object"
@@ -45290,7 +45324,7 @@
             "description": "Problem details"
           }
         },
-        "summary": "Categorise, tag, untag, delete or confirm many transactions",
+        "summary": "Categorise, tag, untag, delete, confirm or accept suggestions for many transactions",
         "tags": [
           "transactions"
         ]

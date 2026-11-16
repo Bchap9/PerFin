@@ -153,7 +153,11 @@ transaction           (account, posted_date, effective_date?, amount, currency,
                        payee_id?, category_id?, raw_payee?, memo?, notes?,
                        status: pending|cleared|reconciled, transfer_group_id?,
                        source_document_id?, import_hash?,
-                       review_state: none|pending|confirmed, confidence?)
+                       review_state: none|pending|confirmed, confidence?,
+                       merchant_key?, category_source?: person|file|rule|payee|
+                       learned|dictionary|keyword|legacy, category_confidence?,
+                       category_rule_id?, suggested_category_id?,
+                       scheduled_transaction_id?)
 transaction_split     (transaction, category_id?, amount, memo?, tax_flag)
 payee                 (household, name, normalized_name, aliases[], default_category?)
 category              (household, parent_id?, name, kind: expense|income|transfer|ignore,
@@ -165,7 +169,18 @@ rule                  (household, name, sort_order, enabled, stop_processing,
 scheduled_transaction (household, account, name, cadence: daily|weekly|monthly|
                        quarterly|yearly, interval_count, next_due, amount_min,
                        amount_max, currency, payee?, category?, origin: detected|manual,
-                       active, last_seen_on?)
+                       active, last_seen_on?,
+                       kind: subscription|bill|income|other, kind_source: detector|person,
+                       status: suggested|active|confirmed|paused|ended|dismissed,
+                       status_source: detector|person, merchant_key?, first_seen_on?,
+                       occurrences, confidence?, last_amount?, previous_amount?,
+                       price_changed_on?, ended_on?)
+merchant_memory       (household, merchant_key, direction: out|in, category,
+                       decisions, last_decided_at)
+subscription_event    (household, schedule, account, kind: new|price_changed|missed|
+                       ended|charged_after_end|renewal_due|trial_converted,
+                       occurred_on, amount_before?, amount_after?, transaction?,
+                       state: open|seen)
 balance_snapshot      (account, as_of_date, balance, currency,
                        source: statement|computed|manual, source_document_id?)
 fx_rate               (household, base, quote, rate_date, rate NUMERIC(24,12), source)
@@ -257,7 +272,9 @@ is `HouseholdScoped` with forced RLS):
   `category_unset`, combinators `all|any|not`, at most 5 levels and 50
   nodes; actions `set_category`, `split_percent`, `split_amount`,
   `add_tags`, `set_payee`, `flag_for_review`, `set_note`, at most one of
-  each). There are no regular expressions: `glob` (`*`, `?`) is matched in
+  each; since migration `0014` also the condition `merchant` with `key`,
+  which is true when the transaction's stored `merchant_key` is exactly
+  that key, never a prefix and never for a row without one). There are no regular expressions: `glob` (`*`, `?`) is matched in
   bounded linear-time-per-star code, so a pattern cannot cause ReDoS.
   Evaluation (`app.domain.rules.engine`, pure): enabled rules in
   `(sort_order, id)` order, each against the working state left by the
@@ -305,6 +322,156 @@ is `HouseholdScoped` with forced RLS):
   the review queue) unless the household setting
   `reports.include_pending_review` is `true`
   (`app.domain.transactions.service.reportable_clause`).
+
+### Categorisation and subscriptions (migration `0014`)
+
+What the columns and the two tables mean to a person is in
+[CATEGORISATION.md](CATEGORISATION.md); this section is the storage
+(`app/domain/transactions/models.py`, `app/domain/categorisation/models.py`,
+`app/domain/recurring/models.py`; migration
+`0014_categories_subscriptions.py`).
+
+- **`transaction.merchant_key`** (at most 64 characters): who was paid, in
+  merchant-key form (`^[a-z0-9]+( [a-z0-9]+)*$`: lower-case tokens joined
+  by single spaces), computed from `raw_payee` by
+  `app.domain.categorisation.engine.identify`: the bundled dictionary's key
+  on a hit, else the first four tokens of what clean-up left; for a payment
+  between people the service (`zelle`), never the other person; NULL when
+  the line names nobody (a transfer, a card payment, cash, a cheque, a fee,
+  interest, a deposit). `raw_payee` itself is never changed. The descriptor
+  kind and the display name are not stored: both are recomputed when
+  needed. Partial index `(household_id, merchant_key)`. The key is derived
+  from statement text and is `classification: denied` for AI access; it is
+  never written to an audit row, an event or a notification.
+- **`category_source`**, **`category_confidence`** (`NUMERIC`, 0..1),
+  **`category_rule_id`**: how `category_id` (or the split) was decided.
+  Sources: `person` (a person chose, cleared, accepted a suggestion or
+  split; 1.00), `file` (the imported file's own category; 0.95), `rule`
+  (with the rule's id; 1.00), `payee` (the payee's default; 0.95),
+  `learned`, `dictionary`, `keyword` (guesses, with their confidence) and
+  `legacy` (categorised before `0014`: the backfill sets it on every row
+  that had a category or a split). **Undecided** is exactly `category_id IS
+  NULL AND category_source IS NULL` and no split. A row a person cleared is
+  `person` with no category: decided, and never guessed for again. Checks:
+  the source is one of the eight or NULL; the confidence is in range.
+  `category_rule_id` is cleared when the rule is deleted
+  (household-consistent key, ADR-0008; `rule` gains `UNIQUE (household_id,
+  id)` for it).
+- **`suggested_category_id`**: a guess below 0.80, with its source and
+  confidence in the two columns above. Check
+  `ck_transaction_suggestion_only_without_category`: it exists only while
+  `category_id` is NULL. It counts in no report and no budget: reports read
+  `category_id` and the splits. Accepting it is a person's choice
+  (`person`, 1.00) and clears it; so does any other choice. Cleared with
+  its category; a category merge re-points it.
+- **`scheduled_transaction_id`**: the recurring series a charge belongs to
+  (set by detection, cleared when a person dismisses the series and with
+  the series itself). Partial index.
+- **Who may write these.** A person, through
+  `app.domain.transactions.service` (which calls
+  `engine.person_decided` and moves `updated_at`, as every edit does); a
+  rule, through `rules.service.write_outcome` (moves `updated_at`: a rule
+  run is a change somebody asked for); and the system, **only** through
+  `app.domain.categorisation.pinned.pinned_update`, a Core `UPDATE ... SET
+  ..., updated_at = updated_at` limited to the household and to
+  `merchant_key`, `category_id`, `category_source`, `category_confidence`,
+  `category_rule_id`, `suggested_category_id` and
+  `scheduled_transaction_id` (any other column is a `ValueError`). The
+  importer reads `updated_at == created_at` as "nobody touched this row
+  since it was imported" and replaces only such rows when a document is
+  read again (INGESTION.md "A document read again"), so a guess, a
+  refresh, an undo of a rule and the subscription link must never look
+  like a person. The `0014` backfill is plain SQL and does not move
+  `updated_at` either. Pinned by
+  `tests/integration/test_ledger_models.py::test_pinned_update_keeps_updated_at`,
+  `::test_pinned_update_refuses_other_columns`,
+  `::test_pinned_update_stays_inside_the_household` and
+  `tests/integration/test_import_categorisation.py::test_every_imported_row_is_untouched_after_the_engine_ran`.
+- **No guess over a decision.** No code path writes `category_id` on a row
+  whose source is `person`, `file`, `rule`, `payee` or `legacy` except a
+  person (any of them) and a rule job on request (`rule`, `payee`, `file`,
+  `legacy`; never `person`). A refresh re-evaluates undecided rows, rows
+  with a suggestion and rows whose source is `dictionary` or `keyword`;
+  `learned` rows are left as they are. Deleting a category makes the rows
+  whose category was a guess, or only a suggestion, undecided again (source
+  and confidence cleared, `updated_at` pinned).
+- **`merchant_memory`** (new; `HouseholdScoped`, forced RLS): the
+  household's counted corrections. One row per `(household, merchant_key,
+  direction, category)` (`uq_merchant_memory_choice`) with `decisions >= 1`
+  and `last_decided_at`; `direction` is `out` for an amount below zero,
+  else `in`; the key has the merchant-key form (checked). One
+  person-decided transaction contributes one decision; changing it moves
+  the decision; deleting the transaction leaves the memory as it is (that
+  is why it is a table and not a query over the ledger, and why it
+  survives deleting and re-importing a statement). The answer for a key
+  and direction is the category with the most decisions (the latest on a
+  tie) and its share of all decisions for the key. At most 5,000 rows per
+  household; the entries decided longest ago are evicted. Seeded once, in
+  the household's first refresh, from its `legacy` rows. Deleting a
+  category removes its entries; merging one folds them into the target.
+  When a newer clean-up or dictionary renames a merchant, the refresh that
+  re-keys the rows carries the entries to the new key in the same
+  transaction. Not exposed to AI clients (`classification: denied`).
+- **Household state**: setting `categorisation.state` (`cleaner`,
+  `dictionary`, `taxonomy`, `memory_seeded`): the versions the household's
+  rows were last evaluated with (`cleanup.CLEANER_VERSION`,
+  `dictionary.version()` from `data/meta.yaml`,
+  `categories.TAXONOMY_VERSION`). The hourly `categorise.dispatch` job
+  queues `categorise.refresh` for a household that is behind.
+- **Default categories, second edition** (`TAXONOMY_VERSION = 2`): 12
+  groups and 68 leaves, the 55 of the first edition with unchanged keys
+  plus `food.fast_food`, `food.alcohol`, `food.delivery`,
+  `shopping.general`, `shopping.home`, `leisure.games`, `leisure.news`,
+  `leisure.software`, `leisure.memberships`, `utilities.other`,
+  `housing.improvement`, `financial.services` and `transfers.cash`.
+  `leisure.subscriptions` is named "Streaming" for households seeded from
+  now on (the key does not change; an existing household keeps its name).
+  An existing household gets only the new leaves, in its first refresh,
+  under the groups it still has; a category of its own with the same name
+  under that parent takes the key instead of getting a twin; a default it
+  deleted stays deleted. Merging a keyed category into an unkeyed one moves
+  the key. "Subscription" is not a category: a streaming charge is
+  `leisure.subscriptions` **and** belongs to a subscription series.
+- **`scheduled_transaction`: a series, not only a schedule.** `kind`
+  (`subscription`, `bill`, `income`, `other`) and `status` (`suggested`,
+  `active`, `confirmed`, `paused`, `ended`, `dismissed`), each with who
+  set it (`kind_source`, `status_source`: `detector` or `person`).
+  Detection writes a kind or a status only while the detector decided it,
+  and a status only upwards from `suggested` to `active`; what a person
+  set stays, with one exception (a confirmed series whose charges stop is
+  ended, with an event). A dismissed detected series is kept as the
+  tombstone that stops it from coming back: `DELETE /recurring/{id}` on a
+  detected series sets `dismissed`, on a manual one it deletes.
+  `merchant_key` (how detection finds the series again; denied for AI
+  access), `first_seen_on`, `occurrences`, `confidence`, `last_amount`,
+  `previous_amount`, `price_changed_on` and `ended_on` are the facts the
+  Subscriptions view shows. `UNIQUE (household_id, id)` is added for the
+  references to it.
+- **Why `active` stays.** The calendar, the budget forecast,
+  `reports/ledger.py` and the AI view read `active` and were not changed.
+  The check `ck_scheduled_transaction_active_matches_status` makes it
+  always equal to `status IN ('active', 'confirmed')`, column defaults and
+  a mapper listener give a writer that only knows `active` (the import
+  of an older archive) a matching status, and a bulk `UPDATE`
+  of `active` alone is refused by the check. Backfill: an active manual
+  schedule is `confirmed` by a `person`, an active detected one `active` by
+  the `detector`, a switched-off one `paused` by a `person`; a schedule of
+  money in is `income`, every other one `other` until detection looks at
+  it again.
+- **`subscription_event`** (new; `HouseholdScoped`, forced RLS): one
+  change of one series, stored once (`uq_subscription_event_once` on
+  household, schedule, kind and day): `new`, `price_changed` (with
+  `amount_before` and `amount_after`), `missed`, `ended`,
+  `charged_after_end` (with the transaction), `renewal_due`,
+  `trial_converted`; `state` is `open` until a person has seen it or
+  decided about the series. It follows its schedule and account
+  (cascade). Not exported (detection finds the changes again) and not
+  exposed to AI clients.
+- **The data clock.** For an account, `as_of = min(today, latest
+  posted_date on the account)`. Missed, ended, new and renewal are all
+  judged against `as_of`, never against the wall clock: PerFin has no bank
+  feed, and a subscription has not stopped because nobody uploaded this
+  month's statement yet.
 
 ## Budgets and goals
 

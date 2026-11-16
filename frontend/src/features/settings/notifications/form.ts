@@ -236,7 +236,7 @@ function checkName(form: ChannelForm, errors: Record<string, string>): void {
 
 /** The ticked kinds as the request's `events`; the server refuses a kind it does not know. */
 function eventsOf(form: ChannelForm): Kind[] {
-  return form.kinds as Kind[];
+  return form.kinds;
 }
 
 /** The POST body of a new channel. */

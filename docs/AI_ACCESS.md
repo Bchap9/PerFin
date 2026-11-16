@@ -43,7 +43,15 @@ Everything else that describes money, by default at full detail:
   city/state when the statement carried it, category, tags, notes and memos
   after scrubbing (see below), split details, transfer pairing.
 - Budgets, goals and progress, savings rate, recurring spend, cash-flow
-  calendar.
+  calendar. A recurring row says its `kind` (`subscription`, `bill`,
+  `income` or `other`) and its `status` (`active`: found by detection;
+  `confirmed`: a person said so), so an assistant can tell a subscription
+  from a bill. Only series PerFin counts are listed: a suggested, paused,
+  ended or dismissed one is not. How a category was decided is not part of
+  any answer, and the merchant key PerFin derives from statement text, what
+  it learned from the household's corrections (`merchant_memory`) and the
+  changes it found (`subscription_event`) are denied: no serialiser reads
+  them (CATEGORISATION.md).
 - Holdings by ticker, quantity, cost basis, gains, allocation, performance.
 - Loans: lender, balance, rate, term, payment split, payoff projections.
 - Manual assets: kind, nickname, valuation history. Not the address.
@@ -197,7 +205,8 @@ get_spending(period, group_by: category|payee|merchant_category|month|account, d
 get_income(period, group_by)
 get_budget_status(period)
 get_trends(metric, periods)
-get_recurring()                            subscriptions and bills detected
+get_recurring()                            recurring charges and income PerFin counts, each with its kind
+                                           (subscription|bill|income|other) and status (active|confirmed)
 get_savings_goals()
 get_net_worth_history(range, granularity)
 get_allocation()

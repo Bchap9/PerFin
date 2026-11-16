@@ -211,7 +211,7 @@ def post_transaction(
     "/transactions/bulk",
     response_model=BulkResult,
     responses=_PROBLEMS,
-    summary="Categorise, tag, untag, delete or confirm many transactions",
+    summary="Categorise, tag, untag, delete, confirm or accept suggestions for many transactions",
 )
 def post_bulk(body: BulkAction, request: Request, db: DbSession, principal: Writer) -> BulkResult:
     return service.bulk(db, principal, body, request=request)

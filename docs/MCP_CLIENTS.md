@@ -41,7 +41,12 @@ boundary is in [security/ai.md](security/ai.md).
 and no documents. Every answer is scrubbed twice and audited (AI_ACCESS.md).
 There are 19 read-only tools, listed by the host once connected;
 `explain_data_policy` tells the assistant (and you) the client's mode and
-options.
+options. Since 1.0.0-rc.10 each row of `get_recurring` also says its `kind`
+(subscription, bill, income or other) and its `status` (active: found by
+detection; confirmed: a person said so). The number of tools is unchanged,
+and nothing else about categorisation or subscriptions is exposed: not how
+a category was decided, not the merchant key, not what PerFin learned from
+your corrections.
 
 ## 1. Create the client and review the exposure preview
 

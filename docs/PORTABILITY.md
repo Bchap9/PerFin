@@ -53,7 +53,7 @@ emits an event of the same name; a finished import also emits
 `document.imported`, `investment.imported`, `loan.imported`,
 `asset.imported` and `tax.imported` so open pages refresh.
 
-## Archive layout (format version 2)
+## Archive layout (format version 3)
 
 A zip archive:
 
@@ -71,7 +71,22 @@ Entities, in dependency order (`app/domain/portability/entities.py`,
 | --- | --- |
 | 1 | `institutions`, `categories`, `payees`, `tags`, `accounts`, `documents` (metadata, including the stored extraction), `transactions`, `transaction_splits`, `transaction_tags`, `balance_snapshots`, `scheduled_transactions` (recurring and scheduled transactions), `rules`, `budgets`, `budget_lines`, `goals`, `goal_accounts`, `goal_contributions`, `fx_rates`, `import_mappings` |
 | 2 | `parser_fingerprints` (learned layouts), `securities`, `prices`, `investment_accounts` (cost method per account), `investment_txns`, `lots`, `loans`, `loan_payments`, `loan_rate_changes`, `manual_assets`, `asset_valuations`, `net_worth_snapshots` (the stored history), `tax_years`, `tax_checklist_items`, `tax_category_maps`, `tax_form_data`, `ai_clients` (definitions only) |
+| 3 | `merchant_memory` (what PerFin learned from the household's category choices; written right after `categories`) |
 | 1 | `document_links` (last: a link may name a transaction, account, investment transaction, loan payment or tax year) |
+
+Format 3 (1.0.0-rc.10) also adds columns to two entities that already
+existed (`EntitySpec.added`: column to the format version that introduced
+it), so that a person's decisions travel:
+
+| Entity | Columns since format 3 |
+| --- | --- |
+| `transactions` | `merchant_key`, `category_source`, `category_confidence`, `suggested_category_id` (a reference to `categories`) |
+| `scheduled_transactions` | `kind`, `kind_source`, `status`, `status_source`, `merchant_key`, `first_seen_on`, `occurrences`, `confidence`, `last_amount`, `previous_amount`, `price_changed_on`, `ended_on` |
+
+So a category arrives with how it was decided (yours stays yours and is
+never guessed over on the new instance), a suggestion arrives as a
+suggestion, and a series you dismissed, paused, confirmed or ended
+arrives in that state.
 
 Each row has every column of the table except `household_id` and these:
 
@@ -79,6 +94,7 @@ Each row has every column of the table except `household_id` and these:
 | --- | --- | --- |
 | `documents` | `blob_id`, `extracted_text`, `uploaded_by` | the original is exported decrypted and re-encrypted into a new blob; the full-text index is rebuilt; a user of this instance |
 | `import_mappings` | `created_by` | a user of this instance |
+| `transactions` | `category_rule_id`, `scheduled_transaction_id` | the two links that do not travel: both point at rows written later in the archive (rules, scheduled transactions) and are local to an instance. A rule-categorised row keeps `category_source: "rule"` without the rule's id (it shows "A rule that no longer exists" and cannot be undone through that rule); the charges of a series are linked again by the next detection |
 | `ai_clients` | `token_id`, `created_by` | the client's bearer token is a secret of this instance and never leaves it; a user of this instance |
 
 Not exported, by design (`NOT_EXPORTED`, each with its reason; a unit test
@@ -94,6 +110,7 @@ fails for a household table in neither list):
 | `idempotency_key`, `event` | request replay cache, live-update stream |
 | `import_hash_alias` | the hash of a deleted duplicate cannot be recomputed for new account ids (see Import) |
 | `import_tombstone` | the hash of a deleted imported row contains the account id and cannot be recomputed for new account ids (see Import) |
+| `subscription_event` | what detection found on this instance (new, price changed, missed, ended); found again from the imported transactions, quietly for what was already running |
 | `statement_record` | the statement duplicate guard's history of this instance's imports, with how each statement was checked (`verification`); documents imported again record their statements anew |
 | `portability_archive`, `tax_export` | the export/import jobs and one-time accountant exports themselves |
 | `review_item`, `ingest_job`, `dropfolder_entry`, `mail_intake_message` | ingestion workflow and history of this instance |
@@ -126,7 +143,7 @@ and spaces, at most 120 characters (`document` when nothing is left).
 ```json
 {
   "format": "perfin-export",
-  "format_version": 2,
+  "format_version": 3,
   "app_version": "0.2.0",
   "created_at": "2026-11-04T10:00:00+00:00",
   "household": {"name": "...", "base_currency": "USD"},
@@ -178,11 +195,15 @@ anything is written (`app/domain/portability/import_.py`, `zipsafe.py`):
   drive letters or control characters; no directories, links, duplicates,
   encrypted members or compression other than stored/deflated. Member names
   are never used as file system paths;
-* the manifest: `format` must be `perfin-export`; `format_version` 1 and 2
-  are read, anything else is `archive-version-unsupported`. A version 1
-  archive (written before the Phase 3-6 tables were added) has none of the
-  version 2 members and imports none of their rows; a version 2 member in
-  it is `archive-unexpected-member`;
+* the manifest: `format` must be `perfin-export`; `format_version` 1, 2
+  and 3 are read, anything else is `archive-version-unsupported`. A
+  version 1 archive (written before the Phase 3-6 tables were added) has
+  none of the version 2 members and imports none of their rows; a member
+  of a later version in an older archive is `archive-unexpected-member`.
+  A row is compared with the columns of the **archive's own** version
+  (`EntitySpec.columns(version)`), so a version 1 or 2 row must not carry
+  the format 3 columns and a version 3 row must carry them all. A merchant
+  key in an archive must have the key's form;
 * the members must be exactly those the manifest lists, each matching its
   SHA-256 and size, each in a known place of the layout, every document row
   with exactly one original;
@@ -200,6 +221,35 @@ payees (by normalised name) and tags (by name) are **merged** into existing
 ones; an existing import mapping with the same name and an existing FX rate
 for the same pair and day win over the archive's; names that would clash
 get ` (imported)`. Rules are appended after the household's own.
+
+**Older archives (format 1 and 2)** import with what migration `0014`
+gave the rows of their time: a transaction with a category or a split
+gets `category_source: "legacy"` (never guessed over), and a scheduled
+transaction gets the series backfill (an active manual one `confirmed`,
+an active detected one `active`, a switched-off one `paused`; money in is
+`income`, the rest `other` until detection looks again).
+
+**After every import**, whatever its format: each transaction without a
+merchant key gets the key its description names (a key the archive gives
+is kept), and a `categorise.refresh` job is queued for the household with
+`force`, which guesses for the rows nobody decided. `merchant_memory`
+entries the household already has win over the archive's, so importing
+the same archive twice counts no decision twice, and the memory keeps its
+bound of 5,000 rows. In a household whose memory was already seeded, the
+categorised rows of an archive older than format 3 are counted as
+decisions at import, once per row and only for a merchant and direction
+the household has no entry for; a household not seeded yet counts them in
+its first refresh.
+
+**Known limit, not new in format 3.** The reader wants exactly the
+columns of the archive's version as this release knows them. A format 2
+archive written **before migration `0009`** added `account.subtype` (by a
+release before 1.0.0-rc.3) has no `subtype` field and is refused whole
+with `archive-invalid-value` ("data/accounts.json: a row has unexpected
+fields"); nothing is imported. Export it again from an instance at
+revision `0009` or later (restore the backup of that time, upgrade, then
+export). Pinned by
+`backend/tests/integration/test_portability.py::test_a_format_2_archive_without_account_subtype`.
 
 The version 2 entities follow the same pattern:
 
