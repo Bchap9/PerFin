@@ -18,9 +18,9 @@ merchants:
   - {key: texaco, name: Texaco, category: transport.fuel, match: [texaco]}
   - {key: bp, name: BP, category: transport.fuel, match: [bp]}
   - {key: amoco, name: Amoco, category: transport.fuel, match: [amoco]}
-  - {key: arco, name: ARCO, category: transport.fuel, match: [arco]}
+  - {key: arco, name: ARCO, category: transport.fuel, match: [arco =]}
   - {key: marathon, name: Marathon, category: transport.fuel, match: [marathon petro, marathon petroleum, marathon gas]}
-  - {key: speedway, name: Speedway, category: transport.fuel, match: [speedway]}
+  - {key: speedway, name: Speedway, category: transport.fuel, match: [speedway =]}
   - {key: sunoco, name: Sunoco, category: transport.fuel, match: [sunoco]}
   - {key: valero, name: Valero, category: transport.fuel, match: [valero]}
   - {key: phillips 66, name: Phillips 66, category: transport.fuel, match: [phillips 66]}
@@ -31,7 +31,7 @@ merchants:
   - {key: gulf oil, name: Gulf, category: transport.fuel, match: [gulf oil, gulf gas]}
   - {key: murphy usa, name: Murphy USA, category: transport.fuel, match: [murphy usa, murphy express, murphy oil]}
   - {key: pilot flying j, name: Pilot Flying J, category: transport.fuel, match: [pilot travel, pilot flying j, flying j]}
-  - {key: loves travel stops, name: Love's Travel Stops, category: transport.fuel, match: [loves, love travel, love country, love outside]}
+  - {key: loves travel stops, name: Love's Travel Stops, category: transport.fuel, match: [loves =, love travel, love country, love outside, loves travel, loves country]}
   - {key: travelcenters of america, name: TravelCenters of America, category: transport.fuel, match: [ta travel, travelcenters of america, petro stopping]}
   - {key: cenex, name: Cenex, category: transport.fuel, match: [cenex]}
   - {key: kwik fill, name: Kwik Fill, category: transport.fuel, match: [kwik fill]}
@@ -42,18 +42,18 @@ merchants:
   - {key: circle k, name: Circle K, category: transport.fuel, mixed: true, match: [circle k, circlek]}
   - {key: wawa, name: Wawa, category: transport.fuel, mixed: true, match: [wawa]}
   - {key: sheetz, name: Sheetz, category: transport.fuel, mixed: true, match: [sheetz]}
-  - {key: quiktrip, name: QuikTrip, category: transport.fuel, mixed: true, match: [quiktrip, qt]}
+  - {key: quiktrip, name: QuikTrip, category: transport.fuel, mixed: true, match: [quiktrip, qt =]}
   - {key: racetrac, name: RaceTrac, category: transport.fuel, mixed: true, match: [racetrac]}
   - {key: kwik trip, name: Kwik Trip, category: transport.fuel, mixed: true, match: [kwik trip, kwik star]}
   - {key: kum and go, name: Kum & Go, category: transport.fuel, mixed: true, match: [kum go, kum and go]}
-  - {key: caseys, name: Casey's, category: transport.fuel, mixed: true, match: [caseys, casey gen, casey general]}
+  - {key: caseys, name: Casey's, category: transport.fuel, mixed: true, match: [caseys =, casey gen, casey general, caseys gen, caseys general]}
   - {key: buc ees, name: Buc-ee's, category: transport.fuel, mixed: true, match: [buc ee, buc ees, bucees]}
   - {key: maverik, name: Maverik, category: transport.fuel, mixed: true, match: [maverik]}
   - {key: holiday stationstores, name: Holiday Stationstores, category: transport.fuel, mixed: true, match: [holiday stationstore, holiday stationstores, holiday station]}
   - {key: cumberland farms, name: Cumberland Farms, category: transport.fuel, mixed: true, match: [cumberland farms, cumberland farm]}
   - {key: getgo, name: GetGo, category: transport.fuel, mixed: true, match: [getgo]}
   - {key: royal farms, name: Royal Farms, category: transport.fuel, mixed: true, match: [royal farms]}
-  - {key: thorntons, name: Thorntons, category: transport.fuel, mixed: true, match: [thorntons]}
+  - {key: thorntons, name: Thorntons, category: transport.fuel, mixed: true, match: [thorntons =]}
   - {key: ampm, name: ampm, category: transport.fuel, mixed: true, match: [ampm]}
 
   # A club's or a grocer's pumps: longer than the store's match, so they win.
@@ -123,13 +123,13 @@ merchants:
   - {key: valvoline, name: Valvoline Instant Oil Change, category: transport.car_maintenance, match: [valvoline]}
   - {key: take 5 oil change, name: Take 5 Oil Change, category: transport.car_maintenance, match: [take 5]}
   - {key: firestone, name: Firestone Complete Auto Care, category: transport.car_maintenance, match: [firestone complete, firestone auto, firestone tire, firestone store]}
-  - {key: goodyear, name: Goodyear, category: transport.car_maintenance, match: [goodyear]}
+  - {key: goodyear, name: Goodyear, category: transport.car_maintenance, match: [goodyear =, goodyear tire, goodyear auto]}
   - {key: discount tire, name: Discount Tire, category: transport.car_maintenance, match: [discount tire, america tire, americas tire]}
   - {key: pep boys, name: Pep Boys, category: transport.car_maintenance, match: [pep boys]}
-  - {key: midas, name: Midas, category: transport.car_maintenance, match: [midas]}
+  - {key: midas, name: Midas, category: transport.car_maintenance, match: [midas =, midas auto, midas muffler]}
   - {key: meineke, name: Meineke, category: transport.car_maintenance, match: [meineke]}
   - {key: autozone, name: AutoZone, category: transport.car_maintenance, match: [autozone, auto zone]}
-  - {key: oreilly auto parts, name: O'Reilly Auto Parts, category: transport.car_maintenance, match: [oreilly, o reilly]}
+  - {key: oreilly auto parts, name: O'Reilly Auto Parts, category: transport.car_maintenance, match: [oreilly =, oreilly auto, o reilly auto]}
   - {key: advance auto parts, name: Advance Auto Parts, category: transport.car_maintenance, match: [advance auto]}
   - {key: napa auto parts, name: NAPA Auto Parts, category: transport.car_maintenance, match: [napa auto]}
   - {key: les schwab, name: Les Schwab Tire Centers, category: transport.car_maintenance, match: [les schwab]}

@@ -20,7 +20,7 @@ merchants:
 
   # Several lines under one name: a suggestion only.
   - {key: state farm, name: State Farm, category: transport.car_insurance, series: bill, cadences: [monthly, half_yearly, annual], mixed: true, match: [state farm, statefarm]}
-  - {key: allstate, name: Allstate, category: transport.car_insurance, series: bill, cadences: [monthly, half_yearly, annual], mixed: true, match: [allstate]}
+  - {key: allstate, name: Allstate, category: transport.car_insurance, series: bill, cadences: [monthly, half_yearly, annual], mixed: true, match: [allstate =, allstate insurance, allstate ins, allstate indemnity, allstate fire, allstate payment]}
   - {key: liberty mutual, name: Liberty Mutual, category: transport.car_insurance, series: bill, cadences: [monthly, half_yearly, annual], mixed: true, match: [liberty mutual, libertymutual]}
   - {key: farmers insurance, name: Farmers Insurance, category: transport.car_insurance, series: bill, cadences: [monthly, half_yearly, annual], mixed: true, match: [farmers insurance, farmers ins, farmers group]}
   - {key: nationwide insurance, name: Nationwide, category: transport.car_insurance, series: bill, cadences: [monthly, half_yearly, annual], mixed: true, match: [nationwide insurance, nationwide ins, nationwide mutual ins]}
@@ -33,7 +33,7 @@ merchants:
   - {key: the hartford, name: The Hartford, category: transport.car_insurance, series: bill, cadences: [monthly, half_yearly, annual], mixed: true, match: [the hartford, hartford insurance, hartford ins]}
   - {key: amica, name: Amica Mutual, category: transport.car_insurance, series: bill, cadences: [monthly, half_yearly, annual], mixed: true, match: [amica]}
   - {key: aaa insurance, name: AAA Insurance, category: transport.car_insurance, series: bill, cadences: [monthly, half_yearly, annual], mixed: true, match: [aaa insurance, aaa ins, csaa insurance, csaa ins, auto club insurance]}
-  - {key: kemper, name: Kemper, category: transport.car_insurance, series: bill, cadences: [monthly, half_yearly], mixed: true, match: [kemper insurance, kemper ins, kemper]}
+  - {key: kemper, name: Kemper, category: transport.car_insurance, series: bill, cadences: [monthly, half_yearly], mixed: true, match: [kemper insurance, kemper ins, kemper =]}
   - {key: farm bureau insurance, name: Farm Bureau Insurance, category: transport.car_insurance, series: bill, cadences: [monthly, half_yearly, annual], mixed: true, match: [farm bureau insurance, farm bureau ins, farm bureau mutual]}
   - {key: lemonade, name: Lemonade, category: housing.insurance, series: bill, cadences: [monthly, annual], mixed: true, match: [lemonade insurance, lemonade ins, lemonade inc]}
 
@@ -57,7 +57,7 @@ merchants:
 
   # Health, dental and vision plans.
   - {key: blue cross blue shield, name: Blue Cross Blue Shield, category: health.insurance, series: bill, cadences: [monthly], match: [blue cross, bluecross, bcbs, blue shield, anthem blue cross, florida blue, highmark, carefirst, premera, regence]}
-  - {key: anthem, name: Anthem, category: health.insurance, series: bill, cadences: [monthly], match: [anthem, elevance health]}
+  - {key: anthem, name: Anthem, category: health.insurance, series: bill, cadences: [monthly], match: [anthem =, elevance health, anthem blue, anthem bcbs, anthem bc, anthem health, anthem insurance]}
   - {key: aetna, name: Aetna, category: health.insurance, series: bill, cadences: [monthly], match: [aetna]}
   - {key: cigna, name: Cigna, category: health.insurance, series: bill, cadences: [monthly], match: [cigna]}
   - {key: unitedhealthcare, name: UnitedHealthcare, category: health.insurance, series: bill, cadences: [monthly], match: [unitedhealthcare, united healthcare, uhc, unitedhealthone]}

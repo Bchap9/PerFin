@@ -12,10 +12,10 @@
 merchants:
   # General stores, warehouse clubs and marketplaces.
   - {key: walmart, name: Walmart, category: shopping.general, mixed: true, match: [walmart, wal mart, wm supercenter, wmt]}
-  - {key: target, name: Target, category: shopping.general, mixed: true, match: [target]}
+  - {key: target, name: Target, category: shopping.general, mixed: true, match: [target =]}
   - {key: costco, name: Costco, category: shopping.general, mixed: true, match: [costco]}
   - {key: sams club, name: Sam's Club, category: shopping.general, mixed: true, match: [sams club, sam club, samsclub]}
-  - {key: bjs wholesale club, name: BJ's Wholesale Club, category: shopping.general, mixed: true, match: [bjs wholesale, bj wholesale, bjs whsl, bjs]}
+  - {key: bjs wholesale club, name: BJ's Wholesale Club, category: shopping.general, mixed: true, match: [bjs wholesale, bj wholesale, bjs whsl, bjs =]}
   - {key: meijer, name: Meijer, category: shopping.general, mixed: true, match: [meijer]}
   - {key: fred meyer, name: Fred Meyer, category: shopping.general, mixed: true, match: [fred meyer, fredmeyer]}
   - {key: amazon, name: Amazon, category: shopping.general, mixed: true, match: [amazon, amzn]}
@@ -25,7 +25,7 @@ merchants:
   - {key: five below, name: Five Below, category: shopping.general, mixed: true, match: [five below]}
   - {key: big lots, name: Big Lots, category: shopping.general, mixed: true, match: [big lots]}
   - {key: kmart, name: Kmart, category: shopping.general, mixed: true, match: [kmart]}
-  - {key: ollies bargain outlet, name: Ollie's Bargain Outlet, category: shopping.general, mixed: true, match: [ollies, ollie bargain]}
+  - {key: ollies bargain outlet, name: Ollie's Bargain Outlet, category: shopping.general, mixed: true, match: [ollies =, ollie bargain]}
   - {key: ebay, name: eBay, category: shopping.general, mixed: true, match: [ebay]}
   - {key: etsy, name: Etsy, category: shopping.general, mixed: true, match: [etsy]}
   - {key: temu, name: Temu, category: shopping.general, mixed: true, match: [temu]}
@@ -44,27 +44,27 @@ merchants:
   - {key: costco membership, name: Costco Membership, category: leisure.memberships, series: subscription, cadences: [annual], match: [costco annual renewal, costco membership]}
 
   # Department stores and off-price.
-  - {key: macys, name: Macy's, category: shopping.clothing, match: [macys, macy]}
+  - {key: macys, name: Macy's, category: shopping.clothing, match: [macys, macy =]}
   - {key: nordstrom, name: Nordstrom, category: shopping.clothing, match: [nordstrom]}
-  - {key: kohls, name: Kohl's, category: shopping.clothing, match: [kohls, kohl]}
+  - {key: kohls, name: Kohl's, category: shopping.clothing, match: [kohls, kohl =]}
   - {key: jcpenney, name: JCPenney, category: shopping.clothing, match: [jcpenney, jc penney, jcp]}
-  - {key: dillards, name: Dillard's, category: shopping.clothing, match: [dillards, dillard]}
-  - {key: belk, name: Belk, category: shopping.clothing, match: [belk]}
+  - {key: dillards, name: Dillard's, category: shopping.clothing, match: [dillards, dillard =]}
+  - {key: belk, name: Belk, category: shopping.clothing, match: [belk =]}
   - {key: bloomingdales, name: Bloomingdale's, category: shopping.clothing, match: [bloomingdales]}
   - {key: saks fifth avenue, name: Saks Fifth Avenue, category: shopping.clothing, match: [saks]}
   - {key: neiman marcus, name: Neiman Marcus, category: shopping.clothing, match: [neiman marcus]}
   - {key: von maur, name: Von Maur, category: shopping.clothing, match: [von maur]}
-  - {key: boscovs, name: Boscov's, category: shopping.clothing, match: [boscovs, boscov]}
-  - {key: bealls, name: Bealls, category: shopping.clothing, match: [bealls]}
+  - {key: boscovs, name: Boscov's, category: shopping.clothing, match: [boscovs, boscov =]}
+  - {key: bealls, name: Bealls, category: shopping.clothing, match: [bealls =]}
   - {key: tj maxx, name: T.J. Maxx, category: shopping.clothing, match: [tj maxx, t j maxx, tjmaxx]}
-  - {key: marshalls, name: Marshalls, category: shopping.clothing, match: [marshalls]}
+  - {key: marshalls, name: Marshalls, category: shopping.clothing, match: [marshalls =]}
   - {key: ross, name: Ross Dress for Less, category: shopping.clothing, match: [ross stores, ross dress]}
   - {key: burlington, name: Burlington, category: shopping.clothing, match: [burlington stores, burlington coat]}
   - {key: sierra, name: Sierra, category: shopping.clothing, match: [sierra trading]}
   - {key: dds discounts, name: dd's DISCOUNTS, category: shopping.clothing, match: [dds discounts, dd discounts]}
   - {key: citi trends, name: Citi Trends, category: shopping.clothing, match: [citi trends]}
   - {key: rainbow shops, name: Rainbow Shops, category: shopping.clothing, match: [rainbow shops]}
-  - {key: goodwill, name: Goodwill, category: shopping.clothing, match: [goodwill]}
+  - {key: goodwill, name: Goodwill, category: shopping.clothing, match: [goodwill =, goodwill industries, goodwill store, goodwill retail]}
   - {key: platos closet, name: Plato's Closet, category: shopping.clothing, match: [platos closet, plato closet]}
 
   # Clothing and shoes.
@@ -73,13 +73,13 @@ merchants:
   - {key: banana republic, name: Banana Republic, category: shopping.clothing, match: [banana republic]}
   - {key: athleta, name: Athleta, category: shopping.clothing, match: [athleta]}
   - {key: h and m, name: H&M, category: shopping.clothing, match: [h m us, h m com, h m online, h m hennes, hm com]}
-  - {key: zara, name: Zara, category: shopping.clothing, match: [zara]}
+  - {key: zara, name: Zara, category: shopping.clothing, match: [zara =]}
   - {key: uniqlo, name: UNIQLO, category: shopping.clothing, match: [uniqlo]}
   - {key: forever 21, name: Forever 21, category: shopping.clothing, match: [forever 21, forever21]}
   - {key: american eagle, name: American Eagle, category: shopping.clothing, match: [american eagle, ae outfitters, aeo]}
-  - {key: aerie, name: Aerie, category: shopping.clothing, match: [aerie]}
-  - {key: hollister, name: Hollister, category: shopping.clothing, match: [hollister]}
-  - {key: abercrombie and fitch, name: Abercrombie & Fitch, category: shopping.clothing, match: [abercrombie]}
+  - {key: aerie, name: Aerie, category: shopping.clothing, match: [aerie =]}
+  - {key: hollister, name: Hollister, category: shopping.clothing, match: [hollister =]}
+  - {key: abercrombie and fitch, name: Abercrombie & Fitch, category: shopping.clothing, match: [abercrombie =, abercrombie fitch, abercrombie and, abercrombie kids]}
   - {key: j crew, name: J.Crew, category: shopping.clothing, match: [j crew, jcrew]}
   - {key: madewell, name: Madewell, category: shopping.clothing, match: [madewell]}
   - {key: anthropologie, name: Anthropologie, category: shopping.clothing, match: [anthropologie]}
@@ -98,20 +98,20 @@ merchants:
   - {key: champs sports, name: Champs Sports, category: shopping.clothing, match: [champs sports]}
   - {key: shoe carnival, name: Shoe Carnival, category: shopping.clothing, match: [shoe carnival]}
   - {key: zappos, name: Zappos, category: shopping.clothing, match: [zappos]}
-  - {key: levis, name: Levi's, category: shopping.clothing, match: [levis, levi strauss]}
-  - {key: carters, name: Carter's, category: shopping.clothing, match: [carters]}
-  - {key: oshkosh, name: OshKosh B'gosh, category: shopping.clothing, match: [oshkosh]}
+  - {key: levis, name: Levi's, category: shopping.clothing, match: [levis =, levi strauss]}
+  - {key: carters, name: Carter's, category: shopping.clothing, match: [carters =]}
+  - {key: oshkosh, name: OshKosh B'gosh, category: shopping.clothing, match: [oshkosh =, oshkosh b, oshkosh bgosh]}
   - {key: the childrens place, name: The Children's Place, category: shopping.clothing, match: [children place, childrens place, the children place, the childrens place]}
-  - {key: torrid, name: Torrid, category: shopping.clothing, match: [torrid]}
+  - {key: torrid, name: Torrid, category: shopping.clothing, match: [torrid =]}
   - {key: lane bryant, name: Lane Bryant, category: shopping.clothing, match: [lane bryant]}
-  - {key: maurices, name: maurices, category: shopping.clothing, match: [maurices]}
+  - {key: maurices, name: maurices, category: shopping.clothing, match: [maurices =]}
   - {key: the buckle, name: Buckle, category: shopping.clothing, match: [the buckle]}
   - {key: hot topic, name: Hot Topic, category: shopping.clothing, match: [hot topic]}
   - {key: pacsun, name: PacSun, category: shopping.clothing, match: [pacsun]}
-  - {key: tillys, name: Tillys, category: shopping.clothing, match: [tillys]}
+  - {key: tillys, name: Tillys, category: shopping.clothing, match: [tillys =]}
   - {key: zumiez, name: Zumiez, category: shopping.clothing, match: [zumiez]}
-  - {key: talbots, name: Talbots, category: shopping.clothing, match: [talbots]}
-  - {key: chicos, name: Chico's, category: shopping.clothing, match: [chicos, chico fas]}
+  - {key: talbots, name: Talbots, category: shopping.clothing, match: [talbots =]}
+  - {key: chicos, name: Chico's, category: shopping.clothing, match: [chicos =, chico fas]}
   - {key: ann taylor, name: Ann Taylor, category: shopping.clothing, match: [ann taylor, anntaylor]}
   - {key: white house black market, name: White House Black Market, category: shopping.clothing, match: [white house black market, whbm]}
   - {key: j jill, name: J.Jill, category: shopping.clothing, match: [j jill, jjill]}
@@ -122,7 +122,7 @@ merchants:
   - {key: tommy hilfiger, name: Tommy Hilfiger, category: shopping.clothing, match: [tommy hilfiger]}
   - {key: calvin klein, name: Calvin Klein, category: shopping.clothing, match: [calvin klein]}
   - {key: columbia sportswear, name: Columbia Sportswear, category: shopping.clothing, match: [columbia sportswear]}
-  - {key: patagonia, name: Patagonia, category: shopping.clothing, match: [patagonia]}
+  - {key: patagonia, name: Patagonia, category: shopping.clothing, match: [patagonia =]}
   - {key: the north face, name: The North Face, category: shopping.clothing, match: [the north face, north face]}
   - {key: ll bean, name: L.L.Bean, category: shopping.clothing, match: [l l bean, ll bean, llbean]}
   - {key: lands end, name: Lands' End, category: shopping.clothing, match: [lands end, land end]}
@@ -142,10 +142,10 @@ merchants:
   - {key: stockx, name: StockX, category: shopping.clothing, match: [stockx]}
   - {key: sunglass hut, name: Sunglass Hut, category: shopping.clothing, match: [sunglass hut]}
   - {key: kay jewelers, name: Kay Jewelers, category: shopping.clothing, match: [kay jewelers]}
-  - {key: zales, name: Zales, category: shopping.clothing, match: [zales]}
+  - {key: zales, name: Zales, category: shopping.clothing, match: [zales =, zales jewelers, zales outlet]}
   - {key: jared, name: Jared, category: shopping.clothing, match: [jared galleria, jared jewelry, jared the galleria]}
   - {key: pandora jewelry, name: Pandora Jewelry, category: shopping.clothing, match: [pandora jewelry]}
-  - {key: claires, name: Claire's, category: shopping.clothing, match: [claires]}
+  - {key: claires, name: Claire's, category: shopping.clothing, match: [claires =]}
   - {key: swarovski, name: Swarovski, category: shopping.clothing, match: [swarovski]}
 
   # Electronics.
@@ -155,7 +155,7 @@ merchants:
   - {key: b and h photo, name: B&H Photo Video, category: shopping.electronics, match: [b h photo, bh photo, bhphotovideo]}
   - {key: newegg, name: Newegg, category: shopping.electronics, match: [newegg]}
   - {key: adorama, name: Adorama, category: shopping.electronics, match: [adorama]}
-  - {key: crutchfield, name: Crutchfield, category: shopping.electronics, match: [crutchfield]}
+  - {key: crutchfield, name: Crutchfield, category: shopping.electronics, match: [crutchfield =]}
   - {key: dell, name: Dell, category: shopping.electronics, match: [dell sales, dell technologies, dell marketing, dell mkt, dell financial]}
   - {key: lenovo, name: Lenovo, category: shopping.electronics, match: [lenovo]}
   - {key: samsung, name: Samsung, category: shopping.electronics, match: [samsung]}
@@ -176,9 +176,9 @@ merchants:
   - {key: books a million, name: Books-A-Million, category: leisure.news, match: [books a million, booksamillion]}
   - {key: half price books, name: Half Price Books, category: leisure.news, match: [half price books]}
   - {key: gamestop, name: GameStop, category: leisure.games, match: [gamestop]}
-  - {key: michaels, name: Michaels, category: leisure.hobbies, match: [michaels]}
+  - {key: michaels, name: Michaels, category: leisure.hobbies, match: [michaels =, michaels stores, michaels store, michaels arts]}
   - {key: hobby lobby, name: Hobby Lobby, category: leisure.hobbies, match: [hobby lobby, hobbylobby]}
-  - {key: joann, name: JOANN, category: leisure.hobbies, match: [joann, jo ann stores, jo ann fabric]}
+  - {key: joann, name: JOANN, category: leisure.hobbies, match: [joann =, jo ann stores, jo ann fabric, joann stores, joann fabric, joann fabrics]}
   - {key: party city, name: Party City, category: leisure.hobbies, match: [party city]}
   - {key: guitar center, name: Guitar Center, category: leisure.hobbies, match: [guitar center]}
   - {key: lego, name: LEGO, category: leisure.hobbies, match: [lego]}
@@ -188,7 +188,7 @@ merchants:
   - {key: dicks sporting goods, name: Dick's Sporting Goods, category: leisure.hobbies, match: [dicks sporting, dick sporting]}
   - {key: academy sports, name: Academy Sports + Outdoors, category: leisure.hobbies, match: [academy sports]}
   - {key: bass pro shops, name: Bass Pro Shops, category: leisure.hobbies, match: [bass pro]}
-  - {key: cabelas, name: Cabela's, category: leisure.hobbies, match: [cabelas, cabela]}
+  - {key: cabelas, name: Cabela's, category: leisure.hobbies, match: [cabelas, cabela =]}
   - {key: big 5 sporting goods, name: Big 5 Sporting Goods, category: leisure.hobbies, match: [big 5]}
   - {key: scheels, name: SCHEELS, category: leisure.hobbies, match: [scheels]}
   - {key: sportsmans warehouse, name: Sportsman's Warehouse, category: leisure.hobbies, match: [sportsmans warehouse, sportsman warehouse]}
@@ -197,5 +197,5 @@ merchants:
   - {key: pga tour superstore, name: PGA TOUR Superstore, category: leisure.hobbies, match: [pga tour superstore]}
 
   # Office supplies.
-  - {key: staples, name: Staples, category: shopping.household, match: [staples]}
+  - {key: staples, name: Staples, category: shopping.household, match: [staples =]}
   - {key: office depot, name: Office Depot OfficeMax, category: shopping.household, match: [office depot, officemax, office max]}

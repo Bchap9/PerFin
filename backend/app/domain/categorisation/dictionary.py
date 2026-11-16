@@ -20,9 +20,17 @@ bought.
 **Matching** is by whole tokens and by nothing else: no regular expression is
 built from an entry or from a core. A ``match`` is one or more tokens in
 merchant-key form; it is looked for at the start of the core, or anywhere in
-it when it ends in the marker `` ~``. The match with the most tokens wins, so
-a sub-brand beats its brand; when the longest matches belong to different
-merchants the core names nobody.
+it when it ends in the marker `` ~``, or it must be the whole core when it
+ends in the marker `` =`` (a name other businesses carry too: a word, a
+surname, a place). The match with the most tokens wins, so a sub-brand beats
+its brand; when the longest matches belong to different merchants the core
+names nobody.
+
+**A payment to the merchant's card** is not a purchase. When the rest of the
+core speaks of a credit card or of card services, or says "payment" after a
+merchant that has no ``series`` (a shop is paid at the till; a bill is
+paid), the core names nobody: the row is left to the kind clean-up gives it
+and to the person.
 
 Everything is read once per process, with ``yaml.safe_load``, and checked on
 the way in: a malformed file raises :class:`DictionaryError` at the first
@@ -32,6 +40,7 @@ call, naming the file and the entry.
 from __future__ import annotations
 
 import hashlib
+import itertools
 import json
 import re
 from collections.abc import Mapping
@@ -58,6 +67,34 @@ KEY_MAX: Final = 64
 NAME_MAX: Final = 80
 #: A ``match`` ending in this is looked for anywhere in the core.
 ANYWHERE_MARK: Final = " ~"
+#: A ``match`` ending in this must be the whole core.
+ALONE_MARK: Final = " ="
+#: Where a match is read: at the start of the core, anywhere in it, or as all of it.
+Where = Literal["start", "anywhere", "alone"]
+_MARKS: Final[Mapping[str, Where]] = MappingProxyType(
+    {ANYWHERE_MARK: "anywhere", ALONE_MARK: "alone"}
+)
+_MARK_OF: Final[Mapping[str, str]] = MappingProxyType(
+    {"start": "", "anywhere": ANYWHERE_MARK, "alone": ALONE_MARK}
+)
+#: Words that say an account was paid, not that something was bought.
+PAYMENT_WORDS: Final = frozenset(
+    {
+        "payment",
+        "payments",
+        "pmt",
+        "pymt",
+        "pymnt",
+        "paymt",
+        "epay",
+        "epayment",
+        "autopay",
+        "autopmt",
+        "autopymt",
+    }
+)
+_CARD_WORDS: Final = frozenset({"card", "crd"})
+_SERVICE_WORDS: Final = frozenset({"service", "services", "srvc", "svc", "svcs"})
 #: Tokens in a keyword's ``word``, at most.
 WORD_TOKENS_MAX: Final = 2
 #: The cadences an entry may name: how often its series usually bills.
@@ -122,6 +159,8 @@ class KeywordHit:
 class _Match:
     tokens: tuple[str, ...]
     merchant: Merchant
+    #: Counts only when it is the whole core.
+    alone: bool = False
 
 
 @dataclass(frozen=True)
@@ -135,6 +174,21 @@ class _Word:
 
 def _at(tokens: tuple[str, ...], start: int, wanted: tuple[str, ...]) -> bool:
     return tokens[start : start + len(wanted)] == wanted
+
+
+def _pays_an_account(rest: tuple[str, ...], merchant: Merchant) -> bool:
+    """Whether ``rest`` (the core without the merchant's name) says its card was paid.
+
+    "Credit card", "credit services" and "card services" or "card payment"
+    say so of anyone. A bare payment word says so of a merchant without a
+    ``series`` only: a utility's "payment" is the bill itself.
+    """
+    for word, following in itertools.pairwise(rest):
+        if word == "credit" and (following in _CARD_WORDS or following in _SERVICE_WORDS):
+            return True
+        if word in _CARD_WORDS and (following in _SERVICE_WORDS or following in PAYMENT_WORDS):
+            return True
+    return merchant.series is None and not PAYMENT_WORDS.isdisjoint(rest)
 
 
 @dataclass(frozen=True)
@@ -157,7 +211,8 @@ class Table:
         """The merchant ``core`` names, or ``None`` (module doc)."""
         tokens = tuple(core.split())
         longest = 0
-        found: dict[str, Hit] = {}
+        #: By merchant key: the hit and where its match starts.
+        found: dict[str, tuple[Hit, int]] = {}
         for start, token in enumerate(tokens):
             candidates = self._anywhere.get(token, ())
             if start == 0:
@@ -166,6 +221,9 @@ class Table:
                 size = len(match.tokens)
                 if size < longest or not _at(tokens, start, match.tokens):
                     continue
+                if match.alone and size != len(tokens):
+                    # Something else is named with it: not this merchant's claim.
+                    continue
                 if size > longest:
                     longest = size
                     found = {}
@@ -173,12 +231,15 @@ class Table:
                     "exact" if size == len(tokens) else "prefix" if start == 0 else "anywhere"
                 )
                 known = found.get(match.merchant.key)
-                if known is None or _RANK[how] < _RANK[known.how]:
-                    found[match.merchant.key] = Hit(merchant=match.merchant, how=how)
+                if known is None or _RANK[how] < _RANK[known[0].how]:
+                    found[match.merchant.key] = (Hit(merchant=match.merchant, how=how), start)
         if len(found) != 1:
             # Nobody, or two merchants with equally long claims.
             return None
-        return next(iter(found.values()))
+        hit, start = next(iter(found.values()))
+        if _pays_an_account((*tokens[:start], *tokens[start + longest :]), hit.merchant):
+            return None
+        return hit
 
     def keyword(self, core: str, via: str | None) -> KeywordHit | None:
         """A telling word in ``core`` (or behind the processor ``via``), or ``None``.
@@ -267,8 +328,10 @@ class _Entry:
         return value
 
 
-def _merchant(entry: _Entry, categories: frozenset[str]) -> tuple[Merchant, list[tuple[str, bool]]]:
-    """The merchant an entry describes and its matches as ``(tokens, anywhere)``."""
+def _merchant(
+    entry: _Entry, categories: frozenset[str]
+) -> tuple[Merchant, list[tuple[str, Where]]]:
+    """The merchant an entry describes and its matches as ``(tokens, where)``."""
     raw = entry.raw
     key = entry.key("key")
     name = raw.get("name")
@@ -285,16 +348,22 @@ def _merchant(entry: _Entry, categories: frozenset[str]) -> tuple[Merchant, list
     written = raw.get("match")
     if not isinstance(written, list) or not written:
         raise entry.error("`match` must be a list of at least one string")
-    matches: list[tuple[str, bool]] = []
+    matches: list[tuple[str, Where]] = []
     for item in written:
-        anywhere = isinstance(item, str) and item.endswith(ANYWHERE_MARK)
-        plain = item.removesuffix(ANYWHERE_MARK) if isinstance(item, str) else item
+        plain: object = item
+        where: Where = "start"
+        if isinstance(item, str):
+            for mark, marked in _MARKS.items():
+                if item.endswith(mark):
+                    plain, where = item.removesuffix(mark), marked
+                    break
         if not _is_key(plain):
             raise entry.error(
                 f"`match` {item!r} must be lower-case a-z0-9 tokens joined by single "
-                f"spaces, with `{ANYWHERE_MARK.strip()}` after a space at the end to match anywhere"
+                f"spaces, with `{ANYWHERE_MARK.strip()}` after a space at the end to match "
+                f"anywhere or `{ALONE_MARK.strip()}` to match the whole core only"
             )
-        matches.append((cast(str, plain), anywhere))
+        matches.append((cast(str, plain), where))
     if len({plain for plain, _ in matches}) != len(matches):
         raise entry.error("`match` names the same tokens twice")
 
@@ -345,7 +414,7 @@ def _keyword(entry: _Entry, order: int, categories: frozenset[str]) -> tuple[_Wo
 
 def _digest(
     merchants: Mapping[str, Merchant],
-    matches: Mapping[str, list[tuple[str, bool]]],
+    matches: Mapping[str, list[tuple[str, Where]]],
     keywords: list[tuple[_Word, str | None]],
 ) -> str:
     """SHA-256 of the entries as canonical JSON.
@@ -360,10 +429,7 @@ def _digest(
                 "key": merchant.key,
                 "name": merchant.name,
                 "category": merchant.category,
-                "match": sorted(
-                    plain + (ANYWHERE_MARK if anywhere else "")
-                    for plain, anywhere in matches[merchant.key]
-                ),
+                "match": sorted(plain + _MARK_OF[where] for plain, where in matches[merchant.key]),
                 "series": merchant.series,
                 "cadences": list(merchant.cadences),
                 "mixed": merchant.mixed,
@@ -412,7 +478,7 @@ def build(
     categories = frozenset(default_category_keys())
 
     merchants: dict[str, Merchant] = {}
-    matches: dict[str, list[tuple[str, bool]]] = {}
+    matches: dict[str, list[tuple[str, Where]]] = {}
     seen_in: dict[str, str] = {}
     owner: dict[str, str] = {}
     prefix: list[tuple[str, _Match]] = []
@@ -436,10 +502,10 @@ def build(
             merchants[merchant.key] = merchant
             matches[merchant.key] = wanted
             seen_in[merchant.key] = entry.where
-            for plain, is_anywhere in wanted:
+            for plain, where in wanted:
                 tokens = tuple(plain.split())
-                (anywhere if is_anywhere else prefix).append(
-                    (tokens[0], _Match(tokens=tokens, merchant=merchant))
+                (anywhere if where == "anywhere" else prefix).append(
+                    (tokens[0], _Match(tokens=tokens, merchant=merchant, alone=where == "alone"))
                 )
 
     words: dict[str, list[_Word]] = {}

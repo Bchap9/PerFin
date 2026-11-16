@@ -47,7 +47,7 @@ merchants:
   - {key: liberty tax, name: Liberty Tax, category: financial.services, match: [liberty tax]}
   - {key: legalzoom, name: LegalZoom, category: financial.services, match: [legalzoom]}
   - {key: rocket lawyer, name: Rocket Lawyer, category: financial.services, match: [rocket lawyer, rocketlawyer]}
-  - {key: nolo, name: Nolo, category: financial.services, match: [nolo]}
+  - {key: nolo, name: Nolo, category: financial.services, match: [nolo =]}
   - {key: trust and will, name: Trust & Will, category: financial.services, match: [trust will, trust and will]}
   - {key: experian, name: Experian, category: financial.services, match: [experian]}
   - {key: equifax, name: Equifax, category: financial.services, match: [equifax]}

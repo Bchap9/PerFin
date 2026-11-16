@@ -65,7 +65,7 @@ merchants:
     category: leisure.subscriptions
     series: subscription
     cadences: [monthly, annual]
-    match: [youtube premium ~, youtubepremium ~]
+    match: [youtube premium ~, youtubepremium ~, google youtubepremium]
 
   - key: sling tv
     name: Sling TV

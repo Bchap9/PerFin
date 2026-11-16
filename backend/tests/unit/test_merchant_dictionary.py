@@ -143,7 +143,7 @@ def _is_key(value: object) -> bool:
 
 
 def _plain(match: str) -> str:
-    return match.removesuffix(" ~")
+    return match.removesuffix(" ~").removesuffix(" =")
 
 
 # --- the gate ----------------------------------------------------------------
@@ -698,6 +698,177 @@ def test_every_merchant_finds_itself() -> None:
     assert lost == []
 
 
+# --- names other businesses carry, and paying a store's card -------------------
+
+#: A statement line of a business that is not the chain whose name it starts
+#: with (the tails are invented). Each names nobody: a word, a surname, a
+#: place or a possessive stem is a chain only when it is the whole core.
+NOT_THE_CHAIN = (
+    "MCDONALD FAMILY DENTAL",
+    "CULVER CITY PARKING",
+    "HILTON HEAD PLUMBING",
+    "OSHKOSH WATER UTILITY",
+    "HOLLISTER HONDA SERVICE",
+    "PATAGONIA GRILL",
+    "CHICOS TACOS 0412",
+    "GOODYEAR FAMILY DENTAL",
+    "JOANN'S DINER",
+    "WEIS LAW OFFICE",
+    "DILLONS AUTO REPAIR",
+    "SPROUTS DAYCARE CENTER",
+    "XCEL FITNESS CLUB",
+    "ADOBE ANIMAL HOSPITAL",
+    "ADOBE GRILL SANTA FE NM",
+    "QUICKEN LOANS MTG PYMT",
+    "TINDER BOX CIGARS",
+    "BUMBLE BEE DAYCARE",
+    "AUDIBLE HEARING CENTER",
+    "BLOOMBERG PHILANTHROPIES",
+    "WENDY'S FLOWERS 0412 AUSTIN TX",
+    "MACY'S DINER",
+    "DENNY'S AUTO BODY",
+    "LOWE'S FAMILY FARM",
+    "DOMINO SUGAR OUTLET",
+    "ARBY TREE SERVICE",
+    "PEET BROTHERS HVAC",
+    "KOHL PLUMBING",
+    "DILLARD ROOFING",
+    "WALGREEN LAW OFFICE",
+    "SUBWAY TILE AND STONE LLC",
+    "OUTBACK ADVENTURE TOURS",
+    "BOOKING AGENT SVCS",
+    "SPEEDWAY MOTORSPORTS TICKETS",
+    "STAPLES FAMILY DENTISTRY",
+    "MICHAELS AUTO REPAIR",
+    "GREYHOUND PET RESCUE",
+    "ROVER LANDSCAPING",
+    "HALLMARK ROOFING",
+    "HYATT LEGAL PLANS",
+    "BANFIELD ELECTRIC",
+    "BLIZZARD SNOW REMOVAL",
+    "ALLEGIANT MORTGAGE",
+    "LOVES FURNITURE",
+    "TARGET SPORTS USA",
+    "ALLSTATE PLUMBING",
+    "ANTHEM CHURCH",
+    "MARSHALLS PLUMBING",
+    "SAFEWAY DRIVING SCHOOL",
+    "CENTERPOINT CHURCH",
+    "O'REILLY'S PUB",
+    "MIDAS TOUCH JEWELRY",
+    "DISCORD RECORDS",
+    "GOODWILL MOVERS",
+)
+
+#: The chain itself, as a statement prints it, and its key.
+THE_CHAIN_ITSELF = (
+    ("WENDY'S 0412 AUSTIN TX", "wendys"),
+    ("MCDONALD'S F12345 AUSTIN TX", "mcdonalds"),
+    ("SUBWAY 12345 AUSTIN TX", "subway"),
+    ("LOWE'S #1234", "lowes"),
+    ("LOWES HOME CENTERS", "lowes"),
+    ("LOWES FOODS 0412", "lowes foods"),
+    ("DOMINO'S 1234", "dominos"),
+    ("DOMINO'S PIZZA", "dominos"),
+    ("PEET'S COFFEE", "peets coffee"),
+    ("OUTBACK STEAKHOUSE", "outback steakhouse"),
+    ("BOOKING.COM", "booking com"),
+    ("STAPLES 00123", "staples"),
+    ("MICHAELS STORES 1234", "michaels"),
+    ("JOANN STORES #123", "joann"),
+    ("GREYHOUND LINES", "greyhound"),
+    ("HALLMARK CARDS", "hallmark"),
+    ("SPROUTS FARMERS MARKET", "sprouts"),
+    ("XCEL ENERGY", "xcel energy"),
+    ("GOODYEAR TIRE", "goodyear"),
+    ("HILTON GARDEN INN AUSTIN TX", "hilton"),
+    ("HILTON HOTELS", "hilton"),
+    ("HYATT REGENCY", "hyatt"),
+    ("ADOBE *CREATIVE CLOUD", "adobe"),
+    ("ADOBE ACROPRO SUBS", "adobe"),
+    ("ADOBE INC", "adobe"),
+    ("AUDIBLE*2K4AB1CD0", "audible"),
+    ("TINDER", "tinder"),
+    ("BUMBLE", "bumble"),
+    ("BLOOMBERG.COM", "bloomberg"),
+    ("BLIZZARD ENTERTAINMENT", "blizzard"),
+    ("LOVES TRAVEL STOP", "loves travel stops"),
+    ("WEIS MARKETS", "weis markets"),
+    ("DILLONS #12", "dillons"),
+    ("PATAGONIA.COM", "patagonia"),
+    ("HOLLISTER #123", "hollister"),
+    ("OSHKOSH B'GOSH", "oshkosh"),
+    ("BANFIELD PET HOSP", "banfield pet hospital"),
+    ("ALLEGIANT AIR", "allegiant air"),
+    ("TARGET 00012345", "target"),
+    ("ALLSTATE INS CO", "allstate"),
+    ("OREILLY AUTO PARTS 1234", "oreilly auto parts"),
+    ("QUICKEN INC", "quicken"),
+)
+
+#: Paying the card a store issues is not shopping there. Each names nobody
+#: and no keyword answers for it.
+STORE_CARD_PAYMENTS = (
+    "KOHL'S PAYMENT",
+    "KOHLS PAYMENT",
+    "MACY'S ONLINE PMT",
+    "MACYS CREDIT CARD PAYMENT",
+    "NORDSTROM CARD PAYMENT",
+    "LOWES CREDIT CARD EPAY",
+    "HOME DEPOT CREDIT SERVICES",
+    "BEST BUY CREDIT CARD PMT",
+    "TARGET CARD SRVC PAYMENT",
+    "AMAZON STORE CARD PAYMENT",
+    "WALMART CREDIT CARD PYMT",
+    "APPLE CARD GSBANK PAYMENT",
+)
+
+#: A bill or a subscription is paid, and the statement may say so: still the merchant.
+PAID_BILLS = (
+    ("VERIZON WIRELESS PAYMENT", "verizon wireless"),
+    ("COMCAST CABLE PAYMENT", "xfinity"),
+    ("GEICO PAYMENT", "geico"),
+    ("DUKE ENERGY BILL PAY", "duke energy"),
+    ("ATT*BILL PAYMENT", "at and t"),
+    ("NETFLIX.COM PAYMENT", "netflix"),
+)
+
+
+def _found(raw: str) -> str | None:
+    hit = dictionary.lookup(cleanup.clean(raw).core)
+    return hit.merchant.key if hit is not None else None
+
+
+def test_a_name_other_businesses_carry_is_the_chain_only_alone() -> None:
+    wrong = {raw: _found(raw) for raw in NOT_THE_CHAIN if _found(raw) is not None}
+    assert wrong == {}
+    lost = {raw: _found(raw) for raw, key in THE_CHAIN_ITSELF if _found(raw) != key}
+    assert lost == {}
+    # The unrelated business keeps a key of its own: a correction made on it
+    # never teaches the chain.
+    for raw in NOT_THE_CHAIN:
+        core = cleanup.clean(raw).core
+        assert core not in dictionary.merchants(), raw
+
+
+def test_paying_a_store_card_is_not_shopping_there() -> None:
+    wrong = {raw: _found(raw) for raw in STORE_CARD_PAYMENTS if _found(raw) is not None}
+    assert wrong == {}
+    for raw in STORE_CARD_PAYMENTS:
+        cleaned = cleanup.clean(raw)
+        assert dictionary.keyword(cleaned.core, cleaned.via) is None, raw
+    lost = {raw: _found(raw) for raw, key in PAID_BILLS if _found(raw) != key}
+    assert lost == {}
+    for _, key in PAID_BILLS:
+        assert dictionary.merchants()[key].series is not None, key
+
+
+def test_a_product_named_behind_its_biller_is_the_product() -> None:
+    for raw in ("GOOGLE *YouTubePremium", "GOOGLE*YOUTUBEPREMIUM", "GOOGLE *YouTube Premium"):
+        assert _found(raw) == "youtube premium", raw
+    assert _found("GOOGLE *LanternApp") == "google play"
+
+
 # --- the matcher, on tables built here ---------------------------------------
 
 STREAMBOX: dict[str, Any] = {
@@ -808,6 +979,65 @@ def test_anywhere_needs_the_marker() -> None:
     assert table.lookup("online evrymrtx") is None
 
 
+def test_alone_is_the_whole_core_or_nothing() -> None:
+    harbor = {"key": "harbors", "name": "Harbor's", "category": "food.fast_food"}
+    grill = {"key": "harbor grill", "name": "Harbor Grill", "category": "food.restaurants"}
+    table = _table(
+        {
+            "a.yaml": [
+                {**harbor, "match": ["harbors", "harbor =", "harbor burgers"]},
+                {**grill, "match": ["harbor grill"]},
+            ]
+        }
+    )
+    chain = table.merchants["harbors"]
+    assert table.lookup("harbor") == Hit(chain, "exact")
+    # Something follows: a business that only shares the name.
+    assert table.lookup("harbor family dental") is None
+    assert table.lookup("old harbor") is None
+    # The entry's other matches, and other entries, are read as before.
+    assert table.lookup("harbors 0412") == Hit(chain, "prefix")
+    assert table.lookup("harbor burgers west") == Hit(chain, "prefix")
+    assert table.lookup("harbor grill west") == Hit(table.merchants["harbor grill"], "prefix")
+    # More than one token may be marked too.
+    both = _table({"a.yaml": [{**grill, "match": ["harbor grill ="]}]})
+    assert both.lookup("harbor grill") == Hit(both.merchants["harbor grill"], "exact")
+    assert both.lookup("harbor grill supply") is None
+    # The marker is content: the digest follows it.
+    plain = _table({"a.yaml": [{**grill, "match": ["harbor grill"]}]})
+    assert plain.digest != both.digest
+
+
+def test_a_payment_to_the_merchants_card_names_nobody() -> None:
+    shop = {"key": "everymart", "name": "EveryMart", "category": "shopping.general"}
+    table = _table({"a.yaml": [{**shop, "match": ["everymart", "evry mart"]}, STREAMBOX]})
+    everymart, streambox = table.merchants["everymart"], table.merchants["streambox"]
+    assert table.lookup("everymart 0042") == Hit(everymart, "prefix")
+    # A shop is paid at the till: "payment" after its name is its card's bill.
+    for core in (
+        "everymart payment",
+        "everymart online pmt",
+        "everymart pymt",
+        "everymart epay",
+        "everymart autopay",
+        "evry mart e payment",
+        "everymart credit card payment",
+        "everymart credit crd epay",
+        "everymart credit services",
+        "everymart card srvc",
+        "everymart store card payment",
+    ):
+        assert table.lookup(core) is None, core
+    # Words that only look like it.
+    for core in ("everymart cards", "everymart gift card", "everymart credit union plaza"):
+        assert table.lookup(core) == Hit(everymart, "prefix"), core
+    # A series is a bill: paying it is the thing itself. Its card is not.
+    assert table.lookup("streambox payment") == Hit(streambox, "prefix")
+    assert table.lookup("streambox autopay") == Hit(streambox, "prefix")
+    assert table.lookup("streambox credit card payment") is None
+    assert table.lookup("streambox card services") is None
+
+
 def test_keyword_and_via_keyword() -> None:
     assert dictionary.keyword("harbor pizza", None) == KeywordHit(
         category="food.restaurants", word="pizza", strong=False
@@ -898,6 +1128,11 @@ def _bad(change: dict[str, Any], *, drop: str | None = None) -> dict[str, Any]:
         (_bad({"match": ["~"]}), "match"),
         (_bad({"match": ["streambox ~ com"]}), "match"),
         (_bad({"match": ["streambox", "streambox ~"]}), "match"),
+        (_bad({"match": ["streambox="]}), "match"),
+        (_bad({"match": ["="]}), "match"),
+        (_bad({"match": ["streambox = ~"]}), "match"),
+        (_bad({"match": ["streambox ~ ="]}), "match"),
+        (_bad({"match": ["streambox", "streambox ="]}), "match"),
         (_bad({"series": "habit"}), "series"),
         (_bad({"cadences": ["daily"]}), "cadences"),
         (_bad({"cadences": ["monthly", "monthly"]}), "cadences"),

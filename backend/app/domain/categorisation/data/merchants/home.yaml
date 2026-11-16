@@ -8,7 +8,7 @@
 merchants:
   # Hardware, building supplies and farm stores.
   - {key: the home depot, name: The Home Depot, category: housing.improvement, match: [home depot, the home depot, homedepot]}
-  - {key: lowes, name: Lowe's, category: housing.improvement, match: [lowes, lowe]}
+  - {key: lowes, name: Lowe's, category: housing.improvement, match: [lowes =, lowe =, lowes home, lowe home]}
   - {key: menards, name: Menards, category: housing.improvement, match: [menards]}
   - {key: ace hardware, name: Ace Hardware, category: housing.improvement, match: [ace hardware, ace hdwe, ace hdw]}
   - {key: true value, name: True Value, category: housing.improvement, match: [true value]}
@@ -37,7 +37,7 @@ merchants:
   - {key: west elm, name: West Elm, category: shopping.home, match: [west elm, westelm]}
   - {key: restoration hardware, name: RH, category: shopping.home, match: [restoration hardware]}
   - {key: wayfair, name: Wayfair, category: shopping.home, match: [wayfair]}
-  - {key: overstock, name: Overstock, category: shopping.home, match: [overstock]}
+  - {key: overstock, name: Overstock, category: shopping.home, match: [overstock =]}
   - {key: ashley furniture, name: Ashley Furniture, category: shopping.home, match: [ashley furniture, ashley homestore, ashley home]}
   - {key: rooms to go, name: Rooms To Go, category: shopping.home, match: [rooms to go]}
   - {key: bobs discount furniture, name: Bob's Discount Furniture, category: shopping.home, match: [bobs discount, bob discount]}
@@ -77,5 +77,5 @@ merchants:
   - {key: one hour heating, name: One Hour Heating & Air Conditioning, category: housing.maintenance, match: [one hour heating]}
   - {key: aire serv, name: Aire Serv, category: housing.maintenance, match: [aire serv]}
   - {key: angi, name: Angi, category: housing.maintenance, match: [angies list, angie list, angi services, angi homeservices]}
-  - {key: thumbtack, name: Thumbtack, category: housing.maintenance, match: [thumbtack]}
+  - {key: thumbtack, name: Thumbtack, category: housing.maintenance, match: [thumbtack =]}
   - {key: taskrabbit, name: Taskrabbit, category: housing.maintenance, match: [taskrabbit]}

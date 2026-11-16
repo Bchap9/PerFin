@@ -19,7 +19,7 @@ merchants:
   - {key: alaska airlines, name: Alaska Airlines, category: leisure.travel, match: [alaska air, alaska airlines, alaska airl]}
   - {key: spirit airlines, name: Spirit Airlines, category: leisure.travel, match: [spirit airlines, spirit airl]}
   - {key: frontier airlines, name: Frontier Airlines, category: leisure.travel, match: [frontier airlines, frontier airl]}
-  - {key: allegiant air, name: Allegiant Air, category: leisure.travel, match: [allegiant]}
+  - {key: allegiant air, name: Allegiant Air, category: leisure.travel, match: [allegiant =, allegiant air, allegiant travel]}
   - {key: hawaiian airlines, name: Hawaiian Airlines, category: leisure.travel, match: [hawaiian airlines, hawaiian airl]}
   - {key: sun country airlines, name: Sun Country Airlines, category: leisure.travel, match: [sun country]}
   - {key: breeze airways, name: Breeze Airways, category: leisure.travel, match: [breeze airways]}
@@ -30,7 +30,7 @@ merchants:
   - {key: lufthansa, name: Lufthansa, category: leisure.travel, match: [lufthansa]}
   - {key: air france, name: Air France, category: leisure.travel, match: [air france]}
   - {key: klm, name: KLM, category: leisure.travel, match: [klm]}
-  - {key: emirates, name: Emirates, category: leisure.travel, match: [emirates]}
+  - {key: emirates, name: Emirates, category: leisure.travel, match: [emirates =, emirates airline, emirates airlines, emirates air]}
   - {key: qatar airways, name: Qatar Airways, category: leisure.travel, match: [qatar airways, qatar air]}
   - {key: aeromexico, name: Aeromexico, category: leisure.travel, match: [aeromexico]}
   - {key: volaris, name: Volaris, category: leisure.travel, match: [volaris]}
@@ -59,13 +59,13 @@ merchants:
   - {key: westin, name: Westin, category: leisure.travel, match: [westin]}
   - {key: sheraton, name: Sheraton, category: leisure.travel, match: [sheraton]}
   - {key: ritz carlton, name: The Ritz-Carlton, category: leisure.travel, match: [ritz carlton, the ritz carlton]}
-  - {key: hilton, name: Hilton, category: leisure.travel, match: [hilton]}
+  - {key: hilton, name: Hilton, category: leisure.travel, match: [hilton =, hilton garden, hilton hotels, hilton hotel, hilton honors, hilton grand, hilton resort, hilton suites]}
   - {key: hampton inn, name: Hampton Inn, category: leisure.travel, match: [hampton inn]}
   - {key: doubletree, name: DoubleTree by Hilton, category: leisure.travel, match: [doubletree]}
   - {key: embassy suites, name: Embassy Suites, category: leisure.travel, match: [embassy suites]}
   - {key: homewood suites, name: Homewood Suites, category: leisure.travel, match: [homewood suites]}
   - {key: home2 suites, name: Home2 Suites, category: leisure.travel, match: [home2 suites]}
-  - {key: hyatt, name: Hyatt, category: leisure.travel, match: [hyatt]}
+  - {key: hyatt, name: Hyatt, category: leisure.travel, match: [hyatt =, hyatt regency, hyatt place, hyatt house, hyatt hotels, hyatt hotel, hyatt centric, grand hyatt, park hyatt]}
   - {key: holiday inn, name: Holiday Inn, category: leisure.travel, match: [holiday inn]}
   - {key: ihg, name: IHG Hotels & Resorts, category: leisure.travel, match: [ihg]}
   - {key: crowne plaza, name: Crowne Plaza, category: leisure.travel, match: [crowne plaza]}
@@ -93,7 +93,7 @@ merchants:
 
   # Booking sites and home stays.
   - {key: expedia, name: Expedia, category: leisure.travel, match: [expedia]}
-  - {key: booking com, name: Booking.com, category: leisure.travel, match: [booking com, booking]}
+  - {key: booking com, name: Booking.com, category: leisure.travel, match: [booking com, booking =]}
   - {key: hotels com, name: Hotels.com, category: leisure.travel, match: [hotels com, hotelscom]}
   - {key: priceline, name: Priceline, category: leisure.travel, match: [priceline]}
   - {key: orbitz, name: Orbitz, category: leisure.travel, match: [orbitz]}
@@ -122,7 +122,7 @@ merchants:
 
   # Long-distance rail and coach.
   - {key: amtrak, name: Amtrak, category: leisure.travel, match: [amtrak]}
-  - {key: greyhound, name: Greyhound, category: leisure.travel, match: [greyhound]}
+  - {key: greyhound, name: Greyhound, category: leisure.travel, match: [greyhound =, greyhound lines, greyhound bus]}
   - {key: megabus, name: megabus, category: leisure.travel, match: [megabus]}
   - {key: flixbus, name: FlixBus, category: leisure.travel, match: [flixbus]}
   - {key: brightline, name: Brightline, category: leisure.travel, match: [brightline]}

@@ -8,7 +8,7 @@
 merchants:
   # Pharmacies.
   - {key: cvs, name: CVS Pharmacy, category: health.pharmacy, match: [cvs]}
-  - {key: walgreens, name: Walgreens, category: health.pharmacy, match: [walgreens, walgreen]}
+  - {key: walgreens, name: Walgreens, category: health.pharmacy, match: [walgreens, walgreen =]}
   - {key: rite aid, name: Rite Aid, category: health.pharmacy, match: [rite aid, riteaid]}
   - {key: duane reade, name: Duane Reade, category: health.pharmacy, match: [duane reade]}
   - {key: walmart pharmacy, name: Walmart Pharmacy, category: health.pharmacy, match: [walmart pharmacy, wal mart pharmacy]}

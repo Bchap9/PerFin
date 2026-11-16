@@ -13,9 +13,10 @@ import uuid
 from collections.abc import Sequence
 from dataclasses import dataclass
 
-from sqlalchemy import delete, func, select, update
+from sqlalchemy import and_, delete, func, or_, select, update
 from sqlalchemy.orm import Session
 
+from app.db.base import Base
 from app.domain.budgets.models import BudgetLine
 from app.domain.categorisation.models import MerchantMemory
 from app.domain.transactions.models import (
@@ -250,7 +251,44 @@ def _merge_budget_lines(
     return len(lines)
 
 
+#: Sources of a category nobody chose: the system's own guesses. A row that
+#: got the deleted category from one of them is undecided again.
+GUESSED_SOURCES = ("learned", "dictionary", "keyword")
+
+
 def delete_category(db: Session, household_id: uuid.UUID, category_id: uuid.UUID) -> None:
+    """Delete the category; the foreign keys clear it from the rows that had it.
+
+    A foreign key clears only the id. A row whose category was a guess
+    (:data:`GUESSED_SOURCES`), or that was only offered this category, would
+    keep saying how a category it no longer has was decided, and would never
+    be looked at again: its source and confidence are cleared first, so it is
+    undecided and the next pass evaluates it. What a person, a file, a rule
+    or a payee decided (and ``legacy``) keeps its source: a decided "no
+    category" that no guess overwrites. ``updated_at`` is pinned: this is not
+    a person's edit of the row.
+    """
+    table = Base.metadata.tables[Transaction.__tablename__]
+    db.execute(
+        update(table)
+        .where(
+            table.c.household_id == household_id,
+            or_(
+                and_(
+                    table.c.category_id == category_id,
+                    table.c.category_source.in_(GUESSED_SOURCES),
+                ),
+                table.c.suggested_category_id == category_id,
+            ),
+        )
+        .values(
+            category_source=None,
+            category_confidence=None,
+            category_rule_id=None,
+            # Explicit, so the column's ``onupdate`` does not apply.
+            updated_at=table.c.updated_at,
+        )
+    )
     db.execute(
         delete(Category).where(Category.household_id == household_id, Category.id == category_id)
     )

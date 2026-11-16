@@ -26,7 +26,7 @@ merchants:
   - {key: apple icloud, name: iCloud, category: leisure.software, series: subscription, cadences: [monthly], match: [apple icloud, icloud]}
 
   # Creative and office tools.
-  - {key: adobe, name: Adobe, category: leisure.software, series: subscription, cadences: [monthly, annual], match: [adobe]}
+  - {key: adobe, name: Adobe, category: leisure.software, series: subscription, cadences: [monthly, annual], match: [adobe =, adobe creative, adobe acropro, adobe acrobat, adobe systems, adobe photogphy, adobe photography, adobe stock, adobe express, adobe premiere, adobe lightroom, adobe cc]}
   - {key: canva, name: Canva, category: leisure.software, series: subscription, cadences: [monthly, annual], match: [canva]}
   - {key: figma, name: Figma, category: leisure.software, series: subscription, cadences: [monthly, annual], match: [figma]}
   - {key: grammarly, name: Grammarly, category: leisure.software, series: subscription, cadences: [monthly, quarterly, annual], match: [grammarly]}
@@ -56,7 +56,7 @@ merchants:
   - {key: proton, name: Proton, category: leisure.software, series: subscription, cadences: [monthly, annual], match: [proton ag, protonmail, proton mail, protonvpn, proton vpn]}
   - {key: norton, name: Norton, category: leisure.software, series: subscription, cadences: [annual], match: [nortonlifelock, norton lifelock, norton antivirus, norton security, norton 360]}
   - {key: lifelock, name: LifeLock, category: financial.services, series: subscription, cadences: [monthly, annual], match: [lifelock]}
-  - {key: mcafee, name: McAfee, category: leisure.software, series: subscription, cadences: [annual], match: [mcafee]}
+  - {key: mcafee, name: McAfee, category: leisure.software, series: subscription, cadences: [annual], match: [mcafee =, mcafee total, mcafee antivirus, mcafee livesafe]}
   - {key: malwarebytes, name: Malwarebytes, category: leisure.software, series: subscription, cadences: [annual], match: [malwarebytes]}
   - {key: life360, name: Life360, category: leisure.software, series: subscription, cadences: [monthly, annual], match: [life360]}
 
@@ -69,7 +69,7 @@ merchants:
 
   # Money and paperwork.
   - {key: quickbooks, name: QuickBooks, category: leisure.software, series: subscription, cadences: [monthly, annual], match: [quickbooks, intuit quickbooks, intuit qbooks]}
-  - {key: quicken, name: Quicken, category: leisure.software, series: subscription, cadences: [annual], match: [quicken]}
+  - {key: quicken, name: Quicken, category: leisure.software, series: subscription, cadences: [annual], match: [quicken =, quicken deluxe, quicken premier, quicken classic, quicken simplifi]}
   - {key: ynab, name: YNAB, category: leisure.software, series: subscription, cadences: [monthly, annual], match: [ynab, you need a budget]}
   - {key: monarch money, name: Monarch Money, category: leisure.software, series: subscription, cadences: [monthly, annual], match: [monarch money, monarchmoney]}
   - {key: rocket money, name: Rocket Money, category: leisure.software, series: subscription, cadences: [monthly, annual], match: [rocket money, rocketmoney, truebill]}
@@ -77,8 +77,8 @@ merchants:
   # People and family trees.
   - {key: linkedin, name: LinkedIn, category: leisure.software, series: subscription, cadences: [monthly, annual], match: [linkedin]}
   - {key: ancestry, name: Ancestry, category: leisure.memberships, series: subscription, cadences: [monthly, half_yearly, annual], match: [ancestry, ancestrycom]}
-  - {key: tinder, name: Tinder, category: leisure.memberships, series: subscription, cadences: [monthly, half_yearly, annual], match: [tinder]}
-  - {key: bumble, name: Bumble, category: leisure.memberships, series: subscription, cadences: [weekly, monthly, quarterly], match: [bumble]}
+  - {key: tinder, name: Tinder, category: leisure.memberships, series: subscription, cadences: [monthly, half_yearly, annual], match: [tinder =, tinder gold, tinder plus, tinder platinum]}
+  - {key: bumble, name: Bumble, category: leisure.memberships, series: subscription, cadences: [weekly, monthly, quarterly], match: [bumble =, bumble premium, bumble boost]}
   - {key: hinge, name: Hinge, category: leisure.memberships, series: subscription, cadences: [weekly, monthly, quarterly, half_yearly], match: [hinge app, hinge inc, hingeapp]}
   - {key: eharmony, name: eharmony, category: leisure.memberships, series: subscription, cadences: [monthly, half_yearly, annual], match: [eharmony]}
 

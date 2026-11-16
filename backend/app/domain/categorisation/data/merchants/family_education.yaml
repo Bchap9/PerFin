@@ -9,16 +9,16 @@ merchants:
   # Pets.
   - {key: petco, name: Petco, category: family.pets, match: [petco]}
   - {key: petsmart, name: PetSmart, category: family.pets, match: [petsmart]}
-  - {key: chewy, name: Chewy, category: family.pets, match: [chewy]}
+  - {key: chewy, name: Chewy, category: family.pets, match: [chewy =]}
   - {key: pet supplies plus, name: Pet Supplies Plus, category: family.pets, match: [pet supplies plus]}
   - {key: petland, name: Petland, category: family.pets, match: [petland]}
   - {key: pet valu, name: Pet Valu, category: family.pets, match: [pet valu]}
   - {key: petsense, name: Petsense, category: family.pets, match: [petsense]}
   - {key: hollywood feed, name: Hollywood Feed, category: family.pets, match: [hollywood feed]}
-  - {key: banfield pet hospital, name: Banfield Pet Hospital, category: family.pets, match: [banfield]}
+  - {key: banfield pet hospital, name: Banfield Pet Hospital, category: family.pets, match: [banfield =, banfield pet]}
   - {key: vca animal hospitals, name: VCA Animal Hospitals, category: family.pets, match: [vca]}
   - {key: bluepearl, name: BluePearl Pet Hospital, category: family.pets, match: [bluepearl]}
-  - {key: rover, name: Rover, category: family.pets, match: [rover]}
+  - {key: rover, name: Rover, category: family.pets, match: [rover =]}
 
   # Hair, grooming and the like.
   - {key: great clips, name: Great Clips, category: family.personal_care, match: [great clips]}
@@ -29,7 +29,7 @@ merchants:
   - {key: smartstyle, name: SmartStyle, category: family.personal_care, match: [smartstyle]}
   - {key: hair cuttery, name: Hair Cuttery, category: family.personal_care, match: [hair cuttery]}
   - {key: regis salons, name: Regis Salons, category: family.personal_care, match: [regis salon, regis salons]}
-  - {key: drybar, name: Drybar, category: family.personal_care, match: [drybar]}
+  - {key: drybar, name: Drybar, category: family.personal_care, match: [drybar =]}
   - {key: european wax center, name: European Wax Center, category: family.personal_care, match: [european wax]}
   - {key: waxing the city, name: Waxing the City, category: family.personal_care, match: [waxing the city]}
   - {key: massage envy, name: Massage Envy, category: family.personal_care, match: [massage envy]}
@@ -69,14 +69,14 @@ merchants:
   - {key: outschool, name: Outschool, category: family.education, match: [outschool]}
   - {key: college board, name: College Board, category: family.education, match: [college board, collegeboard]}
   - {key: common app, name: Common App, category: family.education, match: [common app, commonapp]}
-  - {key: parchment, name: Parchment, category: family.education, match: [parchment]}
+  - {key: parchment, name: Parchment, category: family.education, match: [parchment =]}
   - {key: princeton review, name: The Princeton Review, category: family.education, match: [princeton review, the princeton review]}
   - {key: kaplan, name: Kaplan, category: family.education, match: [kaplan test, kaplan prep]}
   - {key: pearson, name: Pearson, category: family.education, match: [pearson education, pearson ed]}
   - {key: mcgraw hill, name: McGraw Hill, category: family.education, match: [mcgraw hill, mheducation]}
   - {key: cengage, name: Cengage, category: family.education, match: [cengage]}
-  - {key: scholastic, name: Scholastic, category: family.education, match: [scholastic]}
-  - {key: follett, name: Follett, category: family.education, match: [follett]}
+  - {key: scholastic, name: Scholastic, category: family.education, match: [scholastic =, scholastic book, scholastic books]}
+  - {key: follett, name: Follett, category: family.education, match: [follett =, follett higher, follett bookstore]}
   - {key: barnes and noble college, name: Barnes & Noble College, category: family.education, match: [bncollege, bkstr, barnes noble college]}
   - {key: lakeshore learning, name: Lakeshore Learning, category: family.education, match: [lakeshore learning]}
   - {key: myschoolbucks, name: MySchoolBucks, category: family.education, match: [myschoolbucks]}
@@ -93,15 +93,15 @@ merchants:
   - {key: edible arrangements, name: Edible Arrangements, category: family.gifts, match: [edible arrangements, edible arrangement]}
   - {key: shutterfly, name: Shutterfly, category: family.gifts, match: [shutterfly]}
   - {key: snapfish, name: Snapfish, category: family.gifts, match: [snapfish]}
-  - {key: minted, name: Minted, category: family.gifts, match: [minted]}
-  - {key: hallmark, name: Hallmark, category: family.gifts, match: [hallmark]}
+  - {key: minted, name: Minted, category: family.gifts, match: [minted =]}
+  - {key: hallmark, name: Hallmark, category: family.gifts, match: [hallmark =, hallmark cards, hallmark gold crown, hallmark store]}
   - {key: american greetings, name: American Greetings, category: family.gifts, match: [american greetings]}
   - {key: paper source, name: Paper Source, category: family.gifts, match: [paper source]}
   - {key: things remembered, name: Things Remembered, category: family.gifts, match: [things remembered]}
   - {key: harry and david, name: Harry & David, category: family.gifts, match: [harry david, harry and david]}
   - {key: sees candies, name: See's Candies, category: family.gifts, match: [sees candies, see candies]}
-  - {key: godiva, name: Godiva, category: family.gifts, match: [godiva]}
-  - {key: spencers, name: Spencer's, category: family.gifts, match: [spencer gifts, spencers]}
+  - {key: godiva, name: Godiva, category: family.gifts, match: [godiva =, godiva chocolatier]}
+  - {key: spencers, name: Spencer's, category: family.gifts, match: [spencer gifts, spencers =]}
 
   # Giving.
   - {key: american red cross, name: American Red Cross, category: family.donations, match: [american red cross, red cross]}

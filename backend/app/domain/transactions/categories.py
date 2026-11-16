@@ -16,6 +16,11 @@ what it has not been offered before, so a default it deleted stays deleted.
 A new name for an old key (``leisure.subscriptions`` is "Streaming" from
 edition 2) reaches only households seeded from then on.
 
+A household seeded from nothing was offered every leaf of this edition, and
+the seed says so in its ``categorisation.state`` setting (:data:`STATE_KEY`,
+``taxonomy``). Without that its first refresh would read "edition 1" and
+bring back a newer default the household had deleted in the meantime.
+
 ``system_key`` is ``<group>`` for a top-level category and
 ``<group>.<name>`` for a child; names are English (the SPA may translate by
 key). Every child has its parent's ``kind``. Tax treatments are hints for
@@ -32,12 +37,17 @@ from typing import Final
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.core import clock
+from app.db.models import Setting, SettingScope
 from app.domain.transactions.models import Category, CategoryKind, TaxTreatment
 
 #: Edition of the default set. A household records the edition it was last
 #: brought up to (``categorisation.state``); :func:`add_new_defaults` adds
 #: what later editions introduced.
 TAXONOMY_VERSION: Final = 2
+#: The household setting that records it (``app.domain.categorisation.service``
+#: owns the setting and reads it; that module imports this one).
+STATE_KEY: Final = "categorisation.state"
 
 _E, _I, _T, _X = (
     CategoryKind.EXPENSE,
@@ -236,6 +246,8 @@ def seed_default_categories(db: Session, household_id: uuid.UUID) -> int:
     """Insert the missing default categories of ``household_id``; return how many.
 
     Must run in that household's RLS context (``app.db.rls.set_context``).
+    A household that had no default yet is recorded as seeded at this edition
+    (module doc).
     """
     existing: dict[str, uuid.UUID] = {
         key: category_id
@@ -246,6 +258,8 @@ def seed_default_categories(db: Session, household_id: uuid.UUID) -> int:
         )
         if key is not None
     }
+    # No default yet: this is the household's first seed, at this edition.
+    fresh = not existing
     # A user category may already use a default's name under the same parent.
     taken: set[tuple[uuid.UUID | None, str]] = {
         (parent_id, name)
@@ -286,7 +300,44 @@ def seed_default_categories(db: Session, household_id: uuid.UUID) -> int:
             )
             added += 1
     db.flush()
+    if fresh:
+        _record_edition(db, household_id)
     return added
+
+
+def _record_edition(db: Session, household_id: uuid.UUID) -> None:
+    """Store "seeded at :data:`TAXONOMY_VERSION`" unless the household has a state.
+
+    Only the edition is claimed: no clean-up and no dictionary has looked at
+    the household's rows and its memory is not seeded, so its first refresh
+    still does everything else.
+    """
+    held = db.execute(
+        select(Setting.id).where(
+            Setting.scope == SettingScope.HOUSEHOLD,
+            Setting.scope_id == household_id,
+            Setting.key == STATE_KEY,
+        )
+    ).first()
+    if held is not None:
+        return
+    now = clock.utcnow()
+    db.add(
+        Setting(
+            scope=SettingScope.HOUSEHOLD,
+            scope_id=household_id,
+            key=STATE_KEY,
+            value={
+                "cleaner": 0,
+                "dictionary": 0,
+                "taxonomy": TAXONOMY_VERSION,
+                "memory_seeded": False,
+            },
+            created_at=now,
+            updated_at=now,
+        )
+    )
+    db.flush()
 
 
 def add_new_defaults(db: Session, household_id: uuid.UUID, since: int) -> int:

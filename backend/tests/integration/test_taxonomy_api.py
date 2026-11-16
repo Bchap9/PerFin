@@ -20,6 +20,7 @@ from sqlalchemy import select
 from app.core.settings import Settings
 from app.db.rls import set_context
 from app.domain.budgets.models import BudgetLine
+from app.domain.categorisation import engine as categorisation
 from app.domain.categorisation import memory
 from app.domain.categorisation.models import MerchantMemory
 from app.domain.transactions.models import (
@@ -148,6 +149,69 @@ def test_category_delete_rules(
     assert owner.delete(f"{CATEGORIES}/{parent.id}").status_code == 204
     assert owner.get(f"{CATEGORIES}/{parent.id}").status_code == 404
     assert len(household_audit(factories, household_id, "category.delete")) == 2
+
+
+def test_deleting_a_category_makes_its_guessed_rows_undecided_again(
+    actors: Actors, factories: Factories, ledger: LedgerFactories
+) -> None:
+    owner = actors.new(role="owner")
+    household_id = _hid(owner)
+    doomed = ledger.category(household_id, name="Takeaway")
+    kept = ledger.category(household_id, name="Quick bites")
+    account = ledger.account(household_id)
+    confidence = Decimal("0.90")
+
+    def row(source: str, **fields: Any) -> Transaction:
+        fields.setdefault("category", doomed)
+        return ledger.transaction(
+            account, category_source=source, category_confidence=confidence, **fields
+        )
+
+    guessed = {source: row(source) for source in ("learned", "dictionary", "keyword")}
+    decided = {source: row(source) for source in ("person", "file", "rule", "payee", "legacy")}
+    suggested = row("learned", category=None, suggested_category_id=doomed.id)
+    elsewhere = row("dictionary", category=kept)
+    before = {
+        txn.id: txn.updated_at
+        for txn in (*guessed.values(), *decided.values(), suggested, elsewhere)
+    }
+
+    assert owner.delete(f"{CATEGORIES}/{doomed.id}").status_code == 204
+
+    with factories.transaction() as db:
+        set_context(db, household_id)
+        stored = {
+            txn.id: txn
+            for txn in db.execute(select(Transaction).where(Transaction.id.in_(before))).scalars()
+        }
+        undecided = set(
+            db.execute(
+                select(Transaction.id).where(
+                    Transaction.id.in_(before), categorisation.undecided_clause()
+                )
+            ).scalars()
+        )
+
+    def state(txn: Transaction) -> tuple[Any, ...]:
+        found = stored[txn.id]
+        return (
+            found.category_id,
+            found.suggested_category_id,
+            found.category_source,
+            found.category_confidence,
+        )
+
+    # A guess about a category that is gone is no decision: the next pass looks again.
+    for source, txn in guessed.items():
+        assert state(txn) == (None, None, None, None), source
+    assert state(suggested) == (None, None, None, None)
+    assert undecided == {txn.id for txn in (*guessed.values(), suggested)}
+    # What a person, a file, a rule or a payee decided stays a decided "no category".
+    for source, txn in decided.items():
+        assert state(txn) == (None, None, source, confidence), source
+    assert state(elsewhere) == (kept.id, None, "dictionary", confidence)
+    # None of it looks like a person's edit.
+    assert {row_id: found.updated_at for row_id, found in stored.items()} == before
 
 
 def test_category_merge_reassigns_everything(

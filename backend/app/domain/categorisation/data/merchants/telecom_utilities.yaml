@@ -47,7 +47,7 @@ merchants:
   - {key: windstream, name: Windstream (Kinetic), category: utilities.internet, series: bill, cadences: [monthly], match: [windstream, kinetic by windstream]}
   - {key: mediacom, name: Mediacom, category: utilities.internet, series: bill, cadences: [monthly], match: [mediacom]}
   - {key: wow internet, name: WOW! Internet, category: utilities.internet, series: bill, cadences: [monthly], match: [wow internet, wideopenwest, wow cable]}
-  - {key: astound broadband, name: Astound Broadband, category: utilities.internet, series: bill, cadences: [monthly], match: [astound, rcn, grande communications, wave broadband]}
+  - {key: astound broadband, name: Astound Broadband, category: utilities.internet, series: bill, cadences: [monthly], match: [astound =, rcn, grande communications, wave broadband, astound broadband]}
   - {key: sparklight, name: Sparklight (Cable One), category: utilities.internet, series: bill, cadences: [monthly], match: [sparklight, cable one, cableone]}
   - {key: google fiber, name: Google Fiber, category: utilities.internet, series: bill, cadences: [monthly], match: [google fiber ~, googlefiber]}
   - {key: starlink, name: Starlink, category: utilities.internet, series: bill, cadences: [monthly], match: [starlink]}
@@ -66,7 +66,7 @@ merchants:
   - {key: georgia power, name: Georgia Power, category: utilities.electricity, series: bill, cadences: [monthly], match: [georgia power, ga power]}
   - {key: alabama power, name: Alabama Power, category: utilities.electricity, series: bill, cadences: [monthly], match: [alabama power, al power]}
   - {key: national grid, name: National Grid, category: utilities.electricity, series: bill, cadences: [monthly], match: [national grid, nat grid, ngrid, nationalgrid]}
-  - {key: xcel energy, name: Xcel Energy, category: utilities.electricity, series: bill, cadences: [monthly], match: [xcel energy, xcelenergy, xcel]}
+  - {key: xcel energy, name: Xcel Energy, category: utilities.electricity, series: bill, cadences: [monthly], match: [xcel energy, xcelenergy, xcel =]}
   - {key: dte energy, name: DTE Energy, category: utilities.electricity, series: bill, cadences: [monthly], match: [dte energy, dte]}
   - {key: consumers energy, name: Consumers Energy, category: utilities.electricity, series: bill, cadences: [monthly], match: [consumers energy, consumersenergy]}
   - {key: comed, name: ComEd, category: utilities.electricity, series: bill, cadences: [monthly], match: [comed, commonwealth edison]}
@@ -76,7 +76,7 @@ merchants:
   - {key: eversource, name: Eversource, category: utilities.electricity, series: bill, cadences: [monthly], match: [eversource]}
   - {key: entergy, name: Entergy, category: utilities.electricity, series: bill, cadences: [monthly], match: [entergy]}
   - {key: ameren, name: Ameren, category: utilities.electricity, series: bill, cadences: [monthly], match: [ameren]}
-  - {key: centerpoint energy, name: CenterPoint Energy, category: utilities.electricity, series: bill, cadences: [monthly], match: [centerpoint energy, centerpoint]}
+  - {key: centerpoint energy, name: CenterPoint Energy, category: utilities.electricity, series: bill, cadences: [monthly], match: [centerpoint energy, centerpoint =]}
   - {key: american electric power, name: American Electric Power, category: utilities.electricity, series: bill, cadences: [monthly], match: [american electric power, aep ohio, aep texas, appalachian power, indiana michigan power, aep]}
   - {key: txu energy, name: TXU Energy, category: utilities.electricity, series: bill, cadences: [monthly], match: [txu energy, txu]}
   - {key: reliant energy, name: Reliant Energy, category: utilities.electricity, series: bill, cadences: [monthly], match: [reliant energy]}
@@ -101,7 +101,7 @@ merchants:
   - {key: socalgas, name: SoCalGas, category: utilities.heating, series: bill, cadences: [monthly], match: [socalgas, so cal gas, socal gas, southern california gas]}
   - {key: nicor gas, name: Nicor Gas, category: utilities.heating, series: bill, cadences: [monthly], match: [nicor gas, nicor]}
   - {key: peoples gas, name: Peoples Gas, category: utilities.heating, series: bill, cadences: [monthly], match: [peoples gas]}
-  - {key: atmos energy, name: Atmos Energy, category: utilities.heating, series: bill, cadences: [monthly], match: [atmos energy, atmos]}
+  - {key: atmos energy, name: Atmos Energy, category: utilities.heating, series: bill, cadences: [monthly], match: [atmos energy, atmos =]}
   - {key: southwest gas, name: Southwest Gas, category: utilities.heating, series: bill, cadences: [monthly], match: [southwest gas, sw gas]}
   - {key: piedmont natural gas, name: Piedmont Natural Gas, category: utilities.heating, series: bill, cadences: [monthly], match: [piedmont natural gas, piedmont ng, piedmont nat gas]}
   - {key: columbia gas, name: Columbia Gas, category: utilities.heating, series: bill, cadences: [monthly], match: [columbia gas]}

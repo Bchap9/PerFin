@@ -285,3 +285,48 @@ def test_a_same_named_category_takes_the_key(db: Session) -> None:
         )
     ).scalars()
     assert sorted(under_food).count("fast food") == 1
+
+
+@pytest.mark.integration
+def test_seeding_records_the_edition_so_a_deleted_default_stays_deleted(db: Session) -> None:
+    from app.domain.categorisation import service
+
+    household = make_household(db)
+    set_context(db, household.id)
+    seed_default_categories(db, household.id)
+    # A household created on this release was offered every leaf of this edition.
+    assert categories.STATE_KEY == service.STATE_KEY
+    assert service.read_state(db, household.id) == service.State(
+        taxonomy=categories.TAXONOMY_VERSION
+    )
+    # Nothing else is claimed: the first refresh still has everything to do.
+    assert service.is_behind(db, household.id) is True
+
+    db.delete(_by_key(db, household.id, "leisure.games"))
+    db.flush()
+    result = service.refresh(db, household.id)
+
+    assert result.ran is True
+    assert result.before.taxonomy == categories.TAXONOMY_VERSION
+    assert result.categories_added == 0
+    assert "leisure.games" not in _keys(db, household.id)
+    assert service.is_behind(db, household.id) is False
+    # Seeding again changes neither the state nor, here, the categories it re-creates.
+    stored = service.read_state(db, household.id)
+    seed_default_categories(db, household.id)
+    assert service.read_state(db, household.id) == stored
+
+
+@pytest.mark.integration
+def test_a_household_seeded_before_editions_is_not_marked_current(db: Session) -> None:
+    from app.domain.categorisation import service
+
+    # Its categories were there before any state was recorded.
+    household = make_household(db)
+    set_context(db, household.id)
+    parent = make_category(db, household.id, name="Food", system_key="food")
+    make_category(db, household.id, name="Groceries", parent=parent, system_key="food.groceries")
+
+    seed_default_categories(db, household.id)
+
+    assert service.read_state(db, household.id) == service.State()

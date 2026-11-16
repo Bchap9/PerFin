@@ -38,6 +38,11 @@ from a purchase are not here: they are code, in `../cleanup.py`.
   - A match that ends in ` ~` (a space and a tilde) is found anywhere in the
     core: `youtube tv ~` finds `google youtube tv`. Use it only for a name no
     other business carries, because it is looked for in every descriptor.
+  - A match that ends in ` =` (a space and an equals sign) must be the whole
+    core: `wendy =` finds `wendy` (what `WENDY'S 0412 AUSTIN TX` cleans to)
+    and not `wendy flowers`. Clean-up has already dropped store numbers,
+    places, web endings and company suffixes, so a chain's own line usually
+    is the bare name.
   - The match with the most tokens wins, so a sub-brand is its own entry with
     a longer match (`streambox kids` beats `streambox`). When the longest
     matches belong to two merchants, nobody is found.
@@ -49,6 +54,21 @@ from a purchase are not here: they are code, in `../cleanup.py`.
 - If the name is an everyday word or is shared with other businesses, match
   only a form that cannot be anyone else, or leave the merchant out. A wrong
   category stated as a fact is worse than no answer.
+- A one-token match that is a word, a surname, a place or a possessive stem
+  (`subway`, `mcdonald`, `hilton`, `wendy`, `adobe`) is written with ` =`,
+  because as a prefix it would also claim "Subway Tile and Stone",
+  "McDonald Family Dental" and "Hilton Head Plumbing", give them the chain's
+  category as a fact and its key, and let one correction on the stranger
+  teach the whole chain. Beside it, write the two-token forms the chain's
+  statements really carry (`hilton garden`, `adobe creative`, `domino
+  pizza`). A coined name (`netflix`, `chipotle`) stays a plain prefix. Every
+  such name gets a line in `NOT_THE_CHAIN` in the unit test.
+- A payment to a store's credit card is not shopping there, and it has no
+  entry. The matcher also refuses a merchant when the rest of the core says
+  "credit card", "credit services" or "card services", or says "payment"
+  (`pmt`, `pymt`, `epay`, `autopay`) after a merchant without a `series`:
+  `KOHLS PAYMENT` and `HOME DEPOT CREDIT SERVICES` name nobody, while
+  `GEICO PAYMENT` is still the bill.
 - `category` is a key of the default set
   (`app.domain.transactions.categories`), not a name: a household may have
   renamed the category.
@@ -123,7 +143,8 @@ conditions and disclaimer to this section in the same change.
 4. Open a pull request. The test is the gate: the schema, the token form,
    unique keys, a match owned by one merchant, every match finding its own
    merchant, every category a default key, no match that is a keyword or a
-   processor prefix, a cadence for every series, the size (800 to 1,500
+   processor prefix, the names other businesses carry (`NOT_THE_CHAIN`) and
+   the store-card payments (`STORE_CARD_PAYMENTS`) naming nobody, a cadence for every series, the size (800 to 1,500
    merchants, 100 to 150 keywords), and the digest pinned to the version.
 
 The version is what makes installed households catch up: each household

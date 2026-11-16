@@ -11,7 +11,7 @@
 merchants:
   # National and large regional supermarkets.
   - {key: kroger, name: Kroger, category: food.groceries, match: [kroger]}
-  - {key: safeway, name: Safeway, category: food.groceries, match: [safeway]}
+  - {key: safeway, name: Safeway, category: food.groceries, match: [safeway =, safeway store]}
   - {key: albertsons, name: Albertsons, category: food.groceries, match: [albertsons]}
   - {key: publix, name: Publix, category: food.groceries, match: [publix]}
   - {key: h e b, name: H-E-B, category: food.groceries, match: [h e b, heb]}
@@ -29,46 +29,46 @@ merchants:
   - {key: winn dixie, name: Winn-Dixie, category: food.groceries, match: [winn dixie, winndixie]}
   - {key: piggly wiggly, name: Piggly Wiggly, category: food.groceries, match: [piggly wiggly]}
   - {key: hy vee, name: Hy-Vee, category: food.groceries, match: [hy vee, hyvee]}
-  - {key: sprouts, name: Sprouts Farmers Market, category: food.groceries, match: [sprouts]}
+  - {key: sprouts, name: Sprouts Farmers Market, category: food.groceries, match: [sprouts =, sprouts farmers, sprouts fm, sprouts mkt]}
   - {key: vons, name: Vons, category: food.groceries, match: [vons]}
-  - {key: ralphs, name: Ralphs, category: food.groceries, match: [ralphs]}
+  - {key: ralphs, name: Ralphs, category: food.groceries, match: [ralphs =]}
   - {key: frys food, name: Fry's Food Stores, category: food.groceries, match: [frys food, fry food, frys marketplace, fry marketplace]}
   - {key: smiths food, name: Smith's Food and Drug, category: food.groceries, match: [smiths food, smith food]}
   - {key: king soopers, name: King Soopers, category: food.groceries, match: [king soopers]}
   - {key: qfc, name: QFC, category: food.groceries, match: [qfc]}
   - {key: jewel osco, name: Jewel-Osco, category: food.groceries, match: [jewel osco, jewelosco]}
   - {key: acme markets, name: ACME Markets, category: food.groceries, match: [acme markets, acme mkts]}
-  - {key: shaws, name: Shaw's, category: food.groceries, match: [shaws, shaw supermarket, shaws supermarket]}
+  - {key: shaws, name: Shaw's, category: food.groceries, match: [shaws =, shaw supermarket, shaws supermarket]}
   - {key: star market, name: Star Market, category: food.groceries, match: [star market]}
   - {key: tom thumb, name: Tom Thumb, category: food.groceries, match: [tom thumb]}
-  - {key: randalls, name: Randalls, category: food.groceries, match: [randalls]}
-  - {key: pavilions, name: Pavilions, category: food.groceries, match: [pavilions]}
-  - {key: dillons, name: Dillons, category: food.groceries, match: [dillons]}
+  - {key: randalls, name: Randalls, category: food.groceries, match: [randalls =]}
+  - {key: pavilions, name: Pavilions, category: food.groceries, match: [pavilions =]}
+  - {key: dillons, name: Dillons, category: food.groceries, match: [dillons =]}
   - {key: food 4 less, name: Food 4 Less, category: food.groceries, match: [food 4 less, food4less, foods co]}
-  - {key: marianos, name: Mariano's, category: food.groceries, match: [marianos]}
+  - {key: marianos, name: Mariano's, category: food.groceries, match: [marianos =, marianos fresh]}
   - {key: pick n save, name: Pick 'n Save, category: food.groceries, match: [pick n save]}
-  - {key: hannaford, name: Hannaford, category: food.groceries, match: [hannaford]}
+  - {key: hannaford, name: Hannaford, category: food.groceries, match: [hannaford =]}
   - {key: market basket, name: Market Basket, category: food.groceries, match: [market basket]}
   - {key: price chopper, name: Price Chopper, category: food.groceries, match: [price chopper, market 32]}
   - {key: tops markets, name: Tops Friendly Markets, category: food.groceries, match: [tops markets, tops friendly]}
-  - {key: weis markets, name: Weis Markets, category: food.groceries, match: [weis markets, weis mkts, weis]}
+  - {key: weis markets, name: Weis Markets, category: food.groceries, match: [weis markets, weis mkts, weis =]}
   - {key: save a lot, name: Save A Lot, category: food.groceries, match: [save a lot, savealot]}
   - {key: winco foods, name: WinCo Foods, category: food.groceries, match: [winco foods, winco]}
   - {key: stater bros, name: Stater Bros., category: food.groceries, match: [stater bros, stater brothers]}
-  - {key: raleys, name: Raley's, category: food.groceries, match: [raleys, raley]}
+  - {key: raleys, name: Raley's, category: food.groceries, match: [raleys =, raley =]}
   - {key: save mart, name: Save Mart, category: food.groceries, match: [save mart]}
   - {key: food city, name: Food City, category: food.groceries, match: [food city]}
-  - {key: ingles, name: Ingles Markets, category: food.groceries, match: [ingles]}
+  - {key: ingles, name: Ingles Markets, category: food.groceries, match: [ingles =, ingles markets, ingles mkts]}
   - {key: lowes foods, name: Lowes Foods, category: food.groceries, match: [lowes foods]}
-  - {key: brookshires, name: Brookshire's, category: food.groceries, match: [brookshires, brookshire grocery]}
+  - {key: brookshires, name: Brookshire's, category: food.groceries, match: [brookshires =, brookshire grocery]}
   - {key: schnucks, name: Schnucks, category: food.groceries, match: [schnucks]}
   - {key: dierbergs, name: Dierbergs, category: food.groceries, match: [dierbergs]}
   - {key: fareway, name: Fareway, category: food.groceries, match: [fareway]}
   - {key: cub foods, name: Cub Foods, category: food.groceries, match: [cub foods]}
   - {key: festival foods, name: Festival Foods, category: food.groceries, match: [festival foods]}
-  - {key: woodmans, name: Woodman's Markets, category: food.groceries, match: [woodmans, woodman food, woodman market]}
+  - {key: woodmans, name: Woodman's Markets, category: food.groceries, match: [woodmans =, woodman food, woodman market]}
   - {key: big y, name: Big Y, category: food.groceries, match: [big y]}
-  - {key: bashas, name: Bashas', category: food.groceries, match: [bashas, basha]}
+  - {key: bashas, name: Bashas', category: food.groceries, match: [bashas =, basha =]}
   - {key: bi lo, name: BI-LO, category: food.groceries, match: [bi lo]}
   - {key: lucky supermarkets, name: Lucky Supermarkets, category: food.groceries, match: [lucky supermarkets, lucky supermarket]}
   - {key: nob hill foods, name: Nob Hill Foods, category: food.groceries, match: [nob hill foods]}
@@ -86,7 +86,7 @@ merchants:
   - {key: earth fare, name: Earth Fare, category: food.groceries, match: [earth fare]}
   - {key: grocery outlet, name: Grocery Outlet, category: food.groceries, match: [grocery outlet]}
   - {key: smart and final, name: Smart & Final, category: food.groceries, match: [smart final, smart and final]}
-  - {key: gelsons, name: Gelson's, category: food.groceries, match: [gelsons, gelson]}
+  - {key: gelsons, name: Gelson's, category: food.groceries, match: [gelsons =, gelson =, gelsons market, gelson market]}
   - {key: bristol farms, name: Bristol Farms, category: food.groceries, match: [bristol farms]}
   - {key: new seasons market, name: New Seasons Market, category: food.groceries, match: [new seasons market, new seasons mkt]}
   - {key: erewhon, name: Erewhon, category: food.groceries, match: [erewhon]}
@@ -109,7 +109,7 @@ merchants:
   - {key: total wine, name: Total Wine & More, category: food.alcohol, match: [total wine, totalwine]}
   - {key: bevmo, name: BevMo!, category: food.alcohol, match: [bevmo]}
   - {key: abc fine wine, name: ABC Fine Wine & Spirits, category: food.alcohol, match: [abc fine wine]}
-  - {key: binnys, name: Binny's Beverage Depot, category: food.alcohol, match: [binnys, binny beverage]}
+  - {key: binnys, name: Binny's Beverage Depot, category: food.alcohol, match: [binnys =, binny beverage]}
   - {key: specs wines, name: Spec's Wines Spirits & Finer Foods, category: food.alcohol, match: [specs wines, spec wines, specs liquor, spec liquor]}
   - {key: twin liquors, name: Twin Liquors, category: food.alcohol, match: [twin liquors]}
   - {key: drizly, name: Drizly, category: food.alcohol, match: [drizly]}

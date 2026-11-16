@@ -41,14 +41,14 @@ merchants:
   - {key: mindbody, name: Mindbody, category: health.fitness, match: [mindbody, mindbodyonline]}
 
   # Fitness at home and on the wrist.
-  - {key: peloton, name: Peloton, category: health.fitness, series: subscription, cadences: [monthly, annual], match: [peloton, onepeloton]}
+  - {key: peloton, name: Peloton, category: health.fitness, series: subscription, cadences: [monthly, annual], match: [peloton =, onepeloton, peloton interactive, peloton membership, peloton app]}
   - {key: ifit, name: iFIT, category: health.fitness, series: subscription, cadences: [monthly, annual], match: [ifit]}
   - {key: beachbody, name: Beachbody (BODi), category: health.fitness, series: subscription, cadences: [monthly, quarterly, annual], match: [beachbody, teambeachbody]}
   - {key: zwift, name: Zwift, category: health.fitness, series: subscription, cadences: [monthly, annual], match: [zwift]}
   - {key: strava, name: Strava, category: health.fitness, series: subscription, cadences: [monthly, annual], match: [strava]}
   - {key: myfitnesspal, name: MyFitnessPal, category: health.fitness, series: subscription, cadences: [monthly, annual], match: [myfitnesspal]}
   - {key: fitbit, name: Fitbit, category: health.fitness, series: subscription, cadences: [monthly, annual], match: [fitbit]}
-  - {key: whoop, name: WHOOP, category: health.fitness, series: subscription, cadences: [monthly, annual], match: [whoop]}
+  - {key: whoop, name: WHOOP, category: health.fitness, series: subscription, cadences: [monthly, annual], match: [whoop =, whoop membership]}
   - {key: oura, name: Oura, category: health.fitness, series: subscription, cadences: [monthly, annual], match: [oura ring, ouraring, oura health]}
   - {key: alltrails, name: AllTrails, category: health.fitness, series: subscription, cadences: [annual], match: [alltrails]}
 
