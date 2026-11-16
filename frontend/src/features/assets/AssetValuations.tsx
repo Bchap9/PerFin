@@ -8,7 +8,7 @@
  */
 import { useQuery } from "@tanstack/react-query";
 import { useNavigate } from "@tanstack/react-router";
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 import { Button } from "../../components/Button";
 import { Card } from "../../components/Card";
@@ -93,7 +93,14 @@ function EditDialog({ asset, onClose }: { asset: Asset; onClose: () => void }) {
   );
 }
 
-function Valuations({ asset, editable }: { asset: Asset; editable: boolean }) {
+function Valuations({ asset, editable, focusValue }: { asset: Asset; editable: boolean; focusValue: number }) {
+  const valueInput = useRef<HTMLInputElement>(null);
+  // The hub's "Add valuation" asks for the value field (a new request each time).
+  useEffect(() => {
+    if (focusValue > 0) {
+      valueInput.current?.focus();
+    }
+  }, [focusValue]);
   const accounts = useAccounts();
   const currency = accounts.data?.find((a) => a.id === asset.account_id)?.currency ?? asset.current_value?.value.currency ?? "USD";
   const query = useQuery({ queryKey: assetKeys.valuations(asset.id), queryFn: () => listValuations(asset.id) });
@@ -153,7 +160,7 @@ function Valuations({ asset, editable }: { asset: Asset; editable: boolean }) {
               <Input type="date" value={valuedOn} onChange={(event) => { setValuedOn(event.target.value); }} />
             </Field>
             <Field label={`Value (${currency})`}>
-              <Input inputMode="decimal" value={value} onChange={(event) => { setValue(event.target.value); }} />
+              <Input ref={valueInput} inputMode="decimal" value={value} onChange={(event) => { setValue(event.target.value); }} />
             </Field>
             <Button type="submit" variant="primary" loading={add.busy}>
               Save value
@@ -182,8 +189,12 @@ function Valuations({ asset, editable }: { asset: Asset; editable: boolean }) {
   );
 }
 
-/** The asset of a manual asset account, by its id (found by the hub from `GET /assets`). */
-export function AssetValuations({ assetId }: { assetId: string }) {
+/**
+ * The asset of a manual asset account, by its id (found by the hub from
+ * `GET /assets`). `focusValue` above 0 puts the focus in the value field of
+ * "Add a value", once per new number (the hub's "Add valuation").
+ */
+export function AssetValuations({ assetId, focusValue = 0 }: { assetId: string; focusValue?: number }) {
   const navigate = useNavigate();
   const query = useQuery({ queryKey: assetKeys.one(assetId), queryFn: () => getAsset(assetId), enabled: assetId !== "" });
   const accounts = useAccounts();
@@ -236,7 +247,7 @@ export function AssetValuations({ assetId }: { assetId: string }) {
               </dl>
               {asset.description === null ? null : <p className="muted">{asset.description}</p>}
             </Card>
-            <Valuations asset={asset} editable={editable} />
+            <Valuations asset={asset} editable={editable} focusValue={focusValue} />
           </>
         )}
       </QueryState>

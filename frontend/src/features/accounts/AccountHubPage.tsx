@@ -2,8 +2,11 @@
 /**
  * The account hub (`/accounts/$accountId`): one page per account. The
  * header carries the breadcrumbs, the name, the type and how current the
- * balance is, the balance itself, "Add transaction" and a menu with Edit,
- * Close or Reopen, and Delete. Below it the tabs (`?tab=`, see `hub.ts`):
+ * balance is, the balance itself, the main action and a menu with Edit,
+ * Close or Reopen, and Delete. The main action is "Add transaction", or for a
+ * manual asset "Add valuation" (its Valuations tab, with the value field
+ * ready, or the asset details with a first value when it has none), with
+ * "Add transaction" moved to the menu. Below it the tabs (`?tab=`, see `hub.ts`):
  * Overview, Transactions and Documents for every account, plus the
  * investment panels, the loan's tabs or the asset's valuations by type.
  *
@@ -97,6 +100,8 @@ function Hub({ account }: { account: Account }) {
   const toast = useToast();
   const [opened, setOpened] = useState<Opened>(null);
   const [requested, setTab] = useTabParam(HUB_TAB_IDS, defaultTab);
+  // Bumped by "Add valuation" so the Valuations tab focuses its value field.
+  const [valueRequest, setValueRequest] = useState(0);
   const writable = canWrite && account.can_edit;
   const name = accountLabel(account);
 
@@ -120,6 +125,9 @@ function Hub({ account }: { account: Account }) {
   });
 
   const items: MenuItem[] = [];
+  if (writable && assetable) {
+    items.push({ id: "transaction", label: "Add transaction", onSelect: () => { setOpened("transaction"); } });
+  }
   if (writable) {
     items.push({ id: "edit", label: "Edit", onSelect: () => { setOpened("edit"); } });
     items.push(
@@ -186,7 +194,7 @@ function Hub({ account }: { account: Account }) {
             action={writable ? { label: "Add asset details", onClick: () => { setOpened("asset"); } } : undefined}
           />
         ) : (
-          <AssetValuations assetId={asset.id} />
+          <AssetValuations assetId={asset.id} focusValue={valueRequest} />
         );
     }
   };
@@ -200,7 +208,22 @@ function Hub({ account }: { account: Account }) {
         actions={
           writable || items.length > 0 ? (
             <>
-              {writable ? <Button onClick={() => { setOpened("transaction"); }}>Add transaction</Button> : null}
+              {writable && assetable ? (
+                <Button
+                  disabled={assets.isPending}
+                  onClick={() => {
+                    if (asset === undefined && !assets.isError) {
+                      setOpened("asset");
+                      return;
+                    }
+                    setTab("valuations");
+                    setValueRequest((count) => count + 1);
+                  }}
+                >
+                  Add valuation
+                </Button>
+              ) : null}
+              {writable && !assetable ? <Button onClick={() => { setOpened("transaction"); }}>Add transaction</Button> : null}
               {items.length > 0 ? <Menu label={`Actions for ${name}`} items={items} /> : null}
             </>
           ) : undefined
@@ -237,6 +260,7 @@ function Hub({ account }: { account: Account }) {
           onSelect={(id) => {
             const next = tabs.find((entry) => entry.id === id);
             if (next !== undefined) {
+              setValueRequest(0);
               setTab(next.id);
             }
           }}

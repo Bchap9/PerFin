@@ -95,6 +95,47 @@ describe("assets", () => {
     expect(api.callsTo("POST", "/api/v1/assets/:id/valuations")[0]?.body).toMatchObject({ value: { amount: "335000", currency: "USD" } });
   });
 
+  it("offers Add valuation, not Add transaction, as an asset account's main action", async () => {
+    mockApi({
+      ...ownerSession(),
+      ...referenceHandlers(),
+      "GET /api/v1/accounts": page([HOME]),
+      "GET /api/v1/accounts/:id": () => json(HOME),
+      "GET /api/v1/accounts/:id/balances": () => json({ account_id: ACCOUNT_CHECKING, currency: "USD", start: "2025-11-01", end: "2026-11-03", items: [], snapshots: [] }),
+      "GET /api/v1/assets": () => json({ items: [asset], next_cursor: null }),
+      "GET /api/v1/assets/:id": () => json(asset),
+      "GET /api/v1/assets/:id/valuations": () => json({ items: [valuation("v2", "2026-06-01", "330000.00")] }),
+    });
+    const { router } = renderApp(HUB);
+    const user = userEvent.setup();
+    await user.click(await screen.findByRole("button", { name: "Add valuation" }));
+    expect(screen.queryByRole("button", { name: "Add transaction" })).not.toBeInTheDocument();
+    expect(await screen.findByRole("tab", { name: "Valuations", selected: true })).toBeInTheDocument();
+    expect(currentHref(router)).toBe(`${HUB}?tab=valuations`);
+    const form = await screen.findByRole("form", { name: "Add a value" });
+    await vi.waitFor(() => { expect(within(form).getByLabelText(/^Value/)).toHaveFocus(); });
+    // A transaction can still be added, from the account's menu.
+    await user.click(screen.getByRole("button", { name: "Actions for Family home" }));
+    await user.click(within(screen.getByRole("menu", { name: "Actions for Family home" })).getByRole("menuitem", { name: "Add transaction" }));
+    expect(await screen.findByRole("dialog", { name: "Add transaction" })).toBeInTheDocument();
+  });
+
+  it("Add valuation on an asset account without details asks for them with a first value", async () => {
+    mockApi({
+      ...ownerSession(),
+      ...referenceHandlers(),
+      "GET /api/v1/accounts": page([HOME]),
+      "GET /api/v1/accounts/:id": () => json(HOME),
+      "GET /api/v1/accounts/:id/balances": () => json({ account_id: ACCOUNT_CHECKING, currency: "USD", start: "2025-11-01", end: "2026-11-03", items: [], snapshots: [] }),
+      "GET /api/v1/assets": () => json({ items: [], next_cursor: null }),
+    });
+    renderApp(HUB);
+    const user = userEvent.setup();
+    await user.click(await screen.findByRole("button", { name: "Add valuation" }));
+    const dialog = await screen.findByRole("dialog", { name: "Asset details for Family home" });
+    expect(within(dialog).getByLabelText(/^First value/)).toBeInTheDocument();
+  });
+
   it("deleting the asset details keeps the account", async () => {
     const state = { items: [asset] };
     const api = mockApi({
