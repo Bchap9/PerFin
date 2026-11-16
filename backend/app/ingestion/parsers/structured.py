@@ -178,6 +178,11 @@ class ParsedStatement:
     #: Document parsers: the printed opening balance and the reconciliation
     #: of opening + transactions = closing (``app.ingestion.reconcile``).
     opening_balance: Decimal | None = None
+    #: Tables: the day whose end ``opening_balance`` is the balance at (a
+    #: snapshot's meaning), the day before the opening row's own date, else
+    #: before the first transaction: the row is the balance before that day's
+    #: rows, so a snapshot on its own day would leave them out.
+    opening_balance_date: date | None = None
     reconciliation: Reconciliation | None = None
     #: Which parser read it (``name/version``), for review items.
     parser: str | None = None
@@ -806,7 +811,8 @@ def _read_rows(
       row: an export that prints its header again on every page;
     * a row whose description is a balance (:func:`_balance_row`) is a note
       row; the first of an opening kind gives the statement's
-      ``opening_balance`` (its balance cell, else its amount).
+      ``opening_balance`` (its balance cell, else its amount) and
+      ``opening_balance_date``.
 
     A **continuation row** is a row with one filled cell, under the payee
     or the memo header, directly below a transaction row or below another
@@ -823,6 +829,8 @@ def _read_rows(
         else None
     )
     balances: list[tuple[int, date, Decimal, Decimal | None]] = []
+    #: The opening balance row's own date, when it reads.
+    opened: date | None = None
     #: (position of the transaction, row, text) of each candidate continuation.
     continued: list[tuple[int, int, str]] = []
     #: The last transaction row, or the last continuation row below it.
@@ -848,6 +856,8 @@ def _read_rows(
             parsed.note_rows.append(index)
             if end == "opening" and parsed.opening_balance is None:
                 parsed.opening_balance = _balance_figure(row, spec, printed_negative)
+                raw_opening = _cell(row, spec.date_column)
+                opened = parse_cell_date(raw_opening, spec.date_format) if raw_opening else None
             continue
         if _blank(row, spec.date_column, spec.amount_column, spec.debit_column, spec.credit_column):
             parsed.note_rows.append(index)
@@ -884,6 +894,9 @@ def _read_rows(
         currencies = {t.currency for t in parsed.transactions if t.currency}
         if len(currencies) == 1:
             parsed.currency = next(iter(currencies))
+    if parsed.opening_balance is not None:
+        before = opened or parsed.period_start
+        parsed.opening_balance_date = before - timedelta(days=1) if before else None
     chronological = _chronological(balances)
     printed = [(posted, balance) for _, posted, _, balance in chronological if balance is not None]
     if printed:

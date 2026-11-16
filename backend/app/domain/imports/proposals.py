@@ -138,6 +138,9 @@ class _Found:
     from_model: bool = False
     #: The subtype the document prints (an account index's group, a PDF parser).
     subtype: str | None = None
+    #: The day whose end ``opening_balance`` is the balance at, when the
+    #: source says (a table's opening row); else ``period_start``.
+    opening_date: date | None = None
     #: Tables only: the header names a card export; the mapping's sign is on trust.
     card_named: bool = False
     sign_on_trust: bool = False
@@ -257,6 +260,7 @@ def _parsed(target: AssignmentTarget, index: int, parsed: Any) -> _Found:
         opening_balance=parsed.opening_balance,
         closing_balance=closing.amount if closing is not None else None,
         transactions=len(parsed.transactions),
+        opening_date=parsed.opening_balance_date,
     )
 
 
@@ -368,7 +372,9 @@ def _proposal(found: _Found, institution: str | None, base_currency: str | None)
         name = f"{institution.split()[0]} {label}" if institution else label
     if found.last4 is not None and found.last4 not in name:
         name = f"{name} {found.last4}"
-    opening_date = found.period_start if found.opening_balance is not None else None
+    opening_date = (
+        (found.opening_date or found.period_start) if found.opening_balance is not None else None
+    )
     return AccountProposal(
         name=name[:NAME_MAX],
         type=kind,

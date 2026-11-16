@@ -196,7 +196,9 @@ migration, no new setting, no new container, nothing new leaves the host
   reported as an unreadable row; a dated `Opening balance` or `Closing
   balance` row with a figure in the amount column was imported as a
   transaction. Both are now note rows, and an opening balance row gives
-  the statement's opening balance.
+  the statement's opening balance, proposed for a new account as of the
+  day before the row, so transactions on the row's own day still count
+  toward the balance.
 - **A line that leaves one or two letters names no merchant.** What was
   left of a line such as `E` or `XY #0042` became a merchant key, so every
   such line of a household was one merchant: one correction, one "Always

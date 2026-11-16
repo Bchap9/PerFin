@@ -8,12 +8,14 @@ the statement's opening balance.
 
 from __future__ import annotations
 
+from datetime import date
 from decimal import Decimal
 
 import pytest
 
+from app.domain.imports import proposals
 from app.domain.imports.schemas import MappingSpec
-from app.ingestion.parsers.structured import from_table
+from app.ingestion.parsers.structured import ParsedStatement, from_table
 from app.ingestion.sandbox.protocol import Table
 
 # ---------------------------------------------------------------------------
@@ -129,3 +131,50 @@ def test_table_balance_wording_with_more_text_stays_a_transaction() -> None:
     parsed = from_table(table, SPEC)
     assert [t.row for t in parsed.transactions] == [1]
     assert parsed.opening_balance is None
+
+
+# ---------------------------------------------------------------------------
+# The opening balance's date
+# ---------------------------------------------------------------------------
+
+
+def _proposed_opening(parsed: ParsedStatement) -> tuple[str | None, date | None]:
+    proposal = proposals._proposal(proposals._parsed("table", 0, parsed), None, "USD")
+    return proposal.opening_balance, proposal.opening_balance_date
+
+
+def test_table_opening_balance_is_proposed_as_of_the_day_before_its_row() -> None:
+    # A snapshot is the balance at the end of its day: dated on the opening
+    # row's own day it would leave out a transaction of that day.
+    table = _table(
+        [
+            ["Date", "Description", "Amount", "Balance"],
+            ["2026-03-02", "Opening Balance", "", "1000.00"],
+            ["2026-03-02", "Orchard Row Market", "-23.80", "976.20"],
+            ["2026-03-09", "Stipend", "410.00", "1386.20"],
+        ]
+    )
+    assert _proposed_opening(from_table(table, SPEC)) == ("1000.00", date(2026, 3, 1))
+
+
+def test_table_opening_balance_a_day_before_the_first_row_is_proposed_before_it() -> None:
+    table = _table(
+        [
+            ["Date", "Description", "Amount", "Balance"],
+            ["2026-03-01", "Opening Balance", "", "1000.00"],
+            ["2026-03-02", "Orchard Row Market", "-23.80", "976.20"],
+        ]
+    )
+    assert _proposed_opening(from_table(table, SPEC)) == ("1000.00", date(2026, 2, 28))
+
+
+def test_table_opening_balance_row_without_a_date_is_proposed_before_every_row() -> None:
+    table = _table(
+        [
+            ["Date", "Description", "Amount", "Balance"],
+            ["", "Opening Balance", "", "1000.00"],
+            ["2026-03-02", "Orchard Row Market", "-23.80", "976.20"],
+            ["2026-03-09", "Stipend", "410.00", "1386.20"],
+        ]
+    )
+    assert _proposed_opening(from_table(table, SPEC)) == ("1000.00", date(2026, 3, 1))
