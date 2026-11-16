@@ -11,7 +11,7 @@ from __future__ import annotations
 
 from decimal import Decimal
 
-from app.ingestion.extract import ofx
+from app.ingestion.extract import ofx, qif
 from app.ingestion.parsers import brokerage_table, positions_table, receipt, tax_forms, template
 from app.ingestion.parsers.registry import PARSERS
 
@@ -50,6 +50,7 @@ def test_the_readers_outside_the_registry_have_their_pinned_versions() -> None:
     assert (receipt.PARSER_NAME, receipt.PARSER_VERSION) == ("receipt_basic", "2")
     assert (tax_forms.PARSER_NAME, tax_forms.PARSER_VERSION) == ("tax_forms", "2")
     assert ofx.VERSION == "ofx/3"
+    assert qif.VERSION == "qif/2"
 
 
 def test_a_taught_layout_reads_an_amount_grouped_the_indian_way() -> None:

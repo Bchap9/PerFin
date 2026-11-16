@@ -179,6 +179,13 @@ migration, no new setting, no new container, nothing new leaves the host
 - **The rolling-upgrade note for rc.10 says what fails.** docs/UPGRADING.md
   lists the writes of rc.9 pods that migration `0014` refuses and the
   stop-then-migrate order for Helm.
+- **A QIF opening balance is no transaction.** Quicken's own `Opening
+  Balance` record (and `Balance brought forward` and the like, when it says
+  nothing else) was imported as a transaction. It is now the statement's
+  opening balance when it comes first; a closing balance record, or an
+  opening one further down, is left out and counted in the document's
+  warnings. QIF files read before are read this way on "Process again"
+  (extractor `qif/2`).
 
 ### Security
 

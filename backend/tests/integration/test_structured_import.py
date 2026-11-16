@@ -524,6 +524,25 @@ def test_qif_with_a_record_without_an_amount_raises_lines_skipped(env: Env) -> N
     assert item.payload == {"reason": "lines_skipped", "count": 1, "source": "extraction"}
 
 
+def test_qif_opening_balance_record_is_no_transaction(env: Env) -> None:
+    """Quicken's own ``Opening Balance`` record is the statement's opening figure."""
+    account = env.ledger.account(env.household_id)  # QIF names no account number
+    data = (
+        "!Type:Bank\n"
+        "D03/01/2026\nT500.00\nPOpening Balance\nL[Everyday]\n^\n"
+        "D03/04/2026\nT-12.40\nPHarbor Lane Bakery\n^\n"
+        "D03/19/2026\nT300.00\nPNorthfield Payroll\n^\n"
+    ).encode("ascii")
+    document_id = env.ingest(data, account=account, name="export.qif")
+
+    assert sorted(t.raw_payee or "" for t in env.transactions(account)) == [
+        "Harbor Lane Bakery",
+        "Northfield Payroll",
+    ]
+    assert env.document(document_id).status is DocumentStatus.PROCESSED
+    assert env.open_reviews(document_id) == []
+
+
 def test_rerunning_a_statement_that_lost_records_does_not_repeat_the_item(env: Env) -> None:
     account = _variant_account(env)
     document_id = env.ingest(ofx_variants.sgml_with_unreadable_amount())

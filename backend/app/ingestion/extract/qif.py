@@ -23,6 +23,16 @@
   "mdy_assumed"`` and a warning). Four-digit first components are
   year-month-day. Two-digit years: ``'`` (Quicken's 2000s marker) or a year
   below 70 is 20xx, otherwise 19xx.
+* **Balance records are not transactions** (``app.ingestion.balance_lines``):
+  a record whose payee is a balance phrase (``Opening Balance``, ``Balance
+  brought forward``...) and that says nothing else (no split, no check
+  number, no memo but a balance phrase, no category but an account in
+  brackets, as Quicken writes its own opening balance ``L[Account]``) is the
+  section's ``opening_balance`` (as of its date, which starts the period)
+  when it is of an opening kind and no transaction was read before it.
+  Any other such record (a closing balance, an opening one further down) is
+  left out and counted in one ``balance_record_skipped:<n>`` warning for the
+  file: a figure, not money that moved, and not a record the file lost.
 * Text fields are whitespace-collapsed, cut and formula-neutralised (C7).
 """
 
@@ -34,12 +44,14 @@ from datetime import date
 from decimal import Decimal
 from typing import Final, Literal
 
+from app.ingestion.balance_lines import balance_line
 from app.ingestion.extract.common import ExtractFailure, clean_text, decode_text, parse_amount
 from app.ingestion.extract.ofx import skipped_warnings
 from app.ingestion.extract.registry import register
 from app.ingestion.sandbox.protocol import (
     MAX_STATEMENTS,
     WARNINGS_MAX,
+    Balance,
     ExtractedTransaction,
     ExtractOptions,
     ExtractResult,
@@ -48,7 +60,7 @@ from app.ingestion.sandbox.protocol import (
     StatementAccount,
 )
 
-VERSION: Final = "qif/1"
+VERSION: Final = "qif/2"
 TRANSACTION_TYPES: Final = {
     "bank": "bank",
     "cash": "cash",
@@ -209,6 +221,19 @@ def _sections(text: str, options: ExtractOptions, warnings: set[str]) -> list[_S
     return sections
 
 
+def _balance_record(record: _Record) -> str | None:
+    """``opening``/``closing`` for a record that only prints a balance (module doc)."""
+    end = balance_line(record.payee)
+    if end is None or record.splits or (record.number or "").strip():
+        return None
+    if (record.memo or "").strip() and balance_line(record.memo) is None:
+        return None
+    category = (record.category or "").strip()
+    if category and not (category.startswith("[") and category.endswith("]")):
+        return None
+    return end
+
+
 def _splits(raw: list[dict[str, str]], warnings: set[str]) -> list[SplitLine]:
     lines: list[SplitLine] = []
     for item in raw[:1000]:
@@ -244,8 +269,10 @@ def extract_qif(data: bytes, options: ExtractOptions, kind: str) -> ExtractResul
     statements: list[Statement] = []
     #: Records not read, per section (a set would merge two equal counts).
     skipped: list[int] = []
+    balances_skipped = 0
     for section in sections:
         transactions: list[ExtractedTransaction] = []
+        opening: Balance | None = None
         unread = section.unread
         for record in section.records:
             parts = _date_parts(record.date_raw or "")
@@ -253,6 +280,13 @@ def extract_qif(data: bytes, options: ExtractOptions, kind: str) -> ExtractResul
             amount = parse_amount(record.amount_raw)
             if posted is None or amount is None:
                 unread += 1
+                continue
+            end = _balance_record(record)
+            if end == "opening" and opening is None and not transactions:
+                opening = Balance(amount=amount, as_of=posted)
+                continue
+            if end is not None:
+                balances_skipped += 1
                 continue
             splits = _splits(record.splits, warnings)
             if splits and sum((s.amount for s in splits), Decimal(0)) != amount:
@@ -273,6 +307,8 @@ def extract_qif(data: bytes, options: ExtractOptions, kind: str) -> ExtractResul
             warnings.add(f"transactions_truncated:{options.max_transactions}")
         skipped.append(unread)
         dates = [t.posted for t in transactions]
+        if opening is not None and opening.as_of is not None:
+            dates.append(opening.as_of)
         statements.append(
             Statement(
                 source_format="qif",
@@ -284,8 +320,11 @@ def extract_qif(data: bytes, options: ExtractOptions, kind: str) -> ExtractResul
                 transactions=transactions,
                 date_order=order,
                 truncated=section.truncated,
+                opening_balance=opening,
             )
         )
+    if balances_skipped:
+        warnings.add(f"balance_record_skipped:{balances_skipped}")
     return ExtractResult(
         kind=kind,
         ok=True,
