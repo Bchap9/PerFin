@@ -87,7 +87,7 @@ from app.domain.review.schemas import (
     ResolveUnknownAccount,
 )
 from app.domain.transactions import transfers
-from app.domain.transactions.models import Transaction
+from app.domain.transactions.models import ReviewState, Transaction
 from app.ingestion.intake.upload import receive_upload
 from app.ingestion.parsers.vocabulary import Vocabulary
 from app.ingestion.sandbox.protocol import ExtractResult
@@ -2345,3 +2345,91 @@ def test_a_one_holding_statement_with_a_period_and_totals_imports(env: Env) -> N
     assert env.holdings(account) == [(name, Decimal(shares))]
     (snapshot,) = env.snapshots(account)
     assert snapshot.balance == choice.HOLDING_VALUE + choice.HOLDING_CASH
+
+
+def _records(env: Env, account: Account) -> list[StatementRecord]:
+    return env.query(select(StatementRecord).where(StatementRecord.account_id == account.id))
+
+
+def test_brokerage_statement_without_totals_is_imported_unverified(env: Env) -> None:
+    """Nothing printed to check the rows against, and no other doubt: imported, marked.
+
+    The owner's policy ("import clean reads, flag quietly"): the statement
+    prints a period, every row is typed and read, no line was skipped. It
+    is written, the document is done, and its record says it was not
+    checked. No account value is taken from it.
+    """
+    january, _ = synth.brokerage_series(seed=81)
+    account = env.brokerage(january)
+    document_id = env.ingest(synth.placeholder_pdf(january, totals=False), "statement.pdf")
+
+    document = env.document(document_id)
+    assert document.status is DocumentStatus.PROCESSED, env.open_reviews(document_id)
+    assert env.open_reviews(document_id) == []
+    stored = ExtractResult.model_validate(document.extraction)
+    (statement,) = stored.investments
+    assert statement.reconciliation is not None
+    assert statement.reconciliation.status == "unavailable"
+    assert env.activity(account) == _expected(january)
+    assert env.holdings(account) == _positions(january)
+    cash = env.cash_rows(account)
+    assert sorted((t.posted_date, t.amount) for t in cash) == _cash(january)
+    assert all(t.review_state is not ReviewState.PENDING for t in cash)
+    (record,) = _records(env, account)
+    assert (record.document_id, record.outcome, record.verification) == (
+        document_id,
+        "imported",
+        "unverified",
+    )
+    assert env.snapshots(account) == []
+    (imported,) = _audits(env, "investment.import")
+    assert "accepted_as_read" not in imported
+
+
+def test_unchecked_statement_with_a_doubtful_line_is_still_held(env: Env) -> None:
+    """One activity row of a kind no vocabulary types: nothing of the statement is written."""
+    january, _ = synth.brokerage_series(seed=82)
+    account = env.brokerage(january)
+    data = synth.placeholder_pdf(january, totals=False, relabel={"fee": "Zorblat"})
+    document_id = env.ingest(data, "statement.pdf")
+
+    assert env.document(document_id).status is DocumentStatus.NEEDS_REVIEW
+    assert env.reasons(document_id) == {"investment_low_confidence", "lines_skipped"}
+    (held,) = [
+        r
+        for r in env.open_reviews(document_id)
+        if r.payload["reason"] == "investment_low_confidence"
+    ]
+    assert held.payload["reconciliation"] == "unavailable"
+    assert held.payload["fields"] == ["reconciliation"]
+    assert env.txns(account) == []
+    assert env.holdings(account) == []
+    assert env.cash_rows(account) == []
+    assert env.snapshots(account) == []
+    assert _records(env, account) == []
+
+
+def test_import_as_read_is_recorded_accepted(env: Env) -> None:
+    january, _ = synth.brokerage_series(seed=83)
+    account = env.brokerage(january)
+    document_id = env.ingest(synth.placeholder_pdf(january, tamper="extra_row"), "statement.pdf")
+    # What the first run wrote (the rest waits) is not a checked statement.
+    assert [r.verification for r in _records(env, account)] == ["unverified"]
+
+    _import_as_read(env, _held_item(env, document_id))
+
+    assert env.document(document_id).status is DocumentStatus.PROCESSED
+    (record,) = _records(env, account)
+    assert (record.outcome, record.verification) == ("imported", "accepted")
+    assert env.snapshots(account) == []
+
+
+def test_reconciled_brokerage_statement_is_recorded_reconciled(env: Env) -> None:
+    january, _ = synth.brokerage_series(seed=84)
+    account = env.brokerage(january)
+    document_id = env.ingest(synth.placeholder_pdf(january), "statement.pdf")
+
+    assert env.document(document_id).status is DocumentStatus.PROCESSED
+    (record,) = _records(env, account)
+    assert record.verification == "reconciled"
+    assert len(env.snapshots(account)) == 1

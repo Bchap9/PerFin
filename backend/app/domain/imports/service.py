@@ -2379,6 +2379,8 @@ def import_extraction(
             answers=run.answers,
             user_id=user_id,
             several=_several_kinds(result),
+            unread=bool(run.parse_skipped)
+            or bool(CONTRADICTION_WARNINGS.intersection(run.parse_warnings)),
         )
         run.overlaps += done.overlaps
         for investment_account in done.accounts:
