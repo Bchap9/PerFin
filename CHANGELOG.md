@@ -97,7 +97,7 @@ docs/UPGRADING.md "1.0.0-rc.10").
   has an **Undo** that returns exactly the transactions that rule
   categorised to undecided. The rules page offers Undo as well (to
   members on a merchant rule, to owners and admins on any rule) and the
-  rule editor reads a "Merchant is" condition. A transfer, a card
+  rule editor reads and edits a "Merchant is" condition. A transfer, a card
   payment, a payment to a person and a split transaction cannot teach,
   and the dialog says so.
 - **A Subscriptions page** (after Calendar in the navigation): what your
@@ -228,7 +228,9 @@ docs/UPGRADING.md "1.0.0-rc.10").
   series instead of 100%, which is under the 90% target and is held at
   that figure by its own test. Categories from before this release are not
   known to be a person's choice, so a re-applied rule can still change
-  them. When a later merchant list or clean-up renames a merchant, what
+  them. A wire transfer is only suggested as a transfer between your
+  accounts, never stated, because a wire may pay somebody else. When a
+  later merchant list or clean-up renames a merchant, what
   was learned, the rules that name it and its recurring series follow the
   new name; when that one merchant becomes two, a rule or a series that
   named it stays with the old name and has to be made again. A format 2 archive written before migration `0009` (before

@@ -790,17 +790,17 @@ def key_now(old: str, renamed: Mapping[str, Collection[str | None]]) -> str | No
 
     For whatever names a merchant by its key outside the ledger (a merchant
     rule's condition, a recurring series). ``renamed`` is
-    :attr:`Summary.renamed`. Answers the new key when every row that carried
-    ``old`` carries that one key now, or, when no row carries ``old`` at all,
-    when the dictionary reads ``old`` as a merchant under another key.
-    ``None`` when the key did not move, when its rows went to several keys
-    (nobody can say which was meant) or when they name nobody any more.
+    :attr:`Summary.renamed`. Answers the new key only when rows carried
+    ``old`` and every one of them carries that one key now. ``None`` when the
+    key did not move, when its rows went to several keys (nobody can say
+    which was meant), when they name nobody any more, and when no row
+    carried ``old`` at all: unlike a learned entry (:func:`_move_memory`), a
+    rule is never pointed at another merchant on the dictionary's reading of
+    its key alone, since a prefix match would make it decide more rows than
+    it was made for.
     """
     now = renamed.get(old)
-    if now is None:
-        hit = dictionary.lookup(old)
-        return hit.merchant.key if hit is not None and hit.merchant.key != old else None
-    if len(now) != 1:
+    if now is None or len(now) != 1:
         return None
     [only] = now
     return only if only != old else None

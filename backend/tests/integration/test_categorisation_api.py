@@ -715,6 +715,16 @@ def test_a_rule_does_not_follow_a_split_key_or_onto_a_merchant_that_has_its_rule
         actions=_always(home.other),
     )
     series = _series(db, home, "evening shows", "dismissed")
+    # A key no row carries, which the new dictionary would read as the renamed
+    # merchant by its first words: the rule was not made for that merchant.
+    unseen = make_rule(
+        db,
+        hh,
+        sort_order=3,
+        conditions={"type": "merchant", "key": f"{PICTURES.key} annex"},
+        actions=_always(home.other),
+    )
+    unseen_series = _series(db, home, f"{PICTURES.key} annex", "dismissed")
 
     _ship_a_release_that_renames_the_cinema(known, monkeypatch)
     service.refresh(db, hh)
@@ -725,6 +735,14 @@ def test_a_rule_does_not_follow_a_split_key_or_onto_a_merchant_that_has_its_rule
     assert db.get(Rule, always.id).conditions == {"type": "merchant", "key": old}  # type: ignore[union-attr]
     assert db.get(Rule, split.id).conditions == {"type": "merchant", "key": "evening shows"}  # type: ignore[union-attr]
     assert db.get(ScheduledTransaction, series.id).merchant_key == "evening shows"  # type: ignore[union-attr]
+    assert db.get(Rule, unseen.id).conditions == {  # type: ignore[union-attr]
+        "type": "merchant",
+        "key": f"{PICTURES.key} annex",
+    }
+    assert (
+        db.get(ScheduledTransaction, unseen_series.id).merchant_key  # type: ignore[union-attr]
+        == f"{PICTURES.key} annex"
+    )
     [entry] = _audits(db, hh, "categorise.refresh")
     assert entry.after is not None
     assert (entry.after["rules_moved"], entry.after["series_moved"]) == (0, 0)
