@@ -28,10 +28,6 @@ def _qif(*records: bytes) -> bytes:
     return b"!Account\nNEveryday\nTBank\n^\n!Type:Bank\n" + b"".join(records)
 
 
-def _payees(data: bytes) -> list[str | None]:
-    return [t.payee for t in extract_qif(data, OPTIONS, "qif").statements[0].transactions]
-
-
 # ---------------------------------------------------------------------------
 # QIF records made of column names
 # ---------------------------------------------------------------------------
