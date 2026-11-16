@@ -40,7 +40,12 @@ run as the owner, exactly like ``perfin migrate`` in production, and then:
 * 0013 adds ``statement_record.verification`` (backfilled from the snapshots
   and the answered review items of earlier imports) and creates
   ``import_tombstone`` under forced RLS with a household-consistent key to
-  the account; its downgrade removes exactly that column and that table.
+  the account; its downgrade removes exactly that column and that table;
+* 0014 adds category provenance to ``transaction`` and kind, status and price
+  facts to ``scheduled_transaction`` (both backfilled without moving
+  ``updated_at``), and creates ``merchant_memory`` and ``subscription_event``
+  under forced RLS with household-consistent keys; its downgrade removes
+  exactly those columns and tables.
 """
 
 from __future__ import annotations
@@ -184,6 +189,8 @@ PHASE7_ENUM_TYPES = frozenset({"notification_channel_type"})
 STATEMENT_RECORD_TABLES = frozenset({"statement_record"})
 #: Import tombstones (revision 0013), household-scoped.
 IMPORT_TRUST_TABLES = frozenset({"import_tombstone"})
+#: Merchant memory and subscription changes (revision 0014), household-scoped.
+CATEGORISATION_TABLES = frozenset({"merchant_memory", "subscription_event"})
 #: Enum types created by revision 0002 (identity).
 PHASE1_ENUM_TYPES = frozenset(
     {
@@ -347,6 +354,7 @@ def test_single_head_and_linear_history() -> None:
     assert script.get_base() == "0001"
     # One revision per phase, each on top of the previous one.
     assert [rev.revision for rev in script.walk_revisions("base", "heads")] == [
+        "0014",
         "0013",
         "0012",
         "0011",
@@ -372,6 +380,8 @@ def test_single_head_and_linear_history() -> None:
     assert script.get_revision("0010").down_revision == "0009"
     assert script.get_revision("0011").down_revision == "0010"
     assert script.get_revision("0012").down_revision == "0011"
+    assert script.get_revision("0013").down_revision == "0012"
+    assert script.get_revision("0014").down_revision == "0013"
 
 
 def test_upgrade_head_matches_models_without_drift(migrated: Scratch) -> None:
@@ -394,6 +404,7 @@ def test_upgrade_head_matches_models_without_drift(migrated: Scratch) -> None:
         | PHASE7_TABLES
         | STATEMENT_RECORD_TABLES
         | IMPORT_TRUST_TABLES
+        | CATEGORISATION_TABLES
     )
 
 
@@ -484,6 +495,7 @@ def test_every_household_scoped_table_has_forced_rls(migrated: Scratch) -> None:
         | PHASE7_TABLES
         | STATEMENT_RECORD_TABLES
         | IMPORT_TRUST_TABLES
+        | CATEGORISATION_TABLES
     )
     for table in scoped:
         assert rows[table] == (True, True), table
@@ -679,6 +691,7 @@ def test_app_role_privileges_are_least(migrated: Scratch) -> None:
         | PHASE7_TABLES
         | STATEMENT_RECORD_TABLES
         | IMPORT_TRUST_TABLES
+        | CATEGORISATION_TABLES
     )
     for table in sorted(all_tables - {"audit_log"}):
         assert {p for t, p in privileges if t == table} == {
@@ -1594,7 +1607,9 @@ def test_downgrade_0008_removes_only_the_mapping_sign_column(migrated: Scratch) 
             )
         command.upgrade(cfg, "head")
         command.check(cfg)
-        assert _public_tables(engine) == tables | STATEMENT_RECORD_TABLES | IMPORT_TRUST_TABLES
+        assert _public_tables(engine) == (
+            tables | STATEMENT_RECORD_TABLES | IMPORT_TRUST_TABLES | CATEGORISATION_TABLES
+        )
         with engine.begin() as conn:
             set_context(conn, household)
             flag = conn.execute(
@@ -1730,7 +1745,9 @@ def test_0010_statement_record_is_household_isolated_and_downgrades(migrated: Sc
         tables = _public_tables(engine)
         assert tables >= STATEMENT_RECORD_TABLES
         command.downgrade(cfg, "0009")
-        assert _public_tables(engine) == tables - STATEMENT_RECORD_TABLES - IMPORT_TRUST_TABLES
+        assert _public_tables(engine) == (
+            tables - STATEMENT_RECORD_TABLES - IMPORT_TRUST_TABLES - CATEGORISATION_TABLES
+        )
         command.upgrade(cfg, "head")
         command.check(cfg)
         assert _public_tables(engine) == tables
@@ -1758,7 +1775,7 @@ def test_0011_fingerprint_template_column_downgrades(migrated: Scratch) -> None:
         tables = _public_tables(engine)
         command.downgrade(cfg, "0010")
         assert "template" not in _fingerprint_columns(engine)
-        assert _public_tables(engine) == tables - IMPORT_TRUST_TABLES
+        assert _public_tables(engine) == tables - IMPORT_TRUST_TABLES - CATEGORISATION_TABLES
         command.upgrade(cfg, "head")
         command.check(cfg)
         assert "template" in _fingerprint_columns(engine)
@@ -2030,11 +2047,371 @@ def test_0013_verification_is_backfilled_and_tombstones_are_isolated(
         tables = _public_tables(engine)
         assert tables >= IMPORT_TRUST_TABLES
         command.downgrade(cfg, "0012")
-        assert _public_tables(engine) == tables - IMPORT_TRUST_TABLES
+        assert _public_tables(engine) == tables - IMPORT_TRUST_TABLES - CATEGORISATION_TABLES
         assert "verification" not in _statement_columns(engine)
         command.upgrade(cfg, "head")
         command.check(cfg)
         assert _public_tables(engine) == tables
         assert "verification" in _statement_columns(engine)
+    finally:
+        engine.dispose()
+
+
+def _columns(engine: Engine, table: str) -> set[str]:
+    with engine.connect() as conn:
+        rows = conn.execute(
+            text(
+                "SELECT column_name FROM information_schema.columns "
+                "WHERE table_schema = 'public' AND table_name = :t"
+            ),
+            {"t": table},
+        ).scalars()
+        return {str(r) for r in rows}
+
+
+#: Columns revision 0014 adds to ``transaction``.
+PROVENANCE_COLUMNS = frozenset(
+    {
+        "merchant_key",
+        "category_source",
+        "category_confidence",
+        "category_rule_id",
+        "suggested_category_id",
+        "scheduled_transaction_id",
+    }
+)
+#: Columns revision 0014 adds to ``scheduled_transaction``.
+SERIES_COLUMNS = frozenset(
+    {
+        "kind",
+        "kind_source",
+        "status",
+        "status_source",
+        "merchant_key",
+        "first_seen_on",
+        "occurrences",
+        "confidence",
+        "last_amount",
+        "previous_amount",
+        "price_changed_on",
+        "ended_on",
+    }
+)
+
+
+def _insert_category(conn: Connection, household: uuid.UUID) -> uuid.UUID:
+    category = uuid.uuid4()
+    conn.execute(
+        text("INSERT INTO category (id, household_id, name, kind) VALUES (:id, :h, :n, 'expense')"),
+        {"id": category, "h": household, "n": f"Synthetic {category.hex[:8]}"},
+    )
+    return category
+
+
+def _insert_ledger_row(
+    conn: Connection, household: uuid.UUID, account: uuid.UUID, category: uuid.UUID | None
+) -> uuid.UUID:
+    row = uuid.uuid4()
+    conn.execute(
+        text(
+            "INSERT INTO transaction (id, household_id, account_id, posted_date, amount, "
+            "currency, category_id, created_at, updated_at) VALUES (:id, :h, :a, "
+            "DATE '2026-02-03', -18.25, 'USD', :c, TIMESTAMPTZ '2026-02-04 09:00:00+00', "
+            "TIMESTAMPTZ '2026-02-04 09:00:00+00')"
+        ),
+        {"id": row, "h": household, "a": account, "c": category},
+    )
+    return row
+
+
+def _insert_schedule(
+    conn: Connection,
+    household: uuid.UUID,
+    account: uuid.UUID,
+    *,
+    origin: str,
+    active: bool,
+    amount: str,
+) -> uuid.UUID:
+    schedule = uuid.uuid4()
+    conn.execute(
+        text(
+            "INSERT INTO scheduled_transaction (id, household_id, account_id, name, cadence, "
+            "next_due, amount_min, amount_max, currency, origin, active) VALUES (:id, :h, :a, "
+            "'Synthetic series', 'monthly', DATE '2026-03-01', CAST(:m AS numeric), "
+            "CAST(:m AS numeric), 'USD', CAST(:o AS schedule_origin), :active)"
+        ),
+        {"id": schedule, "h": household, "a": account, "m": amount, "o": origin, "active": active},
+    )
+    return schedule
+
+
+def _insert_memory(conn: Connection, household: uuid.UUID, category: uuid.UUID) -> uuid.UUID:
+    memory = uuid.uuid4()
+    conn.execute(
+        text(
+            "INSERT INTO merchant_memory (id, household_id, merchant_key, direction, "
+            "category_id, decisions, last_decided_at) VALUES (:id, :h, 'corner grocer', "
+            "'out', :c, 1, now())"
+        ),
+        {"id": memory, "h": household, "c": category},
+    )
+    return memory
+
+
+def _insert_series_event(
+    conn: Connection,
+    household: uuid.UUID,
+    schedule: uuid.UUID,
+    account: uuid.UUID,
+    kind: str = "new",
+) -> uuid.UUID:
+    event = uuid.uuid4()
+    conn.execute(
+        text(
+            "INSERT INTO subscription_event (id, household_id, schedule_id, account_id, kind, "
+            "occurred_on) VALUES (:id, :h, :s, :a, :k, DATE '2026-03-01')"
+        ),
+        {"id": event, "h": household, "s": schedule, "a": account, "k": kind},
+    )
+    return event
+
+
+def test_0014_backfills_sources_and_statuses_and_isolates_the_new_tables(
+    scratch_factory: Callable[[], Scratch],
+) -> None:
+    """0014 marks what was categorised before it as ``legacy`` and gives every
+    schedule a status with its decider, without moving ``updated_at`` (the
+    importer reads ``updated_at == created_at`` as "untouched"); the two new
+    tables are under forced RLS with household-consistent keys; the new checks
+    hold; its downgrade removes exactly its own columns and tables."""
+    scratch = scratch_factory()
+    cfg = scratch.config()
+    command.upgrade(cfg, "0013")
+    app = scratch.app_engine()
+    a, b = uuid.uuid4(), uuid.uuid4()
+    try:
+        for household in (a, b):
+            with app.begin() as conn:
+                set_context(conn, household)
+                conn.execute(
+                    text("INSERT INTO household (id, name) VALUES (:id, 'Synthetic')"),
+                    {"id": household},
+                )
+        with app.begin() as conn:
+            set_context(conn, a)
+            account_a = _insert_account(conn, a)
+            category_a = _insert_category(conn, a)
+            categorised = _insert_ledger_row(conn, a, account_a, category_a)
+            uncategorised = _insert_ledger_row(conn, a, account_a, None)
+            split = _insert_ledger_row(conn, a, account_a, None)
+            conn.execute(
+                text(
+                    "INSERT INTO transaction_split (id, household_id, transaction_id, amount) "
+                    "VALUES (:id, :h, :t, -18.25)"
+                ),
+                {"id": uuid.uuid4(), "h": a, "t": split},
+            )
+            detected = _insert_schedule(
+                conn, a, account_a, origin="detected", active=True, amount="-9.99"
+            )
+            switched_off = _insert_schedule(
+                conn, a, account_a, origin="detected", active=False, amount="-4.50"
+            )
+            by_hand = _insert_schedule(
+                conn, a, account_a, origin="manual", active=True, amount="2100.00"
+            )
+            stamps = {
+                row.id: (row.created_at, row.updated_at)
+                for row in conn.execute(text("SELECT id, created_at, updated_at FROM transaction"))
+            }
+            schedule_stamps = {
+                row.id: row.updated_at
+                for row in conn.execute(text("SELECT id, updated_at FROM scheduled_transaction"))
+            }
+        command.upgrade(cfg, "head")
+        command.check(cfg)
+        with app.begin() as conn:
+            set_context(conn, a)
+            sources = {
+                row.id: row.category_source
+                for row in conn.execute(text("SELECT id, category_source FROM transaction"))
+            }
+            assert sources == {categorised: "legacy", uncategorised: None, split: "legacy"}
+            # The backfill is not a person: the rows still read as untouched.
+            assert stamps == {
+                row.id: (row.created_at, row.updated_at)
+                for row in conn.execute(text("SELECT id, created_at, updated_at FROM transaction"))
+            }
+            assert all(created == updated for created, updated in stamps.values())
+            series = {
+                row.id: (row.status, row.status_source, row.kind, row.kind_source, row.occurrences)
+                for row in conn.execute(
+                    text(
+                        "SELECT id, status, status_source, kind, kind_source, occurrences "
+                        "FROM scheduled_transaction"
+                    )
+                )
+            }
+            assert series == {
+                detected: ("active", "detector", "other", "detector", 0),
+                switched_off: ("paused", "person", "other", "detector", 0),
+                by_hand: ("confirmed", "person", "income", "detector", 0),
+            }
+            assert schedule_stamps == {
+                row.id: row.updated_at
+                for row in conn.execute(text("SELECT id, updated_at FROM scheduled_transaction"))
+            }
+            memory_a = _insert_memory(conn, a, category_a)
+            event_a = _insert_series_event(conn, a, detected, account_a)
+        with app.begin() as conn:
+            set_context(conn, b)
+            for table in sorted(CATEGORISATION_TABLES):
+                count = conn.execute(text(f"SELECT count(*) FROM {table}")).scalar_one()  # noqa: S608
+                assert count == 0, table
+            for table, row_id in (("merchant_memory", memory_a), ("subscription_event", event_a)):
+                removed = conn.execute(
+                    text(f"DELETE FROM {table} WHERE id = :id"),  # noqa: S608
+                    {"id": row_id},
+                )
+                assert removed.rowcount == 0, table
+            account_b = _insert_account(conn, b)
+            category_b = _insert_category(conn, b)
+            schedule_b = _insert_schedule(
+                conn, b, account_b, origin="detected", active=True, amount="-7.00"
+            )
+            rule_b = uuid.uuid4()
+            conn.execute(
+                text(
+                    "INSERT INTO rule (id, household_id, name, sort_order, conditions, actions) "
+                    "VALUES (:id, :h, 'Synthetic rule', 0, '{}'::jsonb, '[]'::jsonb)"
+                ),
+                {"id": rule_b, "h": b},
+            )
+        # Household A cannot name household B's category, schedule or rule.
+        foreign: tuple[Callable[[Connection], object], ...] = (
+            lambda conn: _insert_memory(conn, a, category_b),
+            lambda conn: _insert_series_event(conn, a, schedule_b, account_a),
+            lambda conn: _insert_series_event(conn, a, detected, account_b, "missed"),
+            lambda conn: conn.execute(
+                text("UPDATE transaction SET suggested_category_id = :c WHERE id = :id"),
+                {"c": category_b, "id": uncategorised},
+            ),
+            lambda conn: conn.execute(
+                text("UPDATE transaction SET scheduled_transaction_id = :s WHERE id = :id"),
+                {"s": schedule_b, "id": uncategorised},
+            ),
+            lambda conn: conn.execute(
+                text("UPDATE transaction SET category_rule_id = :r WHERE id = :id"),
+                {"r": rule_b, "id": uncategorised},
+            ),
+        )
+        for write in foreign:
+            with app.connect() as conn, conn.begin():
+                set_context(conn, a)
+                # The optional references are deferred; check them now.
+                conn.execute(text("SET CONSTRAINTS ALL IMMEDIATE"))
+                with pytest.raises(DBAPIError, match="foreign key"):
+                    write(conn)
+        # Nor can a row of household B be written from household A's context.
+        with app.connect() as conn, conn.begin():
+            set_context(conn, a)
+            with pytest.raises(DBAPIError, match="row-level security"):
+                _insert_memory(conn, b, category_b)
+        with app.connect() as conn, conn.begin():
+            set_context(conn, a)
+            with pytest.raises(DBAPIError, match="row-level security"):
+                _insert_series_event(conn, b, schedule_b, account_b)
+        refused = (
+            ("UPDATE transaction SET category_source = 'maybe' WHERE id = :id", uncategorised),
+            ("UPDATE transaction SET category_confidence = 1.5 WHERE id = :id", uncategorised),
+            # A suggestion exists only while there is no category.
+            (
+                "UPDATE transaction SET suggested_category_id = category_id WHERE id = :id",
+                categorised,
+            ),
+            ("UPDATE scheduled_transaction SET status = 'on' WHERE id = :id", detected),
+            ("UPDATE scheduled_transaction SET kind = 'habit' WHERE id = :id", detected),
+            ("UPDATE scheduled_transaction SET status_source = 'robot' WHERE id = :id", detected),
+            ("UPDATE scheduled_transaction SET occurrences = -1 WHERE id = :id", detected),
+            # ``active`` is always ``status IN ('active', 'confirmed')``.
+            ("UPDATE scheduled_transaction SET status = 'paused' WHERE id = :id", detected),
+            ("UPDATE scheduled_transaction SET active = true WHERE id = :id", switched_off),
+            ("UPDATE merchant_memory SET merchant_key = 'Corner  Grocer' WHERE id = :id", memory_a),
+            ("UPDATE merchant_memory SET direction = 'up' WHERE id = :id", memory_a),
+            ("UPDATE merchant_memory SET decisions = 0 WHERE id = :id", memory_a),
+            ("UPDATE subscription_event SET kind = 'renamed' WHERE id = :id", event_a),
+            ("UPDATE subscription_event SET state = 'closed' WHERE id = :id", event_a),
+        )
+        for statement, row_id in refused:
+            with app.connect() as conn, conn.begin():
+                set_context(conn, a)
+                with pytest.raises(DBAPIError, match="check constraint"):
+                    conn.execute(text(statement), {"id": row_id})
+        with app.begin() as conn:
+            set_context(conn, a)
+            # The allowed moves: a suggestion on an uncategorised row, a series
+            # switched off together with its flag, and one event per change.
+            conn.execute(
+                text("UPDATE transaction SET suggested_category_id = :c WHERE id = :id"),
+                {"c": category_a, "id": uncategorised},
+            )
+            conn.execute(
+                text(
+                    "UPDATE scheduled_transaction SET status = 'ended', active = false "
+                    "WHERE id = :id"
+                ),
+                {"id": detected},
+            )
+        with app.connect() as conn, conn.begin():
+            set_context(conn, a)
+            with pytest.raises(DBAPIError, match="uq_subscription_event_once"):
+                _insert_series_event(conn, a, detected, account_a)
+        with app.connect() as conn, conn.begin():
+            set_context(conn, a)
+            with pytest.raises(DBAPIError, match="uq_merchant_memory_choice"):
+                _insert_memory(conn, a, category_a)
+        with app.begin() as conn:
+            set_context(conn, a)
+            # The memory goes with its category, the event with its series.
+            conn.execute(text("DELETE FROM category WHERE id = :id"), {"id": category_a})
+            conn.execute(text("DELETE FROM scheduled_transaction WHERE id = :id"), {"id": detected})
+            for table in sorted(CATEGORISATION_TABLES):
+                count = conn.execute(text(f"SELECT count(*) FROM {table}")).scalar_one()  # noqa: S608
+                assert count == 0, table
+            # Deleting the category cleared the reference; the source is the service's job.
+            assert (
+                conn.execute(
+                    text("SELECT suggested_category_id FROM transaction WHERE id = :id"),
+                    {"id": uncategorised},
+                ).scalar_one()
+                is None
+            )
+    finally:
+        app.dispose()
+    engine = scratch.owner_engine()
+    try:
+        tables = _public_tables(engine)
+        assert tables >= CATEGORISATION_TABLES
+        assert _columns(engine, "transaction") >= PROVENANCE_COLUMNS
+        assert _columns(engine, "scheduled_transaction") >= SERIES_COLUMNS
+        command.downgrade(cfg, "0013")
+        assert _public_tables(engine) == tables - CATEGORISATION_TABLES
+        assert not _columns(engine, "transaction") & PROVENANCE_COLUMNS
+        assert not _columns(engine, "scheduled_transaction") & SERIES_COLUMNS
+        with engine.connect() as conn:
+            left = set(
+                conn.execute(
+                    text(
+                        "SELECT conname FROM pg_constraint WHERE conrelid IN "
+                        "('rule'::regclass, 'scheduled_transaction'::regclass) AND contype = 'u'"
+                    )
+                ).scalars()
+            )
+        assert left == set()
+        command.upgrade(cfg, "head")
+        command.check(cfg)
+        assert _public_tables(engine) == tables
+        assert _columns(engine, "transaction") >= PROVENANCE_COLUMNS
     finally:
         engine.dispose()

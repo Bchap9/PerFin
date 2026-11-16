@@ -63,6 +63,9 @@ R_EXPORT: Final = "export archives and their passphrases"
 R_AI_AUDIT: Final = "the AI call audit itself (responses as sent)"
 R_RAW_ALIASES: Final = "raw statement strings matched to the payee; the canonical name is exposed"
 R_BREAKDOWN: Final = "per-account detail with account names; AI views recompute totals"
+R_MERCHANT_KEY: Final = (
+    "derived from raw statement text; the payee and the category are what an assistant reads"
+)
 
 _COMMON: Final = ("id", "created_at", "updated_at", "household_id")
 
@@ -123,9 +126,15 @@ _table(
 _table(
     "transaction",
     exposed="account_id posted_date effective_date amount currency payee_id category_id "
-    "status transfer_group_id review_state confidence",
+    "status transfer_group_id review_state confidence category_source category_confidence "
+    "suggested_category_id scheduled_transaction_id",
     free_text="raw_payee memo notes",
-    denied={"source_document_id": R_DOCUMENT, "import_hash": R_INGEST},
+    denied={
+        "source_document_id": R_DOCUMENT,
+        "import_hash": R_INGEST,
+        "merchant_key": R_MERCHANT_KEY,
+        "category_rule_id": R_SETTINGS,
+    },
 )
 _table("transaction_split", exposed="transaction_id category_id amount tax_flag", free_text="memo")
 _table("transaction_tag", exposed="transaction_id tag_id")
@@ -140,8 +149,16 @@ _table("tag", free_text="name")
 _table(
     "scheduled_transaction",
     exposed="account_id cadence interval_count next_due amount_min amount_max currency "
-    "payee_id category_id origin active last_seen_on",
+    "payee_id category_id origin active last_seen_on kind kind_source status status_source "
+    "first_seen_on occurrences confidence last_amount previous_amount price_changed_on ended_on",
     free_text="name",
+    denied={"merchant_key": R_MERCHANT_KEY},
+)
+_deny_table(
+    "merchant_memory",
+    R_MERCHANT_KEY,
+    "merchant_key direction category_id decisions last_decided_at id created_at updated_at "
+    "household_id",
 )
 _table("fx_rate", exposed="base quote rate_date rate source")
 _table("budget", exposed="period start_date end_date currency rollover", free_text="name")
@@ -423,6 +440,12 @@ _deny_table(
     R_SETTINGS,
     "name sort_order enabled stop_processing conditions actions hit_count last_hit_at id "
     "created_at updated_at household_id",
+)
+_deny_table(
+    "subscription_event",
+    R_SETTINGS,
+    "schedule_id account_id kind occurred_on amount_before amount_after transaction_id state "
+    "id created_at updated_at household_id",
 )
 _deny_table(
     "portability_archive",

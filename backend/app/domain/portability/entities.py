@@ -50,6 +50,37 @@ from app.domain.transactions.models import (
     TransactionTag,
 )
 
+#: Columns added by revision 0014 that the archive does not carry yet: how a
+#: category was decided and what a recurring series is. Left out so that
+#: format 2 archives keep their exact columns; an imported row gets the
+#: column defaults. (The archive format that carries them is a later change.)
+_TRANSACTION_PROVENANCE: Final = frozenset(
+    {
+        "merchant_key",
+        "category_source",
+        "category_confidence",
+        "category_rule_id",
+        "suggested_category_id",
+        "scheduled_transaction_id",
+    }
+)
+_SERIES_FACTS: Final = frozenset(
+    {
+        "kind",
+        "kind_source",
+        "status",
+        "status_source",
+        "merchant_key",
+        "first_seen_on",
+        "occurrences",
+        "confidence",
+        "last_amount",
+        "previous_amount",
+        "price_changed_on",
+        "ended_on",
+    }
+)
+
 #: ``data/<name>.json``.
 DATA_PREFIX: Final = "data/"
 CSV_PREFIX: Final = "csv/"
@@ -108,6 +139,7 @@ ENTITIES: Final[tuple[EntitySpec, ...]] = (
             "category_id": "categories",
             "source_document_id": "documents",
         },
+        exclude=_TRANSACTION_PROVENANCE,
     ),
     EntitySpec(
         "transaction_splits",
@@ -128,6 +160,7 @@ ENTITIES: Final[tuple[EntitySpec, ...]] = (
         "scheduled_transactions",
         ScheduledTransaction,
         refs={"account_id": "accounts", "payee_id": "payees", "category_id": "categories"},
+        exclude=_SERIES_FACTS,
     ),
     EntitySpec("rules", Rule),
     EntitySpec("budgets", Budget),
@@ -276,6 +309,15 @@ NOT_EXPORTED: Final[Mapping[str, str]] = MappingProxyType(
         "import_tombstone": (
             "the hash of a deleted imported row contains the account id and cannot be "
             "recomputed for new account ids"
+        ),
+        # Categorisation (revision 0014); not in the archive format yet.
+        "merchant_memory": (
+            "the household's learned categories are not part of archive format 2; they "
+            "build up again from corrections made on the new instance"
+        ),
+        "subscription_event": (
+            "changes found by recurring detection on this instance; detection finds them "
+            "again from the imported ledger"
         ),
         # Jobs and workflow history of this instance's pipelines.
         "portability_archive": "the export and import jobs themselves",

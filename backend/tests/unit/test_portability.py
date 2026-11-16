@@ -286,6 +286,10 @@ def test_not_exported_only_holds_justified_tables() -> None:
         "mail_intake_message",
         "ai_call",
         "notification_channel",
+        # Categorisation (revision 0014): the learned categories are not in
+        # archive format 2 yet; detection finds a series' changes again.
+        "merchant_memory",
+        "subscription_event",
     }
     assert set(NOT_EXPORTED) <= allowed
     assert all(len(reason) >= 15 for reason in NOT_EXPORTED.values())

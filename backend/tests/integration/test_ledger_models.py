@@ -18,12 +18,12 @@ from datetime import date
 from decimal import Decimal
 
 import pytest
-from sqlalchemy import func, select, text, update
+from sqlalchemy import func, insert, select, text, update
 from sqlalchemy.exc import DBAPIError, IntegrityError
 from sqlalchemy.orm import Session
 
 from app.auth.models import AccountGrant, GrantLevel
-from app.db.base import household_scoped_tables
+from app.db.base import Base, household_scoped_tables
 from app.db.models import Household
 from app.db.rls import set_context
 from app.domain.accounts.models import Account, AccountType, BalanceSnapshot, BalanceSource
@@ -38,9 +38,12 @@ from app.domain.imports.tombstones import (
     tombstoned_hashes,
 )
 from app.domain.transactions.models import (
+    Cadence,
     Category,
     CategoryKind,
     Payee,
+    ScheduledTransaction,
+    ScheduleOrigin,
     Transaction,
     TransactionSplit,
     TransactionTag,
@@ -610,3 +613,161 @@ def test_tombstoned_hashes_only_names_the_account_asked_for(db: Session) -> None
     assert remove_tombstone(db, other.id, tombstone.id) is None
     set_context(db, household_id)
     assert tombstoned_hashes(db, household_id, first.id, asked) == {gone.import_hash}
+
+
+# ---------------------------------------------------------------------------
+# The pinned write (a system write never looks like a person)
+# ---------------------------------------------------------------------------
+
+
+def _untouched(db: Session, household_id: uuid.UUID, *rows: Transaction) -> None:
+    """Leave ``rows`` as an import does: ``updated_at == created_at``."""
+    set_context(db, household_id)
+    db.execute(
+        update(Transaction)
+        .where(Transaction.id.in_([row.id for row in rows]))
+        .values(updated_at=Transaction.created_at)
+    )
+    for row in rows:
+        db.refresh(row)
+        assert row.updated_at == row.created_at
+
+
+def test_pinned_update_keeps_updated_at(db: Session) -> None:
+    from app.domain.categorisation.pinned import pinned_update
+
+    a = make_household(db)
+    account = make_account(db, a.id)
+    category = make_category(db, a.id)
+    first = make_transaction(db, account, raw_payee="CORNER GROCER 0417 SPRINGFIELD")
+    second = make_transaction(db, account, raw_payee="CORNER GROCER 0932 SPRINGFIELD")
+    third = make_transaction(db, account, raw_payee="LAMPLIGHT CINEMA 12")
+    _untouched(db, a.id, first, second, third)
+
+    changed = pinned_update(
+        db,
+        a.id,
+        {
+            first.id: {"merchant_key": "corner grocer", "suggested_category_id": category.id},
+            second.id: {"merchant_key": "corner grocer", "suggested_category_id": category.id},
+            # Another set of columns: a second statement of the same call.
+            third.id: {
+                "merchant_key": "lamplight cinema",
+                "category_id": category.id,
+                "category_source": "dictionary",
+                "category_confidence": Decimal("0.9000"),
+            },
+            uuid.uuid4(): {"merchant_key": "nobody"},
+        },
+    )
+
+    assert changed == 3
+    # The instances the caller holds show the new values without a refresh call.
+    assert (first.merchant_key, first.suggested_category_id) == ("corner grocer", category.id)
+    assert (second.merchant_key, second.suggested_category_id) == ("corner grocer", category.id)
+    assert (third.category_id, third.category_source, third.category_confidence) == (
+        category.id,
+        "dictionary",
+        Decimal("0.9000"),
+    )
+    stamps = db.execute(
+        select(Transaction.id, Transaction.created_at, Transaction.updated_at).where(
+            Transaction.id.in_([first.id, second.id, third.id])
+        )
+    ).all()
+    assert len(stamps) == 3
+    assert all(created == updated for _, created, updated in stamps)
+    # The same change through the ORM is what a person's edit looks like.
+    third.merchant_key = "lamplight"
+    db.flush()
+    db.refresh(third)
+    assert third.updated_at > third.created_at
+    # Nothing to write is not an error.
+    assert pinned_update(db, a.id, {}) == 0
+    assert pinned_update(db, a.id, {first.id: {}}) == 0
+
+
+def test_pinned_update_refuses_other_columns(db: Session) -> None:
+    from app.domain.categorisation.pinned import PINNED_COLUMNS, pinned_update
+
+    a = make_household(db)
+    row = make_transaction(db, make_account(db, a.id), amount="-20.00")
+    set_context(db, a.id)
+    for column in ("amount", "updated_at", "raw_payee", "household_id", "review_state"):
+        assert column not in PINNED_COLUMNS
+        with pytest.raises(ValueError, match=column):
+            pinned_update(db, a.id, {row.id: {"merchant_key": "corner grocer", column: None}})
+    db.refresh(row)
+    # Refused whole: the allowed column of the same change was not written either.
+    assert (row.amount, row.merchant_key) == (Decimal("-20.00"), None)
+
+
+def test_pinned_update_stays_inside_the_household(db: Session) -> None:
+    from app.domain.categorisation.pinned import pinned_update
+
+    a = make_household(db)
+    b = make_household(db)
+    row_a = make_transaction(db, make_account(db, a.id))
+    row_b = make_transaction(db, make_account(db, b.id))
+    change = {row_a.id: {"merchant_key": "corner grocer"}}
+    # Naming the wrong household finds nothing, even in the owner's context ...
+    set_context(db, a.id)
+    assert pinned_update(db, b.id, change) == 0
+    # ... and another household's context cannot reach the row at all.
+    set_context(db, b.id)
+    assert pinned_update(db, a.id, change) == 0
+    assert pinned_update(db, b.id, {row_b.id: {"merchant_key": "lamplight cinema"}}) == 1
+    set_context(db, a.id)
+    db.refresh(row_a)
+    assert row_a.merchant_key is None
+    assert pinned_update(db, a.id, change) == 1
+    assert row_a.merchant_key == "corner grocer"
+
+
+def test_schedule_status_follows_the_active_flag(db: Session) -> None:
+    """Code that only knows ``active`` (today's recurring service, an archive
+    import) still writes a status the check accepts."""
+    a = make_household(db)
+    account = make_account(db, a.id)
+    by_hand = make_scheduled_transaction(db, account)
+    found = make_scheduled_transaction(db, account, origin=ScheduleOrigin.DETECTED)
+    assert (by_hand.active, by_hand.status, by_hand.status_source) == (True, "confirmed", "person")
+    assert (found.active, found.status, found.status_source) == (True, "active", "detector")
+    assert (found.kind, found.kind_source, found.occurrences) == ("other", "detector", 0)
+    set_context(db, a.id)
+    # A person switches one off and on again through the flag alone.
+    found.active = False
+    db.flush()
+    assert (found.status, found.status_source) == ("paused", "person")
+    found.active = True
+    db.flush()
+    assert (found.status, found.status_source) == ("confirmed", "person")
+    # A status set on its own carries the flag with it.
+    found.status = "ended"
+    db.flush()
+    assert found.active is False
+    # A plain insert that names only the flag (the archive import's shape).
+    table = Base.metadata.tables[ScheduledTransaction.__tablename__]
+    row_id = uuid.uuid4()
+    db.execute(
+        insert(table),
+        [
+            {
+                "id": row_id,
+                "household_id": a.id,
+                "account_id": account.id,
+                "name": "Synthetic series",
+                "cadence": Cadence.MONTHLY,
+                "next_due": date(2026, 3, 1),
+                "amount_min": Decimal("-5.00"),
+                "amount_max": Decimal("-5.00"),
+                "currency": "USD",
+                "origin": ScheduleOrigin.DETECTED,
+                "active": False,
+            }
+        ],
+    )
+    stored = db.execute(
+        select(table.c.status, table.c.status_source, table.c.active).where(table.c.id == row_id)
+    ).one()
+    assert tuple(stored) == ("paused", "person", False)
