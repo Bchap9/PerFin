@@ -149,6 +149,34 @@ describe("categories page", () => {
     expect(screen.queryByRole("textbox", { name: /^Schedule for/ })).not.toBeInTheDocument();
   });
 
+  it("payees and tags show each role only what the API lets it do", async () => {
+    const as = (role: "member" | "viewer") => ({ ...referenceHandlers(), "GET /api/v1/auth/session": authedSession({ role }) });
+    mockApi(as("member"));
+    let view = renderApp("/settings/categories?tab=payees");
+    expect(await screen.findByRole("button", { name: "Edit Cafe Uno" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Add payee" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /^(Merge|Delete) Cafe Uno$/ })).not.toBeInTheDocument();
+    view.unmount();
+
+    mockApi(as("member"));
+    view = renderApp("/settings/categories?tab=tags");
+    expect(await screen.findByRole("button", { name: "Rename fun" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Add tag" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Delete fun" })).not.toBeInTheDocument();
+    view.unmount();
+
+    mockApi(as("viewer"));
+    view = renderApp("/settings/categories?tab=payees");
+    expect(await screen.findByRole("rowheader", { name: "Cafe Uno" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /^(Add payee|Edit|Merge|Delete)/ })).not.toBeInTheDocument();
+    view.unmount();
+
+    mockApi(as("viewer"));
+    renderApp("/settings/categories?tab=tags");
+    expect(await screen.findByText("fun")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /^(Add tag|Rename|Delete)/ })).not.toBeInTheDocument();
+  });
+
   it("indentation without a style attribute", async () => {
     mockApi({ ...ownerSession(), ...referenceHandlers() });
     const { container } = renderApp("/settings/categories");
