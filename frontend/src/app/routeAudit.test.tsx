@@ -366,7 +366,7 @@ describe.each(SETTINGS_GROUPS.flatMap((group) => group.pages.map((page) => [page
       await openRoute(to);
       const page = document.querySelector<HTMLElement>(".settings-shell__page");
       const headings = within(page ?? document.body).getAllByRole("heading");
-      const levels = headings.map((heading) => `h${heading.tagName.slice(1)} ${heading.textContent ?? ""}`);
+      const levels = headings.map((heading) => `h${heading.tagName.slice(1)} ${heading.textContent}`);
       expect(levels.filter((line) => /^h[12] /.test(line))).toEqual([`h2 ${label}`]);
       // A heading inside a card sits under the card's title.
       const nested = headings.flatMap((heading) => {
@@ -375,7 +375,7 @@ describe.each(SETTINGS_GROUPS.flatMap((group) => group.pages.map((page) => [page
         if (card == null || title == null || title === heading) return [];
         return Number(heading.tagName.slice(1)) > Number(title.tagName.slice(1))
           ? []
-          : [`${heading.tagName} ${heading.textContent ?? ""} in ${title.tagName} ${title.textContent ?? ""}`];
+          : [`${heading.tagName} ${heading.textContent} in ${title.tagName} ${title.textContent}`];
       });
       expect(nested).toEqual([]);
     });
