@@ -13,51 +13,13 @@ import { Button } from "../../components/Button";
 import { Card } from "../../components/Card";
 import { Chip } from "../../components/Chip";
 import { Spinner } from "../../components/Spinner";
-import { formatDate } from "../../lib/dates";
-import { amountSign, formatMoney, isDecimalString, negateAmount } from "../../lib/money";
 import type { LearnedCategory } from "../categories/api";
-import type { Subscription, SubscriptionDecision, SubscriptionEvent } from "../subscriptions/api";
+import type { Subscription, SubscriptionDecision } from "../subscriptions/api";
 import { merchantName, type Transaction } from "../transactions/api";
 import type { SubscriptionCardEntry } from "./order";
+import { changeText, cost, guessText } from "./words";
 
 // ---- words ---------------------------------------------------------------------
-
-/** A cost without its sign: money out is stored negative, a price is not. */
-function cost(money: { amount: string; currency: string } | null): string | null {
-  if (money === null) {
-    return null;
-  }
-  const amount = isDecimalString(money.amount) && amountSign(money.amount) < 0 ? negateAmount(money.amount) : money.amount;
-  return formatMoney(amount, money.currency);
-}
-
-function dateText(iso: string): string {
-  return formatDate(iso) ?? iso;
-}
-
-/** One open change of a series, as a sentence. */
-export function changeText(event: Pick<SubscriptionEvent, "kind" | "occurred_on" | "amount_before" | "amount_after">): string {
-  switch (event.kind) {
-    case "price_changed": {
-      const before = cost(event.amount_before);
-      const after = cost(event.amount_after);
-      const words = before === null || after === null ? "Price changed" : `Price went from ${before} to ${after}`;
-      return `${words} on ${dateText(event.occurred_on)}`;
-    }
-    case "missed":
-      return `Expected on ${dateText(event.occurred_on)}, not seen`;
-    case "ended":
-      return `Stopped on ${dateText(event.occurred_on)}`;
-    case "new":
-      return `First seen on ${dateText(event.occurred_on)}`;
-    case "charged_after_end":
-      return `Charged after you ended it, on ${dateText(event.occurred_on)}`;
-    case "renewal_due":
-      return `Renews on ${dateText(event.occurred_on)}`;
-    case "trial_converted":
-      return `Trial became paid on ${dateText(event.occurred_on)}`;
-  }
-}
 
 const UNITS = new Map<Subscription["cadence"], [string, string]>([
   ["daily", ["daily", "days"]],
@@ -70,14 +32,6 @@ const UNITS = new Map<Subscription["cadence"], [string, string]>([
 function cadenceWords(cadence: Subscription["cadence"], every: number): string {
   const [one, many] = UNITS.get(cadence) ?? [cadence, cadence];
   return every <= 1 ? one : `every ${String(every)} ${many}`;
-}
-
-/** What PerFin thinks a suggested series is, as a question to answer. */
-function guessText(kind: Subscription["kind"]): string {
-  if (kind === "bill") {
-    return "Might be a bill";
-  }
-  return kind === "subscription" ? "Might be a subscription" : "Might be recurring";
 }
 
 /** The answer that says PerFin was wrong, in the words of the series' kind. */

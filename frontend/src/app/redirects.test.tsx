@@ -3,6 +3,7 @@ import { screen, waitFor } from "@testing-library/react";
 
 import { json, mockApi, problem, renderApp } from "../features/auth/testing";
 import { money, ownerSession, referenceHandlers } from "../features/planning/testing";
+import { account, page } from "../features/transactions/fixtures";
 import { REDIRECTS, type Redirect } from "./routeMap";
 
 const PARAMS = new Map([
@@ -24,20 +25,20 @@ function fill(path: string): string {
 
 /** The heading the target page shows, so the test knows the right page rendered. */
 const HEADINGS = new Map<string, RegExp>([
-  ["/inbox", /^Review$/],
+  ["/inbox", /^Inbox$/],
   ["/inbox/documents", /^Document library$/],
   ["/inbox/documents/$documentId", /^Document$/],
   ["/inbox/documents/$documentId/mapping", /^Map columns$/],
   ["/settings/learned", /^What PerFin has learned$/],
   ["/accounts/investments", /^Investments$/],
   ["/accounts?group=loans", /^Loans$/],
-  ["/accounts?group=property", /^Assets$/],
+  ["/accounts?group=property", /^Property and other$/],
   ["/plan/subscriptions", /^Subscriptions$/],
   ["/plan/subscriptions/$id", /^Subscriptions$/],
   ["/plan/budgets", /^Budgets$/],
   ["/plan/budgets/$budgetId", /^Budget$/],
   ["/plan/goals", /^Goals$/],
-  ["/plan/upcoming", /^Calendar$/],
+  ["/plan/upcoming", /^Upcoming$/],
   ["/reports/net-worth", /^Net worth$/],
   ["/reports/tax", /^Tax$/],
   ["/reports/tax/$year", /2025/],
@@ -98,6 +99,9 @@ const ASSET = {
   updated_at: "2026-11-01T10:00:00Z",
 };
 
+const MORTGAGE = account("a-9", "Example mortgage", { type: "mortgage" });
+const CABIN = account("a-8", "Example cabin", { type: "manual_asset" });
+
 describe("redirects from every old address", () => {
   it.each(REDIRECTS.filter((row) => row.data === undefined).map((row) => [row.from, row] as const))(
     "%s",
@@ -123,6 +127,9 @@ describe("redirects from every old address", () => {
       ...referenceHandlers(),
       "GET /api/v1/loans/:id": () => json(LOAN),
       "GET /api/v1/loans": () => json({ items: [LOAN], next_cursor: null }),
+      // The account hub reads the account the loan belongs to.
+      "GET /api/v1/accounts": page([MORTGAGE]),
+      "GET /api/v1/accounts/:id": () => json(MORTGAGE),
     });
     const { router } = renderApp("/loans/l-1?probe=1#here");
     await waitFor(() => {
@@ -141,6 +148,9 @@ describe("redirects from every old address", () => {
       ...referenceHandlers(),
       "GET /api/v1/assets/:id": () => json(ASSET),
       "GET /api/v1/assets": () => json({ items: [ASSET], next_cursor: null }),
+      // The account hub reads the account the asset belongs to; its h1 is the account's name.
+      "GET /api/v1/accounts": page([CABIN]),
+      "GET /api/v1/accounts/:id": () => json(CABIN),
     });
     const { router } = renderApp("/assets/x-1");
     await waitFor(() => {

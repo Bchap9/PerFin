@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import { screen, waitFor, within } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 
 import { expectNoAxeViolations } from "../../test/axe";
 import { json, mockApi, renderApp, type Handler } from "../auth/testing";
@@ -400,6 +401,21 @@ describe("Home", () => {
     expect(guess).toHaveTextContent("Food?");
     expect(guess).toHaveTextContent("Suggestion");
     expect(within(panel).getByRole("link", { name: "All transactions" })).toHaveAttribute("href", "/transactions");
+  });
+
+  it("a latest transaction opens its drawer on Transactions", async () => {
+    mockApi(
+      handlers({
+        "GET /api/v1/transactions/:id": () => json(transaction("t-cafe", { raw_payee: "CAFE UNO 0042", merchant: "Cafe Uno" })),
+      }),
+    );
+    const { router } = renderApp("/");
+    const user = userEvent.setup();
+    const panel = await screen.findByRole("region", { name: "Latest transactions" });
+    await user.click(await within(panel).findByRole("link", { name: /Cafe Uno/ }));
+    expect(await screen.findByRole("dialog", { name: /Cafe Uno/ })).toBeInTheDocument();
+    expect(router.state.location.pathname).toBe("/transactions");
+    expect(new URLSearchParams(router.state.location.searchStr).get("tx")).toBe("t-cafe");
   });
 
   it("latest transactions say when a row is split or has no category", async () => {

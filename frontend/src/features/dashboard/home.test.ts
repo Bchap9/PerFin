@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import {
+  categorySourceText,
   comingUp,
   comparison,
   greeting,
@@ -9,6 +10,8 @@ import {
   spendingPeriods,
   topCategories,
 } from "./home";
+
+import { changeText } from "../inbox/words";
 
 const money = (amount: string, currency = "USD") => ({ amount, currency });
 
@@ -197,7 +200,7 @@ describe("needs you rows", () => {
 });
 
 describe("needs you series rows", () => {
-  const series = (id: string, name: string, occurrences: number, kind: "subscription" | "bill" = "subscription") => ({
+  const series = (id: string, name: string, occurrences: number, kind: "subscription" | "bill" | "other" = "subscription") => ({
     id,
     name,
     kind,
@@ -234,8 +237,42 @@ describe("needs you series rows", () => {
     expect(rows.map((row) => row.title)).toEqual(["Paper Weekly", "Streamly Plus", "Cloud Locker", "Puzzle Club"]);
     expect(rows[0]?.question).toBe("Expected on Nov 9, 2026, not seen");
     expect(rows[1]?.question).toBe("Price went from $15.99 to $17.99 on Nov 2, 2026, and 1 more change");
-    expect(rows[2]?.question).toBe("Might be recurring");
+    // A suggested bill is asked about as the Inbox's card asks: "Might be a bill".
+    expect(rows[2]?.question).toBe("Might be a bill");
     expect(rows[3]?.question).toBe("Might be a subscription");
     expect(rows.every((row) => row.document === null)).toBe(true);
+  });
+
+  it("says each change and each guess in the words of the Inbox's card", () => {
+    const kinds = ["new", "price_changed", "missed", "ended", "charged_after_end", "renewal_due", "trial_converted"] as const;
+    const changes = kinds.map((kind, index) => ({
+      id: `e-${kind}`,
+      schedule_id: `s-${kind}`,
+      name: `Series ${kind}`,
+      kind,
+      occurred_on: `2026-10-${String(10 + index)}`,
+      amount_before: money("-4.00"),
+      amount_after: money("-5.00"),
+    }));
+    const rows = needsYouSeriesRows(
+      [series("s-other", "Kettle Club", 3, "other"), series("s-bill", "Lantern Power", 2, "bill")],
+      changes,
+    );
+    const said = new Map(rows.map((row) => [row.title, row.question]));
+    for (const change of changes) {
+      expect(said.get(change.name)).toBe(changeText(change));
+    }
+    expect(said.get("Kettle Club")).toBe("Might be recurring");
+    expect(said.get("Lantern Power")).toBe("Might be a bill");
+  });
+});
+
+describe("category source", () => {
+  it("says who decided in the drawer's words, and names a rule without loading the rules", () => {
+    expect(categorySourceText("person")).toBe("You chose this");
+    expect(categorySourceText("learned")).toBe("Learned from you");
+    expect(categorySourceText("rule")).toBe("By a rule");
+    expect(categorySourceText(null)).toBeNull();
+    expect(categorySourceText(undefined)).toBeNull();
   });
 });

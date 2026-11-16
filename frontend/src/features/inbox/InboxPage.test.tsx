@@ -390,6 +390,31 @@ describe("Inbox, Needs you", () => {
     expect(query("/api/v1/transactions").get("limit")).toBe("200");
   });
 
+  it("the badge, Home's needs-you and the Inbox show the same number", async () => {
+    // One summary and one card set, for a viewer: the server counts only what the viewer may see,
+    // so the three places must agree with it and with each other. Home shows no figure, only up
+    // to three rows, so the set holds three cards (a document, a loose item and a series) and no
+    // suggestions, whose card Home shows as the uncategorised line instead.
+    inboxApi({ role: "viewer", cards: [MONEY_NEW], loose: [LOOSE], suggested: [SUGGESTED] });
+    renderApp("/");
+    const user = userEvent.setup();
+    const [rail] = await screen.findAllByRole("link", { name: "Inbox, 3 things need you" });
+    const panel = await screen.findByRole("region", { name: "Needs you" });
+    const list = await within(panel).findByRole("list", { name: "What needs you" });
+    await within(list).findByText("Lumen Streaming");
+    const homeRows = within(list).getAllByRole("link");
+    expect(homeRows).toHaveLength(3);
+    expect(homeRows.map((row) => row.getAttribute("href"))).toEqual(["/inbox?document=d-2", "/inbox", "/inbox"]);
+
+    await user.click(element(rail));
+    expect(await screen.findByRole("link", { name: "Needs you, 3" })).toBeInTheDocument();
+    const entries = await waitingCards();
+    expect(entries).toHaveLength(3);
+    // The same cards in the same order as Home's rows.
+    expect(within(element(entries[0])).getByRole("link", { name: "maple-card-october.csv" })).toBeInTheDocument();
+    expect(within(element(entries[2])).getByRole("heading", { name: "Lumen Streaming" })).toBeInTheDocument();
+  });
+
   it("?document= shows one card", async () => {
     inboxApi({
       cards: [NOTE_OLD, MONEY_NEW],

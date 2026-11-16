@@ -16,6 +16,11 @@ import {
   subtractAmounts,
   sumAmounts,
 } from "../../lib/money";
+import { orderCards, subscriptionCards } from "../inbox/order";
+import { changeText, guessText } from "../inbox/words";
+import type { Subscription, SubscriptionEvent } from "../subscriptions/api";
+import type { Transaction } from "../transactions/api";
+import { sourceLabel } from "../transactions/provenance";
 
 interface MoneyValue {
   amount: string;
@@ -289,29 +294,6 @@ export function comingUp(
 
 // ---- Needs you ----------------------------------------------------------------
 
-/*
- * The Inbox order (design note, section 4.2), groups 1 to 4. A local copy:
- * lane I owns `inbox/order.ts`, and the integration task replaces this copy
- * with an import of it.
- */
-const ACTION_GROUP: ReadonlyMap<string, number> = new Map([
-  // 1. The money is wrong until someone answers.
-  ["reconcile", 1],
-  ["check_rows", 1],
-  ["confirm_duplicate", 1],
-  ["answer_sign", 1],
-  // 2. The document cannot import until someone answers.
-  ["choose_account", 2],
-  ["map_columns", 2],
-  ["choose_owner", 2],
-  ["teach", 2],
-  ["reprocess", 2],
-  // 3. Something to note (and any action this client does not know).
-  ["attach_receipt", 3],
-  ["acknowledge", 3],
-]);
-const NOTE_GROUP = 3;
-
 const QUESTIONS: ReadonlyMap<string, string> = new Map([
   ["reconcile", "Check the balance against the statement"],
   ["check_rows", "Check the rows PerFin was unsure of"],
@@ -343,19 +325,13 @@ export interface NeedsYouRow {
   document: string | null;
 }
 
-/** Document cards in the Inbox order (oldest first inside a group), then the loose items. */
+/** Document cards in the Inbox's order (`inbox/order.ts`), then the loose items. */
 export function needsYouRows(
   cards: readonly { action: string; document: { id: string; original_filename: string | null; created_at: string } }[],
   loose: readonly { id: string; kind: string }[],
 ): NeedsYouRow[] {
-  const ordered = cards
-    .map((card, index) => ({ card, index, group: ACTION_GROUP.get(card.action) ?? NOTE_GROUP }))
-    .sort(
-      (a, b) =>
-        a.group - b.group || a.card.document.created_at.localeCompare(b.card.document.created_at) || a.index - b.index,
-    );
   return [
-    ...ordered.map(({ card }) => ({
+    ...orderCards(cards).map((card) => ({
       id: card.document.id,
       title: card.document.original_filename ?? "A document with no name",
       question: QUESTIONS.get(card.action) ?? "Something to note",
@@ -371,92 +347,25 @@ export function needsYouRows(
 }
 
 /** A suggested series, as much of it as Needs you shows. */
-export interface SeriesWords {
-  id: string;
-  name: string;
-  kind: string;
-  occurrences: number;
-}
+export type SeriesWords = Pick<Subscription, "id" | "name" | "kind" | "occurrences">;
 
 /** An open change of a series, as much of it as Needs you shows. */
-export interface ChangeWords {
-  id: string;
-  schedule_id: string;
-  name: string;
-  kind: "new" | "price_changed" | "missed" | "ended" | "charged_after_end" | "renewal_due" | "trial_converted";
-  occurred_on: string;
-  amount_before: MoneyValue | null;
-  amount_after: MoneyValue | null;
-}
-
-function changeDate(iso: string): string {
-  return formatDate(iso) ?? iso;
-}
-
-function changeCost(value: MoneyValue | null): string | null {
-  return value === null ? null : formatMoney(magnitude(value.amount), value.currency);
-}
-
-/** One open change in words (the Inbox's subscription card says the same). */
-function changeText(change: ChangeWords): string {
-  const on = changeDate(change.occurred_on);
-  switch (change.kind) {
-    case "price_changed": {
-      const before = changeCost(change.amount_before);
-      const after = changeCost(change.amount_after);
-      return `${before === null || after === null ? "Price changed" : `Price went from ${before} to ${after}`} on ${on}`;
-    }
-    case "missed":
-      return `Expected on ${on}, not seen`;
-    case "ended":
-      return `Stopped on ${on}`;
-    case "new":
-      return `First seen on ${on}`;
-    case "charged_after_end":
-      return `Charged after you ended it, on ${on}`;
-    case "renewal_due":
-      return `Renews on ${on}`;
-    case "trial_converted":
-      return `Trial became paid on ${on}`;
-  }
-}
+export type ChangeWords = Pick<
+  SubscriptionEvent,
+  "id" | "schedule_id" | "name" | "kind" | "occurred_on" | "amount_before" | "amount_after"
+>;
 
 /**
- * The subscription cards of the Inbox (spec section 4.2, group 5) as rows:
- * one per series, the series with an open change first (newest change
- * first), then the suggested series with none (most charges first). A row
- * names the series and its newest change; a suggested series with no change
- * reads as a guess. A local copy of `inbox/order.ts::subscriptionCards`,
- * which Task 21 may import instead.
+ * The subscription cards of the Inbox (spec section 4.2, group 5) as rows,
+ * in the Inbox's order (`inbox/order.ts::subscriptionCards`). A row names the
+ * series and its newest change in the card's words; a suggested series with
+ * no change reads as the card's question.
  */
 export function needsYouSeriesRows(suggested: readonly SeriesWords[], changes: readonly ChangeWords[]): NeedsYouRow[] {
-  const entries = new Map<string, { name: string; series: SeriesWords | null; changes: ChangeWords[] }>();
-  for (const series of suggested) {
-    entries.set(series.id, { name: series.name, series, changes: [] });
-  }
-  for (const change of changes) {
-    const entry = entries.get(change.schedule_id);
-    if (entry === undefined) {
-      entries.set(change.schedule_id, { name: change.name, series: null, changes: [change] });
-    } else {
-      entry.changes.push(change);
-    }
-  }
-  const all = [...entries].map(([id, entry]) => ({
-    id,
-    ...entry,
-    changes: [...entry.changes].sort((a, b) => b.occurred_on.localeCompare(a.occurred_on)),
-  }));
-  const changed = all
-    .filter((entry) => entry.changes.length > 0)
-    .sort((a, b) => (b.changes[0]?.occurred_on ?? "").localeCompare(a.changes[0]?.occurred_on ?? ""));
-  const quiet = all
-    .filter((entry) => entry.changes.length === 0)
-    .sort((a, b) => (b.series?.occurrences ?? 0) - (a.series?.occurrences ?? 0));
-  return [...changed, ...quiet].map((entry) => {
-    const [newest, ...rest] = entry.changes;
+  return subscriptionCards(suggested, changes).map((entry) => {
+    const [newest, ...rest] = entry.events;
     const more = rest.length === 0 ? "" : `, and ${String(rest.length)} more ${rest.length === 1 ? "change" : "changes"}`;
-    const guess = entry.series?.kind === "subscription" ? "Might be a subscription" : "Might be recurring";
+    const guess = guessText(entry.series?.kind ?? "other");
     return {
       id: `series:${entry.id}`,
       title: entry.name,
@@ -468,17 +377,14 @@ export function needsYouSeriesRows(suggested: readonly SeriesWords[], changes: r
 
 // ---- Latest transactions ----------------------------------------------------------
 
-const SOURCES: ReadonlyMap<string, string> = new Map([
-  ["person", "You chose this"],
-  ["file", "From the file"],
-  ["rule", "By a rule"],
-  ["payee", "Payee default"],
-  ["learned", "Learned from you"],
-  ["dictionary", "Merchant list"],
-  ["keyword", "Keyword"],
-]);
-
-/** Who or what decided a row's category, in words; null when nothing was recorded. */
-export function categorySourceText(source: string | null | undefined): string | null {
-  return source === null || source === undefined ? null : (SOURCES.get(source) ?? null);
+/**
+ * Who or what decided a row's category, in words (`transactions/provenance.ts`);
+ * null when nothing was recorded. Home does not load the rules, so a rule is
+ * named only as "By a rule".
+ */
+export function categorySourceText(source: Transaction["category_source"] | undefined): string | null {
+  if (source === null || source === undefined) {
+    return null;
+  }
+  return source === "rule" ? "By a rule" : sourceLabel({ category_source: source });
 }

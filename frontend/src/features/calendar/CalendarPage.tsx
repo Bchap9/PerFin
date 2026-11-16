@@ -2,11 +2,8 @@
 /**
  * Plan > Upcoming: the cash-flow calendar and the recurring items list. The
  * tab is in the address (`?tab=recurring`; the calendar is the default and
- * is left out), so a view can be bookmarked and shared.
- *
- * The page keeps the title "Calendar" under the "Upcoming" tab for now:
- * `app/redirects.test.tsx` (Start-owned) expects that heading at
- * `/plan/upcoming`. Renaming it is left to the integration task.
+ * is left out), so a view can be bookmarked and shared. The page's title is
+ * its tab's name, "Upcoming".
  */
 import { Tabs } from "../../components/Tabs";
 import { useTabParam } from "../../lib/urlState";
@@ -20,7 +17,7 @@ type UpcomingTab = (typeof TABS)[number];
 export function CalendarPage() {
   const [tab, setTab] = useTabParam<UpcomingTab>(TABS, "calendar");
   return (
-    <PlanningPage title="Calendar">
+    <PlanningPage title="Upcoming">
       <Tabs
         label="Upcoming"
         selectedId={tab}

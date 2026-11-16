@@ -8,7 +8,8 @@
  * the suggested series with none (most charges first).
  *
  * Types only are imported, so a page that needs the order (Home) does not
- * pull in the review or subscription code.
+ * pull in the review or subscription code. The functions take as much of a
+ * card as the order reads, so Home's rows sort by the same code.
  */
 import type { CardAction, ReviewCard } from "../review/api";
 import type { Subscription, SubscriptionEvent } from "../subscriptions/api";
@@ -30,8 +31,16 @@ export const ACTION_GROUP: ReadonlyMap<Action, 1 | 2 | 3> = new Map<Action, 1 | 
   ["acknowledge", 3],
 ]);
 
-function groupOf(card: ReviewCard): number {
-  return ACTION_GROUP.get(card.action) ?? 3;
+/** As much of a card as its place in the order needs; Home passes no more than this. */
+export interface OrderedCard {
+  action: string;
+  document: { created_at: string };
+}
+
+const GROUPS: ReadonlyMap<string, number> = ACTION_GROUP;
+
+function groupOf(card: OrderedCard): number {
+  return GROUPS.get(card.action) ?? 3;
 }
 
 function stamp(iso: string): number {
@@ -40,31 +49,45 @@ function stamp(iso: string): number {
 }
 
 /** The document cards in the Inbox's order; a new array, the one given is left as it was. */
-export function orderCards(cards: readonly ReviewCard[]): ReviewCard[] {
+export function orderCards<Card extends OrderedCard = ReviewCard>(cards: readonly Card[]): Card[] {
   return [...cards].sort(
     (a, b) => groupOf(a) - groupOf(b) || stamp(a.document.created_at) - stamp(b.document.created_at),
   );
 }
 
+/** As much of a series as its place in the order needs. */
+export interface OrderedSeries {
+  id: string;
+  name: string;
+  occurrences: number;
+}
+
+/** As much of an open change as its place in the order needs. */
+export interface OrderedChange {
+  schedule_id: string;
+  name: string;
+  occurred_on: string;
+}
+
 /** One subscription card: a series and its open changes, newest first. */
-export interface SubscriptionCardEntry {
+export interface SubscriptionCardEntry<Series extends OrderedSeries = Subscription, Change extends OrderedChange = SubscriptionEvent> {
   /** The series' id (`schedule_id` of its changes). */
   id: string;
   name: string;
   /** The series when it is suggested; `null` for a series known from its open changes only. */
-  series: Subscription | null;
-  events: SubscriptionEvent[];
+  series: Series | null;
+  events: Change[];
 }
 
 /**
  * One entry per series that is suggested or has an open change, each once,
  * as `GET /inbox/summary` counts them.
  */
-export function subscriptionCards(
-  suggested: readonly Subscription[],
-  events: readonly SubscriptionEvent[],
-): SubscriptionCardEntry[] {
-  const byId = new Map<string, SubscriptionCardEntry>();
+export function subscriptionCards<Series extends OrderedSeries = Subscription, Change extends OrderedChange = SubscriptionEvent>(
+  suggested: readonly Series[],
+  events: readonly Change[],
+): SubscriptionCardEntry<Series, Change>[] {
+  const byId = new Map<string, SubscriptionCardEntry<Series, Change>>();
   for (const row of suggested) {
     byId.set(row.id, { id: row.id, name: row.name, series: row, events: [] });
   }
@@ -76,7 +99,7 @@ export function subscriptionCards(
       entry.events.push(change);
     }
   }
-  const newestFirst = (a: SubscriptionEvent, b: SubscriptionEvent): number =>
+  const newestFirst = (a: Change, b: Change): number =>
     b.occurred_on.localeCompare(a.occurred_on);
   const entries = [...byId.values()].map((entry) => ({ ...entry, events: [...entry.events].sort(newestFirst) }));
   const changed = entries

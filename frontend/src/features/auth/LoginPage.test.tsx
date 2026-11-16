@@ -49,7 +49,8 @@ describe("login page", () => {
     const [loginCall] = api.callsTo("POST", "/api/v1/auth/login");
     expect(loginCall?.headers.get("X-CSRF-Token")).toBe("pre-token");
     expect(loginCall?.body).toEqual({ username: "alice", password: "correct horse battery", remember_device: false });
-    expect(await screen.findByRole("heading", { level: 1, name: "Profile" })).toBeInTheDocument();
+    // Profile is a Settings page now: its heading sits under the section's h1.
+    expect(await screen.findByRole("heading", { name: "Profile" })).toBeInTheDocument();
   });
 
   it("continues to the second-factor step when MFA is required", async () => {
