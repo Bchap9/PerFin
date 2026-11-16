@@ -2,7 +2,15 @@
 /** Pure helpers of the notification channels page: form state, request bodies and outcome texts. */
 import type { Channel, ChannelCreate, ChannelType, ChannelUpdate, Kind, Outcome } from "./api";
 
-export const KINDS: readonly { kind: Kind; label: string }[] = [
+/**
+ * The four subscription alerts (design note, section 6). Named here as well
+ * as in the API schema so the form knows them whether or not the generated
+ * schema already lists them.
+ */
+export type SubscriptionKind = "subscription_new" | "subscription_price_changed" | "subscription_missed" | "subscription_renewal";
+export type FormKind = Kind | SubscriptionKind;
+
+export const KINDS: readonly { kind: FormKind; label: string }[] = [
   { kind: "account_locked", label: "An account is locked after failed sign-ins" },
   { kind: "recovery_code_used", label: "A recovery code is used" },
   { kind: "mfa_reset", label: "An administrator resets someone's second factors" },
@@ -12,6 +20,10 @@ export const KINDS: readonly { kind: Kind; label: string }[] = [
   { kind: "review_waiting", label: "Items are waiting in Review (daily)" },
   { kind: "tax_reminder", label: "Expected tax documents are still missing" },
   { kind: "backup_failed", label: "A backup failed" },
+  { kind: "subscription_new", label: "A new subscription is found" },
+  { kind: "subscription_price_changed", label: "A subscription's price changes" },
+  { kind: "subscription_missed", label: "An expected charge does not arrive" },
+  { kind: "subscription_renewal", label: "A subscription or bill renews within a week" },
 ];
 
 export const TYPES: readonly { value: ChannelType; label: string }[] = [
@@ -26,7 +38,7 @@ export interface ChannelForm {
   name: string;
   type: ChannelType;
   enabled: boolean;
-  kinds: Kind[];
+  kinds: FormKind[];
   host: string;
   port: string;
   tls: "starttls" | "implicit";
@@ -222,6 +234,11 @@ function checkName(form: ChannelForm, errors: Record<string, string>): void {
   }
 }
 
+/** The ticked kinds as the request's `events`; the server refuses a kind it does not know. */
+function eventsOf(form: ChannelForm): Kind[] {
+  return form.kinds as Kind[];
+}
+
 /** The POST body of a new channel. */
 export function buildCreate(form: ChannelForm): Built<ChannelCreate> {
   const errors: Record<string, string> = {};
@@ -232,7 +249,7 @@ export function buildCreate(form: ChannelForm): Built<ChannelCreate> {
   }
   return {
     errors,
-    body: { name: form.name.trim(), enabled: form.enabled, events: form.kinds, config: config as ChannelCreate["config"] },
+    body: { name: form.name.trim(), enabled: form.enabled, events: eventsOf(form), config: config as ChannelCreate["config"] },
   };
 }
 
@@ -244,7 +261,7 @@ export function buildUpdate(form: ChannelForm, channel: Channel): Built<ChannelU
   if (Object.keys(errors).length > 0) {
     return { body: null, errors };
   }
-  return { errors, body: { name: form.name.trim(), enabled: form.enabled, events: form.kinds, config } };
+  return { errors, body: { name: form.name.trim(), enabled: form.enabled, events: eventsOf(form), config } };
 }
 
 const OUTCOMES: Readonly<Record<Outcome, string>> = {

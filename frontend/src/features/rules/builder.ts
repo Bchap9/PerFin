@@ -37,7 +37,8 @@ export type ConditionType =
   | "currency"
   | "date"
   | "category_is"
-  | "category_unset";
+  | "category_unset"
+  | "merchant";
 
 export const CONDITION_TYPES: readonly { value: ConditionType; label: string }[] = [
   { value: "payee", label: "Payee text" },
@@ -50,7 +51,11 @@ export const CONDITION_TYPES: readonly { value: ConditionType; label: string }[]
   { value: "date", label: "Date" },
   { value: "category_is", label: "Category is one of" },
   { value: "category_unset", label: "Has no category" },
+  { value: "merchant", label: "Merchant is" },
 ];
+
+/** Longest merchant key the server stores (backend `MerchantKey`). */
+export const MERCHANT_KEY_MAX = 64;
 
 export interface ConditionDraft {
   key: number;
@@ -58,6 +63,7 @@ export interface ConditionDraft {
   /** Wrap the condition in `not`. */
   negate: boolean;
   op: TextOp;
+  /** The text of `payee` and `memo`; the merchant key of `merchant`. */
   value: string;
   ids: string[];
   min: string;
@@ -192,6 +198,8 @@ function leafDoc(draft: ConditionDraft): ConditionDoc {
       return { type: "category_is", category_ids: draft.ids };
     case "category_unset":
       return { type: "category_unset" };
+    case "merchant":
+      return { type: "merchant", key: draft.value.trim() };
   }
 }
 
@@ -263,10 +271,7 @@ export function serializeRuleBody(draft: RuleDraft): Schemas["RuleBody"] {
 // ---- parsing -----------------------------------------------------------------
 
 function leafDraft(doc: ConditionDoc): ConditionDraft | null {
-  // "merchant" has no leaf in the builder yet: such a rule falls through to `null` below.
-  const draft = newCondition(
-    doc.type === "not" || doc.type === "all" || doc.type === "any" || doc.type === "merchant" ? "payee" : doc.type,
-  );
+  const draft = newCondition(doc.type === "not" || doc.type === "all" || doc.type === "any" ? "payee" : doc.type);
   switch (doc.type) {
     case "payee":
     case "memo":
@@ -287,6 +292,8 @@ function leafDraft(doc: ConditionDoc): ConditionDraft | null {
       return { ...draft, ids: [...doc.category_ids] };
     case "category_unset":
       return draft;
+    case "merchant":
+      return { ...draft, value: doc.key };
     default:
       return null;
   }
@@ -356,6 +363,29 @@ export interface StoredRule {
   actions: ActionDoc[];
 }
 
+/**
+ * The merchant key of a merchant rule, else `null`. A merchant rule is what
+ * "always categorise this merchant as..." makes: its conditions are exactly
+ * one `merchant` leaf (bare, or the only member of an `all`) and its actions
+ * exactly one `set_category`. A rule that looks at or does anything more is
+ * a general rule (the same reading as the backend's `rules/merchant.py`).
+ */
+export function merchantRuleKey(rule: Pick<StoredRule, "conditions" | "actions">): string | null {
+  let leaf = rule.conditions;
+  if (leaf.type === "all") {
+    const [only, ...others] = leaf.conditions ?? [];
+    if (only === undefined || others.length > 0) {
+      return null;
+    }
+    leaf = only;
+  }
+  const [action, ...more] = rule.actions;
+  if (leaf.type !== "merchant" || action === undefined || more.length > 0 || action.type !== "set_category") {
+    return null;
+  }
+  return leaf.key;
+}
+
 /** The draft of a stored rule, with `conditions` null when the builder cannot show them. */
 export function parseRule(rule: StoredRule): { draft: RuleDraft; conditionsSupported: boolean } {
   const group = parseConditions(rule.conditions);
@@ -382,6 +412,24 @@ export interface RuleProblems {
 
 function validAmountBound(text: string): boolean {
   return text.trim() === "" || tryParseDecimal(text.trim()) !== null;
+}
+
+/**
+ * The server's merchant key form: lower-case letters and digits in words
+ * separated by single spaces, at most 64 characters. Checked word by word,
+ * without a pattern that repeats a group.
+ */
+function merchantKeyProblem(text: string): string | undefined {
+  const key = text.trim();
+  if (key === "") {
+    return "Enter the merchant.";
+  }
+  if (key.length > MERCHANT_KEY_MAX) {
+    return `A merchant is at most ${String(MERCHANT_KEY_MAX)} characters.`;
+  }
+  return key.split(" ").every((word) => /^[a-z0-9]+$/.test(word))
+    ? undefined
+    : "A merchant is written in lower-case letters and digits with single spaces, such as trader joes.";
 }
 
 function conditionProblem(draft: ConditionDraft): string | undefined {
@@ -423,6 +471,8 @@ function conditionProblem(draft: ConditionDraft): string | undefined {
     case "sign":
     case "category_unset":
       return undefined;
+    case "merchant":
+      return merchantKeyProblem(draft.value);
   }
 }
 

@@ -2,6 +2,7 @@
 import {
   emptyRule,
   hasProblems,
+  merchantRuleKey,
   newAction,
   newCondition,
   parseConditions,
@@ -18,6 +19,7 @@ import {
 } from "./builder";
 import { describeChanges, describeGroup, type Names } from "./describe";
 import { movedOrder } from "./api";
+import { parseRulesFile } from "./portable";
 
 const CAT_A = "11111111-1111-4111-8111-111111111111";
 const CAT_B = "22222222-2222-4222-8222-222222222222";
@@ -277,5 +279,73 @@ describe("reordering", () => {
     expect(movedOrder(["a", "b", "c"], "a", -1)).toBeNull();
     expect(movedOrder(["a", "b", "c"], "c", 1)).toBeNull();
     expect(movedOrder(["a"], "x", 1)).toBeNull();
+  });
+});
+
+describe("the merchant condition", () => {
+  const MERCHANT_RULE = {
+    name: "Quiet Bean Coffee: Dining",
+    enabled: true,
+    stop_processing: false,
+    conditions: { type: "merchant", key: "quiet bean coffee" } as ConditionDoc,
+    actions: [{ type: "set_category" as const, category_id: CAT_A }],
+  };
+
+  it("a merchant leaf round-trips", () => {
+    expect(serializeCondition(condition({ type: "merchant", value: " quiet bean coffee " }))).toEqual({ type: "merchant", key: "quiet bean coffee" });
+    // Bare, as "always categorise..." stores it: shown as one condition and written back as the same key.
+    const bare = parseRule(MERCHANT_RULE);
+    expect(bare.conditionsSupported).toBe(true);
+    expect(bare.draft.conditions.items).toMatchObject([{ type: "merchant", value: "quiet bean coffee", negate: false }]);
+    expect(serializeConditions(bare.draft.conditions)).toEqual({ type: "all", conditions: [{ type: "merchant", key: "quiet bean coffee" }] });
+    // Beside other conditions, and negated.
+    const doc: ConditionDoc = {
+      type: "any",
+      conditions: [{ type: "merchant", key: "netflix" }, { type: "not", condition: { type: "merchant", key: "corner grocer" } }],
+    };
+    const group = parseConditions(doc);
+    expect(group).not.toBeNull();
+    expect(group === null ? null : serializeConditions(group)).toEqual(doc);
+    expect(hasProblems(validateRule(bare.draft))).toBe(false);
+  });
+
+  it("a key with a capital letter is refused", () => {
+    const problemOf = (value: string): string | undefined => {
+      const item = condition({ type: "merchant", value });
+      return validateRule(rule({ conditions: { match: "all", items: [item] } })).conditions[item.key];
+    };
+    expect(problemOf("Netflix")).toMatch(/lower-case letters and digits/);
+    expect(problemOf("")).toBe("Enter the merchant.");
+    expect(problemOf("trader  joes")).toMatch(/single spaces/);
+    expect(problemOf("sq *coffee")).toMatch(/lower-case letters and digits/);
+    expect(problemOf("a".repeat(65))).toMatch(/at most 64/);
+    expect(problemOf("trader joes")).toBeUndefined();
+    expect(problemOf("7 eleven")).toBeUndefined();
+    expect(problemOf("a".repeat(64))).toBeUndefined();
+  });
+
+  it("says the merchant in words, by name when one is known", () => {
+    const names: Names = (kind, id) => `${kind}:${id}`;
+    const group = { match: "all" as const, items: [condition({ type: "merchant", value: "quiet bean coffee" })] };
+    expect(describeGroup(group, names)).toBe("The merchant is quiet bean coffee");
+    expect(describeGroup(group, names, (key) => (key === "quiet bean coffee" ? "Quiet Bean Coffee" : undefined))).toBe("The merchant is Quiet Bean Coffee");
+    expect(describeGroup({ match: "all", items: [condition({ type: "merchant", value: "netflix", negate: true })] }, names)).toBe("not: The merchant is netflix");
+  });
+
+  it("tells a merchant rule from a general one", () => {
+    expect(merchantRuleKey(MERCHANT_RULE)).toBe("quiet bean coffee");
+    expect(merchantRuleKey({ ...MERCHANT_RULE, conditions: { type: "all", conditions: [{ type: "merchant", key: "netflix" }] } })).toBe("netflix");
+    // Anything more than the one merchant and the one category is a general rule.
+    expect(merchantRuleKey({ ...MERCHANT_RULE, conditions: { type: "all", conditions: [{ type: "merchant", key: "netflix" }, { type: "sign", sign: "outflow" }] } })).toBeNull();
+    expect(merchantRuleKey({ ...MERCHANT_RULE, conditions: { type: "any", conditions: [{ type: "merchant", key: "netflix" }] } })).toBeNull();
+    expect(merchantRuleKey({ ...MERCHANT_RULE, conditions: { type: "not", condition: { type: "merchant", key: "netflix" } } })).toBeNull();
+    expect(merchantRuleKey({ ...MERCHANT_RULE, actions: [...MERCHANT_RULE.actions, { type: "flag_for_review" }] })).toBeNull();
+    expect(merchantRuleKey({ ...MERCHANT_RULE, conditions: { type: "payee", op: "contains", value: "netflix" } })).toBeNull();
+  });
+
+  it("a rules file with a merchant rule is accepted", () => {
+    const parsed = parseRulesFile(JSON.stringify({ format: "perfin-rules", version: 1, rules: [MERCHANT_RULE] }));
+    expect(parsed.ok).toBe(true);
+    expect(parsed.ok ? parsed.file.document.rules[0]?.conditions : null).toEqual({ type: "merchant", key: "quiet bean coffee" });
   });
 });

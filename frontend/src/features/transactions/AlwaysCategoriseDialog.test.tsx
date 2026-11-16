@@ -337,3 +337,46 @@ describe("Offering the rule after a correction in the grid", () => {
     expect(api.callsTo("POST", "/api/v1/rules/merchant/preview")).toHaveLength(0);
   });
 });
+
+describe("Always categorise a merchant, from what PerFin learned", () => {
+  it("a link with a transaction opens the dialog for that row", async () => {
+    const api = setup(preview(), []);
+    api.on("GET /api/v1/transactions/:id", () => json(ROW));
+    renderApp("/transactions?always=t-1");
+    const dialog = await screen.findByRole("dialog", { name: "Always categorise Quiet Bean Coffee" });
+    expect(within(dialog).getByText("SQ *QUIET BEAN COFFEE 0042")).toBeInTheDocument();
+    expect(api.callsTo("GET", "/api/v1/transactions/t-1")).toHaveLength(1);
+    // Closed, it stays closed.
+    await userEvent.setup().click(await within(dialog).findByRole("button", { name: "Cancel" }));
+    await waitFor(() => {
+      expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    });
+  });
+
+  it("the link does nothing for a viewer, a row that cannot teach or a row that is gone", async () => {
+    const viewer = setup(preview(), [], "viewer");
+    viewer.on("GET /api/v1/transactions/:id", () => json(ROW));
+    renderApp("/transactions?always=t-1");
+    await screen.findByText(/No transactions/);
+    expect(viewer.callsTo("GET", "/api/v1/transactions/t-1")).toHaveLength(0);
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    cleanup();
+
+    const split = setup(preview(), []);
+    split.on("GET /api/v1/transactions/:id", () => json({ ...ROW, merchant_key: null, merchant: null }));
+    renderApp("/transactions?always=t-1");
+    await waitFor(() => {
+      expect(split.callsTo("GET", "/api/v1/transactions/t-1")).toHaveLength(1);
+    });
+    await screen.findByText(/No transactions/);
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    cleanup();
+
+    const gone = setup(preview(), []);
+    renderApp("/transactions?always=t-1");
+    await waitFor(() => {
+      expect(gone.callsTo("GET", "/api/v1/transactions/t-1")).toHaveLength(1);
+    });
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+  });
+});

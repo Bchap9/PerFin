@@ -2,7 +2,7 @@
 import { screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 
-import { json, mockApi, renderApp } from "../auth/testing";
+import { authedSession, json, mockApi, renderApp } from "../auth/testing";
 import { CAT_DINING, CAT_FOOD, PAYEE_CAFE, TAG_FUN, money, ownerSession, referenceHandlers } from "../planning/testing";
 
 const STAMP = "2026-11-01T10:00:00Z";
@@ -78,6 +78,87 @@ describe("rules list", () => {
     expect(api.callsTo("POST", "/api/v1/rules/apply")[0]?.body).toEqual({ date_from: "2026-10-01" });
     expect(await within(dialog).findByText("Finished", undefined, { timeout: 4000 })).toBeInTheDocument();
     expect(within(dialog).getByRole("button", { name: "Done" })).toBeInTheDocument();
+  });
+});
+
+describe("undoing a rule", () => {
+  const MERCHANT = rule("r-3", "Quiet Bean Coffee: Dining", 2, { conditions: { type: "merchant", key: "quiet bean coffee" } });
+
+  it("undo reverts and removes the rule from the list", async () => {
+    let rules = [...RULES, MERCHANT];
+    const api = mockApi({
+      ...ownerSession(),
+      ...referenceHandlers(),
+      "GET /api/v1/rules": () => json({ items: rules }),
+      "POST /api/v1/rules/:id/revert": () => {
+        rules = RULES;
+        return json({ rule_id: "r-3", reverted: 12, job_id: null });
+      },
+    });
+    renderApp("/rules");
+    const user = userEvent.setup();
+    const table = await screen.findByRole("region", { name: "Rules in the order they run" });
+    expect(await within(table).findByText("The merchant is quiet bean coffee")).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Undo Quiet Bean Coffee: Dining" }));
+    // Nothing happens before the person has read what it does.
+    const dialog = await screen.findByRole("dialog", { name: "Undo rule" });
+    expect(within(dialog).getByText(/A category chosen by hand stays/)).toBeInTheDocument();
+    expect(api.callsTo("POST", "/api/v1/rules/:id/revert")).toHaveLength(0);
+    await user.click(within(dialog).getByRole("button", { name: "Undo rule" }));
+    await vi.waitFor(() => {
+      expect(api.callsTo("POST", "/api/v1/rules/r-3/revert")).toHaveLength(1);
+    });
+    expect(api.callsTo("POST", "/api/v1/rules/r-3/revert")[0]?.headers.get("X-CSRF-Token")).toBeTruthy();
+    await vi.waitFor(() => {
+      expect(within(table).getAllByRole("rowheader").map((cell) => cell.textContent)).toEqual(["Alpha", "Beta"]);
+    });
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    expect(await screen.findByText("Rule undone. 12 transactions are without its category again.")).toBeInTheDocument();
+    // Deleting is still there, and is not what was called.
+    expect(api.callsTo("DELETE", "/api/v1/rules/:id")).toHaveLength(0);
+  });
+
+  it("an administrator may undo any rule, a member only a merchant rule, a viewer none", async () => {
+    const handlers = (role: "admin" | "member" | "viewer") => ({
+      ...referenceHandlers(),
+      "GET /api/v1/auth/session": authedSession({ role }),
+      "GET /api/v1/rules": () => json({ items: [...RULES, MERCHANT, rule("r-4", "Hidden", 3, { redacted: true })] }),
+    });
+    mockApi(handlers("admin"));
+    const admin = renderApp("/rules");
+    expect(await screen.findByRole("button", { name: "Undo Alpha" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Undo Quiet Bean Coffee: Dining" })).toBeInTheDocument();
+    // A rule whose conditions are hidden from the caller is not theirs to undo.
+    expect(screen.queryByRole("button", { name: "Undo Hidden" })).not.toBeInTheDocument();
+    admin.unmount();
+
+    mockApi(handlers("member"));
+    const member = renderApp("/rules");
+    expect(await screen.findByRole("button", { name: "Undo Quiet Bean Coffee: Dining" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Undo Alpha" })).not.toBeInTheDocument();
+    member.unmount();
+
+    mockApi(handlers("viewer"));
+    renderApp("/rules");
+    await screen.findByRole("button", { name: "Delete Alpha" });
+    expect(screen.queryByRole("button", { name: /^Undo / })).not.toBeInTheDocument();
+  });
+
+  it("shows the server's refusal and keeps the rule", async () => {
+    mockApi({
+      ...ownerSession(),
+      ...referenceHandlers(),
+      "GET /api/v1/rules": () => json({ items: [MERCHANT] }),
+      "POST /api/v1/rules/:id/revert": () =>
+        json({ type: "rule-not-revertible", title: "Forbidden", status: 403, detail: "Only an owner or administrator may undo this rule." }, 403),
+    });
+    renderApp("/rules");
+    const user = userEvent.setup();
+    await user.click(await screen.findByRole("button", { name: "Undo Quiet Bean Coffee: Dining" }));
+    const dialog = await screen.findByRole("dialog", { name: "Undo rule" });
+    await user.click(within(dialog).getByRole("button", { name: "Undo rule" }));
+    expect(await within(dialog).findByText("Only an owner or administrator may undo this rule.")).toBeInTheDocument();
+    expect(screen.getByRole("rowheader", { name: "Quiet Bean Coffee: Dining" })).toBeInTheDocument();
   });
 });
 

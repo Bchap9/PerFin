@@ -3,9 +3,10 @@ import { screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 
 import { authedSession, json, mockApi, renderApp } from "../auth/testing";
-import { lookupHandlers, NOW } from "../transactions/fixtures";
+import type { CategorisationSummary, LearnedCategory } from "../categories/api";
+import { lookupHandlers, NOW, summary } from "../transactions/fixtures";
 import type { LearnedLayout, LearnedWording, Mapping } from "./api";
-import { layoutReads, mappingReads, wordingMeans } from "./learned";
+import { layoutReads, mappingReads, sourceCountLine, timesText, wordingMeans } from "./learned";
 
 const TAUGHT: LearnedLayout = {
   id: "l-1",
@@ -63,10 +64,54 @@ const MAPPING: Mapping = {
   },
 };
 
-function handlers(role: "owner" | "viewer" = "owner") {
+/** Three of three corrections went one way and no rule covers the merchant yet: a rule is offered. */
+const UNANIMOUS: LearnedCategory = {
+  id: "m-1",
+  merchant: "Quiet Bean Coffee",
+  merchant_key: "quiet bean coffee",
+  direction: "out",
+  category_id: "c-2",
+  decisions: 3,
+  total: 3,
+  share: "1.00",
+  last_decided_at: NOW,
+  offer_rule: true,
+  rule_id: null,
+  example_transaction_id: "t-7",
+};
+const DIVIDED: LearnedCategory = {
+  ...UNANIMOUS,
+  id: "m-2",
+  merchant: "Corner Grocer",
+  merchant_key: "corner grocer",
+  category_id: "c-1",
+  decisions: 2,
+  share: "0.67",
+  offer_rule: false,
+  example_transaction_id: "t-8",
+};
+
+const COUNTED: CategorisationSummary = summary({
+  by_source: [
+    { source: "dictionary", transactions: 120 },
+    { source: "person", transactions: 14 },
+    { source: "keyword", transactions: 1 },
+    { source: null, transactions: 9 },
+  ],
+  dictionary_version: 3,
+  dictionary_merchants: 950,
+  learned_merchants: 2,
+  uncategorised: 9,
+  suggestions: 4,
+  up_to_date: false,
+});
+
+function handlers(role: "owner" | "member" | "viewer" = "owner") {
   return {
     "GET /api/v1/auth/session": authedSession({ role }),
     ...lookupHandlers(),
+    "GET /api/v1/categorisation/summary": () => json(COUNTED),
+    "GET /api/v1/categorisation/learned": () => json({ items: [UNANIMOUS, DIVIDED], next_cursor: null }),
     "GET /api/v1/imports/layouts": () => json({ items: [TAUGHT, NAMED] }),
     "GET /api/v1/imports/wording": () => json({ items: [WORDING, HEADING] }),
     "GET /api/v1/imports/mappings": () => json({ items: [MAPPING], next_cursor: null }),
@@ -215,8 +260,133 @@ describe("LearnedPage", () => {
     renderApp("/documents/learned");
     await screen.findByRole("table", { name: "Learned statement layouts" });
     await screen.findByText("Everyday export");
+    await screen.findByText("Quiet Bean Coffee");
     expect(screen.queryByRole("button", { name: /Forget/ })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /Rename|Delete/ })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Check again" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("link", { name: /a rule$/ })).not.toBeInTheDocument();
+  });
+});
+
+describe("LearnedPage: categories", () => {
+  it("lists what was learned and forgets an entry", async () => {
+    const user = userEvent.setup();
+    const api = mockApi({
+      ...handlers("member"),
+      "DELETE /api/v1/categorisation/learned/:id": () => new Response(null, { status: 204 }),
+    });
+    renderApp("/documents/learned");
+    const table = await screen.findByRole("table", { name: "Categories learned from you" });
+    const unanimous = within(table).getByRole("rowheader", { name: "Quiet Bean Coffee" }).closest("tr");
+    expect(unanimous).not.toBeNull();
+    expect(await within(unanimous as HTMLElement).findByText("Dining")).toBeInTheDocument();
+    expect(within(unanimous as HTMLElement).getByText("3 of 3 times")).toBeInTheDocument();
+    const divided = within(table).getByRole("rowheader", { name: "Corner Grocer" }).closest("tr");
+    expect(within(divided as HTMLElement).getByText("Groceries")).toBeInTheDocument();
+    expect(within(divided as HTMLElement).getByText("2 of 3 times")).toBeInTheDocument();
+    // What the bank printed is not on this page: only the merchant's name.
+    expect(screen.queryByText("quiet bean coffee")).not.toBeInTheDocument();
+
+    api.on("GET /api/v1/categorisation/learned", () => json({ items: [DIVIDED], next_cursor: null }));
+    await user.click(within(table).getByRole("button", { name: "Forget what was learned about Quiet Bean Coffee" }));
+    await waitFor(() => {
+      expect(api.callsTo("DELETE", "/api/v1/categorisation/learned/m-1")).toHaveLength(1);
+    });
+    expect(api.callsTo("DELETE", "/api/v1/categorisation/learned/m-1")[0]?.headers.get("X-CSRF-Token")).toBeTruthy();
+    await waitFor(() => {
+      expect(within(table).queryByText("Quiet Bean Coffee")).not.toBeInTheDocument();
+    });
+    expect(within(table).getByText("Corner Grocer")).toBeInTheDocument();
+  });
+
+  it("offers a rule at three unanimous decisions", async () => {
+    mockApi(handlers("member"));
+    renderApp("/documents/learned");
+    const table = await screen.findByRole("table", { name: "Categories learned from you" });
+    // The link opens "Always categorise..." for a row of that merchant on the transactions page.
+    expect(within(table).getByRole("link", { name: "Make Quiet Bean Coffee a rule" })).toHaveAttribute(
+      "href",
+      "/transactions?always=t-7",
+    );
+    expect(within(table).queryByRole("link", { name: "Make Corner Grocer a rule" })).not.toBeInTheDocument();
+  });
+
+  it("offers no rule without a transaction to make it from, and names the rule a merchant already has", async () => {
+    mockApi({
+      ...handlers("member"),
+      "GET /api/v1/categorisation/learned": () =>
+        json({
+          items: [
+            { ...UNANIMOUS, example_transaction_id: null },
+            { ...DIVIDED, decisions: 3, share: "1.00", rule_id: "r-4" },
+          ],
+          next_cursor: null,
+        }),
+    });
+    renderApp("/documents/learned");
+    const table = await screen.findByRole("table", { name: "Categories learned from you" });
+    expect(within(table).queryByRole("link", { name: /a rule$/ })).not.toBeInTheDocument();
+    expect(within(table).getByRole("link", { name: "The rule for Corner Grocer" })).toHaveAttribute("href", "/rules/r-4");
+  });
+
+  it("shows the counts by source and the dictionary version", async () => {
+    const user = userEvent.setup();
+    const api = mockApi({
+      ...handlers("owner"),
+      "POST /api/v1/categorisation/refresh": () => json({ job_id: "j-5", state: "queued" }, 202),
+      "GET /api/v1/jobs/:id": () =>
+        json({ id: "j-5", type: "categorise.refresh", state: "running", finished: false, attempts: 1, max_attempts: 3, created_at: NOW, updated_at: NOW }),
+    });
+    renderApp("/documents/learned");
+    const list = await screen.findByRole("list", { name: "Transactions by how their category was decided" });
+    expect(within(list).getAllByRole("listitem").map((item) => item.textContent)).toEqual([
+      "You chose: 14 transactions",
+      "Merchant list: 120 transactions",
+      "Keyword: 1 transaction",
+      "Not decided: 9 transactions",
+    ]);
+    expect(screen.getByText("Merchant list version 3, with 950 merchants.")).toBeInTheDocument();
+    expect(screen.getByText("Not up to date yet")).toBeInTheDocument();
+    expect(screen.getByText("9 transactions have no category; 4 of them have a suggestion.")).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Check again" }));
+    await waitFor(() => {
+      expect(api.callsTo("POST", "/api/v1/categorisation/refresh")).toHaveLength(1);
+    });
+    expect(api.callsTo("POST", "/api/v1/categorisation/refresh")[0]?.headers.get("X-CSRF-Token")).toBeTruthy();
+    expect(await screen.findByText("Running")).toBeInTheDocument();
+  });
+
+  it("says nothing about being behind when it is up to date", async () => {
+    mockApi({ ...handlers(), "GET /api/v1/categorisation/summary": () => json({ ...COUNTED, up_to_date: true }) });
+    renderApp("/documents/learned");
+    await screen.findByText("Merchant list version 3, with 950 merchants.");
+    expect(screen.queryByText("Not up to date yet")).not.toBeInTheDocument();
+  });
+
+  it('a member sees no "Check again"', async () => {
+    mockApi(handlers("member"));
+    renderApp("/documents/learned");
+    await screen.findByText("Merchant list version 3, with 950 merchants.");
+    expect(await screen.findByRole("button", { name: "Forget what was learned about Quiet Bean Coffee" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Check again" })).not.toBeInTheDocument();
+  });
+
+  it("names the three ways a category is decided", async () => {
+    mockApi(handlers());
+    renderApp("/documents/learned");
+    expect(
+      await screen.findByText(/what PerFin learned from the categories you chose, and the merchant list that ships with PerFin/),
+    ).toBeInTheDocument();
+  });
+});
+
+describe("learned categories in words", () => {
+  it("counts decisions and transactions in the singular and the plural", () => {
+    expect(timesText(1, 1)).toBe("1 of 1 time");
+    expect(timesText(2, 3)).toBe("2 of 3 times");
+    expect(sourceCountLine({ source: "learned", transactions: 1 })).toBe("Learned from you: 1 transaction");
+    expect(sourceCountLine({ source: "legacy", transactions: 40 })).toBe("From before this version: 40 transactions");
+    expect(sourceCountLine({ source: "rule", transactions: 2 })).toBe("A rule: 2 transactions");
   });
 });
 

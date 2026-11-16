@@ -4,7 +4,7 @@ import userEvent from "@testing-library/user-event";
 
 import { authedSession, json, mockApi, renderApp } from "../../auth/testing";
 import type { Channel } from "./api";
-import { buildCreate, buildUpdate, describeOutcome, emptyForm, formFrom } from "./form";
+import { buildCreate, buildUpdate, describeOutcome, emptyForm, formFrom, KINDS } from "./form";
 
 const NTFY: Channel = {
   id: "0190a000-0000-7000-8000-000000000001",
@@ -42,6 +42,17 @@ describe("notification form helpers", () => {
     expect(update?.config).toEqual({ type: "ntfy", server_url: "https://ntfy.example.org", priority: 3 });
     expect(buildUpdate({ ...form, token: "new" }, NTFY).body?.config).toHaveProperty("token", "new");
     expect(buildCreate({ ...emptyForm("ntfy"), name: "x" }).errors["topic"]).toBeDefined();
+  });
+
+  it("offers the four subscription kinds, on by default for a new channel and off for one saved without them", () => {
+    const kinds = ["subscription_new", "subscription_price_changed", "subscription_missed", "subscription_renewal"];
+    expect(KINDS.map((k) => k.kind)).toEqual(expect.arrayContaining(kinds));
+    expect(KINDS).toHaveLength(13);
+    expect(emptyForm().kinds).toEqual(expect.arrayContaining(kinds));
+    // A channel saved before the kinds existed does not get them by itself.
+    expect(formFrom(NTFY).kinds).toEqual(["account_locked", "role_changed"]);
+    const ticked = { ...formFrom(NTFY), kinds: [...formFrom(NTFY).kinds, "subscription_renewal" as const] };
+    expect(buildUpdate(ticked, NTFY).body?.events).toEqual(["account_locked", "role_changed", "subscription_renewal"]);
   });
 
   it("explains outcomes", () => {
@@ -85,6 +96,40 @@ describe("notifications settings page", () => {
     await waitFor(() => {
       expect(api.callsTo("POST", "/api/v1/settings/notifications/channels")).toHaveLength(1);
     });
+  });
+
+  it("the four subscription kinds can be ticked and are sent", async () => {
+    const api = mockApi({
+      "GET /api/v1/auth/session": authedSession({ role: "owner" }),
+      "GET /api/v1/settings/notifications/channels": () => json([NTFY]),
+      "POST /api/v1/settings/notifications/channels": () =>
+        json({ ...NTFY, id: "0190a000-0000-7000-8000-000000000003", name: "Hook", type: "webhook", config: { url: "https://hooks.example.org/x" }, secrets_set: ["secret"] }, 201),
+      "PATCH /api/v1/settings/notifications/channels/:id": () => json(NTFY),
+    });
+    renderApp("/settings/notifications");
+    const user = userEvent.setup();
+    await screen.findByRole("heading", { name: "Phone" });
+    const labels = [
+      "A new subscription is found",
+      "A subscription's price changes",
+      "An expected charge does not arrive",
+      "A subscription or bill renews within a week",
+    ];
+    // A new channel starts with every kind ticked; one of the four is taken off here.
+    for (const label of labels) {
+      expect(screen.getByRole("checkbox", { name: label })).toBeChecked();
+    }
+    await user.click(screen.getByRole("checkbox", { name: "An expected charge does not arrive" }));
+    await user.type(screen.getByLabelText("Name"), "Hook");
+    await user.selectOptions(screen.getByLabelText("Service"), "webhook");
+    await user.type(screen.getByLabelText("Webhook URL"), "https://hooks.example.org/x");
+    await user.click(screen.getByRole("button", { name: "Add channel" }));
+    await waitFor(() => {
+      expect(api.callsTo("POST", "/api/v1/settings/notifications/channels")).toHaveLength(1);
+    });
+    const sent = (api.callsTo("POST", "/api/v1/settings/notifications/channels")[0]?.body as { events: string[] }).events;
+    expect(sent).toEqual(expect.arrayContaining(["subscription_new", "subscription_price_changed", "subscription_renewal", "backup_failed"]));
+    expect(sent).not.toContain("subscription_missed");
   });
 
   it("is closed to a member", async () => {

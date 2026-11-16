@@ -1,6 +1,63 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-/** Plain words for what a learned layout or a saved column mapping does. */
+/** Plain words for what a learned layout or a saved column mapping does, and for how categories were decided. */
+import type { SourceCount } from "../categories/api";
 import type { LearnedLayout, LearnedWording, Mapping } from "./api";
+
+type Source = NonNullable<SourceCount["source"]>;
+
+/** The ways a category is decided, strongest first (design note, section 4), with the words for a count. */
+const SOURCES: readonly { source: Source; label: string }[] = [
+  { source: "person", label: "You chose" },
+  { source: "file", label: "From the file" },
+  { source: "rule", label: "A rule" },
+  { source: "payee", label: "Payee default" },
+  { source: "learned", label: "Learned from you" },
+  { source: "dictionary", label: "Merchant list" },
+  { source: "keyword", label: "Keyword" },
+  { source: "legacy", label: "From before this version" },
+];
+
+function sourceWords(source: SourceCount["source"]): string {
+  return source === null ? "Not decided" : (SOURCES.find((known) => known.source === source)?.label ?? words(source));
+}
+
+function count(n: number, one: string, many: string): string {
+  return `${String(n)} ${n === 1 ? one : many}`;
+}
+
+/** "Merchant list: 120 transactions". */
+export function sourceCountLine(entry: SourceCount): string {
+  return `${sourceWords(entry.source)}: ${count(entry.transactions, "transaction", "transactions")}`;
+}
+
+/** The counts in the order categories are decided, the undecided rows last; sources with nothing are left out. */
+export function sourceCountLines(entries: readonly SourceCount[]): string[] {
+  const rank = (source: SourceCount["source"]): number => {
+    const index = SOURCES.findIndex((known) => known.source === source);
+    return index < 0 ? SOURCES.length : index;
+  };
+  return entries
+    .filter((entry) => entry.transactions > 0)
+    .sort((a, b) => rank(a.source) - rank(b.source))
+    .map(sourceCountLine);
+}
+
+/** "3 of 3 times": how many of the merchant's hand-decided transactions went to the category. */
+export function timesText(decisions: number, total: number): string {
+  return `${String(decisions)} of ${count(total, "time", "times")}`;
+}
+
+/** "9 transactions have no category; 4 of them have a suggestion." Null when every row has one. */
+export function openText(uncategorised: number, suggestions: number): string | null {
+  if (uncategorised <= 0) {
+    return null;
+  }
+  const open = uncategorised === 1 ? "1 transaction has no category" : `${String(uncategorised)} transactions have no category`;
+  if (suggestions <= 0) {
+    return `${open}.`;
+  }
+  return uncategorised === 1 ? `${open}; it has a suggestion.` : `${open}; ${String(suggestions)} of them ${suggestions === 1 ? "has" : "have"} a suggestion.`;
+}
 
 const FIELD_LABELS: ReadonlyMap<string, string> = new Map(Object.entries({
   account_number: "account number",

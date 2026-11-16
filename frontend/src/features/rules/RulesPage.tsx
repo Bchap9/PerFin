@@ -12,12 +12,13 @@ import { Field } from "../../components/Field";
 import { Input } from "../../components/Input";
 import { Table, type TableColumn } from "../../components/Table";
 import { queryRoots } from "../../lib/queryKeys";
+import { canWriteLedger } from "../accounts/api";
 import { canManageMembers, useAuthSession } from "../auth/session";
 import { ErrorLine, PlanningPage, QueryState } from "../planning/PlanningPage";
 import { nameLookup, useAccounts, useCategories, usePayees, useTags } from "../planning/queries";
 import { useAction } from "../planning/useAction";
-import { applyRules, deleteRule, listRules, movedOrder, reorderRules, ruleKeys, updateRule, type Rule } from "./api";
-import { parseRule } from "./builder";
+import { applyRules, deleteRule, listRules, movedOrder, reorderRules, revertRule, ruleKeys, updateRule, type Rule } from "./api";
+import { merchantRuleKey, parseRule } from "./builder";
 import { describeGroup, type Names } from "./describe";
 import { JobProgress } from "./JobProgress";
 import { ExportRulesButton, ImportRulesDialog } from "./RuleTransfer";
@@ -96,6 +97,53 @@ function ApplyDialog({ rules, onClose }: { rules: readonly Rule[]; onClose: () =
   );
 }
 
+/**
+ * Undo, unlike Delete, also takes back what the rule did: the transactions it
+ * categorised have no category again and PerFin guesses for them afresh.
+ */
+function UndoDialog({ rule, onClose }: { rule: Rule; onClose: () => void }) {
+  const undo = useAction(revertRule, {
+    // The ledger changes with it: the rows, their counts and what a preview would say.
+    invalidate: [queryRoots.rules, queryRoots.transactions],
+    success: (result) =>
+      result.reverted === 0
+        ? "Rule undone. It had categorised no transaction."
+        : `Rule undone. ${result.reverted === 1 ? "1 transaction is" : `${String(result.reverted)} transactions are`} without its category again.`,
+  });
+  return (
+    <Dialog
+      open
+      onClose={onClose}
+      title="Undo rule"
+      description={`Remove "${rule.name}" and take back the categories it set.`}
+      footer={
+        <>
+          <Button onClick={onClose}>Cancel</Button>
+          <Button
+            variant="danger"
+            loading={undo.busy}
+            onClick={() => {
+              void undo.run(rule.id).then((done) => {
+                if (done !== undefined) {
+                  onClose();
+                }
+              });
+            }}
+          >
+            Undo rule
+          </Button>
+        </>
+      }
+    >
+      <p>
+        Every transaction this rule categorised goes back to having no category, and PerFin then guesses for it again. A category
+        chosen by hand stays as it is. To remove the rule and keep what it did, use Delete.
+      </p>
+      <ErrorLine message={undo.error} />
+    </Dialog>
+  );
+}
+
 export function RulesPage() {
   const query = useQuery({ queryKey: ruleKeys.list, queryFn: listRules });
   const categories = useCategories();
@@ -105,9 +153,13 @@ export function RulesPage() {
   const { session } = useAuthSession();
   // The server lets any role export; only an owner or admin may import.
   const canImport = canManageMembers(session?.household?.role);
+  // The server lets a member undo a merchant rule ("always categorise...") and an owner or admin any rule.
+  const canWrite = canWriteLedger(session?.household?.role);
+  const canUndo = (rule: Rule): boolean => !rule.redacted && (canImport || (canWrite && merchantRuleKey(rule) !== null));
   const [applying, setApplying] = useState(false);
   const [importing, setImporting] = useState(false);
   const [deleting, setDeleting] = useState<Rule | null>(null);
+  const [undoing, setUndoing] = useState<Rule | null>(null);
   const rules = useMemo(() => [...(query.data ?? [])].sort((a, b) => a.sort_order - b.sort_order), [query.data]);
   const names: Names = useMemo(() => {
     const lookups = {
@@ -175,6 +227,11 @@ export function RulesPage() {
             <Button size="sm" aria-label={`${rule.enabled ? "Disable" : "Enable"} ${rule.name}`} onClick={() => void toggle.run(rule)}>
               {rule.enabled ? "Disable" : "Enable"}
             </Button>
+            {canUndo(rule) ? (
+              <Button size="sm" aria-label={`Undo ${rule.name}`} onClick={() => { setUndoing(rule); }}>
+                Undo
+              </Button>
+            ) : null}
             <Button size="sm" variant="danger" aria-label={`Delete ${rule.name}`} onClick={() => { setDeleting(rule); }}>
               Delete
             </Button>
@@ -219,6 +276,7 @@ export function RulesPage() {
       </QueryState>
       {applying ? <ApplyDialog rules={rules.filter((rule) => !rule.redacted)} onClose={() => { setApplying(false); }} /> : null}
       {importing ? <ImportRulesDialog existing={rules.length} onClose={() => { setImporting(false); }} /> : null}
+      {undoing === null ? null : <UndoDialog rule={undoing} onClose={() => { setUndoing(null); }} />}
       {deleting === null ? null : (
         <Dialog
           open

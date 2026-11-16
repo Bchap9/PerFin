@@ -2,7 +2,7 @@
 import "../accounts/ledger.css";
 import "./transactions.css";
 
-import { useInfiniteQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link, useSearch } from "@tanstack/react-router";
 import { useMemo, useState, type FormEvent } from "react";
 
@@ -25,6 +25,7 @@ import {
   autoPairTransfers,
   canTeach,
   EMPTY_FILTERS,
+  getTransaction,
   invalidateLedger,
   listTransactions,
   merchantName,
@@ -65,6 +66,7 @@ function initialFilters(search: Record<string, unknown>): TransactionFilters {
   // `account`, `category` (an id, or "none"), `date_from`, `date_to` and
   // `document` (the file the rows were imported from), named like the filters
   // of GET /transactions. `suggested=true` shows only the rows with a suggestion.
+  // (`always` is not a filter: see `linkedTransactionId`.)
   const given = new Map(Object.entries(search));
   const text = (key: string): string => {
     const value = given.get(key);
@@ -80,6 +82,15 @@ function initialFilters(search: Record<string, unknown>): TransactionFilters {
     document: text("document"),
     suggested: given.get("suggested") === true || text("suggested") === "true",
   };
+}
+
+/**
+ * `?always=<transaction id>`: "Make it a rule" on the learned page links here
+ * to open "Always categorise <merchant> as..." for that transaction.
+ */
+function linkedTransactionId(search: Record<string, unknown>): string | null {
+  const value = new Map(Object.entries(search)).get("always");
+  return typeof value === "string" && value !== "" ? value : null;
 }
 
 export function TransactionsPage() {
@@ -104,6 +115,18 @@ export function TransactionsPage() {
   const [always, setAlways] = useState<TeachOffer | { transaction: Transaction; categoryId?: undefined } | null>(null);
   const [offer, setOffer] = useState<TeachOffer | null>(null);
   const [savedRule, setSavedRule] = useState<SavedRule | null>(null);
+  // A link that names a transaction opens the dialog for it until it is
+  // closed: the row is asked for by id because it need not be on the first
+  // page of the grid.
+  const linkedId = canWrite ? linkedTransactionId(search) : null;
+  const [linkClosed, setLinkClosed] = useState(false);
+  const linked = useQuery({
+    queryKey: txKeys.one(linkedId ?? ""),
+    queryFn: () => getTransaction(linkedId ?? ""),
+    enabled: linkedId !== null && !linkClosed,
+  });
+  const linkedRow = linkClosed ? undefined : linked.data;
+  const alwaysOpen = always ?? (linkedRow !== undefined && canTeach(linkedRow) ? { transaction: linkedRow, categoryId: undefined } : null);
   const edit = useEditTransaction();
   const findTransfers = useMutation({
     mutationFn: autoPairTransfers,
@@ -593,18 +616,19 @@ export function TransactionsPage() {
           }}
         />
       )}
-      {always === null ? null : (
+      {alwaysOpen === null ? null : (
         <AlwaysCategoriseDialog
-          transaction={always.transaction}
+          transaction={alwaysOpen.transaction}
           categories={categoryList}
-          categoryId={always.categoryId}
+          categoryId={alwaysOpen.categoryId}
           onClose={() => {
             setAlways(null);
+            setLinkClosed(true);
           }}
           onSaved={(saved) => {
             setSavedRule(saved);
             // The merchant has its rule: the offer for it is answered.
-            setOffer((current) => (current?.transaction.merchant_key === always.transaction.merchant_key ? null : current));
+            setOffer((current) => (current?.transaction.merchant_key === alwaysOpen.transaction.merchant_key ? null : current));
           }}
         />
       )}
