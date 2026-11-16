@@ -286,8 +286,8 @@ def _keys_of_series(
 def _names_nobody_now(
     account_id: uuid.UUID, direction: Direction, key: str, summary: Summary
 ) -> bool:
-    """Whether rows of ``account_id`` and ``direction`` carried ``key`` and none names anybody now."""
-    now = summary.renamed_at.get((account_id, direction, key))
+    """Whether rows of ``account_id`` and ``direction`` carried ``key``, none naming anybody now."""
+    now = summary.renamed_at.get((account_id, direction, key), frozenset())
     return bool(now) and all(new is None for new in now)
 
 
