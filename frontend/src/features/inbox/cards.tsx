@@ -155,7 +155,19 @@ function acceptable(row: Transaction): boolean {
   return typeof row.suggested_category_id === "string" && (row.category_id ?? null) === null && row.splits.length === 0;
 }
 
-/** The suggested rows by merchant, most rows first, at most `max`. */
+/** Printed text with fewer letters and digits than this says too little to group rows by. */
+const MIN_GROUP_CHARACTERS = 3;
+
+function groupable(printed: string): boolean {
+  return (printed.match(/[\p{L}\p{N}]/gu)?.length ?? 0) >= MIN_GROUP_CHARACTERS;
+}
+
+/**
+ * The suggested rows by merchant, most rows first, at most `max`. A row with
+ * no merchant groups by its printed text ("raw:"), unless that text has
+ * fewer than three letters and digits ("#1", "-", none): such a row stands
+ * alone, so one Accept never covers unrelated rows.
+ */
 export function groupSuggestions(rows: readonly Transaction[], max = 5): MerchantGroup[] {
   const groups = new Map<string, { name: string; ids: string[]; categories: Map<string, number> }>();
   for (const row of rows) {
@@ -164,7 +176,7 @@ export function groupSuggestions(rows: readonly Transaction[], max = 5): Merchan
       continue;
     }
     const printed = row.raw_payee ?? "";
-    const key = row.merchant_key ?? `raw:${printed}`;
+    const key = row.merchant_key ?? (groupable(printed) ? `raw:${printed}` : `row:${row.id}`);
     const group = groups.get(key) ?? {
       name: merchantName(row) ?? (printed === "" ? "No merchant" : printed),
       ids: [] as string[],
