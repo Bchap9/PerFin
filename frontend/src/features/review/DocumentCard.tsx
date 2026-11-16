@@ -1438,10 +1438,17 @@ function CardView({ model }: { model: CardModel }) {
         }}
       />
     ));
+  // Several cards share a heading ("1 thing(s) to settle"), so each region
+  // is named after its file as well: landmarks need distinct names.
+  const regionName = `${heading}: ${
+    document?.original_filename ?? (asked === undefined ? "no file" : explain(asked).title)
+  }`;
   return (
     <Card
       className="review-card"
       title={heading}
+      aria-labelledby={undefined}
+      aria-label={regionName}
       actions={
         <Button
           size="sm"
