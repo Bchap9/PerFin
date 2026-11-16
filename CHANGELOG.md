@@ -100,12 +100,6 @@ Stage 4 of four on the way to 1.0.0: the release review.
   with `FUEL` or `PETROLEUM`. `SHELL` alone is still nobody's fuel: the
   word names too many other businesses (merchant list version 9).
 
-### Security
-
-- **Development tooling: minimatch 11.** ESLint 10.15.0 and typescript-eslint
-  8.73.0 bring minimatch 11.0.8, out of GHSA-g3hv-75wg-m249 (minimatch
-  7 to 11.0.0). Development dependencies only; nothing shipped changes.
-
 ## [1.0.0-rc.11] - 2026-11-16
 
 The redesign, the third of four stages on the way to 1.0.0. PerFin is six
