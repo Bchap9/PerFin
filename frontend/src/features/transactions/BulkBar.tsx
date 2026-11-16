@@ -72,6 +72,7 @@ export function BulkBar({ ids, suggestionIds = [], onDone }: BulkBarProps) {
       {suggestionIds.length > 0 ? (
         <Button
           title="Take the suggested category for each selected transaction that has one"
+          loading={run.isPending}
           onClick={() => {
             // Only the rows that have one: the others are not this action's business.
             run.mutate({ action: "accept_suggestions", ids: [...suggestionIds] });

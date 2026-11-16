@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import {
+  CONDITION_TYPES,
   emptyRule,
   hasProblems,
   merchantRuleKey,
@@ -295,7 +296,7 @@ describe("the merchant condition", () => {
     expect(serializeCondition(condition({ type: "merchant", value: " quiet bean coffee " }))).toEqual({ type: "merchant", key: "quiet bean coffee" });
     // Bare, as "always categorise..." stores it: shown as one condition and written back as the same key.
     const bare = parseRule(MERCHANT_RULE);
-    expect(bare.conditionsSupported).toBe(true);
+    expect(bare.conditionsReadable).toBe(true);
     expect(bare.draft.conditions.items).toMatchObject([{ type: "merchant", value: "quiet bean coffee", negate: false }]);
     expect(serializeConditions(bare.draft.conditions)).toEqual({ type: "all", conditions: [{ type: "merchant", key: "quiet bean coffee" }] });
     // Beside other conditions, and negated.
@@ -307,6 +308,19 @@ describe("the merchant condition", () => {
     expect(group).not.toBeNull();
     expect(group === null ? null : serializeConditions(group)).toEqual(doc);
     expect(hasProblems(validateRule(bare.draft))).toBe(false);
+  });
+
+  it("the rule form does not offer or open a merchant condition while it has no field for the key", () => {
+    // RuleForm renders no input for the key: offered there it is a dead end,
+    // so the type is not in its list and such a rule keeps its conditions as stored.
+    expect(CONDITION_TYPES.map((type) => type.value)).not.toContain("merchant");
+    expect(parseRule(MERCHANT_RULE)).toMatchObject({ conditionsSupported: false, conditionsReadable: true });
+    const beside: ConditionDoc = { type: "all", conditions: [{ type: "sign", sign: "outflow" }, { type: "not", condition: { type: "merchant", key: "netflix" } }] };
+    expect(parseRule({ ...MERCHANT_RULE, conditions: beside })).toMatchObject({ conditionsSupported: false, conditionsReadable: true });
+    // Every other rule is as before.
+    expect(parseRule({ ...MERCHANT_RULE, conditions: { type: "sign", sign: "outflow" } })).toMatchObject({ conditionsSupported: true, conditionsReadable: true });
+    const nested: ConditionDoc = { type: "all", conditions: [{ type: "any", conditions: [{ type: "sign", sign: "outflow" }] }] };
+    expect(parseRule({ ...MERCHANT_RULE, conditions: nested })).toMatchObject({ conditionsSupported: false, conditionsReadable: false });
   });
 
   it("a key with a capital letter is refused", () => {

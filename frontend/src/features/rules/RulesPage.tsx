@@ -195,7 +195,7 @@ export function RulesPage() {
           return <span className="muted">Hidden (refers to accounts you cannot see)</span>;
         }
         const parsed = parseRule({ ...rule, conditions: rule.conditions, actions: rule.actions });
-        return parsed.conditionsSupported ? describeGroup(parsed.draft.conditions, names) : "Complex conditions";
+        return parsed.conditionsReadable ? describeGroup(parsed.draft.conditions, names) : "Complex conditions";
       },
     },
     { id: "hits", header: "Matches", align: "end", cell: (rule) => String(rule.hit_count) },

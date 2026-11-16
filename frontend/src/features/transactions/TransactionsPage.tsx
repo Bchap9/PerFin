@@ -3,7 +3,7 @@ import "../accounts/ledger.css";
 import "./transactions.css";
 
 import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Link, useSearch } from "@tanstack/react-router";
+import { Link, useNavigate, useSearch } from "@tanstack/react-router";
 import { useMemo, useState, type FormEvent } from "react";
 
 import { Badge } from "../../components/Badge";
@@ -95,6 +95,7 @@ function linkedTransactionId(search: Record<string, unknown>): string | null {
 
 export function TransactionsPage() {
   const search: Record<string, unknown> = useSearch({ strict: false });
+  const navigate = useNavigate();
   const queryClient = useQueryClient();
   const toast = useToast();
   const canWrite = useCanWrite();
@@ -117,7 +118,8 @@ export function TransactionsPage() {
   const [savedRule, setSavedRule] = useState<SavedRule | null>(null);
   // A link that names a transaction opens the dialog for it until it is
   // closed: the row is asked for by id because it need not be on the first
-  // page of the grid.
+  // page of the grid. Closing also takes `always` out of the address, so a
+  // reload or the back button does not open it again.
   const linkedId = canWrite ? linkedTransactionId(search) : null;
   const [linkClosed, setLinkClosed] = useState(false);
   const linked = useQuery({
@@ -126,7 +128,6 @@ export function TransactionsPage() {
     enabled: linkedId !== null && !linkClosed,
   });
   const linkedRow = linkClosed ? undefined : linked.data;
-  const alwaysOpen = always ?? (linkedRow !== undefined && canTeach(linkedRow) ? { transaction: linkedRow, categoryId: undefined } : null);
   const edit = useEditTransaction();
   const findTransfers = useMutation({
     mutationFn: autoPairTransfers,
@@ -195,6 +196,9 @@ export function TransactionsPage() {
   const counted = (label: string, count: number | undefined): string => (count === undefined ? label : `${label} (${String(count)})`);
 
   const editable = (row: Transaction): boolean => canWrite && accountsById.get(row.account_id)?.can_edit === true;
+  // The link opens the dialog only where the row's own menu would offer it.
+  const alwaysOpen =
+    always ?? (linkedRow !== undefined && canTeach(linkedRow) && editable(linkedRow) ? { transaction: linkedRow, categoryId: undefined } : null);
   const selectableRows = rows.filter(editable);
   const allSelected = selectableRows.length > 0 && selectableRows.every((row) => selected.has(row.id));
   const canAdd = canWrite && (accounts.data ?? []).some((account) => account.can_edit);
@@ -624,6 +628,10 @@ export function TransactionsPage() {
           onClose={() => {
             setAlways(null);
             setLinkClosed(true);
+            if (linkedId !== null) {
+              const rest = Object.fromEntries(Object.entries(search).filter(([name]) => name !== "always"));
+              void navigate({ to: "/transactions", search: rest, replace: true });
+            }
           }}
           onSaved={(saved) => {
             setSavedRule(saved);

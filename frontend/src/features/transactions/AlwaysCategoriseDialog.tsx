@@ -8,8 +8,9 @@
  * person or another rule decided, which never change. Changing the existing
  * ones is a separate choice and not the default. A row that cannot teach, or
  * a merchant an earlier rule already decides, is explained and cannot be
- * saved. `RuleSavedNotice` is what the page shows afterwards: the undo, and
- * the progress of the job when existing transactions are being changed.
+ * saved. `RuleSavedNotice` is what the page shows afterwards: the undo of a
+ * rule this save made, and the progress of the job when existing transactions
+ * are being changed.
  */
 import "./transactions.css";
 
@@ -36,6 +37,10 @@ export interface SavedRule {
   categoryName: string;
   /** Whether the existing transactions were asked to change too. */
   applied: boolean;
+  /** The merchant had its rule before this save: the save made no rule, so there is none to undo. */
+  existed: boolean;
+  /** The name of the category the rule had before, when this save changed it. */
+  previousCategoryName: string | null;
   result: MerchantRuleSaved;
 }
 
@@ -107,7 +112,16 @@ export function AlwaysCategoriseDialog({ transaction, categories, categoryId: st
       void queryClient.invalidateQueries({ queryKey: queryRoots.rules });
       invalidateLedger(queryClient);
       toast.notify({ tone: "success", title: "Rule saved" });
-      onSaved({ transactionId: transaction.id, merchant, categoryName: category.name, applied, result });
+      const previous = result.previous_category_id ?? null;
+      onSaved({
+        transactionId: transaction.id,
+        merchant,
+        categoryName: category.name,
+        applied,
+        existed: data.existing_rule_id !== null,
+        previousCategoryName: previous === null ? null : (categories.find((candidate) => candidate.id === previous)?.name ?? null),
+        result,
+      });
       onClose();
     } catch (caught) {
       setError(errorMessage(caught));
@@ -121,7 +135,11 @@ export function AlwaysCategoriseDialog({ transaction, categories, categoryId: st
       open
       onClose={onClose}
       title={`Always categorise ${merchant}`}
-      description="Saves a rule for this merchant. It runs on every import from now on, and you can undo it."
+      description={
+        data?.existing_rule_id != null
+          ? "Changes the rule this merchant has. It runs on every import from now on."
+          : "Saves a rule for this merchant. It runs on every import from now on, and you can undo it."
+      }
       footer={
         <>
           <Button onClick={onClose}>{savable ? "Cancel" : "Close"}</Button>
@@ -214,29 +232,38 @@ export interface RuleSavedNoticeProps {
 
 /**
  * Under the grid's toolbar after a rule was saved: what it does, "Undo", and
- * the job's progress when existing transactions are being changed. Undo of a
- * new rule removes it and returns what it categorised to undecided
- * (`POST /rules/{id}/revert`); undo of a changed rule saves its previous
- * category again, over the existing transactions too when the change was.
+ * the job's progress when existing transactions are being changed. Undo is
+ * offered only for a rule this save made: it removes the rule and returns
+ * what it categorised to undecided (`POST /rules/{id}/revert`). A rule that
+ * was there before is never reverted from here, because that would delete it
+ * together with everything it ever categorised. A changed rule has no undo
+ * either: the only way to put its category back is to save the merchant's
+ * rule again, and the server then also sets this transaction to that category
+ * as the person's own choice, which is a decision nobody made. The notice
+ * says how to go back by hand instead.
  */
 export function RuleSavedNotice({ saved, onDone }: RuleSavedNoticeProps) {
   const queryClient = useQueryClient();
   const toast = useToast();
   const [busy, setBusy] = useState(false);
   const { result } = saved;
-  const previous = result.previous_category_id;
-  const canUndo = !result.replaced || previous !== null;
+  // Only a rule this save made: `replaced` alone is false both for a new rule
+  // and for an existing one saved again with the category it had.
+  const canUndo = !saved.existed && !result.replaced;
+  const earlier = !saved.existed
+    ? null
+    : !result.replaced
+      ? `${saved.merchant} had this rule already; it is as it was.`
+      : `${saved.previousCategoryName === null ? "It had another category before" : `It was ${saved.previousCategoryName} before`}. To go back, choose that category for the rule again.`;
 
   const undo = async (): Promise<void> => {
+    if (!canUndo) {
+      return;
+    }
     setBusy(true);
     try {
-      if (!result.replaced) {
-        await revertRule(result.rule.id);
-        toast.notify({ tone: "success", title: "Rule removed", description: "What it had categorised is without a category again, for PerFin to guess anew." });
-      } else if (previous !== null) {
-        await createMerchantRule({ transaction_id: saved.transactionId, category_id: previous, apply_to_existing: saved.applied });
-        toast.notify({ tone: "success", title: "The rule has its earlier category back" });
-      }
+      await revertRule(result.rule.id);
+      toast.notify({ tone: "success", title: "Rule removed", description: "What it had categorised is without a category again, for PerFin to guess anew." });
       void queryClient.invalidateQueries({ queryKey: queryRoots.rules });
       invalidateLedger(queryClient);
       onDone();
@@ -249,7 +276,7 @@ export function RuleSavedNotice({ saved, onDone }: RuleSavedNoticeProps) {
   return (
     <div className="tx-notice" role="group" aria-label="Rule saved">
       <p role="status" className="tx-notice__text">
-        {saved.merchant} is always {saved.categoryName} from now on.
+        {saved.merchant} is always {saved.categoryName} from now on.{earlier === null ? null : ` ${earlier}`}
       </p>
       {result.job_id === null ? null : (
         <div className="tx-notice__job">

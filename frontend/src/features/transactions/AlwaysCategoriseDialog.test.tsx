@@ -3,9 +3,9 @@
 import { cleanup, screen, waitFor, within } from "@testing-library/react";
 import userEvent, { type UserEvent } from "@testing-library/user-event";
 
-import { authedSession, json, mockApi, renderApp, type SessionOptions } from "../auth/testing";
+import { authedSession, currentHref, json, mockApi, renderApp, type SessionOptions } from "../auth/testing";
 import type { MerchantRulePreview } from "../rules/api";
-import { lookupHandlers, NOW, page, tx } from "./fixtures";
+import { account, lookupHandlers, NOW, page, tx } from "./fixtures";
 import { forgetTeachDismissals } from "./TeachPrompt";
 
 const MERCHANT = { raw_payee: "SQ *QUIET BEAN COFFEE 0042", payee_id: null, merchant_key: "quiet bean coffee", merchant: "Quiet Bean Coffee" };
@@ -153,8 +153,7 @@ describe("Always categorise a merchant, from the row", () => {
     expect(api.callsTo("POST", "/api/v1/rules/merchant")).toHaveLength(0);
   });
 
-  it("undo of a new rule calls revert and undo of a changed rule puts the old category back", async () => {
-    // A new rule: undo removes it.
+  it("undo of a new rule calls revert", async () => {
     const fresh = setup();
     fresh.on("POST /api/v1/rules/merchant", () =>
       json({ rule: rule("r-9", "Quiet Bean Coffee: Dining", "c-2"), replaced: false, previous_category_id: null, job_id: null }, 201),
@@ -162,7 +161,8 @@ describe("Always categorise a merchant, from the row", () => {
     fresh.on("POST /api/v1/rules/:id/revert", () => json({ rule_id: "r-9", reverted: 0, job_id: null }));
     renderApp("/transactions");
     const user = userEvent.setup();
-    let dialog = await openDialog(user);
+    const dialog = await openDialog(user);
+    expect(within(dialog).getByText(/and you can undo it/)).toBeInTheDocument();
     await user.click(await within(dialog).findByRole("button", { name: "Save rule" }));
     await user.click(await within(await screen.findByRole("group", { name: "Rule saved" })).findByRole("button", { name: "Undo" }));
     await waitFor(() => {
@@ -172,26 +172,51 @@ describe("Always categorise a merchant, from the row", () => {
     await waitFor(() => {
       expect(screen.queryByRole("group", { name: "Rule saved" })).not.toBeInTheDocument();
     });
-    cleanup();
+  });
 
-    // A rule that was there already: saving changes it, undo puts its category back.
-    const changed = setup(preview({ existing_rule_id: "r-9" }));
-    changed.on("POST /api/v1/rules/merchant", (call) => {
-      const wanted = (call.body as { category_id: string }).category_id;
-      return json({ rule: rule("r-9", "Quiet Bean Coffee: Groceries", wanted), replaced: true, previous_category_id: wanted === "c-2" ? "c-1" : "c-2", job_id: null }, 201);
-    });
+  it("saving a rule that was there already with the same category offers no undo", async () => {
+    // The server answers replaced:false for a rule it did not change; revert
+    // would delete a rule this save did not make.
+    const api = setup(preview({ existing_rule_id: "r-9" }));
+    api.on("POST /api/v1/rules/merchant", () =>
+      json({ rule: rule("r-9", "Quiet Bean Coffee: Dining", "c-2"), replaced: false, previous_category_id: null, job_id: null }, 201),
+    );
+    api.on("POST /api/v1/rules/:id/revert", () => json({ rule_id: "r-9", reverted: 412, job_id: null }));
     renderApp("/transactions");
-    dialog = await openDialog(user);
+    const user = userEvent.setup();
+    const dialog = await openDialog(user);
     await user.click(await within(dialog).findByRole("button", { name: "Change the rule" }));
-    await user.click(await within(await screen.findByRole("group", { name: "Rule saved" })).findByRole("button", { name: "Undo" }));
-    await waitFor(() => {
-      expect(changed.callsTo("POST", "/api/v1/rules/merchant")).toHaveLength(2);
-    });
-    expect(changed.callsTo("POST", "/api/v1/rules/merchant").map((call) => call.body)).toEqual([
+    const saved = await screen.findByRole("group", { name: "Rule saved" });
+    expect(within(saved).getByRole("status")).toHaveTextContent("Quiet Bean Coffee is always Dining from now on. Quiet Bean Coffee had this rule already; it is as it was.");
+    expect(within(saved).queryByRole("button", { name: "Undo" })).not.toBeInTheDocument();
+    await user.click(within(saved).getByRole("button", { name: "Hide" }));
+    expect(api.callsTo("POST", "/api/v1/rules/:id/revert")).toHaveLength(0);
+    expect(api.callsTo("POST", "/api/v1/rules/merchant")).toHaveLength(1);
+  });
+
+  it("a changed rule offers no undo and says how to go back", async () => {
+    // Saving the earlier category again would also set this transaction to it
+    // as the person's own choice, so it is not offered as an undo.
+    const api = setup(preview({ existing_rule_id: "r-9" }));
+    api.on("POST /api/v1/rules/merchant", () =>
+      json({ rule: rule("r-9", "Quiet Bean Coffee: Dining", "c-2"), replaced: true, previous_category_id: "c-1", job_id: null }, 201),
+    );
+    renderApp("/transactions");
+    const user = userEvent.setup();
+    const dialog = await openDialog(user);
+    // The dialog does not promise an undo for a rule it only changes.
+    expect(await within(dialog).findByRole("button", { name: "Change the rule" })).toBeInTheDocument();
+    expect(within(dialog).queryByText(/you can undo it/)).not.toBeInTheDocument();
+    await user.click(within(dialog).getByRole("button", { name: "Change the rule" }));
+    const saved = await screen.findByRole("group", { name: "Rule saved" });
+    expect(within(saved).getByRole("status")).toHaveTextContent(
+      "Quiet Bean Coffee is always Dining from now on. It was Groceries before. To go back, choose that category for the rule again.",
+    );
+    expect(within(saved).queryByRole("button", { name: "Undo" })).not.toBeInTheDocument();
+    expect(api.callsTo("POST", "/api/v1/rules/merchant").map((call) => call.body)).toEqual([
       { transaction_id: "t-1", category_id: "c-2", apply_to_existing: false },
-      { transaction_id: "t-1", category_id: "c-1", apply_to_existing: false },
     ]);
-    expect(changed.callsTo("POST", "/api/v1/rules/:id/revert")).toHaveLength(0);
+    expect(api.callsTo("POST", "/api/v1/rules/:id/revert")).toHaveLength(0);
   });
 
   it("shows the server's refusal and keeps the dialog open", async () => {
@@ -351,6 +376,37 @@ describe("Always categorise a merchant, from what PerFin learned", () => {
     await waitFor(() => {
       expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
     });
+  });
+
+  it("closing the dialog takes the transaction out of the address, and the other filters stay", async () => {
+    const api = setup(preview(), []);
+    api.on("GET /api/v1/transactions/:id", () => json(ROW));
+    const { router } = renderApp("/transactions?always=t-1&category=none");
+    const dialog = await screen.findByRole("dialog", { name: "Always categorise Quiet Bean Coffee" });
+    await userEvent.setup().click(await within(dialog).findByRole("button", { name: "Cancel" }));
+    await waitFor(() => {
+      expect(currentHref(router)).toBe("/transactions?category=none");
+    });
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    // Replaced, not pushed: going back does not bring the dialog up again.
+    expect(router.history.length).toBe(1);
+  });
+
+  it("the link does nothing for a row on an account the person may only view", async () => {
+    const api = mockApi({
+      "GET /api/v1/auth/session": authedSession({ role: "member" }),
+      ...lookupHandlers([account("a-1", "Everyday", { can_edit: false }), account("a-2", "Spare")]),
+      "GET /api/v1/transactions": page([]),
+      "GET /api/v1/transactions/:id": () => json(ROW),
+      "POST /api/v1/rules/merchant/preview": () => json(preview()),
+    });
+    renderApp("/transactions?always=t-1");
+    await waitFor(() => {
+      expect(api.callsTo("GET", "/api/v1/transactions/t-1")).toHaveLength(1);
+    });
+    await screen.findByText(/No transactions/);
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    expect(api.callsTo("POST", "/api/v1/rules/merchant/preview")).toHaveLength(0);
   });
 
   it("the link does nothing for a viewer, a row that cannot teach or a row that is gone", async () => {

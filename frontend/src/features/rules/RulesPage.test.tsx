@@ -84,6 +84,32 @@ describe("rules list", () => {
 describe("undoing a rule", () => {
   const MERCHANT = rule("r-3", "Quiet Bean Coffee: Dining", 2, { conditions: { type: "merchant", key: "quiet bean coffee" } });
 
+  it("the editor keeps a merchant rule's condition as stored instead of showing a field it cannot fill", async () => {
+    const api = mockApi({
+      ...ownerSession(),
+      ...referenceHandlers(),
+      "GET /api/v1/rules/:id": () => json(MERCHANT),
+      "PATCH /api/v1/rules/:id": () => json(MERCHANT),
+      "GET /api/v1/rules": () => json({ items: [MERCHANT] }),
+    });
+    renderApp("/rules/r-3");
+    const user = userEvent.setup();
+    expect(await screen.findByLabelText(/^Rule name/)).toHaveValue("Quiet Bean Coffee: Dining");
+    // No condition row with a type and nothing to type the merchant into.
+    expect(screen.queryByLabelText("Condition 1")).not.toBeInTheDocument();
+    expect(screen.getByRole("note")).toHaveTextContent("They are kept as they are.");
+    // A new condition cannot be made a merchant one either.
+    expect(screen.queryByRole("option", { name: "Merchant is" })).not.toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Save rule" }));
+    const sent = (await vi.waitFor(() => {
+      const calls = api.callsTo("PATCH", "/api/v1/rules/r-3");
+      expect(calls).toHaveLength(1);
+      return calls;
+    }))[0]?.body;
+    expect(sent).not.toHaveProperty("conditions");
+    expect(sent).toMatchObject({ name: "Quiet Bean Coffee: Dining", actions: [{ type: "set_category", category_id: CAT_DINING }] });
+  });
+
   it("undo reverts and removes the rule from the list", async () => {
     let rules = [...RULES, MERCHANT];
     const api = mockApi({

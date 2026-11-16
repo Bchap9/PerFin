@@ -40,6 +40,13 @@ export type ConditionType =
   | "category_unset"
   | "merchant";
 
+/**
+ * The condition types the rule form offers. `merchant` is a condition type
+ * but is not in this list: the form (`RuleForm.tsx`) has no field for the
+ * merchant key, so offering it there would be a dead end. Merchant rules are
+ * made by "Always categorise <merchant> as..." and keep their conditions as
+ * stored in the editor (see `parseRule`). Add it back together with the field.
+ */
 export const CONDITION_TYPES: readonly { value: ConditionType; label: string }[] = [
   { value: "payee", label: "Payee text" },
   { value: "memo", label: "Memo text" },
@@ -51,7 +58,6 @@ export const CONDITION_TYPES: readonly { value: ConditionType; label: string }[]
   { value: "date", label: "Date" },
   { value: "category_is", label: "Category is one of" },
   { value: "category_unset", label: "Has no category" },
-  { value: "merchant", label: "Merchant is" },
 ];
 
 /** Longest merchant key the server stores (backend `MerchantKey`). */
@@ -386,11 +392,19 @@ export function merchantRuleKey(rule: Pick<StoredRule, "conditions" | "actions">
   return leaf.key;
 }
 
-/** The draft of a stored rule, with `conditions` null when the builder cannot show them. */
-export function parseRule(rule: StoredRule): { draft: RuleDraft; conditionsSupported: boolean } {
+/**
+ * The draft of a stored rule. `conditionsReadable`: the conditions are in the
+ * draft and can be said in words (false when they nest deeper than the
+ * builder shows; the draft's conditions are then empty). `conditionsSupported`:
+ * the rule form can also edit them, which it cannot while one of them is a
+ * merchant (the form has no field for the key); the editor then leaves the
+ * stored conditions untouched.
+ */
+export function parseRule(rule: StoredRule): { draft: RuleDraft; conditionsSupported: boolean; conditionsReadable: boolean } {
   const group = parseConditions(rule.conditions);
   return {
-    conditionsSupported: group !== null,
+    conditionsSupported: group !== null && !group.items.some((item) => item.type === "merchant"),
+    conditionsReadable: group !== null,
     draft: {
       name: rule.name,
       enabled: rule.enabled,
