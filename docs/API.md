@@ -1311,7 +1311,9 @@ creation order (`limit` 1-500, default 100). An account is `{"id", "type",
 "number_last4", "is_asset", "manual_balance", "include_in_net_worth",
 "opened_on", "closed_on", "is_closed", "balance": {"amount", "currency"},
 "balance_date", "can_edit", "created_at", "updated_at"}` (`balance` at the
-end of today, UTC). `POST /accounts` (`Idempotency-Key` honoured) takes
+end of today, UTC; a brokerage or retirement account with investment
+activity is worth its cash plus its holdings at market value, as net worth
+counts it). `POST /accounts` (`Idempotency-Key` honoured) takes
 `type`, `name` and optionally `nickname`, `currency` (default the
 household's base currency), `institution_id` (`404 institution-not-found`),
 `asset_kind` (required for and only for `manual_asset`), `subtype` (one of

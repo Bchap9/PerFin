@@ -30,6 +30,7 @@ ids only, so the SPA refetches over the API (which applies visibility).
 from __future__ import annotations
 
 import uuid
+from collections.abc import Sequence
 from datetime import date, timedelta
 from decimal import Decimal
 from typing import TYPE_CHECKING, Any, Final
@@ -80,6 +81,7 @@ from app.domain.accounts.visibility import (
 )
 from app.domain.households import repo as households_repo
 from app.domain.households import service as households_service
+from app.domain.networth.compute import INVESTMENT_TYPES, NetWorthBook
 from app.domain.transactions.import_hash import normalize_payee
 from app.ingestion.match.institutions import pick
 
@@ -249,10 +251,33 @@ def snapshot_out(snapshot: BalanceSnapshot) -> SnapshotOut:
     )
 
 
+def _balances(db: Session, accounts: Sequence[Account], on: date) -> dict[uuid.UUID, Decimal]:
+    """Each account's balance at the end of ``on``, as net worth counts it.
+
+    The ledger balance (``app.domain.accounts.balances``), except that an
+    investment account is worth its cash plus its holdings
+    (``app.domain.networth.compute``), so a brokerage account that only has
+    investment activity is not shown at 0.00 while net worth counts it.
+    """
+    amounts = balances.balances_as_of(db, accounts, on)
+    invest = [a for a in accounts if a.type in INVESTMENT_TYPES]
+    if invest:
+        book = NetWorthBook.load(
+            db,
+            invest[0].household_id,
+            [a.id for a in invest],
+            target=invest[0].currency,
+            until=on,
+            include_excluded=True,
+        )
+        amounts.update(book.values_on(on))
+    return amounts
+
+
 def _view(db: Session, principal: Principal, account: Account, *, can_edit: bool) -> AccountOut:
     on = today()
     return account_out(
-        account, balance=balances.balance_as_of(db, account, on), on=on, can_edit=can_edit
+        account, balance=_balances(db, [account], on)[account.id], on=on, can_edit=can_edit
     )
 
 
@@ -360,7 +385,7 @@ def list_accounts(
     more = len(rows) > limit
     page = rows[:limit]
     on = today()
-    amounts = balances.balances_as_of(db, page, on)
+    amounts = _balances(db, page, on)
     editable = (
         {a.id for a in page}
         if sees_all_accounts(principal)

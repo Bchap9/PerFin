@@ -346,11 +346,16 @@ class NetWorthBook:
         *,
         target: str,
         until: date,
+        include_excluded: bool = False,
     ) -> NetWorthBook:
-        """Read the accounts (``None``: every account of the household) once."""
-        stmt = select(Account).where(
-            Account.household_id == household_id, Account.include_in_net_worth.is_(True)
-        )
+        """Read the accounts (``None``: every account of the household) once.
+
+        Accounts left out of net worth are skipped unless ``include_excluded``
+        (``app.domain.accounts.service`` values each account the same way).
+        """
+        stmt = select(Account).where(Account.household_id == household_id)
+        if not include_excluded:
+            stmt = stmt.where(Account.include_in_net_worth.is_(True))
         if account_ids is not None:
             if not account_ids:
                 return cls(
@@ -587,6 +592,15 @@ class NetWorthBook:
         if entry.valuations is not None:
             return ZERO
         return entry.moves.upto(day)
+
+    def values_on(self, day: date) -> dict[uuid.UUID, Decimal]:
+        """Each loaded account's value at the end of ``day``, in its own currency."""
+        if day > self.until:
+            raise ValueError("day after the book's 'until'")
+        unpriced: set[uuid.UUID] = set()
+        return {
+            entry.account.id: to_storage(self._value(entry, day, unpriced)) for entry in self._data
+        }
 
     def on(self, day: date) -> NetWorthPoint:
         """The net worth at the end of ``day`` (module doc)."""
