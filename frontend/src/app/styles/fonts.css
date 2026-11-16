@@ -1,0 +1,8 @@
+/* SPDX-License-Identifier: AGPL-3.0-or-later */
+/*
+ * Self-hosted variable fonts (OFL-1.1), served from 'self' (CSP font-src).
+ * Vite copies the woff2 files to /static/ with hashed names; unicode-range
+ * means a Latin page loads only the Latin files.
+ */
+@import "@fontsource-variable/figtree/index.css";
+@import "@fontsource-variable/bricolage-grotesque/index.css";

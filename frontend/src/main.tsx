@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
+import "./app/styles/fonts.css";
 import "./app/styles/tokens.css";
 import "./app/styles/base.css";
+import "./app/styles/charts.css";
 import "./app/styles/layout.css";
 import "./components/components.css";
 

@@ -1,0 +1,58 @@
+/* SPDX-License-Identifier: AGPL-3.0-or-later */
+/*
+ * Chart colours come from the series tokens through classes, never from
+ * colours in code (CSP style-src 'self'; one palette for both themes).
+ * Recharts elements take these as className.
+ */
+.chart-series-1 {
+  fill: var(--color-series-1);
+  stroke: var(--color-series-1);
+}
+
+.chart-series-2 {
+  fill: var(--color-series-2);
+  stroke: var(--color-series-2);
+}
+
+.chart-series-3 {
+  fill: var(--color-series-3);
+  stroke: var(--color-series-3);
+}
+
+.chart-series-4 {
+  fill: var(--color-series-4);
+  stroke: var(--color-series-4);
+}
+
+.chart-series-5 {
+  fill: var(--color-series-5);
+  stroke: var(--color-series-5);
+}
+
+.chart-series-6 {
+  fill: var(--color-series-6);
+  stroke: var(--color-series-6);
+}
+
+/* A line is a stroke only: its path must not take the series fill. */
+.recharts-line .recharts-line-curve,
+.recharts-line-curve[class*="chart-series-"] {
+  fill: none;
+}
+
+.chart-grid,
+.chart-grid line {
+  stroke: var(--color-border);
+}
+
+.chart-axis line,
+.chart-axis path {
+  stroke: var(--color-border-strong);
+}
+
+.chart-axis text,
+text.chart-axis {
+  fill: var(--color-text-muted);
+  font-size: var(--font-size-xs);
+  font-variant-numeric: var(--num);
+}
