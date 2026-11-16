@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import uuid
 from collections.abc import Iterator
+from decimal import Decimal
 from pathlib import Path
 from typing import Any
 
@@ -31,7 +32,8 @@ from app.domain.documents.models import (
     ReviewKind,
 )
 from app.domain.documents.schemas import INGEST_JOB_TYPE
-from app.domain.imports.schemas import APPLY_MAPPING_JOB_TYPE
+from app.domain.imports.models import ImportMapping
+from app.domain.imports.schemas import APPLY_MAPPING_JOB_TYPE, MappingSpec
 from app.domain.review import repo as review_repo
 from app.domain.review.models import ImportHashAlias
 from app.domain.transactions.models import ReviewState, Transaction
@@ -39,7 +41,8 @@ from app.ingestion.sandbox.protocol import ExtractResult, Statement, StatementAc
 from tests.fixtures.documents import make_document, make_review_item
 from tests.fixtures.factories import AuthedClient, Factories
 from tests.fixtures.households import API, Actors, household_audit, household_events, problem_type
-from tests.fixtures.ledger import DEFAULT_DATE, make_account, make_transaction
+from tests.fixtures.imports import make_import_mapping, run_jobs, table_result
+from tests.fixtures.ledger import DEFAULT_DATE, household_context, make_account, make_transaction
 
 pytestmark = pytest.mark.integration
 
@@ -574,3 +577,442 @@ def test_the_review_report_counts_items_by_kind_and_reason(
     }
     assert report["open_by_file_type"] == {"application/pdf": 3}
     assert "private-name" not in str(report)
+
+
+# ---------------------------------------------------------------------------
+# unparsed: what a positive amount means
+# ---------------------------------------------------------------------------
+
+#: A card export that lists purchases as positive amounts (invented rows).
+CARD_ROWS: list[list[str]] = [
+    ["Date", "Description", "Amount"],
+    ["02/03/2026", "Lantern Lane Books", "18.40"],
+    ["02/05/2026", "Harbor Tea Rooms", "6.25"],
+    ["02/09/2026", "Pine Hollow Hardware", "41.00"],
+]
+CARD_SPEC: dict[str, Any] = {
+    "date_column": 0,
+    "date_format": "MM/DD/YYYY",
+    "payee_column": 1,
+    "amount_column": 2,
+}
+
+
+def card_document(
+    factories: Factories, store: LocalFSBlobStore, household_id: uuid.UUID
+) -> tuple[Document, Account]:
+    """A card CSV with its stored table, and the card account it is for."""
+    with factories.transaction() as db:
+        card = make_account(db, household_id, type="credit_card")
+    doc = document(
+        factories,
+        store,
+        household_id,
+        account_id=card.id,
+        extraction=table_result(CARD_ROWS).model_dump(mode="json"),
+    )
+    return doc, card
+
+
+def sign_item(
+    factories: Factories, doc: Document, account: Account, scope: str, **facts: Any
+) -> ReviewItem:
+    """The importer's question about the sign of one statement of a table."""
+    return item(
+        factories,
+        doc,
+        ReviewKind.UNPARSED,
+        {
+            "reason": "mapping_required",
+            "table": 0,
+            "column_count": 3,
+            "row_count": len(CARD_ROWS),
+            "candidates": [],
+            "suggested_spec": MappingSpec.model_validate(CARD_SPEC).model_dump(mode="json"),
+            "auto_import": "sign_unverified",
+            "account_id": str(account.id),
+            "group": None,
+            "transactions": len(CARD_ROWS) - 1,
+            "scope": scope,
+            **facts,
+        },
+    )
+
+
+def on_trust_mapping(factories: Factories, household_id: uuid.UUID) -> ImportMapping:
+    with factories.transaction() as db:
+        mapping = make_import_mapping(db, household_id, spec=CARD_SPEC, rows=CARD_ROWS)
+        with household_context(db, household_id):
+            mapping.sign_unverified = True
+            db.flush()
+        return mapping
+
+
+@pytest.mark.parametrize("saved", [True, False])
+def test_sign_answer_for_the_layout_saves_the_mapping_and_imports(
+    home: dict[str, AuthedClient], factories: Factories, store: LocalFSBlobStore, saved: bool
+) -> None:
+    """Every statement of the table waited: the answer is the layout's sign, asked once."""
+    owner = home["owner"]
+    hh = hh_of(owner)
+    doc, card = card_document(factories, store, hh)
+    mapping = on_trust_mapping(factories, hh) if saved else None
+    facts = {"mapping_id": str(mapping.id)} if mapping is not None else {}
+    row = sign_item(factories, doc, card, "mapping", **facts)
+    response = resolve(
+        owner, row.id, {"kind": "unparsed", "action": "answer_sign", "positive_is": "money_out"}
+    )
+    assert response.status_code == 200, response.text
+    assert response.json()["state"] == "resolved"
+    resolution = response.json()["resolution"]
+    assert resolution["action"] == "answer_sign"
+    assert (resolution["sign"], resolution["scope"]) == ("outflow_positive", "mapping")
+    if mapping is not None:
+        assert resolution["mapping_id"] == str(mapping.id)
+    stored = load(factories, hh, ImportMapping, uuid.UUID(resolution["mapping_id"]))
+    assert stored.spec["sign"] == "outflow_positive"
+    assert stored.sign_unverified is False
+    (job,) = jobs_of(factories, hh, APPLY_MAPPING_JOB_TYPE)
+    assert resolution["job_id"] == str(job.id)
+    assert job.payload["mapping_id"] == str(stored.id)
+    # The rows are written as spending, and nobody is asked again.
+    assert run_jobs(factories, hh, APPLY_MAPPING_JOB_TYPE, done=set())
+    with factories.transaction() as db:
+        set_context(db, hh)
+        amounts = sorted(
+            db.execute(
+                select(Transaction.amount).where(Transaction.source_document_id == doc.id)
+            ).scalars()
+        )
+        waiting = list(
+            db.execute(
+                select(ReviewItem).where(
+                    ReviewItem.document_id == doc.id,
+                    ReviewItem.kind == ReviewKind.UNPARSED,
+                    ReviewItem.state == ReviewItemState.OPEN,
+                )
+            ).scalars()
+        )
+    assert amounts == [Decimal("-41.000000"), Decimal("-18.400000"), Decimal("-6.250000")]
+    assert waiting == []
+
+
+def test_sign_answer_for_one_account_leaves_the_mapping(
+    home: dict[str, AuthedClient], factories: Factories, store: LocalFSBlobStore
+) -> None:
+    """The table's other accounts were imported: the answer is for this account only."""
+    owner, member = home["owner"], home["member"]
+    hh = hh_of(owner)
+    doc, card = card_document(factories, store, hh)
+    mapping = on_trust_mapping(factories, hh)
+    row = sign_item(factories, doc, card, "account", group=1, mapping_id=str(mapping.id))
+    # A member who may not edit the account is refused, and nothing changes.
+    refused = resolve(
+        member, row.id, {"kind": "unparsed", "action": "answer_sign", "positive_is": "money_out"}
+    )
+    assert refused.status_code in (403, 404)
+    assert load(factories, hh, ReviewItem, row.id).state is ReviewItemState.OPEN
+    response = resolve(
+        owner, row.id, {"kind": "unparsed", "action": "answer_sign", "positive_is": "money_out"}
+    )
+    assert response.status_code == 200, response.text
+    resolution = response.json()["resolution"]
+    assert resolution["action"] == "answer_sign"
+    assert resolution["sign"] == "outflow_positive"
+    assert resolution["scope"] == "account"
+    assert resolution["account_id"] == str(card.id)
+    stored = load(factories, hh, ImportMapping, mapping.id)
+    assert stored.spec == mapping.spec
+    assert stored.sign_unverified is True
+    (job,) = jobs_of(factories, hh, APPLY_MAPPING_JOB_TYPE)
+    assert resolution["job_id"] == str(job.id)
+    # The re-run names no mapping: no other account's question is answered by it.
+    assert job.payload.get("mapping_id") is None
+    # Money in is an answer too.
+    again = sign_item(factories, doc, card, "account", group=1, mapping_id=str(mapping.id))
+    response = resolve(
+        owner, again.id, {"kind": "unparsed", "action": "answer_sign", "positive_is": "money_in"}
+    )
+    assert response.status_code == 200, response.text
+    assert response.json()["resolution"]["sign"] == "inflow_positive"
+
+
+def test_sign_answer_on_another_item_is_422(
+    home: dict[str, AuthedClient], factories: Factories, store: LocalFSBlobStore
+) -> None:
+    owner = home["owner"]
+    hh = hh_of(owner)
+    doc, card = card_document(factories, store, hh)
+    columns = item(
+        factories,
+        doc,
+        ReviewKind.UNPARSED,
+        {"reason": "mapping_required", "auto_import": "not_confident"},
+    )
+    asked = sign_item(factories, doc, card, "mapping")
+    not_asked = resolve(
+        owner, columns.id, {"kind": "unparsed", "action": "answer_sign", "positive_is": "money_out"}
+    )
+    assert not_asked.status_code == 422
+    assert problem_type(not_asked) == "invalid-resolution"
+    no_answer = resolve(owner, asked.id, {"kind": "unparsed", "action": "answer_sign"})
+    assert no_answer.status_code == 422
+    # ``positive_is`` goes with the sign question only.
+    stray = resolve(
+        owner, asked.id, {"kind": "unparsed", "action": "reprocess", "positive_is": "money_out"}
+    )
+    assert stray.status_code == 422
+    for row in (columns, asked):
+        assert load(factories, hh, ReviewItem, row.id).state is ReviewItemState.OPEN
+    assert jobs_of(factories, hh, APPLY_MAPPING_JOB_TYPE) == []
+    assert jobs_of(factories, hh, INGEST_JOB_TYPE) == []
+
+
+# ---------------------------------------------------------------------------
+# possible_duplicate: several near duplicates of one statement, a skipped copy
+# ---------------------------------------------------------------------------
+
+
+def near_matches(
+    factories: Factories,
+    store: LocalFSBlobStore,
+    household_id: uuid.UUID,
+    account: Account,
+    *,
+    count: int = 3,
+) -> tuple[Document, ReviewItem, list[Transaction], list[Transaction]]:
+    """A statement entered by hand first: ``count`` imported rows, each beside a kept one."""
+    doc = document(factories, store, household_id, account_id=account.id)
+    kept: list[Transaction] = []
+    imported: list[Transaction] = []
+    with factories.transaction() as db:
+        for index in range(count):
+            amount = f"-{11 + index}.50"
+            kept.append(
+                make_transaction(
+                    db,
+                    account,
+                    amount=amount,
+                    raw_payee=f"Mill Pond Market {index}",
+                    with_import_hash=True,
+                )
+            )
+            imported.append(
+                make_transaction(
+                    db,
+                    account,
+                    amount=amount,
+                    raw_payee=f"MILL POND MKT #{index}",
+                    with_import_hash=True,
+                    review_state=ReviewState.PENDING,
+                    source_document_id=doc.id,
+                )
+            )
+    row = item(
+        factories,
+        doc,
+        ReviewKind.POSSIBLE_DUPLICATE,
+        {
+            "reason": "near_matches",
+            "account_id": str(account.id),
+            "statement": 0,
+            "count": count,
+            "rows": [
+                {"transaction_id": str(new.id), "candidates": [str(old.id)]}
+                for new, old in zip(imported, kept, strict=True)
+            ],
+        },
+    )
+    return doc, row, kept, imported
+
+
+def test_near_matches_are_decided_in_one_request(
+    home: dict[str, AuthedClient], factories: Factories, store: LocalFSBlobStore
+) -> None:
+    owner, member = home["owner"], home["member"]
+    hh = hh_of(owner)
+    account = new_account(factories, hh, {member.user.id: GrantLevel.EDIT})
+    doc, row, kept, imported = near_matches(factories, store, hh, account)
+    response = resolve(
+        member,
+        row.id,
+        {
+            "kind": "possible_duplicate",
+            "decision": "confirm",
+            "rows": [
+                {"transaction_id": str(imported[0].id), "decision": "confirm"},
+                {"transaction_id": str(imported[1].id), "decision": "reject"},
+                {"transaction_id": str(imported[2].id), "decision": "confirm"},
+            ],
+        },
+    )
+    assert response.status_code == 200, response.text
+    assert response.json()["state"] == "resolved"
+    decided = response.json()["resolution"]["rows"]
+    assert [(d["transaction_id"], d["decision"]) for d in decided] == [
+        (str(imported[0].id), "confirm"),
+        (str(imported[1].id), "reject"),
+        (str(imported[2].id), "confirm"),
+    ]
+    assert load(factories, hh, Transaction, imported[0].id) is None
+    assert load(factories, hh, Transaction, imported[2].id) is None
+    assert load(factories, hh, Transaction, imported[1].id).review_state is ReviewState.CONFIRMED
+    assert all(load(factories, hh, Transaction, old.id) is not None for old in kept)
+    with factories.transaction() as db:
+        set_context(db, hh)
+        aliases = {
+            (a.transaction_id, a.import_hash) for a in db.execute(select(ImportHashAlias)).scalars()
+        }
+    assert aliases == {
+        (kept[0].id, imported[0].import_hash),
+        (kept[2].id, imported[2].import_hash),
+    }
+    assert load(factories, hh, Document, doc.id).status is DocumentStatus.PROCESSED
+
+
+def test_near_matches_decided_in_part_keep_the_rest_open(
+    home: dict[str, AuthedClient], factories: Factories, store: LocalFSBlobStore
+) -> None:
+    owner = home["owner"]
+    hh = hh_of(owner)
+    account = new_account(factories, hh, {})
+    doc, row, kept, imported = near_matches(factories, store, hh, account)
+    first = resolve(
+        owner,
+        row.id,
+        {
+            "kind": "possible_duplicate",
+            "decision": "confirm",
+            "rows": [{"transaction_id": str(imported[1].id), "decision": "confirm"}],
+        },
+    )
+    assert first.status_code == 200, first.text
+    body = first.json()
+    assert body["state"] == "open"
+    assert body["resolution"] is None
+    assert body["payload"]["count"] == 2
+    assert [r["transaction_id"] for r in body["payload"]["rows"]] == [
+        str(imported[0].id),
+        str(imported[2].id),
+    ]
+    assert load(factories, hh, Transaction, imported[1].id) is None
+    assert load(factories, hh, Document, doc.id).status is DocumentStatus.NEEDS_REVIEW
+    # A row already decided is no longer one of the item's.
+    gone = resolve(
+        owner,
+        row.id,
+        {
+            "kind": "possible_duplicate",
+            "decision": "reject",
+            "rows": [{"transaction_id": str(imported[1].id), "decision": "reject"}],
+        },
+    )
+    assert gone.status_code == 422
+    # One decision for every row still listed.
+    rest = resolve(owner, row.id, {"kind": "possible_duplicate", "decision": "reject"})
+    assert rest.status_code == 200, rest.text
+    assert rest.json()["state"] == "resolved"
+    for index in (0, 2):
+        row_now = load(factories, hh, Transaction, imported[index].id)
+        assert row_now.review_state is ReviewState.CONFIRMED
+    assert all(load(factories, hh, Transaction, old.id) is not None for old in kept)
+    assert load(factories, hh, Document, doc.id).status is DocumentStatus.PROCESSED
+
+
+def test_a_decision_for_a_row_the_item_does_not_list_is_422(
+    home: dict[str, AuthedClient], factories: Factories, store: LocalFSBlobStore
+) -> None:
+    owner = home["owner"]
+    hh = hh_of(owner)
+    account = new_account(factories, hh, {})
+    doc, row, kept, imported = near_matches(factories, store, hh, account)
+    with factories.transaction() as db:
+        other = make_transaction(
+            db,
+            account,
+            amount="-3.00",
+            raw_payee="Mill Pond Market other",
+            with_import_hash=True,
+            review_state=ReviewState.PENDING,
+            source_document_id=doc.id,
+        )
+    for rows in (
+        # A row of the document the item does not name; a kept row; a row named twice.
+        [{"transaction_id": str(other.id), "decision": "confirm"}],
+        [
+            {"transaction_id": str(imported[0].id), "decision": "confirm"},
+            {"transaction_id": str(kept[1].id), "decision": "confirm"},
+        ],
+        [{"transaction_id": str(imported[0].id), "decision": "confirm"}] * 2,
+        [],
+    ):
+        response = resolve(
+            owner, row.id, {"kind": "possible_duplicate", "decision": "confirm", "rows": rows}
+        )
+        assert response.status_code == 422, response.text
+        assert problem_type(response) == "invalid-resolution"
+    # Nothing was decided: not even the listed row named beside the stray one.
+    assert load(factories, hh, ReviewItem, row.id).state is ReviewItemState.OPEN
+    for row_id in (*(t.id for t in imported), *(t.id for t in kept), other.id):
+        assert load(factories, hh, Transaction, row_id) is not None
+    assert load(factories, hh, Transaction, imported[0].id).review_state is ReviewState.PENDING
+    assert load(factories, hh, Document, doc.id).status is DocumentStatus.NEEDS_REVIEW
+
+
+def skipped_copy(
+    factories: Factories, store: LocalFSBlobStore, household_id: uuid.UUID
+) -> tuple[Document, Document, ReviewItem]:
+    """A byte-identical upload, skipped with a notice (``documents.service``)."""
+    original = document(factories, store, household_id, status=DocumentStatus.PROCESSED)
+    copy = document(factories, store, household_id, status=DocumentStatus.REJECTED)
+    with factories.transaction() as db:
+        set_context(db, household_id)
+        stored = db.get(Document, copy.id)
+        assert stored is not None
+        stored.error = "duplicate"
+    row = item(
+        factories,
+        copy,
+        ReviewKind.POSSIBLE_DUPLICATE,
+        {"reason": "same_content_skipped", "duplicate_of": str(original.id)},
+    )
+    return original, copy, row
+
+
+def test_skipped_copy_can_be_imported_anyway(
+    home: dict[str, AuthedClient], factories: Factories, store: LocalFSBlobStore
+) -> None:
+    owner = home["owner"]
+    hh = hh_of(owner)
+    _, copy, row = skipped_copy(factories, store, hh)
+    response = resolve(owner, row.id, {"kind": "possible_duplicate", "decision": "reject"})
+    assert response.status_code == 200, response.text
+    assert response.json()["state"] == "resolved"
+    stored = load(factories, hh, Document, copy.id)
+    assert stored.status is DocumentStatus.RECEIVED
+    assert stored.error is None
+    (job,) = jobs_of(factories, hh, INGEST_JOB_TYPE)
+    assert job.payload == {"document_id": str(copy.id)}
+    assert response.json()["resolution"] == {"decision": "reject", "job_id": str(job.id)}
+
+
+def test_skipped_copy_is_acknowledged(
+    home: dict[str, AuthedClient], factories: Factories, store: LocalFSBlobStore
+) -> None:
+    owner = home["owner"]
+    hh = hh_of(owner)
+    original, copy, row = skipped_copy(factories, store, hh)
+    response = resolve(owner, row.id, {"kind": "possible_duplicate", "decision": "confirm"})
+    assert response.status_code == 200, response.text
+    assert response.json()["state"] == "resolved"
+    assert response.json()["resolution"] == {
+        "decision": "confirm",
+        "acknowledged": True,
+        "duplicate_of": str(original.id),
+    }
+    stored = load(factories, hh, Document, copy.id)
+    assert (stored.status, stored.error) == (DocumentStatus.REJECTED, "duplicate")
+    assert jobs_of(factories, hh, INGEST_JOB_TYPE) == []
+    # Only the notice was closed: no ``document.updated`` says the file changed.
+    updated = household_events(factories, hh, "document.updated")
+    assert all(e.payload.get("id") != str(copy.id) for e in updated)

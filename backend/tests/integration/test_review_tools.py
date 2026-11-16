@@ -45,6 +45,8 @@ from app.domain.documents.models import (
 from app.domain.documents.schemas import INGEST_JOB_TYPE
 from app.domain.imports.schemas import APPLY_MAPPING_JOB_TYPE
 from app.domain.imports.service import import_extraction
+from app.domain.imports.statement_answers import statement_key
+from app.domain.investments.models import InvestmentTxn
 from app.domain.review.layout import (
     derive_match,
     layout_import_tables,
@@ -56,7 +58,8 @@ from app.domain.transactions.models import ReviewState, Transaction
 from app.ingestion.classify.fingerprints import household_fingerprints
 from app.ingestion.classify.service import classify_extraction
 from app.ingestion.extract.render import plain_png
-from app.ingestion.sandbox.protocol import ExtractResult, Preview
+from app.ingestion.parsers.brokerage import reconcile_investment
+from app.ingestion.sandbox.protocol import Balance, ExtractResult, InvestmentStatement, Preview
 from tests.fixtures.documents import make_document, make_review_item
 from tests.fixtures.factories import AuthedClient, Factories
 from tests.fixtures.households import API, Actors, household_audit, problem_type
@@ -1122,3 +1125,272 @@ def test_skipped_lines_are_highlighted_on_the_page(
             "fields": [],
         }
     ]
+
+
+# ---------------------------------------------------------------------------
+# Account alternatives, best first
+# ---------------------------------------------------------------------------
+
+
+def test_account_alternatives_are_ranked(
+    home: dict[str, AuthedClient], factories: Factories, store: LocalFSBlobStore
+) -> None:
+    """Best fit first, equal fits by id: the first is pre-selected only when it leads alone."""
+    owner = home["owner"]
+    hh = hh_of(owner)
+    with factories.transaction() as db:
+        bank = make_institution(db, hh)
+        # Named so that the order by name is neither the order by score nor by id.
+        currency_only = [
+            make_account(db, hh, name="Zz same currency"),
+            make_account(db, hh, name="Aa same currency"),
+        ]
+        nothing = make_account(db, hh, name="Bb other currency", currency="EUR")
+        institution = make_account(db, hh, name="Yy same bank", institution_id=bank.id)
+        digits = make_account(db, hh, name="Xx same digits", number_last4="4821")
+        best = make_account(
+            db, hh, name="Ww everything", number_last4="4821", institution_id=bank.id
+        )
+    doc = pdf_document(factories, store, hh, extraction=statement_extraction())
+    with factories.transaction() as db:
+        set_context(db, hh)
+        stored = db.get(Document, doc.id)
+        assert stored is not None
+        stored.institution_id = bank.id
+    row = item(
+        factories,
+        doc,
+        ReviewKind.UNKNOWN_ACCOUNT,
+        {"reason": "account_not_found", "statement": 0, "currency": "USD"},
+    )
+    alternatives = owner.get(f"{REVIEW}/{row.id}").json()["alternatives"]
+    tied = sorted(str(a.id) for a in currency_only)
+    assert [a["value"] for a in alternatives] == [
+        str(best.id),
+        str(digits.id),
+        str(institution.id),
+        *tied,
+        str(nothing.id),
+    ]
+    scores = [a["score"] for a in alternatives]
+    assert scores == sorted(scores, reverse=True)
+    assert scores[:3] == [pytest.approx(1.0), pytest.approx(0.75), pytest.approx(0.4)]
+    assert scores[0] > scores[1] > scores[2] > scores[3] == scores[4] > scores[5]
+
+
+# ---------------------------------------------------------------------------
+# A held brokerage line, corrected and imported
+# ---------------------------------------------------------------------------
+
+
+def resolve_item(user: AuthedClient, item_id: uuid.UUID, body: dict[str, Any]) -> Any:
+    return user.post(f"{REVIEW}/{item_id}/resolve", json=body)
+
+
+def brokerage_statement(lines: list[dict[str, Any]]) -> InvestmentStatement:
+    """A brokerage statement of cash activity only whose cash adds up (invented figures)."""
+    opening = Decimal("100.00")
+    closing = opening + sum((Decimal(line["amount"]) for line in lines), Decimal(0))
+    return InvestmentStatement.model_validate(
+        {
+            "source_format": "pdf",
+            "account": {"last4": "7313", "currency": "USD"},
+            "period_start": "2026-03-01",
+            "period_end": "2026-03-31",
+            "as_of": "2026-03-31",
+            "activity": [{"page": 1, **line} for line in lines],
+            "cash_opening": {"amount": str(opening), "as_of": "2026-03-01"},
+            "cash_closing": {"amount": str(closing), "as_of": "2026-03-31"},
+        }
+    )
+
+
+def brokerage_document(
+    factories: Factories,
+    store: LocalFSBlobStore,
+    home: dict[str, AuthedClient],
+    statement: InvestmentStatement,
+) -> tuple[Document, Account]:
+    """The statement imported for the first time into a brokerage account."""
+    hh = hh_of(home["owner"])
+    account = shared_account(factories, home, type="brokerage", number_last4="7313")
+    extraction = ExtractResult.model_validate(
+        {"kind": "pdf", "ok": True, "pages": [page(1, HEADER)], "investments": [statement]}
+    ).model_dump(mode="json")
+    doc = pdf_document(factories, store, hh, extraction=extraction, account_id=account.id)
+    with factories.transaction() as db:
+        set_context(db, hh)
+        fresh = db.get(Document, doc.id)
+        assert fresh is not None
+        result = stored_result(fresh.extraction)
+        assert result is not None
+        import_extraction(db, fresh, result)
+    return doc, account
+
+
+def held_lines(factories: Factories, doc: Document) -> list[ReviewItem]:
+    return [
+        row
+        for row in rows_of(
+            factories,
+            doc.household_id,
+            select(ReviewItem).where(
+                ReviewItem.document_id == doc.id, ReviewItem.state == ReviewItemState.OPEN
+            ),
+        )
+        if row.payload.get("reason") == "investment_lines_held"
+    ]
+
+
+def written(factories: Factories, account: Account) -> list[tuple[date, str, Decimal]]:
+    rows = rows_of(
+        factories,
+        account.household_id,
+        select(InvestmentTxn).where(InvestmentTxn.account_id == account.id),
+    )
+    return sorted((r.trade_date, str(r.type), r.amount) for r in rows)
+
+
+def test_a_held_brokerage_line_is_corrected_and_imported(
+    home: dict[str, AuthedClient], factories: Factories, store: LocalFSBlobStore
+) -> None:
+    """A date the parser guessed is typed in: the line is written with it, nothing else is."""
+    owner, viewer = home["owner"], home["viewer"]
+    hh = hh_of(owner)
+    statement = brokerage_statement(
+        [
+            {"type": "interest", "trade_date": "2026-03-10", "amount": "1.25"},
+            {
+                "type": "fee",
+                "trade_date": "2026-03-12",
+                "amount": "-2.00",
+                "low_confidence": ["trade_date"],
+            },
+            {
+                "type": "interest",
+                "trade_date": "2026-03-20",
+                "amount": "0.75",
+                "low_confidence": ["amount", "trade_date"],
+            },
+        ]
+    )
+    doc, account = brokerage_document(factories, store, home, statement)
+    (held,) = held_lines(factories, doc)
+    assert [line["index"] for line in held.payload["lines"]] == [1, 2]
+    first = [(date(2026, 3, 10), "interest", Decimal("1.250000"))]
+    assert written(factories, account) == first
+    before = load(factories, hh, Document, doc.id).extraction
+
+    fix = {"line": 1, "trade_date": "2026-03-17"}
+    for user, fixes, status in (
+        (owner, [{"line": 0, "trade_date": "2026-03-17"}], 422),  # not a line of the item
+        (owner, [fix, fix], 422),  # named twice
+        (owner, [{"line": 1}], 422),  # nothing to correct
+        (owner, [{"line": 1, "type": "no_such_kind"}], 422),
+        (viewer, [fix], 403),
+    ):
+        refused = resolve_item(user, held.id, {"kind": "low_confidence_field", "line_fixes": fixes})
+        assert refused.status_code == status, refused.text
+    # ``line_fixes`` are for held brokerage lines only.
+    other = item(
+        factories,
+        doc,
+        ReviewKind.LOW_CONFIDENCE_FIELD,
+        {"reason": "low_confidence", "account_id": str(account.id), "transactions": []},
+    )
+    stray = resolve_item(owner, other.id, {"kind": "low_confidence_field", "line_fixes": [fix]})
+    assert stray.status_code == 422, stray.text
+    assert load(factories, hh, Document, doc.id).extraction == before
+    assert written(factories, account) == first
+
+    response = resolve_item(owner, held.id, {"kind": "low_confidence_field", "line_fixes": [fix]})
+    assert response.status_code == 200, response.text
+    assert response.json()["state"] == "resolved"
+    resolution = response.json()["resolution"]
+    assert resolution["line_fixes"] == [{"line": 1, "fields": ["trade_date"]}]
+    assert resolution["corrected"] == 1
+    assert "import_as_read" not in resolution
+    stored = stored_result(load(factories, hh, Document, doc.id).extraction)
+    assert stored is not None
+    line = stored.investments[0].activity[1]
+    assert (line.trade_date, line.low_confidence) == (date(2026, 3, 17), [])
+    # Only the named field of the named line changed.
+    assert stored.investments[0].activity[2] == statement.activity[2]
+    assert stored.investments[0].activity[0] == statement.activity[0]
+
+    assert run_jobs(factories, hh, APPLY_MAPPING_JOB_TYPE, done=set())
+    assert written(factories, account) == [
+        *first,
+        (date(2026, 3, 17), "fee", Decimal("-2.000000")),
+    ]
+    # No item is open for the corrected line; the line still in doubt waits.
+    (still,) = held_lines(factories, doc)
+    assert [line["index"] for line in still.payload["lines"]] == [2]
+    audited = [a.after for a in household_audit(factories, hh, "review.resolve") if a.after]
+    assert audited[-1]["resolution"]["line_fixes"] == [{"line": 1, "fields": ["trade_date"]}]
+
+
+def test_a_corrected_line_is_imported_as_read_under_the_new_key(
+    home: dict[str, AuthedClient], factories: Factories, store: LocalFSBlobStore
+) -> None:
+    """A line no figure vouches for, with a guessed date: corrected, then imported as read."""
+    owner = home["owner"]
+    hh = hh_of(owner)
+    statement = brokerage_statement(
+        [
+            {"type": "interest", "trade_date": "2026-03-10", "amount": "1.25"},
+            {
+                "type": "fee",
+                "trade_date": "2026-03-12",
+                "amount": "-2.00",
+                "low_confidence": ["reconciliation", "trade_date"],
+            },
+        ]
+    )
+    # The printed closing cash is off by the fee, and the statement says which line.
+    check = reconcile_investment(
+        statement.model_copy(
+            update={"cash_closing": Balance(amount=Decimal("101.25"), as_of=date(2026, 3, 31))}
+        )
+    ).model_copy(update={"doubtful_activity": [1], "doubtful_positions": []})
+    assert check.status == "mismatch"
+    statement = statement.model_copy(
+        update={
+            "cash_closing": Balance(amount=Decimal("101.25"), as_of=date(2026, 3, 31)),
+            "reconciliation": check,
+        }
+    )
+    doc, account = brokerage_document(factories, store, home, statement)
+    (held,) = held_lines(factories, doc)
+    assert held.payload["fields"] == ["reconciliation", "trade_date"]
+    first = [(date(2026, 3, 10), "interest", Decimal("1.250000"))]
+    assert written(factories, account) == first
+    # A guessed date is never imported on a click.
+    as_read = {"kind": "low_confidence_field", "import_as_read": True}
+    assert resolve_item(owner, held.id, as_read).status_code == 422
+    # Correcting something else leaves the date in doubt: still not importable as read.
+    amount_only = {**as_read, "line_fixes": [{"line": 1, "amount": "-2.00"}]}
+    before = load(factories, hh, Document, doc.id).extraction
+    assert resolve_item(owner, held.id, amount_only).status_code == 422
+    # The refused answer corrected nothing.
+    assert load(factories, hh, Document, doc.id).extraction == before
+    assert written(factories, account) == first
+
+    response = resolve_item(
+        owner, held.id, {**as_read, "line_fixes": [{"line": 1, "trade_date": "2026-03-17"}]}
+    )
+    assert response.status_code == 200, response.text
+    resolution = response.json()["resolution"]
+    assert resolution["import_as_read"] is True
+    stored = stored_result(load(factories, hh, Document, doc.id).extraction)
+    assert stored is not None
+    # The answer is for the statement as it reads now.
+    assert resolution["statement_key"] == statement_key(stored.investments[0])
+    assert resolution["statement_key"] != held.payload["statement_key"]
+    assert stored.investments[0].activity[1].low_confidence == ["reconciliation"]
+    assert run_jobs(factories, hh, APPLY_MAPPING_JOB_TYPE, done=set())
+    assert written(factories, account) == [
+        *first,
+        (date(2026, 3, 17), "fee", Decimal("-2.000000")),
+    ]
+    assert held_lines(factories, doc) == []

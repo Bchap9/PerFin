@@ -25,10 +25,20 @@ editable by the caller as well. A closed item is ``409 review-item-closed``.
   records the statement as skipped and writes nothing; *reject* ("import
   anyway") imports the item's statement into the item's account although
   it overlaps (below). Both need edit on the account.
+* ``possible_duplicate`` / ``same_content_skipped`` (a byte-identical copy
+  that was skipped at upload, a notice): *confirm* only closes the item;
+  *reject* ("import it anyway") sends the copy through the pipeline, as for
+  ``same_content``.
 * ``possible_duplicate`` / ``near_match``: *confirm* -> the imported row is
   deleted and its ``import_hash`` recorded for the kept transaction (the
   kept row takes the hash when it has none, else an ``import_hash_alias``);
   *reject* -> the imported row is ``confirmed``.
+* ``possible_duplicate`` / ``near_matches`` (several such rows of one
+  statement, :func:`_resolve_near_matches`): the same decision per listed
+  row, all in one request (``rows``; without it ``decision`` is for every
+  listed row). A decision for a row the item does not list is ``422`` and
+  nothing is decided. Rows left without a decision stay in the item, which
+  stays open and lists only them; it is resolved with the last one.
 * ``unknown_account``: the document is imported into the chosen account
   (``app.domain.imports.service.request_apply`` re-runs the stored
   extraction; a document without one goes through the pipeline again).
@@ -37,8 +47,18 @@ editable by the caller as well. A closed item is ``409 review-item-closed``.
   multi-account CSV (``group``) the digits are read again from the stored
   table with the item's mapping, and the mapping itself is left alone (it
   serves every account of the file).
-* ``unparsed``: ``reprocess`` (pipeline again) or ``apply_mapping``
-  (re-import with a saved column mapping).
+* ``unparsed``: ``reprocess`` (pipeline again), ``apply_mapping``
+  (re-import with a saved column mapping) or ``answer_sign``
+  (:func:`_answer_sign`): what a positive amount means, for an item held
+  because nothing proves the sign of its amounts (``auto_import:
+  sign_unverified``; any other item is ``422``). When every statement of
+  the table waited (``scope: mapping``) the answer is the layout's: it is
+  saved on the item's mapping (or on one made from the item's suggestion),
+  which is then no longer on trust, and the document is imported with it.
+  When the table's other accounts were imported (``scope: account``) the
+  mapping is left alone: the resolution records the sign for that account
+  of that document (``statement_answers.sign_answer``) and the importer
+  reads it on the re-run. Either way no row already imported is flipped.
 * ``receipt_match``: the receipt is attached to the chosen transaction
   (``app.ingestion.match.receipts.resolve_receipt_item`` through
   ``documents.manage.link``: the caller edits the document and the
@@ -59,7 +79,16 @@ editable by the caller as well. A closed item is ``409 review-item-closed``.
   account as printed, without a balance snapshot. Needs edit on the
   account. It is also the confirmation of any kind the local model
   suggested for the statement's rows, whose wording is then kept for the
-  household (:func:`_remember_wording`).
+  household (:func:`_remember_wording`). ``line_fixes`` on an
+  ``investment_lines_held`` / ``investment_low_confidence`` item
+  (:func:`_correct_held_lines`) types in what a held line should read (its
+  date, amount, units or kind): the stored statement is corrected
+  (``actions.correct_lines``), the doubts about exactly those fields are
+  settled and the document is imported again, so a line with nothing else
+  in doubt is written and any other still waits. With ``import_as_read``
+  the answer is recorded for the statement as it reads after the
+  correction (its key changes with it), and only if what is still in doubt
+  may be imported as read.
 
 **Importing a held statement again** ("import anyway", "import as read")
 goes through one path (:func:`_import_statement_again`). The answer is
@@ -93,6 +122,7 @@ from collections.abc import Collection, Mapping, Sequence
 from datetime import date
 from typing import Any, Final
 
+from pydantic import ValidationError
 from sqlalchemy import Boolean, ColumnElement, String, and_, cast, not_, or_, select
 from sqlalchemy.orm import Session
 from starlette.requests import HTTPConnection
@@ -123,13 +153,22 @@ from app.domain.documents.models import (
 )
 from app.domain.documents.service import visible_document_filter
 from app.domain.dropfolder import service as dropfolder_service
+from app.domain.imports import repo as imports_repo
 from app.domain.imports import service as imports_service
 from app.domain.imports import statement_answers, statement_records, wording
-from app.domain.imports.schemas import ApplyMapping, AssignmentTarget, MappingUpdate
+from app.domain.imports.schemas import (
+    ApplyMapping,
+    AssignmentTarget,
+    MappingCreate,
+    MappingSpec,
+    MappingUpdate,
+    Sign,
+)
 from app.domain.investments import statement_import
 from app.domain.review import assist, repo
 from app.domain.review.schemas import (
     CardAction,
+    DuplicateDecision,
     NextStep,
     ResolveDuplicate,
     ResolveLowConfidence,
@@ -186,6 +225,22 @@ IMPORT_ANYWAY: Final = statement_answers.IMPORT_ANYWAY
 IMPORT_AS_READ: Final = statement_answers.IMPORT_AS_READ
 #: Document statuses whose stored extraction the importer can run again.
 REIMPORTABLE: Final = frozenset({DocumentStatus.NEEDS_REVIEW, DocumentStatus.PROCESSED})
+#: ``possible_duplicate`` reasons: several near duplicates of one statement
+#: in one item; a byte-identical copy skipped at upload (a notice).
+NEAR_MATCHES: Final = "near_matches"
+SAME_CONTENT_SKIPPED: Final = "same_content_skipped"
+#: Resolution key of a ``near_matches`` answer that left rows undecided: how
+#: many. The item then stays open (:func:`resolve`).
+REMAINING: Final = "remaining"
+#: ``auto_import`` of an ``unparsed`` item that asks what a positive amount means.
+SIGN_UNVERIFIED: Final = "sign_unverified"
+#: ``scope`` of such an item: the answer is the layout's, saved on its mapping
+#: (the other, ``account``, is ``statement_answers.SCOPE_ACCOUNT``).
+SCOPE_MAPPING: Final = "mapping"
+#: Name of a mapping made from an item's suggestion when the sign is answered.
+ANSWERED_MAPPING_NAME: Final = "Layout answered in Review"
+#: ``low_confidence_field`` reasons whose held brokerage lines can be corrected.
+CORRECTABLE_LINES: Final = frozenset({statement_import.LINES_HELD, statement_import.LOW_CONFIDENCE})
 
 
 # ---------------------------------------------------------------------------
@@ -613,11 +668,24 @@ def _resolve_duplicate(
     request: HTTPConnection | None,
 ) -> dict[str, Any]:
     payload = item.payload or {}
-    if payload.get("reason") == statement_records.REASON:
+    reason = payload.get("reason")
+    if reason == NEAR_MATCHES:
+        return _resolve_near_matches(db, principal, item, body, request)
+    if body.rows is not None:
+        raise _invalid("rows goes with an item that lists several rows.")
+    if reason == statement_records.REASON:
         return _resolve_statement_overlap(db, principal, item, body, request)
     transaction_id = _uuid(payload.get("transaction_id"))
     if transaction_id is None:
         document = _document(db, item)
+        if reason == SAME_CONTENT_SKIPPED and body.decision == "confirm":
+            # The copy was skipped when it arrived: nothing is left to do but
+            # to say it was seen. The document stays as it is.
+            return {
+                "decision": "confirm",
+                "acknowledged": True,
+                "duplicate_of": payload.get("duplicate_of"),
+            }
         if body.decision == "reject":
             job_id = queue_ingestion(
                 db,
@@ -658,12 +726,15 @@ def _import_statement_again(
     investment: bool,
     answer: str,
     request: HTTPConnection | None,
+    key: str | None = None,
 ) -> dict[str, Any]:
     """Import the item's held statement into the item's account (module doc).
 
     ``answer`` is :data:`IMPORT_ANYWAY` or :data:`IMPORT_AS_READ`; the
     resolution returned records it for the item's statement key, which the
     queued re-run (and every later import of the document) applies.
+    ``key``: the statement's key now, when the stored statement was
+    corrected since the item was raised (:func:`_correct_held_lines`).
     """
     if document.extraction is None or document.status not in REIMPORTABLE:
         raise ProblemError(
@@ -673,14 +744,12 @@ def _import_statement_again(
             "The document has no stored statements to import again; reprocess it instead.",
         )
     payload = item.payload or {}
-    key = statement_answers.payload_key(payload)
     if key is None:
-        raise ProblemError(
-            409,
-            "review-item-stale",
-            "Review item is out of date",
+        key = statement_answers.payload_key(payload)
+    if key is None:
+        raise _stale(
             "This item does not say which statement it holds; reprocess the document "
-            "to raise a current one.",
+            "to raise a current one."
         )
     index = payload.get("statement")
     target: AssignmentTarget = "investment" if investment else "statement"
@@ -757,7 +826,37 @@ def _resolve_transaction_duplicate(
     request: HTTPConnection | None,
 ) -> dict[str, Any]:
     payload = item.payload or {}
-    candidates = [c for c in (_uuid(v) for v in payload.get("candidates") or []) if c]
+    return _decide_duplicate(
+        db,
+        principal,
+        item.household_id,
+        transaction_id,
+        _ids(payload.get("candidates")),
+        body.decision,
+        body.duplicate_of,
+        request,
+    )
+
+
+def _ids(values: Any) -> list[uuid.UUID]:
+    return [c for c in (_uuid(v) for v in values or []) if c] if isinstance(values, list) else []
+
+
+def _decide_duplicate(
+    db: Session,
+    principal: Principal,
+    household_id: uuid.UUID,
+    transaction_id: uuid.UUID,
+    candidates: Sequence[uuid.UUID],
+    decision: str,
+    duplicate_of: uuid.UUID | None,
+    request: HTTPConnection | None,
+) -> dict[str, Any]:
+    """One imported row beside the rows it may duplicate (``candidates``): the decision.
+
+    *confirm*: the imported row is deleted and its hash recorded for the
+    kept one; *reject*: it is confirmed (module doc). Edit on the account.
+    """
     try:
         imported: Transaction | None = transactions_service.get_visible_transaction(
             db, principal, transaction_id, need="edit", lock=True
@@ -766,18 +865,18 @@ def _resolve_transaction_duplicate(
         if exc.slug != "transaction-not-found":
             raise
         imported = None  # removed by hand meanwhile: nothing left to decide
-    if body.decision == "reject":
+    if decision == "reject":
         if imported is not None and imported.review_state is ReviewState.PENDING:
             imported.review_state = ReviewState.CONFIRMED
             db.flush()
             emit(
                 db,
-                item.household_id,
+                household_id,
                 "transaction.updated",
                 {"id": str(imported.id), "account_id": str(imported.account_id)},
             )
         return {"decision": "reject", "transaction_id": str(transaction_id)}
-    kept_id = body.duplicate_of
+    kept_id = duplicate_of
     if kept_id is None:
         if len(candidates) != 1:
             raise _invalid("Name the transaction this row duplicates in duplicate_of.")
@@ -797,7 +896,7 @@ def _resolve_transaction_duplicate(
             kept.import_hash = imported.import_hash
             recorded = "hash"
         else:
-            repo.add_alias(db, item.household_id, kept.account_id, kept.id, imported.import_hash)
+            repo.add_alias(db, household_id, kept.account_id, kept.id, imported.import_hash)
             recorded = "alias"
     transactions_service.delete_transaction(db, principal, imported, request=request)
     db.flush()
@@ -807,6 +906,78 @@ def _resolve_transaction_duplicate(
         "deleted": True,
         "hash_recorded": recorded,
     }
+
+
+def _resolve_near_matches(
+    db: Session,
+    principal: Principal,
+    item: ReviewItem,
+    body: ResolveDuplicate,
+    request: HTTPConnection | None,
+) -> dict[str, Any]:
+    """Decide several near duplicates of one statement in one request (module doc).
+
+    Every named row is checked against the item before anything is decided.
+    When rows are left without a decision the item's payload is rewritten to
+    list only them and the answer says how many (:data:`REMAINING`): the
+    item stays open.
+    """
+    payload = item.payload or {}
+    entries = [
+        (found, entry)
+        for entry in payload.get("rows") or []
+        if isinstance(entry, dict) and (found := _uuid(entry.get("transaction_id")))
+    ]
+    listed = {found: _ids(entry.get("candidates")) for found, entry in entries}
+    if not listed:
+        raise _invalid("This item lists no rows.")
+    decisions: list[DuplicateDecision]
+    if body.rows is None:
+        if body.duplicate_of is not None:
+            raise _invalid("Name the transaction each row duplicates in rows.")
+        decisions = [
+            DuplicateDecision(transaction_id=found, decision=body.decision) for found in listed
+        ]
+    else:
+        decisions = list(body.rows)
+        if not decisions:
+            raise _invalid("Name at least one of the rows this item lists.")
+        named = [d.transaction_id for d in decisions]
+        if len(set(named)) != len(named):
+            raise _invalid("Name each row once.")
+        if not set(named) <= listed.keys():
+            raise _invalid("Decide only rows this item lists.")
+    decided = [
+        {
+            "transaction_id": str(d.transaction_id),
+            **_decide_duplicate(
+                db,
+                principal,
+                item.household_id,
+                d.transaction_id,
+                listed[d.transaction_id],
+                d.decision,
+                d.duplicate_of,
+                request,
+            ),
+        }
+        for d in decisions
+    ]
+    done = {d.transaction_id for d in decisions}
+    rest = [entry for found, entry in entries if found not in done]
+    resolution: dict[str, Any] = {"rows": decided}
+    if body.rows is None:
+        resolution["decision"] = body.decision
+    count = payload.get("count")
+    total = count if isinstance(count, int) and not isinstance(count, bool) else len(listed)
+    if rest:
+        item.payload = {**payload, "rows": rest, "count": max(total - len(done), len(rest))}
+        db.flush()
+        resolution[REMAINING] = len(rest)
+    elif total > len(listed):
+        # More rows than an item lists: the others stay pending in the ledger.
+        resolution["unlisted"] = total - len(listed)
+    return resolution
 
 
 def _statement_last4(document: Document, index: Any) -> str | None:
@@ -926,6 +1097,10 @@ def _resolve_unparsed(
     request: HTTPConnection | None,
 ) -> dict[str, Any]:
     document = _document(db, item)
+    if body.action == "answer_sign":
+        return _answer_sign(db, principal, item, document, body, request)
+    if body.positive_is is not None:
+        raise _invalid("positive_is goes with answer_sign.")
     if body.action == "reprocess":
         if body.mapping_id is not None or body.account_id is not None:
             raise _invalid("reprocess takes no mapping_id or account_id.")
@@ -933,17 +1108,8 @@ def _resolve_unparsed(
             db, document, principal=principal, action="document.reprocess", request=request
         )
         return {"action": "reprocess", "job_id": str(job_id)}
-    if body.action == "answer_sign":
-        # Declared in the API; refused until the answer is acted on, so it is
-        # never taken for a mapping to apply.
-        raise _invalid("This item does not ask what a positive amount means.")
     if document.extraction is None or document.status not in REIMPORTABLE:
-        raise ProblemError(
-            409,
-            "document-not-importable",
-            "Nothing to import",
-            "The document has no extracted table to map; reprocess it instead.",
-        )
+        raise _no_table()
     rerun = _reimport(
         db,
         principal,
@@ -953,6 +1119,121 @@ def _resolve_unparsed(
         request=request,
     )
     return {"action": "apply_mapping", **rerun}
+
+
+def _no_table() -> ProblemError:
+    return ProblemError(
+        409,
+        "document-not-importable",
+        "Nothing to import",
+        "The document has no extracted table to map; reprocess it instead.",
+    )
+
+
+def _stale(detail: str) -> ProblemError:
+    return ProblemError(409, "review-item-stale", "Review item is out of date", detail)
+
+
+def _answered_mapping_name(db: Session, household_id: uuid.UUID) -> str:
+    """A free name for the mapping a sign answer makes (never text of the file)."""
+    if not imports_repo.name_taken(db, household_id, ANSWERED_MAPPING_NAME):
+        return ANSWERED_MAPPING_NAME
+    for number in range(2, 100):
+        candidate = f"{ANSWERED_MAPPING_NAME} ({number})"
+        if not imports_repo.name_taken(db, household_id, candidate):
+            return candidate
+    return f"{ANSWERED_MAPPING_NAME} ({uuid.uuid4().hex[:8]})"
+
+
+def _answer_sign(
+    db: Session,
+    principal: Principal,
+    item: ReviewItem,
+    document: Document,
+    body: ResolveUnparsed,
+    request: HTTPConnection | None,
+) -> dict[str, Any]:
+    """What a positive amount means, for an item that asks (module doc).
+
+    Nothing already imported is touched: the answer only decides how the
+    rows that waited are read when the document is imported again.
+    """
+    payload = item.payload or {}
+    if payload.get("auto_import") != SIGN_UNVERIFIED:
+        raise _invalid("This item does not ask what a positive amount means.")
+    if body.positive_is is None:
+        raise _invalid("Say what a positive amount means in positive_is.")
+    if body.mapping_id is not None or body.account_id is not None:
+        raise _invalid("answer_sign takes no mapping_id or account_id.")
+    if document.extraction is None or document.status not in REIMPORTABLE:
+        raise _no_table()
+    sign = Sign.OUTFLOW_POSITIVE if body.positive_is == "money_out" else Sign.INFLOW_POSITIVE
+    account_id = _uuid(payload.get("account_id"))
+    if account_id is not None:
+        # The rows that waited are written there.
+        get_visible_account(db, principal, account_id, need="edit")
+    if payload.get("scope") == statement_answers.SCOPE_ACCOUNT:
+        if account_id is None:
+            raise _invalid("This item names no account.")
+        # The table's other accounts were imported with the mapping as it
+        # is: it is left alone, and the re-run names no mapping (naming one
+        # would answer every other account's question with it). The importer
+        # reads this resolution (``statement_answers.document_answers``).
+        rerun = _reimport(
+            db, principal, document, mapping_id=None, account_id=None, request=request
+        )
+        return {
+            "action": statement_answers.SIGN_ACTION,
+            **statement_answers.sign_answer(
+                sign.value, account_id, statement_answers.SCOPE_ACCOUNT
+            ),
+            **rerun,
+        }
+    # Every statement of the table waited: the answer is the layout's sign.
+    mapping_id = _uuid(payload.get("mapping_id"))
+    if mapping_id is not None:
+        try:
+            spec = imports_service.get_mapping(db, principal, mapping_id).spec
+        except ProblemError as exc:
+            if exc.status != 404:
+                raise
+            raise _stale(
+                "The column mapping this item names is gone; import the document again."
+            ) from exc
+    else:
+        try:
+            spec = MappingSpec.model_validate(payload.get("suggested_spec"))
+        except ValidationError as exc:
+            raise _stale(
+                "This item carries no columns to read the file with; map its columns instead."
+            ) from exc
+    signed = MappingSpec.model_validate({**spec.model_dump(mode="json"), "sign": sign.value})
+    if mapping_id is not None:
+        # Saving a spec says a person stands behind it: no longer on trust.
+        imports_service.update_mapping(
+            db, principal, mapping_id, MappingUpdate(spec=signed), request=request
+        )
+    else:
+        mapping_id = imports_service.create_mapping(
+            db,
+            principal,
+            MappingCreate(
+                name=_answered_mapping_name(db, item.household_id),
+                spec=signed,
+                document_id=document.id,
+            ),
+            request=request,
+        ).id
+    rerun = _reimport(
+        db, principal, document, mapping_id=mapping_id, account_id=None, request=request
+    )
+    return {
+        "action": statement_answers.SIGN_ACTION,
+        statement_answers.SIGN: sign.value,
+        statement_answers.SCOPE: SCOPE_MAPPING,
+        "mapping_id": str(mapping_id),
+        **rerun,
+    }
 
 
 def apply_fixes(
@@ -1193,13 +1474,20 @@ def _import_as_read(
     request: HTTPConnection | None,
     *,
     lines: Sequence[int] | None = None,
+    fields: Collection[str] | None = None,
+    key: str | None = None,
 ) -> dict[str, Any]:
     """Import a held brokerage statement as printed (module doc).
 
     ``lines``: only these lines of the item (:func:`_chosen_lines`); the
     others it lists are left out, and no item is raised for them again.
+    ``fields`` and ``key``: what is still in doubt, and the statement's key,
+    after its lines were corrected (:func:`_correct_held_lines`); the item's
+    own otherwise.
     """
     payload = item.payload or {}
+    if fields is not None:
+        payload = {**payload, "fields": sorted(fields)}
     if not statement_import.acceptable_as_read(payload):
         raise _invalid(
             "Only a brokerage statement held back because its figures do not add up "
@@ -1220,6 +1508,7 @@ def _import_as_read(
         investment=True,
         answer=IMPORT_AS_READ,
         request=request,
+        key=key,
     )
     failed = payload.get("failed")
     return {
@@ -1270,6 +1559,84 @@ def _remember_wording(
     return {"wording_learned": learned} if learned else {}
 
 
+def _correct_held_lines(
+    db: Session,
+    principal: Principal,
+    item: ReviewItem,
+    body: ResolveLowConfidence,
+    request: HTTPConnection | None,
+) -> dict[str, Any]:
+    """Correct held brokerage lines, then import the document again (module doc).
+
+    The stored statement is rewritten, so its key changes: an "import as
+    read" answer given with the correction is recorded under the new key,
+    and an earlier answer about the statement as it read before (lines left
+    out, say) no longer applies: what is still in doubt is asked again.
+    """
+    # ``actions`` imports this module: bound here, when both are loaded.
+    from app.domain.review import actions
+
+    payload = item.payload or {}
+    if payload.get("reason") not in CORRECTABLE_LINES:
+        raise _invalid("Only the held lines of a brokerage statement can be corrected this way.")
+    if body.transactions:
+        raise _invalid("line_fixes takes no transactions.")
+    document = _document(db, item)
+    if document.extraction is None or document.status not in REIMPORTABLE:
+        raise ProblemError(
+            409,
+            "document-not-importable",
+            "Nothing to import",
+            "The document has no stored statements to import again; reprocess it instead.",
+        )
+    account_id = _uuid(payload.get("account_id"))
+    if account_id is None:
+        raise _invalid("This item names no account.")
+    get_visible_account(db, principal, account_id, need="edit")
+    index = payload.get("statement")
+    if not isinstance(index, int) or isinstance(index, bool) or index < 0:
+        raise _stale(
+            "This item does not say which statement it holds; reprocess the document "
+            "to raise a current one."
+        )
+    fixed = actions.correct_lines(db, document, index, body.line_fixes, item=item)
+    statement = fixed.statement
+    key = statement_answers.statement_key(statement)
+    corrected = {
+        "line_fixes": [
+            {"line": line, "fields": list(names)} for line, names in sorted(fixed.fields.items())
+        ],
+        "corrected": fixed.changed,
+    }
+    # What is in doubt now, read from the statement itself; the item's own
+    # ``reconciliation`` doubt (nothing to check a document against) stays.
+    doubts = {f for position in statement.positions for f in position.low_confidence}
+    doubts.update(f for line in statement.activity for f in line.low_confidence)
+    listed = payload.get("fields")
+    if isinstance(listed, list) and statement_import.RECONCILIATION_DOUBT in listed:
+        doubts.add(statement_import.RECONCILIATION_DOUBT)
+    if body.import_as_read and doubts:
+        answered = _import_as_read(
+            db, principal, item, request, lines=body.lines, fields=doubts, key=key
+        )
+        return {**answered, **corrected}
+    # Nothing to accept (or nobody said to): the corrected lines are imported
+    # when nothing else holds them, and whatever still does is asked again.
+    _chosen_lines(payload, body.lines)
+    queued = imports_service.request_apply(
+        db, principal, document.id, ApplyMapping(), request=request
+    )
+    return {
+        **corrected,
+        "account_id": str(account_id),
+        "target": "investment",
+        "statement": index,
+        statement_answers.KEY_FIELD: key,
+        "rerun": "import",
+        "job_id": str(queued.job_id),
+    }
+
+
 def _resolve_low_confidence(
     db: Session,
     principal: Principal,
@@ -1277,6 +1644,8 @@ def _resolve_low_confidence(
     body: ResolveLowConfidence,
     request: HTTPConnection | None,
 ) -> dict[str, Any]:
+    if body.line_fixes:
+        return _correct_held_lines(db, principal, item, body, request)
     if body.import_as_read:
         return _import_as_read(db, principal, item, request, lines=body.lines)
     document = _document(db, item)
@@ -1420,6 +1789,23 @@ def resolve(
         resolution = _resolve_low_confidence(db, principal, item, body, request)
     else:  # pragma: no cover - the union is exhaustive
         raise unsupported(item.kind)
+    if isinstance(body, ResolveDuplicate) and resolution.get(REMAINING):
+        # Some rows of the item were decided: it stays open for the rest.
+        audit(
+            db,
+            action="review.resolve",
+            target_type="review_item",
+            target_id=item.id,
+            after={
+                "kind": str(item.kind),
+                "document_id": item.document_id,
+                "resolution": resolution,
+            },
+            household_id=item.household_id,
+            user_id=principal.user_id,
+            request=request,
+        )
+        return _out(db, principal, item)
     _close(db, principal, item, ReviewItemState.RESOLVED, resolution, request=request)
     return _out(db, principal, item)
 
