@@ -37,7 +37,74 @@ What remains (details in docs/ROADMAP.md):
 
 ## [Unreleased]
 
-Nothing yet.
+Stage 4 of four on the way to 1.0.0: the release review.
+
+### Fixed
+
+- **`scripts/check_spdx.py` runs in a container.** In a checkout that
+  reports another owner (a bind mount), git refused the repository and the
+  script stopped with a traceback; it now checks that one checkout and
+  prints a one-line message for any other git failure.
+- **The rolling-upgrade note for rc.10 says what fails.** docs/UPGRADING.md
+  lists the writes of rc.9 pods that migration `0014` refuses and the
+  stop-then-migrate order for Compose and Helm.
+- **A QIF opening balance is no transaction.** Quicken's own `Opening
+  Balance` record (and `Balance brought forward` and the like, when it says
+  nothing else) was imported as a transaction. It is now the statement's
+  opening balance when it comes first (as of the day before its date, so a
+  transaction on that same day still counts toward the balance of an
+  account set up from it); a closing balance record, or an
+  opening one further down, is left out and counted in the document's
+  warnings. QIF files read before are read this way on "Process again"
+  (extractor `qif/2`).
+- **A QIF record made only of column names waits for review.** A record
+  whose payee, memo and category are the words of a header (`Description`,
+  `Reference`, `Debit`) was posted quietly. Its date and amount are kept, as
+  they may be money that moved, but it is imported pending with a
+  low-confidence item on its payee.
+- **CSV: a repeated header row and a balance row are no transactions.** A
+  row that repeats the header (an export that prints it on every page) was
+  reported as an unreadable row; a dated `Opening balance` or `Closing
+  balance` row with a figure in the amount column was imported as a
+  transaction. Both are now note rows, and an opening balance row gives
+  the statement's opening balance, proposed for a new account as of the
+  day before the row, so transactions on the row's own day still count
+  toward the balance. The import's summary counts both kinds of row
+  (`header_rows`, `balance_rows`), so a dropped closing balance row is
+  still on record.
+- **A line that leaves one or two letters names no merchant.** What was
+  left of a line such as `E` or `XY #0042` became a merchant key, so every
+  such line of a household was one merchant: one correction or one
+  "Always use…" rule covered rows that had nothing to do with each other.
+  Such a line now has no merchant key, like a transfer; a brand the
+  merchant list knows by two letters (`BP`) keeps its own. Rows keyed
+  before lose the key in the refresh that follows the upgrade (the hourly
+  `categorise.dispatch` queues it; clean-up version 3); their categories
+  stay, and what was learned under such a key no longer answers.
+- **More of a bank's own lines are read, and more plain wording is
+  suggested.** `BANK FEE`, `OVERLIMIT FEE`, `RETURNED CHECK FEE` are bank
+  fees, `INTEREST FEE` interest paid and `SAVINGS INTEREST CREDIT`
+  interest earned, stated as for the other fee and interest lines;
+  `AUTOMATIC WITHDRAWAL <name>` is a debit to that name. Rent (`RENT
+  PAYMENT`, `APARTMENT RENT`), electricity (`ELECTRICITY`, `ELECTRIC
+  BILL`), `UTILITY`, pay (`WAGES`, `SALARY`, `EMPLOYER`, money in only),
+  `DIVIDEND EARNED` (money in only), `CASH DEPOSIT` (money in only),
+  `WITHDRAWAL` (money out only) and cinemas (`THEATERS`, `CINEMAS`) are
+  suggested. "Rent" or "electric" alone, inside another word or at the
+  start of a shop's name suggests nothing; cheques (`CHECK WITHDRAWAL`
+  too) and deposits stay unguessed (merchant list version 8).
+- **The merchant list knows more cinemas and a few more forms.** Marcus,
+  Harkins, Alamo Drafthouse, Landmark, Cineplex, Showcase, Studio Movie
+  Grill, Cinépolis, Megaplex and Century (Cinemark); Napster, also as
+  `RHAPSODY`; `ITUNES MUSIC` and `ITUNES STORE` (Apple); `THE GAP`; Shell
+  with `FUEL` or `PETROLEUM`. `SHELL` alone is still nobody's fuel: the
+  word names too many other businesses (merchant list version 9).
+
+### Security
+
+- **Development tooling: minimatch 11.** ESLint 10.15.0 and typescript-eslint
+  8.73.0 bring minimatch 11.0.8, out of GHSA-g3hv-75wg-m249 (minimatch
+  7 to 11.0.0). Development dependencies only; nothing shipped changes.
 
 ## [1.0.0-rc.11] - 2026-11-16
 
@@ -172,70 +239,6 @@ migration, no new setting, no new container, nothing new leaves the host
   account's own page showed a brokerage or retirement account at its cash
   alone (often 0.00) while net worth counted its cash plus holdings; both
   now show the same value.
-- **`scripts/check_spdx.py` runs in a container.** In a checkout that
-  reports another owner (a bind mount), git refused the repository and the
-  script stopped with a traceback; it now checks that one checkout and
-  prints a one-line message for any other git failure.
-- **The rolling-upgrade note for rc.10 says what fails.** docs/UPGRADING.md
-  lists the writes of rc.9 pods that migration `0014` refuses and the
-  stop-then-migrate order for Compose and Helm.
-- **A QIF opening balance is no transaction.** Quicken's own `Opening
-  Balance` record (and `Balance brought forward` and the like, when it says
-  nothing else) was imported as a transaction. It is now the statement's
-  opening balance when it comes first (as of the day before its date, so a
-  transaction on that same day still counts toward the balance of an
-  account set up from it); a closing balance record, or an
-  opening one further down, is left out and counted in the document's
-  warnings. QIF files read before are read this way on "Process again"
-  (extractor `qif/2`).
-- **A QIF record made only of column names waits for review.** A record
-  whose payee, memo and category are the words of a header (`Description`,
-  `Reference`, `Debit`) was posted quietly. Its date and amount are kept, as
-  they may be money that moved, but it is imported pending with a
-  low-confidence item on its payee.
-- **CSV: a repeated header row and a balance row are no transactions.** A
-  row that repeats the header (an export that prints it on every page) was
-  reported as an unreadable row; a dated `Opening balance` or `Closing
-  balance` row with a figure in the amount column was imported as a
-  transaction. Both are now note rows, and an opening balance row gives
-  the statement's opening balance, proposed for a new account as of the
-  day before the row, so transactions on the row's own day still count
-  toward the balance. The import's summary counts both kinds of row
-  (`header_rows`, `balance_rows`), so a dropped closing balance row is
-  still on record.
-- **A line that leaves one or two letters names no merchant.** What was
-  left of a line such as `E` or `XY #0042` became a merchant key, so every
-  such line of a household was one merchant: one correction, one "Always
-  use…" rule or one subscription covered rows that had nothing to do with
-  each other. Such a line now has no merchant key, like a transfer; a brand
-  the merchant list knows by two letters (`BP`) keeps its own. Rows keyed
-  before lose the key in the refresh that follows the upgrade (the hourly
-  `categorise.dispatch` queues it; clean-up version 3); their categories
-  stay, and what was learned under such a key no longer answers.
-- **More of a bank's own lines are read, and more plain wording is
-  suggested.** `BANK FEE`, `OVERLIMIT FEE`, `RETURNED CHECK FEE` are bank
-  fees, `INTEREST FEE` interest paid and `SAVINGS INTEREST CREDIT`
-  interest earned, stated as for the other fee and interest lines;
-  `AUTOMATIC WITHDRAWAL <name>` is a debit to that name. Rent (`RENT
-  PAYMENT`, `APARTMENT RENT`), electricity (`ELECTRICITY`, `ELECTRIC
-  BILL`), `UTILITY`, pay (`WAGES`, `SALARY`, `EMPLOYER`, money in only),
-  `DIVIDEND EARNED` (money in only), `CASH DEPOSIT` (money in only),
-  `WITHDRAWAL` (money out only) and cinemas (`THEATERS`, `CINEMAS`) are
-  suggested. "Rent" or "electric" alone, inside another word or at the
-  start of a shop's name suggests nothing; cheques (`CHECK WITHDRAWAL`
-  too) and deposits stay unguessed (merchant list version 8).
-- **The merchant list knows more cinemas and a few more forms.** Marcus,
-  Harkins, Alamo Drafthouse, Landmark, Cineplex, Showcase, Studio Movie
-  Grill, Cinépolis, Megaplex and Century (Cinemark); Napster, also as
-  `RHAPSODY`; `ITUNES MUSIC` and `ITUNES STORE` (Apple); `THE GAP`; Shell
-  with `FUEL` or `PETROLEUM`. `SHELL` alone is still nobody's fuel: the
-  word names too many other businesses (merchant list version 9).
-
-### Security
-
-- **Development tooling: minimatch 11.** ESLint 10.15.0 and typescript-eslint
-  8.73.0 bring minimatch 11.0.8, out of GHSA-g3hv-75wg-m249 (minimatch
-  7 to 11.0.0). Development dependencies only; nothing shipped changes.
 
 ## [1.0.0-rc.10] - 2026-11-16
 
