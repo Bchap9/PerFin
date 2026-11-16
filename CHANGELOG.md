@@ -38,7 +38,128 @@ What remains (details in docs/ROADMAP.md):
 
 ## [Unreleased]
 
-Nothing yet.
+The redesign, the third of four stages on the way to 1.0.0. PerFin is six
+sections and Settings, in a new look in light and dark. Each piece of data
+has one home, every old address forwards to it, and one Inbox gathers
+everything that waits on a person, with its count on the rail. No
+migration, no new setting, no new container, nothing new leaves the host
+(docs/USING.md, docs/UPGRADING.md "1.0.0-rc.11").
+
+### Added
+
+- **Six sections and Settings.** The rail on the left holds Home, Inbox,
+  Transactions, Accounts, Plan and Reports, then Settings, the account
+  menu and the theme toggle; it had 17 entries. A section with several
+  pages has tabs under its heading, and a page about one thing (an
+  account, a document, a budget, a rule, a tax year) has breadcrumbs.
+  Settings is one list of pages in six groups (You, Household,
+  Categorisation, Import, Data and integrations, Instance). "Finding your
+  way around" (docs/USING.md) says what lives where.
+- **One Inbox for everything that waits on a person**, with its count on
+  the rail ("Inbox, 3 things need you"). It replaces Review and the
+  Documents upload page: Upload and a drop zone at the top, then one card
+  per thing to answer, the documents whose money is wrong until someone
+  answers first, then those that cannot import, then notes, loose items,
+  subscription series that are suggested or changed, the merchants with
+  the most suggested categories and "Make it a rule" offers. "Imported
+  recently" lists the files of the last 14 days with their account and
+  period. The document library, each document's page (now saying where
+  its rows went) and the answered items are its other tabs. The count on
+  the rail, Home's "Needs you" and the cards agree, and each counts only
+  accounts the person may see; when the count cannot be loaded the rail
+  shows nothing rather than zero.
+- **A drawer for each transaction.** A click on a row, or Enter on it,
+  opens the drawer and puts `?tx=<id>` in the address: the amount and
+  date, the account, what the bank wrote, the file it came from (or
+  "Entered by hand") and who or what decided the category, with how sure
+  a guess is. A category chosen there is the person's, and the drawer says
+  what it replaced, with Undo for an earlier choice of theirs and "Choose
+  *category* again" for a guess. **"Always use *category* for
+  *merchant*"** is a box under the category, unticked; ticking it shows
+  what the server counted before anything is saved, a second unticked box
+  offers to change the existing transactions, and Undo right after a save
+  removes the new rule. Categories can be made from the drawer.
+- **Transactions keeps its filters in the address**: account, category or
+  "No category", suggestions only, merchant, subscription, file, dates and
+  a search field, so a filtered list can be bookmarked or shared. With a
+  filter set, a line adds up money in, money out and the net of the rows
+  shown. Every category shows how it was decided, in small text under it;
+  a suggestion reads "*Category*?" with Accept.
+- **One page per account**, with the tabs its type needs: Overview,
+  Transactions (the latest 50) and Documents for every account, Holdings,
+  Activity and Performance for an investment account, Schedule, Payments,
+  Rate changes and Payoff for a loan, Valuations for a manual asset.
+  Accounts lists every account in groups (Cash, Cards and credit,
+  Investments, Loans, Property and other) under net worth and its change
+  over the last month, each row saying how current its balance is.
+  Investments across all accounts is its own tab.
+- **Plan** holds Subscriptions, Budgets, Goals and Upcoming (the
+  cash-flow calendar and the recurring items). **Reports** holds
+  Spending, Income, Cash flow and Trends under one tab bar, keeping the
+  period and account as you switch, then Net worth (each row linking to
+  its account) and Tax (each year with the documents it still misses).
+- **A command palette**: Ctrl+K, or Cmd+K on a Mac, from anywhere. Type
+  part of a name and press Enter to go to a section, tab, settings page or
+  account. It does not search transactions.
+- **Light and dark.** The theme toggle cycles System, Light and Dark and
+  says which is chosen; System follows the device. Every text and control
+  colour meets WCAG 2.2 AA contrast in both themes, a test checks each
+  pair, and every page is checked with axe in both.
+- **A phone layout.** Under 820 px the rail becomes a top bar and a bottom
+  bar with the six sections, Settings moves into the account menu, the
+  drawer fills the screen and panels stack. Under 720 px lists switch to
+  cards. From 820 to 1023 px the rail shows icons only, with their names
+  still read out.
+- **Home is one page**: net worth with a 12-month line, the first three
+  Inbox cards, spending this month against the same day of last month,
+  what is coming up in 30 days and the five latest transactions. Each
+  panel loads, and fails, on its own, with Retry.
+- **Budgets, Goals and Categories show their write buttons only to who may
+  write**, as the API already enforced.
+- API: `GET /inbox/summary`, the counts behind the Inbox (read-only, for
+  every role, limited to the accounts the caller may see; docs/API.md).
+
+### Changed
+
+- **Every old address forwards to its new home** and keeps what came
+  after `?` and `#`, so bookmarks keep working: `/review` and `/documents`
+  to `/inbox`, `/documents/library` to `/inbox/documents`,
+  `/documents/learned` to `/settings/learned`, `/investments` to
+  `/accounts/investments`, `/loans` and `/assets` to the Loans and
+  Property groups of Accounts, a loan or an asset to its account's page,
+  `/subscriptions`, `/budgets`, `/goals` and `/calendar` under `/plan`,
+  `/net-worth` and `/tax` under `/reports`, `/tax/mapping` to the Tax
+  hints tab of Categories, and `/rules` to `/settings/rules`
+  (docs/USING.md, "Where the old pages went").
+- **The new look**: new colours, type (Figtree and Bricolage Grotesque,
+  served by PerFin itself under `font-src 'self'`), spacing and panels
+  across every page. Charts colour their series through stylesheet
+  classes, and no page uses an inline style, which a lint rule now
+  enforces (the CSP stays `style-src 'self'`).
+- **Pages load as they are opened.** The app was one script of 391 kB
+  (gzip); the script Home needs before it can show is now 156 kB, and the
+  rest loads per page. All the scripts together are 467 kB (gzip, 69
+  files) against a budget of 470 kB, CSS 17 kB and the two fonts 62 kB;
+  `npm run check:bundle` fails a build over budget.
+- "Check again" (look again at what nobody decided after a newer merchant
+  list) moved to Settings, What PerFin learned. Upload moved to the top of
+  the Inbox.
+- "Link transfer" in a transaction's menu is named "Mark as transfer";
+  notes are edited from the row's menu, tags from the selection bar or the
+  drawer, the payee under Edit details.
+
+### Removed
+
+- **Customising Home.** The dashboard's widget catalogue and its customise
+  dialog are gone; Home is one fixed page. A layout you saved stays in the
+  database, unread (`dashboard_layout` is still accepted by the API).
+  Budgets, goals, holdings, loans and missing tax documents are one click
+  away in Plan, Accounts and Reports.
+- **The category select in the list of transactions**, and the inline
+  payee, tags and notes editors. A category is changed in the drawer, or
+  for many rows from the selection bar. The prompt that offered a rule
+  after a correction in the list went with it; the drawer's "Always use…"
+  box replaces it.
 
 ## [1.0.0-rc.10] - 2026-11-16
 
