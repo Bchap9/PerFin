@@ -6,8 +6,9 @@ touched: the zip itself (:mod:`app.domain.portability.zipsafe`, C2/C3), the
 manifest (format name; an unknown ``format_version`` is refused), that the
 members are exactly those the manifest lists with matching SHA-256 and size,
 that every member has a known place in the layout, and every row of every
-``data/*.json`` member (exact column set, values decoded strictly by
-:mod:`app.domain.portability.codec`, unique ids, counts as in the manifest).
+``data/*.json`` member (exactly the columns of the archive's format version,
+values decoded strictly by :mod:`app.domain.portability.codec`, unique ids,
+counts as in the manifest).
 
 :func:`apply_archive` then writes into the **current** household inside the
 caller's transaction, which the caller makes all-or-nothing (a savepoint and
@@ -38,6 +39,23 @@ keys are checked before it decides):
   ``breakdown`` are re-mapped; the ``holding`` cache is rebuilt from the
   imported lots; an AI client arrives without a token and revoked;
 * a format version 1 archive simply has none of the version 2 entities;
+* an archive older than format version 3 says nothing about how a category
+  was decided or where a recurring series stands, and gets what migration
+  0014 gave the rows of its time: ``category_source = 'legacy'`` for a
+  transaction with a category or a split (a guess never touches it), and for
+  a series ``confirmed`` by a person when it was entered by hand and on,
+  ``paused`` by a person when it was off, the detector's ``active``
+  otherwise, with the kind ``income`` for money in. It holds nothing learned;
+* from format version 3 on those facts are the archive's: a person's choice
+  arrives as a person's choice, a suggestion as a suggestion, a dismissed
+  series as dismissed. Merchant keys must have the key's form. What the
+  household already learned about a merchant and category wins over the
+  archive's count (so importing an archive twice counts nothing twice), and
+  the memory stays within its bound (the most recently decided are kept);
+* the links of a transaction to the rule that set its category and to its
+  recurring series are not in any archive. After every import
+  ``categorise.refresh`` is queued for the household with ``force``: merchant
+  keys, series links and what changed about a series are derived there;
 * ``import_hash`` (of transactions and investment transactions) embeds the
   account id (and the security), so it is recomputed for the new
   account (its running index is recovered by trying the indexes until the
@@ -58,6 +76,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 import uuid
 from collections import defaultdict
 from collections.abc import Callable, Iterable
@@ -73,6 +92,8 @@ from app.core import clock
 from app.core.crypto import Keyring
 from app.core.ids import uuid7
 from app.domain.accounts.models import Account, Institution
+from app.domain.categorisation.memory import MAX_ROWS as MEMORY_MAX_ROWS
+from app.domain.categorisation.models import MerchantMemory
 from app.domain.documents.blobstore import BlobStore, EncryptingWriter, SealedBlob
 from app.domain.documents.models import (
     TERMINAL_STATUSES,
@@ -103,6 +124,8 @@ from app.domain.portability.entities import (
     ENTITIES,
     LINK_TARGETS,
     MANIFEST,
+    SERIES_FACTS,
+    TRANSACTION_PROVENANCE,
     entities_for,
 )
 from app.domain.portability.schemas import (
@@ -113,11 +136,18 @@ from app.domain.portability.schemas import (
 from app.domain.portability.zipsafe import SafeZip, ZipLimits
 from app.domain.rules import engine
 from app.domain.rules import repo as rules_repo
+from app.domain.rules.merchant import queue_refresh
 from app.domain.rules.schemas import RULES_MAX, RuleBody
 from app.domain.tax.models import TaxCategoryMap, TaxChecklistItem, TaxYear
 from app.domain.taxonomy.service import MAX_CATEGORY_DEPTH
 from app.domain.transactions.import_hash import import_hash, normalize_payee
-from app.domain.transactions.models import Category, Payee, Tag
+from app.domain.transactions.models import (
+    MERCHANT_KEY_PATTERN,
+    Category,
+    Payee,
+    ScheduleOrigin,
+    Tag,
+)
 from app.ingestion.classify.fingerprints import (
     MAX_HOUSEHOLD_FINGERPRINTS,
     SCHEMA_VERSION,
@@ -137,6 +167,11 @@ HASH_INDEX_MAX: Final = 64
 CSV_MEMBERS: Final = frozenset({f"{CSV_PREFIX}accounts.csv", f"{CSV_PREFIX}transactions.csv"})
 #: Field separator of the investment activity hashes (``statement_import``).
 _INVEST_SEP: Final = "\x1f"
+#: The format version from which an archive says how a category was decided
+#: and where a series stands (``EntitySpec.added``).
+PROVENANCE_VERSION: Final = 3
+#: A fixed pattern (``transaction.merchant_key``); keys are at most 64 characters.
+_MERCHANT_KEY: Final = re.compile(MERCHANT_KEY_PATTERN)
 _RULE_KINDS: Final = {
     "category": "categories",
     "payee": "payees",
@@ -194,7 +229,8 @@ def _check_member(archive: SafeZip, manifest: Manifest, name: str, data: bytes) 
         raise _fail("archive-hash-mismatch", f"{name} does not match its manifest hash")
 
 
-def _decode_rows(entity: str, data: bytes) -> list[dict[str, Any]]:
+def _decode_rows(entity: str, data: bytes, version: int) -> list[dict[str, Any]]:
+    """The rows of one member; their fields are exactly the columns of ``version``."""
     spec = BY_NAME[entity]
     try:
         raw = json.loads(data)
@@ -202,7 +238,7 @@ def _decode_rows(entity: str, data: bytes) -> list[dict[str, Any]]:
         raise _fail("archive-invalid-value", f"{spec.member} is not valid JSON") from None
     if not isinstance(raw, list):
         raise _fail("archive-invalid-value", f"{spec.member} is not a JSON array")
-    columns = {c.name: c for c in spec.columns()}
+    columns = {c.name: c for c in spec.columns(version)}
     expected = set(columns)
     rows: list[dict[str, Any]] = []
     seen: set[uuid.UUID] = set()
@@ -233,7 +269,7 @@ def read_archive(data: bytes, *, limits: ZipLimits | None = None) -> ParsedArchi
             raise _fail("archive-members-mismatch", f"the archive has no {spec.member}")
         content = archive.read(spec.member, limit=DATA_MEMBER_MAX_BYTES)
         _check_member(archive, manifest, spec.member, content)
-        rows[spec.name] = _decode_rows(spec.name, content)
+        rows[spec.name] = _decode_rows(spec.name, content, manifest.format_version)
         if manifest.counts.get(spec.name) != len(rows[spec.name]):
             raise _fail("archive-members-mismatch", f"the row count of {spec.member} differs")
     for name in CSV_MEMBERS & members:
@@ -365,6 +401,8 @@ class _Importer:
         #: Securities and tax years the household had before the import.
         self.existing_securities: set[uuid.UUID] = set()
         self.existing_tax_years: set[uuid.UUID] = set()
+        #: Whether the archive says how categories were decided (module doc).
+        self.has_provenance = parsed.manifest.format_version >= PROVENANCE_VERSION
 
     # ---- helpers ---------------------------------------------------------
     def rows(self, entity: str) -> list[dict[str, Any]]:
@@ -651,8 +689,16 @@ class _Importer:
     def transactions(self) -> None:
         groups: dict[uuid.UUID, uuid.UUID] = {}
         old_accounts = {row["id"]: row["account_id"] for row in self.parsed.rows["transactions"]}
+        split = {row["transaction_id"] for row in self.parsed.rows["transaction_splits"]}
 
         def transform(row: dict[str, Any], old: uuid.UUID) -> dict[str, Any]:
+            if self.has_provenance:
+                self.check_merchant_key("transactions", row["merchant_key"])
+            else:
+                # As migration 0014 did: categorised before provenance existed.
+                row.update(dict.fromkeys(TRANSACTION_PROVENANCE))
+                if row["category_id"] is not None or old in split:
+                    row["category_source"] = "legacy"
             group = row["transfer_group_id"]
             if group is not None:
                 row["transfer_group_id"] = groups.setdefault(group, uuid7())
@@ -665,6 +711,62 @@ class _Importer:
             return row
 
         self.insert("transactions", transform=transform)
+
+    def scheduled_transactions(self) -> None:
+        def transform(row: dict[str, Any], _: uuid.UUID) -> dict[str, Any]:
+            if self.has_provenance:
+                self.check_merchant_key("scheduled_transactions", row["merchant_key"])
+                return row
+            # As migration 0014 did for the series of its time.
+            row.update(dict.fromkeys(SERIES_FACTS))
+            if not row["active"]:
+                status, decider = "paused", "person"
+            elif row["origin"] is ScheduleOrigin.MANUAL:
+                status, decider = "confirmed", "person"
+            else:
+                status, decider = "active", "detector"
+            row.update(
+                kind="income" if row["amount_min"] >= 0 else "other",
+                kind_source="detector",
+                status=status,
+                status_source=decider,
+                occurrences=0,
+            )
+            return row
+
+        self.insert("scheduled_transactions", transform=transform)
+
+    @staticmethod
+    def check_merchant_key(entity: str, key: str | None) -> None:
+        if key is not None and _MERCHANT_KEY.fullmatch(key) is None:
+            raise _fail("archive-invalid-value", f"{entity}.merchant_key: not a merchant key")
+
+    def merchant_memory(self) -> None:
+        """What was learned; an entry the household already has keeps its own count."""
+        existing = {
+            (key, direction, category)
+            for key, direction, category in self.session.execute(
+                select(
+                    MerchantMemory.merchant_key,
+                    MerchantMemory.direction,
+                    MerchantMemory.category_id,
+                ).where(MerchantMemory.household_id == self.household_id)
+            )
+        }
+        new_rows: list[dict[str, Any]] = []
+        for row in self.rows("merchant_memory"):
+            self.check_merchant_key("merchant_memory", row["merchant_key"])
+            category = self.ids["categories"].get(row["category_id"])
+            if (row["merchant_key"], row["direction"], category) in existing:
+                self.skipped["merchant_memory"] += 1
+                continue
+            new_rows.append(row)
+        # The memory is bounded: the most recently decided entries are kept.
+        new_rows.sort(key=lambda row: row["last_decided_at"], reverse=True)
+        room = max(MEMORY_MAX_ROWS - len(existing), 0)
+        if len(new_rows) > room:
+            self.skipped["merchant_memory"] += len(new_rows) - room
+        self.insert("merchant_memory", new_rows[:room])
 
     def check_splits(self) -> None:
         amounts = {row["id"]: row["amount"] for row in self.parsed.rows["transactions"]}
@@ -1037,6 +1139,8 @@ class _Importer:
         self.check_splits()
         self.institutions()
         self.categories()
+        # Format version 3 (empty for an older archive).
+        self.merchant_memory()
         self.payees()
         self.tags()
         self.insert("accounts")
@@ -1045,7 +1149,7 @@ class _Importer:
         self.insert("transaction_splits")
         self.insert("transaction_tags")
         self.insert("balance_snapshots")
-        self.insert("scheduled_transactions")
+        self.scheduled_transactions()
         self.rules()
         self.insert("budgets")
         self.insert("budget_lines")
@@ -1104,6 +1208,9 @@ def apply_archive(
         written_keys=written_keys,
     )
     importer.run()
+    # Merchant keys, the links to rules' and series' rows and what changed
+    # about a series are not in an archive: the engine derives them here.
+    queue_refresh(session, household_id)
     return {
         "created": dict(sorted(importer.created.items())),
         "merged": dict(sorted(importer.merged.items())),

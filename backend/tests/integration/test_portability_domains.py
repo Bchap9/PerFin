@@ -51,6 +51,8 @@ from tests.fixtures.portability import (
 from tests.fixtures.wealth import make_security
 from tests.integration.test_portability import (
     Jobs,
+    as_format,
+    decisions_of,
     export_archive,
     household,
     import_archive,
@@ -62,6 +64,8 @@ pytestmark = pytest.mark.integration
 
 _UUID = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$")
 _V2_ENTITIES = [spec for spec in ENTITIES if spec.since == 2]
+#: Everything a format 1 archive does not hold.
+_LATER_ENTITIES = [spec for spec in ENTITIES if spec.since > 1]
 
 
 @pytest.fixture
@@ -372,30 +376,11 @@ def test_securities_without_a_symbol_merge_by_name(
 
 
 def _as_version_1(data: bytes) -> bytes:
-    """``data`` as a format version 1 archive: no Phase 3-6 members."""
-    kept_links: list[Any] = []
-
-    def mutate(members: dict[str, bytes]) -> None:
-        for spec in _V2_ENTITIES:
-            del members[spec.member]
-        # Links to version 2 targets cannot be in a version 1 archive.
-        kept_links.extend(
-            row
-            for row in rows_of(members, "document_links")
-            if row["target_type"] in ("transaction", "account")
-        )
-        set_rows(members, "document_links", kept_links)
-
-    def manifest(document: dict[str, Any]) -> None:
-        document["format_version"] = 1
-        for spec in _V2_ENTITIES:
-            document["counts"].pop(spec.name, None)
-        document["counts"]["document_links"] = len(kept_links)
-
-    return rezip(data, mutate, manifest=manifest)
+    """``data`` as a format version 1 archive: no Phase 3-6 members, no later column."""
+    return as_format(data, 1)
 
 
-def test_a_version_1_archive_still_imports(
+def test_a_format_1_archive_still_imports(
     actors: Actors,
     factories: Factories,
     jobs: Jobs,
@@ -410,11 +395,20 @@ def test_a_version_1_archive_still_imports(
     assert outcome["state"] == "imported", outcome
     assert reports(owner_b) == reports(owner_a)
     counts = table_counts(factories, household(owner_b))
-    for spec in _V2_ENTITIES:
+    for spec in _LATER_ENTITIES:
         assert counts[spec.name] == 0, spec.name
     assert {spec.name for spec in entities_for(1)} == {
         spec.name for spec in ENTITIES if spec.since == 1
     }
+    # Its rows predate provenance: what had a category or a split is "legacy".
+    after = decisions_of(factories, household(owner_b))
+    assert {row[6] for row in after["transactions"]} == {"legacy", ""}
+    for row in after["transactions"]:
+        assert row[6] == ("legacy" if row[4] or row[8] else ""), row
+        assert row[3] == "", row
+    assert after["series"]["Rent"]["status"] == "confirmed"
+    assert after["series"]["Rent"]["status_source"] == "person"
+    assert after["memory"] == []
 
 
 def test_a_version_1_archive_with_a_version_2_member_is_refused(

@@ -14,7 +14,20 @@ fails for a table in neither list).
 
 :attr:`EntitySpec.since` is the archive format version that introduced the
 entity: an older archive has no such member and imports none of its rows
-(format version 1 had no Phase 3-6 tables).
+(format version 1 had no Phase 3-6 tables; ``merchant_memory`` came with
+format version 3).
+
+:attr:`EntitySpec.added` names the columns a later format version added to an
+entity that already existed, with that version: an older archive's rows do
+not have them (:meth:`EntitySpec.columns` with the archive's version), and
+the importer fills them as the migration that added them filled the rows of
+that time. Format version 3 added how a transaction's category was decided
+(``merchant_key``, ``category_source``, ``category_confidence``,
+``suggested_category_id``) and what a recurring series is and where it stands
+(:data:`SERIES_FACTS`). Two columns of that revision are never exported:
+``transaction.category_rule_id`` and ``transaction.scheduled_transaction_id``
+point at rows written later in the archive, are local to an instance and are
+found again there.
 """
 
 from __future__ import annotations
@@ -31,6 +44,7 @@ from app.domain.accounts.models import Account, BalanceSnapshot, Institution
 from app.domain.ai.models import AiClient
 from app.domain.assets.models import AssetValuation, ManualAsset
 from app.domain.budgets.models import Budget, BudgetLine
+from app.domain.categorisation.models import MerchantMemory
 from app.domain.documents.models import Document, DocumentLink, ParserFingerprint
 from app.domain.fx.models import FxRate
 from app.domain.goals.models import Goal, GoalAccount, GoalContribution
@@ -50,35 +64,31 @@ from app.domain.transactions.models import (
     TransactionTag,
 )
 
-#: Columns added by revision 0014 that the archive does not carry yet: how a
-#: category was decided and what a recurring series is. Left out so that
-#: format 2 archives keep their exact columns; an imported row gets the
-#: column defaults. (The archive format that carries them is a later change.)
-_TRANSACTION_PROVENANCE: Final = frozenset(
-    {
-        "merchant_key",
-        "category_source",
-        "category_confidence",
-        "category_rule_id",
-        "suggested_category_id",
-        "scheduled_transaction_id",
-    }
+#: How a category was decided (revision 0014), carried from format version 3 on.
+TRANSACTION_PROVENANCE: Final = (
+    "merchant_key",
+    "category_source",
+    "category_confidence",
+    "suggested_category_id",
 )
-_SERIES_FACTS: Final = frozenset(
-    {
-        "kind",
-        "kind_source",
-        "status",
-        "status_source",
-        "merchant_key",
-        "first_seen_on",
-        "occurrences",
-        "confidence",
-        "last_amount",
-        "previous_amount",
-        "price_changed_on",
-        "ended_on",
-    }
+#: Links of a transaction to rows written later in the archive (a rule, a
+#: recurring series): local to an instance, never exported, found again.
+TRANSACTION_LINKS: Final = frozenset({"category_rule_id", "scheduled_transaction_id"})
+#: What a recurring series is and where it stands (revision 0014), carried
+#: from format version 3 on.
+SERIES_FACTS: Final = (
+    "kind",
+    "kind_source",
+    "status",
+    "status_source",
+    "merchant_key",
+    "first_seen_on",
+    "occurrences",
+    "confidence",
+    "last_amount",
+    "previous_amount",
+    "price_changed_on",
+    "ended_on",
 )
 
 #: ``data/<name>.json``.
@@ -100,6 +110,8 @@ class EntitySpec:
     exclude: frozenset[str] = frozenset()
     #: The archive format version that introduced the entity (module doc).
     since: int = 1
+    #: column -> the (later) format version that added it (module doc).
+    added: Mapping[str, int] = field(default_factory=dict)
 
     @property
     def member(self) -> str:
@@ -109,16 +121,26 @@ class EntitySpec:
     def table(self) -> Any:
         return self.model.__table__
 
-    def columns(self) -> list[Column[Any]]:
-        """The exported columns, in table order."""
+    def columns(self, version: int | None = None) -> list[Column[Any]]:
+        """The exported columns, in table order.
+
+        With ``version``: those an archive of that format version holds
+        (without the columns a later version added).
+        """
         return [
-            c for c in self.table.columns if c.name != "household_id" and c.name not in self.exclude
+            c
+            for c in self.table.columns
+            if c.name != "household_id"
+            and c.name not in self.exclude
+            and (version is None or self.added.get(c.name, self.since) <= version)
         ]
 
 
 ENTITIES: Final[tuple[EntitySpec, ...]] = (
     EntitySpec("institutions", Institution),
     EntitySpec("categories", Category, refs={"parent_id": "categories"}),
+    # ---- format version 3: what the household's corrections taught --------
+    EntitySpec("merchant_memory", MerchantMemory, refs={"category_id": "categories"}, since=3),
     EntitySpec("payees", Payee, refs={"default_category_id": "categories"}),
     EntitySpec("tags", Tag),
     EntitySpec("accounts", Account, refs={"institution_id": "institutions"}),
@@ -137,9 +159,11 @@ ENTITIES: Final[tuple[EntitySpec, ...]] = (
             "account_id": "accounts",
             "payee_id": "payees",
             "category_id": "categories",
+            "suggested_category_id": "categories",
             "source_document_id": "documents",
         },
-        exclude=_TRANSACTION_PROVENANCE,
+        exclude=TRANSACTION_LINKS,
+        added=dict.fromkeys(TRANSACTION_PROVENANCE, 3),
     ),
     EntitySpec(
         "transaction_splits",
@@ -160,7 +184,7 @@ ENTITIES: Final[tuple[EntitySpec, ...]] = (
         "scheduled_transactions",
         ScheduledTransaction,
         refs={"account_id": "accounts", "payee_id": "payees", "category_id": "categories"},
-        exclude=_SERIES_FACTS,
+        added=dict.fromkeys(SERIES_FACTS, 3),
     ),
     EntitySpec("rules", Rule),
     EntitySpec("budgets", Budget),
@@ -310,14 +334,8 @@ NOT_EXPORTED: Final[Mapping[str, str]] = MappingProxyType(
             "the hash of a deleted imported row contains the account id and cannot be "
             "recomputed for new account ids"
         ),
-        # Categorisation (revision 0014); not in the archive format yet.
-        "merchant_memory": (
-            "the household's learned categories are not part of archive format 2; they "
-            "build up again from corrections made on the new instance"
-        ),
         "subscription_event": (
-            "changes found by recurring detection on this instance; detection finds them "
-            "again from the imported ledger"
+            "what detection found on this instance; found again from the imported transactions"
         ),
         # Jobs and workflow history of this instance's pipelines.
         "portability_archive": "the export and import jobs themselves",

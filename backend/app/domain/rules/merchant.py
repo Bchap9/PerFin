@@ -329,7 +329,7 @@ def create(
     )
 
 
-def _queue_refresh(db: Session, household_id: uuid.UUID) -> uuid.UUID:
+def queue_refresh(db: Session, household_id: uuid.UUID) -> uuid.UUID:
     """Ask the engine to guess again for the household, whatever its versions say."""
     spec = REGISTRY.get(REFRESH_JOB_TYPE)
     # Where the worker's handler is loaded, its own payload model is the one to send.
@@ -379,5 +379,5 @@ def revert(
                 "account_ids": sorted({str(account_id) for _, account_id in rows}),
             },
         )
-        job_id = _queue_refresh(db, household_id)
+        job_id = queue_refresh(db, household_id)
     return RuleRevertOut(rule_id=rule_id, reverted=len(rows), job_id=job_id)

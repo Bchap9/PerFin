@@ -286,9 +286,8 @@ def test_not_exported_only_holds_justified_tables() -> None:
         "mail_intake_message",
         "ai_call",
         "notification_channel",
-        # Categorisation (revision 0014): the learned categories are not in
-        # archive format 2 yet; detection finds a series' changes again.
-        "merchant_memory",
+        # What detection found on this instance (revision 0014); found again
+        # from the imported transactions. The learned categories travel.
         "subscription_event",
     }
     assert set(NOT_EXPORTED) <= allowed
@@ -303,7 +302,74 @@ def test_version_1_entities_are_the_original_ones() -> None:
     v1 = [spec.name for spec in entities_for(1)]
     assert "securities" not in v1
     assert "transactions" in v1
-    assert entities_for(2) == ENTITIES
+    assert "merchant_memory" not in [spec.name for spec in entities_for(2)]
+    assert entities_for(3) == ENTITIES
+
+
+def test_format_3_is_written_and_every_earlier_format_is_read() -> None:
+    from app.domain.portability.schemas import FORMAT_VERSION, SUPPORTED_FORMAT_VERSIONS
+
+    assert FORMAT_VERSION == 3
+    assert frozenset({1, 2, 3}) == SUPPORTED_FORMAT_VERSIONS
+
+
+def test_columns_added_in_format_3_are_left_out_of_an_older_archive() -> None:
+    """How a category was decided and what a series is travel from format 3 on."""
+    transactions = BY_NAME["transactions"]
+    provenance = {
+        "merchant_key",
+        "category_source",
+        "category_confidence",
+        "suggested_category_id",
+    }
+    assert {column for column, version in transactions.added.items() if version == 3} == provenance
+    current = {c.name for c in transactions.columns()}
+    assert provenance <= current
+    assert {c.name for c in transactions.columns(3)} == current
+    for version in (1, 2):
+        assert {c.name for c in transactions.columns(version)} == current - provenance
+    assert transactions.refs["suggested_category_id"] == "categories"
+
+    series = BY_NAME["scheduled_transactions"]
+    facts = {
+        "kind",
+        "kind_source",
+        "status",
+        "status_source",
+        "merchant_key",
+        "first_seen_on",
+        "occurrences",
+        "confidence",
+        "last_amount",
+        "previous_amount",
+        "price_changed_on",
+        "ended_on",
+    }
+    assert set(series.added) == facts
+    assert facts <= {c.name for c in series.columns()}
+    assert not facts & {c.name for c in series.columns(2)}
+    # Every "added" column exists and is one that is exported.
+    for spec in ENTITIES:
+        assert set(spec.added) <= {c.name for c in spec.columns()}, spec.name
+        assert all(version > spec.since for version in spec.added.values()), spec.name
+
+
+def test_rule_links_and_series_links_are_not_exported() -> None:
+    """Both point at rows written later in the archive; they are found again."""
+    transactions = BY_NAME["transactions"]
+    links = {"category_rule_id", "scheduled_transaction_id"}
+    assert links <= transactions.exclude
+    for version in (None, 1, 2, 3):
+        assert not links & {c.name for c in transactions.columns(version)}
+
+
+def test_what_was_learned_travels_from_format_3_on() -> None:
+    memory = BY_NAME["merchant_memory"]
+    assert memory.since == 3
+    assert dict(memory.refs) == {"category_id": "categories"}
+    names = [spec.name for spec in ENTITIES]
+    assert names.index("categories") < names.index("merchant_memory") < names.index("payees")
+    assert "subscription_event" in NOT_EXPORTED
 
 
 def test_investment_hashes_are_recomputed_for_the_new_ids() -> None:
