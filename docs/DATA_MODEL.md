@@ -339,7 +339,9 @@ What the columns and the two tables mean to a person is in
   on a hit, else the first four tokens of what clean-up left; for a payment
   between people the service (`zelle`), never the other person; NULL when
   the line names nobody (a transfer, a card payment, cash, a cheque, a fee,
-  interest, a deposit). `raw_payee` itself is never changed. The descriptor
+  interest, a deposit), or when those tokens hold fewer than three letters
+  and digits (`engine.KEY_CHARS_MIN`; a dictionary key is never held to
+  this). `raw_payee` itself is never changed. The descriptor
   kind and the display name are not stored: both are recomputed when
   needed. Partial index `(household_id, merchant_key)`. The key is derived
   from statement text and is `classification: denied` for AI access; it is
