@@ -272,7 +272,8 @@ def patch_transaction(
 def delete_transaction(
     row: Editable, request: Request, db: DbSession, principal: Writer
 ) -> Response:
-    service.delete_transaction(db, principal, row, request=request)
+    # A person's own delete of one row: an imported row stays deleted (tombstone).
+    service.delete_transaction(db, principal, row, request=request, tombstone=True)
     return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
