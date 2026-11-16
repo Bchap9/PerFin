@@ -22,7 +22,12 @@ Rules:
   ``into`` not ``source`` nor one of its descendants. Transactions, splits,
   schedules and payee defaults move to ``into``; budget lines move or are
   added to ``into``'s line in the same budget; ``source``'s children move
-  under ``into``; then ``source`` is deleted.
+  under ``into``; suggestions for ``source`` become suggestions for ``into``
+  (the rows stay untouched) and what the household taught about ``source``
+  (``merchant_memory``) is added to ``into``; then ``source`` is deleted.
+  When ``source`` has a ``system_key`` and ``into`` has none, ``into`` takes
+  it, so the merchant list still finds the category. Deleting a category
+  leaves suggestions and the memory to the foreign keys (cleared, removed).
 * **Payees**: ``normalized_name`` is
   ``app.domain.transactions.import_hash.normalize_payee(name)``, unique per
   household (``409 payee-exists``). Aliases (statement spellings) are kept
@@ -431,12 +436,16 @@ def merge_category(
         target_depth = _depth(tree, target.id)
         if any(target_depth + _height(tree, child.id) > MAX_CATEGORY_DEPTH for child in children):
             raise _too_deep()
-    state, source_id = _category_state(source), source.id
+    state, source_id, source_key = _category_state(source), source.id, source.system_key
     counts = repo.reassign_category(db, household_id, source_id, target.id)
     counts["children"] = repo.reparent_children(db, household_id, source_id, target.id)
     db.flush()
     db.expunge(source)
     repo.delete_category(db, household_id, source_id)
+    if source_key is not None and target.system_key is None:
+        # The key is how the merchant list finds this category: it follows
+        # the merge (after the delete: a key is unique per household).
+        target.system_key = source_key
     target.updated_at = clock.utcnow()
     db.flush()
     _record(

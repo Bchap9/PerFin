@@ -17,6 +17,7 @@ from sqlalchemy import delete, func, select, update
 from sqlalchemy.orm import Session
 
 from app.domain.budgets.models import BudgetLine
+from app.domain.categorisation.models import MerchantMemory
 from app.domain.transactions.models import (
     Category,
     CategoryKind,
@@ -137,7 +138,10 @@ def reassign_category(
     """Point every reference to ``source_id`` at ``target_id``; return counts per table.
 
     Budget lines merge: a budget that already has a line for the target adds
-    the source line's amount to it (both are in the budget's currency).
+    the source line's amount to it (both are in the budget's currency). A
+    suggestion for the source becomes one for the target without the row
+    counting as touched; what the household taught about the source is
+    folded into the target (:func:`_fold_memory`).
     """
     counts: dict[str, int] = {}
     for name, model in (
@@ -160,7 +164,63 @@ def reassign_category(
     )
     counts["payees"] = _rowcount(result)
     counts["budget_lines"] = _merge_budget_lines(db, household_id, source_id, target_id)
+    result = db.execute(
+        update(Transaction)
+        .where(
+            Transaction.household_id == household_id,
+            Transaction.suggested_category_id == source_id,
+        )
+        # A suggestion is PerFin's guess, not the person's edit: ``updated_at``
+        # stays (explicit, so the column's ``onupdate`` does not apply) and the
+        # importer still reads the row as untouched.
+        .values(suggested_category_id=target_id, updated_at=Transaction.updated_at)
+        .execution_options(synchronize_session=False)
+    )
+    counts["suggestions"] = _rowcount(result)
+    counts["memory"] = _fold_memory(db, household_id, source_id, target_id)
     return counts
+
+
+def _fold_memory(
+    db: Session, household_id: uuid.UUID, source_id: uuid.UUID, target_id: uuid.UUID
+) -> int:
+    """Count the decisions for ``source_id`` as decisions for ``target_id``.
+
+    ``merchant_memory`` has one row per merchant key, direction and category.
+    Where the target already has a row for the key and direction, the
+    source's decisions are added to it and it keeps the later
+    ``last_decided_at``; the source's other rows are re-pointed. Returns the
+    source rows folded or moved.
+    """
+    scope = (MerchantMemory.household_id == household_id,)
+    rows = list(
+        db.execute(
+            select(MerchantMemory)
+            .where(*scope, MerchantMemory.category_id == source_id)
+            .order_by(MerchantMemory.id)
+            .with_for_update()
+        ).scalars()
+    )
+    if not rows:
+        return 0
+    held = {
+        (row.merchant_key, row.direction): row
+        for row in db.execute(
+            select(MerchantMemory)
+            .where(*scope, MerchantMemory.category_id == target_id)
+            .with_for_update()
+        ).scalars()
+    }
+    for row in rows:
+        existing = held.get((row.merchant_key, row.direction))
+        if existing is None:
+            row.category_id = target_id
+        else:
+            existing.decisions = existing.decisions + row.decisions
+            existing.last_decided_at = max(existing.last_decided_at, row.last_decided_at)
+            db.delete(row)
+    db.flush()
+    return len(rows)
 
 
 def _merge_budget_lines(

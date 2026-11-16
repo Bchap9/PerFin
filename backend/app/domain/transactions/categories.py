@@ -5,9 +5,16 @@
 (``app.domain.households.service.create_household`` and first-run setup in
 ``app.auth.bootstrap``), in the new household's RLS context. It is
 idempotent: categories are identified by ``system_key`` and only the missing
-ones are inserted, so a later release can add defaults to existing
-households. Users may rename, move or delete seeded categories; a deleted
-default is re-created only if the seed runs again for that household.
+ones are inserted. Users may rename, move or delete seeded categories; a
+deleted default is re-created only if the seed runs again for that household.
+
+The set has editions (:data:`TAXONOMY_VERSION`). A key never changes and a
+leaf never moves once shipped; a later edition only adds leaves, each marked
+with the edition that introduced it (``DefaultCategory.since``). An existing
+household is brought up to date by :func:`add_new_defaults`, which adds only
+what it has not been offered before, so a default it deleted stays deleted.
+A new name for an old key (``leisure.subscriptions`` is "Streaming" from
+edition 2) reaches only households seeded from then on.
 
 ``system_key`` is ``<group>`` for a top-level category and
 ``<group>.<name>`` for a child; names are English (the SPA may translate by
@@ -30,7 +37,7 @@ from app.domain.transactions.models import Category, CategoryKind, TaxTreatment
 #: Edition of the default set. A household records the edition it was last
 #: brought up to (``categorisation.state``); :func:`add_new_defaults` adds
 #: what later editions introduced.
-TAXONOMY_VERSION: Final = 1
+TAXONOMY_VERSION: Final = 2
 
 _E, _I, _T, _X = (
     CategoryKind.EXPENSE,
@@ -47,12 +54,35 @@ class DefaultCategory:
     kind: CategoryKind
     tax: TaxTreatment | None = None
     children: tuple[DefaultCategory, ...] = field(default=())
+    #: The edition that introduced it.
+    since: int = 1
 
 
-def _group(key: str, name: str, kind: CategoryKind, *children: tuple[str, ...]) -> DefaultCategory:
-    """A top-level default; each child is ``(key, name)`` or ``(key, name, tax)``."""
+@dataclass(frozen=True)
+class _Added:
+    """A child introduced by a later edition (:func:`_v2`)."""
+
+    key: str
+    name: str
+    since: int
+
+
+def _v2(key: str, name: str) -> _Added:
+    return _Added(key, name, 2)
+
+
+def _group(
+    key: str, name: str, kind: CategoryKind, *children: tuple[str, ...] | _Added
+) -> DefaultCategory:
+    """A top-level default.
+
+    Each child is ``(key, name)`` or ``(key, name, tax)`` for the first
+    edition, :func:`_v2` for the second.
+    """
     built = tuple(
-        DefaultCategory(
+        DefaultCategory(f"{key}.{child.key}", child.name, kind, since=child.since)
+        if isinstance(child, _Added)
+        else DefaultCategory(
             f"{key}.{child[0]}", child[1], kind, TaxTreatment(child[2]) if len(child) > 2 else None
         )
         for child in children
@@ -86,6 +116,7 @@ DEFAULT_CATEGORIES: Final[tuple[DefaultCategory, ...]] = (
         ("insurance", "Home insurance"),
         ("maintenance", "Maintenance and repairs"),
         ("fees", "HOA and service charges"),
+        _v2("improvement", "Home improvement"),
     ),
     _group(
         "utilities",
@@ -96,6 +127,7 @@ DEFAULT_CATEGORIES: Final[tuple[DefaultCategory, ...]] = (
         ("water", "Water"),
         ("internet", "Internet"),
         ("phone", "Mobile phone"),
+        _v2("other", "Other utilities"),
     ),
     _group(
         "food",
@@ -104,6 +136,9 @@ DEFAULT_CATEGORIES: Final[tuple[DefaultCategory, ...]] = (
         ("groceries", "Groceries"),
         ("restaurants", "Restaurants"),
         ("coffee", "Coffee and snacks"),
+        _v2("fast_food", "Fast food"),
+        _v2("alcohol", "Alcohol and bars"),
+        _v2("delivery", "Food delivery"),
     ),
     _group(
         "transport",
@@ -133,15 +168,23 @@ DEFAULT_CATEGORIES: Final[tuple[DefaultCategory, ...]] = (
         ("clothing", "Clothing"),
         ("electronics", "Electronics"),
         ("household", "Household supplies"),
+        _v2("general", "General merchandise"),
+        _v2("home", "Home and garden"),
     ),
     _group(
         "leisure",
         "Leisure",
         _E,
-        ("subscriptions", "Streaming and subscriptions"),
+        # "Streaming and subscriptions" in edition 1. A subscription is a
+        # series, not a category; households seeded before keep their name.
+        ("subscriptions", "Streaming"),
         ("hobbies", "Hobbies"),
         ("events", "Events and tickets"),
         ("travel", "Travel"),
+        _v2("games", "Games"),
+        _v2("news", "News and books"),
+        _v2("software", "Software and apps"),
+        _v2("memberships", "Memberships"),
     ),
     _group(
         "family",
@@ -162,6 +205,7 @@ DEFAULT_CATEGORIES: Final[tuple[DefaultCategory, ...]] = (
         ("interest_paid", "Interest paid"),
         ("taxes", "Taxes", TaxTreatment.TAX_PAYMENT),
         ("insurance", "Life insurance"),
+        _v2("services", "Financial and legal services"),
     ),
     _group(
         "transfers",
@@ -172,6 +216,8 @@ DEFAULT_CATEGORIES: Final[tuple[DefaultCategory, ...]] = (
         ("savings", "Savings contribution"),
         ("investments", "Investment contribution"),
         ("loan_payment", "Loan payment"),
+        # Cash is moved, not spent: the kind keeps it out of spending totals.
+        _v2("cash", "Cash and ATM"),
     ),
     _group("excluded", "Excluded", _X, ("reimbursable", "Reimbursable")),
 )
@@ -244,12 +290,72 @@ def seed_default_categories(db: Session, household_id: uuid.UUID) -> int:
 
 
 def add_new_defaults(db: Session, household_id: uuid.UUID, since: int) -> int:
-    """Add the defaults introduced after edition ``since``; return how many.
+    """Add the default leaves introduced after edition ``since``; return how many.
 
-    Edition 1 is the only one so far, so there is nothing to add.
+    For a household that was seeded at edition ``since``. Nothing it already
+    has is renamed, moved or re-created, and a leaf of edition ``since`` or
+    earlier is never touched: one the household deleted stays deleted. Each
+    newer leaf goes under the category that carries its group's key; a group
+    the household removed gets nothing. A category of theirs with the same
+    name (ignoring case) under that parent and no key takes the key instead
+    of getting a twin; that is not counted, only inserted rows are. Running
+    it again adds nothing. Must run in that household's RLS context.
     """
-    del db, household_id, since
-    return 0
+    wanted = [
+        (group, leaf)
+        for group in DEFAULT_CATEGORIES
+        for leaf in group.children
+        if leaf.since > since
+    ]
+    if not wanted:
+        return 0
+    by_key = category_ids_by_key(db, household_id)
+    parents = {by_key[group.key] for group, _ in wanted if group.key in by_key}
+    # A child has its parent's kind, and the household may have changed it.
+    kinds: dict[uuid.UUID, CategoryKind] = {}
+    # Their categories under those parents, by parent and case-folded name.
+    siblings: dict[tuple[uuid.UUID, str], Category] = {}
+    if parents:
+        kinds.update(
+            (category_id, kind)
+            for category_id, kind in db.execute(
+                select(Category.id, Category.kind).where(
+                    Category.household_id == household_id, Category.id.in_(parents)
+                )
+            )
+        )
+        for category in db.execute(
+            select(Category)
+            .where(Category.household_id == household_id, Category.parent_id.in_(parents))
+            .order_by(Category.id)
+        ).scalars():
+            if category.parent_id is not None:
+                siblings.setdefault((category.parent_id, category.name.lower()), category)
+    added = 0
+    for group, leaf in wanted:
+        parent_id = by_key.get(group.key)
+        if parent_id is None or leaf.key in by_key:
+            continue
+        same_name = siblings.get((parent_id, leaf.name.lower()))
+        if same_name is not None:
+            # Keyed already means it is another default: no twin, no second key.
+            if same_name.system_key is None:
+                same_name.system_key = leaf.key
+                by_key[leaf.key] = same_name.id
+            continue
+        db.add(
+            Category(
+                household_id=household_id,
+                parent_id=parent_id,
+                name=leaf.name,
+                kind=kinds.get(parent_id, leaf.kind),
+                tax_treatment=leaf.tax,
+                system_key=leaf.key,
+            )
+        )
+        added += 1
+    db.flush()
+    return added
 
 
 def category_ids_by_key(db: Session, household_id: uuid.UUID) -> dict[str, uuid.UUID]:
