@@ -324,7 +324,14 @@ need it ([PORTABILITY.md](PORTABILITY.md)).
   by hand, and an admin's "Check again" (Settings, What PerFin learned)
   runs it at once. Categories on those rows stay; what was learned under such a key
   no longer answers, and the cash suggestion of a withdrawal or a cash
-  deposit stays. The same refresh suggests rent, water, sewer and tuition
+  deposit stays. A merchant rule ("Always use…") on such a key stops
+  applying, since no row carries the key any more: look in Settings ›
+  Rules for a merchant rule of a withdrawal, a cash deposit, a cheque or a
+  name of one or two letters, and replace it with a rule on the payee text
+  if it is still wanted. A recurring series of such rows loses its key too, and a
+  dismissed one stays dismissed as long as detection can tell it is the
+  same: by its name or payee and an amount in its range (a dismissed
+  series that was renamed may come back once as a suggestion). The same refresh suggests rent, water, sewer and tuition
   for more lines, and the next daily detection then shows a recurring
   series of such rows as a bill instead of "other", unless somebody set
   its kind.

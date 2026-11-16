@@ -103,7 +103,11 @@ Stage 4 of four on the way to 1.0.0: the release review.
   so all of a household's cash lines were one merchant, though the data
   model says a cash line has none. They now have no key; the suggestion of
   cash (a withdrawal money out, a cash deposit money in) stays. Rows keyed
-  before lose the key in the same refresh after the upgrade.
+  before lose the key in the same refresh after the upgrade. A recurring
+  series of such rows loses its key with them, so one a person dismissed
+  under the old key stays dismissed instead of coming back as a new
+  suggestion; a merchant rule on such a key stops applying
+  (docs/UPGRADING.md).
 - **A cheque in the `CHEQUE` or `CHQ` spelling is a cheque.** Clean-up read
   only `CHECK 0042` as a cheque, so `CHEQUE #0042`, `CHQ 0042`, a bare
   `CHEQUE` or `CHECK` and `TELLER CHEQUE 0042` became the merchant

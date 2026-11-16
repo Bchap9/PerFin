@@ -906,8 +906,10 @@ def keys_at(
     """The keys the rows of ``account_id`` and ``direction`` that carried ``old`` carry now.
 
     For a recurring series (``Summary.renamed_at``): rows that name nobody
-    any more are left out, since no series can be found for them. Empty when
-    no such row carried ``old``; ``{old}`` alone when the key did not move.
+    any more are left out, since no key can follow them (a series whose rows
+    all name nobody loses its key: ``service._follow_keys``). Empty when no
+    such row carried ``old`` or none names anybody now; ``{old}`` alone when
+    the key did not move.
     """
     return frozenset(
         key for key in renamed_at.get((account_id, direction, old), ()) if key is not None
