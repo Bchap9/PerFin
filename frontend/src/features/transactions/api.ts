@@ -74,6 +74,8 @@ export interface TransactionFilters {
   q: string;
   /** A document id: only the rows imported from that file. Empty for all. */
   document: string;
+  /** A recurring series id: only the charges linked to it. Empty for all. */
+  subscription: string;
   /** Only rows that carry a suggestion and no category. */
   suggested: boolean;
 }
@@ -88,6 +90,7 @@ export const EMPTY_FILTERS: TransactionFilters = {
   reviewState: "",
   q: "",
   document: "",
+  subscription: "",
   suggested: false,
 };
 
@@ -105,6 +108,7 @@ export function filterQuery(filters: TransactionFilters) {
     ...(filters.reviewState === "" ? {} : { review_state: [filters.reviewState] }),
     ...(filters.q.trim() === "" ? {} : { q: filters.q.trim() }),
     ...(filters.document === "" ? {} : { document: filters.document }),
+    ...(filters.subscription === "" ? {} : { subscription: filters.subscription }),
     ...(filters.suggested ? { suggested: true } : {}),
   };
 }

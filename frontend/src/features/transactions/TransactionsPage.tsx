@@ -64,8 +64,9 @@ function isReviewState(value: string): value is ReviewState | "" {
 function initialFilters(search: Record<string, unknown>): TransactionFilters {
   // A link from a report, an account page or a document narrows the list:
   // `account`, `category` (an id, or "none"), `date_from`, `date_to` and
-  // `document` (the file the rows were imported from), named like the filters
-  // of GET /transactions. `suggested=true` shows only the rows with a suggestion.
+  // `document` (the file the rows were imported from) and `subscription` (the
+  // series the charges belong to), named like the filters of GET
+  // /transactions. `suggested=true` shows only the rows with a suggestion.
   // (`always` is not a filter: see `linkedTransactionId`.)
   const given = new Map(Object.entries(search));
   const text = (key: string): string => {
@@ -80,6 +81,7 @@ function initialFilters(search: Record<string, unknown>): TransactionFilters {
     dateFrom: day("date_from"),
     dateTo: day("date_to"),
     document: text("document"),
+    subscription: text("subscription"),
     suggested: given.get("suggested") === true || text("suggested") === "true",
   };
 }
@@ -177,6 +179,12 @@ export function TransactionsPage() {
   const showEveryFile = (): void => {
     setDraft((current) => ({ ...current, document: "" }));
     setFilters((current) => ({ ...current, document: "" }));
+    setSelected(new Set());
+  };
+  // Likewise the charges of one subscription ("See in transactions").
+  const showEverySeries = (): void => {
+    setDraft((current) => ({ ...current, subscription: "" }));
+    setFilters((current) => ({ ...current, subscription: "" }));
     setSelected(new Set());
   };
 
@@ -505,6 +513,16 @@ export function TransactionsPage() {
             From one file
           </Link>
           <Button variant="ghost" size="sm" aria-label="Remove the file filter" onClick={showEveryFile}>
+            Remove
+          </Button>
+        </p>
+      )}
+      {filters.subscription === "" ? null : (
+        <p className="ledger-actions">
+          <Link to="/subscriptions/$id" params={{ id: filters.subscription }}>
+            Charges of one subscription
+          </Link>
+          <Button variant="ghost" size="sm" aria-label="Remove the subscription filter" onClick={showEverySeries}>
             Remove
           </Button>
         </p>

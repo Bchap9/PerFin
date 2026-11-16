@@ -310,16 +310,13 @@ describe("the merchant condition", () => {
     expect(hasProblems(validateRule(bare.draft))).toBe(false);
   });
 
-  it("the rule form does not offer or open a merchant condition while it has no field for the key", () => {
-    // RuleForm renders no input for the key: offered there it is a dead end,
-    // so the type is not in its list and such a rule keeps its conditions as stored.
-    expect(CONDITION_TYPES.map((type) => type.value)).not.toContain("merchant");
-    expect(parseRule(MERCHANT_RULE)).toMatchObject({ conditionsSupported: false, conditionsReadable: true });
+  it("the rule form offers a merchant condition and opens one for editing", () => {
+    expect(CONDITION_TYPES).toContainEqual({ value: "merchant", label: "Merchant is" });
+    expect(parseRule(MERCHANT_RULE)).toMatchObject({ conditionsSupported: true, conditionsReadable: true });
     const beside: ConditionDoc = { type: "all", conditions: [{ type: "sign", sign: "outflow" }, { type: "not", condition: { type: "merchant", key: "netflix" } }] };
-    expect(parseRule({ ...MERCHANT_RULE, conditions: beside })).toMatchObject({ conditionsSupported: false, conditionsReadable: true });
-    // Every other rule is as before.
-    expect(parseRule({ ...MERCHANT_RULE, conditions: { type: "sign", sign: "outflow" } })).toMatchObject({ conditionsSupported: true, conditionsReadable: true });
-    const nested: ConditionDoc = { type: "all", conditions: [{ type: "any", conditions: [{ type: "sign", sign: "outflow" }] }] };
+    expect(parseRule({ ...MERCHANT_RULE, conditions: beside })).toMatchObject({ conditionsSupported: true, conditionsReadable: true });
+    // Negative: conditions nested deeper than the builder shows are still kept as stored.
+    const nested: ConditionDoc = { type: "all", conditions: [{ type: "any", conditions: [{ type: "merchant", key: "netflix" }] }] };
     expect(parseRule({ ...MERCHANT_RULE, conditions: nested })).toMatchObject({ conditionsSupported: false, conditionsReadable: false });
   });
 

@@ -12,6 +12,7 @@ import type { Account, Category, Payee, Tag } from "../planning/queries";
 import {
   ACTION_TYPES,
   CONDITION_TYPES,
+  MERCHANT_KEY_MAX,
   TEXT_OPS,
   newAction,
   newCondition,
@@ -193,6 +194,13 @@ function ConditionRow({
         </>
       );
       break;
+    case "merchant":
+      body = (
+        <Field label={`Merchant ${n}`} hint="As PerFin names it: lower-case words, such as trader joes." error={problem}>
+          <Input value={item.value} maxLength={MERCHANT_KEY_MAX} onChange={(event) => { patch({ value: event.target.value }); }} />
+        </Field>
+      );
+      break;
     case "category_unset":
       body = null;
       break;
@@ -211,7 +219,7 @@ function ConditionRow({
         />
       </Field>
       {body}
-      {problem !== undefined && item.type !== "payee" && item.type !== "memo" ? (
+      {problem !== undefined && item.type !== "payee" && item.type !== "memo" && item.type !== "merchant" ? (
         <p role="alert" className="auth-error">
           {problem}
         </p>

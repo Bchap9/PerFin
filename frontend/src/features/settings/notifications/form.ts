@@ -2,15 +2,7 @@
 /** Pure helpers of the notification channels page: form state, request bodies and outcome texts. */
 import type { Channel, ChannelCreate, ChannelType, ChannelUpdate, Kind, Outcome } from "./api";
 
-/**
- * The four subscription alerts (design note, section 6). Named here as well
- * as in the API schema so the form knows them whether or not the generated
- * schema already lists them.
- */
-export type SubscriptionKind = "subscription_new" | "subscription_price_changed" | "subscription_missed" | "subscription_renewal";
-export type FormKind = Kind | SubscriptionKind;
-
-export const KINDS: readonly { kind: FormKind; label: string }[] = [
+export const KINDS: readonly { kind: Kind; label: string }[] = [
   { kind: "account_locked", label: "An account is locked after failed sign-ins" },
   { kind: "recovery_code_used", label: "A recovery code is used" },
   { kind: "mfa_reset", label: "An administrator resets someone's second factors" },
@@ -38,7 +30,7 @@ export interface ChannelForm {
   name: string;
   type: ChannelType;
   enabled: boolean;
-  kinds: FormKind[];
+  kinds: Kind[];
   host: string;
   port: string;
   tls: "starttls" | "implicit";

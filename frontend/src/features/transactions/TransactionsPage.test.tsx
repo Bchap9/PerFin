@@ -402,6 +402,39 @@ describe("rows of one file", () => {
     expect(api.callsTo("GET", "/api/v1/transactions").at(-1)?.search).not.toContain("document=");
   });
 
+  it("reads the subscription filter from the address, sends it and drops it with its chip", async () => {
+    const api = setup();
+    renderApp("/transactions?subscription=s-1");
+    const user = userEvent.setup();
+    await screen.findByLabelText("Category of Corner Market");
+    expect(api.callsTo("GET", "/api/v1/transactions")[0]?.search).toContain("subscription=s-1");
+    // The chip says the list is narrowed and leads back to the series.
+    expect(screen.getByRole("link", { name: "Charges of one subscription" })).toHaveAttribute("href", "/subscriptions/s-1");
+    // Other filters are applied on top of it.
+    await user.type(screen.getByLabelText("Search"), "market");
+    await user.click(screen.getByRole("button", { name: "Apply filters" }));
+    await waitFor(() => {
+      const last = api.callsTo("GET", "/api/v1/transactions").at(-1);
+      expect(last?.search).toContain("q=market");
+      expect(last?.search).toContain("subscription=s-1");
+    });
+    await user.click(screen.getByRole("button", { name: "Remove the subscription filter" }));
+    await waitFor(() => {
+      const last = api.callsTo("GET", "/api/v1/transactions").at(-1);
+      expect(last?.search).not.toContain("subscription=");
+      expect(last?.search).toContain("q=market");
+    });
+    expect(screen.queryByRole("link", { name: "Charges of one subscription" })).not.toBeInTheDocument();
+  });
+
+  it("shows no subscription chip and sends no subscription without one in the address", async () => {
+    const api = setup();
+    renderApp("/transactions?document=d-7");
+    await screen.findByLabelText("Category of Corner Market");
+    expect(api.callsTo("GET", "/api/v1/transactions")[0]?.search).not.toContain("subscription=");
+    expect(screen.queryByRole("link", { name: "Charges of one subscription" })).not.toBeInTheDocument();
+  });
+
   it("shows no chip and sends no document without one in the address", async () => {
     const api = setup();
     renderApp("/transactions");
