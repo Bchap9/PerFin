@@ -130,6 +130,28 @@
     flex-wrap: wrap;
   }
 
+  /* The row's text may shrink, so a long loan or asset line does not push
+     the amount below it; the line keeps to one line with an ellipsis (the
+     account's page has it in full) and its link stays whole. */
+  .account-row__main {
+    flex: 1 1 12rem;
+  }
+
+  .account-row__detail {
+    flex-wrap: nowrap;
+  }
+
+  .account-row__detail > span:first-child {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .account-row__detail > a {
+    flex: none;
+  }
+
   .accounts-worth {
     align-items: flex-start;
   }
