@@ -3,8 +3,10 @@
 
 * ``GET /transactions``: filters ``account``, ``date_from``/``date_to``,
   ``category``, ``uncategorized``, ``payee``, ``tag``, ``review_state``,
-  ``status``, ``transfer`` and ``q`` (a case-insensitive substring of the
-  payee text, payee name, memo or notes; no query language); keyset cursor
+  ``status``, ``transfer``, ``document`` (the rows a document produced; one
+  the caller cannot see gives an empty page) and ``q`` (a case-insensitive
+  substring of the payee text, payee name, memo or notes; no query
+  language); keyset cursor
   pagination (``cursor``, ``limit`` at most 500), newest first.
 * ``POST /transactions``: a manual transaction (``Idempotency-Key`` honoured).
 * ``GET/PATCH/DELETE /transactions/{id}``, ``POST /transactions/{id}/split``.
@@ -147,6 +149,7 @@ def list_transactions(
     review_state: Annotated[list[ReviewState] | None, _Ids] = None,
     status_: Annotated[list[TransactionStatus] | None, Query(alias="status", max_length=3)] = None,
     transfer: bool | None = None,
+    document: uuid.UUID | None = None,
     q: Annotated[str | None, Query(min_length=1, max_length=Q_MAX)] = None,
     cursor: Annotated[str | None, Query(max_length=128)] = None,
     limit: Annotated[int, Query(ge=1, le=MAX_LIMIT)] = DEFAULT_LIMIT,
@@ -163,6 +166,7 @@ def list_transactions(
         statuses=status_ or (),
         q=q.strip() or None if q is not None else None,
         transfer=transfer,
+        document_id=document,
     )
     return service.list_transactions(db, principal, filters, cursor=cursor, limit=limit)
 

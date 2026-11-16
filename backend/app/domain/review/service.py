@@ -136,6 +136,7 @@ from app.domain.review.schemas import (
     ResolveUnknownAccount,
     ResolveUnknownOwner,
     ResolveUnparsed,
+    ReviewCardPage,
     ReviewDocument,
     ReviewItemOut,
     ReviewPage,
@@ -377,6 +378,19 @@ def list_items(
         items=[_out(db, principal, row, documents=documents) for row in rows],
         next_cursor=rows[-1].id if more and rows else None,
     )
+
+
+#: Page size of ``GET /review/cards`` (it counts documents).
+CARDS_DEFAULT_PAGE: Final = 25
+CARDS_MAX_PAGE: Final = 100
+
+
+def list_cards(
+    db: Session, principal: Principal, *, cursor: uuid.UUID | None, limit: int
+) -> ReviewCardPage:
+    """The open items grouped by document. Declared; no card is built yet."""
+    _household(principal)
+    return ReviewCardPage(cards=[], loose=[], next_cursor=None)
 
 
 def _get(db: Session, principal: Principal, item_id: uuid.UUID, *, lock: bool) -> ReviewItem:
@@ -771,6 +785,10 @@ def _resolve_unparsed(
             db, document, principal=principal, action="document.reprocess", request=request
         )
         return {"action": "reprocess", "job_id": str(job_id)}
+    if body.action == "answer_sign":
+        # Declared in the API; refused until the answer is acted on, so it is
+        # never taken for a mapping to apply.
+        raise _invalid("This item does not ask what a positive amount means.")
     if document.extraction is None or document.status not in REIMPORTABLE:
         raise ProblemError(
             409,

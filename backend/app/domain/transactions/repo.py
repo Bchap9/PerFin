@@ -59,6 +59,8 @@ class TransactionFilters:
     q: str | None = None
     #: ``False``: only transactions that are not part of a transfer; ``True``: only transfers.
     transfer: bool | None = None
+    #: Only rows imported from (or added for) this document.
+    document_id: uuid.UUID | None = None
     extra: Sequence[ColumnElement[bool]] = field(default_factory=tuple)
 
 
@@ -111,6 +113,8 @@ def filter_clauses(household_id: uuid.UUID, f: TransactionFilters) -> list[Colum
         clauses.append(Transaction.transfer_group_id.is_not(None))
     elif f.transfer is False:
         clauses.append(Transaction.transfer_group_id.is_(None))
+    if f.document_id is not None:
+        clauses.append(Transaction.source_document_id == f.document_id)
     if f.q:
         pattern = like_pattern(f.q)
         clauses.append(

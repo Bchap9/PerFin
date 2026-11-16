@@ -7645,7 +7645,7 @@
         "type": "object"
       },
       "DocumentDetailOut": {
-        "description": "``GET /documents/{id}``: metadata only (never the file or extracted text).\n\n``downloadable`` says whether ``GET /documents/{id}/download`` would\nserve the caller (not quarantined, and member or above, or a viewer in a\nhousehold that allows viewer downloads); ``can_edit`` whether the caller\nmay reprocess, link or delete it.",
+        "description": "``GET /documents/{id}``: metadata only (never the file or extracted text).\n\n``downloadable`` says whether ``GET /documents/{id}/download`` would\nserve the caller (not quarantined, and member or above, or a viewer in a\nhousehold that allows viewer downloads); ``can_edit`` whether the caller\nmay reprocess, link or delete it; ``previewable`` whether ``GET\n/documents/{id}/preview`` would show the caller its pages.",
         "properties": {
           "account_id": {
             "anyOf": [
@@ -7763,6 +7763,11 @@
               }
             ],
             "title": "Period Start"
+          },
+          "previewable": {
+            "default": false,
+            "title": "Previewable",
+            "type": "boolean"
           },
           "quarantined": {
             "title": "Quarantined",
@@ -7960,7 +7965,7 @@
         "type": "object"
       },
       "DocumentImportedOut": {
-        "description": "``GET /documents/{id}/imported``: what ``DELETE ?with_data=true`` would also remove.\n\nCounts only rows in accounts the caller can see. ``child_documents`` are\nattachments or archive members received from this file (an email or ZIP);\ntheir own imported rows are included in the other counts.",
+        "description": "``GET /documents/{id}/imported``: what ``DELETE ?with_data=true`` would also remove.\n\nCounts only rows in accounts the caller can see. ``child_documents`` are\nattachments or archive members received from this file (an email or ZIP);\ntheir own imported rows are included in the other counts. ``statements``\nlists what the file imported, per account and period; ``skipped_lines``\nis how many lines of the file were counted but not read.",
         "properties": {
           "balance_snapshots": {
             "title": "Balance Snapshots",
@@ -7977,6 +7982,19 @@
           "loan_payments": {
             "title": "Loan Payments",
             "type": "integer"
+          },
+          "skipped_lines": {
+            "default": 0,
+            "title": "Skipped Lines",
+            "type": "integer"
+          },
+          "statements": {
+            "default": [],
+            "items": {
+              "$ref": "#/components/schemas/ImportedStatement"
+            },
+            "title": "Statements",
+            "type": "array"
           },
           "transactions": {
             "title": "Transactions",
@@ -8214,6 +8232,11 @@
             ],
             "title": "Tax Year"
           },
+          "unchecked": {
+            "default": false,
+            "title": "Unchecked",
+            "type": "boolean"
+          },
           "updated_at": {
             "format": "date-time",
             "title": "Updated At",
@@ -8327,6 +8350,29 @@
           "job_id"
         ],
         "title": "DocumentReceivedOut",
+        "type": "object"
+      },
+      "DocumentReconciliation": {
+        "description": "``GET /documents/{id}/reconciliation``: the statements the caller can see.",
+        "properties": {
+          "document_id": {
+            "format": "uuid",
+            "title": "Document Id",
+            "type": "string"
+          },
+          "statements": {
+            "items": {
+              "$ref": "#/components/schemas/StatementReconciliation"
+            },
+            "title": "Statements",
+            "type": "array"
+          }
+        },
+        "required": [
+          "document_id",
+          "statements"
+        ],
+        "title": "DocumentReconciliation",
         "type": "object"
       },
       "DocumentRegions": {
@@ -8482,6 +8528,43 @@
           "statements"
         ],
         "title": "DocumentSummary",
+        "type": "object"
+      },
+      "DuplicateDecision": {
+        "additionalProperties": false,
+        "description": "What to do with one imported row of a ``near_matches`` item.",
+        "properties": {
+          "decision": {
+            "enum": [
+              "confirm",
+              "reject"
+            ],
+            "title": "Decision",
+            "type": "string"
+          },
+          "duplicate_of": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Duplicate Of"
+          },
+          "transaction_id": {
+            "format": "uuid",
+            "title": "Transaction Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "transaction_id",
+          "decision"
+        ],
+        "title": "DuplicateDecision",
         "type": "object"
       },
       "ExportOut": {
@@ -10448,6 +10531,96 @@
         "title": "ImportQueuedOut",
         "type": "object"
       },
+      "ImportedStatement": {
+        "description": "A statement the document produced and the account it went to.\n\n``unchecked``: imported, of a document format (PDF or image) and not\nchecked against a balance (``verification = unverified``): the marker\n\"Not checked against a balance\". ``transactions`` and ``pending`` count\nthe ledger rows the document produced on the account for this period.",
+        "properties": {
+          "account_id": {
+            "format": "uuid",
+            "title": "Account Id",
+            "type": "string"
+          },
+          "account_name": {
+            "title": "Account Name",
+            "type": "string"
+          },
+          "kind": {
+            "enum": [
+              "bank",
+              "investment"
+            ],
+            "title": "Kind",
+            "type": "string"
+          },
+          "outcome": {
+            "title": "Outcome",
+            "type": "string"
+          },
+          "pending": {
+            "title": "Pending",
+            "type": "integer"
+          },
+          "period_end": {
+            "anyOf": [
+              {
+                "format": "date",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Period End"
+          },
+          "period_start": {
+            "anyOf": [
+              {
+                "format": "date",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Period Start"
+          },
+          "source_format": {
+            "title": "Source Format",
+            "type": "string"
+          },
+          "transactions": {
+            "title": "Transactions",
+            "type": "integer"
+          },
+          "unchecked": {
+            "title": "Unchecked",
+            "type": "boolean"
+          },
+          "verification": {
+            "enum": [
+              "reconciled",
+              "unverified",
+              "accepted"
+            ],
+            "title": "Verification",
+            "type": "string"
+          }
+        },
+        "required": [
+          "account_id",
+          "account_name",
+          "kind",
+          "period_start",
+          "period_end",
+          "outcome",
+          "verification",
+          "source_format",
+          "unchecked",
+          "transactions",
+          "pending"
+        ],
+        "title": "ImportedStatement",
+        "type": "object"
+      },
       "InvestmentTxnCreate": {
         "additionalProperties": false,
         "properties": {
@@ -11214,6 +11387,66 @@
           "learned_from_document_id"
         ],
         "title": "LearnedWordingOut",
+        "type": "object"
+      },
+      "LineFix": {
+        "additionalProperties": false,
+        "description": "Corrected values for one held activity line of a brokerage statement.\n\n``line`` is the line's ``index`` in the item's payload; absent fields\nare left as read.",
+        "properties": {
+          "amount": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/MoneyIn"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "line": {
+            "minimum": 0.0,
+            "title": "Line",
+            "type": "integer"
+          },
+          "quantity": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/MoneyIn"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "trade_date": {
+            "anyOf": [
+              {
+                "format": "date",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Trade Date"
+          },
+          "type": {
+            "anyOf": [
+              {
+                "pattern": "^[a-z_]{1,32}$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Type"
+          }
+        },
+        "required": [
+          "line"
+        ],
+        "title": "LineFix",
         "type": "object"
       },
       "LinkOfferOut": {
@@ -15634,6 +15867,293 @@
         "title": "RatioIn",
         "type": "object"
       },
+      "ReconcileAccept": {
+        "additionalProperties": false,
+        "description": "Accept a statement as read, without balancing it (no balance is recorded).",
+        "properties": {
+          "statement": {
+            "maximum": 10000.0,
+            "minimum": 0.0,
+            "title": "Statement",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "statement"
+        ],
+        "title": "ReconcileAccept",
+        "type": "object"
+      },
+      "ReconcileCause": {
+        "description": "A likely reason for the difference, most likely first.",
+        "properties": {
+          "amount": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Amount"
+          },
+          "bbox": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "number"
+                },
+                "maxItems": 4,
+                "minItems": 4,
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Bbox"
+          },
+          "kind": {
+            "enum": [
+              "extra_row",
+              "sign_flipped",
+              "transposed_digits",
+              "fee_or_interest",
+              "opening_differs_from_previous",
+              "duplicated_row",
+              "out_of_period",
+              "earlier_reading",
+              "missing_row"
+            ],
+            "title": "Kind",
+            "type": "string"
+          },
+          "page": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Page"
+          },
+          "transaction_ids": {
+            "items": {
+              "format": "uuid",
+              "type": "string"
+            },
+            "title": "Transaction Ids",
+            "type": "array"
+          }
+        },
+        "required": [
+          "kind",
+          "transaction_ids",
+          "amount",
+          "page",
+          "bbox"
+        ],
+        "title": "ReconcileCause",
+        "type": "object"
+      },
+      "ReconcileConfirm": {
+        "additionalProperties": false,
+        "description": "Confirm a statement that balances; balances are typed as printed.",
+        "properties": {
+          "closing_balance": {
+            "anyOf": [
+              {
+                "maxLength": 32,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Closing Balance"
+          },
+          "opening_balance": {
+            "anyOf": [
+              {
+                "maxLength": 32,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Opening Balance"
+          },
+          "statement": {
+            "maximum": 10000.0,
+            "minimum": 0.0,
+            "title": "Statement",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "statement"
+        ],
+        "title": "ReconcileConfirm",
+        "type": "object"
+      },
+      "ReconcileOutcome": {
+        "description": "The statement after the action, and what the action did.",
+        "properties": {
+          "confirmed": {
+            "title": "Confirmed",
+            "type": "integer"
+          },
+          "items_closed": {
+            "title": "Items Closed",
+            "type": "integer"
+          },
+          "snapshot": {
+            "title": "Snapshot",
+            "type": "boolean"
+          },
+          "statement": {
+            "$ref": "#/components/schemas/StatementReconciliation"
+          }
+        },
+        "required": [
+          "statement",
+          "confirmed",
+          "snapshot",
+          "items_closed"
+        ],
+        "title": "ReconcileOutcome",
+        "type": "object"
+      },
+      "ReconcileRemoveEarlier": {
+        "additionalProperties": false,
+        "description": "Remove the rows an earlier reading of the statement left behind.",
+        "properties": {
+          "statement": {
+            "maximum": 10000.0,
+            "minimum": 0.0,
+            "title": "Statement",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "statement"
+        ],
+        "title": "ReconcileRemoveEarlier",
+        "type": "object"
+      },
+      "ReconcileRestore": {
+        "additionalProperties": false,
+        "description": "Put a removed row of the document back.",
+        "properties": {
+          "tombstone_id": {
+            "format": "uuid",
+            "title": "Tombstone Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "tombstone_id"
+        ],
+        "title": "ReconcileRestore",
+        "type": "object"
+      },
+      "ReconcileRow": {
+        "description": "A ledger row that counts towards a statement's sum.\n\n``origin``: ``read`` from this document, ``added`` by a person for it,\n``matched`` when the row first came from another file. ``edited``: it\nwas changed after its import. ``page``/``bbox``: where the document\nprints it, when known.",
+        "properties": {
+          "amount": {
+            "title": "Amount",
+            "type": "string"
+          },
+          "bbox": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "number"
+                },
+                "maxItems": 4,
+                "minItems": 4,
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Bbox"
+          },
+          "edited": {
+            "title": "Edited",
+            "type": "boolean"
+          },
+          "in_period": {
+            "title": "In Period",
+            "type": "boolean"
+          },
+          "origin": {
+            "enum": [
+              "read",
+              "added",
+              "matched"
+            ],
+            "title": "Origin",
+            "type": "string"
+          },
+          "page": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Page"
+          },
+          "payee": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Payee"
+          },
+          "posted_date": {
+            "format": "date",
+            "title": "Posted Date",
+            "type": "string"
+          },
+          "review_state": {
+            "$ref": "#/components/schemas/ReviewState"
+          },
+          "transaction_id": {
+            "format": "uuid",
+            "title": "Transaction Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "transaction_id",
+          "posted_date",
+          "payee",
+          "amount",
+          "review_state",
+          "origin",
+          "edited",
+          "in_period",
+          "page",
+          "bbox"
+        ],
+        "title": "ReconcileRow",
+        "type": "object"
+      },
       "RecoveryCodesOut": {
         "properties": {
           "codes": {
@@ -16141,6 +16661,52 @@
         "title": "RememberLayoutOut",
         "type": "object"
       },
+      "RemovedRow": {
+        "description": "An imported row a person deleted (its tombstone); it can be put back.",
+        "properties": {
+          "amount": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Amount"
+          },
+          "deleted_at": {
+            "format": "date-time",
+            "title": "Deleted At",
+            "type": "string"
+          },
+          "posted_date": {
+            "anyOf": [
+              {
+                "format": "date",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Posted Date"
+          },
+          "tombstone_id": {
+            "format": "uuid",
+            "title": "Tombstone Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "tombstone_id",
+          "posted_date",
+          "amount",
+          "deleted_at"
+        ],
+        "title": "RemovedRow",
+        "type": "object"
+      },
       "ReportItem": {
         "description": "One group: ``key`` is a category, payee or account id, or ``YYYY-MM``.\n\n``key`` is ``null`` for uncategorised lines (``group_by=category``) and\nlines without a payee (``group_by=payee``); ``name`` is the category,\npayee or account name (``null`` for a month or a missing one).",
         "properties": {
@@ -16244,6 +16810,21 @@
             "const": "possible_duplicate",
             "title": "Kind",
             "type": "string"
+          },
+          "rows": {
+            "anyOf": [
+              {
+                "items": {
+                  "$ref": "#/components/schemas/DuplicateDecision"
+                },
+                "maxItems": 50,
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Rows"
           }
         },
         "required": [
@@ -16271,6 +16852,14 @@
             "const": "low_confidence_field",
             "title": "Kind",
             "type": "string"
+          },
+          "line_fixes": {
+            "items": {
+              "$ref": "#/components/schemas/LineFix"
+            },
+            "maxItems": 200,
+            "title": "Line Fixes",
+            "type": "array"
           },
           "lines": {
             "anyOf": [
@@ -16415,7 +17004,8 @@
           "action": {
             "enum": [
               "reprocess",
-              "apply_mapping"
+              "apply_mapping",
+              "answer_sign"
             ],
             "title": "Action",
             "type": "string"
@@ -16436,6 +17026,21 @@
               }
             ],
             "title": "Mapping Id"
+          },
+          "positive_is": {
+            "anyOf": [
+              {
+                "enum": [
+                  "money_in",
+                  "money_out"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Positive Is"
           }
         },
         "required": [
@@ -16443,6 +17048,99 @@
           "action"
         ],
         "title": "ResolveUnparsed",
+        "type": "object"
+      },
+      "ReviewCard": {
+        "description": "A document's open items as one card, with the one thing to do next.\n\n``action_item_id`` is the item that asks for ``action``; ``open`` counts\nthe items that wait on a person, ``notices`` the rest.",
+        "properties": {
+          "action": {
+            "enum": [
+              "choose_account",
+              "map_columns",
+              "answer_sign",
+              "reconcile",
+              "check_rows",
+              "confirm_duplicate",
+              "attach_receipt",
+              "choose_owner",
+              "teach",
+              "reprocess",
+              "acknowledge"
+            ],
+            "title": "Action",
+            "type": "string"
+          },
+          "action_item_id": {
+            "format": "uuid",
+            "title": "Action Item Id",
+            "type": "string"
+          },
+          "document": {
+            "$ref": "#/components/schemas/ReviewDocument"
+          },
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/ReviewItemOut"
+            },
+            "title": "Items",
+            "type": "array"
+          },
+          "notices": {
+            "title": "Notices",
+            "type": "integer"
+          },
+          "open": {
+            "title": "Open",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "document",
+          "items",
+          "action",
+          "action_item_id",
+          "open",
+          "notices"
+        ],
+        "title": "ReviewCard",
+        "type": "object"
+      },
+      "ReviewCardPage": {
+        "description": "``GET /review/cards``: cards by document; ``loose`` are open items of no document.\n\n``next_cursor`` (a document id) is ``null`` on the last page; ``loose``\nis filled on the first page only.",
+        "properties": {
+          "cards": {
+            "items": {
+              "$ref": "#/components/schemas/ReviewCard"
+            },
+            "title": "Cards",
+            "type": "array"
+          },
+          "loose": {
+            "items": {
+              "$ref": "#/components/schemas/ReviewItemOut"
+            },
+            "title": "Loose",
+            "type": "array"
+          },
+          "next_cursor": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Next Cursor"
+          }
+        },
+        "required": [
+          "cards",
+          "loose",
+          "next_cursor"
+        ],
+        "title": "ReviewCardPage",
         "type": "object"
       },
       "ReviewChange": {
@@ -20564,6 +21262,190 @@
         "title": "SplitSet",
         "type": "object"
       },
+      "StatementReconciliation": {
+        "description": "One statement of a document against the ledger rows it produced.\n\n``opening``, ``closing`` and ``previous_closing`` are as printed\n(``printed_sign = owed``: a balance owed is positive on paper); ``total``\nand ``difference`` (``opening + total - closing``) are in ledger terms.\n``status`` is ``unchecked`` without both balances.",
+        "properties": {
+          "account_id": {
+            "format": "uuid",
+            "title": "Account Id",
+            "type": "string"
+          },
+          "account_name": {
+            "title": "Account Name",
+            "type": "string"
+          },
+          "can_edit": {
+            "title": "Can Edit",
+            "type": "boolean"
+          },
+          "causes": {
+            "items": {
+              "$ref": "#/components/schemas/ReconcileCause"
+            },
+            "title": "Causes",
+            "type": "array"
+          },
+          "closing": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Closing"
+          },
+          "currency": {
+            "title": "Currency",
+            "type": "string"
+          },
+          "difference": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Difference"
+          },
+          "lines_skipped": {
+            "title": "Lines Skipped",
+            "type": "integer"
+          },
+          "opening": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Opening"
+          },
+          "period_end": {
+            "anyOf": [
+              {
+                "format": "date",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Period End"
+          },
+          "period_start": {
+            "anyOf": [
+              {
+                "format": "date",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Period Start"
+          },
+          "previous_closing": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Previous Closing"
+          },
+          "printed_sign": {
+            "enum": [
+              "ledger",
+              "owed"
+            ],
+            "title": "Printed Sign",
+            "type": "string"
+          },
+          "removed": {
+            "items": {
+              "$ref": "#/components/schemas/RemovedRow"
+            },
+            "title": "Removed",
+            "type": "array"
+          },
+          "rows": {
+            "items": {
+              "$ref": "#/components/schemas/ReconcileRow"
+            },
+            "title": "Rows",
+            "type": "array"
+          },
+          "rows_truncated": {
+            "title": "Rows Truncated",
+            "type": "boolean"
+          },
+          "statement": {
+            "title": "Statement",
+            "type": "integer"
+          },
+          "status": {
+            "enum": [
+              "balanced",
+              "off",
+              "unchecked"
+            ],
+            "title": "Status",
+            "type": "string"
+          },
+          "total": {
+            "title": "Total",
+            "type": "string"
+          },
+          "verification": {
+            "anyOf": [
+              {
+                "enum": [
+                  "reconciled",
+                  "unverified",
+                  "accepted"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Verification"
+          }
+        },
+        "required": [
+          "statement",
+          "account_id",
+          "account_name",
+          "currency",
+          "printed_sign",
+          "period_start",
+          "period_end",
+          "opening",
+          "closing",
+          "previous_closing",
+          "rows",
+          "rows_truncated",
+          "removed",
+          "total",
+          "difference",
+          "status",
+          "verification",
+          "causes",
+          "lines_skipped",
+          "can_edit"
+        ],
+        "title": "StatementReconciliation",
+        "type": "object"
+      },
       "StatementSummary": {
         "description": "What one brokerage statement of a document says about itself.",
         "properties": {
@@ -21379,6 +22261,48 @@
           "page"
         ],
         "title": "TaughtField",
+        "type": "object"
+      },
+      "TaughtRow": {
+        "description": "One row a taught table reads (``payee`` only for callers who may see content).",
+        "properties": {
+          "amount": {
+            "title": "Amount",
+            "type": "string"
+          },
+          "page": {
+            "title": "Page",
+            "type": "integer"
+          },
+          "payee": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Payee"
+          },
+          "posted_date": {
+            "format": "date",
+            "title": "Posted Date",
+            "type": "string"
+          },
+          "table": {
+            "title": "Table",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "posted_date",
+          "amount",
+          "payee",
+          "table",
+          "page"
+        ],
+        "title": "TaughtRow",
         "type": "object"
       },
       "TaughtTable": {
@@ -22222,6 +23146,16 @@
             "title": "Notes",
             "type": "array"
           },
+          "preview": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/TeachPreview"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "reprocessed": {
             "items": {
               "format": "uuid",
@@ -22271,9 +23205,79 @@
         "title": "TeachOut",
         "type": "object"
       },
+      "TeachPreview": {
+        "description": "What the labels would read, before anything is saved.",
+        "properties": {
+          "account_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Account Id"
+          },
+          "difference": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Difference"
+          },
+          "reconciliation": {
+            "anyOf": [
+              {
+                "enum": [
+                  "ok",
+                  "mismatch",
+                  "unavailable"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reconciliation"
+          },
+          "row_count": {
+            "title": "Row Count",
+            "type": "integer"
+          },
+          "rows": {
+            "items": {
+              "$ref": "#/components/schemas/TaughtRow"
+            },
+            "maxItems": 50,
+            "title": "Rows",
+            "type": "array"
+          },
+          "similar_waiting": {
+            "title": "Similar Waiting",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "rows",
+          "row_count",
+          "reconciliation",
+          "difference",
+          "similar_waiting",
+          "account_id"
+        ],
+        "title": "TeachPreview",
+        "type": "object"
+      },
       "TeachRequest": {
         "additionalProperties": false,
-        "description": "``POST /documents/{id}/teach``: what the person labelled on the document.\n\nThe labels are applied to this document at once (period, institution,\naccount, balances, the labelled table re-imported); with ``remember``\nthe layout is also kept as a household fingerprint with the labels'\nanchors (label text and direction, never the values), and this document\nand similar ones are read again with it. ``item_id`` names the review\nitem the teaching answers (closed with ``resolve``).",
+        "description": "``POST /documents/{id}/teach``: what the person labelled on the document.\n\nThe labels are applied to this document at once (period, institution,\naccount, balances, the labelled table re-imported); with ``remember``\nthe layout is also kept as a household fingerprint with the labels'\nanchors (label text and direction, never the values), and this document\nand similar ones are read again with it. ``item_id`` names the review\nitem the teaching answers (closed with ``resolve``). With ``preview``\nnothing is applied or kept: the answer says what would be read\n(:class:`TeachPreview`).",
         "properties": {
           "account_id": {
             "anyOf": [
@@ -22332,6 +23336,10 @@
             "title": "Labels",
             "type": "array"
           },
+          "preview": {
+            "title": "Preview",
+            "type": "boolean"
+          },
           "remember": {
             "default": false,
             "title": "Remember",
@@ -22356,7 +23364,7 @@
             "items": {
               "$ref": "#/components/schemas/TeachTable"
             },
-            "maxItems": 2,
+            "maxItems": 5,
             "title": "Tables",
             "type": "array"
           }
@@ -22366,7 +23374,7 @@
       },
       "TeachTable": {
         "additionalProperties": false,
-        "description": "A table selected on a page: the box starts at its header line.",
+        "description": "A table selected on a page: the box starts at its header line.\n\n``direction`` says what a single ``amount`` column means: as printed\n(signed on the page), all money in, all money out, or a card's charges\nprinted positive. ``continues``: the table runs on over later pages\nthat do not repeat its header.",
         "properties": {
           "bbox": {
             "items": {
@@ -22385,6 +23393,20 @@
             "minItems": 2,
             "title": "Columns",
             "type": "array"
+          },
+          "continues": {
+            "title": "Continues",
+            "type": "boolean"
+          },
+          "direction": {
+            "enum": [
+              "as_printed",
+              "money_in",
+              "money_out",
+              "card"
+            ],
+            "title": "Direction",
+            "type": "string"
           },
           "kind": {
             "enum": [
@@ -22928,7 +23950,7 @@
       },
       "TransactionCreate": {
         "additionalProperties": false,
-        "description": "A manual transaction. ``amount.currency`` must be the account's currency.",
+        "description": "A manual transaction. ``amount.currency`` must be the account's currency.\n\n``source_document_id``: the row is added for that document (a line the\nreader missed, entered in the reconcile view).",
         "properties": {
           "account_id": {
             "format": "uuid",
@@ -23014,6 +24036,18 @@
               }
             ],
             "title": "Raw Payee"
+          },
+          "source_document_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source Document Id"
           },
           "status": {
             "$ref": "#/components/schemas/TransactionStatus",
@@ -30642,6 +31676,403 @@
         ]
       }
     },
+    "/api/v1/documents/{document_id}/reconciliation": {
+      "get": {
+        "operationId": "get_reconciliation_api_v1_documents__document_id__reconciliation_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "document_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Document Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DocumentReconciliation"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {}
+            },
+            "description": "Problem details"
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {}
+            },
+            "description": "Problem details"
+          },
+          "409": {
+            "content": {
+              "application/problem+json": {}
+            },
+            "description": "Problem details"
+          },
+          "422": {
+            "content": {
+              "application/problem+json": {}
+            },
+            "description": "Problem details"
+          }
+        },
+        "summary": "A document's statements against the ledger rows it produced",
+        "tags": [
+          "documents"
+        ]
+      }
+    },
+    "/api/v1/documents/{document_id}/reconciliation/accept": {
+      "post": {
+        "operationId": "post_accept_api_v1_documents__document_id__reconciliation_accept_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "document_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Document Id",
+              "type": "string"
+            }
+          },
+          {
+            "description": "Optional. Repeating a request with the same key returns the first answer instead of creating again (24 hours; 1-255 visible ASCII characters).",
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Optional. Repeating a request with the same key returns the first answer instead of creating again (24 hours; 1-255 visible ASCII characters).",
+              "title": "Idempotency-Key"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ReconcileAccept"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReconcileOutcome"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {}
+            },
+            "description": "Problem details"
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {}
+            },
+            "description": "Problem details"
+          },
+          "409": {
+            "content": {
+              "application/problem+json": {}
+            },
+            "description": "Problem details"
+          },
+          "422": {
+            "content": {
+              "application/problem+json": {}
+            },
+            "description": "Problem details"
+          }
+        },
+        "summary": "Accept a statement as read, without balancing it",
+        "tags": [
+          "documents"
+        ]
+      }
+    },
+    "/api/v1/documents/{document_id}/reconciliation/confirm": {
+      "post": {
+        "operationId": "post_confirm_api_v1_documents__document_id__reconciliation_confirm_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "document_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Document Id",
+              "type": "string"
+            }
+          },
+          {
+            "description": "Optional. Repeating a request with the same key returns the first answer instead of creating again (24 hours; 1-255 visible ASCII characters).",
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Optional. Repeating a request with the same key returns the first answer instead of creating again (24 hours; 1-255 visible ASCII characters).",
+              "title": "Idempotency-Key"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ReconcileConfirm"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReconcileOutcome"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {}
+            },
+            "description": "Problem details"
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {}
+            },
+            "description": "Problem details"
+          },
+          "409": {
+            "content": {
+              "application/problem+json": {}
+            },
+            "description": "Problem details"
+          },
+          "422": {
+            "content": {
+              "application/problem+json": {}
+            },
+            "description": "Problem details"
+          }
+        },
+        "summary": "Confirm a statement that balances",
+        "tags": [
+          "documents"
+        ]
+      }
+    },
+    "/api/v1/documents/{document_id}/reconciliation/remove-earlier": {
+      "post": {
+        "operationId": "post_remove_earlier_api_v1_documents__document_id__reconciliation_remove_earlier_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "document_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Document Id",
+              "type": "string"
+            }
+          },
+          {
+            "description": "Optional. Repeating a request with the same key returns the first answer instead of creating again (24 hours; 1-255 visible ASCII characters).",
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Optional. Repeating a request with the same key returns the first answer instead of creating again (24 hours; 1-255 visible ASCII characters).",
+              "title": "Idempotency-Key"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ReconcileRemoveEarlier"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReconcileOutcome"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {}
+            },
+            "description": "Problem details"
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {}
+            },
+            "description": "Problem details"
+          },
+          "409": {
+            "content": {
+              "application/problem+json": {}
+            },
+            "description": "Problem details"
+          },
+          "422": {
+            "content": {
+              "application/problem+json": {}
+            },
+            "description": "Problem details"
+          }
+        },
+        "summary": "Remove the rows an earlier reading left behind",
+        "tags": [
+          "documents"
+        ]
+      }
+    },
+    "/api/v1/documents/{document_id}/reconciliation/restore": {
+      "post": {
+        "operationId": "post_restore_api_v1_documents__document_id__reconciliation_restore_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "document_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Document Id",
+              "type": "string"
+            }
+          },
+          {
+            "description": "Optional. Repeating a request with the same key returns the first answer instead of creating again (24 hours; 1-255 visible ASCII characters).",
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Optional. Repeating a request with the same key returns the first answer instead of creating again (24 hours; 1-255 visible ASCII characters).",
+              "title": "Idempotency-Key"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ReconcileRestore"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReconcileOutcome"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {}
+            },
+            "description": "Problem details"
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {}
+            },
+            "description": "Problem details"
+          },
+          "409": {
+            "content": {
+              "application/problem+json": {}
+            },
+            "description": "Problem details"
+          },
+          "422": {
+            "content": {
+              "application/problem+json": {}
+            },
+            "description": "Problem details"
+          }
+        },
+        "summary": "Put a removed row of the document back",
+        "tags": [
+          "documents"
+        ]
+      }
+    },
     "/api/v1/documents/{document_id}/regions": {
       "get": {
         "operationId": "get_regions_api_v1_documents__document_id__regions_get",
@@ -36850,6 +38281,82 @@
         ]
       }
     },
+    "/api/v1/review/cards": {
+      "get": {
+        "operationId": "get_review_cards_api_v1_review_cards_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "cursor",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Cursor"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 25,
+              "maximum": 100,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReviewCardPage"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {}
+            },
+            "description": "Problem details"
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {}
+            },
+            "description": "Problem details"
+          },
+          "409": {
+            "content": {
+              "application/problem+json": {}
+            },
+            "description": "Problem details"
+          },
+          "422": {
+            "content": {
+              "application/problem+json": {}
+            },
+            "description": "Problem details"
+          }
+        },
+        "summary": "Review queue, one card per document",
+        "tags": [
+          "review"
+        ]
+      }
+    },
     "/api/v1/review/{item_id}": {
       "get": {
         "operationId": "get_review_item_api_v1_review__item_id__get",
@@ -41438,6 +42945,23 @@
                 }
               ],
               "title": "Transfer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "document",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Document"
             }
           },
           {

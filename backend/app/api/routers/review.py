@@ -4,6 +4,9 @@
 * ``GET /review?state=open&kind=&document=&cursor=&limit=``: items the
   caller can see, oldest first (any role; ``state`` defaults to ``open``,
   ``all`` lists every state).
+* ``GET /review/cards?cursor=&limit=``: the open items grouped by document,
+  one card per document with the one thing to do next (any role). Declared
+  above ``GET /review/{id}``, or ``cards`` would be read as an item id.
 * ``GET /review/{id}``: one item (``404 review-item-not-found`` if hidden).
 * ``POST /review/{id}/resolve``: a typed resolution whose ``kind`` matches
   the item (``app.domain.review.schemas``); member or above who may change
@@ -40,6 +43,7 @@ from app.domain.review.schemas import (
     Correction,
     RememberLayout,
     RememberLayoutOut,
+    ReviewCardPage,
     ReviewItemOut,
     ReviewPage,
     ReviewResolution,
@@ -81,6 +85,21 @@ def get_review(
         cursor=cursor,
         limit=limit,
     )
+
+
+@router.get(
+    "/review/cards",
+    response_model=ReviewCardPage,
+    responses=PROBLEMS,
+    summary="Review queue, one card per document",
+)
+def get_review_cards(
+    db: DbSession,
+    principal: Reader,
+    cursor: Annotated[uuid.UUID | None, Query()] = None,
+    limit: Annotated[int, Query(ge=1, le=service.CARDS_MAX_PAGE)] = service.CARDS_DEFAULT_PAGE,
+) -> ReviewCardPage:
+    return service.list_cards(db, principal, cursor=cursor, limit=limit)
 
 
 @router.get(

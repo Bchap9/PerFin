@@ -18,6 +18,7 @@ from collections.abc import Iterator
 from dataclasses import dataclass
 from datetime import date, timedelta
 from decimal import Decimal
+from pathlib import Path
 from typing import Any
 
 import pytest
@@ -28,6 +29,8 @@ from app.core.settings import Settings
 from app.db.models import Setting, SettingScope
 from app.db.rls import set_context
 from app.domain.accounts.models import Account
+from app.domain.documents.blobstore import LocalFSBlobStore
+from app.domain.documents.models import Document
 from app.domain.transactions import service
 from app.domain.transactions.models import (
     ReviewState,
@@ -36,6 +39,7 @@ from app.domain.transactions.models import (
     TransactionStatus,
     TransactionTag,
 )
+from tests.fixtures.documents import make_document
 from tests.fixtures.factories import AuthedClient, Factories, UserRecord
 from tests.fixtures.households import (
     API,
@@ -226,6 +230,76 @@ def test_filters(world: World) -> None:
     assert world.owner.get(TXN, params={"review_state": "bogus"}).status_code == 422
     too_many = [str(uuid.uuid4()) for _ in range(51)]
     assert world.owner.get(TXN, params={"account": too_many}).status_code == 422
+
+
+def _document(world: World, tmp_path: Path, account: Account, name: str) -> Document:
+    """A stored statement of ``account`` (bytes differ per ``name``)."""
+    store = LocalFSBlobStore(tmp_path / "documents", tmp_path / "quarantine")
+    with world.factories.transaction() as db:
+        return make_document(
+            db,
+            store,
+            world.factories.keyring,
+            account.household_id,
+            data=f"Date,Payee,Amount\n2026-03-02,{name},-1.00\n".encode(),
+            filename=f"{name}.csv",
+            account_id=account.id,
+        )
+
+
+def test_list_by_source_document(world: World, tmp_path: Path) -> None:
+    ledger, acct = world.ledger, world.edit_acct
+    first = _document(world, tmp_path, acct, "first-export")
+    second = _document(world, tmp_path, acct, "second-export")
+    hidden = _document(world, tmp_path, world.hidden_acct, "hidden-export")
+    a1 = ledger.transaction(acct, amount="-4.10", source_document_id=first.id)
+    a2 = ledger.transaction(acct, amount="-5.20", source_document_id=first.id)
+    b1 = ledger.transaction(acct, amount="-6.30", source_document_id=second.id)
+    manual = ledger.transaction(acct, amount="-7.40")
+    on_hidden = ledger.transaction(world.hidden_acct, amount="-8.50", source_document_id=hidden.id)
+
+    def ids(client: AuthedClient, document: Document) -> set[str]:
+        return set(_ids(client.get(TXN, params={"document": str(document.id)})))
+
+    assert ids(world.owner, first) == {str(a1.id), str(a2.id)}
+    assert ids(world.owner, second) == {str(b1.id)}
+    assert ids(world.member, first) == {str(a1.id), str(a2.id)}
+    assert str(manual.id) not in ids(world.owner, first) | ids(world.owner, second)
+    # Rows on an account the caller cannot see: an empty page, never 403 or 404.
+    assert ids(world.owner, hidden) == {str(on_hidden.id)}
+    for client in (world.member, world.viewer, world.outsider):
+        response = client.get(TXN, params={"document": str(hidden.id)})
+        assert response.status_code == 200, response.text
+        assert response.json() == {"items": [], "next_cursor": None}
+    # Another household's document, or one that does not exist, reads the same.
+    assert ids(world.outsider, first) == set()
+    response = world.owner.get(TXN, params={"document": str(uuid.uuid4())})
+    assert response.json() == {"items": [], "next_cursor": None}
+    assert world.owner.get(TXN, params={"document": "not-a-uuid"}).status_code == 422
+
+
+def test_document_filter_combines_with_review_state(world: World, tmp_path: Path) -> None:
+    ledger, acct = world.ledger, world.edit_acct
+    first = _document(world, tmp_path, acct, "first-export")
+    second = _document(world, tmp_path, acct, "second-export")
+    waiting = ledger.transaction(
+        acct, amount="-4.10", source_document_id=first.id, review_state=ReviewState.PENDING
+    )
+    posted = ledger.transaction(acct, amount="-5.20", source_document_id=first.id)
+    ledger.transaction(
+        acct, amount="-6.30", source_document_id=second.id, review_state=ReviewState.PENDING
+    )
+
+    def ids(**params: Any) -> set[str]:
+        return set(_ids(world.owner.get(TXN, params={"document": str(first.id), **params})))
+
+    assert ids(review_state="pending") == {str(waiting.id)}
+    assert ids(review_state="none") == {str(posted.id)}
+    assert ids(account=str(acct.id), review_state=["pending", "none"]) == {
+        str(waiting.id),
+        str(posted.id),
+    }
+    assert ids(account=str(world.view_acct.id)) == set()
 
 
 def _tag(db: Any, transaction: Transaction, tag: Any) -> None:

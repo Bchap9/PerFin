@@ -724,9 +724,27 @@ POLICIES: Final[Mapping[str, Policy]] = MappingProxyType(
         f"POST {API}/documents/{{document_id}}/teach": scoped(
             "documents:write", role=M, params=SDOC
         ),
+        # Import 1d: the reconcile view reads like the document; its four
+        # actions change it (and need edit on the statement's account).
+        f"GET {API}/documents/{{document_id}}/reconciliation": scoped(
+            "documents:read", role=V, params=SDOC
+        ),
+        f"POST {API}/documents/{{document_id}}/reconciliation/confirm": scoped(
+            "documents:write", role=M, params=SDOC
+        ),
+        f"POST {API}/documents/{{document_id}}/reconciliation/accept": scoped(
+            "documents:write", role=M, params=SDOC
+        ),
+        f"POST {API}/documents/{{document_id}}/reconciliation/restore": scoped(
+            "documents:write", role=M, params=SDOC
+        ),
+        f"POST {API}/documents/{{document_id}}/reconciliation/remove-earlier": scoped(
+            "documents:write", role=M, params=SDOC
+        ),
         f"DELETE {API}/documents/{{document_id}}": scoped("documents:write", role=M, params=SDOC),
         # --- review queue (Phase 2): items of visible documents -------------
         f"GET {API}/review": scoped("review:read", role=V),
+        f"GET {API}/review/cards": scoped("review:read", role=V),
         f"GET {API}/review/{{item_id}}": scoped("review:read", role=V, params=ITEM),
         f"POST {API}/review/{{item_id}}/resolve": scoped("review:write", role=M, params=ITEM),
         f"POST {API}/review/{{item_id}}/dismiss": scoped("review:write", role=M, params=ITEM),
