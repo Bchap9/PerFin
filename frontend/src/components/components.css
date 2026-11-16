@@ -478,6 +478,13 @@ a.btn--danger:hover {
     width: 100%;
   }
 
+  /* The caption spans the width (a caption box would shrink to its longest
+     word) and lines up with the row cards under it, which have no frame. */
+  .table__caption {
+    display: block;
+    padding: var(--space-2) 0 var(--space-3);
+  }
+
   .table thead {
     position: absolute;
     width: 1px;
