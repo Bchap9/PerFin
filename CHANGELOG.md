@@ -6,14 +6,14 @@ All notable changes to PerFin are recorded here. The format follows
 
 ## Status
 
-The current release candidate is `v1.0.0-rc.8`; the final `v1.0.0` follows the
+The current release candidate is `v1.0.0-rc.9`; the final `v1.0.0` follows the
 external security review. Every phase (0-7) is implemented. Alembic head is
-`0013` on `main` (`0012` in rc.8). On 2026-11-12, for rc.8: SPDX;
-backend ruff, ruff format, mypy --strict (704 source files), bandit, OpenAPI
-drift and 8405 pytest tests with `-n 6` (the Helm chart tests aside, which
-need `helm`), of which the OCR tests (20) need Tesseract and could not run
-in that environment (both sets run in CI); frontend
-eslint, tsc, 694 vitest tests in 75 files and the production build. As of rc.2: `pip-audit` finds no known vulnerabilities and
+`0013`. On 2026-11-16: SPDX;
+backend ruff, ruff format, mypy --strict (765 source files), bandit, OpenAPI
+drift and 10702 pytest tests with `-n 4` before the last four fixes of the
+release, then the unit and integration suites (7592 tests) after them (the
+Helm chart tests aside, which need `helm`; all of it runs in CI); frontend
+eslint, tsc, 852 vitest tests in 77 files and the production build. As of rc.2: `pip-audit` finds no known vulnerabilities and
 `npm audit --audit-level=high` passes with 10 moderate advisories in dev
 tooling (eslint, typescript-eslint, minimatch), none high.
 CI is green end to end on GitHub Actions for commit `21d2b38`: `ci` run
@@ -36,6 +36,20 @@ What remains (details in docs/ROADMAP.md):
   hosts, and contributed classifier samples.
 
 ## [Unreleased]
+
+Nothing yet.
+
+## [1.0.0-rc.9] - 2026-11-16
+
+Ninth release candidate of 1.0.0: import reliability. Bank and card
+statement PDFs in many more layouts are read and checked against their
+printed balances; brokerage, loan, payslip, tax-form and receipt documents
+are read more widely; a statement that reads cleanly but prints nothing to
+check against is imported and marked "Not checked against a balance";
+Review is a queue of cards with "Check against the statement" and one
+"Teach PerFin" dialog; a document read again replaces the rows nobody
+touched, and a deleted imported row does not come back. Migration `0013`
+(docs/UPGRADING.md).
 
 ### Added
 
