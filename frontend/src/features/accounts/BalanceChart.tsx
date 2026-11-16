@@ -96,7 +96,8 @@ export function BalanceChart({ history }: { history: BalanceHistory }) {
             className="chart-series-1"
             type="monotone"
             dataKey="plot"
-            stroke="currentColor"
+            stroke="inherit"
+            strokeWidth={2}
             dot={false}
             activeDot={{ className: "chart-series-1 chart-active-dot", stroke: "currentColor" }}
             isAnimationActive={false}
