@@ -172,6 +172,19 @@ migration, no new setting, no new container, nothing new leaves the host
   account's own page showed a brokerage or retirement account at its cash
   alone (often 0.00) while net worth counted its cash plus holdings; both
   now show the same value.
+- **`scripts/check_spdx.py` runs in a container.** In a checkout that
+  reports another owner (a bind mount), git refused the repository and the
+  script stopped with a traceback; it now checks that one checkout and
+  prints a one-line message for any other git failure.
+- **The rolling-upgrade note for rc.10 says what fails.** docs/UPGRADING.md
+  lists the writes of rc.9 pods that migration `0014` refuses and the
+  stop-then-migrate order for Helm.
+
+### Security
+
+- **Development tooling: minimatch 11.** ESLint 10.15.0 and typescript-eslint
+  8.73.0 bring minimatch 11.0.8, out of GHSA-g3hv-75wg-m249 (minimatch
+  7 to 11.0.0). Development dependencies only; nothing shipped changes.
 
 ## [1.0.0-rc.10] - 2026-11-16
 
