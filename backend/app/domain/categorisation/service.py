@@ -314,7 +314,8 @@ def _follow_keys(db: Session, household_id: uuid.UUID, summary: Summary) -> tupl
     "dismissed" still stands. Keys already in
     ``split_keys`` follow their rows the same way. Nothing else of the rule
     or the series is written. Returns ``(rules, series)`` that follow a new
-    key; a series that only gains ``split_keys`` is not counted.
+    key (a series that loses its key counts too); a series that only gains
+    ``split_keys`` is not counted.
     """
     renamed = summary.renamed
     rules = list(

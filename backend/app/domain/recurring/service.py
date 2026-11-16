@@ -29,7 +29,8 @@ next statement yet.
 A candidate is matched to an existing series of the same account and
 direction (money in or out), best first: (0) the same merchant key and
 overlapping amounts; (1) the same merchant key; (2) a series without a key
-(from before merchant keys, or entered by hand) with the same payee or the
+(from before merchant keys, entered by hand, or one whose rows lost their
+key in a re-key: ``categorisation.service``) with the same payee or the
 same normalised name and overlapping amounts; (3) the series most of the
 candidate's already linked charges belong to (a series without a key that
 a person renamed, or one whose key was recomputed). Cadence is not part of the

@@ -318,23 +318,25 @@ need it ([PORTABILITY.md](PORTABILITY.md)).
   (`WITHDRAWAL`, `CASH DEPOSIT`, `TELLER DEPOSIT`, a line that starts with
   `ATM`) no longer have a merchant key, nor a cheque written with the
   `CHEQUE` or `CHQ` spelling (`CHEQUE #0042`, `CHQ 0042`, a bare `CHEQUE`
-  or `CHECK`), which is now read as a cheque like `CHECK 0042`. Rows keyed before lose it in the
-  refresh the hourly `categorise.dispatch` job queues after the upgrade
-  (clean-up version 3, merchant list version 11); nothing needs to be run
-  by hand, and an admin's "Check again" (Settings, What PerFin learned)
-  runs it at once. Categories on those rows stay; what was learned under such a key
-  no longer answers, and the cash suggestion of a withdrawal or a cash
-  deposit stays. A merchant rule ("Always use…") on such a key stops
-  applying, since no row carries the key any more: look in Settings ›
-  Rules for a merchant rule of a withdrawal, a cash deposit, a cheque or a
-  name of one or two letters, and replace it with a rule on the payee text
-  if it is still wanted. A recurring series of such rows loses its key too, and a
-  dismissed one stays dismissed as long as detection can tell it is the
-  same: by its name or payee and an amount in its range (a dismissed
-  series that was renamed may come back once as a suggestion). The same refresh suggests rent, water, sewer and tuition
-  for more lines, and the next daily detection then shows a recurring
-  series of such rows as a bill instead of "other", unless somebody set
-  its kind.
+  or `CHECK`), which is now read as a cheque like `CHECK 0042`. Rows keyed
+  before lose it in the refresh the hourly `categorise.dispatch` job
+  queues after the upgrade (clean-up version 3, merchant list version 11);
+  nothing needs to be run by hand, and an admin's "Check again" (Settings,
+  What PerFin learned) runs it at once. Categories on those rows stay;
+  what was learned under such a key no longer answers, and the cash
+  suggestion of a withdrawal or a cash deposit stays. A merchant rule
+  ("Always use…") on such a key stops applying, since no row carries the
+  key any more: look in Settings › Rules for a merchant rule of a
+  withdrawal, a cash deposit, a cheque or a name of one or two letters, and
+  replace it with a rule on the payee text if it is still wanted. A
+  recurring series of such rows loses its key too, and a dismissed one
+  stays dismissed as long as detection can tell it is the same: by its
+  name or payee and an amount in its range (a dismissed series that was
+  renamed may come back once as a suggestion). Detection no longer finds
+  a series of cheques. The same refresh suggests rent, water, a sewer
+  district and tuition for more lines, and the next daily detection then
+  shows a recurring series of such rows as a bill instead of "other",
+  unless somebody set its kind.
 - **An investment account's chart changes.** The balance history of a
   brokerage or retirement account (`GET /accounts/{id}/balances`, the
   account page's chart) is now cash plus holdings on each day, as the
