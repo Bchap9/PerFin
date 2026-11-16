@@ -282,7 +282,9 @@ def register(server: MCPServer, rt: ToolRuntime, *, mcp_info: Mapping[str, Any])
         return await rt.call("get_trends", "/trends", params)
 
     async def get_recurring() -> str:
-        """Subscriptions and bills PerFin tracks as recurring."""
+        """Recurring charges and income PerFin counts. Each row says its kind
+        (subscription, bill, income or other) and its status (active: found by
+        detection; confirmed: a person said so)."""
         return await rt.call("get_recurring", "/recurring")
 
     async def get_savings_goals() -> str:

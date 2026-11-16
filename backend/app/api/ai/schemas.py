@@ -291,6 +291,10 @@ class RecurringAi(AiOut):
     origin: str = src("scheduled_transaction.origin")
     active: bool = src("scheduled_transaction.active")
     last_seen_on: date | None = src("scheduled_transaction.last_seen_on")
+    #: ``subscription``, ``bill``, ``income`` or ``other``.
+    kind: str = src("scheduled_transaction.kind")
+    #: ``active`` (found by detection) or ``confirmed`` (a person said so).
+    status: str = src("scheduled_transaction.status")
 
 
 class AiRecurringOut(AiOut):

@@ -721,6 +721,8 @@ def recurring(ctx: AiContext) -> s.AiRecurringOut:
                 origin=r.origin.value,
                 active=r.active,
                 last_seen_on=r.last_seen_on,
+                kind=r.kind,
+                status=r.status,
             )
             for r in listing.items
         ]

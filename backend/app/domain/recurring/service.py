@@ -41,9 +41,10 @@ pairs are taken first and a series matches at most one candidate per run.
 * A **manual** match wins over a detected one and is never rewritten
   (``skipped_manual``); its charges are linked to it.
 * Any other match has its facts refreshed (the cadence, the amount range,
-  the latest amount, ``next_due``, when it was first and last seen, how many
-  charges, the confidence, a category when it had none, and the merchant key
-  when the candidate has one). Its name is left alone. Its ``kind`` is
+  ``next_due``, when it was first and last seen, how many charges, the
+  confidence, a category when it had none, and the merchant key when the
+  candidate has one). Its name is left alone. The latest amount is written
+  by ``subscriptions.settle``, which reads a price change from it. Its ``kind`` is
   written only while the detector decided it; its ``status`` only while the
   detector decided it, and then only upwards: ``suggested`` may become
   ``active``, never the reverse. What a person paused, ended or confirmed
@@ -55,6 +56,13 @@ The charges of a candidate are linked to its series
 (``transaction.scheduled_transaction_id``) through the pinned write, which
 leaves ``updated_at`` alone: a linked row still reads as untouched since its
 import. A charge that is no longer part of the series is not unlinked.
+
+What changed about a series (a new one, a price, a missed charge, the end, a
+charge after a person ended it, a trial that became a paid plan) is read off
+in the same run by ``app.domain.recurring.subscriptions.settle``, for every
+detected series whether detection found it again or not; that module says
+what is written and who is told. The one status the detector takes from a
+person is there: a confirmed series whose charges stopped is ended.
 
 A person's word: ``PATCH`` with ``kind`` sets the kind for good; ``active:
 false`` pauses the series and ``active: true`` confirms it. ``DELETE`` on a
@@ -112,7 +120,7 @@ from app.domain.budgets.reports import midpoint, occurrences
 from app.domain.categorisation import engine as categorisation
 from app.domain.categorisation.pinned import pinned_update
 from app.domain.fx.service import FxConverter, base_currency
-from app.domain.recurring import detection
+from app.domain.recurring import detection, subscriptions
 from app.domain.recurring.detection import Candidate, Observed
 from app.domain.recurring.schemas import (
     MAX_SCHEDULES,
@@ -794,8 +802,9 @@ def _create(
 def _refresh(row: ScheduledTransaction, candidate: Candidate) -> bool:
     """Write what detection found onto a matched series; whether anything changed.
 
-    Facts are always refreshed. The kind and the status are the detector's to
-    write only while no person decided them, and the status only rises.
+    Facts are always refreshed (the latest amount by ``subscriptions.settle``,
+    which runs first). The kind and the status are the detector's to write
+    only while no person decided them, and the status only rises.
     """
     first_seen = min(row.first_seen_on or candidate.first_seen, candidate.first_seen)
     wanted: dict[str, Any] = {
@@ -804,7 +813,6 @@ def _refresh(row: ScheduledTransaction, candidate: Candidate) -> bool:
         "next_due": candidate.next_due,
         "amount_min": to_storage(candidate.amount_min),
         "amount_max": to_storage(candidate.amount_max),
-        "last_amount": to_storage(candidate.last_amount),
         "first_seen_on": first_seen,
         "last_seen_on": candidate.last_seen,
         "occurrences": candidate.occurrences,
@@ -827,18 +835,55 @@ def _refresh(row: ScheduledTransaction, candidate: Candidate) -> bool:
     return bool(changed) or rises
 
 
+def _settled(row: ScheduledTransaction) -> tuple[Any, ...]:
+    """The columns ``subscriptions.settle`` may write."""
+    return (
+        row.status,
+        row.status_source,
+        row.ended_on,
+        row.last_amount,
+        row.previous_amount,
+        row.price_changed_on,
+    )
+
+
+def _first_run(db: Session, household_id: uuid.UUID) -> bool:
+    """Whether the household has no series with a merchant key yet (a quiet run)."""
+    keyed = db.execute(
+        select(ScheduledTransaction.id)
+        .where(
+            ScheduledTransaction.household_id == household_id,
+            ScheduledTransaction.merchant_key.is_not(None),
+        )
+        .limit(1)
+    ).first()
+    return keyed is None
+
+
+def _charge(row: Observed) -> subscriptions.Charge:
+    return subscriptions.Charge(row.id, row.posted_date, row.amount)
+
+
 def persist(
     db: Session, household_id: uuid.UUID, account_ids: Collection[uuid.UUID], on: date
 ) -> tuple[DetectCounts, list[CandidateOut]]:
-    """Detect on ``account_ids``, write the series and link their charges (module doc)."""
+    """Detect on ``account_ids``, write the series, link their charges and
+    settle what changed (module doc)."""
+    quiet = _first_run(db, household_id)
     ledger = _read(db, household_id, account_ids, on)
     found = detection.detect(ledger.rows, ledger.as_of)
     payees = _payee_names(db, household_id, found)
     currencies = _currencies(db, household_id, account_ids)
-    matches = _match(_existing(db, household_id, account_ids), found, ledger.links)
+    existing = _existing(db, household_id, account_ids)
+    matches = _match(existing, found, ledger.links)
     counts = DetectCounts()
     items: list[CandidateOut] = []
     charges: dict[uuid.UUID, dict[str, Any]] = {}
+    #: The series each read row belongs to once this run's links are written.
+    owner: dict[uuid.UUID, uuid.UUID] = {
+        row_id: schedule_id for row_id, schedule_id in ledger.links.items() if schedule_id
+    }
+    resolved: list[tuple[Candidate, ScheduledTransaction, bool]] = []
     for index, candidate in enumerate(found):
         match = matches.get(index)
         if match is not None and match.status == DISMISSED:
@@ -850,20 +895,65 @@ def persist(
             row = _create(db, household_id, candidate, name, currency)
             counts.created += 1
             _event(db, row, "created")
-        elif match.origin is ScheduleOrigin.MANUAL:
-            row = match
-            counts.skipped_manual += 1
         else:
             row = match
-            if _refresh(row, candidate):
-                counts.updated += 1
-                _event(db, row, "updated")
-            else:
-                counts.unchanged += 1
         for row_id in candidate.transaction_ids:
             if ledger.links.get(row_id) != row.id:
                 charges[row_id] = {"scheduled_transaction_id": row.id}
+            owner[row_id] = row.id
+        resolved.append((candidate, row, match is None))
         items.append(_candidate_out(candidate, name, currency, row.id))
+
+    own: dict[uuid.UUID, list[subscriptions.Charge]] = defaultdict(list)
+    loose: dict[tuple[uuid.UUID, str, bool], list[subscriptions.Charge]] = defaultdict(list)
+    for observed_row in ledger.rows:
+        schedule_id = owner.get(observed_row.id)
+        if schedule_id is not None:
+            own[schedule_id].append(_charge(observed_row))
+        elif observed_row.merchant_key is not None:
+            key = (observed_row.account_id, observed_row.merchant_key, observed_row.amount > 0)
+            loose[key].append(_charge(observed_row))
+
+    def settle(row: ScheduledTransaction, candidate: Candidate | None, created: bool) -> bool:
+        """Settle ``row``; whether one of its columns changed."""
+        as_of = ledger.as_of.get(row.account_id)
+        if as_of is None:
+            return False
+        before = _settled(row)
+        merchant = (row.account_id, row.merchant_key or "", row.amount_min >= 0)
+        subscriptions.settle(
+            db,
+            household_id,
+            row,
+            candidate,
+            own.get(row.id, ()),
+            as_of,
+            quiet=quiet,
+            created=created,
+            loose=loose.get(merchant, ()),
+        )
+        return _settled(row) != before
+
+    found_again: set[uuid.UUID] = set()
+    for candidate, row, created in resolved:
+        found_again.add(row.id)
+        if row.origin is ScheduleOrigin.MANUAL:
+            counts.skipped_manual += 1
+            continue
+        settled = settle(row, candidate, created)
+        if created:
+            continue
+        refreshed = _refresh(row, candidate)
+        if settled or refreshed:
+            counts.updated += 1
+            _event(db, row, "updated")
+        else:
+            counts.unchanged += 1
+    for row in existing:
+        # A series detection did not find this time: missed, or ended.
+        if row.id not in found_again and settle(row, None, False):
+            counts.updated += 1
+            _event(db, row, "updated")
     db.flush()
     pinned_update(db, household_id, charges)
     return counts, items

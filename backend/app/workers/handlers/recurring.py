@@ -10,7 +10,10 @@ run per household and day).
 :func:`app.domain.recurring.service.detect_household`: detection over every
 account of the household, writing ``origin = detected`` schedules (manual
 schedules are never touched; a detected one a person switched off stays
-off). Running it twice on the same ledger changes nothing.
+off), and what changed about each series (a price, a missed charge, the end,
+a new one). After it, :func:`app.domain.recurring.subscriptions.renewals`
+announces the half-yearly and annual charges due within a week. Running the
+job twice on the same ledger changes nothing and announces nothing twice.
 """
 
 from __future__ import annotations
@@ -24,7 +27,7 @@ from app.core import clock
 from app.core.logging import get_logger
 from app.db.queue import enqueue
 from app.db.rls import set_context
-from app.domain.recurring import service
+from app.domain.recurring import service, subscriptions
 from app.workers.handlers.networth import household_ids
 from app.workers.registry import JobContext, PermanentJobError, job_handler
 from app.workers.scheduler import recurring
@@ -72,8 +75,15 @@ def detect_household(ctx: JobContext, payload: HouseholdDetectPayload) -> None:
     if ctx.household_id is None:
         raise PermanentJobError("recurring.detect needs a household")
     counts = service.detect_household(ctx.session, ctx.household_id, payload.as_of)
+    renewals = subscriptions.renewals(ctx.session, ctx.household_id, payload.as_of)
     # Prefixed: a bare ``created`` collides with a LogRecord attribute (KeyError at INFO).
-    log.info("recurring detection", extra={f"detect_{k}": v for k, v in counts.__dict__.items()})
+    log.info(
+        "recurring detection",
+        extra={
+            **{f"detect_{k}": v for k, v in counts.__dict__.items()},
+            "detect_renewals": renewals,
+        },
+    )
 
 
 recurring(DISPATCH_JOB_TYPE, DETECT_INTERVAL, DetectRecurringPayload())

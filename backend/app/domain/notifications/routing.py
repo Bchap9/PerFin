@@ -28,7 +28,19 @@ event                                     kind                    control
 ``tax.reminder``                          ``tax_reminder``
 ``backup.failed``                         ``backup_failed``
 ``ai_client.created``                     ``ai_client_created``   E3
+``subscription.new`` /                    ``subscription_new``
+``.trial_converted``
+``subscription.price_changed``            ``subscription_price_changed``
+``subscription.missed`` / ``.ended`` /    ``subscription_missed``
+``.charged_after_end``
+``subscription.renewal_due``              ``subscription_renewal``
 ========================================  ======================  =========
+
+The ``subscription.*`` events are raised by
+``app.domain.recurring.subscriptions`` with the ``subscription_event`` row as
+the source, so a change is delivered to a channel at most once however often
+detection runs. Which subscription, what it costs and when are in the app,
+never in the sentence.
 """
 
 from __future__ import annotations
@@ -59,11 +71,22 @@ Kind = Literal[
     "tax_reminder",
     "backup_failed",
     "ai_client_created",
+    "subscription_new",
+    "subscription_price_changed",
+    "subscription_missed",
+    "subscription_renewal",
 ]
 KINDS: Final[tuple[str, ...]] = get_args(Kind)
 #: The kind of the message sent by ``POST .../test`` (not subscribable).
 TEST_KIND: Final = "test"
 TEST_MESSAGE: Final = "This is a test notification. The channel works."
+
+_SUBSCRIPTION_NEW: Final = "A new subscription was found. Open PerFin to see it."
+_SUBSCRIPTION_PRICE: Final = "A subscription's price changed. Open PerFin to see it."
+_SUBSCRIPTION_MISSED: Final = (
+    "An expected subscription or bill charge did not arrive. Open PerFin to see it."
+)
+_SUBSCRIPTION_RENEWAL: Final = "A subscription or bill renews within a week. Open PerFin to see it."
 
 
 @dataclass(frozen=True)
@@ -98,6 +121,13 @@ ROUTES: Final[dict[str, Route]] = {
     "ai_client.created": Route(
         "ai_client_created", "A new AI assistant connection was created for the household."
     ),
+    "subscription.new": Route("subscription_new", _SUBSCRIPTION_NEW),
+    "subscription.trial_converted": Route("subscription_new", _SUBSCRIPTION_NEW),
+    "subscription.price_changed": Route("subscription_price_changed", _SUBSCRIPTION_PRICE),
+    "subscription.missed": Route("subscription_missed", _SUBSCRIPTION_MISSED),
+    "subscription.ended": Route("subscription_missed", _SUBSCRIPTION_MISSED),
+    "subscription.charged_after_end": Route("subscription_missed", _SUBSCRIPTION_MISSED),
+    "subscription.renewal_due": Route("subscription_renewal", _SUBSCRIPTION_RENEWAL),
 }
 
 

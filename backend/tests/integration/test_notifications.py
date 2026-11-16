@@ -11,6 +11,9 @@
   reminders, review items waiting and ``perfin notify backup-failed``
   each queue one ``send_notification`` per subscribed, enabled channel and
   nothing for others; the job payload holds no identity;
+* what changed about a subscription (a new one, a price, a missed or
+  stopped charge, a renewal) is routed the same way, once per change however
+  often detection runs, with sentences that name nothing;
 * ``send_notification``: delivers through the real adapter, retries
   retryable outcomes, records the final one, skips disabled channels, and
   what leaves the host names nobody and no amount.
@@ -37,8 +40,11 @@ from app.core.crypto import DecryptionError, column_ad
 from app.core.settings import Settings
 from app.db.models import Job
 from app.db.rls import set_context
+from app.domain.accounts.models import AccountType
 from app.domain.notifications.backup import notify_backup_failed
-from app.domain.notifications.routing import KINDS, SEND_JOB_TYPE, SEND_MAX_ATTEMPTS
+from app.domain.notifications.routing import KINDS, ROUTES, SEND_JOB_TYPE, SEND_MAX_ATTEMPTS
+from app.domain.recurring import service as recurring_service
+from app.domain.reports.dates import add_months
 from app.domain.tax.reminders import send_reminders
 from app.workers.handlers import notifications as notify_jobs
 from app.workers.registry import REGISTRY, JobContext
@@ -49,6 +55,7 @@ from tests.fixtures.factories import Factories
 from tests.fixtures.fake_imap import ImapPki, make_pki
 from tests.fixtures.fake_notify import WEB_HOST, FakeHttpsServer, local_options, running_https
 from tests.fixtures.households import API, Actors, household_audit, problem_type
+from tests.fixtures.ledger import LedgerFactories
 from tests.fixtures.notifications import make_channel
 from tests.fixtures.tax import make_checklist_item, make_tax_year
 
@@ -472,6 +479,75 @@ def test_tax_reminder_is_routed(factories: Factories, admin_engine: Engine) -> N
         sent = send_reminders(db, household_id, date(2026, 1, 31), "01-31")
     assert len(sent) == 1
     _assert_routed(admin_engine, household_id, channel, "tax.reminder")
+
+
+def test_subscription_events_queue_one_job_per_subscribed_channel(
+    factories: Factories, ledger: LedgerFactories, admin_engine: Engine
+) -> None:
+    household = factories.household()
+    channel = _three_channels(factories, household.id, "subscription_price_changed")
+    account = ledger.account(household.id, type=AccountType.CHECKING)
+
+    def charge(on: date, amount: str, text_: str = "TUNEBOX 7781", key: str = "tunebox") -> None:
+        ledger.transaction(
+            account, amount=amount, posted_date=on, raw_payee=text_, merchant_key=key
+        )
+
+    def detect(on: date) -> None:
+        for _ in range(2):  # a second run finds nothing new to say
+            with factories.transaction() as db:
+                set_context(db, household.id)
+                recurring_service.persist(db, household.id, [account.id], on)
+
+    def routed() -> list[str]:
+        return [
+            job["event_type"]
+            for job in _jobs(admin_engine, household.id)
+            if job["event_type"].startswith("subscription.")
+        ]
+
+    for i in range(4):
+        charge(add_months(date(2026, 1, 7), i), "-10.99")
+    detect(date(2026, 4, 10))
+    assert routed() == []
+    charge(date(2026, 5, 7), "-12.99")
+    detect(date(2026, 5, 10))
+    assert routed() == ["subscription.price_changed"]
+    _assert_routed(admin_engine, household.id, channel, "subscription.price_changed")
+    # It stops. That goes to the channel subscribed to everything but prices.
+    charge(date(2026, 8, 20), "-3.00", "KERB KIOSK", "kerb kiosk")
+    detect(date(2026, 8, 25))
+    assert routed() == ["subscription.price_changed", "subscription.ended"]
+    (ended,) = [
+        j for j in _jobs(admin_engine, household.id) if j["event_type"] == "subscription.ended"
+    ]
+    assert set(ended) == {"channel_id", "event_type", "delivery_id"}
+    assert ended["channel_id"] != str(channel)
+
+
+def test_subscription_sentences_carry_no_detail() -> None:
+    routed = {event: route for event, route in ROUTES.items() if event.startswith("subscription.")}
+    assert {event: route.kind for event, route in routed.items()} == {
+        "subscription.new": "subscription_new",
+        "subscription.trial_converted": "subscription_new",
+        "subscription.price_changed": "subscription_price_changed",
+        "subscription.missed": "subscription_missed",
+        "subscription.ended": "subscription_missed",
+        "subscription.charged_after_end": "subscription_missed",
+        "subscription.renewal_due": "subscription_renewal",
+    }
+    assert {route.kind for route in routed.values()} <= set(KINDS)
+    assert {route.message for route in routed.values()} == {
+        "A new subscription was found. Open PerFin to see it.",
+        "A subscription's price changed. Open PerFin to see it.",
+        "An expected subscription or bill charge did not arrive. Open PerFin to see it.",
+        "A subscription or bill renews within a week. Open PerFin to see it.",
+    }
+    for route in routed.values():
+        assert not any(ch.isdigit() for ch in route.message), route.message
+        assert not set(route.message) & set("$\u20ac\u00a3\u00a5%#"), route.message
+        for name in ("tunebox", "kerb", "kiosk", "netflix"):
+            assert name not in route.message.lower()
 
 
 def test_new_device_sign_in_is_routed(
