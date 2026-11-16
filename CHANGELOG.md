@@ -136,9 +136,9 @@ migration, no new setting, no new container, nothing new leaves the host
   across every page. Charts colour their series through stylesheet
   classes, and no page uses an inline style, which a lint rule now
   enforces (the CSP stays `style-src 'self'`).
-- **Pages load as they are opened.** The app was one script of 391 kB
-  (gzip); the script Home needs before it can show is now 156 kB, and the
-  rest loads per page. All the scripts together are 467 kB (gzip, 69
+- **Pages load as they are opened.** Before the pages were split, the app
+  was one script of 391 kB (gzip); the script Home needs before it can
+  show is now 156 kB, and the rest loads per page. All the scripts together are 467 kB (gzip, 69
   files) against a budget of 470 kB, CSS 17 kB and the two fonts 62 kB;
   `npm run check:bundle` fails a build over budget.
 - "Check again" (look again at what nobody decided after a newer merchant

@@ -339,16 +339,18 @@ was removed from the API and no response changed.
   keeps the old bundle until it is reloaded. The service worker caches only
   content-hashed files under `/static/` and never the page itself, so the
   reload fetches the new page and its new files; nothing needs to be
-  cleared by hand. A phone with PerFin installed as an app does the same
-  the next time it is opened.
+  cleared by hand. PerFin installed as an app on a phone or a desktop
+  needs the same: reload it, or close it and open it again.
 - **Habits that changed.** The category of a transaction is no longer a
   select in the list: open the row (its drawer) or select several rows and
   use the bar. "Check again" moved from Documents to Settings, What PerFin
   learned. Upload is at the top of the Inbox.
-- **Rollback** to rc.10 is a plain image downgrade: the database is the
-  same. Old addresses work in rc.10 again; the new ones (`/inbox`,
-  `/plan/...`) do not exist there, so a bookmark made in rc.11 does not
-  open its page.
+- **Rollback.** This release adds no revision, so the database stays at
+  `0014`, the head of rc.10. Going back is the first case under
+  "Rollback": set `PERFIN_VERSION` back (Compose) or `helm rollback`
+  (Helm); no restore is needed. Take the backup before the upgrade all the
+  same. In rc.10 the new addresses (`/inbox`, `/plan/...`) do not exist,
+  so a bookmark made in rc.11 does not open its page there.
 
 ### 1.0.0-rc.10
 
