@@ -5,23 +5,39 @@
    in ../accounts/ledger.css. */
 
 /* ---- Search and filters -------------------------------------------------- */
-.tx-search {
+/* Search, the chips, Account and Category on one row that wraps; the dates
+   and the rarer filters sit under "More filters". */
+.tx-bar {
   display: flex;
   flex-wrap: wrap;
+  align-items: flex-start;
+  gap: var(--space-2) var(--space-3);
+}
+
+.tx-search {
+  display: flex;
+  flex: 1 1 14rem;
   align-items: center;
   gap: var(--space-2);
+  min-width: min(100%, 14rem);
 }
 
 .tx-search .input {
-  flex: 1 1 18rem;
+  flex: 1 1 auto;
   min-width: 0;
 }
 
 .tx-filters {
   display: flex;
+  flex: 999 1 0;
   flex-wrap: wrap;
-  align-items: flex-end;
+  min-width: min(100%, 28rem);
+  align-items: center;
   gap: var(--space-2) var(--space-3);
+}
+
+.tx-more[open] {
+  flex-basis: 100%;
 }
 
 .tx-filters__chips {
@@ -33,13 +49,20 @@
 }
 
 .tx-filters__field {
-  flex: 0 1 12rem;
+  flex: 0 1 10rem;
   min-width: 9rem;
   margin: 0;
 }
 
-.tx-filters__date {
-  flex-basis: 10rem;
+/* "All accounts" and "Any category" say what the selects are; the labels
+   stay for screen readers. */
+.tx-filters__field .field__label {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
 }
 
 .tx-more {
@@ -89,17 +112,6 @@
   background: var(--color-surface);
 }
 
-.tx-toolbar {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  justify-content: space-between;
-  gap: var(--space-2) var(--space-4);
-}
-
-.tx-toolbar__actions {
-  margin-inline-start: auto;
-}
 
 /* ---- The total of the rows shown ----------------------------------------- */
 .tx-totals {

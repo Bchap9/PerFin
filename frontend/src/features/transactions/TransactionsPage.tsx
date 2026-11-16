@@ -148,8 +148,10 @@ export function TransactionsPage() {
     setTypedFor(filters.q);
     setTyped(filters.q);
   }
-  const moreSet = filters.payee !== "" || filters.tag !== "" || filters.reviewState !== "";
-  const [moreOpen, setMoreOpen] = useState(moreSet);
+  // The filters behind "More filters": open when the address sets one, and
+  // counted on the summary while it is closed, so none is hidden silently.
+  const hidden = [filters.dateFrom, filters.dateTo, filters.payee, filters.tag, filters.reviewState].filter((value) => value !== "").length;
+  const [moreOpen, setMoreOpen] = useState(hidden > 0);
   // "Always categorise <merchant> as..." from the row menu, and the rule that was just saved there.
   const [always, setAlways] = useState<Transaction | null>(null);
   const [savedRule, setSavedRule] = useState<SavedRule | null>(null);
@@ -434,135 +436,165 @@ export function TransactionsPage() {
 
   return (
     <section className="ledger-stack tx-page">
-      <PageHeader title="Transactions" description="Every account in one list. Open a row to see where it came from or change its category." />
-      <form role="search" aria-label="Transactions" className="tx-search" onSubmit={submitSearch}>
-        <Input
-          type="search"
-          aria-label="Search transactions"
-          placeholder="Search merchant or description"
-          value={typed}
-          maxLength={100}
-          onChange={(event) => {
-            setTyped(event.target.value);
-          }}
-        />
-        <Button type="submit">Search</Button>
-      </form>
-      <div className="tx-filters" role="group" aria-label="Filters">
-        <div className="tx-filters__chips">
-          <Chip
-            pressed={filters.suggested}
-            onClick={() => {
-              change({ suggested: !filters.suggested });
-            }}
-          >
-            {counted("Suggestions", summary.data?.suggestions)}
-          </Chip>
-          <Chip
-            pressed={filters.category === "none"}
-            onClick={() => {
-              change({ category: filters.category === "none" ? "" : "none" });
-            }}
-          >
-            {counted("No category", summary.data?.uncategorised)}
-          </Chip>
-        </div>
-        <Field label="Account" className="tx-filters__field">
-          <Select
-            placeholder="All accounts"
-            options={(accounts.data ?? []).map((account) => ({ value: account.id, label: accountLabel(account) }))}
-            value={filters.account}
-            onChange={(event) => {
-              change({ account: event.target.value });
-            }}
-          />
-        </Field>
-        <Field label="Category" className="tx-filters__field">
-          <CategoryPicker
-            placeholder="Any category"
-            categories={categoryList}
-            value={filters.category === "none" ? "" : filters.category}
-            onChange={(event) => {
-              change({ category: event.target.value });
-            }}
-          />
-        </Field>
-        <Field label="From" className="tx-filters__field tx-filters__date">
+      <PageHeader
+        title="Transactions"
+        description="Every account in one list. Open a row to see where it came from or change its category."
+        {...(canAdd
+          ? {
+              actions: (
+                <>
+                  <Button
+                    loading={findTransfers.isPending}
+                    title="Link matching money out and money in between your accounts as transfers"
+                    onClick={() => {
+                      findTransfers.mutate();
+                    }}
+                  >
+                    Find transfers
+                  </Button>
+                  <Button
+                    variant="primary"
+                    onClick={() => {
+                      setAdding(true);
+                    }}
+                  >
+                    Add transaction
+                  </Button>
+                </>
+              ),
+            }
+          : {})}
+      />
+      <div className="tx-bar">
+        <form role="search" aria-label="Transactions" className="tx-search" onSubmit={submitSearch}>
           <Input
-            type="date"
-            value={filters.dateFrom}
+            type="search"
+            aria-label="Search transactions"
+            placeholder="Search merchant or description"
+            value={typed}
+            maxLength={100}
             onChange={(event) => {
-              const value = event.target.value;
-              if (value === "" || isIsoDate(value)) {
-                change({ dateFrom: value });
-              }
+              setTyped(event.target.value);
             }}
           />
-        </Field>
-        <Field label="To" className="tx-filters__field tx-filters__date">
-          <Input
-            type="date"
-            value={filters.dateTo}
-            onChange={(event) => {
-              const value = event.target.value;
-              if (value === "" || isIsoDate(value)) {
-                change({ dateTo: value });
-              }
-            }}
-          />
-        </Field>
-        <details
-          className="tx-more"
-          open={moreOpen}
-          onToggle={(event) => {
-            setMoreOpen(event.currentTarget.open);
-          }}
-        >
-          <summary>More filters</summary>
-          <div className="tx-more__fields">
-            <Field label="Payee">
-              <Select
-                placeholder="Any payee"
-                options={payeeList.map((payee) => ({ value: payee.id, label: payee.name }))}
-                value={filters.payee}
-                onChange={(event) => {
-                  change({ payee: event.target.value });
-                }}
-              />
-            </Field>
-            <Field label="Tag">
-              <Select
-                placeholder="Any tag"
-                options={tagList.map((tag) => ({ value: tag.id, label: tag.name }))}
-                value={filters.tag}
-                onChange={(event) => {
-                  change({ tag: event.target.value });
-                }}
-              />
-            </Field>
-            <Field label="Review state">
-              <Select
-                placeholder="Any state"
-                options={REVIEW_STATES}
-                value={filters.reviewState}
-                onChange={(event) => {
-                  change({ reviewState: reviewState(event.target.value) });
-                }}
-              />
-            </Field>
+          <Button type="submit">Search</Button>
+        </form>
+        <div className="tx-filters" role="group" aria-label="Filters">
+          <div className="tx-filters__chips">
+            <Chip
+              pressed={filters.suggested}
+              onClick={() => {
+                change({ suggested: !filters.suggested });
+              }}
+            >
+              {counted("Suggestions", summary.data?.suggestions)}
+            </Chip>
+            <Chip
+              pressed={filters.category === "none"}
+              onClick={() => {
+                change({ category: filters.category === "none" ? "" : "none" });
+              }}
+            >
+              {counted("No category", summary.data?.uncategorised)}
+            </Chip>
           </div>
-        </details>
-        {hasFilters(filters) ? (
-          <Button
-            size="sm"
-            variant="ghost"
-            onClick={() => {
-              setFilters(NO_FILTERS);
+          <Field label="Account" className="tx-filters__field">
+            <Select
+              placeholder="All accounts"
+              options={(accounts.data ?? []).map((account) => ({ value: account.id, label: accountLabel(account) }))}
+              value={filters.account}
+              onChange={(event) => {
+                change({ account: event.target.value });
+              }}
+            />
+          </Field>
+          <Field label="Category" className="tx-filters__field">
+            <CategoryPicker
+              placeholder="Any category"
+              categories={categoryList}
+              value={filters.category === "none" ? "" : filters.category}
+              onChange={(event) => {
+                change({ category: event.target.value });
+              }}
+            />
+          </Field>
+          <details
+            className="tx-more"
+            open={moreOpen}
+            onToggle={(event) => {
+              setMoreOpen(event.currentTarget.open);
             }}
           >
-            Clear filters
-          </Button>
-        ) : null}
+            <summary>{moreOpen || hidden === 0 ? "More filters" : `More filters (${String(hidden)})`}</summary>
+            <div className="tx-more__fields">
+              <Field label="From">
+                <Input
+                  type="date"
+                  value={filters.dateFrom}
+                  onChange={(event) => {
+                    const value = event.target.value;
+                    if (value === "" || isIsoDate(value)) {
+                      change({ dateFrom: value });
+                    }
+                  }}
+                />
+              </Field>
+              <Field label="To">
+                <Input
+                  type="date"
+                  value={filters.dateTo}
+                  onChange={(event) => {
+                    const value = event.target.value;
+                    if (value === "" || isIsoDate(value)) {
+                      change({ dateTo: value });
+                    }
+                  }}
+                />
+              </Field>
+              <Field label="Payee">
+                <Select
+                  placeholder="Any payee"
+                  options={payeeList.map((payee) => ({ value: payee.id, label: payee.name }))}
+                  value={filters.payee}
+                  onChange={(event) => {
+                    change({ payee: event.target.value });
+                  }}
+                />
+              </Field>
+              <Field label="Tag">
+                <Select
+                  placeholder="Any tag"
+                  options={tagList.map((tag) => ({ value: tag.id, label: tag.name }))}
+                  value={filters.tag}
+                  onChange={(event) => {
+                    change({ tag: event.target.value });
+                  }}
+                />
+              </Field>
+              <Field label="Review state">
+                <Select
+                  placeholder="Any state"
+                  options={REVIEW_STATES}
+                  value={filters.reviewState}
+                  onChange={(event) => {
+                    change({ reviewState: reviewState(event.target.value) });
+                  }}
+                />
+              </Field>
+            </div>
+          </details>
+          {hasFilters(filters) ? (
+            <Button
+              size="sm"
+              variant="ghost"
+              onClick={() => {
+                setFilters(NO_FILTERS);
+              }}
+            >
+              Clear filters
+            </Button>
+          ) : null}
+        </div>
       </div>
       {filters.document === "" && filters.subscription === "" && filters.merchant === "" ? null : (
         <ul className="tx-narrowed" aria-label="The list is narrowed to">
@@ -617,30 +649,7 @@ export function TransactionsPage() {
           )}
         </ul>
       )}
-      <div className="tx-toolbar">
-        {canWrite ? null : <p className="ledger-muted">You have read-only access.</p>}
-        {canAdd ? (
-          <div className="ledger-actions tx-toolbar__actions">
-            <Button
-              loading={findTransfers.isPending}
-              title="Link matching money out and money in between your accounts as transfers"
-              onClick={() => {
-                findTransfers.mutate();
-              }}
-            >
-              Find transfers
-            </Button>
-            <Button
-              variant="primary"
-              onClick={() => {
-                setAdding(true);
-              }}
-            >
-              Add transaction
-            </Button>
-          </div>
-        ) : null}
-      </div>
+      {canWrite ? null : <p className="ledger-muted">You have read-only access.</p>}
       {hasFilters(filters) && query.isSuccess ? <TotalLine rows={rows} /> : null}
       {savedRule === null ? null : (
         <RuleSavedNotice

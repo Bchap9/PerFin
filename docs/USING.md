@@ -110,8 +110,13 @@ account, the category (or "No category"), suggestions only, the merchant,
 the subscription, the file it came from, the dates and the search. Choosing
 Transactions on the rail clears them.
 
-- The search field is the first control under the heading.
-- **Suggestions** and **No category** are quick filters with their counts.
+- **Add transaction** and **Find transfers** are at the top, beside the
+  heading. The search field is the first control under it.
+- Search, **Suggestions** and **No category** (quick filters with their
+  counts), Account and Category share one bar. The dates, payee, tag and
+  review state are under **More filters**, which opens by itself when the
+  address sets one of them and, while closed, counts the ones set
+  ("More filters (2)").
 - When a filter is set, a line under the filters adds up money in, money
   out and the net of the rows shown ("of the 48 shown").
 - A category always shows how it was decided, in small text under it

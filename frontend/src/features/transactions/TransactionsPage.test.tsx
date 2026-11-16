@@ -48,11 +48,12 @@ describe("filters in the address", () => {
     const { router } = renderApp("/transactions");
     const user = userEvent.setup();
     await screen.findByRole("row", { name: /ACME/ });
-    // The search field is the first control of the page: nothing comes before it, under the heading or above it.
+    // The search field is the first control under the page's header: only the
+    // header's own actions (Find transfers, Add transaction) come before it.
     const main = screen.getByRole("main");
     expect(within(main).getByRole("heading", { name: "Transactions" })).toBeInTheDocument();
     const controls = Array.from(main.querySelectorAll<HTMLElement>("a[href], button, input, select, textarea, [tabindex]")).filter(
-      (element) => element.tabIndex >= 0,
+      (element) => element.tabIndex >= 0 && element.closest(".page-header") === null,
     );
     expect(controls[0]).toBe(screen.getByRole("searchbox", { name: "Search transactions" }));
     await user.selectOptions(screen.getByLabelText("Account"), "a-1");
@@ -68,6 +69,7 @@ describe("filters in the address", () => {
       expect(currentHref(router)).toBe("/transactions?account=a-1&suggested=true&q=market");
     });
     await user.selectOptions(screen.getByLabelText("Category"), "c-2");
+    await user.click(screen.getByText("More filters"));
     await user.type(screen.getByLabelText("From"), "2026-10-01");
     await waitFor(() => {
       expect(currentHref(router)).toContain("category=c-2");
@@ -89,6 +91,46 @@ describe("filters in the address", () => {
       expect(currentHref(router)).toBe("/transactions");
     });
     expect(screen.getByRole("searchbox", { name: "Search transactions" })).toHaveValue("");
+  });
+
+  it("keeps search, the chips, Account and Category on one bar and the dates under More filters", async () => {
+    setup();
+    renderApp("/transactions");
+    const user = userEvent.setup();
+    await screen.findByRole("row", { name: /ACME/ });
+    const bar = screen.getByRole("searchbox", { name: "Search transactions" }).closest(".tx-bar");
+    expect(bar).not.toBeNull();
+    const inBar = within(bar as HTMLElement);
+    expect(inBar.getByRole("button", { name: "Suggestions" })).toBeInTheDocument();
+    expect(inBar.getByLabelText("Account")).toBeInTheDocument();
+    expect(inBar.getByLabelText("Category")).toBeInTheDocument();
+    const more = screen.getByLabelText("From").closest("details");
+    expect(more).not.toBeNull();
+    expect(more).toBe(screen.getByLabelText("To").closest("details"));
+    expect(more).not.toHaveAttribute("open");
+    expect(within(more as HTMLElement).getByText("More filters")).toBeInTheDocument();
+    // Add transaction and Find transfers are the page header's actions.
+    const header = screen.getByRole("heading", { name: "Transactions" }).closest(".page-header");
+    expect(within(header as HTMLElement).getByRole("button", { name: "Add transaction" })).toBeInTheDocument();
+    expect(within(header as HTMLElement).getByRole("button", { name: "Find transfers" })).toBeInTheDocument();
+    await user.click(within(more as HTMLElement).getByText("More filters"));
+    expect(more).toHaveAttribute("open");
+  });
+
+  it("a date in the address opens More filters, and a closed panel says what it hides", async () => {
+    setup();
+    renderApp("/transactions?date_from=2026-10-01&date_to=2026-10-31");
+    const user = userEvent.setup();
+    await screen.findByRole("row", { name: /ACME/ });
+    const from = screen.getByLabelText("From");
+    expect(from).toHaveValue("2026-10-01");
+    expect(screen.getByLabelText("To")).toHaveValue("2026-10-31");
+    const more = from.closest("details") as HTMLElement;
+    expect(more).toHaveAttribute("open");
+    await user.click(within(more).getByText(/More filters/));
+    expect(more).not.toHaveAttribute("open");
+    // Nothing is hidden silently: the summary counts the filters inside.
+    expect(within(more).getByText("More filters (2)")).toBeInTheDocument();
   });
 
   it("reads the filters of a link, payee, tag and review state included", async () => {
