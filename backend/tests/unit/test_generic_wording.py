@@ -176,6 +176,20 @@ def test_a_trade_that_works_on_sewers_is_no_water_bill(raw: str) -> None:
 
 
 @pytest.mark.parametrize(
+    ("raw", "direction"),
+    [
+        ("QUARRYVALE HOLDINGS DES:PHARMACY ID:%1 CO ID:0000000006 PPD", "out"),
+        ("QUARRYVALE HOLDINGS DES:GYM ID:%1 CO ID:0000000007 PPD", "out"),
+        ("ORIG CO NAME:QUARRYVALE HOLDINGS CO ENTRY DESCR:PARKING", "out"),
+    ],
+)
+def test_an_entry_description_suggests_only_a_bill(raw: str, direction: Direction) -> None:
+    # The entry description is read to find a bill (rent, tuition) at a
+    # company whose name says nothing; any other word there answers nothing.
+    assert _answer(raw, direction) == (None, False)
+
+
+@pytest.mark.parametrize(
     "raw",
     [
         "QUARRYVALE INS DES:INS PREM ID:%1 CO ID:0000000004 PPD",

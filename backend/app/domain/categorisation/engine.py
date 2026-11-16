@@ -49,6 +49,7 @@ from app.domain.categorisation.dictionary import Hit
 from app.domain.categorisation.memory import Direction, Learned
 from app.domain.categorisation.models import MerchantMemory
 from app.domain.categorisation.pinned import pinned_update
+from app.domain.recurring.detection import BILL_KEYS
 from app.domain.transactions.categories import category_ids_by_key
 from app.domain.transactions.categories import resolve as resolve_category
 from app.domain.transactions.models import MERCHANT_KEY_MAX, Transaction, TransactionSplit
@@ -139,9 +140,11 @@ KEYWORD_DIRECTIONS: Final[Mapping[str, Direction]] = {
     "cash deposit": "in",
 }
 #: Categories a keyword in the entry description of a labelled ACH line
-#: (``DES:WITHDRAWAL``) never answers: a company is on the other end, so it is
-#: no cash at the counter.
-NOT_DESCRIBED: Final = frozenset({"transfers.cash"})
+#: answers: a bill's (``DES:RENT``, ``DES:TUITION``), the recurring payments
+#: detection calls bills. Any other word there answers nothing: a company is on
+#: the other end, so ``DES:WITHDRAWAL`` is no cash at the counter, and what it
+#: says it charged for (``DES:PHARMACY``, ``DES:GYM``) is its own wording.
+DESCRIBED: Final = BILL_KEYS
 
 #: Money that is not spending at a merchant, read from the descriptor's kind:
 #: ``(kind, direction) -> (default category key, confidence)``. A pair that is
@@ -401,16 +404,21 @@ def _described(identity: Identity) -> dictionary.KeywordHit | None:
     """A keyword in the entry description of a labelled ACH line (``DES:RENT``), or ``None``.
 
     Read only when the company's name holds none: "<name> DES:TUITION" is
-    tuition at a business no list knows. A word for cash answers nothing
-    there (:data:`NOT_DESCRIBED`): a company that pulls money by ACH
-    ("<name> DES:WITHDRAWAL") was paid, it handed out no cash.
+    tuition at a business no list knows. Only a bill's word answers there
+    (:data:`DESCRIBED`): a company that pulls money by ACH ("<name>
+    DES:WITHDRAWAL") was paid, it handed out no cash.
     """
     for signal in sorted(identity.signals):
         prefix, _, described = signal.partition(":")
         if prefix == "descr" and described:
             hit = dictionary.keyword(described, None)
-            return None if hit is None or hit.category in NOT_DESCRIBED else hit
+            return hit if hit is not None and _is_bill(hit.category) else None
     return None
+
+
+def _is_bill(key: str) -> bool:
+    """Whether ``key`` is under one of :data:`DESCRIBED` (``housing`` is under ``housing.``)."""
+    return key.startswith(DESCRIBED) or f"{key}." in DESCRIBED
 
 
 def _from_data(identity: Identity, direction: Direction) -> tuple[str, str, Decimal] | None:
@@ -465,8 +473,8 @@ def decide(
        ``memory.STALE_DAYS``);
     4. the descriptor's kind (:data:`KIND_CATEGORIES`, ``dictionary``);
     5. the dictionary's merchant (``dictionary``);
-    6. a telling word (``keyword``), in the core or else in a labelled ACH
-       line's entry description.
+    6. a telling word (``keyword``), in the core or else, for a bill only
+       (:data:`DESCRIBED`), in a labelled ACH line's entry description.
 
     When the household is split on the merchant (a share below the minimum),
     steps 4 to 6 give a suggestion at most. So do steps 5 and 6 for money

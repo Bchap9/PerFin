@@ -12,7 +12,8 @@
 # only in that merchant's group of categories.
 #
 # The entry description of a labelled ACH line (`DES:RENT`, `CO ENTRY
-# DESCR:TUITION`) is read too when the company's name holds no keyword.
+# DESCR:TUITION`) is read too when the company's name holds no keyword, and
+# there only a bill's keyword answers (`engine.DESCRIBED`).
 #
 # `via` ties an entry to a payment processor (the name clean-up gives it).
 # With no `word`, the entry covers everything that processor fronts.
