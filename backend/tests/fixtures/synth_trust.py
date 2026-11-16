@@ -27,6 +27,11 @@ account number and the same six dated rows with signed amounts.
   that agree with the six rows, no running balance column, plus the row
   dated before the period (:data:`STRAY`). It is off by exactly that row,
   which alone is in doubt, and the row's date is a doubt of its own.
+* :func:`mixed_sign_accounts_csv`: not a PDF but a CSV export of two
+  accounts under one ``Account Number`` column and one signed ``Amount``
+  column: a checking account (:data:`CSV_CHECKING`, money out negative) and
+  a card (:data:`CSV_CARD`, purchases positive, the payment negative).
+  Nothing in the file proves what a positive amount means.
 
 :data:`ROWS` are the six rows; :func:`expected` is what the ledger holds for
 a builder's statement.
@@ -176,3 +181,36 @@ def closing_that_disagrees() -> bytes:
 def stray_row_against_the_balances() -> bytes:
     """Balances of the six rows, no running balance, plus the row before the period."""
     return _pdf([STRAY, *ROWS], balances=True, running=False)
+
+
+#: (date, amount as printed, description) of the checking account's rows.
+CSV_CHECKING: Final[tuple[Row, ...]] = (
+    (date(2026, 4, 1), Decimal("-1180.00"), "Alder Row Lettings"),
+    (date(2026, 4, 3), Decimal("-52.16"), "Pinewick Grocers"),
+    (date(2026, 4, 8), Decimal("-39.40"), "Maple Yard Fuel"),
+    (date(2026, 4, 15), Decimal("1850.00"), "Payroll Deposit Brindle Works"),
+    (date(2026, 4, 21), Decimal("-71.25"), "Saltmarsh Power and Water"),
+    (date(2026, 4, 28), Decimal("-26.80"), "Juniper Corner Cafe"),
+)
+#: The card's rows as printed: three purchases (positive) and one payment.
+CSV_CARD: Final[tuple[Row, ...]] = (
+    (date(2026, 4, 2), Decimal("64.30"), "Harbor Mill Hardware"),
+    (date(2026, 4, 9), Decimal("18.75"), "Lantern Street Books"),
+    (date(2026, 4, 17), Decimal("33.10"), "Quartz Lane Pharmacy"),
+    (date(2026, 4, 24), Decimal("-116.15"), "Payment received with thanks"),
+)
+#: The last four digits of the card's number (the checking one is :data:`LAST4`).
+CSV_CARD_LAST4: Final = "9052"
+
+
+def mixed_sign_accounts_csv() -> bytes:
+    """``Date,Account Number,Description,Amount``: a checking account and a card, by date."""
+    rows = sorted(
+        [(day, LAST4, text, amount) for day, amount, text in CSV_CHECKING]
+        + [(day, CSV_CARD_LAST4, text, amount) for day, amount, text in CSV_CARD]
+    )
+    lines = ["Date,Account Number,Description,Amount"]
+    lines += [
+        f"{day.isoformat()},XXXX-XXXX-{last4},{text},{amount}" for day, last4, text, amount in rows
+    ]
+    return ("\r\n".join(lines) + "\r\n").encode("utf-8")

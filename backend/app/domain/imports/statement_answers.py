@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""A person's answers about one held statement: import anyway, import as read.
+"""A person's answers about one held statement: import anyway, import as read, the sign.
 
-Two review answers let a statement the importer held back be imported:
+Three review answers let a statement the importer held back be imported:
 
 * **Import anyway** on a ``possible_duplicate`` / ``statement_overlap``
   item (``app.domain.imports.statement_records``): the statement is
@@ -12,7 +12,19 @@ Two review answers let a statement the importer held back be imported:
   ``investment_low_confidence`` item
   (``app.domain.investments.statement_import``, step 3): the brokerage
   statement is imported as printed although its figures do not add up, or
-  could not be checked.
+  could not be checked;
+* **What a positive amount means** on an ``unparsed`` /
+  ``mapping_required`` item held with ``auto_import: sign_unverified`` and
+  ``scope: account`` (``app.domain.imports.service._import_table``): one
+  account's rows of a table whose sign nothing proves, while the table's
+  other accounts were imported. The answer (:func:`sign_answer`) is kept
+  for **that account of that document** (:attr:`StatementAnswers.signs`):
+  every later import of the document reads that account's rows with the
+  answered sign and no longer holds them. It changes no saved mapping and
+  no row of another account, and it never flips a row already imported:
+  rows are only ever written with the sign the answer names. (An answer
+  with ``scope: mapping`` is for the whole layout: the review queue saves
+  it on the mapping itself and nothing is read from it here.)
 
 **An answer belongs to one statement as read**, never to an account or to
 a place in the document. The item that holds a statement names its
@@ -74,6 +86,14 @@ KEY_FIELD: Final = "statement_key"
 #: (indices in the statement; the others it listed are left out).
 LINES_FIELD: Final = "lines"
 LINES_MAX: Final = 2000
+#: Resolution key of a sign answer: what a positive amount means (:data:`SIGNS`).
+SIGN: Final = "sign"
+SIGNS: Final = frozenset({"inflow_positive", "outflow_positive"})
+#: Resolution key and value saying the sign answer is for one account of the
+#: document; the action that records it.
+SCOPE: Final = "scope"
+SCOPE_ACCOUNT: Final = "account"
+SIGN_ACTION: Final = "answer_sign"
 #: A bank statement (``statements``) or a brokerage one (``investments``).
 Target = Literal["statement", "investment"]
 _KEY_LENGTH: Final = 64
@@ -132,6 +152,9 @@ class StatementAnswers:
     #: The lines an "import as read" answer named (their indices in the
     #: statement); absent: every line it was asked about.
     chosen: dict[tuple[Target, str, uuid.UUID], frozenset[int]] = field(default_factory=dict)
+    #: What a positive amount means for an account's rows of the document's
+    #: table (``inflow_positive`` / ``outflow_positive``); the latest answer.
+    signs: dict[uuid.UUID, str] = field(default_factory=dict)
 
     def add(
         self,
@@ -172,10 +195,11 @@ class StatementAnswers:
 
 
 def document_answers(db: Session, document: Document) -> StatementAnswers:
-    """What the document's resolved items said to import anyway / as read.
+    """What the document's resolved items said: import anyway / as read, the sign.
 
     Oldest answer first, so a later answer about the same statement on
-    another account decides where it goes.
+    another account decides where it goes, and a later sign answer for an
+    account replaces an earlier one.
     """
     found = StatementAnswers()
     rows = db.execute(
@@ -189,6 +213,10 @@ def document_answers(db: Session, document: Document) -> StatementAnswers:
     ).scalars()
     for resolution in rows:
         if not isinstance(resolution, dict):
+            continue
+        signed = _sign(resolution)
+        if signed is not None:
+            found.signs[signed[0]] = signed[1]
             continue
         answer: str | None
         if resolution.get(IMPORT_ANYWAY) is True:
@@ -210,6 +238,22 @@ def document_answers(db: Session, document: Document) -> StatementAnswers:
         else:
             found.add(kind, key, account_id, answer, _lines(resolution.get(LINES_FIELD)))
     return found
+
+
+def _sign(resolution: Mapping[str, Any]) -> tuple[uuid.UUID, str] | None:
+    """The account and sign of a sign answer for one account (None: it is not one)."""
+    if resolution.get("action") != SIGN_ACTION or resolution.get(SCOPE) != SCOPE_ACCOUNT:
+        return None
+    sign = resolution.get(SIGN)
+    account_id = _uuid(resolution.get("account_id"))
+    if account_id is None or not isinstance(sign, str) or sign not in SIGNS:
+        return None
+    return account_id, sign
+
+
+def sign_answer(sign: str, account_id: uuid.UUID, scope: str) -> dict[str, Any]:
+    """The resolution keys of a sign answer (beside ``action: answer_sign``)."""
+    return {SIGN: sign, SCOPE: scope, "account_id": str(account_id)}
 
 
 def placement(target: Target, key: str, account_id: uuid.UUID) -> dict[str, Any]:

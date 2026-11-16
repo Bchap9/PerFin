@@ -34,7 +34,18 @@ The flow (INGESTION.md "Parse", "Match and deduplicate", "Commit"):
      are money in than money out (the suggestion's ``sign_unverified``
      doubt; ``auto_import: sign_unverified`` when it is the only one), and
      a sign on trust is never used to write into a liability account (a
-     card export may list purchases as positive). A table of securities
+     card export may list purchases as positive). Only that account's
+     statement waits: the other accounts of a multi-account file are
+     imported, and each statement held is one ``mapping_required`` item
+     with ``auto_import: sign_unverified``, its ``account_id``, ``group``
+     and row count (``transactions``), the ``mapping_id`` when a mapping
+     exists, and a ``scope``: ``mapping`` when every statement of the table
+     waits (nothing is imported, no mapping is saved; the answer is the
+     layout's sign and is saved on its mapping, so a layout is asked about
+     once), ``account`` when others were imported (the answer is kept for
+     that account of that document, ``statement_answers``: every later run
+     reads that account's rows with the answered sign and holds them no
+     more; no row of another account changes). A table of securities
      trades (``investment_columns``) and direction words that contradict
      the signs (``indicator_contradicts_sign``) are never confident either. A
      table without a header row is read from the shapes of its columns
@@ -45,18 +56,21 @@ The flow (INGESTION.md "Parse", "Match and deduplicate", "Commit"):
      ``account_required``/``unknown_account`` item, and the mapping saved
      from a suggestion on trust is marked ``sign_unverified``: whenever it
      later meets a liability account (the re-run after a person picks the
-     card, next month's file), or a file whose own suggestion doubts the
-     sign, the import waits as ``mapping_required``
-     (``auto_import: sign_unverified``) until a person saves the mapping's
-     spec in the editor (which clears the mark) or chooses the mapping
-     explicitly for that re-run. With one account-bound mapping among the
+     card, next month's file), that account's statement waits, and with a
+     file whose own suggestion doubts the sign every statement does, as
+     ``mapping_required`` (``auto_import: sign_unverified``) until a
+     person answers for the account, saves the mapping's spec in the
+     editor (which clears the mark: a mapping a person saved holds
+     nothing, whatever a later file's suggestion doubts) or chooses the
+     mapping explicitly for that re-run. With one account-bound mapping among the
      fitting ones, it wins over household mappings for an upload that
      names no account. Anything else is an ``unparsed``
      review item (``mapping_required``) carrying the suggestion and why it
      was not used (``auto_import``), and the table is shown by ``GET
      /imports/{document_id}/preview`` for the mapping editor. The account is
      the one given on re-run, the document's or the mapping's. A table that
-     is only a header row (:func:`header_only`), and a PDF or image whose
+     is only a header row, or a header row above nothing but total lines
+     (:func:`header_only`), and a PDF or image whose
      page tables hold no dated row (``app.domain.review.layout``), have
      nothing to map: they wait as ``unparsed``/``no_rows`` (``source``:
      ``table`` or ``pages``), which the mapping editor is not offered for.
@@ -194,7 +208,7 @@ import json
 import re
 import uuid
 from collections.abc import Collection, Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import UTC, date
 from decimal import Decimal
 from typing import TYPE_CHECKING, Any, Final, Literal, cast
@@ -251,8 +265,10 @@ from app.domain.imports.schemas import (
     PreviewStatement,
     PreviewTable,
     PreviewTransaction,
+    Sign,
 )
 from app.domain.imports.statement_answers import (
+    SCOPE_ACCOUNT,
     StatementAnswers,
     document_answers,
     placement,
@@ -303,6 +319,7 @@ from app.ingestion.parsers.structured import (
     MappingSuggestion,
     ParsedStatement,
     ParsedTransaction,
+    best_date_format,
     candidate_fingerprints,
     from_statement,
     from_table_grouped,
@@ -1698,25 +1715,75 @@ def _held(run: _Run, result: ExtractResult, suggestion: MappingSuggestion | None
     return None
 
 
-def _sign_held(on_trust: bool, targets: list[_Target], doubted: bool = False) -> str | None:
-    """A sign taken on trust is never used to write into a liability account.
+def _sign_held(on_trust: bool, targets: list[_Target], doubted: bool = False) -> list[_Target]:
+    """The statements of a table that wait because nothing proves their sign.
+
+    A sign taken on trust is never used to write into a liability account
+    (a card export may list purchases as positive), and it holds back that
+    account's statement only: the other accounts of the file are imported.
 
     ``on_trust``: a suggestion without ``sign_evidence``, or a mapping saved
     from one (``sign_unverified``). Statements whose account is not known
     yet are left to their ``unknown_account`` / ``account_required`` item;
     the mapping saved meanwhile keeps ``sign_unverified``, so the re-run
-    after a person picks a liability account is held here again.
+    after a person picks a liability account holds that statement here.
 
     ``doubted``: the suggestion for this very table doubts the sign
     (``sign_unverified``: a card-like header, no money out, more money
     in than out). A mapping still on trust is not used for such a
     file whatever the account, which also stops a mapping saved from a card
-    export before those doubts existed.
+    export before those doubts existed: every statement waits.
+
+    Empty when the sign is proven (or a person saved or chose the mapping).
     """
     if not on_trust:
-        return None
-    if doubted or any(t.account is not None and t.account.type in LIABILITY_TYPES for t in targets):
-        return "sign_unverified"
+        return []
+    if doubted:
+        return list(targets)
+    return [t for t in targets if t.account is not None and t.account.type in LIABILITY_TYPES]
+
+
+def _answered_signs(run: _Run, targets: list[_Target], waiting: list[_Target]) -> dict[int, Sign]:
+    """The sign a person answered for a target's account, by the target's place in ``targets``.
+
+    ``statement_answers``: "what does a positive amount mean" answered for
+    one account of this document. Such a statement is never held for its
+    sign again and is always read with the answered sign, whatever the
+    mapping says by then, so its rows keep the hashes they were imported
+    under.
+
+    An answer counts only for a statement the question can be about: one
+    of ``waiting`` (:func:`_sign_held`), or one on a liability account
+    (held before a person saved the mapping). An answer naming any other
+    account is ignored: that account's rows were imported as the file
+    prints them, and reading them the other way round now would add every
+    one of them again with its sign turned.
+    """
+    found: dict[int, Sign] = {}
+    for index, target in enumerate(targets):
+        if target.account is None:
+            continue
+        sign = run.answers.signs.get(target.account.id)
+        if sign is None:
+            continue
+        if target.account.type in LIABILITY_TYPES or any(target is other for other in waiting):
+            found[index] = Sign(sign)
+    return found
+
+
+def _read_with_sign(
+    table: Table, spec: MappingSpec, parsed: ParsedStatement, sign: Sign
+) -> ParsedStatement | None:
+    """``parsed`` (a statement of ``table`` read with ``spec``) read with ``sign`` instead.
+
+    The same statement is the one made of the same table rows. None when
+    the other sign groups the rows differently, which no table read so far
+    does: the caller holds the statement rather than guess.
+    """
+    rows = [t.row for t in parsed.transactions]
+    for other in from_table_grouped(table, spec.model_copy(update={"sign": sign})):
+        if other.last4 == parsed.last4 and [t.row for t in other.transactions] == rows:
+            return other
     return None
 
 
@@ -1787,21 +1854,53 @@ def _save_suggested(run: _Run, table: Table, suggestion: MappingSuggestion) -> I
     return mapping
 
 
+#: How the first filled cell of a total line starts (case-folded).
+_TOTAL_WORDS: Final = ("total", "totals", "balance", "ending balance", "closing balance")
+#: A cell that may be a date: digits around two separators, eight digits in
+#: a row, or a month name beside a digit. Wide on purpose: a row with such
+#: a cell is never called a total line.
+_DATE_SHAPED: Final = re.compile(
+    r"[0-9]{1,4}\s*[/.\-]\s*[0-9]{1,2}\s*[/.\-]\s*[0-9]{1,4}"
+    r"|(?<![0-9])[0-9]{8}(?![0-9])"
+    r"|(?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\.?,?\s*[0-9]"
+    r"|[0-9](?:st|nd|rd|th)?\s*(?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)",
+    re.IGNORECASE,
+)
+
+
+def _date_shaped(cell: str) -> bool:
+    return _DATE_SHAPED.search(cell) is not None or best_date_format([cell])[1] > 0
+
+
+def _total_line(row: Sequence[str]) -> bool:
+    """A row that only sums up: it starts with a total word and carries no date."""
+    cells = [cell.strip() for cell in row if cell.strip()]
+    if not cells or not cells[0].casefold().startswith(_TOTAL_WORDS):
+        return False
+    return not any(_date_shaped(cell) for cell in cells)
+
+
 def header_only(table: Table) -> bool:
-    """A table that is a header row and nothing else (or nothing at all).
+    """A table that is a header row and nothing to import under it (or nothing at all).
 
     One row with text, at least two cells of it filled and none with a
     digit: column names. A single row with a digit in it may be the file's
     only transaction (an export without a header) and is never called
     empty; it is asked about like any other table.
+
+    Under such a header, rows that are all total lines (:func:`_total_line`:
+    ``Total,,0.00``, ``Ending Balance,,1204.18``) are the export of a period
+    without a transaction: there is no row to map either. One row with a
+    date-shaped cell, or one that starts with anything else, and the table
+    is asked about as before.
     """
     rows = [row for row in table.rows if any(cell.strip() for cell in row)]
     if not rows:
         return True
-    if len(rows) > 1:
-        return False
     cells = [cell for cell in rows[0] if cell.strip()]
-    return len(cells) >= 2 and not any(ch.isdigit() for cell in cells for ch in cell)
+    if len(cells) < 2 or any(ch.isdigit() for cell in cells for ch in cell):
+        return False
+    return all(_total_line(row) for row in rows[1:])
 
 
 def _mapping_review(
@@ -1810,7 +1909,13 @@ def _mapping_review(
     choice: MappingChoice,
     suggestion: MappingSuggestion | None,
     held: str | None,
+    **facts: Any,
 ) -> None:
+    """Ask for the table's columns (or, ``held == "sign_unverified"``, its sign).
+
+    ``facts``: the keys a sign question about one statement adds
+    (:func:`_sign_review`).
+    """
     run.review(
         ReviewKind.UNPARSED,
         {
@@ -1825,7 +1930,40 @@ def _mapping_review(
             ),
             "suggestion": suggestion.summary() if suggestion is not None else None,
             "auto_import": held,
+            **facts,
         },
+    )
+
+
+def _sign_review(
+    run: _Run,
+    table: Table,
+    choice: MappingChoice,
+    suggestion: MappingSuggestion | None,
+    target: _Target,
+    *,
+    whole: bool,
+    mapping: ImportMapping | None,
+) -> None:
+    """One statement of the table waits until a person says what a positive amount means.
+
+    ``scope`` says what the answer is for: ``mapping`` when every statement
+    of the table waits (``whole``: the answer is the layout's sign, saved on
+    its mapping, so the layout is asked about once), ``account`` when the
+    others were imported (the answer is kept for this account of this
+    document, ``statement_answers``). Ids and counts only.
+    """
+    _mapping_review(
+        run,
+        table,
+        choice,
+        suggestion,
+        "sign_unverified",
+        account_id=str(target.account.id) if target.account is not None else None,
+        group=target.group,
+        transactions=len(target.parsed.transactions),
+        scope="mapping" if whole else SCOPE_ACCOUNT,
+        **({"mapping_id": str(mapping.id)} if mapping is not None else {}),
     )
 
 
@@ -1894,29 +2032,57 @@ def _import_table(
         account_id=account_id,
         group=group,
     )
+    asked: MappingSuggestion | None
     if saved is None:
         if suggestion is None:  # pragma: no cover - set whenever no mapping was saved
             return
-        held = _sign_held(suggestion.sign_evidence is None, targets)
-        mapping = None if held is not None else _save_suggested(run, table, suggestion)
-        if mapping is None:
-            _mapping_review(run, table, choice, suggestion, held or "not_saved")
-            return
-        run.mapping_suggested = True
+        asked = suggestion
+        waiting = _sign_held(suggestion.sign_evidence is None, targets)
     else:
         # A mapping saved from a trust-only suggestion is checked again
         # whenever it meets a liability account or a file whose sign the
-        # suggestion doubts, unless the person chose it.
+        # suggestion doubts, unless the person chose it. One a person saved
+        # (``sign_unverified`` False) is their answer for the layout: it
+        # holds nothing, whatever a fresh suggestion would doubt.
         on_trust = saved.sign_unverified and mapping_id is None
-        fresh = suggest_mapping(table, today=_received_on(run.document)) if on_trust else None
-        doubted = fresh is not None and "sign_unverified" in fresh.doubts
-        if _sign_held(on_trust, targets, doubted) is not None:
-            _mapping_review(run, table, choice, fresh, "sign_unverified")
+        asked = suggest_mapping(table, today=_received_on(run.document)) if on_trust else None
+        doubted = asked is not None and "sign_unverified" in asked.doubts
+        waiting = _sign_held(on_trust, targets, doubted)
+    # What a person answered for an account of this document settles its sign.
+    answered = _answered_signs(run, targets, waiting)
+    unsettled = [
+        place
+        for place, item in enumerate(targets)
+        if place not in answered and any(item is other for other in waiting)
+    ]
+    if unsettled and len(unsettled) == len(targets):
+        # Every statement waits: nothing is imported and no mapping is
+        # saved; the answer is for the layout.
+        for place in unsettled:
+            _sign_review(run, table, choice, asked, targets[place], whole=True, mapping=saved)
+        return
+    if saved is None:
+        mapping = _save_suggested(run, table, suggestion) if suggestion is not None else None
+        if mapping is None:
+            _mapping_review(run, table, choice, suggestion, "not_saved")
             return
+        run.mapping_suggested = True
+    else:
         mapping = saved
     run.mapping_id = mapping.id
     committed = False
-    for item in targets:
+    for place, item in enumerate(targets):
+        if place in unsettled:
+            # Only this account's rows wait; the others go on below.
+            _sign_review(run, table, choice, asked, item, whole=False, mapping=mapping)
+            continue
+        sign = answered.get(place)
+        if sign is not None and sign is not spec.sign:
+            reread = _read_with_sign(table, spec, item.parsed, sign)
+            if reread is None:  # pragma: no cover - the sign never regroups rows
+                _sign_review(run, table, choice, asked, item, whole=False, mapping=mapping)
+                continue
+            item = replace(item, parsed=reread)
         if item.account is None and item.group is None:
             run.review(
                 ReviewKind.UNKNOWN_ACCOUNT,
