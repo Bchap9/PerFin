@@ -33,8 +33,8 @@ Both run only in the worker, in the instance-level `refresh_prices` job
 (`backend/app/workers/handlers/market_data.py`): every
 `PERFIN_PRICE_REFRESH_MINUTES` (360, six hours, by default; 5 at the
 least), and once more when a member asks for it (`POST
-/investments/prices/refresh`, the "Refresh prices" button on the
-Investments page). A request only queues the job: requests within the same
+/investments/prices/refresh`, the "Refresh prices" button on
+Accounts, Investments). A request only queues the job: requests within the same
 minute share one run for the whole instance, the job names no household,
 and it asks the provider exactly what the scheduled run asks, so a request
 tells the provider nothing about who made it and cannot be used to call
@@ -153,8 +153,8 @@ holdings. Units and cost basis are those of the last import of each
 account (a statement or a positions export), so between imports a market
 value is an estimate: the latest price times units the account may no
 longer hold. `GET /investments/holdings` names the last import's day per
-account (`positions_as_of`) and each price's source and time, and the
-Investments page says so above the table.
+account (`positions_as_of`) and each price's source and time, and
+Accounts, Investments says so above the table.
 
 ### Manual prices win
 

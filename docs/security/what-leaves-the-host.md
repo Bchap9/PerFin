@@ -11,6 +11,7 @@ detail on its own page.
 
 | Feature | Setting that enables it | Destination | What is sent | Page |
 | --- | --- | --- | --- | --- |
+| The web app: pages, scripts, styles and fonts | always on | none | nothing; your browser loads everything from PerFin itself, the fonts included (two OFL-1.1 fonts bundled with the app, served under `font-src 'self'`), and the page may load nothing from another site | [CONTROLS.md](CONTROLS.md) (A4, F1) |
 | Document ingestion (upload, drop folder) | always on | none | nothing; files stay local, encrypted | [ingestion.md](ingestion.md) |
 | Categorisation and subscription detection | always on | none | nothing; the merchant list is a file in the image, what was learned is a table in your database, and no lookup is made | [CATEGORISATION.md](../CATEGORISATION.md) |
 | Email intake | `PERFIN_EMAIL_INTAKE_ENABLED=true` and mailbox settings | your IMAPS host, port 993 | mailbox login, IMAP commands | [ingestion.md](ingestion.md), [email.md](email.md) |

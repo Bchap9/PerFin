@@ -18,6 +18,7 @@ PerFin/
 │   ├── API.md
 │   ├── SECURITY.md             threat model and controls
 │   ├── ROADMAP.md
+│   ├── USING.md                finding your way around the app: sections, old addresses, keyboard
 │   ├── REPO_STRUCTURE.md       this file
 │   └── adr/                    architecture decision records
 ├── backend/                    Python 3.12, managed with uv
@@ -41,6 +42,7 @@ PerFin/
 │   │   │   ├── loans/
 │   │   │   ├── networth/
 │   │   │   ├── documents/      blob store, document lifecycle, review items
+│   │   │   ├── inbox/          the Inbox count (GET /inbox/summary), read-only
 │   │   │   └── tax/
 │   │   ├── ingestion/
 │   │   │   ├── intake/         upload, dropfolder, email
@@ -65,11 +67,16 @@ PerFin/
 │   ├── vite.config.ts
 │   ├── index.html
 │   ├── public/
+│   ├── scripts/                check-bundle.mjs (bundle budget after the build), icon generation
 │   └── src/
-│       ├── app/                router, providers, layout, theme
-│       ├── lib/                api client, sse, query keys, money/date utils
-│       ├── components/         design system
-│       └── features/           one folder per domain mirroring backend/app/domain
+│       ├── app/                routeMap.ts (sections, tabs, redirects), routeTree.tsx (every page,
+│       │                       lazily loaded), shell (rail, bottom bar), command palette, providers, theme
+│       │   └── styles/         tokens.css (every colour, light and dark), fonts, layout, charts
+│       ├── lib/                api client, sse, query keys, URL state, media queries, money/date utils
+│       ├── components/         design system (drawer, menu, section tabs, page header, stats, chips, charts)
+│       ├── test/               axe check for page tests
+│       └── features/           one folder per domain; app/routeTree.tsx mounts their pages
+│                               under the six sections and Settings
 ├── deploy/
 │   ├── docker-compose.yml      hardened default deployment
 │   ├── .env.example
@@ -87,5 +94,7 @@ Conventions:
   in `app/api` call services only.
 - Nothing in `app/api` or `app/domain` imports from `app/ingestion/extract`;
   file content handling is confined to the worker role.
-- Frontend features own their queries, components and routes; `lib/api` is
-  generated from the OpenAPI schema.
+- Frontend features own their queries, components, styles and tests. Their
+  pages are registered in `app/routeMap.ts` and `app/routeTree.tsx`, not in
+  the feature (DEVELOPMENT.md "Plug-in points"). `lib/api` is generated from
+  the OpenAPI schema.

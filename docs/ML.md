@@ -121,8 +121,8 @@ nvidia-smi` should list the card).
   never keeps a payee, merchant or memo, any digit, a phrase containing a
   household member's name, an address or one of your account numbers, or
   any amount, date, security or account from the statement. You can see
-  every phrase and remove it under **Documents, What PerFin has learned,
-  Statement wording**.
+  every phrase and remove it under **Settings, What PerFin learned,
+  Statement wording** (`/settings/learned`).
 - If the model is slow, down or wrong, documents are processed as if it were
   not there; after three failures in a row it is not asked for five minutes.
 

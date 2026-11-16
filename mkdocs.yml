@@ -55,6 +55,7 @@ nav:
   - Home: index.md
   - Running PerFin:
       - Deployment: DEPLOYMENT.md
+      - Finding your way around: USING.md
       - Operations: OPERATIONS.md
       - Upgrading: UPGRADING.md
       - Release checklist: RELEASE_CHECKLIST.md
