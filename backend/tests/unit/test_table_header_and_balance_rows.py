@@ -15,7 +15,7 @@ import pytest
 
 from app.domain.imports import proposals
 from app.domain.imports.schemas import MappingSpec
-from app.ingestion.parsers.structured import ParsedStatement, from_table
+from app.ingestion.parsers.structured import ParsedStatement, from_table, from_table_grouped
 from app.ingestion.sandbox.protocol import Table
 
 # ---------------------------------------------------------------------------
@@ -178,3 +178,25 @@ def test_table_opening_balance_row_without_a_date_is_proposed_before_every_row()
         ]
     )
     assert _proposed_opening(from_table(table, SPEC)) == ("1000.00", date(2026, 3, 1))
+
+
+def test_grouped_table_counts_header_and_balance_rows_of_no_account() -> None:
+    # Rows with no account cell go to the first group, as other note rows do.
+    table = _table(
+        [
+            ["Account", "Date", "Description", "Amount"],
+            ["", "2026-03-01", "Opening balance", "1000.00"],
+            ["...1234", "2026-03-02", "Orchard Row Market", "-23.80"],
+            ["Account", "Date", "Description", "Amount"],
+            ["...5678", "2026-03-03", "Stipend", "410.00"],
+            ["", "2026-03-31", "Closing balance", "1386.20"],
+        ]
+    )
+    spec = MappingSpec(
+        account_column=0, date_column=1, date_format="YYYY-MM-DD", payee_column=2, amount_column=3
+    )
+    first, second = from_table_grouped(table, spec)
+    assert [len(first.transactions), len(second.transactions)] == [1, 1]
+    assert first.header_rows == [3]
+    assert first.balance_rows == [1, 5]
+    assert (second.header_rows, second.balance_rows) == ([], [])
