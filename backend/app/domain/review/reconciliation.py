@@ -58,8 +58,16 @@ must be one the caller may edit (``404`` otherwise, as for any account).
   waits as an overlap): ``409 statement-unavailable``.
 * :func:`accept`: the statement is taken as read. Its pending rows are
   confirmed and its findings closed; the record becomes ``accepted`` and
-  **no balance is recorded**. ``409 statement-balanced`` for a statement
+  **no balance is recorded**: a balance this document recorded for the
+  statement when it was imported as reconciled is taken back
+  (:func:`_withdraw_snapshot`). ``409 statement-balanced`` for a statement
   that balances (it is confirmed instead).
+
+An answer given here survives a later import of the document
+(``app.domain.imports.service._settle_standing``): an accepted statement is
+not asked about again, and a statement balanced here stays ``reconciled``,
+while that import changes no row of the account; the resolutions name the
+statement by its reference (``statement_answers.statement_ref``).
 * :func:`restore`: a removed row is put back from the stored statement,
   pending, with its original hash; ``404 tombstone-not-found`` for a
   tombstone that is not of this document's statements.
@@ -106,7 +114,7 @@ from app.core.errors import ProblemError
 from app.core.events import emit
 from app.core.money import AMOUNT_INTEGER_DIGITS, AMOUNT_PLACES, to_storage
 from app.domain.accounts import repo as accounts_repo
-from app.domain.accounts.models import LIABILITY_TYPES, Account, BalanceSource
+from app.domain.accounts.models import LIABILITY_TYPES, Account, BalanceSnapshot, BalanceSource
 from app.domain.accounts.visibility import (
     can_edit_account,
     can_view_account,
@@ -118,6 +126,7 @@ from app.domain.documents.schemas import Verification
 from app.domain.documents.service import get_visible_document
 from app.domain.imports import tombstones
 from app.domain.imports.models import StatementRecord
+from app.domain.imports.statement_answers import REF_FIELD, statement_refs
 from app.domain.review import repo, service
 from app.domain.review.actions import correct_balances
 from app.domain.review.causes import Cause, LedgerRow, PageAmount, fee_lines, rank_causes
@@ -147,7 +156,12 @@ from app.domain.transactions.models import (
 from app.ingestion.parsers.base import DocumentView
 from app.ingestion.parsers.structured import ParsedStatement
 from app.ingestion.reconcile import TOLERANCE
-from app.ingestion.sandbox.protocol import ExtractedTransaction, ExtractResult, Statement
+from app.ingestion.sandbox.protocol import (
+    DOCUMENT_STATEMENT_FORMATS,
+    ExtractedTransaction,
+    ExtractResult,
+    Statement,
+)
 
 #: Rows listed for one statement (the sum always counts every row).
 ROWS_MAX: Final = 2000
@@ -335,6 +349,39 @@ def _split(
             out[index].rows.append(row)
             out[index].hashes[row.id] = mine
     return out
+
+
+def _difference(statement: Statement, rows: Sequence[Transaction]) -> Decimal | None:
+    """Opening plus the ledger rows, less the closing balance (None: a balance is missing)."""
+    opening = statement.opening_balance.amount if statement.opening_balance else None
+    closing = statement.ledger_balance.amount if statement.ledger_balance else None
+    if opening is None or closing is None:
+        return None
+    return opening + sum((row.amount for row in rows), Decimal(0)) - closing
+
+
+def _status(difference: Decimal | None) -> Literal["balanced", "off", "unchecked"]:
+    if difference is None:
+        return "unchecked"
+    return "balanced" if abs(difference) <= TOLERANCE else "off"
+
+
+def ledger_status(
+    db: Session,
+    document: Document,
+    account: Account,
+    statements: Sequence[Statement],
+    index: int,
+) -> Literal["balanced", "off", "unchecked"]:
+    """Whether the ledger rows of statement ``index`` add up to its balances.
+
+    ``statements`` are the document's statements of ``account`` in document
+    order, as for the view (:func:`_split`). The importer asks this before
+    it lets an acceptance or a balance a person struck stand
+    (``imports.service._settle_standing``).
+    """
+    group = _split(db, document, account, statements)[index]
+    return _status(_difference(statements[index], group.rows))
 
 
 def reading_hashes(account: Account, statements: Sequence[ParsedStatement | Statement]) -> set[str]:
@@ -640,11 +687,8 @@ def _statement_out(
     closing = statement.ledger_balance.amount if statement.ledger_balance else None
     previous = _previous_closing(db, document, account, statement.period_start)
     total = sum((row.amount for row in group.rows), Decimal(0))
-    difference: Decimal | None = None
-    status: Literal["balanced", "off", "unchecked"] = "unchecked"
-    if opening is not None and closing is not None:
-        difference = opening + total - closing
-        status = "balanced" if abs(difference) <= TOLERANCE else "off"
+    difference = _difference(statement, group.rows)
+    status = _status(difference)
     taken_out = tombstones.list_tombstones(db, account.household_id, account.id, list(group.read))
     earlier = _earlier_ids(db, document, result, account)
     causes = rank_causes(
@@ -888,6 +932,8 @@ def _settle(
             **resolution,
             "account_id": str(opened.account.id),
             "statement": opened.placed.index,
+            # The statement whatever its figures read as afterwards.
+            REF_FIELD: statement_refs("statement", opened.result.statements)[opened.placed.index],
             "confirmed": confirmed,
         },
         statement=opened.placed.index,
@@ -1022,6 +1068,7 @@ def accept(
     confirmed, closed = _settle(db, principal, opened, {"accepted": True}, request=request)
     if opened.placed.record is not None:
         opened.placed.record.verification = "accepted"
+    withdrawn = _withdraw_snapshot(db, opened)
     db.flush()
     audit(
         db,
@@ -1035,12 +1082,45 @@ def accept(
             "confirmed": confirmed,
             "items_closed": closed,
             "snapshot": False,
+            "snapshot_withdrawn": withdrawn,
         },
         household_id=opened.account.household_id,
         user_id=principal.user_id,
         request=request,
     )
     return _outcome(db, opened, confirmed=confirmed, closed=closed)
+
+
+def _withdraw_snapshot(db: Session, opened: _Open) -> bool:
+    """Take back the balance this document recorded for an accepted statement.
+
+    A statement of a document format (PDF, image) that was imported as
+    reconciled wrote its closing balance as a statement snapshot. Accepted
+    without balancing (its rows were changed since), no balance stands for
+    it: the snapshot of this document, account and closing day is removed.
+    A balance another document or a person recorded is never touched, and
+    neither is the balance a bank file (OFX, QIF) states.
+    """
+    statement, account = opened.placed.statement, opened.account
+    closing = statement.ledger_balance
+    as_of = (closing.as_of if closing is not None else None) or statement.period_end
+    if statement.source_format not in DOCUMENT_STATEMENT_FORMATS or as_of is None:
+        return False
+    found = db.execute(
+        select(BalanceSnapshot).where(
+            BalanceSnapshot.household_id == account.household_id,
+            BalanceSnapshot.account_id == account.id,
+            BalanceSnapshot.source == BalanceSource.STATEMENT,
+            BalanceSnapshot.source_document_id == opened.document.id,
+            BalanceSnapshot.as_of_date == as_of,
+        )
+    ).scalar_one_or_none()
+    if found is None:
+        return False
+    db.delete(found)
+    db.flush()
+    emit(db, account.household_id, "balance.updated", {"account_id": str(account.id)})
+    return True
 
 
 def _removed(

@@ -25,7 +25,7 @@ numbers).
 from __future__ import annotations
 
 import uuid
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from dataclasses import dataclass, field
 from datetime import date
 from decimal import Decimal
@@ -61,7 +61,7 @@ from app.domain.review.reconciliation import read_printed
 from app.domain.transactions.models import ReviewState, Transaction
 from app.ingestion.intake.upload import receive_upload
 from app.ingestion.parsers.template import rebalance
-from app.ingestion.sandbox.protocol import ExtractResult
+from app.ingestion.sandbox.protocol import ExtractResult, Statement
 from app.workers.handlers import ingest
 from tests.fixtures import synth_neutral_report as neutral
 from tests.fixtures import synth_pdf_statements as synth
@@ -1433,3 +1433,310 @@ def test_read_printed_refuses(text: str) -> None:
     with pytest.raises(ProblemError) as caught:
         read_printed(text)
     assert (caught.value.status_code, caught.value.slug) == (422, "invalid-amount")
+
+
+# ---------------------------------------------------------------------------
+# Answers that survive a re-read
+# ---------------------------------------------------------------------------
+
+
+def reread(
+    env: Env,
+    document_id: uuid.UUID,
+    change: Callable[[list[Statement]], list[Statement]] | None = None,
+) -> None:
+    """Import the document again from its stored reading, as any re-run does.
+
+    ``change`` rewrites the stored statements first, the way a reprocess
+    that reads the file differently would leave them.
+    """
+    if change is not None:
+        with env.factories.transaction() as db:
+            set_context(db, env.household_id)
+            document = db.get(Document, document_id)
+            assert document is not None
+            result = stored_result(document.extraction)
+            assert result is not None
+            document.extraction = result.model_copy(
+                update={"statements": change(list(result.statements))}
+            ).model_dump(mode="json")
+    queued = env.client().post(f"{API}/imports/{document_id}/apply-mapping", json={})
+    assert queued.status_code == 202, queued.text
+    assert env.run(APPLY_MAPPING_JOB_TYPE)
+
+
+def reasons(env: Env, document_id: uuid.UUID) -> list[str]:
+    return sorted(i.payload["reason"] for i in env.open_reviews(document_id))
+
+
+def test_an_accepted_statement_is_not_asked_about_again(env: Env) -> None:
+    _, account, document_id, _ = tampered(env, 81)
+    owner = env.client()
+    status, got = act(owner, document_id, "accept", statement=0)
+    assert status == 200, got
+    before = states(env, account)
+
+    reread(env, document_id)
+
+    assert [r.verification for r in records(env, document_id)] == ["accepted"]
+    assert env.open_reviews(document_id) == []
+    assert states(env, account) == before
+    assert ReviewState.PENDING not in {state for _, state in before}
+    assert snapshots(env, account) == []
+    assert env.document(document_id).status is DocumentStatus.PROCESSED
+    # Nor on the run after that.
+    reread(env, document_id)
+    assert [r.verification for r in records(env, document_id)] == ["accepted"]
+    assert env.open_reviews(document_id) == []
+
+
+def test_a_re_read_that_changes_a_row_asks_again(env: Env) -> None:
+    _, account, document_id, forged = tampered(env, 82)
+    owner = env.client()
+    status, got = act(owner, document_id, "accept", statement=0)
+    assert status == 200, got
+    count = len(env.transactions(account))
+
+    read_as: list[Decimal] = []
+
+    def one_row_read_differently(statements: list[Statement]) -> list[Statement]:
+        rows = list(statements[0].transactions)
+        index = next(i for i, t in enumerate(rows) if t.amount != forged.amount)
+        read_as.append(rows[index].amount - Decimal("1.00"))
+        rows[index] = rows[index].model_copy(update={"amount": read_as[0]})
+        return [rebalance(statements[0].model_copy(update={"transactions": rows}))]
+
+    reread(env, document_id, one_row_read_differently)
+
+    assert [r.verification for r in records(env, document_id)] == ["unverified"]
+    found = env.open_reviews(document_id)
+    (failed,) = [i for i in found if i.payload["reason"] == "reconciliation_failed"]
+    assert failed.payload["account_id"] == str(account.id)
+    # The item names its statement by a reference that outlives a corrected balance.
+    ref = failed.payload["statement_ref"]
+    assert isinstance(ref, str)
+    assert len(ref) == 64
+    assert not any(c.isdigit() for c in ref)
+    # The row read differently is in the ledger; nothing was lost for it.
+    rows = env.transactions(account)
+    assert read_as[0] in {r.amount for r in rows}
+    assert len(rows) >= count
+    assert snapshots(env, account) == []
+    assert env.document(document_id).status is DocumentStatus.NEEDS_REVIEW
+
+
+def test_a_re_read_that_now_reconciles_is_reconciled(env: Env) -> None:
+    stmt, account, document_id, forged = tampered(env, 83)
+    owner = env.client()
+    status, got = act(owner, document_id, "accept", statement=0)
+    assert status == 200, got
+    assert snapshots(env, account) == []
+    closing = stmt.closing_balance + forged.amount
+
+    def closing_read_right(statements: list[Statement]) -> list[Statement]:
+        balance = statements[0].ledger_balance
+        assert balance is not None
+        fixed = statements[0].model_copy(
+            update={"ledger_balance": balance.model_copy(update={"amount": closing})}
+        )
+        return [rebalance(fixed)]
+
+    reread(env, document_id, closing_read_right)
+
+    assert [r.verification for r in records(env, document_id)] == ["reconciled"]
+    (snapshot,) = snapshots(env, account)
+    assert snapshot.balance == closing
+    assert snapshot.source_document_id == document_id
+    assert env.open_reviews(document_id) == []
+    assert one(owner, document_id)["status"] == "balanced"
+
+
+def _two_accounts(env: Env, last4: str, other: str) -> tuple[Account, Account, uuid.UUID]:
+    """A document of two accounts: the first does not add up, the second is unknown."""
+    first = env.ledger.account(env.household_id, number_last4=last4, name="Everyday")
+    second = env.ledger.account(env.household_id, name="Rainy Day")
+    document_id = _stored(
+        env,
+        # 100.00 - 12.25 - 7.25 is 80.50; the second row was read as 2.25.
+        _month(
+            last4,
+            4,
+            30,
+            "100.00",
+            "80.50",
+            [(3, "-12.25", "Lamplight Books"), (9, "-2.25", "Corner Bakery")],
+        ),
+        _month(other, 4, 30, "50.00", "45.00", [(5, "-5.00", "Ferry Kiosk")]),
+        checked=True,
+    )
+    return first, second, document_id
+
+
+@pytest.mark.parametrize("exit_", ["confirm", "accept"])
+def test_answering_the_second_statement_does_not_reopen_the_first(env: Env, exit_: str) -> None:
+    first, second, document_id = _two_accounts(env, "7331", "9931")
+    owner = env.client()
+    if exit_ == "confirm":
+        misread = next(r for r in env.transactions(first) if r.amount == Decimal("-2.25"))
+        changed = owner.patch(
+            f"{API}/transactions/{misread.id}",
+            json={"amount": {"amount": "-7.25", "currency": "USD"}},
+        )
+        assert changed.status_code == 200, changed.text
+    status, got = act(owner, document_id, exit_, statement=0)
+    assert status == 200, got
+    verification = "reconciled" if exit_ == "confirm" else "accepted"
+    assert [r.verification for r in records(env, document_id)] == [verification]
+    balances = [(s.as_of_date, s.balance) for s in snapshots(env, first)]
+    rows = states(env, first)
+    (unknown,) = env.open_reviews(document_id)
+    assert unknown.kind is ReviewKind.UNKNOWN_ACCOUNT
+
+    # The other statement's account is chosen: the document is imported again.
+    resolved = owner.post(
+        f"{API}/review/{unknown.id}/resolve",
+        json={"kind": "unknown_account", "account_id": str(second.id)},
+    )
+    assert resolved.status_code == 200, resolved.text
+    assert env.run(APPLY_MAPPING_JOB_TYPE)
+
+    assert env.open_reviews(document_id) == []
+    assert env.document(document_id).status is DocumentStatus.PROCESSED
+    by_account = {r.account_id: r.verification for r in records(env, document_id)}
+    assert by_account == {first.id: verification, second.id: "reconciled"}
+    assert states(env, first) == rows
+    assert [(s.as_of_date, s.balance) for s in snapshots(env, first)] == balances
+    assert [r.amount for r in env.transactions(second)] == [Decimal("-5.00")]
+    # A later run neither asks about the first statement nor forgets where
+    # the second one went.
+    reread(env, document_id)
+    assert env.open_reviews(document_id) == []
+    assert {r.account_id: r.verification for r in records(env, document_id)} == by_account
+    assert len(env.transactions(second)) == 1
+
+
+def _reconciled(env: Env, last4: str) -> tuple[Account, uuid.UUID]:
+    """A statement that adds up, imported: reconciled, its balance recorded."""
+    account = env.ledger.account(env.household_id, number_last4=last4, name="Everyday")
+    document_id = _stored(
+        env,
+        _month(
+            last4,
+            6,
+            30,
+            "100.00",
+            "75.50",
+            [(3, "-4.50", "Corner Bakery"), (9, "-20.00", "Lamplight Books")],
+        ),
+        checked=True,
+    )
+    assert [r.verification for r in records(env, document_id)] == ["reconciled"]
+    assert [s.balance for s in snapshots(env, account)] == [Decimal("75.50")]
+    return account, document_id
+
+
+def _set_amount(env: Env, account: Account, old: str, new: str) -> None:
+    row = next(r for r in env.transactions(account) if r.amount == Decimal(old))
+    changed = env.client().patch(
+        f"{API}/transactions/{row.id}", json={"amount": {"amount": new, "currency": "USD"}}
+    )
+    assert changed.status_code == 200, changed.text
+
+
+def test_accepting_an_edited_statement_takes_back_the_balance_it_recorded(env: Env) -> None:
+    account, document_id = _reconciled(env, "7332")
+    # Another month of the account from another file: its balance is not this one's.
+    _stored(
+        env,
+        _month("7332", 5, 31, "110.00", "100.00", [(4, "-10.00", "Ferry Kiosk")]),
+        checked=True,
+    )
+    may = (date(2026, 5, 31), Decimal("100.00"))
+    june = (date(2026, 6, 30), Decimal("75.50"))
+
+    def balances() -> list[tuple[date, Decimal]]:
+        return [(s.as_of_date, s.balance) for s in snapshots(env, account)]
+
+    assert balances() == [may, june]
+    owner = env.client()
+    _set_amount(env, account, "-4.50", "-6.50")
+    assert one(owner, document_id)["status"] == "off"
+
+    status, got = act(owner, document_id, "accept", statement=0)
+
+    assert status == 200, got
+    assert (got["snapshot"], got["statement"]["verification"]) == (False, "accepted")
+    # No balance stands for a statement that was accepted without balancing.
+    assert balances() == [may]
+
+    # The reading adds up, the ledger does not: a re-read does not call it reconciled.
+    reread(env, document_id)
+    assert [r.verification for r in records(env, document_id)] == ["accepted"]
+    assert balances() == [may]
+    assert env.open_reviews(document_id) == []
+
+    # Once the ledger agrees with the statement again, it is.
+    _set_amount(env, account, "-6.50", "-4.50")
+    reread(env, document_id)
+    assert [r.verification for r in records(env, document_id)] == ["reconciled"]
+    assert balances() == [may, june]
+
+
+def test_a_reconciled_statement_read_with_another_balance_is_asked_about(env: Env) -> None:
+    account, document_id = _reconciled(env, "7333")
+    before = states(env, account)
+
+    def closing_read_differently(statements: list[Statement]) -> list[Statement]:
+        balance = statements[0].ledger_balance
+        assert balance is not None
+        fixed = statements[0].model_copy(
+            update={"ledger_balance": balance.model_copy(update={"amount": Decimal("70.00")})}
+        )
+        return [rebalance(fixed)]
+
+    reread(env, document_id, closing_read_differently)
+
+    # No row changed, but the ledger no longer agrees with what the file says.
+    assert states(env, account) == before
+    assert [r.verification for r in records(env, document_id)] == ["unverified"]
+    assert reasons(env, document_id) == ["reconciliation_failed"]
+
+
+def test_rows_kept_from_an_earlier_reading_are_not_listed_again_after_accepting(
+    env: Env,
+) -> None:
+    account = env.ledger.account(env.household_id, number_last4="7334", name="Everyday")
+    document_id = _stored(
+        env,
+        # 100.00 - 4.50 - 20.00 is 75.50: the reading has 70.00.
+        _month(
+            "7334",
+            6,
+            30,
+            "100.00",
+            "70.00",
+            [(3, "-4.50", "Corner Bakery"), (9, "-20.00", "Lamplight Books")],
+        ),
+        checked=True,
+    )
+    owner = env.client()
+    bakery = next(r for r in env.transactions(account) if r.amount == Decimal("-4.50"))
+    noted = owner.patch(f"{API}/transactions/{bakery.id}", json={"memo": "two loaves"})
+    assert noted.status_code == 200, noted.text
+
+    def bakery_row_gone(statements: list[Statement]) -> list[Statement]:
+        rows = [t for t in statements[0].transactions if t.amount != Decimal("-4.50")]
+        return [rebalance(statements[0].model_copy(update={"transactions": rows}))]
+
+    reread(env, document_id, bakery_row_gone)
+    assert "earlier_rows_kept" in reasons(env, document_id)
+    status, got = act(owner, document_id, "accept", statement=0)
+    assert status == 200, got
+    assert env.open_reviews(document_id) == []
+
+    reread(env, document_id)
+
+    assert env.open_reviews(document_id) == []
+    assert [r.verification for r in records(env, document_id)] == ["accepted"]
+    assert bakery.id in {r.id for r in env.transactions(account)}
+    assert snapshots(env, account) == []

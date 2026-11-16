@@ -459,9 +459,11 @@ def test_rows_in_doubt_only_for_reconciliation_are_not_listed_twice(env: Env) ->
     assert item.payload["difference"] == f"{-trust.OFF:f}"
     assert (item.payload["rows_in_doubt"], item.payload["rows_total"]) == (6, 6)
     assert (item.payload["statement"], item.payload["lines_skipped"]) == (0, 0)
-    # Task 24 fills the reference; nothing stands in for it, and a
+    # The statement's reference (a digest in letters, never a digit); a
     # difference that is not zero has no other cause to name.
-    assert "statement_ref" not in item.payload
+    ref = item.payload["statement_ref"]
+    assert len(ref) == 64
+    assert ref.isalpha()
     assert "cause" not in item.payload
     assert env.document(document_id).status is DocumentStatus.NEEDS_REVIEW
     assert env.snapshots(account) == []

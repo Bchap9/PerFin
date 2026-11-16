@@ -147,7 +147,12 @@ from app.domain.accounts.visibility import (
     visible_account_filter,
 )
 from app.domain.documents import repo as documents_repo
-from app.domain.documents.manage import can_edit_document, may_download, queue_ingestion
+from app.domain.documents.manage import (
+    can_edit_document,
+    is_previewable,
+    may_download,
+    queue_ingestion,
+)
 from app.domain.documents.models import (
     Blob,
     BlobArea,
@@ -194,6 +199,7 @@ from app.domain.transactions import service as transactions_service
 from app.domain.transactions.models import ReviewState, Transaction
 from app.domain.transactions.schemas import TransactionUpdate
 from app.ingestion.match import receipts as receipts_match
+from app.ingestion.sandbox.protocol import ExtractResult
 
 #: ``unparsed`` reasons the column-mapping editor answers. A brokerage
 #: activity table none of whose rows read (``activity_unreadable``) is one:
@@ -353,10 +359,6 @@ def _next_step(item: ReviewItem) -> NextStep | None:
     return None
 
 
-#: MIME types whose pages the sandbox renders as previews.
-PREVIEW_MIMES: Final = ("application/pdf", "image/")
-
-
 def _documents(
     db: Session, principal: Principal, items: Sequence[ReviewItem]
 ) -> dict[uuid.UUID, ReviewDocument]:
@@ -382,9 +384,7 @@ def _documents(
             created_at=document.created_at,
             period_start=document.period_start,
             period_end=document.period_end,
-            previewable=pages
-            and area is not BlobArea.QUARANTINE
-            and document.mime_detected.startswith(PREVIEW_MIMES),
+            previewable=is_previewable(document, area, pages),
         )
         for document, area in rows
     }
@@ -1093,7 +1093,44 @@ def _resolve_account(
         if payload.get("investment") is True and isinstance(payload.get("statement"), int)
         else None,
     )
-    return {"account_id": str(account.id), "remembered": remembered, **rerun}
+    return {
+        "account_id": str(account.id),
+        "remembered": remembered,
+        **rerun,
+        **_statement_placement(document, payload, account.id),
+    }
+
+
+def _statement_placement(
+    document: Document, payload: Mapping[str, Any], account_id: uuid.UUID
+) -> dict[str, Any]:
+    """The record that the item's bank statement was put on ``account_id``.
+
+    The statement's key and its stable reference
+    (``statement_answers.statement_ref``), read from the stored extraction:
+    every later import of the document puts that statement on the account
+    again, also after its balances were corrected. Empty for an item about
+    a brokerage statement or a group of a table (the re-run records where
+    those went, ``imports.service._placed``) and for an item that names no
+    stored statement.
+    """
+    index = payload.get("statement")
+    if payload.get("investment") is True or isinstance(payload.get("group"), int):
+        return {}
+    if not isinstance(index, int) or isinstance(index, bool) or document.extraction is None:
+        return {}
+    try:
+        statements = ExtractResult.model_validate(document.extraction).statements
+    except ValidationError:
+        return {}
+    if not 0 <= index < len(statements):
+        return {}
+    return statement_answers.placement(
+        "statement",
+        statement_answers.statement_key(statements[index]),
+        account_id,
+        statement_answers.statement_refs("statement", statements)[index],
+    )
 
 
 def _resolve_unparsed(

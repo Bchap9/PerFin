@@ -61,7 +61,7 @@ from datetime import date
 from decimal import Decimal
 from typing import Any, Final, Literal
 
-from sqlalchemy import delete, func, select
+from sqlalchemy import and_, case, delete, func, select
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.orm import Session
 
@@ -307,12 +307,17 @@ def record_statement(
     *,
     outcome: Literal["imported", "skipped"] = "imported",
     verification: str = "unverified",
+    lower_accepted: bool = False,
 ) -> bool:
     """Record a committed (or skipped) statement; False when it has no period.
 
     ``verification`` is how far the statement was checked against its own
     balances (``imports.models.STATEMENT_VERIFICATIONS``): what this run
-    reached replaces what the record said.
+    reached replaces what the record said, with one exception. A record a
+    person ``accepted`` is never lowered to ``unverified`` by a caller that
+    merely has nothing better to say: only the importer's decision that the
+    acceptance no longer covers the statement does that (``lower_accepted``;
+    ``imports.service._settle_standing``).
     """
     period = facts.period
     if period is None:
@@ -337,6 +342,17 @@ def record_statement(
     statement = insert(StatementRecord).values(id=uuid7(), **values)
     update: dict[str, Any] = {k: statement.excluded[k] for k in values if k != "household_id"}
     update["updated_at"] = func.now()
+    if not lower_accepted:
+        update["verification"] = case(
+            (
+                and_(
+                    StatementRecord.verification == "accepted",
+                    statement.excluded.verification == "unverified",
+                ),
+                StatementRecord.verification,
+            ),
+            else_=statement.excluded.verification,
+        )
     db.execute(
         statement.on_conflict_do_update(
             constraint="uq_statement_record_account_document_kind_start", set_=update

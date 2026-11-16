@@ -209,6 +209,22 @@ The flow (INGESTION.md "Parse", "Match and deduplicate", "Commit"):
      yet or with brokerage statements. Rows without an ``import_hash``
      (added by hand), rows of other documents and rows a person touched are
      never removed here.
+   * **Answers given in the reconcile view survive a re-read**
+     (:func:`_standing`, :func:`_settle_standing`). A bank statement whose
+     record of this document says ``accepted``, or ``reconciled`` although
+     its reading does not add up by itself (a person balanced it against
+     the ledger), is not asked about again while the run changes no row of
+     its account: none written, none removed as an earlier reading, none
+     newly kept. Its record keeps what it said, no reconciliation finding
+     is raised and no balance is recorded; a ``reconciled`` one must still
+     add up against the ledger rows. When the run did change a row the
+     statement is what its reading says again (``unverified``, with its
+     finding). An accepted statement becomes ``reconciled``, with its
+     balance recorded, only when the reading adds up and the ledger rows
+     do as well. The finding names the statement by its reference
+     (``statement_answers.statement_ref``), and a statement a person put on
+     an account is found there again by that reference when its exact key
+     no longer matches.
    * The document is ``processed`` when nothing is left open for it in the
      review queue, ``needs_review`` otherwise.
 
@@ -271,7 +287,7 @@ from app.domain.documents.models import (
 from app.domain.documents.schemas import Verification
 from app.domain.documents.service import get_visible_document
 from app.domain.imports import repo
-from app.domain.imports.models import NAME_MAX, ImportMapping
+from app.domain.imports.models import NAME_MAX, ImportMapping, StatementRecord
 from app.domain.imports.payees import PayeeMatcher
 from app.domain.imports.schemas import (
     ACTIVITY_COLUMNS,
@@ -296,11 +312,13 @@ from app.domain.imports.schemas import (
     Sign,
 )
 from app.domain.imports.statement_answers import (
+    REF_FIELD,
     SCOPE_ACCOUNT,
     StatementAnswers,
     document_answers,
     placement,
     statement_key,
+    statement_refs,
 )
 from app.domain.imports.statement_records import (
     StatementFacts,
@@ -362,6 +380,7 @@ from app.ingestion.sandbox.protocol import (
     ExtractResult,
     InvestmentStatement,
     Reconciliation,
+    Statement,
     Table,
 )
 
@@ -815,6 +834,40 @@ class _NearGroup:
 
 
 @dataclass
+class _Standing:
+    """A statement a person settled in the reconcile view, read again.
+
+    Its record of this document says ``accepted`` or ``reconciled`` and the
+    reading alone would say otherwise (:func:`_standing`). What becomes of
+    it is known when the run ends (:func:`_settle_standing`).
+    """
+
+    index: int | None
+    statement: Statement
+    parsed: ParsedStatement
+    facts: StatementFacts
+    ref: str | None
+    #: What the record said before this run.
+    prior: Verification
+    #: The statement is a clean read (:func:`clean_read`): never asked about.
+    clean: bool = False
+
+    @property
+    def vouched(self) -> bool:
+        """The reading's own check passed (opening + rows = closing)."""
+        check = self.parsed.reconciliation
+        return check is not None and check.status == "ok"
+
+
+def _comparable(payload: Mapping[str, Any]) -> dict[str, Any]:
+    """A review payload without its statement reference.
+
+    An item raised before payloads carried one is the same finding.
+    """
+    return {name: value for name, value in payload.items() if name != REF_FIELD}
+
+
+@dataclass
 class _Run:
     db: Session
     document: Document
@@ -888,6 +941,15 @@ class _Run:
     #: account: a candidate is a row of this very document, which the run
     #: may still remove as an earlier reading (:func:`_replace_earlier`).
     near_waiting: dict[uuid.UUID, list[_NearGroup]] = field(default_factory=dict)
+    #: Accounts a row of which this run wrote, removed as an earlier reading,
+    #: or kept and listed for the first time.
+    changed: set[uuid.UUID] = field(default_factory=set)
+    #: The bank statements of the document this run put on each account, in
+    #: document order (committed or held).
+    placed: dict[uuid.UUID, list[Statement]] = field(default_factory=dict)
+    #: Statements a person accepted or balanced, by account, until the run
+    #: knows whether it changed a row (:func:`_settle_standing`).
+    standing: dict[uuid.UUID, list[_Standing]] = field(default_factory=dict)
     _payees: PayeeMatcher | None = None
     _payee_categories: dict[uuid.UUID, uuid.UUID] | None = None
     _categories: dict[str, uuid.UUID] | None = None
@@ -906,14 +968,14 @@ class _Run:
         if kind not in RERUN_ANSWERS:
             if self._open is None:
                 self._open = [
-                    (item.kind, item.payload)
+                    (item.kind, _comparable(item.payload or {}))
                     for item in repo.open_review_items(
                         self.db, self.household_id, self.document.id, set(ReviewKind)
                     )
                 ]
-            if (kind, payload) in self._open:
+            if (kind, _comparable(payload)) in self._open:
                 return
-            self._open.append((kind, payload))
+            self._open.append((kind, _comparable(payload)))
         documents_repo.add_review_item(
             self.db, self.household_id, kind, payload, document_id=self.document.id
         )
@@ -1088,12 +1150,17 @@ def _row_problems(
     *,
     clean: bool = False,
     statement_index: int | None = None,
+    ref: str | None = None,
+    settled: bool = False,
 ) -> None:
     # Footers and pending rows are not problems: ``rows_skipped`` is raised
     # for the rows that should have read (``parsed.skipped_rows``) only.
     # ``clean``: a clean read (:func:`clean_read`) is not asked about: its
     # record says ``unverified`` instead of a ``reconciliation_unavailable`` item.
     # ``statement_index``: the statement's index in the document (None: a table).
+    # ``ref``: its stable reference (``statement_answers.statement_ref``).
+    # ``settled``: a person accepted or balanced the statement; whether it is
+    # asked about again is decided when the run ends (:func:`_settle_standing`).
     run.footer_rows += len(parsed.footer_rows)
     run.pending_rows += len(parsed.pending_rows)
     if parsed.skipped_rows:
@@ -1133,49 +1200,67 @@ def _row_problems(
             ReviewKind.LOW_CONFIDENCE_FIELD,
             {"reason": "truncated", "account_id": str(account.id)},
         )
-    if not parsed.reconciled and parsed.reconciliation is not None and not clean:
-        # SECURITY.md C12: the statement's own figures disagree (or cannot be
-        # checked and something else is in doubt); its rows are imported
-        # pending and no snapshot is written.
-        check = parsed.reconciliation
-        payload: dict[str, Any] = {
-            "reason": (
-                "reconciliation_failed"
-                if check.status == "mismatch"
-                else "reconciliation_unavailable"
+    if not clean and not settled:
+        _reconciliation_review(run, parsed, account, statement_index=statement_index, ref=ref)
+
+
+def _reconciliation_review(
+    run: _Run,
+    parsed: ParsedStatement,
+    account: Account,
+    *,
+    statement_index: int | None,
+    ref: str | None,
+) -> None:
+    """The finding of a statement whose check failed or could not be made.
+
+    SECURITY.md C12: the statement's own figures disagree (or cannot be
+    checked and something else is in doubt); its rows are imported pending
+    and no snapshot is written. Nothing is raised for a statement that
+    reconciles or carries no check (OFX, QIF, a table).
+    """
+    check = parsed.reconciliation
+    if parsed.reconciled or check is None:
+        return
+    payload: dict[str, Any] = {
+        "reason": (
+            "reconciliation_failed" if check.status == "mismatch" else "reconciliation_unavailable"
+        ),
+        "field": "reconciliation",
+        "account_id": str(account.id),
+        # Which statement of the document, and how many lines of the
+        # document no reader could read (a likely place for a missing row).
+        "statement": statement_index,
+        "lines_skipped": run.parse_skipped,
+    }
+    if ref is not None:
+        # The statement whatever its figures read as (``statement_answers``).
+        payload[REF_FIELD] = ref
+    cause = _contradiction(run, check)
+    if cause is not None:
+        # The balances agree with the rows; the statement's own summary
+        # or a section total does not.
+        payload["cause"] = cause
+    run.review(
+        ReviewKind.LOW_CONFIDENCE_FIELD,
+        {
+            **payload,
+            "parser": parsed.parser,
+            "opening": _decimal_text(check.opening),
+            "closing": _decimal_text(check.closing),
+            "total": _decimal_text(check.total),
+            "difference": _decimal_text(check.difference),
+            "running_mismatches": len(check.running_mismatches),
+            "rows": check.running_mismatches[:IDS_MAX],
+            # How many of the statement's rows the failed check leaves
+            # in doubt (imported pending); the others are vouched for by
+            # the statement's own running balance and imported as usual.
+            "rows_in_doubt": (
+                len(check.doubtful) if check.doubtful is not None else len(parsed.transactions)
             ),
-            "field": "reconciliation",
-            "account_id": str(account.id),
-            # Which statement of the document, and how many lines of the
-            # document no reader could read (a likely place for a missing row).
-            "statement": statement_index,
-            "lines_skipped": run.parse_skipped,
-        }
-        cause = _contradiction(run, check)
-        if cause is not None:
-            # The balances agree with the rows; the statement's own summary
-            # or a section total does not.
-            payload["cause"] = cause
-        run.review(
-            ReviewKind.LOW_CONFIDENCE_FIELD,
-            {
-                **payload,
-                "parser": parsed.parser,
-                "opening": _decimal_text(check.opening),
-                "closing": _decimal_text(check.closing),
-                "total": _decimal_text(check.total),
-                "difference": _decimal_text(check.difference),
-                "running_mismatches": len(check.running_mismatches),
-                "rows": check.running_mismatches[:IDS_MAX],
-                # How many of the statement's rows the failed check leaves
-                # in doubt (imported pending); the others are vouched for by
-                # the statement's own running balance and imported as usual.
-                "rows_in_doubt": (
-                    len(check.doubtful) if check.doubtful is not None else len(parsed.transactions)
-                ),
-                "rows_total": len(parsed.transactions),
-            },
-        )
+            "rows_total": len(parsed.transactions),
+        },
+    )
 
 
 def _decimal_text(value: Decimal | None) -> str | None:
@@ -1275,7 +1360,13 @@ def _low_confidence_review(
 
 
 def _commit_statement(
-    run: _Run, parsed: ParsedStatement, account: Account, *, statement_index: int | None
+    run: _Run,
+    parsed: ParsedStatement,
+    account: Account,
+    *,
+    statement_index: int | None,
+    ref: str | None = None,
+    standing: _Standing | None = None,
 ) -> Verification | None:
     """Write one statement's new transactions, review items and closing balance.
 
@@ -1291,6 +1382,12 @@ def _commit_statement(
     is a near duplicate, no ``reconciliation_unavailable`` and no
     ``low_confidence`` item is raised for it, and, as for every statement
     that did not reconcile, no balance snapshot is written.
+
+    ``standing``: a person accepted or balanced this statement in the
+    reconcile view (:func:`_standing`). Its record keeps what it said, no
+    reconciliation finding is raised and no snapshot is written here;
+    :func:`_settle_standing` decides at the end of the run, when it is known
+    whether the run changed a row of the account.
     """
     db = run.db
     if parsed.currency is not None and parsed.currency != account.currency:
@@ -1326,7 +1423,15 @@ def _commit_statement(
     # Neither is a statement read for the other side of the balance sheet
     # than its account's (:func:`same_side`): its sign is on trust.
     clean = not foreign and same_side(account.type, parsed.account_type) and clean_read(run, parsed)
-    _row_problems(run, parsed, account, clean=clean, statement_index=statement_index)
+    _row_problems(
+        run,
+        parsed,
+        account,
+        clean=clean,
+        statement_index=statement_index,
+        ref=ref,
+        settled=standing is not None,
+    )
     plan = dedupe(
         db,
         run.household_id,
@@ -1430,18 +1535,12 @@ def _commit_statement(
             if rows[index].low_confidence and not clean
         ],
     )
-    if parsed.closing_balance is not None and parsed.reconciled:
-        accounts_repo.upsert_snapshot(
-            db,
-            account,
-            parsed.closing_balance.as_of,
-            to_storage(parsed.closing_balance.amount),
-            BalanceSource.STATEMENT,
-            source_document_id=run.document.id,
-        )
-        run.snapshots += 1
-        emit(db, run.household_id, "balance.updated", {"account_id": str(account.id)})
+    # An accepted statement whose reading adds up is checked against the
+    # ledger first (:func:`_settle_standing`): its rows may have been edited.
+    if parsed.reconciled and not (standing is not None and standing.vouched):
+        _write_snapshot(run, parsed, account)
     if created:
+        run.changed.add(account.id)
         ids = [row.id for row, _ in created]
         audit(
             db,
@@ -1473,8 +1572,28 @@ def _commit_statement(
     # Rules and payee defaults ran as part of the import: the rows are as
     # imported, untouched until a person changes one.
     _mark_untouched(db, [row for row, _ in created])
+    if standing is not None:
+        standing.clean = clean
+        run.standing.setdefault(account.id, []).append(standing)
+        return standing.prior
     check = parsed.reconciliation
     return "reconciled" if check is not None and check.status == "ok" else "unverified"
+
+
+def _write_snapshot(run: _Run, parsed: ParsedStatement, account: Account) -> None:
+    """Record the statement's closing balance as the account's balance that day."""
+    if parsed.closing_balance is None:
+        return
+    accounts_repo.upsert_snapshot(
+        run.db,
+        account,
+        parsed.closing_balance.as_of,
+        to_storage(parsed.closing_balance.amount),
+        BalanceSource.STATEMENT,
+        source_document_id=run.document.id,
+    )
+    run.snapshots += 1
+    emit(run.db, run.household_id, "balance.updated", {"account_id": str(account.id)})
 
 
 def _mark_untouched(db: Session, rows: Sequence[Transaction]) -> None:
@@ -1509,7 +1628,12 @@ def _own_rows(run: _Run, account: Account, candidates: Collection[uuid.UUID]) ->
 
 
 def _record_committed(
-    run: _Run, account: Account, facts: StatementFacts, verification: Verification
+    run: _Run,
+    account: Account,
+    facts: StatementFacts,
+    verification: Verification,
+    *,
+    lower_accepted: bool = False,
 ) -> None:
     """Record a committed statement with how far it was checked.
 
@@ -1517,7 +1641,14 @@ def _record_committed(
     ``unverified`` is the one shown as "not checked against a balance":
     counted for the run's summary (``unverified_statements``).
     """
-    recorded = record_statement(run.db, run.document, account, facts, verification=verification)
+    recorded = record_statement(
+        run.db,
+        run.document,
+        account,
+        facts,
+        verification=verification,
+        lower_accepted=lower_accepted,
+    )
     if recorded and facts.kind == "bank" and facts.period_start is not None:
         run.periods.setdefault(account.id, set()).add(facts.period_start)
     if (
@@ -1669,13 +1800,18 @@ def statement_match(
 
 def _import_statements(run: _Run, result: ExtractResult, *, account_id: uuid.UUID | None) -> None:
     single = len(result.statements) == 1 and not _several_kinds(result)
+    refs = statement_refs("statement", result.statements)
     for index, statement in enumerate(result.statements):
         parsed = from_statement(statement)
         key = statement_key(statement)
         account: Account | None = None
         candidates: tuple[uuid.UUID, ...] = ()
-        # The run's own assignment, else the account an answer put it on.
-        assigned = run.assigned.get(("statement", index)) or run.answers.account("statement", key)
+        # The run's own assignment, else the account an answer put it on: the
+        # statement exactly as read, else the statement by its reference (its
+        # balances were corrected, or a parser reads it differently now).
+        assigned = run.assigned.get(("statement", index)) or run.answers.account(
+            "statement", key, refs[index]
+        )
         if assigned is not None:
             account = _usable_account(run, assigned)
         if (
@@ -1714,12 +1850,115 @@ def _import_statements(run: _Run, result: ExtractResult, *, account_id: uuid.UUI
                 },
             )
             continue
+        run.placed.setdefault(account.id, []).append(statement)
         facts = bank_facts(statement)
         if not _guarded(run, account, facts, index, key):
             continue
-        verification = _commit_statement(run, parsed, account, statement_index=index)
+        verification = _commit_statement(
+            run,
+            parsed,
+            account,
+            statement_index=index,
+            ref=refs[index],
+            standing=_standing(run, statement, parsed, account, facts, index, refs[index]),
+        )
         if verification is not None:
             _record_committed(run, account, facts, verification)
+
+
+def _standing(
+    run: _Run,
+    statement: Statement,
+    parsed: ParsedStatement,
+    account: Account,
+    facts: StatementFacts,
+    index: int,
+    ref: str,
+) -> _Standing | None:
+    """The answer a person gave about this statement in the reconcile view, if it stands.
+
+    The document's record of the statement (this account, this period
+    start) says ``accepted``, or says ``reconciled`` although the reading
+    does not add up by itself (the person balanced it against the ledger:
+    a row edited, a row removed). None for every other statement: one that
+    was never settled, and a reconciled one whose reading vouches for
+    itself.
+    """
+    if facts.period_start is None:
+        return None
+    prior = run.db.execute(
+        select(StatementRecord.verification).where(
+            StatementRecord.household_id == run.household_id,
+            StatementRecord.account_id == account.id,
+            StatementRecord.document_id == run.document.id,
+            StatementRecord.kind == "bank",
+            StatementRecord.outcome == "imported",
+            StatementRecord.period_start == facts.period_start,
+        )
+    ).scalar_one_or_none()
+    if prior not in ("accepted", "reconciled"):
+        return None
+    found = _Standing(
+        index=index,
+        statement=statement,
+        parsed=parsed,
+        facts=facts,
+        ref=ref,
+        prior="accepted" if prior == "accepted" else "reconciled",
+    )
+    if found.prior == "reconciled" and found.vouched:
+        return None
+    return found
+
+
+def _settle_standing(run: _Run, account: Account) -> None:
+    """Decide the statements of ``account`` a person had settled (decision at the run's end).
+
+    An acceptance, and a balance a person struck in the reconcile view, are
+    answers about the ledger rows as they were. They hold while the run
+    changed no row of the account (``_Run.changed``: none written, none
+    removed as an earlier reading, none newly kept):
+
+    * the record stays ``accepted``: nothing is asked again, no row is made
+      pending, no balance is recorded;
+    * the record stays ``reconciled`` while the ledger rows still add up to
+      the statement's balances
+      (``app.domain.review.reconciliation.ledger_status``).
+
+    Otherwise the statement is what its reading says again: ``unverified``,
+    with the reconciliation finding unless the reading adds up or is a clean
+    read. An accepted statement becomes ``reconciled``, and its closing
+    balance is recorded, only when the reading adds up **and** the ledger
+    rows do: a reading that balances says nothing about rows a person
+    edited since.
+    """
+    # Imported here: the review package imports this module.
+    from app.domain.review.reconciliation import ledger_status
+
+    held = run.standing.pop(account.id, [])
+    if not held:
+        return
+    changed = account.id in run.changed
+    statements = run.placed.get(account.id, [])
+    for item in held:
+        position = next(i for i, s in enumerate(statements) if s is item.statement)
+        balanced = ledger_status(run.db, run.document, account, statements, position) == "balanced"
+        verdict: Verification
+        if item.vouched:
+            verdict = "reconciled" if balanced else "unverified" if changed else item.prior
+        elif not changed and (item.prior == "accepted" or balanced):
+            verdict = item.prior
+        else:
+            verdict = "unverified"
+        if verdict == item.prior:
+            continue
+        _record_committed(run, account, item.facts, verdict, lower_accepted=True)
+        if verdict == "reconciled":
+            _write_snapshot(run, item.parsed, account)
+        elif not item.clean:
+            _reconciliation_review(
+                run, item.parsed, account, statement_index=item.index, ref=item.ref
+            )
 
 
 class _GroupFacts(BaseModel):
@@ -2664,6 +2903,19 @@ def _supersede(run: _Run, answered: Callable[[ReviewItem], bool]) -> int:
     return len(found)
 
 
+def _answered_before(run: _Run, finding: Mapping[str, Any]) -> bool:
+    """A resolved finding of the document says exactly what ``finding`` says."""
+    resolved = run.db.execute(
+        select(ReviewItem.payload).where(
+            ReviewItem.household_id == run.household_id,
+            ReviewItem.document_id == run.document.id,
+            ReviewItem.state == ReviewItemState.RESOLVED,
+            ReviewItem.kind == ReviewKind.LOW_CONFIDENCE_FIELD,
+        )
+    ).scalars()
+    return any(payload == finding for payload in resolved)
+
+
 def _replace_earlier(run: _Run, account: Account) -> set[uuid.UUID]:
     """Settle the rows an earlier reading of the document left on ``account``.
 
@@ -2676,7 +2928,8 @@ def _replace_earlier(run: _Run, account: Account) -> set[uuid.UUID]:
     delete, and a later reading that holds it again imports it. Every other
     earlier row is **kept** and listed in one ``earlier_rows_kept`` finding
     of the account (ids only, at most :data:`IDS_MAX`), which the reconcile
-    view answers. Audited as ``import.replace``. Returns the ids removed.
+    view answers; a list a person already answered is not raised again.
+    Audited as ``import.replace``. Returns the ids removed.
 
     Never touched here: rows of another document, rows on another account,
     rows without an ``import_hash`` (added by hand for the document).
@@ -2731,7 +2984,12 @@ def _replace_earlier(run: _Run, account: Account) -> set[uuid.UUID]:
         return bool(named) and named <= gone
 
     _supersede(run, answered)
-    if kept:
+    if removed:
+        run.changed.add(account.id)
+    if kept and not _answered_before(run, finding):
+        # Listed once: a person who accepted or balanced the statement with
+        # these very rows kept is not asked about them on every later run.
+        run.changed.add(account.id)
         run.review(ReviewKind.LOW_CONFIDENCE_FIELD, finding)
     if removed or kept:
         audit(
@@ -2799,7 +3057,8 @@ def _finish_reading(run: _Run) -> None:
     one whose rows would look like an earlier reading. Then the rows of the
     earlier reading go or are listed (:func:`_replace_earlier`) and the
     statement records of periods the run did not record are dropped
-    (``statement_records.drop_stale_records``).
+    (``statement_records.drop_stale_records``). Last, the statements a
+    person had accepted or balanced are decided (:func:`_settle_standing`).
     """
     for account_id in list(run.read):
         account = accounts_repo.get_account(run.db, run.household_id, account_id)
@@ -2811,6 +3070,7 @@ def _finish_reading(run: _Run) -> None:
             if account_id in run.periods:
                 drop_stale_records(run.db, run.document, account, run.periods[account_id])
         _settle_near(run, account, removed)
+        _settle_standing(run, account)
 
 
 def _open_items(db: Session, document: Document) -> int:
@@ -3048,12 +3308,17 @@ def _placed(
     )
     if account_id is None or str(account_id) not in imported_into:
         return {}
-    statements: Sequence[BaseModel] = (
+    statements: Sequence[Statement | InvestmentStatement] = (
         stored_investments(document, db) if investment else result.statements
     )
     if not 0 <= index < len(statements):
         return {}
-    return placement(target, statement_key(statements[index]), account_id)
+    return placement(
+        target,
+        statement_key(statements[index]),
+        account_id,
+        statement_refs(target, statements)[index],
+    )
 
 
 def _placed_group(
