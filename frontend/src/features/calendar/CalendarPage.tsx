@@ -11,7 +11,7 @@ export function CalendarPage() {
         label="Calendar"
         tabs={[
           { id: "calendar", label: "Cash-flow calendar", content: <CalendarTab /> },
-          { id: "recurring", label: "Recurring and subscriptions", content: <RecurringTab /> },
+          { id: "recurring", label: "Recurring items", content: <RecurringTab /> },
         ]}
       />
     </PlanningPage>

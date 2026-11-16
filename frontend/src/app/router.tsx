@@ -25,6 +25,7 @@ import { routes as reportsRoutes } from "../features/reports/routes";
 import { routes as reviewRoutes } from "../features/review/routes";
 import { routes as settingsRoutes } from "../features/settings/routes";
 import { routes as setupRoutes } from "../features/setup/routes";
+import { routes as subscriptionsRoutes } from "../features/subscriptions/routes";
 import { routes as taxRoutes } from "../features/tax/routes";
 import { routes as transactionsRoutes } from "../features/transactions/routes";
 import { AppProviders } from "./AppProviders";
@@ -72,6 +73,7 @@ const features: FeatureRoutes[] = [
   calendarRoutes,
   taxRoutes,
   reportsRoutes,
+  subscriptionsRoutes,
 ];
 
 /**

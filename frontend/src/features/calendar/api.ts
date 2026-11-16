@@ -9,7 +9,6 @@ export type Schedule = Schemas["app__domain__recurring__schemas__ScheduleOut"];
 export type ScheduleCreate = Schemas["ScheduleCreate"];
 export type ScheduleUpdate = Schemas["ScheduleUpdate"];
 export type Cadence = Schemas["Cadence"];
-export type Candidate = Schemas["CandidateOut"];
 export type CashflowCalendar = Schemas["CashflowCalendar"];
 export type CalendarDay = Schemas["CalendarDay"];
 export type DetectResult = Schemas["DetectResult"];
@@ -25,7 +24,6 @@ export const CADENCE_LABELS: Record<Cadence, string> = {
 
 export const recurringKeys = {
   list: [...queryRoots.recurring, "list"],
-  candidates: [...queryRoots.recurring, "candidates"],
   calendar: (days: number) => [...queryRoots.recurring, "calendar", days],
 } as const;
 
@@ -41,8 +39,6 @@ export const updateSchedule = (id: string, body: ScheduleUpdate) =>
 export const deleteSchedule = async (id: string): Promise<void> => {
   await unwrap(api.DELETE("/api/v1/recurring/{schedule_id}", { params: { path: { schedule_id: id } } }));
 };
-
-export const getCandidates = () => unwrap(api.GET("/api/v1/recurring/candidates", {}));
 
 export const detectSchedules = () => unwrap(api.POST("/api/v1/recurring/detect", { body: {} }));
 

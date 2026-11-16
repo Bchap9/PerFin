@@ -1,13 +1,9 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-import { QueryClient } from "@tanstack/react-query";
-import { render, screen, within } from "@testing-library/react";
+import { screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 
-import { AppProviders } from "../../app/AppProviders";
-import { csrfStore } from "../../lib/csrf";
-import { authedSession, json, mockApi, type Handler, type SessionOptions } from "../auth/testing";
+import { authedSession, json, mockApi, renderApp, type Handler, type SessionOptions } from "../auth/testing";
 import { ACCOUNT_CHECKING, money, referenceHandlers } from "../planning/testing";
-import { SubscriptionsPage } from "./SubscriptionsPage";
 
 type Row = Record<string, unknown>;
 
@@ -91,13 +87,8 @@ function setup(items: Row[], options: { session?: SessionOptions; events?: Row[]
     "GET /api/v1/subscriptions/events": () => json({ items: state.events, next_cursor: null, open: state.events.length }),
     ...options.handlers,
   });
-  csrfStore.clear();
-  const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-  render(
-    <AppProviders queryClient={queryClient}>
-      <SubscriptionsPage />
-    </AppProviders>,
-  );
+  // Through the router: a series' name is a link to it up close.
+  renderApp("/subscriptions");
   return { api, state, user: userEvent.setup() };
 }
 

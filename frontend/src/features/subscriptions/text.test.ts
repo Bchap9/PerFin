@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import type { SubscriptionEvent } from "./api";
-import { cadenceText, eventText, kindText, magnitude, statusText } from "./text";
+import { cadenceText, datedEventText, eventText, kindText, magnitude, priceLine, sourceText, statusText } from "./text";
 
 function event(kind: SubscriptionEvent["kind"], extra: Partial<SubscriptionEvent> = {}): SubscriptionEvent {
   return {
@@ -36,6 +36,35 @@ describe("subscription words", () => {
     expect(statusText("suggested", "bill")).toBe("Might be a bill");
     expect(statusText("dismissed", "bill")).toBe("Not a bill");
     expect(statusText("confirmed", "bill")).toBe("Confirmed");
+  });
+
+  it("does not call income or anything else a subscription", () => {
+    expect(statusText("suggested", "income")).toBe("Might be recurring");
+    expect(statusText("dismissed", "income")).toBe("Not recurring");
+    expect(statusText("suggested", "other")).toBe("Might be recurring");
+    expect(statusText("dismissed", "other")).toBe("Not recurring");
+    expect(statusText("active", "other")).toBe("Found for you");
+  });
+
+  it("says who set a status", () => {
+    expect(sourceText("person")).toBe("set by you");
+    expect(sourceText("detector")).toBe("set by PerFin");
+  });
+
+  it("writes a price change as a dated line", () => {
+    expect(
+      priceLine(event("price_changed", { amount_before: { amount: "-15.99", currency: "USD" }, amount_after: { amount: "-17.99", currency: "USD" } })),
+    ).toBe("Nov 10, 2026: $15.99 to $17.99");
+    expect(priceLine(event("price_changed"))).toBe("Nov 10, 2026: Price changed");
+  });
+
+  it("dates a change unless its words already carry the date", () => {
+    expect(datedEventText(event("new"))).toBe("Nov 10, 2026: New");
+    expect(datedEventText(event("ended"))).toBe("Nov 10, 2026: Stopped");
+    expect(datedEventText(event("charged_after_end"))).toBe("Nov 10, 2026: Charged after you ended it");
+    expect(datedEventText(event("trial_converted"))).toBe("Nov 10, 2026: Trial became paid");
+    expect(datedEventText(event("missed"))).toBe("Expected on Nov 10, 2026, not seen");
+    expect(datedEventText(event("renewal_due"))).toBe("Renews on Nov 10, 2026");
   });
 
   it("names each kind", () => {

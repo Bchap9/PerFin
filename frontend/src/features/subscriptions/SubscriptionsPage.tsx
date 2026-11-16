@@ -6,11 +6,13 @@
  * or "seen" for a change; detection never undoes either.
  *
  * The sections are separate components fed by props, so the next stage can
- * rehouse them without touching the data layer.
+ * rehouse them without touching the data layer. A series' name opens it up
+ * close (`/subscriptions/:id`, `SubscriptionDetail`).
  */
 import "./subscriptions.css";
 
 import { useQuery } from "@tanstack/react-query";
+import { Link, Outlet, useChildMatches } from "@tanstack/react-router";
 import { useId, useMemo, useState } from "react";
 
 import { Badge } from "../../components/Badge";
@@ -37,6 +39,7 @@ import {
   type SubscriptionTotals,
 } from "./api";
 import { cadenceText, eventText, magnitude, statusText } from "./text";
+import { useWide } from "./useWide";
 
 type TabKind = "subscription" | "bill";
 
@@ -88,6 +91,15 @@ type Decide = (subscription: Subscription, body: SubscriptionDecision) => void;
 
 function Cost({ money }: { money: { amount: string; currency: string } }) {
   return <MoneyText amount={magnitude(money.amount)} currency={money.currency} tone="none" />;
+}
+
+/** The name of a series, as the way to it up close. */
+function SeriesName({ row }: { row: Subscription }) {
+  return (
+    <Link to="/subscriptions/$id" params={{ id: row.id }} className="subs-name">
+      {row.name}
+    </Link>
+  );
 }
 
 function dateText(iso: string | null): string {
@@ -163,7 +175,7 @@ export function NeedsLook({
           return (
             <li key={row.id} className="subs-look">
               <div className="subs-look__main">
-                <span className="subs-name">{row.name}</span>
+                <SeriesName row={row} />
                 <span className="muted">
                   <Cost money={row.amount} />, {cadenceText(row.cadence, row.interval_count).toLowerCase()}
                 </span>
@@ -212,7 +224,7 @@ export function Upcoming({ rows }: { rows: readonly Subscription[] }) {
           {rows.map((row) => (
             <li key={row.id} className="subs-upcoming">
               <span className="subs-upcoming__date">{dateText(row.next_due)}</span>
-              <span className="subs-name">{row.name}</span>
+              <SeriesName row={row} />
               <span className="subs-upcoming__amount">
                 <Cost money={row.amount} />
               </span>
@@ -324,7 +336,7 @@ export function ActiveTable({
             {sorted.map((row) => (
               <tr key={row.id}>
                 <th scope="row" className="subs-col-name">
-                  <span className="subs-name">{row.name}</span> <Badge tone={row.status === "paused" ? "warning" : row.status === "confirmed" ? "success" : "info"}>{statusText(row.status, row.kind)}</Badge>
+                  <SeriesName row={row} /> <Badge tone={row.status === "paused" ? "warning" : row.status === "confirmed" ? "success" : "info"}>{statusText(row.status, row.kind)}</Badge>
                 </th>
                 <td data-label="Merchant" className="subs-col-rest">
                   {row.merchant ?? ""}
@@ -384,7 +396,7 @@ export function Folded({
         {rows.map((row) => (
           <li key={row.id} className="subs-look">
             <div className="subs-look__main">
-              <span className="subs-name">{row.name}</span>
+              <SeriesName row={row} />
               <Badge>{statusText(row.status, row.kind)}</Badge>
               <span className="muted">
                 <Cost money={row.amount} />, {cadenceText(row.cadence, row.interval_count).toLowerCase()}
@@ -415,7 +427,8 @@ function isUpcoming(row: Subscription, today: string): boolean {
   return compareIsoDates(row.next_due, today) >= 0 && compareIsoDates(row.next_due, addDays(today, UPCOMING_DAYS)) <= 0;
 }
 
-export function SubscriptionsPage() {
+/** The list with its figures and tabs. */
+export function SubscriptionsList() {
   const list = useQuery({ queryKey: subscriptionKeys.list, queryFn: listSubscriptions });
   const openEvents = useQuery({ queryKey: subscriptionKeys.openEvents, queryFn: listOpenEvents });
   const accounts = useAccounts();
@@ -505,5 +518,20 @@ export function SubscriptionsPage() {
         )}
       </QueryState>
     </PlanningPage>
+  );
+}
+
+/**
+ * The view in the shell. One series opens over the list on a wide screen; on
+ * a narrow one it takes the place of the list, which comes back with it gone.
+ */
+export function SubscriptionsPage() {
+  const wide = useWide();
+  const detailOpen = useChildMatches().length > 0;
+  return (
+    <>
+      {detailOpen && !wide ? null : <SubscriptionsList />}
+      <Outlet />
+    </>
   );
 }
