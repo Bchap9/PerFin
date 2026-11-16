@@ -312,6 +312,8 @@ describe("LearnedPage", () => {
     expect(screen.queryByRole("button", { name: /Rename|Delete/ })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Check again" })).not.toBeInTheDocument();
     expect(screen.queryByRole("link", { name: /a rule$/ })).not.toBeInTheDocument();
+    expect(screen.queryByText(/Here you can change their order/)).not.toBeInTheDocument();
+    expect(screen.getByText(/Only an owner or admin can change their order or edit them\.$/)).toBeInTheDocument();
   });
 });
 

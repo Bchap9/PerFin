@@ -37,7 +37,7 @@ import { canManageMembers, useAuthSession } from "../auth/session";
 import { forgetLearned, listLearned, refreshCategorisation, type LearnedCategory } from "../categories/api";
 import { useAction } from "../planning/useAction";
 import { JobProgress } from "../rules/JobProgress";
-import { RULES_INTRO, SettingsPage } from "../settings/SettingsLayout";
+import { rulesIntro, SettingsPage } from "../settings/SettingsLayout";
 import { txKeys, useCategories, useCategorisationSummary } from "../transactions/api";
 import {
   deleteLayout,
@@ -648,7 +648,7 @@ export function LearnedPage() {
   const canRefresh = canManageMembers(session?.household?.role);
   return (
     <SettingsPage title="What PerFin learned">
-      <p>{RULES_INTRO}</p>
+      <p>{rulesIntro(canRefresh)}</p>
       <div className="ledger-stack">
       <Card title="How files are recognised">
         <ul>

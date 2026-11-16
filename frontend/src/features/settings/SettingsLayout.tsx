@@ -19,6 +19,15 @@ export const SETTINGS_INTRO =
 export const RULES_INTRO =
   "Rules are made where you work: in a transaction's panel or from an Inbox card. Here you can change their order, edit or undo them.";
 
+/** The same, to a member or viewer, who cannot reorder or edit rules (`authz_policy`: owner or admin). */
+export const RULES_INTRO_READER =
+  "Rules are made where you work: in a transaction's panel or from an Inbox card. Only an owner or admin can change their order or edit them.";
+
+/** The intro for a role: the plan's words only to one who may act on them. */
+export function rulesIntro(canManageRules: boolean): string {
+  return canManageRules ? RULES_INTRO : RULES_INTRO_READER;
+}
+
 function useIsIndex(): boolean {
   return useRouterState({ select: (state) => state.location.pathname.replace(/\/+$/, "") === "/settings" });
 }

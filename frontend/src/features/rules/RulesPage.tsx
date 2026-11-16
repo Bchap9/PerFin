@@ -17,7 +17,7 @@ import { canManageMembers, useAuthSession } from "../auth/session";
 import { ErrorLine, PlanningPage, QueryState } from "../planning/PlanningPage";
 import { nameLookup, useAccounts, useCategories, usePayees, useTags } from "../planning/queries";
 import { useAction } from "../planning/useAction";
-import { RULES_INTRO } from "../settings/SettingsLayout";
+import { rulesIntro } from "../settings/SettingsLayout";
 import { applyRules, deleteRule, listRules, movedOrder, reorderRules, revertRule, ruleKeys, updateRule, type Rule } from "./api";
 import { merchantRuleKey, parseRule } from "./builder";
 import { describeGroup, type Names } from "./describe";
@@ -275,7 +275,7 @@ export function RulesPage() {
         </>
       }
     >
-      <p>{RULES_INTRO}</p>
+      <p>{rulesIntro(canManage)}</p>
       <p className="muted">Rules run top to bottom on every new transaction. Move a rule up to run it earlier.</p>
       <ErrorLine message={reorder.error ?? toggle.error} />
       <QueryState loading={query.isPending} error={query.error} label="rules">

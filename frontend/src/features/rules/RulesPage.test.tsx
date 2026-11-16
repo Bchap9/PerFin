@@ -132,6 +132,13 @@ describe("who may change rules", () => {
     expect(screen.queryByRole("button", { name: /^(Move|Enable|Disable|Delete) / })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Apply to existing transactions" })).not.toBeInTheDocument();
     expect(screen.queryByRole("link", { name: "New rule" })).not.toBeInTheDocument();
+    // The intro does not offer what this role cannot do.
+    expect(
+      screen.getByText(
+        "Rules are made where you work: in a transaction's panel or from an Inbox card. Only an owner or admin can change their order or edit them.",
+      ),
+    ).toBeInTheDocument();
+    expect(screen.queryByText(/Here you can change their order/)).not.toBeInTheDocument();
     list.unmount();
 
     mockApi(as(role));
