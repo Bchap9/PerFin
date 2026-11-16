@@ -1,0 +1,664 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+"""The reconcile view: a statement checked against the ledger rows its document produced.
+
+``GET /documents/{id}/reconciliation`` (``app.domain.review.reconciliation``).
+Documents go through the real pipeline (upload -> worker -> sandbox ->
+parser -> importer) with the production dependencies on a temporary blob
+store, as in ``test_pdf_statement_pipeline.py``; the view is then read
+through the API as a person would. PDFs and OFX files come from the
+synthetic builders (``tests/fixtures``: fictional institutions, invented
+numbers).
+
+* The sum is the ledger's: an edited row changes it, a deleted row leaves it
+  and is listed as removed, a row that first came from another file counts.
+* Balances are shown as printed (a card's balance owed is positive).
+* Each statement of a document is checked on its own account, with its own
+  rows; a statement on an account the caller cannot see is left out.
+* A viewer reads and cannot edit; a document without a statement is ``409``.
+* ``read_printed`` reads a balance as a person types it.
+"""
+
+from __future__ import annotations
+
+import uuid
+from collections.abc import Iterator
+from dataclasses import dataclass, field
+from datetime import date
+from decimal import Decimal
+from pathlib import Path
+from typing import Any
+
+import pytest
+from sqlalchemy import delete, select
+
+from app.auth.models import AccountGrant, GrantLevel, HouseholdRole
+from app.auth.principal import Principal, apply_rls_context
+from app.core.crypto import Keyring
+from app.core.errors import ProblemError
+from app.core.settings import Settings
+from app.db.rls import set_context
+from app.domain.accounts.models import Account, AccountType
+from app.domain.documents.blobstore import LocalFSBlobStore
+from app.domain.documents.models import Document, DocumentStatus, ReviewItem, ReviewItemState
+from app.domain.documents.schemas import INGEST_JOB_TYPE
+from app.domain.imports.schemas import APPLY_MAPPING_JOB_TYPE
+from app.domain.imports.service import import_extraction
+from app.domain.review.layout import stored_result
+from app.domain.review.reconciliation import read_printed
+from app.domain.transactions.models import Transaction
+from app.ingestion.intake.upload import receive_upload
+from app.ingestion.sandbox.protocol import ExtractResult
+from app.workers.handlers import ingest
+from tests.fixtures import synth_neutral_report as neutral
+from tests.fixtures import synth_pdf_statements as synth
+from tests.fixtures.documents import make_document
+from tests.fixtures.factories import AuthedClient, Factories, UserRecord
+from tests.fixtures.households import API, Actors, problem_type
+from tests.fixtures.imports import run_jobs
+from tests.fixtures.ledger import LedgerFactories
+from tests.fixtures.synth_statements import SynthStatement, ofx_sgml_bytes
+
+pytestmark = pytest.mark.integration
+
+MAX = 10 * 1024 * 1024
+PDF = b"%PDF-1.7\n% synthetic placeholder, never parsed by the API\n%%EOF\n"
+
+
+@dataclass
+class Env:
+    factories: Factories
+    ledger: LedgerFactories
+    store: LocalFSBlobStore
+    keyring: Keyring
+    settings: Settings
+    owner: UserRecord
+    actors: Actors
+    done: set[uuid.UUID] = field(default_factory=set)
+
+    @property
+    def household_id(self) -> uuid.UUID:
+        assert self.owner.household_id is not None
+        return self.owner.household_id
+
+    def principal(self, record: UserRecord | None = None) -> Principal:
+        record = record or self.owner
+        return Principal(
+            user=record.user,
+            household_id=record.household_id,
+            role=record.role,
+            auth_method="session",
+        )
+
+    def ingest(
+        self, data: bytes, *, name: str = "statement.pdf", as_user: UserRecord | None = None
+    ) -> uuid.UUID:
+        principal = self.principal(as_user)
+        with self.factories.transaction() as db:
+            apply_rls_context(db, principal)
+            received = receive_upload(
+                db,
+                principal,
+                store=self.store,
+                keyring=self.keyring,
+                chunks=iter([data]),
+                max_bytes=MAX,
+                filename=name,
+                account_id=None,
+            )
+        assert run_jobs(self.factories, self.household_id, INGEST_JOB_TYPE, done=self.done)
+        return received.document_id
+
+    def run(self, job_type: str) -> list[uuid.UUID]:
+        return run_jobs(self.factories, self.household_id, job_type, done=self.done)
+
+    def query(self, statement: Any) -> list[Any]:
+        with self.factories.transaction() as db:
+            set_context(db, self.household_id)
+            rows = list(db.execute(statement).scalars())
+            db.expunge_all()
+            return rows
+
+    def document(self, document_id: uuid.UUID) -> Document:
+        found: list[Document] = self.query(select(Document).where(Document.id == document_id))
+        return found[0]
+
+    def transactions(self, account: Account) -> list[Transaction]:
+        return self.query(
+            select(Transaction)
+            .where(Transaction.account_id == account.id)
+            .order_by(Transaction.posted_date, Transaction.id)
+        )
+
+    def open_reviews(self, document_id: uuid.UUID) -> list[ReviewItem]:
+        return self.query(
+            select(ReviewItem)
+            .where(ReviewItem.document_id == document_id, ReviewItem.state == ReviewItemState.OPEN)
+            .order_by(ReviewItem.created_at, ReviewItem.id)
+        )
+
+    def account(self, stmt: SynthStatement) -> Account:
+        institution = self.ledger.institution(self.household_id, name=stmt.institution.name)
+        kind = AccountType.CREDIT_CARD if stmt.account_type == "creditcard" else "checking"
+        return self.ledger.account(
+            self.household_id,
+            number_last4=stmt.last4,
+            type=kind,
+            currency=stmt.currency,
+            institution_id=institution.id,
+        )
+
+    def client(self, record: UserRecord | None = None) -> AuthedClient:
+        return self.actors.login(record or self.owner)
+
+    def user(self, role: HouseholdRole) -> UserRecord:
+        return self.factories.user(role=role, household=self.owner.household, with_totp=True)
+
+
+@pytest.fixture
+def env(
+    factories: Factories,
+    ledger: LedgerFactories,
+    settings: Settings,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> Iterator[Env]:
+    local = settings.model_copy(
+        update={"documents_dir": tmp_path / "documents", "quarantine_dir": tmp_path / "quarantine"}
+    )
+    monkeypatch.setattr(ingest, "get_settings", lambda: local)
+    ingest.default_deps.cache_clear()
+    deps = ingest.default_deps()
+    assert isinstance(deps.store, LocalFSBlobStore)
+    with Actors.open(local, factories) as actors:
+        yield Env(
+            factories=factories,
+            ledger=ledger,
+            store=deps.store,
+            keyring=deps.keyring,
+            settings=local,
+            owner=factories.user(role="owner", with_totp=True),
+            actors=actors,
+        )
+    ingest.default_deps.cache_clear()
+
+
+def view(client: AuthedClient, document_id: uuid.UUID) -> dict[str, Any]:
+    response = client.get(f"{API}/documents/{document_id}/reconciliation")
+    assert response.status_code == 200, response.text
+    body: dict[str, Any] = response.json()
+    assert body["document_id"] == str(document_id)
+    return body
+
+
+def one(client: AuthedClient, document_id: uuid.UUID) -> dict[str, Any]:
+    (statement,) = view(client, document_id)["statements"]
+    found: dict[str, Any] = statement
+    return found
+
+
+def amounts(statement: dict[str, Any]) -> list[tuple[str, Decimal]]:
+    return sorted((r["posted_date"], Decimal(r["amount"])) for r in statement["rows"])
+
+
+def tampered(env: Env, seed: int) -> tuple[SynthStatement, Account, uuid.UUID, Transaction]:
+    """A statement with one row its balances do not account for, imported and held."""
+    stmt = synth.generic_statement(seed=seed)
+    account = env.account(stmt)
+    document_id = env.ingest(synth.generic_pdf(stmt, tamper="extra_row"))
+    forged = next(r for r in env.transactions(account) if r.amount == synth.FORGED.amount)
+    return stmt, account, document_id, forged
+
+
+# ---------------------------------------------------------------------------
+# The sum is the ledger's
+# ---------------------------------------------------------------------------
+
+
+def test_reconciliation_lists_the_ledger_rows_and_the_sum(env: Env) -> None:
+    stmt, account, document_id, forged = tampered(env, 61)
+    owner = env.client()
+
+    got = one(owner, document_id)
+
+    assert (got["statement"], got["account_id"]) == (0, str(account.id))
+    assert (got["account_name"], got["currency"]) == (account.name, stmt.currency)
+    assert got["printed_sign"] == "ledger"
+    assert got["status"] == "off"
+    assert Decimal(got["difference"]) == synth.FORGED.amount
+    assert Decimal(got["opening"]) == stmt.opening_balance
+    assert Decimal(got["closing"]) == stmt.closing_balance
+    assert got["previous_closing"] is None
+    ledger_rows = env.transactions(account)
+    assert amounts(got) == sorted((r.posted_date.isoformat(), r.amount) for r in ledger_rows)
+    assert Decimal(got["total"]) == sum((r.amount for r in ledger_rows), Decimal(0))
+    assert Decimal(got["total"]) == stmt.closing_balance - stmt.opening_balance + forged.amount
+    assert got["rows_truncated"] is False
+    assert got["removed"] == []
+    assert got["can_edit"] is True
+    assert got["verification"] == "unverified"
+
+    first = got["causes"][0]
+    assert first["kind"] == "extra_row"
+    assert first["transaction_ids"] == [str(forged.id)]
+    assert Decimal(first["amount"]) == synth.FORGED.amount
+    assert all(isinstance(r["page"], int) and len(r["bbox"]) == 4 for r in got["rows"])
+    assert {(r["origin"], r["in_period"]) for r in got["rows"]} == {("read", True)}
+    shown = next(r for r in got["rows"] if r["transaction_id"] == str(forged.id))
+    assert (shown["payee"], shown["review_state"]) == (forged.raw_payee, "pending")
+
+
+def test_an_edited_row_changes_the_sum(env: Env) -> None:
+    _, _, document_id, forged = tampered(env, 62)
+    owner = env.client()
+
+    changed = owner.patch(
+        f"{API}/transactions/{forged.id}", json={"amount": {"amount": "0", "currency": "USD"}}
+    )
+    assert changed.status_code == 200, changed.text
+
+    got = one(owner, document_id)
+    assert got["status"] == "balanced"
+    assert Decimal(got["difference"]) == 0
+    shown = next(r for r in got["rows"] if r["transaction_id"] == str(forged.id))
+    assert shown["edited"] is True
+    assert Decimal(shown["amount"]) == 0
+    # The row keeps its place on the page although its amount is no longer the printed one.
+    assert isinstance(shown["page"], int)
+    assert "extra_row" not in [c["kind"] for c in got["causes"]]
+
+
+def test_a_deleted_row_is_listed_as_removed_and_leaves_the_sum(env: Env) -> None:
+    stmt, account, document_id, forged = tampered(env, 63)
+    owner = env.client()
+
+    deleted = owner.delete(f"{API}/transactions/{forged.id}")
+    assert deleted.status_code == 204, deleted.text
+
+    got = one(owner, document_id)
+    assert got["status"] == "balanced"
+    assert Decimal(got["total"]) == stmt.closing_balance - stmt.opening_balance
+    assert str(forged.id) not in [r["transaction_id"] for r in got["rows"]]
+    (removed,) = got["removed"]
+    assert Decimal(removed["amount"]) == synth.FORGED.amount
+    assert removed["posted_date"] == synth.FORGED.posted.isoformat()
+    assert uuid.UUID(removed["tombstone_id"])
+    assert len(got["rows"]) == len(env.transactions(account)) == len(stmt.transactions)
+
+
+def test_card_balances_are_shown_as_printed(env: Env) -> None:
+    stmt = synth.demo_card_statement(seed=64)
+    account = env.account(stmt)
+    document_id = env.ingest(synth.demo_card_pdf(stmt))
+    assert stmt.closing_balance < 0  # owed: negative in the ledger
+
+    got = one(env.client(), document_id)
+
+    assert got["printed_sign"] == "owed"
+    assert Decimal(got["closing"]) == -stmt.closing_balance > 0
+    assert Decimal(got["opening"]) == -stmt.opening_balance
+    stored = stored_result(env.document(document_id).extraction)
+    assert stored is not None
+    balance = stored.statements[0].ledger_balance
+    assert balance is not None
+    assert balance.amount == stmt.closing_balance
+    # The sum and the difference stay in ledger terms: spending is negative.
+    assert Decimal(got["total"]) == stmt.closing_balance - stmt.opening_balance < 0
+    assert got["status"] == "balanced"
+    assert got["verification"] == "reconciled"
+    assert len(got["rows"]) == len(env.transactions(account))
+
+
+def test_a_row_that_came_from_another_file_counts(env: Env) -> None:
+    stmt = synth.sample_national_statement(seed=65)
+    account = env.account(stmt)
+    first = env.ingest(ofx_sgml_bytes(stmt), name="statement.ofx")
+    count = len(env.transactions(account))
+    assert count == len(stmt.transactions)
+    second = env.ingest(synth.sample_national_pdf(stmt))
+    (item,) = env.open_reviews(second)
+    assert item.payload["reason"] == "statement_overlap"
+    owner = env.client()
+    resolved = owner.post(
+        f"{API}/review/{item.id}/resolve",
+        json={"kind": "possible_duplicate", "decision": "reject"},
+    )
+    assert resolved.status_code == 200, resolved.text
+    assert resolved.json()["resolution"]["import_anyway"] is True
+    assert env.run(APPLY_MAPPING_JOB_TYPE)
+    rows = env.transactions(account)
+    assert len(rows) == count
+    assert {r.source_document_id for r in rows} == {first}
+
+    got = one(owner, second)
+
+    assert got["status"] == "balanced"
+    assert len(got["rows"]) == count
+    assert {r["origin"] for r in got["rows"]} == {"matched"}
+    assert Decimal(got["total"]) == stmt.closing_balance - stmt.opening_balance
+    assert all(isinstance(r["page"], int) for r in got["rows"])
+
+
+# ---------------------------------------------------------------------------
+# Several statements in one document
+# ---------------------------------------------------------------------------
+
+
+def _neutral(env: Env, uploader: UserRecord | None = None) -> tuple[Account, Account, uuid.UUID]:
+    bank = env.ledger.institution(env.household_id, name=neutral.INSTITUTION)
+    checking, savings = (
+        env.ledger.account(
+            env.household_id,
+            type=kind,
+            number_last4=last4,
+            currency="USD",
+            institution_id=bank.id,
+            name=name,
+        )
+        for kind, last4, name in (
+            (AccountType.CHECKING, "4821", "Checking"),
+            (AccountType.SAVINGS, "5530", "Savings"),
+        )
+    )
+    if uploader is not None:
+        for account in (checking, savings):
+            env.ledger.grant(env.household_id, uploader.user.id, account, GrantLevel.EDIT)
+    document_id = env.ingest(
+        neutral.report_pdf(neutral.report()), name="combined-statement.pdf", as_user=uploader
+    )
+    return checking, savings, document_id
+
+
+def test_rows_of_another_account_do_not_count(env: Env) -> None:
+    checking, savings, document_id = _neutral(env)
+
+    statements = view(env.client(), document_id)["statements"]
+
+    by_account = {s["account_id"]: s for s in statements}
+    assert set(by_account) == {str(checking.id), str(savings.id)}
+    assert len({s["statement"] for s in statements}) == 2
+    for account in (checking, savings):
+        got = by_account[str(account.id)]
+        mine = env.transactions(account)
+        assert mine, account.name
+        assert sorted(r["transaction_id"] for r in got["rows"]) == sorted(str(r.id) for r in mine)
+        assert Decimal(got["total"]) == sum((r.amount for r in mine), Decimal(0))
+        assert got["account_name"] == account.name
+    assert not {r["transaction_id"] for r in by_account[str(checking.id)]["rows"]} & {
+        r["transaction_id"] for r in by_account[str(savings.id)]["rows"]
+    }
+
+
+Entry = tuple[int, str, str]
+
+
+def _month(
+    last4: str, month: int, last_day: int, opening: str, closing: str, entries: list[Entry]
+) -> dict[str, Any]:
+    """One month's statement as a parser stores it (2026; balances in ledger terms)."""
+    start, end = date(2026, month, 1), date(2026, month, last_day)
+    return {
+        "source_format": "pdf",
+        "account": {"last4": last4, "currency": "USD"},
+        "period_start": start.isoformat(),
+        "period_end": end.isoformat(),
+        "opening_balance": {"amount": opening, "as_of": start.isoformat()},
+        "ledger_balance": {"amount": closing, "as_of": end.isoformat()},
+        "transactions": [
+            {"posted": date(2026, month, day).isoformat(), "amount": amount, "payee": payee}
+            for day, amount, payee in entries
+        ],
+        "confidence": {"period": 1.0},
+    }
+
+
+def _stored(env: Env, *statements: dict[str, Any]) -> uuid.UUID:
+    """A PDF document whose stored extraction holds ``statements``, imported."""
+    extraction = ExtractResult.model_validate(
+        {"kind": "pdf", "ok": True, "statements": list(statements)}
+    ).model_dump(mode="json")
+    with env.factories.transaction() as db:
+        document = make_document(
+            db,
+            env.store,
+            env.keyring,
+            env.household_id,
+            data=PDF + uuid.uuid4().hex.encode(),
+            mime="application/pdf",
+            filename="statement.pdf",
+            uploaded_by=env.owner.user.id,
+            status=DocumentStatus.NEEDS_REVIEW,
+            extraction=extraction,
+        )
+        document_id = document.id
+    with env.factories.transaction() as db:
+        set_context(db, env.household_id)
+        fresh = db.get(Document, document_id)
+        assert fresh is not None
+        result = stored_result(fresh.extraction)
+        assert result is not None
+        import_extraction(db, fresh, result)
+    return document_id
+
+
+def test_two_statements_of_one_document_are_separate(env: Env) -> None:
+    account = env.ledger.account(env.household_id, number_last4="7306", name="Everyday")
+    document_id = _stored(
+        env,
+        _month(
+            "7306",
+            4,
+            30,
+            "100.00",
+            "80.50",
+            [(3, "-12.25", "Lamplight Books"), (9, "-7.25", "Corner Bakery")],
+        ),
+        # 80.50 - 7.25 + 40.00 is 113.25: the printed closing is 9.00 short.
+        _month(
+            "7306",
+            5,
+            31,
+            "80.50",
+            "104.25",
+            [(9, "-7.25", "Corner Bakery"), (20, "40.00", "Refund Desk")],
+        ),
+    )
+    assert len(env.transactions(account)) == 4
+    owner = env.client()
+
+    april, may = view(owner, document_id)["statements"]
+
+    assert (april["statement"], may["statement"]) == (0, 1)
+    assert april["account_id"] == may["account_id"] == str(account.id)
+    assert amounts(april) == [("2026-04-03", Decimal("-12.25")), ("2026-04-09", Decimal("-7.25"))]
+    assert amounts(may) == [("2026-05-09", Decimal("-7.25")), ("2026-05-20", Decimal("40.00"))]
+    assert (april["status"], Decimal(april["difference"])) == ("balanced", Decimal(0))
+    assert (may["status"], Decimal(may["difference"])) == ("off", Decimal("9.00"))
+    assert may["causes"][0]["kind"] == "transposed_digits"
+    assert (april["period_start"], may["period_end"]) == ("2026-04-01", "2026-05-31")
+
+    # A row a person adds for the document has no hash: its date says which statement.
+    added = owner.post(
+        f"{API}/transactions",
+        json={
+            "account_id": str(account.id),
+            "posted_date": "2026-05-22",
+            "amount": {"amount": "-9.00", "currency": "USD"},
+            "raw_payee": "Ferry Kiosk",
+            "source_document_id": str(document_id),
+        },
+    )
+    assert added.status_code == 201, added.text
+    april, may = view(owner, document_id)["statements"]
+    assert len(april["rows"]) == 2
+    assert may["status"] == "balanced"
+    shown = next(r for r in may["rows"] if r["transaction_id"] == added.json()["id"])
+    assert (shown["origin"], shown["page"], shown["bbox"]) == ("added", None, None)
+
+
+def test_the_previous_closing_is_the_accounts_last_statement_as_printed(env: Env) -> None:
+    card = env.ledger.account(
+        env.household_id, number_last4="7411", name="Travel card", type=AccountType.CREDIT_CARD
+    )
+    april = _stored(
+        env,
+        _month(
+            "7411",
+            4,
+            30,
+            "0.00",
+            "-19.50",
+            [(3, "-12.25", "Lamplight Books"), (9, "-7.25", "Corner Bakery")],
+        ),
+    )
+    # May opens ten more owed than April closed.
+    may = _stored(env, _month("7411", 5, 31, "-29.50", "-36.75", [(9, "-7.25", "Corner Bakery")]))
+    assert len(env.transactions(card)) == 3
+    owner = env.client()
+
+    first, second = one(owner, april), one(owner, may)
+
+    assert (first["previous_closing"], first["status"]) == (None, "balanced")
+    assert first["causes"] == []
+    assert second["printed_sign"] == "owed"
+    assert (second["opening"], second["closing"], second["previous_closing"]) == (
+        "29.50",
+        "36.75",
+        "19.50",
+    )
+    assert (second["total"], second["difference"], second["status"]) == (
+        "-7.25",
+        "0.00",
+        "balanced",
+    )
+    assert second["causes"] == [
+        {
+            "kind": "opening_differs_from_previous",
+            "transaction_ids": [],
+            "amount": "19.50",
+            "page": None,
+            "bbox": None,
+        }
+    ]
+
+
+# ---------------------------------------------------------------------------
+# Who sees what
+# ---------------------------------------------------------------------------
+
+
+def test_viewer_reads_and_cannot_edit(env: Env) -> None:
+    _, account, document_id, forged = tampered(env, 66)
+    viewer = env.user(HouseholdRole.VIEWER)
+    env.ledger.grant(env.household_id, viewer.user.id, account, GrantLevel.VIEW)
+
+    got = one(env.client(viewer), document_id)
+
+    assert got["can_edit"] is False
+    assert got["status"] == "off"
+    assert str(forged.id) in [r["transaction_id"] for r in got["rows"]]
+    assert one(env.client(), document_id)["can_edit"] is True
+
+
+def test_a_member_who_may_only_view_the_account_cannot_edit(env: Env) -> None:
+    _, account, document_id, _ = tampered(env, 67)
+    member = env.user(HouseholdRole.MEMBER)
+    env.ledger.grant(env.household_id, member.user.id, account, GrantLevel.VIEW)
+
+    assert one(env.client(member), document_id)["can_edit"] is False
+
+
+def test_statement_on_an_invisible_account_is_left_out(env: Env) -> None:
+    member = env.user(HouseholdRole.MEMBER)
+    checking, savings, document_id = _neutral(env, uploader=member)
+    reader = env.client(member)
+    assert {s["account_id"] for s in view(reader, document_id)["statements"]} == {
+        str(checking.id),
+        str(savings.id),
+    }
+    # The member's access to the savings account is taken away.
+    with env.factories.transaction() as db:
+        set_context(db, env.household_id)
+        db.execute(
+            delete(AccountGrant).where(
+                AccountGrant.user_id == member.user.id, AccountGrant.account_id == savings.id
+            )
+        )
+
+    (left,) = view(reader, document_id)["statements"]
+
+    assert left["account_id"] == str(checking.id)
+    savings_rows = {str(r.id) for r in env.transactions(savings)}
+    assert savings_rows
+    assert not savings_rows & {r["transaction_id"] for r in left["rows"]}
+    assert len(view(env.client(), document_id)["statements"]) == 2
+
+
+def test_a_hidden_document_is_404(env: Env) -> None:
+    _, _, document_id, _ = tampered(env, 68)
+    stranger = env.user(HouseholdRole.MEMBER)
+
+    refused = env.client(stranger).get(f"{API}/documents/{document_id}/reconciliation")
+
+    assert refused.status_code == 404, refused.text
+
+
+def test_document_without_a_statement_is_409(env: Env) -> None:
+    document_id = env.ingest(synth.payslip_pdf(), name="payslip.pdf")
+
+    refused = env.client().get(f"{API}/documents/{document_id}/reconciliation")
+
+    assert refused.status_code == 409, refused.text
+    assert problem_type(refused) == "statement-unavailable"
+
+
+# ---------------------------------------------------------------------------
+# A balance as a person types it
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("text", "value"),
+    [
+        ("1,204.18", "1204.18"),
+        ("$1,204.18", "1204.18"),
+        ("(12.00)", "-12.00"),
+        ("-12", "-12"),
+        (" 3 ", "3"),
+        ("1,204,180", "1204180"),
+        ("1204.18 €", "1204.18"),
+        ("-$5.50", "-5.50"),
+        ("£ 0.07", "0.07"),
+        ("($1,000.00)", "-1000.00"),
+    ],
+)
+def test_read_printed(text: str, value: str) -> None:
+    assert read_printed(text) == Decimal(value)
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "1,20",
+        "12.3.4",
+        "abc",
+        "1e5",
+        "",
+        "   ",
+        "12,34.00",
+        "$$5",
+        "$5$",
+        "(5",
+        "-(5)",
+        "--5",
+        "1 000",
+        "5.",
+        "NaN",
+        "\uff11\uff12",  # full-width digits are not what a statement prints
+        "999999999999999.00",  # one digit more than the ledger holds
+        "0.1234567",
+    ],
+)
+def test_read_printed_refuses(text: str) -> None:
+    with pytest.raises(ProblemError) as caught:
+        read_printed(text)
+    assert (caught.value.status_code, caught.value.slug) == (422, "invalid-amount")

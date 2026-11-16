@@ -4,7 +4,7 @@
 from __future__ import annotations
 
 import uuid
-from collections.abc import Sequence
+from collections.abc import Collection, Sequence
 from datetime import date
 from decimal import Decimal
 from typing import Final
@@ -135,3 +135,25 @@ def alias_rows(
         .order_by(Transaction.posted_date, Transaction.id)
     )
     return [(i, d, a, h) for i, d, a, h in rows]
+
+
+def alias_transactions(
+    db: Session, household_id: uuid.UUID, account_id: uuid.UUID, hashes: Collection[str]
+) -> list[tuple[uuid.UUID, str]]:
+    """``(transaction id, alias hash)`` for those of ``hashes`` that are aliases on the account.
+
+    The reconcile view finds with it the ledger row a statement's row was
+    confirmed to be a duplicate of, whatever date that row now has.
+    """
+    if not hashes:
+        return []
+    rows = db.execute(
+        select(ImportHashAlias.transaction_id, ImportHashAlias.import_hash)
+        .where(
+            ImportHashAlias.household_id == household_id,
+            ImportHashAlias.account_id == account_id,
+            ImportHashAlias.import_hash.in_(sorted(set(hashes))),
+        )
+        .order_by(ImportHashAlias.import_hash)
+    )
+    return [(transaction_id, str(value)) for transaction_id, value in rows]
