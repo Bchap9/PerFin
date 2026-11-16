@@ -693,7 +693,11 @@ imported row: confirm
 deletes it and records its `import_hash` for the kept transaction, which
 takes the hash when it has none and otherwise gets an `import_hash_alias`;
 reject confirms it; `duplicate_of` must be one of the item's `candidates`
-and is required when there are several, `422 invalid-resolution`; a
+and is required when there are several, `422 invalid-resolution`; an
+imported row with empty `candidates`, which has the date and amount of a
+row a person deleted: confirm without `duplicate_of` deletes it again and
+writes an import tombstone for its hash (resolution `removed_again:
+true`), reject confirms it; a
 statement whose period overlaps one already imported for the account,
 `reason: "statement_overlap"` with `account_id`, `statement`,
 `statement_key`, `investment`,

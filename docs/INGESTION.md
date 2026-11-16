@@ -1148,8 +1148,8 @@ a child answering with parser output is `bad_output`.
   those ten days it keeps its score, because a purchase of the last days
   before a cycle is printed on the next statement and a row posted just
   after the closing day on this one. The grace is for money that moved:
-  in the table statement reader a line dated outside the period at all
-  whose description names a balance or a statement (`names_a_balance`:
+  in the table statement reader and in a taught layout a line dated
+  outside the period at all whose description names a balance or a statement (`names_a_balance`:
   the whole words balance, statement, forward, carried, brought, owed,
   owing, prior, previous, "last cycle/period/month/bill") gets none and
   scores 0.7. Such a line is what the last statement closed with, printed
@@ -2472,6 +2472,12 @@ reconciliation, per-field confidence).
   pending as a near match that names no live row (a `near_match` item with
   empty `candidates`), because it may as well be a second purchase of that
   amount that day and only a person can say. One tombstone holds one row.
+  Review asks "A row you deleted?": "Remove it again" (resolve with
+  `decision: "confirm"` and no `duplicate_of`) deletes the row and writes
+  a tombstone for this spelling's hash too (resolution `removed_again`);
+  "Keep it" (`reject`) confirms it. A row of a `near_matches` item with
+  empty `candidates` is answered the same way, and "All are the same
+  rows" leaves it for its own answer.
   Deleting a document with its data writes no tombstone (the file can be
   uploaded again whole), nor does confirming a duplicate. A tombstone is
   taken back in the reconcile view ("Put back").
@@ -2554,9 +2560,8 @@ same database transaction.
   several accounts that fit. Digits that are printed and match no account
   never fall back to the institution: a number the household does not have
   is a new account. The Accounts dialog of a document
-  (`app/domain/imports/proposals.py`) does not use this rule yet, so for
-  such a statement it can still propose a new account where the importer
-  finds the existing one.
+  (`app/domain/imports/proposals.py`) matches a statement through the
+  same function, so it names the account the importer chose.
 - **CSV/TSV.** The header row's fingerprint (case, spacing and a
   formula-guard quote ignored; for headerless files the shape of the first
   row) is looked up in the household's saved `import_mapping`s, trying the
@@ -3352,10 +3357,10 @@ Import 1d implementation (`app/domain/review/service.py`,
   A skipped line always keeps a statement from being a clean read. The
   count of records an OFX, QFX or QIF extractor could not read (`source:
   extraction`) is raised as before.
-- **Known gaps.** A row that resembles a row the person deleted waits as a
-  `near_match` with no candidates: it can be kept ("not a duplicate") but
-  there is no "remove it again" answer yet; delete the row from
-  Transactions instead. `GET /review/{id}` lists no transaction
+- **Known gaps.** A row that resembles a row the person deleted has no
+  review reason of its own: it is a `near_match` (or a row of a
+  `near_matches` item) with empty `candidates`, and the card and the
+  resolution go by that. `GET /review/{id}` lists no transaction
   alternatives for a `near_matches` item (its candidates are in
   `payload.rows`). A partly decided `near_matches` item emits no review
   event.

@@ -123,8 +123,9 @@ What remains (details in docs/ROADMAP.md):
   deleted row (its hash, date and amount, never its payee) and leaves it
   out of every later import; of two identical purchases on one day, the
   deleted one neither returns nor is offered as a duplicate of the other.
-  The same row arriving under another spelling waits as a possible
-  duplicate. The reconcile view lists a statement's removed rows and can
+  The same row arriving under another spelling waits in Review as "A row
+  you deleted?", answered with "Remove it again" (deleted, and this
+  spelling is remembered too) or "Keep it". The reconcile view lists a statement's removed rows and can
   put one back. Deleting a document with its data forgets nothing, so the
   file can be uploaded again whole.
 - **Teach PerFin shows what it will read before anything is saved**
@@ -232,8 +233,7 @@ What remains (details in docs/ROADMAP.md):
   card) at that institution, the statement is imported there instead of
   asking. Several fitting accounts, or a sole account of another kind,
   are still asked about, and printed digits that match nothing never fall
-  back. The Accounts dialog does not use this rule yet and may still
-  propose a new account for such a statement.
+  back. The Accounts dialog of the document names the same account.
 - **Ten days of grace around a statement period.** A row dated up to ten
   days before the period starts or after it ends no longer puts its
   statement in doubt (a purchase of the last days before a cycle is
@@ -242,7 +242,7 @@ What remains (details in docs/ROADMAP.md):
   statement ("Prior statement balance", "Carried over", "Amount owed from
   last cycle") gets no grace: it is a balance carried over, not a
   purchase, and on a statement with no balances it would otherwise have
-  been posted as a deposit.
+  been posted as a deposit. A taught layout follows the same rule.
 - **Review: controls that did nothing are removed.** The balance fields
   on a "does not add up" item (the reconcile view replaces them), "Create
   a rule from this" (the endpoint `GET /review/{id}/rule-draft` stays),
