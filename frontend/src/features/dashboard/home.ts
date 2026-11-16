@@ -129,22 +129,7 @@ export function topCategories(
 
 // ---- Net worth ----------------------------------------------------------------
 
-/**
- * Net worth now against the last point of the series dated before the
- * month began; `null` when the series does not reach back that far.
- */
-export function netWorthChange(
-  net: string,
-  points: readonly { as_of: string; net: MoneyValue }[],
-  today: string,
-): string | null {
-  const monthStart = startOfMonth(today);
-  const before = points.filter((point) => compareIsoDates(point.as_of, monthStart) < 0).at(-1);
-  if (before === undefined || !isDecimalString(net) || !isDecimalString(before.net.amount)) {
-    return null;
-  }
-  return subtractAmounts(net, before.net.amount);
-}
+export { netWorthChange } from "../networth/monthChange";
 
 // ---- Coming up ----------------------------------------------------------------
 

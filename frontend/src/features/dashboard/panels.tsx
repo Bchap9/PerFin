@@ -23,6 +23,7 @@ import { formatDate } from "../../lib/dates";
 import { amountSign, formatMoney, isZeroAmount, negateAmount } from "../../lib/money";
 import { useInboxSummary } from "../../app/inboxSummary";
 import { getLatest, netWorthKeys } from "../networth/api";
+import { netWorthChangeWords } from "../networth/monthChange";
 import { nameLookup, useCategories } from "../planning/queries";
 import { listReviewCards, reviewKeys } from "../review/api";
 import { merchantName, type Transaction } from "../transactions/api";
@@ -122,17 +123,7 @@ export function NetWorthPanel({ today }: { today: string }) {
                 label="Today"
                 size="display"
                 value={<MoneyText amount={data.net.amount} currency={data.currency} tone="none" />}
-                {...(change === null
-                  ? {}
-                  : {
-                      change:
-                        amountSign(change) === 0
-                          ? { text: "No change this month", tone: "neutral" as const }
-                          : {
-                              text: `${amountSign(change) > 0 ? "Up" : "Down"} ${money(amountSign(change) > 0 ? change : negateAmount(change), data.currency)} this month`,
-                              tone: amountSign(change) > 0 ? ("up" as const) : ("neutral" as const),
-                            },
-                    })}
+                {...(change === null ? {} : { change: netWorthChangeWords(change, data.currency) })}
               />
             </StatGroup>
             {data.unconverted.length === 0 ? null : (

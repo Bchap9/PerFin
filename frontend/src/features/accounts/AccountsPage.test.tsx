@@ -57,10 +57,14 @@ const NET_WORTH: Record<string, Handler> = {
       range: "1m",
       granularity: "daily",
       scope: "household",
-      date_from: "2026-10-16",
+      date_from: "2025-11-30",
       date_to: "2026-11-16",
-      points: [],
-      change: { amount: "250.00", currency: "USD" },
+      points: [
+        { as_of: "2026-09-30", net: { amount: "-3900.25", currency: "USD" } },
+        { as_of: "2026-10-31", net: { amount: "-3750.25", currency: "USD" } },
+        { as_of: "2026-11-16", net: { amount: "-4000.25", currency: "USD" } },
+      ],
+      change: { amount: "1200.00", currency: "USD" },
     }),
   "GET /api/v1/loans": () => json({ items: [], next_cursor: null }),
   "GET /api/v1/assets": () => json({ items: [], next_cursor: null }),
@@ -95,14 +99,22 @@ describe("account grouping (api)", () => {
 });
 
 describe("accounts page", () => {
+  beforeEach(() => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date(2026, 10, 16, 9, 30));
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
   it("groups with totals and net worth on top", async () => {
     mockApi(handlers("owner"));
     renderApp("/accounts");
     const worth = await screen.findByRole("region", { name: "Net worth" });
     expect(await within(worth).findByText("-$4,000.25")).toBeInTheDocument();
-    expect(
-      await within(worth).findByText("Up $250.00 since Oct 16, 2026"),
-    ).toBeInTheDocument();
+    // The month-to-date change, worded and toned as on Home: money down is not red.
+    const change = await within(worth).findByText("Down $250.00 this month");
+    expect(change).toHaveClass("stat__change--neutral");
     expect(
       within(worth).getByRole("link", { name: "Net worth over time" }),
     ).toHaveAttribute("href", "/reports/net-worth");
@@ -484,7 +496,7 @@ describe("accounts page", () => {
     mockApi(handlers("owner"));
     const { container } = renderApp("/accounts");
     await screen.findByRole("region", { name: "Cash" });
-    await screen.findByText("Up $250.00 since Oct 16, 2026");
+    await screen.findByText("Down $250.00 this month");
     await expectNoAxeViolations(container);
   });
 });

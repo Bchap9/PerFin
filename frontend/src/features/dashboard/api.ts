@@ -3,6 +3,7 @@
 import { api, unwrap } from "../../lib/api/client";
 import type { components } from "../../lib/api/schema";
 import { queryRoots } from "../../lib/queryKeys";
+import { getNetWorthSeries, netWorthSeriesKey } from "../networth/monthChange";
 import { listSchedules, type Schedule } from "../calendar/api";
 import { listOpenEvents, listSubscriptions, type Subscription, type SubscriptionEvent } from "../subscriptions/api";
 
@@ -20,7 +21,7 @@ export const homeKeys = {
     previousFrom,
     previousTo,
   ],
-  netWorthSeries: [...queryRoots.netWorth, "home-series"],
+  netWorthSeries: netWorthSeriesKey,
   comingUp: [...queryRoots.subscriptions, "home-coming-up"],
   seriesNeedingYou: [...queryRoots.subscriptions, "home-needs-you"],
   latest: [...queryRoots.transactions, "home-latest"],
@@ -41,8 +42,7 @@ export async function getSpendingComparison(
 }
 
 /** Net worth at every month end of the last year, and today. */
-export const getNetWorthSeries = (): Promise<NetWorthHistory> =>
-  unwrap(api.GET("/api/v1/networth", { params: { query: { range: "1y", granularity: "month" } } }));
+export { getNetWorthSeries };
 
 /** The subscriptions and the other recurring items, for the charges coming up. */
 export async function getComingUp(): Promise<{ subscriptions: Subscription[]; recurring: Schedule[] }> {

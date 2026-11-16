@@ -19,35 +19,28 @@ import { EmptyState } from "../../components/EmptyState";
 import { MoneyText } from "../../components/MoneyText";
 import { QuietNote } from "../../components/QuietNote";
 import { Spinner } from "../../components/Spinner";
-import { Stat, StatGroup, type StatTone } from "../../components/Stat";
+import { Stat, StatGroup } from "../../components/Stat";
 import { errorMessage } from "../../lib/api/client";
-import { formatDate } from "../../lib/dates";
-import { amountSign, formatMoney, type Money } from "../../lib/money";
+import { formatDate, todayIsoDate } from "../../lib/dates";
 import { assetKeys, KIND_LABELS, listAssets, METHOD_LABELS, type Asset } from "../assets/api";
 import { NewAssetDialog } from "../assets/NewAssetDialog";
 import { formatFraction, labelOf } from "../investments/format";
 import { listLoans, loanKeys, type Loan } from "../loans/api";
 import { LOAN_ACCOUNT_TYPES, NewLoanDialog } from "../loans/NewLoanDialog";
-import { getHistory, getLatest, netWorthKeys } from "../networth/api";
+import { getLatest, netWorthKeys } from "../networth/api";
+import { getNetWorthSeries, netWorthChange, netWorthChangeWords, netWorthSeriesKey } from "../networth/monthChange";
 import { AccountFormDialog } from "./AccountForms";
 import { accountLabel, useAccounts, useCanWrite, type Account } from "./api";
 import { freshness, GROUP_IDS, GROUPS, groupAccounts, type AccountGroupView, type GroupId } from "./groups";
 
-/** "Up $250.00 since Oct 16, 2026", in words so colour is never the only signal. */
-export function changeSince(change: Money, since: string): { text: string; tone: StatTone } {
-  const sign = amountSign(change.amount);
-  const when = formatDate(since) ?? since;
-  if (sign === 0) {
-    return { text: `No change since ${when}`, tone: "neutral" };
-  }
-  const size = formatMoney(change.amount.replace(/^-/, ""), change.currency) ?? change.amount;
-  return sign > 0 ? { text: `Up ${size} since ${when}`, tone: "up" } : { text: `Down ${size} since ${when}`, tone: "down" };
-}
-
 function NetWorthHeader({ canWrite, onAdd }: { canWrite: boolean; onAdd: () => void }) {
   const latest = useQuery({ queryKey: netWorthKeys.latest, queryFn: getLatest });
-  const history = useQuery({ queryKey: netWorthKeys.history("1m", ""), queryFn: () => getHistory("1m", "") });
-  const change = history.data?.change ?? null;
+  // The same month-to-date change as Home, from the same series.
+  const series = useQuery({ queryKey: netWorthSeriesKey, queryFn: getNetWorthSeries });
+  const change =
+    latest.data === undefined || series.data === undefined
+      ? null
+      : netWorthChange(latest.data.net.amount, series.data.points, todayIsoDate());
   return (
     <section className="card accounts-worth" aria-label="Net worth">
       <div className="accounts-worth__figure">
@@ -66,7 +59,7 @@ function NetWorthHeader({ canWrite, onAdd }: { canWrite: boolean; onAdd: () => v
                 <MoneyText amount={latest.data.net.amount} currency={latest.data.net.currency} tone="none" />
               )
             }
-            {...(change === null || history.data === undefined ? {} : { change: changeSince(change, history.data.date_from) })}
+            {...(change === null || latest.data === undefined ? {} : { change: netWorthChangeWords(change, latest.data.currency) })}
           />
         </StatGroup>
         {latest.isError ? (
