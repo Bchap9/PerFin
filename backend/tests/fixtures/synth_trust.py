@@ -12,6 +12,10 @@ account number and the same six dated rows with signed amounts.
   is in doubt: a *clean read* (``app.domain.imports.service.clean_read``).
 * :func:`no_balances_with_a_stray_row`: the same plus one row dated 40 days
   before the period starts (:data:`STRAY`).
+* :func:`no_balances_row_five_days_early`: the first plus one row dated five
+  days before the period starts (:data:`EARLY`): a card or a bank often
+  prints a purchase made just before the cycle on the next statement, so a
+  row within ``confidence.PERIOD_GRACE_DAYS`` of the period is no doubt.
 * :func:`no_balances_with_an_unread_line`: the first plus a dated line whose
   amount cell is not an amount; the parser counts it as skipped.
 * :func:`balanced_with_an_unread_line`: an opening balance, a closing
@@ -27,6 +31,9 @@ account number and the same six dated rows with signed amounts.
   that agree with the six rows, no running balance column, plus the row
   dated before the period (:data:`STRAY`). It is off by exactly that row,
   which alone is in doubt, and the row's date is a doubt of its own.
+* :func:`early_row_against_the_balances`: the same with the row five days
+  before the period (:data:`EARLY`) in place of the stray one: off by that
+  row, whose date is no doubt.
 * :func:`no_balances_without_digits`: the first without the account number
   line: nothing on the page names an account but the bank's own name.
 * :func:`mixed_sign_accounts_csv`: not a PDF but a CSV export of two
@@ -73,6 +80,8 @@ ROWS: Final[tuple[Row, ...]] = (
 )
 #: The row of :func:`no_balances_with_a_stray_row`: 40 days before the period.
 STRAY: Final[Row] = (PERIOD_START - timedelta(days=40), Decimal("-81.15"), "Maple Yard Fuel")
+#: The row of :func:`no_balances_row_five_days_early`: five days before the period.
+EARLY: Final[Row] = (PERIOD_START - timedelta(days=5), Decimal("-23.60"), "Fernhollow Bakery")
 #: The payee and the amount cell of the dated line no reader can read.
 UNREAD_PAYEE: Final = "Adjustment under enquiry"
 UNREAD_AMOUNT: Final = "see branch"
@@ -94,9 +103,9 @@ def _money(value: Decimal) -> str:
     return f"{'-' if value < 0 else ''}{abs(value):,.2f}"
 
 
-def expected(*, stray: bool = False) -> list[Row]:
+def expected(*, stray: bool = False, early: bool = False) -> list[Row]:
     """``(date, amount, payee)`` of every row a builder's statement holds, sorted."""
-    return sorted([*ROWS, STRAY] if stray else ROWS)
+    return sorted([*ROWS, *([STRAY] if stray else []), *([EARLY] if early else [])])
 
 
 def _pdf(
@@ -172,6 +181,11 @@ def no_balances_with_a_stray_row() -> bytes:
     return _pdf([STRAY, *ROWS])
 
 
+def no_balances_row_five_days_early() -> bytes:
+    """The same as the first plus one row dated five days before the period (printed first)."""
+    return _pdf([EARLY, *ROWS])
+
+
 def no_balances_with_an_unread_line() -> bytes:
     """The same as the first plus a dated line whose amount is not an amount."""
     return _pdf(ROWS, unread_after=3)
@@ -223,3 +237,8 @@ def mixed_sign_accounts_csv() -> bytes:
         f"{day.isoformat()},XXXX-XXXX-{last4},{text},{amount}" for day, last4, text, amount in rows
     ]
     return ("\r\n".join(lines) + "\r\n").encode("utf-8")
+
+
+def early_row_against_the_balances() -> bytes:
+    """Balances of the six rows, no running balance, plus the row five days before the period."""
+    return _pdf([EARLY, *ROWS], balances=True, running=False)

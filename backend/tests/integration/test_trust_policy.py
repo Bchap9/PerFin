@@ -28,13 +28,16 @@ from __future__ import annotations
 
 import copy
 import uuid
+from collections.abc import Callable, Iterator
 from decimal import Decimal
+from pathlib import Path
 from typing import Any, cast
 
 import pytest
 from sqlalchemy import select
 
 from app.auth.principal import apply_rls_context
+from app.core.settings import Settings
 from app.db.rls import set_context
 from app.domain.accounts.models import Account, AccountType
 from app.domain.documents.models import (
@@ -46,6 +49,7 @@ from app.domain.documents.models import (
 )
 from app.domain.documents.schemas import INGEST_JOB_TYPE
 from app.domain.imports.models import StatementRecord
+from app.domain.imports.schemas import APPLY_MAPPING_JOB_TYPE
 from app.domain.imports.service import (
     CONTRADICTION_WARNINGS,
     _Run,
@@ -64,9 +68,12 @@ from app.ingestion.sandbox.protocol import (
     Statement,
     StatementAccount,
 )
+from tests.fixtures import synth_bank_layouts as bank_layouts
 from tests.fixtures import synth_card_statement as card
 from tests.fixtures import synth_pdf_statements as synth
 from tests.fixtures import synth_trust as trust
+from tests.fixtures.factories import AuthedClient
+from tests.fixtures.households import API, Actors
 from tests.fixtures.imports import run_jobs
 from tests.fixtures.synth_statements import csv_bytes, sample_statement
 from tests.integration.test_pdf_statement_pipeline import MAX, Env, env
@@ -265,6 +272,96 @@ def test_a_row_in_another_currency_is_never_a_clean_read(env: Env) -> None:
     assert [r.review_state for r in rows] == [ReviewState.PENDING] * 5
     assert {"currency_mismatch", "reconciliation_unavailable"} <= _reasons(env, document_id)
     assert env.snapshots(account) == []
+
+
+# ---------------------------------------------------------------------------
+# A few days outside the period is no doubt; further out is (import 1d)
+# ---------------------------------------------------------------------------
+
+
+def test_a_row_a_few_days_outside_the_period_is_still_a_clean_read(env: Env) -> None:
+    """A purchase of the last days before the cycle, printed on this statement."""
+    account = _account(env)
+    document_id = env.ingest(trust.no_balances_row_five_days_early())
+
+    rows = env.transactions(account)
+    assert _ledger(env, account) == _six(trust.expected(early=True))
+    assert [r.review_state for r in rows] == [ReviewState.NONE] * 7
+    assert env.open_reviews(document_id) == []
+    assert env.document(document_id).status is DocumentStatus.PROCESSED
+    # The marker: imported, a document format, and not checked against a balance.
+    (record,) = _records(env, document_id)
+    assert (record.verification, record.source_format) == ("unverified", "pdf")
+    assert (record.period_start, record.period_end) == (trust.PERIOD_START, trust.PERIOD_END)
+    assert _summary(env, document_id)["unverified_statements"] == 1
+    assert env.snapshots(account) == []
+
+
+def test_a_row_forty_days_outside_is_not(env: Env) -> None:
+    account = _account(env)
+    document_id = env.ingest(trust.no_balances_with_a_stray_row())
+
+    rows = env.transactions(account)
+    assert len(rows) == 7
+    assert [r.review_state for r in rows] == [ReviewState.PENDING] * 7
+    assert env.document(document_id).status is DocumentStatus.NEEDS_REVIEW
+    listed = [
+        i
+        for i in env.open_reviews(document_id)
+        if i.payload.get("reason") not in ("reconciliation_unavailable",)
+    ]
+    # The stray row is named with its own doubt: its date.
+    stray = next(r for r in rows if r.posted_date == trust.STRAY[0])
+    assert any(str(stray.id) in str(i.payload) and "posted_date" in str(i.payload) for i in listed)
+    assert env.snapshots(account) == []
+
+
+def _section_account(env: Env) -> Account:
+    institution = env.ledger.institution(env.household_id, name=bank_layouts.SECTION_BANK)
+    return env.ledger.account(
+        env.household_id,
+        number_last4=bank_layouts.SECTION_LAST4,
+        type="checking",
+        currency="USD",
+        institution_id=institution.id,
+    )
+
+
+@pytest.mark.parametrize(
+    ("build", "account_of", "count", "reason"),
+    [
+        (trust.no_balances_with_a_stray_row, _account, 7, "reconciliation_unavailable"),
+        (trust.no_balances_with_an_unread_line, _account, 6, "lines_skipped"),
+        (bank_layouts.section_total_off_without_balances, _section_account, 8, None),
+    ],
+    ids=["stray-row", "unread-line", "section-total"],
+)
+def test_not_quite_clean_statements_post_nothing(
+    env: Env,
+    build: Callable[[], bytes],
+    account_of: Callable[[Env], Account],
+    count: int,
+    reason: str | None,
+) -> None:
+    """Review Focus 1: no balance to check and one doubt: no row is posted, no balance kept."""
+    account = account_of(env)
+    document_id = env.ingest(build())
+
+    rows = env.transactions(account)
+    assert len(rows) == count
+    assert [r for r in rows if r.review_state is ReviewState.NONE] == []
+    assert env.snapshots(account) == []
+    assert env.document(document_id).status is DocumentStatus.NEEDS_REVIEW
+    assert {r.verification for r in _records(env, document_id)} == {"unverified"}
+    reasons = _reasons(env, document_id)
+    if reason is None:
+        # The withdrawals printed do not add up to the total printed under them.
+        stored = ExtractResult.model_validate(env.document(document_id).extraction)
+        assert stored.parse is not None
+        assert "section_total_mismatch" in stored.parse.warnings
+        assert reasons & {"reconciliation_failed", "reconciliation_unavailable"}
+    else:
+        assert reason in reasons
 
 
 # ---------------------------------------------------------------------------
@@ -617,3 +714,180 @@ def test_contradiction_warning_is_never_a_clean_read() -> None:
     assert clean_read(_run(), _parsed(UNCHECKED, balance_mismatches=[2])) is False
     assert clean_read(_run(), _parsed(UNCHECKED, truncated=True)) is False
     assert clean_read(_run(), _parsed(UNCHECKED, date_order_assumed=True)) is False
+
+
+# ---------------------------------------------------------------------------
+# Through the API, as a person would (Review Focus 4 and 5)
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+def owner(env: Env, settings: Settings, tmp_path: Path) -> Iterator[AuthedClient]:
+    """The household's owner, logged in to an app on the pipeline's directories."""
+    local = settings.model_copy(
+        update={"documents_dir": tmp_path / "documents", "quarantine_dir": tmp_path / "quarantine"}
+    )
+    with Actors.open(local, env.factories) as actors:
+        yield actors.login(env.owner)
+
+
+def _upload(env: Env, data: bytes, name: str) -> uuid.UUID:
+    with env.factories.transaction() as db:
+        apply_rls_context(db, env.principal())
+        received = receive_upload(
+            db,
+            env.principal(),
+            store=env.store,
+            keyring=env.keyring,
+            chunks=iter([data]),
+            max_bytes=MAX,
+            filename=name,
+            account_id=None,
+        )
+    assert run_jobs(env.factories, env.household_id, INGEST_JOB_TYPE, done=env.done)
+    return received.document_id
+
+
+def _card_of(client: AuthedClient, document_id: uuid.UUID) -> dict[str, Any]:
+    response = client.get(f"{API}/review/cards")
+    assert response.status_code == 200, response.text
+    found = [c for c in response.json()["cards"] if c["document"]["id"] == str(document_id)]
+    # One card per document, whatever it found.
+    assert len(found) == 1, found
+    card_out: dict[str, Any] = found[0]
+    return card_out
+
+
+def test_mixed_export_holds_only_the_card_and_the_answer_leaves_checking_alone(
+    env: Env, owner: AuthedClient
+) -> None:
+    """Review Focus 5: one export, a checking account and a card, one signed column."""
+    checking = env.ledger.account(
+        env.household_id, type=AccountType.CHECKING, number_last4=trust.LAST4
+    )
+    card_account = env.ledger.account(
+        env.household_id, type=AccountType.CREDIT_CARD, number_last4=trust.CSV_CARD_LAST4
+    )
+    document_id = _upload(env, trust.mixed_sign_accounts_csv(), "all.csv")
+
+    before = {t.id: (t.posted_date, t.amount) for t in env.transactions(checking)}
+    assert sorted(before.values()) == sorted(
+        (day, amount.quantize(SIX)) for day, amount, _ in trust.CSV_CHECKING
+    )
+    assert env.transactions(card_account) == []
+    assert env.document(document_id).status is DocumentStatus.NEEDS_REVIEW
+    shown = _card_of(owner, document_id)
+    assert shown["action"] == "answer_sign"
+    (item,) = env.open_reviews(document_id)
+    assert shown["action_item_id"] == str(item.id)
+    assert item.payload["account_id"] == str(card_account.id)
+
+    answered = owner.post(
+        f"{API}/review/{item.id}/resolve",
+        json={"kind": "unparsed", "action": "answer_sign", "positive_is": "money_out"},
+    )
+    assert answered.status_code == 200, answered.text
+    assert answered.json()["resolution"]["scope"] == "account"
+    assert run_jobs(env.factories, env.household_id, APPLY_MAPPING_JOB_TYPE, done=env.done)
+
+    # The checking rows are the same rows with the same amounts.
+    assert {t.id: (t.posted_date, t.amount) for t in env.transactions(checking)} == before
+    card_rows = env.transactions(card_account)
+    assert sorted((t.posted_date, t.amount) for t in card_rows) == sorted(
+        (day, (-amount).quantize(SIX)) for day, amount, _ in trust.CSV_CARD
+    )
+    purchases = [t for t in card_rows if "Payment" not in (t.raw_payee or "")]
+    assert len(purchases) == 3
+    assert all(t.amount < 0 for t in purchases)
+    assert env.open_reviews(document_id) == []
+    assert env.document(document_id).status is DocumentStatus.PROCESSED
+
+
+@pytest.mark.parametrize(
+    ("build", "row", "named"),
+    [
+        (trust.stray_row_against_the_balances, trust.STRAY, True),
+        (trust.early_row_against_the_balances, trust.EARLY, False),
+    ],
+    ids=["forty-days", "five-days"],
+)
+def test_only_a_row_beyond_the_grace_is_a_cause_outside_the_period(
+    env: Env, owner: AuthedClient, build: Callable[[], bytes], row: trust.Row, named: bool
+) -> None:
+    """The reconcile view counts a row as outside the period by the parser's ten days."""
+    account = _account(env)
+    document_id = env.ingest(build())
+    extra = next(r for r in env.transactions(account) if r.posted_date == row[0])
+
+    read = owner.get(f"{API}/documents/{document_id}/reconciliation")
+    assert read.status_code == 200, read.text
+    (statement,) = read.json()["statements"]
+    assert statement["status"] == "off"
+    assert Decimal(statement["difference"]) == row[1]
+    causes = {c["kind"]: c["transaction_ids"] for c in statement["causes"]}
+    # Either way the row that explains the difference is named first.
+    assert statement["causes"][0]["transaction_ids"] == [str(extra.id)]
+    assert ("out_of_period" in causes) is named
+    if named:
+        assert causes["out_of_period"] == [str(extra.id)]
+
+
+def _printed(value: Decimal) -> str:
+    """A balance as a card statement prints it: owed is positive, thousands grouped."""
+    return f"{-value:,.2f}"
+
+
+def test_card_statement_is_reconciled_from_the_card(env: Env, owner: AuthedClient) -> None:
+    """Review Focus 4: a card statement with a row its balances do not account for."""
+    stmt = synth.demo_card_statement(seed=58)
+    account = env.account(stmt)
+    document_id = env.ingest(synth.demo_card_pdf(stmt, tamper="extra_row"))
+    assert env.document(document_id).status is DocumentStatus.NEEDS_REVIEW
+    assert env.snapshots(account) == []
+    forged = next(r for r in env.transactions(account) if r.amount == synth.FORGED.amount)
+    assert forged.review_state is ReviewState.PENDING
+
+    shown = _card_of(owner, document_id)
+    assert shown["action"] == "reconcile"
+    read = owner.get(f"{API}/documents/{document_id}/reconciliation")
+    assert read.status_code == 200, read.text
+    (statement,) = read.json()["statements"]
+    assert (statement["status"], statement["printed_sign"]) == ("off", "owed")
+    assert Decimal(statement["difference"]) == synth.FORGED.amount
+    assert statement["causes"][0]["kind"] == "extra_row"
+    assert statement["causes"][0]["transaction_ids"] == [str(forged.id)]
+    # Balances are shown as the card prints them: what is owed is positive.
+    assert statement["closing"] == f"{-stmt.closing_balance:.2f}"
+
+    refused = owner.post(
+        f"{API}/documents/{document_id}/reconciliation/confirm", json={"statement": 0}
+    )
+    assert refused.status_code == 409, refused.text
+    assert owner.delete(f"{API}/transactions/{forged.id}").status_code == 204
+    confirmed = owner.post(
+        f"{API}/documents/{document_id}/reconciliation/confirm",
+        json={
+            "statement": 0,
+            "opening_balance": _printed(stmt.opening_balance),
+            "closing_balance": _printed(stmt.closing_balance),
+        },
+    )
+    assert confirmed.status_code == 200, confirmed.text
+    got = confirmed.json()
+    assert got["snapshot"] is True
+    assert (got["statement"]["status"], got["statement"]["verification"]) == (
+        "balanced",
+        "reconciled",
+    )
+
+    rows = env.transactions(account)
+    assert len(rows) == len(stmt.transactions)
+    assert ReviewState.PENDING not in {r.review_state for r in rows}
+    (snapshot,) = env.snapshots(account)
+    assert snapshot.balance == stmt.closing_balance < 0
+    assert snapshot.source_document_id == document_id
+    assert [r.verification for r in _records(env, document_id)] == ["reconciled"]
+    assert env.open_reviews(document_id) == []
+    assert env.document(document_id).status is DocumentStatus.PROCESSED
+    cards = owner.get(f"{API}/review/cards").json()["cards"]
+    assert str(document_id) not in {c["document"]["id"] for c in cards}

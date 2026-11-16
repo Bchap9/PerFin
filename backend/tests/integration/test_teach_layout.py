@@ -320,7 +320,7 @@ def test_a_taught_layout_reads_the_next_statement_with_no_review(env: Env) -> No
     env.run(INGEST_JOB_TYPE)
     document = env.document(document_id)
     assert document.status is DocumentStatus.PROCESSED, env.open_items(document_id)
-    assert document.parser_version == "layout_template/5"
+    assert document.parser_version == "layout_template/6"
     assert (document.period_start, document.period_end) == (first.start, first.end)
     assert _rows(env, account, document_id) == _expected(first)
 

@@ -304,7 +304,11 @@ are read the same way:
    (:func:`~app.ingestion.classify.dates.band_confidence`: 0.9 on two or
    more pages, 0.75 on one, so a range atop a one-page document is no
    stated period). Yearless row dates (``MM/DD``) take their year from the
-   period. The day/month order of a numeric period comes from its own
+   period. A row dated more than ``confidence.PERIOD_GRACE_DAYS`` days
+   before the period starts or after it ends scores at most
+   ``confidence.INFERRED`` on its date and waits for a person; one within
+   those days keeps its score (a purchase of the days before a cycle is
+   printed on the next statement). The day/month order of a numeric period comes from its own
    values when one proves it (``01/07/2015 - 31/07/2015`` is day-first),
    whatever the rows' default; and when the rows fit both orders (or are
    not numeric) the order the period proves is the rows' order too.
@@ -1248,7 +1252,7 @@ class TableStatementParser(DocumentParser):
     """Generic: any statement with a recognisable transaction table (module doc)."""
 
     name: ClassVar[str] = "statement_generic"
-    version: ClassVar[str] = "9"
+    version: ClassVar[str] = "10"
     kind: ClassVar[Literal["statement", "payslip"]] = "statement"
     #: The institution's name as accounts know it (account matching).
     display_name: ClassVar[str | None] = None
@@ -4505,7 +4509,8 @@ class TableStatementParser(DocumentParser):
                 outcome.skipped_regions.append((row.page, row.bbox))
                 continue
             date_conf = self.base if certain else conf.GUESSED
-            if period is not None and not (period[0] <= posted <= period[1]):
+            if conf.outside_period(posted, period):
+                # Further from the period than the days of grace around it.
                 date_conf = min(date_conf, conf.INFERRED)
             if row.carried:
                 # Printed on the row above, once for the day.

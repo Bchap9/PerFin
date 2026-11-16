@@ -16,6 +16,11 @@ knows about how it read the value:
 * a numeric date whose day/month order could not be told: :data:`GUESSED`;
 * a yearless date placed in the statement period: unchanged; outside it:
   :data:`GUESSED`;
+* a date more than :data:`PERIOD_GRACE_DAYS` days before the statement
+  period starts or after it ends: at most :data:`INFERRED`
+  (:func:`outside_period`). A row within those days keeps its score: a
+  purchase of the last days before a cycle is printed on the next
+  statement, and a row posted just after the closing day on this one;
 * an amount confirmed by the running balance: 1.0 whatever the other
   factors; contradicted by it: :data:`CONTRADICTED`;
 * OCR: multiplied by the lowest Tesseract word confidence of the cell
@@ -33,6 +38,7 @@ knows about how it read the value:
 from __future__ import annotations
 
 from collections.abc import Collection, Iterable, Mapping
+from datetime import date, timedelta
 from typing import Final
 
 DEFAULT_THRESHOLD: Final = 0.85
@@ -47,6 +53,20 @@ CONTRADICTED: Final = 0.4
 #: A kind the optional local model suggested (ADR-0010): below any threshold
 #: (``PERFIN_INGEST_CONFIDENCE_THRESHOLD`` is never under 0.5), so a person confirms it.
 SUGGESTED: Final = 0.4
+#: Days before a statement period starts, or after it ends, in which a row's
+#: date is as sure as inside it (module doc). Further out the date scores
+#: :data:`INFERRED`: the row, and with it its statement, waits for a person.
+PERIOD_GRACE_DAYS: Final = 10
+
+
+def outside_period(
+    day: date, period: tuple[date, date] | None, *, grace_days: int = PERIOD_GRACE_DAYS
+) -> bool:
+    """Whether ``day`` is more than ``grace_days`` outside ``period`` (never without one)."""
+    if period is None:
+        return False
+    grace = timedelta(days=max(grace_days, 0))
+    return not period[0] - grace <= day <= period[1] + grace
 
 
 def scaled(base: float, ocr: float | None) -> float:

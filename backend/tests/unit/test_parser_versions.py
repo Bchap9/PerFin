@@ -17,10 +17,10 @@ from app.ingestion.parsers.registry import PARSERS
 
 VERSIONS = {
     "tax_forms": "2",
-    "sample_national_checking": "7",
-    "example_fcu_share": "7",
-    "demo_card_services": "7",
-    "mock_savings_and_loan": "7",
+    "sample_national_checking": "8",
+    "example_fcu_share": "8",
+    "demo_card_services": "8",
+    "mock_savings_and_loan": "8",
     "placeholder_brokerage": "7",
     "fidelity_investments_statement": "8",
     "brokerage_statement_generic": "9",
@@ -28,8 +28,8 @@ VERSIONS = {
     "loan_statement_generic": "2",
     "payslip_basic": "2",
     "receipt_basic": "2",
-    "card_statement_generic": "9",
-    "statement_generic": "9",
+    "card_statement_generic": "10",
+    "statement_generic": "10",
 }
 
 
@@ -38,7 +38,7 @@ def test_every_registered_parser_has_its_pinned_version() -> None:
 
 
 def test_the_readers_outside_the_registry_have_their_pinned_versions() -> None:
-    assert (template.PARSER_NAME, template.PARSER_VERSION) == ("layout_template", "5")
+    assert (template.PARSER_NAME, template.PARSER_VERSION) == ("layout_template", "6")
     assert (brokerage_table.PARSER_NAME, brokerage_table.PARSER_VERSION) == (
         "brokerage_activity_table",
         "2",
@@ -59,4 +59,6 @@ def test_a_taught_layout_reads_an_amount_grouped_the_indian_way() -> None:
     assert template._amount(cell) == Decimal("114964.36")
     # It moved again with import 1d: a direction per table, several tables,
     # continued pages and month-name dates read the same pages differently.
-    assert template.PARSER_VERSION == "5"
+    # And once more with the days of grace around a statement period: a row
+    # dated just outside it keeps its date's score.
+    assert template.PARSER_VERSION == "6"

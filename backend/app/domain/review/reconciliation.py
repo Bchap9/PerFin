@@ -154,6 +154,7 @@ from app.domain.transactions.models import (
     TransactionStatus,
 )
 from app.ingestion.parsers.base import DocumentView
+from app.ingestion.parsers.confidence import PERIOD_GRACE_DAYS
 from app.ingestion.parsers.structured import ParsedStatement
 from app.ingestion.reconcile import TOLERANCE
 from app.ingestion.sandbox.protocol import (
@@ -702,6 +703,7 @@ def _statement_out(
         previous_closing=previous,
         fee_lines=_fee_lines(result, statement) if status == "off" else (),
         removed=[t.amount for t in taken_out if t.amount is not None],
+        grace_days=PERIOD_GRACE_DAYS,
     )
     rows: list[ReconcileRow] = []
     for row in group.rows[:ROWS_MAX]:

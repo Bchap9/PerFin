@@ -732,6 +732,9 @@ _SECTION_ROWS: Final = (*_SECTION_DEPOSITS, *_SECTION_WITHDRAWALS, *_SECTION_FEE
 #: Withdrawals printed on page 1; the rest are on page 2.
 _SECTION_SPLIT: Final = 3
 _UNSIGNED_HEADER: Final = [(40, "Date"), (110, "Description"), (-560, "Amount")]
+#: The bank and the masked account digits of the sectioned statements.
+SECTION_BANK: Final = "Wexcombe River Bank"
+SECTION_LAST4: Final = "7318"
 
 
 def _total(rows: Sequence[ExpectedRow]) -> Decimal:
@@ -761,13 +764,21 @@ def _total_line(c: canvas.Canvas, y: float, label: str, rows: Sequence[ExpectedR
     return y - 26
 
 
-def _sectioned_unsigned(*, continued_title: bool, omit: ExpectedRow | None = None) -> bytes:
-    """``omit`` is a withdrawal left off the page; the totals and balances count it."""
+def _sectioned_unsigned(
+    *, continued_title: bool, omit: ExpectedRow | None = None, balances: bool = True
+) -> bytes:
+    """``omit`` is a withdrawal left off the page; the totals and balances count it.
+
+    ``balances=False`` prints neither the beginning nor the ending balance.
+    """
     buf = io.BytesIO()
     c = canvas.Canvas(buf, pagesize=letter)
     closing = _running(_SECTION_OPENING, _SECTION_ROWS)[-1]
-    bank = "Wexcombe River Bank"
-    _head(c, bank, "7318", "04/01/2026 - 04/30/2026", _SECTION_OPENING, closing)
+    bank = SECTION_BANK
+    if balances:
+        _head(c, bank, SECTION_LAST4, "04/01/2026 - 04/30/2026", _SECTION_OPENING, closing)
+    else:
+        _top(c, bank, SECTION_LAST4, "04/01/2026 - 04/30/2026")
     y = _rows(
         c,
         674,
@@ -817,6 +828,13 @@ def section_total_off() -> bytes:
     the withdrawals printed no longer add up to their total, nor the
     statement to its closing balance."""
     return _sectioned_unsigned(continued_title=True, omit=SECTION_ROW_OFF)
+
+
+def section_total_off_without_balances() -> bytes:
+    """:func:`section_total_off` printing no beginning and no ending balance:
+    nothing checks the statement as a whole, and its withdrawals still do
+    not add up to the total printed under them."""
+    return _sectioned_unsigned(continued_title=True, omit=SECTION_ROW_OFF, balances=False)
 
 
 #: As the ledger keeps them: a purchase is money out, the payment and the refund money in.

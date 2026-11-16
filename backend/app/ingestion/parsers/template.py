@@ -153,7 +153,7 @@ from app.ingestion.sandbox.protocol import (
 
 SCHEMA_VERSION: Final = 1
 PARSER_NAME: Final = "layout_template"
-PARSER_VERSION: Final = "5"
+PARSER_VERSION: Final = "6"
 TEMPLATE_REF: Final = ParserRef(name=PARSER_NAME, version=PARSER_VERSION, kind="statement")
 
 MAX_LABEL: Final = 120
@@ -1305,7 +1305,7 @@ def _transactions(
             "amount": conf.GENERIC,
             "payee": conf.GENERIC if payee else conf.MISSING,
         }
-        if period is not None and not period[0] <= posted <= period[1]:
+        if conf.outside_period(posted, period):
             score["posted_date"] = min(score["posted_date"], conf.INFERRED)
         scores.append(score)
         kept = None if several else _amount(row.cells.get("balance"))

@@ -781,8 +781,8 @@ def test_five_transaction_tables_are_refused() -> None:
 
 def test_parser_version_is_5() -> None:
     # The plan wrote "2 to 3"; the reader stood at 4 when import 1d began.
-    assert template_module.PARSER_VERSION == "5"
-    assert template_module.TEMPLATE_REF.version == "5"
+    assert template_module.PARSER_VERSION == "6"
+    assert template_module.TEMPLATE_REF.version == "6"
 
 
 # ---------------------------------------------------------------------------
@@ -1056,3 +1056,24 @@ def test_a_card_with_a_table_of_payments_reconciles() -> None:
     plain = read("money_in", "money_out")
     assert plain.opening_balance is not None
     assert plain.opening_balance.amount == Decimal("100.00")
+
+
+def test_a_row_a_few_days_before_the_period_keeps_its_date_score() -> None:
+    """Ten days of grace (``confidence.PERIOD_GRACE_DAYS``); further out the date is doubted."""
+    rows = [
+        _row(220.0, "2026-02-10", "Coal Merchant", "-2.00", "98.00"),
+        _row(235.0, "2026-02-24", "Corner Shop", "-8.00", "90.00"),
+        _row(250.0, "2026-03-05", "Wage Payment", "50.00", "140.00"),
+        _row(220.0, "2026-04-10", "Rail Pass", "-4.50", "135.50"),
+        _row(235.0, "2026-04-11", "Book Stall", "-5.50", "130.00"),
+    ]
+    taught = read_template(DocumentView.from_result(_result(rows)), _template(), threshold=0.85)
+    statement = taught.statements[0]
+    assert (statement.period_start, statement.period_end) == (date(2026, 3, 1), date(2026, 3, 31))
+    assert [(t.posted, "posted_date" in t.low_confidence) for t in statement.transactions] == [
+        (date(2026, 2, 10), True),
+        (date(2026, 2, 24), False),
+        (date(2026, 3, 5), False),
+        (date(2026, 4, 10), False),
+        (date(2026, 4, 11), True),
+    ]
