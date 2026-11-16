@@ -11,6 +11,12 @@ viewer cannot see or edit, so:
   (``redacted: true``);
 * creating, changing, deleting, reordering, importing and applying rules
   needs owner or admin (who see and edit every account);
+* a merchant rule ("always categorise this merchant as...") is the one rule
+  a member may make, change the category of and revert
+  (``app.domain.rules.merchant``; the writes are :func:`add_merchant_rule`,
+  :func:`set_merchant_rule_category` and :func:`remove_reverted_rule` here);
+  applying it to existing rows is limited to accounts the member may edit
+  and never changes a category somebody decided;
 * the dry run (``POST /rules/test``) needs any household role and only
   ever looks at transactions on accounts the caller can see.
 
@@ -24,10 +30,11 @@ the household when the rule is saved (``404 <kind>-not-found``). An object
 deleted later leaves a dangling id: conditions naming it simply do not
 match, actions naming it are dropped when the rules run (logged).
 
-Every write is audited (``rule.create|update|delete|reorder|import|
+Every write is audited (``rule.create|update|delete|revert|reorder|import|
 apply_requested|apply``; the audit trail keeps names, flags, condition and
 action types and referenced ids, never the text values of conditions or
-notes) and emits an event (``rule.*``; ``transaction.rules_applied`` when
+notes, and never the name of a merchant rule, which holds the merchant's)
+and emits an event (``rule.*``; ``transaction.rules_applied`` when
 rules changed transactions; ``job.queued`` for an apply).
 """
 
@@ -36,7 +43,7 @@ from __future__ import annotations
 import uuid
 from collections import Counter, defaultdict
 from collections.abc import Callable, Collection, Iterable, Mapping, Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from decimal import Decimal
 from typing import TYPE_CHECKING, Any, Final
 
@@ -115,6 +122,8 @@ IDS_IN_RECORD_MAX: Final = 100
 RULE_SOURCE: Final = "rule"
 #: ``transaction.category_source`` of a category a person chose: never a rule job's to change.
 PERSON_SOURCE: Final = "person"
+#: Sources of a guess: what a merchant rule applied to existing rows may replace.
+GUESS_SOURCES: Final = frozenset({"learned", "dictionary", "keyword"})
 
 
 # ---------------------------------------------------------------------------
@@ -136,6 +145,15 @@ def _household(principal: Principal, minimum: HouseholdRole) -> uuid.UUID:
     if not role_at_least(principal.role, minimum):
         raise forbidden()
     return principal.household_id
+
+
+def rule_not_revertible() -> ProblemError:
+    return ProblemError(
+        403,
+        "rule-not-revertible",
+        "This rule cannot be reverted",
+        "Only an owner or an admin can revert a rule that is not a merchant rule.",
+    )
 
 
 def _rule_limit() -> ProblemError:
@@ -193,11 +211,20 @@ def _condition_types(document: Any) -> list[str]:
     return sorted(types)
 
 
+def is_merchant_rule(rule: Rule) -> bool:
+    """Whether ``rule`` is a merchant rule (``engine.merchant_document``), enabled or not."""
+    return engine.merchant_document(rule.conditions, rule.actions) is not None
+
+
 def _facts(rule: Rule) -> dict[str, Any]:
-    """What the audit trail keeps about a rule (no condition text, no note text)."""
+    """What the audit trail keeps about a rule (no condition text, no note text).
+
+    A merchant rule is named after its merchant, so its name is left out too.
+    """
     refs = engine.references([rule.conditions, rule.actions])
+    facts: dict[str, Any] = {} if is_merchant_rule(rule) else {"name": rule.name}
     return {
-        "name": rule.name,
+        **facts,
         "enabled": rule.enabled,
         "stop_processing": rule.stop_processing,
         "sort_order": rule.sort_order,
@@ -409,6 +436,190 @@ def delete_rule(
     )
     rules_repo.delete_rule(db, rule)
     db.expunge(rule)
+
+
+# ---------------------------------------------------------------------------
+# Merchant rules (a member may; ``app.domain.rules.merchant`` decides when)
+# ---------------------------------------------------------------------------
+
+
+def locked_rule(db: Session, principal: Principal, rule_id: uuid.UUID) -> Rule:
+    """The household's rule, locked for a member's write; ``404 rule-not-found``."""
+    return _get(db, _household(principal, HouseholdRole.MEMBER), rule_id, lock=True)
+
+
+def _merchant_documents(
+    key: str, category_id: uuid.UUID
+) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+    return _documents(
+        RuleBody.model_validate(
+            {
+                "conditions": {"type": "merchant", "key": key},
+                "actions": [{"type": "set_category", "category_id": str(category_id)}],
+            }
+        )
+    )
+
+
+def add_merchant_rule(
+    db: Session,
+    principal: Principal,
+    *,
+    name: str,
+    key: str,
+    category_id: uuid.UUID,
+    request: HTTPConnection | None,
+) -> Rule:
+    """Append the merchant rule for ``key`` (member or above): last, enabled, not stopping.
+
+    The cap applies (``409 rule-limit``); the category must be the
+    household's. Audited as ``rule.create`` with ``origin: "merchant"``.
+    """
+    household_id = _household(principal, HouseholdRole.MEMBER)
+    if rules_repo.count_rules(db, household_id) >= RULES_MAX:
+        raise _rule_limit()
+    conditions, actions = _merchant_documents(key, category_id)
+    _check_references(db, household_id, actions)
+    rule = Rule(
+        household_id=household_id,
+        name=name,
+        sort_order=rules_repo.next_sort_order(db, household_id),
+        enabled=True,
+        stop_processing=False,
+        conditions=conditions,
+        actions=actions,
+    )
+    db.add(rule)
+    db.flush()
+    _record(
+        db,
+        principal,
+        household_id,
+        action="rule.create",
+        event="rule.created",
+        target_id=rule.id,
+        after={**_facts(rule), "origin": "merchant"},
+        request=request,
+    )
+    return rule
+
+
+def set_merchant_rule_category(
+    db: Session,
+    principal: Principal,
+    rule: Rule,
+    category_id: uuid.UUID,
+    *,
+    name: str,
+    request: HTTPConnection | None,
+) -> None:
+    """Point a merchant rule (locked) at another category (member or above)."""
+    household_id = _household(principal, HouseholdRole.MEMBER)
+    found = engine.merchant_document(rule.conditions, rule.actions)
+    if found is None or rule.household_id != household_id:
+        raise ValueError("not a merchant rule of this household")
+    before = _facts(rule)
+    _, actions = _merchant_documents(found[0], category_id)
+    _check_references(db, household_id, actions)
+    rule.actions = actions
+    rule.name = name
+    rule.updated_at = clock.utcnow()
+    db.flush()
+    _record(
+        db,
+        principal,
+        household_id,
+        action="rule.update",
+        event="rule.updated",
+        target_id=rule.id,
+        before=before,
+        after=_facts(rule),
+        request=request,
+    )
+
+
+def require_revertible(principal: Principal, rule: Rule) -> uuid.UUID:
+    """The caller's household when they may revert ``rule``, else ``403``.
+
+    A merchant rule is a member's to revert; any other rule an owner's or
+    admin's (``403 rule-not-revertible``).
+    """
+    household_id = _household(principal, HouseholdRole.MEMBER)
+    if not is_merchant_rule(rule) and not role_at_least(principal.role, HouseholdRole.ADMIN):
+        raise rule_not_revertible()
+    return household_id
+
+
+def remove_reverted_rule(
+    db: Session,
+    principal: Principal,
+    rule: Rule,
+    *,
+    reverted: int,
+    request: HTTPConnection | None,
+) -> None:
+    """Delete ``rule`` (locked) as part of a revert that undid ``reverted`` rows.
+
+    Checked with :func:`require_revertible`; audited as ``rule.revert``.
+    """
+    household_id = require_revertible(principal, rule)
+    _record(
+        db,
+        principal,
+        household_id,
+        action="rule.revert",
+        event="rule.deleted",
+        target_id=rule.id,
+        before=_facts(rule),
+        after={"reverted": reverted},
+        request=request,
+    )
+    rules_repo.delete_rule(db, rule)
+    db.expunge(rule)
+
+
+def deciding_rule(
+    db: Session,
+    household_id: uuid.UUID,
+    row: Transaction,
+    *,
+    merchant_key: str,
+    before: Rule | None = None,
+) -> uuid.UUID | None:
+    """The rule that keeps a merchant rule for ``merchant_key`` from deciding ``row``.
+
+    The engine's dry run on that one row as it would arrive (no category
+    yet), over the enabled rules that run before ``before`` (all of them
+    when the merchant rule does not exist yet: it would go last), leaving
+    out merchant rules for this key. The answer is the rule whose action
+    would set the row's category or splits (the first one wins), else a
+    matching rule that stops the run before the merchant rule is reached;
+    ``None`` when nothing stands in the way. Reads only.
+    """
+    rules: list[CompiledRule] = []
+    for rule in rules_repo.list_rules(db, household_id, enabled_only=True):
+        if before is not None and (rule.sort_order, rule.id) >= (before.sort_order, before.id):
+            continue
+        found = engine.merchant_document(rule.conditions, rule.actions)
+        if found is not None and found[0] == merchant_key:
+            continue
+        try:
+            rules.append(_compile(rule))
+        except engine.InvalidRuleError:
+            continue
+    rules = _without_dangling(db, household_id, rules)
+    if not rules:
+        return None
+    [facts] = transaction_facts(db, household_id, [row])
+    outcome = engine.evaluate(
+        rules,
+        replace(facts, category_id=None, splits=()),
+        payee_names=rules_repo.payee_names(db, household_id, _payee_targets(rules)),
+    )
+    if outcome.category_rule is not None:
+        return outcome.category_rule
+    last = outcome.matched[-1] if outcome.matched else None
+    return last if last in {rule.id for rule in rules if rule.stop_processing} else None
 
 
 def reorder_rules(
@@ -771,6 +982,28 @@ def write_outcome(db: Session, row: Transaction, outcome: Outcome) -> bool:
     return True
 
 
+def _is_decided(row: Transaction, fact: TxnFacts, own: Collection[uuid.UUID]) -> bool:
+    """Whether ``row``'s categorisation is somebody's decision, not a guess.
+
+    Decided: a split; a category (or a cleared one) from a person, the file,
+    a payee default, an earlier release or a rule that is not one of ``own``;
+    a category with no source. Not decided: no category and no source, a
+    guess or a suggestion (:data:`GUESS_SOURCES`), and what a rule in ``own``
+    set. ``rules_repo.merchant_state`` is the same rule in SQL: the preview
+    counts with it what a merchant rule's apply job then changes.
+    """
+    if fact.splits:
+        return True
+    source = row.category_source
+    if source is None:
+        return row.category_id is not None
+    if source in GUESS_SOURCES:
+        return False
+    if source == RULE_SOURCE:
+        return row.category_rule_id not in own
+    return True
+
+
 def _apply_batch(
     db: Session,
     household_id: uuid.UUID,
@@ -781,19 +1014,27 @@ def _apply_batch(
     payee_names: Mapping[uuid.UUID, str],
     protect: Iterable[RuleField] = (),
     respect_people: bool = False,
+    guesses_only: Collection[uuid.UUID] | None = None,
 ) -> None:
     """Evaluate and write one batch.
 
     ``respect_people``: a row whose category a person chose (or cleared, or
     split) is evaluated with its categorisation protected, so a rule can
     still tag it, flag it or name its payee but never re-categorise it.
+
+    ``guesses_only`` (the ids of the rules being applied): the same
+    protection for every row whose categorisation is decided
+    (:func:`_is_decided`), so only undecided rows, guesses and what these
+    rules set themselves are categorised.
     """
     facts = transaction_facts(db, household_id, rows)
     ordered = engine.order_rules(rules)
     guarded = frozenset(protect)
     by_hand = guarded | {RuleField.CATEGORIZATION}
     for row, fact in zip(rows, facts, strict=True):
-        person = respect_people and row.category_source == PERSON_SOURCE
+        person = (respect_people and row.category_source == PERSON_SOURCE) or (
+            guesses_only is not None and _is_decided(row, fact, guesses_only)
+        )
         outcome = engine.evaluate(
             ordered,
             fact,
@@ -912,6 +1153,42 @@ def request_apply(
         date_to=data.date_to,
         requested_by=principal.user_id,
     )
+    job_id = _queue(db, principal, household_id, payload, request=request)
+    return JobAccepted(job_id=job_id, state="queued")
+
+
+def queue_apply(
+    db: Session,
+    principal: Principal,
+    *,
+    rule_id: uuid.UUID,
+    account_ids: Sequence[uuid.UUID],
+    request: HTTPConnection | None,
+) -> uuid.UUID:
+    """Queue a ``run_rules`` job for one merchant rule over ``account_ids``; its id.
+
+    Internal: for a member who just made that rule
+    (``app.domain.rules.merchant``), so without :func:`request_apply`'s admin
+    check. The caller passes accounts the member may edit, at least one (an
+    empty scope would mean every account) and at most ``IDS_MAX``.
+    """
+    household_id = _household(principal, HouseholdRole.MEMBER)
+    if not account_ids:
+        raise ValueError("queue_apply needs at least one account")
+    payload = RunRulesJob(
+        rule_ids=[rule_id], account_ids=list(account_ids), requested_by=principal.user_id
+    )
+    return _queue(db, principal, household_id, payload, request=request)
+
+
+def _queue(
+    db: Session,
+    principal: Principal,
+    household_id: uuid.UUID,
+    payload: RunRulesJob,
+    *,
+    request: HTTPConnection | None,
+) -> uuid.UUID:
     job_id = enqueue(db, RUN_RULES_JOB_TYPE, payload, household_id=household_id)
     audit(
         db,
@@ -924,7 +1201,20 @@ def request_apply(
         request=request,
     )
     emit(db, household_id, "job.queued", {"id": str(job_id), "type": RUN_RULES_JOB_TYPE})
-    return JobAccepted(job_id=job_id, state="queued")
+    return job_id
+
+
+def _merchant_rules_only(
+    db: Session, household_id: uuid.UUID, rule_ids: Sequence[uuid.UUID] | None
+) -> frozenset[uuid.UUID] | None:
+    """``rule_ids`` when the job names rules and every one is a merchant rule, else ``None``."""
+    if not rule_ids:
+        return None
+    wanted = frozenset(rule_ids)
+    named = [rule for rule in rules_repo.list_rules(db, household_id) if rule.id in wanted]
+    if not named or not all(is_merchant_rule(rule) for rule in named):
+        return None
+    return wanted
 
 
 def run_rules(
@@ -942,8 +1232,15 @@ def run_rules(
     of a row a person decided (``category_source = "person"``) is never
     changed; every other field of such a row, and every other row, is the
     rules' to write as before.
+
+    A job that names only merchant rules (what "apply to existing" queues
+    when one is made from a row, :func:`queue_apply`) is narrower: it
+    categorises undecided rows, guesses and what those rules set earlier,
+    and leaves every category somebody decided (:func:`_is_decided`), which
+    is what the merchant rule's preview promised.
     """
     summary = ApplySummary()
+    guesses_only = _merchant_rules_only(db, household_id, payload.rule_ids)
     rules = compiled_rules(
         db, household_id, rule_ids=set(payload.rule_ids) if payload.rule_ids else None
     )
@@ -965,7 +1262,14 @@ def run_rules(
         if not batch:
             break
         _apply_batch(
-            db, household_id, rules, batch, summary, payee_names=names, respect_people=True
+            db,
+            household_id,
+            rules,
+            batch,
+            summary,
+            payee_names=names,
+            respect_people=True,
+            guesses_only=guesses_only,
         )
         after = (batch[-1].posted_date, batch[-1].id)
         if len(batch) < BATCH:

@@ -528,6 +528,35 @@ def references(document: Any) -> dict[str, set[uuid.UUID]]:
     return found
 
 
+def merchant_document(conditions: Any, actions: Any) -> tuple[str, uuid.UUID] | None:
+    """``(merchant key, category id)`` of a stored rule that is a merchant rule, else ``None``.
+
+    A merchant rule's conditions are exactly one ``merchant`` leaf (bare, or
+    the only member of an ``all``) and its actions exactly one
+    ``set_category``. A rule that also looks at anything else, or does
+    anything else, is a general rule.
+    """
+    if not isinstance(conditions, dict):
+        return None
+    leaf = conditions
+    if leaf.get("type") == "all":
+        members = leaf.get("conditions")
+        if not isinstance(members, list) or len(members) != 1 or not isinstance(members[0], dict):
+            return None
+        leaf = members[0]
+    key = leaf.get("key")
+    if leaf.get("type") != "merchant" or not isinstance(key, str):
+        return None
+    if not isinstance(actions, list) or len(actions) != 1 or not isinstance(actions[0], dict):
+        return None
+    if actions[0].get("type") != "set_category" or actions[0].get("category_id") is None:
+        return None
+    try:
+        return key, uuid.UUID(str(actions[0]["category_id"]))
+    except ValueError:
+        return None
+
+
 def remap(document: Any, mapping: Mapping[str, Mapping[uuid.UUID, uuid.UUID]]) -> Any:
     """A copy of a JSON rule document with ids replaced per kind (unmapped ids kept)."""
     if isinstance(document, list):
