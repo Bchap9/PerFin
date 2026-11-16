@@ -104,6 +104,13 @@ Stage 4 of four on the way to 1.0.0: the release review.
   model says a cash line has none. They now have no key; the suggestion of
   cash (a withdrawal money out, a cash deposit money in) stays. Rows keyed
   before lose the key in the same refresh after the upgrade.
+- **A cheque in the `CHEQUE` or `CHQ` spelling is a cheque.** Clean-up read
+  only `CHECK 0042` as a cheque, so `CHEQUE #0042`, `CHQ 0042`, a bare
+  `CHEQUE` or `CHECK` and `TELLER CHEQUE 0042` became the merchant
+  `cheque` (or `chq`): every cheque of a household was one merchant and
+  could make one recurring series. They are now cheques with no merchant
+  key, never guessed and never a series, as the data model says. Rows keyed
+  before lose the key in the same refresh after the upgrade.
 - **No recurring series of a line that names nobody.** Rows without a
   merchant were put together by their text, so rows printed as `E` or `XY
   #0042` could make one series. Text of fewer than three letters now groups

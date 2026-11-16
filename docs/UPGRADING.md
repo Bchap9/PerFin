@@ -316,7 +316,9 @@ need it ([PORTABILITY.md](PORTABILITY.md)).
 - **Some merchant keys clear themselves.** A line that leaves fewer than
   three letters and digits (`E`, `XY #0042`) and bare cash wording
   (`WITHDRAWAL`, `CASH DEPOSIT`, `TELLER DEPOSIT`, a line that starts with
-  `ATM`) no longer have a merchant key. Rows keyed before lose it in the
+  `ATM`) no longer have a merchant key, nor a cheque written with the
+  `CHEQUE` or `CHQ` spelling (`CHEQUE #0042`, `CHQ 0042`, a bare `CHEQUE`
+  or `CHECK`), which is now read as a cheque like `CHECK 0042`. Rows keyed before lose it in the
   refresh the hourly `categorise.dispatch` job queues after the upgrade
   (clean-up version 3, merchant list version 10); nothing needs to be run
   by hand, and an admin's "Check again" (Settings, What PerFin learned)

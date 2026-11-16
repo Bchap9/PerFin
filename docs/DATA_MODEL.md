@@ -338,8 +338,9 @@ What the columns and the two tables mean to a person is in
   `app.domain.categorisation.engine.identify`: the bundled dictionary's key
   on a hit, else the first four tokens of what clean-up left; for a payment
   between people the service (`zelle`), never the other person; NULL when
-  the line names nobody (a transfer, a card payment, cash, a cheque, a fee,
-  interest, a deposit; also a line of bare cash wording such as
+  the line names nobody (a transfer, a card payment, cash, a cheque in any
+  spelling clean-up reads, `CHECK 0042`, `CHEQUE #0042`, `CHQ 0042` or the
+  word alone, a fee, interest, a deposit; also a line of bare cash wording such as
   `WITHDRAWAL`, `CASH DEPOSIT`, `TELLER DEPOSIT` or one that starts with
   `ATM`, `engine.CASH_WORDS`), or when those tokens hold fewer than three letters
   and digits (`engine.KEY_CHARS_MIN`; a dictionary key is never held to

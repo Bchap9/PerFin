@@ -36,7 +36,6 @@ _KEY_OF = {category_id: key for key, category_id in DEFAULT_CATEGORIES.items()}
         "Cash Deposit",
         "TELLER DEPOSIT",
         "COUNTER WITHDRAWAL",
-        "CHEQUE WITHDRAWAL",
         "CASH",
         "ATM",
         "ATM CASH",
@@ -55,12 +54,51 @@ def test_bare_cash_wording_names_no_merchant(raw: str) -> None:
 
 
 @pytest.mark.parametrize(
+    "raw",
+    [
+        "CHEQUE #0042",
+        "CHEQUE 0042",
+        "Cheque 0042",
+        "CHQ 0042",
+        "CHQ #0042",
+        "TELLER CHEQUE 0042",
+        "CHEQUE",
+        "CHQ",
+        "CHECK",
+        "CHECK 0042",
+        "CHEQUE WITHDRAWAL",
+        "CHQ WITHDRAWAL 0042",
+    ],
+)
+def test_cheque_wording_is_a_cheque_and_names_no_merchant(raw: str) -> None:
+    # Clean-up reads the CHEQUE and CHQ spellings as it reads CHECK: the line
+    # is a cheque (docs/DATA_MODEL.md, ``transaction.merchant_key``), never
+    # guessed and never part of a recurring series.
+    identity = engine.identify(raw)
+
+    assert (identity.key, identity.kind) == (None, "check"), raw
+    assert identity.name is None
+    for direction in ("out", "in"):
+        decision = engine.decide(
+            identity,
+            direction,
+            learned=None,
+            payee_default=None,
+            categories=DEFAULT_CATEGORIES,
+            now=NOW,
+        )
+        assert (decision.category_id, decision.suggested_category_id) == (None, None), raw
+
+
+@pytest.mark.parametrize(
     ("raw", "key"),
     [
         ("CASH APP", "cash app"),
         ("WITHDRAWAL QUARRYVALE BAKEHOUSE", "withdrawal quarryvale bakehouse"),
         ("BRANCH", "branch"),
         ("TELLER", "teller"),
+        ("CHEQUERS PUB", "chequers pub"),
+        ("CHECK CASHING PLACE", "check cashing place"),
     ],
 )
 def test_a_line_that_names_somebody_keeps_its_key(raw: str, key: str) -> None:

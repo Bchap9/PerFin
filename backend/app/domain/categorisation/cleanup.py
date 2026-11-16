@@ -77,7 +77,7 @@ from app.domain.transactions.models import PAYEE_MAX
 
 #: Bumped when clean-up changes what it returns, or the merchant key the
 #: engine makes of it (3: no key of fewer than three letters and digits, nor
-#: of bare cash wording); a
+#: of bare cash wording; the CHEQUE and CHQ spellings are a cheque); a
 #: household whose rows were keyed with an older version is refreshed.
 CLEANER_VERSION: Final = 3
 
@@ -276,8 +276,14 @@ KIND_PREFIXES: Final[tuple[KindPattern, ...]] = (
     _p(rf"E-?DEPOSIT{_END}", "deposit"),
     _p(rf"COUNTER CREDIT{_END}", "deposit"),
     _p(r"DEPOSIT(?:$| ID NUMBER(?![A-Z])| ?#)", "deposit"),
-    _p(r"(?:CHECK|CHK|DRAFT)(?: PAID| NUMBER| NO)? ?#? ?\d{1,12}(?: PAID)?$", "check"),
-    _p(rf"(?:CHECK|CHK) (?:WITHDRAWAL|WITHDRWL|W/D){_END}", "check"),
+    # The CHEQUE and CHQ spellings too, a teller's cheque, and the word alone.
+    _p(
+        r"(?:(?:TELLER |COUNTER |OFFICIAL )?(?:CHECK|CHEQUE)|CHK|CHQ|DRAFT)"
+        r"(?: PAID| NUMBER| NO)? ?#? ?\d{1,12}(?: PAID)?$",
+        "check",
+    ),
+    _p(rf"(?:CHECK|CHK|CHEQUE|CHQ) (?:WITHDRAWAL|WITHDRWL|W/D){_END}", "check"),
+    _p(r"(?:CHECK|CHK|CHEQUE|CHQ)$", "check"),
     # Payroll. "DIRECT DEPOSIT" alone says only that money arrived (a tax
     # refund comes the same way); the word PAYROLL makes it pay (_PAYROLL_WORD).
     _p(rf"PAYROLL(?: DEPOSIT)?{_END}", "payroll"),
