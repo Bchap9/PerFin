@@ -374,14 +374,18 @@ No new setting, no new container, no new outbound connection.
   recurring item on or off, adding one switched off, or setting the
   category of a transaction that the new release has already given a
   suggestion fails with an error (nothing is half-written; the person
-  tries again once the new pods serve). Every other write of the old pods
-  still works. Compose always stops the old containers first, so it is not
-  affected. With Helm, scale the api, worker and MCP deployments to zero
-  before `helm upgrade` (see "Database migrations") if you want no such
-  errors; otherwise the window lasts until the old api pods fail
-  `/readyz` (it answers 503 once the database is past their head) and the
-  rollout replaces them. An upgrade from rc.10 or later adds no revision
-  and has no such window.
+  tries again once the new pods serve). Adding transactions, categories
+  and recurring items that are on, and categorising a row without a
+  suggestion, keep working. With Compose, the old `api`, `worker` and
+  `mcp` containers keep running while `migrate` runs and until
+  `docker compose up -d` recreates them, usually seconds; for no window at
+  all, run `docker compose stop api worker mcp` before
+  `docker compose up -d`. With Helm, scale the api, worker and MCP
+  deployments to zero before `helm upgrade` (see "Database migrations");
+  otherwise the window lasts until the old api pods fail `/readyz` (it
+  answers 503 once the database is past their head) and the rollout
+  replaces them. An upgrade from rc.10 or later adds no revision and has
+  no such window.
 - **Your existing categories are kept, and never guessed over.** Every
   transaction that already had a category or a split is marked as
   categorised "before this version" (`legacy`). No merchant list, keyword
