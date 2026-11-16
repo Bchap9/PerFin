@@ -8,7 +8,7 @@ import {
   Outlet,
   RouterProvider,
 } from "@tanstack/react-router";
-import { render, screen, within } from "@testing-library/react";
+import { fireEvent, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 
 import { mockApi, sessionBody } from "../features/auth/testing";
@@ -94,6 +94,10 @@ describe("CommandPalette", () => {
     mockApi({});
     const user = userEvent.setup();
     renderPalette();
+    const before = await screen.findByRole("button", { name: "Before" });
+    before.focus();
+    await user.keyboard("k");
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
     const notes = await screen.findByRole("textbox", { name: "Notes" });
     await user.click(notes);
     await user.keyboard("k");
@@ -102,6 +106,15 @@ describe("CommandPalette", () => {
     // With the modifier held it opens even from the text field.
     await openPalette(user);
     expect(screen.getByRole("dialog")).toBeInTheDocument();
+  });
+
+  it("opens on a keyboard layout where the K key types another letter", async () => {
+    mockApi({});
+    renderPalette();
+    await screen.findByText("Page home");
+    // A Cyrillic layout: the K key gives "л".
+    fireEvent.keyDown(document.body, { key: "л", code: "KeyK", ctrlKey: true });
+    expect(await screen.findByRole("combobox", { name: "Go to" })).toHaveFocus();
   });
 
   it("typing filters and Enter navigates", async () => {
@@ -160,10 +173,22 @@ describe("CommandPalette", () => {
     renderPalette();
     const input = await openPalette(user);
     await user.type(input, "zzqx");
-    expect(screen.getByRole("status")).toHaveTextContent("No page or account matches.");
+    // No accounts were in the cache, so it does not claim no account matches.
+    expect(screen.getByRole("status")).toHaveTextContent(
+      "No page matches. Accounts appear here once a page has loaded them.",
+    );
     expect(screen.queryAllByRole("option")).toHaveLength(0);
     expect(input).not.toHaveAttribute("aria-activedescendant");
     expect(api.callsTo("GET", "/api/v1/accounts")).toHaveLength(0);
+  });
+
+  it("says no account matches when the accounts were loaded", async () => {
+    mockApi({});
+    const user = userEvent.setup();
+    renderPalette({ accounts: [{ id: ACCOUNT_ID, name: "Sample checking", nickname: null }] });
+    const input = await openPalette(user);
+    await user.type(input, "zzqx");
+    expect(screen.getByRole("status")).toHaveTextContent("No page or account matches.");
   });
 
   it("the combobox pattern attributes", async () => {

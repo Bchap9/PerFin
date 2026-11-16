@@ -50,7 +50,8 @@ describe("accountCommands", () => {
 
 describe("rank", () => {
   it("puts prefix matches above word-start matches above substring matches", () => {
-    const commands = [cmd("Plain beans"), cmd("Reports: Tax"), cmd("Tax years"), cmd("Syntax")];
+    // Each better match comes later in the input, so only the tiers can reorder them.
+    const commands = [cmd("Plain beans"), cmd("Syntax"), cmd("Reports: Tax"), cmd("Tax years")];
     expect(labels(rank(commands, "tax"))).toEqual(["Tax years", "Reports: Tax", "Syntax"]);
   });
 

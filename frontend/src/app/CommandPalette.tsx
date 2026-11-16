@@ -170,7 +170,11 @@ function PaletteDialog({ onClose }: { onClose: () => void }) {
         ))}
       </ul>
       <p role="status" className={cx("palette__empty", expanded && "visually-hidden")}>
-        {expanded ? "" : "No page or account matches."}
+        {expanded
+          ? ""
+          : accounts.length > 0
+            ? "No page or account matches."
+            : "No page matches. Accounts appear here once a page has loaded them."}
       </p>
       <p className="palette__hint">Up and Down to move, Enter to go, Escape to close.</p>
     </Dialog>
@@ -182,7 +186,9 @@ export function CommandPalette() {
 
   useEffect(() => {
     function onKey(event: globalThis.KeyboardEvent) {
-      if ((event.ctrlKey || event.metaKey) && !event.altKey && !event.shiftKey && event.key.toLowerCase() === "k") {
+      // `code` too, so a layout where the K key types another letter still opens it.
+      const isK = event.key.toLowerCase() === "k" || event.code === "KeyK";
+      if ((event.ctrlKey || event.metaKey) && !event.altKey && !event.shiftKey && isK) {
         event.preventDefault();
         setOpen((current) => !current);
       }
