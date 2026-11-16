@@ -36,7 +36,7 @@ from app.domain.documents.models import (
 )
 from app.domain.documents.schemas import INGEST_JOB_TYPE
 from app.domain.documents.search import update_search_index
-from app.domain.imports.models import StatementRecord
+from app.domain.imports.models import ImportTombstone, StatementRecord
 from app.domain.investments.models import InvestmentTxn
 from app.domain.loans.models import LoanPayment
 from app.domain.transactions.models import ReviewState, Transaction
@@ -585,7 +585,7 @@ def imported_rows(factories: Factories, hh: uuid.UUID, document_id: uuid.UUID) -
         loan = make_loan(db, hh)
         child = db.get(Document, document_id)
         assert child is not None
-        txn = make_transaction(db, checking, source_document_id=document_id)
+        txn = make_transaction(db, checking, source_document_id=document_id, with_import_hash=True)
         unrelated = make_transaction(db, checking)
         trade = make_investment_txn(
             db, brokerage, security=make_security(db, hh), source_document_id=document_id
@@ -665,6 +665,17 @@ def test_delete_with_data_removes_the_imported_rows(
     assert len(household_audit(factories, hh, "document.delete")) == 2
     assert len(household_audit(factories, hh, "transaction.delete")) == 2
     assert len(household_audit(factories, hh, "balance_snapshot.delete")) == 1
+    # Nothing is remembered as deleted by a person: the file can be uploaded again whole.
+    with factories.transaction() as db:
+        set_context(db, hh)
+        assert list(db.execute(select(ImportTombstone)).scalars()) == []
+    (deleted,) = [
+        entry
+        for entry in household_audit(factories, hh, "transaction.delete")
+        if entry.target_id == str(rows["transaction"])
+    ]
+    assert deleted.before is not None
+    assert deleted.before["tombstoned"] is False
 
 
 def test_delete_without_data_keeps_the_imported_rows(

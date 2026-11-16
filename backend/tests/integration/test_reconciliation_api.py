@@ -928,7 +928,8 @@ def test_restore_refuses_a_tombstone_of_another_document(env: Env) -> None:
     ]
 
 
-def test_remove_earlier_changes_nothing_yet(env: Env) -> None:
+def test_remove_earlier_without_earlier_rows_changes_nothing(env: Env) -> None:
+    """A first reading has no rows of an earlier one: the action is a no-op, not an error."""
     _, account, document_id, _ = tampered(env, 78)
     before = states(env, account)
 
