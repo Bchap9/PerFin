@@ -257,6 +257,35 @@ describe("the transaction drawer", () => {
     });
   });
 
+  it("opened from the address, Escape still gives focus to the row", async () => {
+    setup();
+    const { router } = renderApp("/transactions?tx=t-1");
+    const user = userEvent.setup();
+    await drawer();
+    const open = await screen.findByRole("button", { name: "Open Quiet Bean Coffee, Nov 1, 2026, -$42.10" });
+    await user.keyboard("{Escape}");
+    await waitFor(() => {
+      expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    });
+    expect(currentHref(router)).toBe("/transactions");
+    await waitFor(() => {
+      expect(open).toHaveFocus();
+    });
+  });
+
+  it("a change the server refuses is put back and said inside the drawer", async () => {
+    const api = setup();
+    api.on("PATCH /api/v1/transactions/:id", () => json({ type: "urn:perfin:problem:conflict", title: "Conflict", status: 409, detail: "The row changed meanwhile." }, 409));
+    renderApp("/transactions?tx=t-1");
+    const user = userEvent.setup();
+    const panel = within(await drawer());
+    await user.selectOptions(panel.getByLabelText("Category"), "c-1");
+    // The toast region sits behind the modal drawer, so the drawer says it itself.
+    expect(await panel.findByRole("alert")).toHaveTextContent("The row changed meanwhile.");
+    expect(panel.getByLabelText("Category")).toHaveValue("c-2");
+    expect(panel.getByText("Merchant list, 90%")).toBeInTheDocument();
+  });
+
   it("Back closes the drawer", async () => {
     setup();
     const { router } = renderApp("/transactions");

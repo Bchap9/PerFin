@@ -157,6 +157,7 @@ function DrawerBody({ row, alwaysOpen, onClose }: { row: Transaction; alwaysOpen
     if (categoryId === row.category_id) {
       return;
     }
+    accept.reset();
     const from = row.category_id;
     edit.mutate(
       { id: row.id, patch: { category_id: categoryId } },
@@ -261,6 +262,7 @@ function DrawerBody({ row, alwaysOpen, onClose }: { row: Transaction; alwaysOpen
                     aria-label={`Accept ${suggested.name}`}
                     loading={accept.isPending}
                     onClick={() => {
+                      edit.reset();
                       accept.mutate(row.id);
                     }}
                   >
@@ -291,6 +293,12 @@ function DrawerBody({ row, alwaysOpen, onClose }: { row: Transaction; alwaysOpen
                 )}
               </p>
             )}
+            {/* The toast region is behind the modal drawer: a refusal is said here too. */}
+            {edit.isError || accept.isError ? (
+              <p role="alert" className="ledger-error">
+                {errorMessage(edit.isError ? edit.error : accept.error)}
+              </p>
+            ) : null}
             {change === null && undone === null ? null : (
               <div className="tx-notice">
                 <p role="status" className="tx-notice__text">
