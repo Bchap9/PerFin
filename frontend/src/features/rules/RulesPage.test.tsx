@@ -269,7 +269,7 @@ describe("rule editor", () => {
       expect(api.callsTo("POST", "/api/v1/rules")).toHaveLength(1);
     });
     expect(api.callsTo("POST", "/api/v1/rules")[0]?.body).toMatchObject({ name: "Coffee", enabled: true, stop_processing: false });
-    expect(await screen.findByRole("heading", { level: 1, name: "Rules" })).toBeInTheDocument();
+    expect(await screen.findByRole("heading", { level: 2, name: "Rules" })).toBeInTheDocument();
   });
 
   it("shows what is wrong instead of saving an incomplete rule", async () => {

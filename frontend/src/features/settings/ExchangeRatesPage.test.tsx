@@ -71,7 +71,7 @@ describe("exchange rates page", () => {
     renderApp("/settings");
     const user = userEvent.setup();
     await user.click(await screen.findByRole("link", { name: "Exchange rates" }));
-    expect(await screen.findByRole("heading", { level: 1, name: "Exchange rates" })).toBeInTheDocument();
+    expect(await screen.findByRole("heading", { level: 2, name: "Exchange rates" })).toBeInTheDocument();
     const table = await screen.findByRole("region", { name: "Recorded exchange rates" });
     const rows = within(table).getAllByRole("row").slice(1);
     expect(rows).toHaveLength(2);

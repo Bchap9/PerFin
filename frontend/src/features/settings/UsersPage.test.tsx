@@ -124,7 +124,7 @@ describe("users page access", () => {
   it("is not listed for, and tells nothing to, someone who is not an instance administrator", async () => {
     const { api } = usersApi({ userId: "u-2", role: "owner", instanceAdmin: false });
     const view = renderApp("/settings");
-    expect(await screen.findByRole("link", { name: "Household members" })).toBeInTheDocument();
+    expect(await screen.findByRole("link", { name: "Members" })).toBeInTheDocument();
     expect(screen.queryByRole("link", { name: "Users" })).not.toBeInTheDocument();
     view.unmount();
 

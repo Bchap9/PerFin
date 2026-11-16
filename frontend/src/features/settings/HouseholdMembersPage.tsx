@@ -272,14 +272,14 @@ export function HouseholdMembersPage() {
 
   if (session === null) {
     return (
-      <SettingsPage title="Household members">
+      <SettingsPage title="Members">
         <Spinner label="Loading" />
       </SettingsPage>
     );
   }
   if (household === null) {
     return (
-      <SettingsPage title="Household members">
+      <SettingsPage title="Members">
         <Card>
           <p>You are not a member of a household yet. Ask an administrator to add you to one.</p>
         </Card>
@@ -400,7 +400,7 @@ export function HouseholdMembersPage() {
   ];
 
   return (
-    <SettingsPage title="Household members">
+    <SettingsPage title="Members">
       <Card title={household.name}>
         <p>
           Your role: <strong>{roleLabel(callerRole)}</strong>.{" "}

@@ -1,0 +1,133 @@
+/* SPDX-License-Identifier: AGPL-3.0-or-later */
+/*
+ * Settings (SettingsLayout.tsx): the h1, the side list from 1024 px, and the
+ * index's group panels. Below 1024 px the side list is hidden and the
+ * /settings index is the list; each page links back to it in its
+ * breadcrumbs. Every colour comes from a token.
+ */
+
+.settings-header {
+  margin-bottom: var(--space-4);
+}
+
+.settings-shell {
+  display: grid;
+  gap: var(--space-5);
+}
+
+.settings-shell__page {
+  min-width: 0;
+}
+
+/* ---- The side list ---------------------------------------------------------- */
+.settings-nav {
+  display: none;
+}
+
+.settings-nav__group + .settings-nav__group {
+  margin-top: var(--space-4);
+}
+
+.settings-nav__heading {
+  margin: 0 0 var(--space-1);
+  padding: 0 var(--space-3);
+  color: var(--color-text-muted);
+  font-family: var(--font-sans);
+  font-size: var(--font-size-xs);
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.settings-nav__list {
+  display: grid;
+  gap: 2px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.settings-nav__link {
+  display: flex;
+  align-items: center;
+  min-height: 2.25rem;
+  padding: var(--space-1) var(--space-3);
+  border-radius: var(--radius-md);
+  color: var(--color-text-muted);
+  font-weight: 600;
+  text-decoration: none;
+}
+
+.settings-nav__link:hover {
+  background: var(--color-surface-sunken);
+  color: var(--color-text);
+  text-decoration: none;
+}
+
+.settings-nav__link[aria-current="page"] {
+  background: var(--color-accent-soft);
+  color: var(--color-text);
+}
+
+@media (min-width: 1024px) {
+  .settings-shell {
+    grid-template-columns: 13rem minmax(0, 1fr);
+    align-items: start;
+  }
+
+  .settings-shell--index {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .settings-nav {
+    display: block;
+    position: sticky;
+    top: var(--space-4);
+  }
+}
+
+/* ---- The index -------------------------------------------------------------- */
+.settings-intro {
+  margin: 0;
+  max-width: 44rem;
+  color: var(--color-text-muted);
+}
+
+.settings-groups {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(min(100%, 18rem), 1fr));
+  gap: var(--space-3);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.settings-group {
+  height: 100%;
+  padding: 1.125rem;
+}
+
+.settings-group__title {
+  margin-bottom: var(--space-3);
+}
+
+.settings-group__pages {
+  display: grid;
+  gap: var(--space-3);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.settings-group__link {
+  display: inline-flex;
+  align-items: center;
+  min-height: 1.5rem;
+  font-weight: 600;
+}
+
+.settings-group__text {
+  margin: 0;
+  color: var(--color-text-muted);
+  font-size: var(--font-size-sm);
+}

@@ -13,7 +13,7 @@ describe("profile and settings overview", () => {
     expect(await screen.findByRole("heading", { level: 1, name: "Settings" })).toBeInTheDocument();
     expect(screen.getByRole("link", { name: "Profile" })).toHaveAttribute("href", "/settings/profile");
     expect(screen.getByRole("link", { name: "Security" })).toHaveAttribute("href", "/settings/security");
-    expect(screen.getByRole("link", { name: "Household members" })).toHaveAttribute("href", "/settings/household");
+    expect(screen.getByRole("link", { name: "Members" })).toHaveAttribute("href", "/settings/household");
   });
 
   it("saves the profile with the CSRF header and applies the theme", async () => {
