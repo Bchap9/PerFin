@@ -2,7 +2,8 @@
 import { screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 
-import { authedSession, json, mockApi, renderApp, type Handler, type SessionOptions } from "../auth/testing";
+import { expectNoAxeViolations } from "../../test/axe";
+import { authedSession, currentHref, json, mockApi, renderApp, type Handler, type SessionOptions } from "../auth/testing";
 import { ACCOUNT_CHECKING, money, referenceHandlers } from "../planning/testing";
 
 type Row = Record<string, unknown>;
@@ -112,7 +113,7 @@ function listBody(items: Row[], extra: Row = {}): Row {
   };
 }
 
-function setup(items: Row[], options: { session?: SessionOptions; events?: Row[]; list?: Row; handlers?: Record<string, Handler> } = {}) {
+function setup(items: Row[], options: { path?: string; session?: SessionOptions; events?: Row[]; list?: Row; handlers?: Record<string, Handler> } = {}) {
   const state = { items, events: options.events ?? [] };
   const api = mockApi({
     "GET /api/v1/auth/session": authedSession({ role: "owner", ...options.session }),
@@ -122,8 +123,8 @@ function setup(items: Row[], options: { session?: SessionOptions; events?: Row[]
     ...options.handlers,
   });
   // Through the router: a series' name is a link to it up close.
-  renderApp("/subscriptions");
-  return { api, state, user: userEvent.setup() };
+  const app = renderApp(options.path ?? "/plan/subscriptions");
+  return { api, state, user: userEvent.setup(), ...app };
 }
 
 describe("subscriptions view", () => {
@@ -397,5 +398,45 @@ describe("subscriptions view", () => {
     expect(await screen.findByText("No subscriptions found yet. They appear after a few statements are imported.")).toBeInTheDocument();
     expect(screen.queryByRole("table", { name: "Active" })).not.toBeInTheDocument();
     expect(screen.queryByRole("region", { name: "Needs a look" })).not.toBeInTheDocument();
+  });
+
+  it("the per-month and per-year figures are a description list", async () => {
+    setup([STREAMLY, CLOUD, GYM, WATER]);
+    const cost = await screen.findByRole("group", { name: "Cost of subscriptions" });
+    expect(within(cost).getAllByRole("term").map((term) => term.textContent)).toEqual(["Per month", "Per year"]);
+    expect(within(cost).getAllByRole("definition").map((value) => value.textContent)).toEqual(["$58.98", "$707.76"]);
+  });
+
+  it("the tab between subscriptions and bills is in the address", async () => {
+    const { router, user } = setup([STREAMLY, WATER]);
+    expect(await screen.findByRole("tab", { name: "Subscriptions", selected: true })).toBeInTheDocument();
+    expect(currentHref(router)).toBe("/plan/subscriptions");
+    await user.click(screen.getByRole("tab", { name: "Bills" }));
+    await vi.waitFor(() => { expect(currentHref(router)).toBe("/plan/subscriptions?kind=bills"); });
+    expect(await screen.findByRole("group", { name: "Cost of bills" })).toBeInTheDocument();
+    await user.click(screen.getByRole("tab", { name: "Subscriptions" }));
+    await vi.waitFor(() => { expect(currentHref(router)).toBe("/plan/subscriptions"); });
+  });
+
+  it("opens on the bills when the address asks for them", async () => {
+    setup([STREAMLY, WATER], { path: "/plan/subscriptions?kind=bills" });
+    expect(await screen.findByRole("tab", { name: "Bills", selected: true })).toBeInTheDocument();
+    expect(screen.getByRole("group", { name: "Cost of bills" })).toBeInTheDocument();
+    expect(within(screen.getByRole("table", { name: "Active" })).getByRole("row", { name: /Harbor Water/ })).toBeInTheDocument();
+  });
+
+  it("a series' name opens it under Plan", async () => {
+    setup([STREAMLY]);
+    const active = await screen.findByRole("table", { name: "Active" });
+    expect(within(active).getByRole("link", { name: "Streamly" })).toHaveAttribute("href", "/plan/subscriptions/s-1");
+    const soon = screen.getByRole("region", { name: "Next 30 days" });
+    expect(within(soon).getByRole("link", { name: "Streamly" })).toHaveAttribute("href", "/plan/subscriptions/s-1");
+  });
+
+  it("has no axe violations", async () => {
+    const { container } = setup([{ ...STREAMLY, open_events: 1 }, MAYBE, CLOUD, GYM, { ...series("s-7", "Old Radio"), status: "ended" }], { events: [MISSED_EVENT] });
+    const look = await screen.findByRole("region", { name: "Needs a look" });
+    await within(look).findByText("Expected on Nov 10, 2026, not seen");
+    await expectNoAxeViolations(container);
   });
 });

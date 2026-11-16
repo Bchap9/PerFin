@@ -3,7 +3,8 @@ import { screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 
 import { ACCOUNT_CHECKING, money, ownerSession, referenceHandlers } from "../planning/testing";
-import { json, mockApi, renderApp } from "../auth/testing";
+import { expectNoAxeViolations } from "../../test/axe";
+import { currentHref, json, mockApi, renderApp } from "../auth/testing";
 
 const SCHEDULE = {
   id: "s-1",
@@ -27,39 +28,97 @@ const SCHEDULE = {
 
 const schedule = (id: string, name: string, extra: Record<string, unknown> = {}) => ({ ...SCHEDULE, id, name, merchant: name, ...extra });
 
+/** Thirty days with one bill due. */
+const CALENDAR = {
+  currency: "USD",
+  date_from: "2026-11-03",
+  date_to: "2026-12-03",
+  opening_balance: money("1200.50"),
+  income: money("0"),
+  bills: money("-15.99"),
+  net: money("-15.99"),
+  unconverted: [],
+  days: [
+    { on: "2026-11-04", events: [], income: money("0"), bills: money("0"), net: money("0"), balance: money("1200.50") },
+    {
+      on: "2026-11-10",
+      events: [{ schedule_id: "s-1", name: "Streaming", account_id: ACCOUNT_CHECKING, kind: "bill", amount: money("-15.99"), amount_min: money("-15.99"), amount_max: money("-15.99"), amount_base: null }],
+      income: money("0"),
+      bills: money("-15.99"),
+      net: money("-15.99"),
+      balance: money("1184.51"),
+    },
+  ],
+};
+
 describe("calendar", () => {
   it("shows what is due with the expected balance", async () => {
     mockApi({
       ...ownerSession(),
       ...referenceHandlers(),
-      "GET /api/v1/cashflow/calendar": () =>
-        json({
-          currency: "USD",
-          date_from: "2026-11-03",
-          date_to: "2026-12-03",
-          opening_balance: money("1200.50"),
-          income: money("0"),
-          bills: money("-15.99"),
-          net: money("-15.99"),
-          unconverted: [],
-          days: [
-            { on: "2026-11-04", events: [], income: money("0"), bills: money("0"), net: money("0"), balance: money("1200.50") },
-            {
-              on: "2026-11-10",
-              events: [{ schedule_id: "s-1", name: "Streaming", account_id: ACCOUNT_CHECKING, kind: "bill", amount: money("-15.99"), amount_min: money("-15.99"), amount_max: money("-15.99"), amount_base: null }],
-              income: money("0"),
-              bills: money("-15.99"),
-              net: money("-15.99"),
-              balance: money("1184.51"),
-            },
-          ],
-        }),
+      "GET /api/v1/cashflow/calendar": () => json(CALENDAR),
     });
-    renderApp("/calendar");
+    renderApp("/plan/upcoming");
     const table = await screen.findByRole("table", { name: "Upcoming days" });
     expect(within(table).getAllByRole("row")).toHaveLength(2);
     expect(within(table).getByText("Streaming")).toBeInTheDocument();
     expect(within(table).getByText("$1,184.51")).toBeInTheDocument();
+  });
+
+  it("the figures for the period are a description list", async () => {
+    mockApi({ ...ownerSession(), ...referenceHandlers(), "GET /api/v1/cashflow/calendar": () => json(CALENDAR) });
+    renderApp("/plan/upcoming");
+    await screen.findByRole("table", { name: "Upcoming days" });
+    expect(screen.getAllByRole("term").map((term) => term.textContent)).toEqual(["Cash now", "Income expected", "Bills expected", "Net"]);
+  });
+
+  it("the tab is in the address", async () => {
+    mockApi({
+      ...ownerSession(),
+      ...referenceHandlers(),
+      "GET /api/v1/cashflow/calendar": () => json(CALENDAR),
+      "GET /api/v1/recurring": () => json({ items: [SCHEDULE] }),
+    });
+    const { router } = renderApp("/plan/upcoming");
+    const user = userEvent.setup();
+    expect(await screen.findByRole("tab", { name: "Cash-flow calendar", selected: true })).toBeInTheDocument();
+    expect(currentHref(router)).toBe("/plan/upcoming");
+    await user.click(screen.getByRole("tab", { name: "Recurring items" }));
+    await vi.waitFor(() => { expect(currentHref(router)).toBe("/plan/upcoming?tab=recurring"); });
+    expect(await screen.findByRole("table", { name: "Recurring items" })).toBeInTheDocument();
+    await user.click(screen.getByRole("tab", { name: "Cash-flow calendar" }));
+    await vi.waitFor(() => { expect(currentHref(router)).toBe("/plan/upcoming"); });
+  });
+
+  it("opens on the recurring items when the address asks for them", async () => {
+    mockApi({
+      ...ownerSession(),
+      ...referenceHandlers(),
+      "GET /api/v1/cashflow/calendar": () => json(CALENDAR),
+      "GET /api/v1/recurring": () => json({ items: [SCHEDULE] }),
+    });
+    renderApp("/plan/upcoming?tab=recurring");
+    expect(await screen.findByRole("tab", { name: "Recurring items", selected: true })).toBeInTheDocument();
+    expect(await screen.findByRole("table", { name: "Recurring items" })).toBeInTheDocument();
+  });
+
+  it("has no axe violations", async () => {
+    mockApi({ ...ownerSession(), ...referenceHandlers(), "GET /api/v1/cashflow/calendar": () => json(CALENDAR) });
+    const { container } = renderApp("/plan/upcoming");
+    await screen.findByRole("table", { name: "Upcoming days" });
+    await expectNoAxeViolations(container);
+  });
+
+  it("has no axe violations on the recurring items", async () => {
+    mockApi({
+      ...ownerSession(),
+      ...referenceHandlers(),
+      "GET /api/v1/cashflow/calendar": () => json(CALENDAR),
+      "GET /api/v1/recurring": () => json({ items: [SCHEDULE, schedule("s-6", "Garden Club", { kind: "bill", status: "confirmed", status_source: "person", origin: "manual" })] }),
+    });
+    const { container } = renderApp("/plan/upcoming?tab=recurring");
+    await screen.findByRole("table", { name: "Recurring items" });
+    await expectNoAxeViolations(container);
   });
 
   it("lists recurring items and pauses one", async () => {
@@ -70,7 +129,7 @@ describe("calendar", () => {
       "GET /api/v1/recurring": () => json({ items: [SCHEDULE] }),
       "PATCH /api/v1/recurring/:id": () => json({ ...SCHEDULE, active: false, status: "paused", status_source: "person" }),
     });
-    renderApp("/calendar");
+    renderApp("/plan/upcoming");
     const user = userEvent.setup();
     expect(screen.queryByRole("tab", { name: "Recurring and subscriptions" })).not.toBeInTheDocument();
     await user.click(await screen.findByRole("tab", { name: "Recurring items" }));
@@ -102,7 +161,7 @@ describe("calendar", () => {
       "PATCH /api/v1/recurring/:id": () => json(SCHEDULE),
       "DELETE /api/v1/recurring/:id": () => new Response(null, { status: 204 }),
     });
-    renderApp("/calendar");
+    renderApp("/plan/upcoming");
     const user = userEvent.setup();
     await user.click(await screen.findByRole("tab", { name: "Recurring items" }));
     const table = await screen.findByRole("table", { name: "Recurring items" });
@@ -127,7 +186,7 @@ describe("calendar", () => {
     expect(cell(/Old Gym/, "State")).toHaveTextContent("Not a subscription");
 
     // The view of subscriptions and bills is one step away.
-    expect(screen.getByRole("link", { name: "Subscriptions and bills" })).toHaveAttribute("href", "/subscriptions");
+    expect(screen.getByRole("link", { name: "See subscriptions" })).toHaveAttribute("href", "/plan/subscriptions");
 
     // A found item is not deleted: the person says it is not recurring, and that sticks.
     const streaming = within(table).getByRole("row", { name: /Streaming/ });

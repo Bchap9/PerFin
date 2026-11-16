@@ -1,6 +1,4 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-import "../networth/wealth.css";
-
 import { useQuery } from "@tanstack/react-query";
 import { useState } from "react";
 
@@ -9,6 +7,7 @@ import { EmptyState } from "../../components/EmptyState";
 import { Field } from "../../components/Field";
 import { MoneyText } from "../../components/MoneyText";
 import { Select } from "../../components/Select";
+import { Stat, StatGroup } from "../../components/Stat";
 import { Table, type TableColumn } from "../../components/Table";
 import { formatDate } from "../../lib/dates";
 import { nameLookup, useAccounts } from "../planning/queries";
@@ -57,25 +56,13 @@ export function CalendarTab() {
       <QueryState loading={query.isPending} error={query.error} label="the calendar">
         {data === undefined ? null : (
           <>
-            <Card title={`${formatDate(data.date_from) ?? data.date_from} to ${formatDate(data.date_to) ?? data.date_to}`} headingLevel={2}>
-              <dl className="wealth-figures">
-                <div>
-                  <dt>Cash now</dt>
-                  <dd><MoneyText amount={data.opening_balance.amount} currency={data.opening_balance.currency} /></dd>
-                </div>
-                <div>
-                  <dt>Income expected</dt>
-                  <dd><MoneyText amount={data.income.amount} currency={data.income.currency} tone="none" /></dd>
-                </div>
-                <div>
-                  <dt>Bills expected</dt>
-                  <dd><MoneyText amount={data.bills.amount} currency={data.bills.currency} tone="none" /></dd>
-                </div>
-                <div>
-                  <dt>Net</dt>
-                  <dd><MoneyText amount={data.net.amount} currency={data.net.currency} tone="signed" signDisplay="exceptZero" /></dd>
-                </div>
-              </dl>
+            <Card title={`${formatDate(data.date_from) ?? data.date_from} to ${formatDate(data.date_to) ?? data.date_to}`} headingLevel={3}>
+              <StatGroup>
+                <Stat label="Cash now" value={<MoneyText amount={data.opening_balance.amount} currency={data.opening_balance.currency} />} />
+                <Stat label="Income expected" value={<MoneyText amount={data.income.amount} currency={data.income.currency} tone="none" />} />
+                <Stat label="Bills expected" value={<MoneyText amount={data.bills.amount} currency={data.bills.currency} tone="none" />} />
+                <Stat label="Net" value={<MoneyText amount={data.net.amount} currency={data.net.currency} tone="signed" signDisplay="exceptZero" />} />
+              </StatGroup>
               <p className="muted">Based on your active recurring items at the middle of their expected range. Cash covers checking, savings and cash accounts.</p>
               {data.unconverted.length > 0 ? <p role="status" className="muted">Some items have no exchange rate and are left out of the totals.</p> : null}
             </Card>

@@ -241,7 +241,8 @@ export function RecurringTab() {
         </Button>
       </div>
       <p className="muted">
-        What they cost, what changed and what needs a look is in <Link to="/subscriptions">Subscriptions and bills</Link>.
+        What subscriptions and bills cost, what changed and what needs a look is under Subscriptions.{" "}
+        <Link to="/plan/subscriptions">See subscriptions</Link>
       </p>
       <ErrorLine message={detect.error ?? toggle.error ?? remove.error ?? dismiss.error} />
       <QueryState loading={query.isPending} error={query.error} label="recurring items">
