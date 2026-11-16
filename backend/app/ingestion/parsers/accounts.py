@@ -214,7 +214,11 @@ def account_heading(text: str) -> str | None:
 # ---------------------------------------------------------------------------
 
 _BANK_WORDS: Final[tuple[tuple[re.Pattern[str], AccountType], ...]] = (
-    (re.compile(r"\b(checking|chequing|current account)\b"), AccountType.CHECKING),
+    # A share draft is a credit union's checking account.
+    (
+        re.compile(r"\b(checking|chequing|current account|share draft)\b"),
+        AccountType.CHECKING,
+    ),
     (re.compile(r"\b(credit card|card account)\b"), AccountType.CREDIT_CARD),
     (re.compile(r"\b(savings|money market|certificate of deposit)\b"), AccountType.SAVINGS),
 )
@@ -247,6 +251,25 @@ def _kind_of(text: str) -> tuple[AccountType | None, str | None]:
     if _INVESTMENT_WORDS.search(text):
         return AccountType.BROKERAGE, None
     return None, None
+
+
+def title_kind(title: str | None) -> tuple[str | None, str | None]:
+    """``(account type, subtype)`` the title of one account names.
+
+    As :func:`account_kind` for a title that is one account's
+    (``Everyday Checking``, ``MONEY MARKET``, ``SHARE DRAFT``); ``(None,
+    None)`` for one that names two kinds of bank account (``Checking &
+    Savings``: the heading of a list of accounts) and for a transaction's
+    description (``TRANSFER TO SAVINGS``, :func:`_describes_transaction`).
+    """
+    text = " ".join((title or "").lower().replace("-", " ").split())
+    if not text:
+        return None, None
+    if len({kind for pattern, kind in _BANK_WORDS if pattern.search(text)}) > 1:
+        return None, None
+    if _describes_transaction([normalise(word) for word in text.split()]):
+        return None, None
+    return account_kind(title)
 
 
 def account_kind(*texts: str | None) -> tuple[str | None, str | None]:

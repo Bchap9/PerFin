@@ -979,12 +979,14 @@ def test_two_accounts_by_their_summaries() -> None:
     assert "accounts_by_balance" not in warnings
     assert "rows_outside_account" not in warnings
     assert _skipped(result) == 0
-    # Named by their summaries; the one masked number tells neither apart.
+    # Named and typed by their summaries; both carry the one masked number
+    # the document prints, which is the number of each of them.
     assert [(s.account.name, s.account.last4) for s in result.statements] == [
-        ("CHECKING", None),
-        ("SAVINGS", None),
+        ("CHECKING", "0000"),
+        ("SAVINGS", "0000"),
     ]
     assert [s.account.account_type for s in result.statements] == ["checking", "savings"]
+    assert all(s.confidence["account_number"] >= 0.9 for s in result.statements)
     assert [(s.first_page, s.last_page) for s in result.statements] == [(1, 2), (2, 2)]
 
 
@@ -1189,6 +1191,168 @@ def test_a_sentence_over_a_summary_names_no_account() -> None:
     assert _statuses(outcome) == ["ok", "ok"]
     assert [s.account.name for s in outcome.statements] == ["CHECKING", None]
     assert [s.account.account_type for s in outcome.statements] == ["checking", None]
+
+
+# -- which account each summary is: its number, its name, its type ---------------
+
+NUMBER = [("Account Number: ******4321", 300.0)]
+
+
+def _accounts(outcome: ParseOutcome) -> list[tuple[str | None, str | None, str | None]]:
+    return [(s.account.name, s.account.account_type, s.account.last4) for s in outcome.statements]
+
+
+def test_split_accounts_carry_the_one_number_printed() -> None:
+    outcome = _parse([NUMBER, *CHECKING_PAGE], SAVINGS_PAGE)
+    assert _statuses(outcome) == ["ok", "ok"]
+    assert _accounts(outcome) == [("CHECKING", "checking", "4321"), ("SAVINGS", "savings", "4321")]
+    # The same number printed with each account is still one number.
+    outcome = _parse([NUMBER, *CHECKING_PAGE], [NUMBER, *SAVINGS_PAGE])
+    assert _accounts(outcome) == [("CHECKING", "checking", "4321"), ("SAVINGS", "savings", "4321")]
+    # No number anywhere: none is made up.
+    outcome = _parse(CHECKING_PAGE, SAVINGS_PAGE)
+    assert _accounts(outcome) == [("CHECKING", "checking", None), ("SAVINGS", "savings", None)]
+
+
+def test_two_numbers_go_to_the_account_each_is_printed_over() -> None:
+    other = [("Account Number: ******8765", 300.0)]
+    outcome = _parse([NUMBER, *CHECKING_PAGE], [other, *SAVINGS_PAGE])
+    assert _statuses(outcome) == ["ok", "ok"]
+    assert _accounts(outcome) == [("CHECKING", "checking", "4321"), ("SAVINGS", "savings", "8765")]
+    # Two numbers over one summary and none over the other: whose is whose
+    # is not guessed.
+    outcome = _parse([NUMBER, other, *CHECKING_PAGE], SAVINGS_PAGE)
+    assert _accounts(outcome) == [("CHECKING", "checking", None), ("SAVINGS", "savings", None)]
+
+
+Page = list[list[tuple[str, float]]]
+#: Opening balance, closing balance and the one row of each of two accounts.
+FIRST = ("100.00", "150.00", "50.00")
+SECOND = ("900.00", "960.00", "60.00")
+
+
+def _account_page(figures: tuple[str, str, str], *titles: list[tuple[str, float]]) -> Page:
+    """An account's page: the lines over its summary, the two balances, one row."""
+    opening, closing, row = figures
+    return [
+        *titles,
+        *_summary(None, opening, closing),
+        HEADER,
+        _dated(5, "Deposit", row),
+    ]
+
+
+def test_the_title_over_a_summary_names_the_account() -> None:
+    # The summary's own title names no kind of account; the product's name
+    # printed over it does, in one cell or in two.
+    activity = [("Statement period activity summary", 62.0), ("Account number: 4321000", 330.0)]
+    outcome = _parse(
+        _account_page(FIRST, [("Larkrise", 62.0), ("Essential Checking", 130.0)], activity),
+        _account_page(SECOND, [("Larkrise Way2Keep", 62.0), ("Savings", 170.0)], activity),
+    )
+    assert _statuses(outcome) == ["ok", "ok"]
+    assert _accounts(outcome) == [
+        ("Larkrise Essential Checking", "checking", "1000"),
+        ("Larkrise Way2Keep Savings", "savings", "1000"),
+    ]
+    # A heading of the summary's figures stands between title and balance.
+    outcome = _parse(
+        _account_page(FIRST, [("CHECKING SUMMARY", 62.0)], [("AMOUNT", 300.0)]),
+        _account_page(SECOND, [("MONEY MARKET SUMMARY", 62.0)], [("AMOUNT", 300.0)]),
+    )
+    assert _accounts(outcome) == [("CHECKING", "checking", None), ("MONEY MARKET", "savings", None)]
+    # A credit union's checking account is a share draft.
+    outcome = _parse(
+        _account_page(FIRST, [("SHARE DRAFT SUMMARY", 62.0)]),
+        _account_page(SECOND, [("REGULAR SAVINGS SUMMARY", 62.0)]),
+    )
+    assert _accounts(outcome) == [
+        ("SHARE DRAFT", "checking", None),
+        ("REGULAR SAVINGS", "savings", None),
+    ]
+
+
+def test_a_title_in_the_opening_line_names_the_account() -> None:
+    def page(title: str, opening: str, closing: str, row: str) -> Page:
+        return [
+            [(title, 62.0), ("Beginning Balance", 330.0), (opening, 480.0)],
+            [("Ending Balance", 330.0), (closing, 480.0)],
+            HEADER,
+            _dated(5, "Deposit", row),
+        ]
+
+    outcome = _parse(
+        [NUMBER, *page("CHECKING - TOTALLY FREE ID 0009", "100.00", "150.00", "50.00")],
+        page("SAVINGS ID 0040", "900.00", "960.00", "60.00"),
+    )
+    assert _statuses(outcome) == ["ok", "ok"]
+    # The title's own number is the account's, not the one printed for all.
+    assert _accounts(outcome) == [
+        ("CHECKING - TOTALLY FREE", "checking", "0009"),
+        ("SAVINGS", "savings", "0040"),
+    ]
+    # Where titles number their accounts, the number printed once for the
+    # document is the member's: an account whose title has none gets none.
+    outcome = _parse(
+        [NUMBER, *page("CHECKING - TOTALLY FREE ID 0009", "100.00", "150.00", "50.00")],
+        page("HOLIDAY SAVINGS", "900.00", "960.00", "60.00"),
+    )
+    assert _accounts(outcome) == [
+        ("CHECKING - TOTALLY FREE", "checking", "0009"),
+        ("HOLIDAY SAVINGS", "savings", None),
+    ]
+
+
+def test_what_names_no_account_gives_no_type() -> None:
+    # Titles that name no kind of account: neither a name nor a type.
+    outcome = _parse(
+        _account_page(FIRST, [("PRIMARY ACCOUNT SUMMARY", 62.0)]),
+        _account_page(SECOND, [("SECOND ACCOUNT SUMMARY", 62.0)]),
+    )
+    assert _statuses(outcome) == ["ok", "ok"]
+    assert _accounts(outcome) == [(None, None, None), (None, None, None)]
+    # A title of two kinds, a line of the list of accounts with its figures
+    # and a transfer's description stand over a summary and name nothing.
+    glance = [("Premier Savings", 62.0), ("900.00", 300.0), ("960.00", 400.0)]
+    outcome = _parse(
+        _account_page(FIRST, [("Checking & Savings", 62.0)], [("ACCOUNT SUMMARY", 62.0)]),
+        _account_page(SECOND, glance, [("ACCOUNT SUMMARY", 62.0)]),
+    )
+    assert _accounts(outcome) == [(None, None, None), (None, None, None)]
+    outcome = _parse(
+        _account_page(FIRST, [("CHECKING SUMMARY", 62.0)]),
+        _account_page(SECOND, [("TRANSFER TO SAVINGS", 62.0)], [("ACCOUNT SUMMARY", 62.0)]),
+    )
+    assert _accounts(outcome) == [("CHECKING", "checking", None), (None, None, None)]
+    # A title five lines above the balance is not the summary's.
+    filler = [[(f"Notice line {n}", 62.0)] for n in ("one", "two", "three", "four")]
+    outcome = _parse(
+        _account_page(FIRST, [("CHECKING SUMMARY", 62.0)]),
+        _account_page(SECOND, [("PREMIER SAVINGS", 62.0)], *filler),
+    )
+    assert _accounts(outcome) == [("CHECKING", "checking", None), (None, None, None)]
+
+
+def test_two_accounts_named_over_their_summaries() -> None:
+    result = _read(synth.two_accounts_named_above())
+    assert [len(s.transactions) for s in result.statements] == [9, 3]
+    assert [_status(s) for s in result.statements] == ["ok", "ok"]
+    assert "accounts_by_summary" in _warnings(result)
+    assert [
+        (s.account.name, s.account.account_type, s.account.last4) for s in result.statements
+    ] == [
+        ("Thistlebeck Everyday Checking", "checking", "0000"),
+        ("Thistlebeck Premier Savings", "savings", "0000"),
+    ]
+
+
+def test_two_accounts_with_titles_that_name_no_kind() -> None:
+    result = _read(synth.two_accounts_unnamed())
+    assert [len(s.transactions) for s in result.statements] == [9, 3]
+    assert [_status(s) for s in result.statements] == ["ok", "ok"]
+    assert [
+        (s.account.name, s.account.account_type, s.account.last4) for s in result.statements
+    ] == [(None, None, "0000"), (None, None, "0000")]
 
 
 # -- what the first page's summary names: a card, a loan bill ---------------------

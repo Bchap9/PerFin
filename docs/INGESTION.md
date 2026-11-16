@@ -962,11 +962,30 @@ a child answering with parser output is `bad_output`.
     opening balance line outside a table, after a closing one, with
     another figure than the account above), when two of the parts or
     more hold a table. Each is a statement of its own, checked against
-    its own balances (warning `accounts_by_summary`), named by its
-    summary's title (`CHECKING SUMMARY` gives `CHECKING`) and typed by
-    it. The shared number names neither, so such a statement carries no
-    last four digits and the importer asks which account each belongs to
-    (`account_not_found`). A balance brought forward that equals the one
+    its own balances (warning `accounts_by_summary`). **Which account
+    each is:** its name and type come from its summary's title (`CHECKING
+    SUMMARY` gives `CHECKING`), looked for in the cell printed before the
+    balance label on the opening line (`SAVINGS ID 0040 | Beginning
+    Balance | 900.00`), else in the four lines over that line on its
+    page, nearest first, up to a line of a table or a balance line: the
+    summary's own title or, when that names no kind of account
+    (`Statement period activity summary`), the product's name printed
+    over it (`Larkrise | Essential Checking`). A title is at most six
+    words, prints no amount and names one kind of account
+    (`accounts.title_kind`: checking, savings, money market, share draft
+    and the other words of `account_kind`); `Checking & Savings`, a line
+    of a list of accounts with its figures, a footer sentence and
+    `TRANSFER TO SAVINGS` name nothing. A title that names no kind gives
+    neither a name nor a type: no type is ever guessed. Its last four
+    digits are the title's own number when it has one (`ID 0040`), else
+    the one number printed in the document outside its tables (the masked
+    number both accounts share), else, when the document prints several,
+    the one number printed in that summary's head; with none or two
+    there, none. Where any title numbers its account the document numbers
+    its accounts in their titles, the number printed once is the member's
+    and an account whose title has none gets none. The importer puts the
+    statements of such a document on accounts by their type (*Matching*
+    below). A balance brought forward that equals the one
     carried forward, a balance printed over the header of a later page
     with no closing figure after it but the account's own (`Balance
     Forward`), and an
@@ -1622,7 +1641,21 @@ OFX `INVSTMTRS` in the sandbox or from a PDF/scan's pages in the worker.
   statements with its own last four digits or, when it records none, the
   single statement nothing matched, never several accounts at once. No account, or one that does not
   fit, raises `unknown_account` (`account_not_found`, `account_ambiguous`,
-  `account_type_mismatch`, `currency_mismatch`). **No
+  `account_type_mismatch`, `currency_mismatch`). In a document the
+  parser split at its accounts' summaries (`accounts_by_summary`), two
+  statements may carry the **same** last four digits (a checking and a
+  savings account printed under one masked number), and the digits then
+  name none of them: a statement of such a document goes to the one
+  account with its digits that has the type its summary names, the name
+  telling several of one type apart
+  (`match.accounts.match_shared_number`, `imports.service.statement_match`).
+  One that names no type while another statement carries its digits, or
+  the type another statement names too, waits with every account of
+  those digits as a candidate (`account_ambiguous`), and a savings
+  statement never lands on the checking account because of the digits.
+  The Accounts dialog matches the same way. In any other file the same
+  digits on two statements are one account (two months in one OFX
+  file). **No
   row a statement's own figures do not vouch for is written** (investment
   rows have no pending state, so what is in doubt waits in a
   `low_confidence_field` item); what is held depends on what the

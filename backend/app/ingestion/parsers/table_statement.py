@@ -459,9 +459,18 @@ are read the same way:
    follows, or only the closing figure of the account above (``Balance
    Forward``: no summary).
    Tried after 6 and 7, and only when two of the accounts hold a table.
-   Each is one statement (warning ``accounts_by_summary``) named by its
-   summary's title when that names a kind of account (``SAVINGS``), with no
-   last four digits: the number printed is every account's. An account
+   Each is one statement (warning ``accounts_by_summary``) named and typed
+   by the title of its summary when that names one kind of account
+   (:meth:`TableStatementParser._summary_account`: the cell before the
+   balance label on the opening line, else the nearest of the
+   :data:`SUMMARY_HEAD_LINES` lines over it, ``SAVINGS SUMMARY`` or the
+   product's name printed over ``Statement period activity summary``);
+   no type is guessed from anything else. Its last four digits are its
+   title's own number, else the one number the document prints outside its
+   tables (every account's), else the one number printed in its summary's
+   head (:meth:`TableStatementParser._summary_numbers`); which of two
+   accounts with one number a statement is, the importer tells by the
+   type (``app.ingestion.match.accounts.match_shared_number``). An account
    whose summary has no table is no statement (``account_without_tables``).
 
 Institution parsers (:mod:`app.ingestion.parsers.institutions`) subclass it
@@ -476,7 +485,7 @@ from __future__ import annotations
 import math
 import re
 from calendar import monthrange
-from collections.abc import Callable, Iterable, Mapping, Sequence
+from collections.abc import Callable, Collection, Iterable, Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from datetime import date, timedelta
 from decimal import Decimal
@@ -501,6 +510,7 @@ from app.ingestion.parsers.accounts import (
     account_kind,
     segment,
     summary_last4,
+    title_kind,
 )
 from app.ingestion.parsers.base import (
     Cell,
@@ -1134,6 +1144,10 @@ class BalanceSection:
     lines: list[ViewLine]
     #: The title printed over the account's table (``FREE CHECKING - ID 0010``).
     title: str | None = None
+    #: The last four digits printed for the account when its title has none
+    #: (accounts told apart by their summaries: the number printed for the
+    #: document, or the one printed over this account's summary).
+    last4: str | None = None
 
 
 #: The number ending a section's title: ``- ID 0010``, ``Share 01``, ``#0070``.
@@ -1161,6 +1175,9 @@ OWN_COLUMN_MARKERS: Final[Mapping[str, bool]] = {"cr": True, "dr": False, "db": 
 
 #: Words the title of an account's summary may have (``PREMIER SAVINGS ACCOUNT SUMMARY``).
 SUMMARY_TITLE_WORDS: Final = 6
+#: Lines above a summary's opening balance searched for the account's title
+#: and its number (the summary's own title, the product's name over it).
+SUMMARY_HEAD_LINES: Final = 4
 #: The word that makes a title the title of a summary, not the account's name.
 _SUMMARY_WORD: Final = re.compile(r"\s*\bsummary\s*$", re.IGNORECASE)
 
@@ -1176,6 +1193,8 @@ class _SummarySection:
     opened: Decimal | None
     #: The closing figures printed outside its tables, in order.
     closings: list[Decimal]
+    #: The index, in the document's lines, of its opening balance line.
+    at: int
 
 
 @dataclass(frozen=True)
@@ -3993,18 +4012,106 @@ class TableStatementParser(DocumentParser):
             inside.update(range(head, (head if last is None else last) + 1))
         return inside
 
-    def _summary_title(self, line: ViewLine) -> str | None:
-        """The account a summary's title line names (``SAVINGS SUMMARY``:
-        ``SAVINGS``), or None when the line is no such title: more than
-        :data:`SUMMARY_TITLE_WORDS` words, or no kind of account in it (a
-        footer sentence stands over a summary as well as a title does)."""
+    def _summary_title(self, line: ViewLine, *, own_cell: bool = False) -> str | None:
+        """The account a title line names (``SAVINGS SUMMARY``: ``SAVINGS``;
+        ``Larkrise | Essential Checking``: both cells), or None when the
+        line is no such title: more than :data:`SUMMARY_TITLE_WORDS` words,
+        an amount on it (a line of a list of accounts), or no one kind of
+        account in it
+        (:func:`~app.ingestion.parsers.accounts.title_kind`: a footer
+        sentence stands over a summary as well as a title does, and so do
+        ``Checking & Savings`` and ``TRANSFER TO SAVINGS``).
+
+        The title is the line's cells joined, or its first cell alone when
+        a later cell holds a digit (``Statement period activity summary |
+        Account number: 1234``). With ``own_cell`` the line is the opening
+        balance line itself and only a first cell printed before the label
+        is looked at (``SAVINGS ID 0040 | Beginning Balance | 900.00``)."""
         text = self._title_cell(line)
-        if text is None or len(line.text.split()) > SUMMARY_TITLE_WORDS:
+        if text is None:
+            return None
+        if own_cell:
+            if len(line.cells) < 2:
+                return None
+        elif find_amounts(line.text):
+            return None
+        elif not any(ch.isdigit() for cell in line.cells[1:] for ch in cell.text):
+            text = line.text
+        if len(text.split()) > SUMMARY_TITLE_WORDS:
             return None
         name = _SUMMARY_WORD.sub("", text[:TITLE_MAX]).strip(" -\u2013:")
-        if not name or account_kind(name)[0] is None:
+        if not name or title_kind(section_name(name)[0])[0] is None:
             return None
         return name
+
+    def _summary_head(
+        self,
+        lines: Sequence[ViewLine],
+        at: int,
+        stop: Callable[[int], bool],
+    ) -> list[int]:
+        """The indexes of the lines over the opening balance line ``at`` of a
+        summary that may name its account, nearest first: at most
+        :data:`SUMMARY_HEAD_LINES` of them, on its page, up to a line
+        ``stop`` says is another account's (a line of a table, a balance
+        line)."""
+        out: list[int] = []
+        for above in range(at - 1, max(at - SUMMARY_HEAD_LINES, 0) - 1, -1):
+            if lines[above].page != lines[at].page or stop(above):
+                break
+            out.append(above)
+        return out
+
+    def _summary_account(
+        self, lines: Sequence[ViewLine], at: int, stop: Callable[[int], bool]
+    ) -> str | None:
+        """The title of the account whose summary opens at line ``at``: the
+        cell printed before the balance label on that line, else the
+        nearest line over it that names one kind of account
+        (:meth:`_summary_title`, :meth:`_summary_head`)."""
+        own = self._summary_title(lines[at], own_cell=True)
+        if own is not None:
+            return own
+        for above in self._summary_head(lines, at, stop):
+            found = self._summary_title(lines[above])
+            if found is not None:
+                return found
+        return None
+
+    def _summary_numbers(
+        self,
+        lines: Sequence[ViewLine],
+        found: Sequence[_SummarySection],
+        inside: Collection[int],
+        stop: Callable[[int], bool],
+    ) -> list[str | None]:
+        """The last four digits printed for each account found by its
+        summary, for those whose title carries no number of its own.
+
+        One number printed in the whole document, outside its tables, is
+        the number of every account in it (two accounts under one masked
+        number). With several, an account has the one number printed in
+        its summary's head (:meth:`_summary_head`, and the opening line
+        itself); with none or two there, none: whose is whose is not
+        guessed. Where a title numbers its account (``SAVINGS ID 0040``)
+        the document numbers its accounts in their titles and any other
+        number is the member's: an account whose title has none gets
+        none."""
+        if any(section_name(section.title)[1] is not None for section in found):
+            return [None] * len(found)
+
+        def numbers(indexes: Iterable[int]) -> set[str]:
+            read = (summary_last4(lines[index].text) for index in indexes)
+            return {digits for digits in read if digits is not None}
+
+        printed = numbers(index for index in range(len(lines)) if index not in inside)
+        if len(printed) == 1:
+            return [next(iter(printed))] * len(found)
+        out: list[str | None] = []
+        for section in found:
+            head = numbers([section.at, *self._summary_head(lines, section.at, stop)])
+            out.append(next(iter(head)) if len(head) == 1 else None)
+        return out
 
     def summary_sections(
         self, lines: Sequence[ViewLine]
@@ -4041,6 +4148,12 @@ class TableStatementParser(DocumentParser):
                 line, self.closing_labels, inside=self.opening_labels, earlier=True
             )
 
+        def other_account(index: int) -> bool:
+            """Line ``index`` is no part of the head of a summary under it:
+            a line of a table, or a balance line (of the account above)."""
+            line = lines[index]
+            return index in inside or opening(line) is not None or closing(line) is not None
+
         starts = summary_starts(lines, opening, closing, inside.__contains__)
         if len(starts) < _MIN_SECTIONS:
             return None
@@ -4048,6 +4161,7 @@ class TableStatementParser(DocumentParser):
         for position, start in enumerate(starts):
             end = starts[position + 1] if position + 1 < len(starts) else len(lines)
             opened: Decimal | None = None
+            opened_at = start
             closings: list[Decimal] = []
             for index in range(start, end):
                 if index in inside:
@@ -4055,7 +4169,7 @@ class TableStatementParser(DocumentParser):
                 figure = opening(lines[index])
                 if figure is not None:
                     if opened is None:
-                        opened = figure.value
+                        opened, opened_at = figure.value, index
                     continue
                 figure = closing(lines[index]) if opened is not None else None
                 if figure is not None:
@@ -4088,13 +4202,16 @@ class TableStatementParser(DocumentParser):
                 # An earlier account's summary printed once more.
                 twin.lines.extend(body)
                 continue
-            found.append(_SummarySection(body, self._summary_title(lines[start]), opened, closings))
+            title = self._summary_account(lines, opened_at, other_account)
+            found.append(_SummarySection(body, title, opened, closings, opened_at))
         if len(found) < _MIN_SECTIONS:
             return None
         if sum(1 for section in found if self.lines_have_table(section.lines)) < _MIN_SECTIONS:
             return None
+        numbers = self._summary_numbers(lines, found, inside, other_account)
         return list(lines[: starts[0]]), [
-            BalanceSection(section.lines, section.title) for section in found
+            BalanceSection(section.lines, section.title, last4)
+            for section, last4 in zip(found, numbers, strict=True)
         ]
 
     def _parse_sections(
@@ -4145,6 +4262,8 @@ class TableStatementParser(DocumentParser):
             if read.statement is None:
                 continue
             name, last4 = section_name(section.title)
+            # Its title's own number, else the one printed for it.
+            last4 = last4 or section.last4
             kind, subtype = account_kind(name)
             kind = self.account_type or kind
             pages = [line.page for line in section.lines]
@@ -4154,7 +4273,8 @@ class TableStatementParser(DocumentParser):
                         "account": read.statement.account.model_copy(
                             update={
                                 "name": name,
-                                # Never the member number printed once for every share.
+                                # Never the member number printed once for
+                                # every share (accounts by their balances).
                                 "last4": last4,
                                 "account_type": kind,
                                 "subtype": subtype if kind is not None else None,

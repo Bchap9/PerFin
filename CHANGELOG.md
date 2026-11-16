@@ -458,10 +458,17 @@ What remains (details in docs/ROADMAP.md):
   A checking and a savings account that share a masked number were read
   as one statement that could not add up. They are split where each
   account's summary starts (`accounts_by_summary`), each checked
-  against its own balances; PerFin asks which account each belongs to,
-  because the number says nothing. A summary printed again on a later
-  page starts no second account, and neither does a balance carried to
-  the head of the next page.
+  against its own balances. Each carries the masked number the document
+  prints and the name and type its own summary's title gives it
+  (`CHECKING SUMMARY`, a product name printed over the summary, `Money
+  Market`, `Share Draft`); a title that names no kind of account gives
+  no type. With a checking and a savings account of the household under
+  that number, each statement lands on the account of its type; when no
+  title says which is which, or the household has no account of that
+  type under the number, PerFin asks instead of guessing, and a new
+  account is proposed with the type the title names. A summary printed
+  again on a later page starts no second account, and neither does a
+  balance carried to the head of the next page.
 - **A card that prints no card word is read as a card.** A statement
   whose summary is `Payments and Credits`, `Purchases` and `New Balance`
   was read with a bank account's signs, purchases as income, and its

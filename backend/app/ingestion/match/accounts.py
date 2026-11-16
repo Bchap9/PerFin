@@ -9,6 +9,14 @@ same name (compared like payees: case, accents and punctuation ignored).
 Anything else (none, or still several) is not a match: the importer raises an
 ``unknown_account`` review item naming the candidates.
 
+Several statements of one document may carry the **same** last four digits
+(a checking and a savings account printed under one masked number). The
+digits then say nothing about which is which: :func:`match_shared_number`
+puts such a statement on the one account with those digits that has the
+type its own summary names, and on none when it names no type, when no
+account or several of that type carry the digits and the name does not tell
+them apart, or when another statement of the document names the same type.
+
 Visibility (SECURITY.md F3): a document uploaded by a member may only land
 on accounts that member can **edit** (:func:`importable_account_ids`), so a
 crafted file cannot write into an account hidden from its uploader. Owners
@@ -102,4 +110,61 @@ def match_account(
         chosen = pick(institution, rows)
         if chosen is not None:
             return AccountMatch(chosen, candidates)
+    return AccountMatch(None, candidates)
+
+
+def _same_type(word: str, account_type: object) -> bool:
+    """A statement's own word for its type is the account's (``creditcard``
+    is ``credit_card``)."""
+    return word.replace("_", "").lower() == str(account_type).replace("_", "").lower()
+
+
+def _words(text: str | None) -> frozenset[str]:
+    return frozenset("".join(c if c.isalnum() else " " for c in (text or "").lower()).split())
+
+
+def shared_numbers(accounts: Collection[tuple[str | None, str | None]]) -> frozenset[str]:
+    """The last four digits more than one of a document's statements carry;
+    ``accounts`` is ``(last4, account type)`` per statement."""
+    seen: dict[str, int] = {}
+    for last4, _ in accounts:
+        if last4:
+            seen[last4] = seen.get(last4, 0) + 1
+    return frozenset(last4 for last4, count in seen.items() if count > 1)
+
+
+def match_shared_number(
+    db: Session,
+    household_id: uuid.UUID,
+    *,
+    last4: str,
+    account_type: str | None,
+    name: str | None = None,
+    told_apart: bool = True,
+    allowed: Collection[uuid.UUID] | None = None,
+) -> AccountMatch:
+    """The account of a statement of a document split at its accounts'
+    summaries, whose ``last4`` other statements of it may carry too
+    (module doc).
+
+    Exactly one account with the digits and the type ``account_type``: that
+    one. Several of the type: the one whose name holds every word of
+    ``name`` or is held by it, if exactly one. ``told_apart`` false (another
+    statement of the document names the same type) or no type named: none.
+    The candidates are every account with the digits.
+    """
+    query = (
+        select(Account.id, Account.type, Account.name)
+        .where(Account.household_id == household_id, Account.number_last4 == last4)
+        .order_by(Account.id)
+    )
+    rows = [row for row in db.execute(query) if allowed is None or row[0] in allowed]
+    candidates = tuple(account_id for account_id, _, _ in rows)
+    if not account_type or not told_apart:
+        return AccountMatch(None, candidates)
+    typed = [row for row in rows if _same_type(account_type, row[1])]
+    if len(typed) > 1 and (wanted := _words(name)):
+        typed = [row for row in typed if wanted <= _words(row[2]) or _words(row[2]) <= wanted]
+    if len(typed) == 1:
+        return AccountMatch(typed[0][0], candidates)
     return AccountMatch(None, candidates)

@@ -50,6 +50,13 @@ Accounts told apart by their summaries only:
   its own balances over ``Date | Description | Amount | Balance``, whose
   first and last lines are undated ``Beginning Balance`` and ``Ending
   Balance``. Each account adds up by itself (:data:`EXPECTED_ACCOUNTS`).
+* :func:`two_accounts_named_above`: the same two accounts; the title of
+  each summary is ``Statement period activity summary`` and the product's
+  name (``Thistlebeck Everyday Checking``, ``Thistlebeck Premier Savings``)
+  is printed over it.
+* :func:`two_accounts_unnamed`: the same two accounts under ``PRIMARY
+  ACCOUNT SUMMARY`` and ``SECOND ACCOUNT SUMMARY``: no title says which is
+  the checking account.
 * :func:`summary_printed_twice`: one account whose summary is printed again
   at the head of page 2, with the same figures, over the rest of its rows.
 
@@ -556,6 +563,32 @@ EXPECTED_ACCOUNTS: Final[tuple[tuple[Decimal, Decimal, list[ExpectedRow]], ...]]
 
 def two_accounts_one_number() -> bytes:
     """A checking and a savings account, each with its summary, one masked number."""
+    return _two_accounts(("CHECKING SUMMARY",), ("SAVINGS SUMMARY",))
+
+
+def two_accounts_named_above() -> bytes:
+    """The same two accounts; each summary's own title names no kind of
+    account and the product's name is printed over it."""
+    summary = "Statement period activity summary"
+    return _two_accounts(
+        ("Thistlebeck Everyday Checking", summary), ("Thistlebeck Premier Savings", summary)
+    )
+
+
+def two_accounts_unnamed() -> bytes:
+    """The same two accounts under titles that name no kind of account."""
+    return _two_accounts(("PRIMARY ACCOUNT SUMMARY",), ("SECOND ACCOUNT SUMMARY",))
+
+
+def _titles(c: canvas.Canvas, y: float, titles: Sequence[str]) -> None:
+    """``titles`` one over the other, the last of them at ``y``."""
+    for position, title in enumerate(reversed(titles)):
+        _line(c, y + 14 * position, [(40, title)], size=10, bold=True)
+
+
+def _two_accounts(first: Sequence[str], second: Sequence[str]) -> bytes:
+    """Two accounts under one masked number; ``first`` and ``second`` are the
+    lines printed over the summary of each."""
     buf = io.BytesIO()
     c = canvas.Canvas(buf, pagesize=letter)
     (checking_open, checking_close, _), (savings_open, savings_close, _) = EXPECTED_ACCOUNTS
@@ -574,7 +607,7 @@ def two_accounts_one_number() -> bytes:
             [(40, "Premier Savings"), (-420, _money(savings_open)), (-560, _money(savings_close))],
         ],
     )
-    _line(c, 640, [(40, "CHECKING SUMMARY")], size=10, bold=True)
+    _titles(c, 640, first)
     y = _rows(
         c,
         626,
@@ -591,7 +624,7 @@ def two_accounts_one_number() -> bytes:
     _dollar_total_line(c, y, "Total Electronic Withdrawals", _PAIR_WITHDRAWALS)
     c.showPage()
     _top(c, _PAIR_BANK, "0000", _PAIR_PERIOD)
-    _line(c, 700, [(40, "SAVINGS SUMMARY")], size=10, bold=True)
+    _titles(c, 700, second)
     _rows(
         c,
         686,

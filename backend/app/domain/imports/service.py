@@ -13,7 +13,9 @@ The flow (INGESTION.md "Parse", "Match and deduplicate", "Commit"):
      four digits (and institution, ``app.ingestion.match.accounts``), the
      document's account for a single-statement file, or an account given by
      the person re-running the import. No match is an ``unknown_account``
-     review item.
+     review item. Statements of one document that carry the same digits
+     (two accounts under one masked number) go by the type each names
+     (:func:`statement_match`).
    * **CSV/TSV**: the header fingerprint
      (``app.ingestion.parsers.structured.header_fingerprint``) finds a saved
      ``import_mapping``. Without one, the deterministic suggestion
@@ -255,7 +257,13 @@ from app.domain.transactions.models import (
     Transaction,
     TransactionStatus,
 )
-from app.ingestion.match.accounts import AccountMatch, importable_account_ids, match_account
+from app.ingestion.match.accounts import (
+    AccountMatch,
+    importable_account_ids,
+    match_account,
+    match_shared_number,
+    shared_numbers,
+)
 from app.ingestion.match.dedupe import dedupe
 from app.ingestion.parsers.brokerage_table import PARSER_NAME as ACTIVITY_PARSER
 from app.ingestion.parsers.brokerage_table import PARSER_VERSION as ACTIVITY_PARSER_VERSION
@@ -1220,6 +1228,56 @@ def _report_skipped(run: _Run, result: ExtractResult) -> None:
         )
 
 
+#: The parser's note that it split one document into the statements of
+#: several accounts at their summaries (``table_statement``, module doc 8).
+SPLIT_BY_SUMMARY: Final = "accounts_by_summary"
+
+
+def statement_match(
+    db: Session,
+    household_id: uuid.UUID,
+    result: ExtractResult,
+    index: int,
+    *,
+    institution: str | None = None,
+    allowed: Collection[uuid.UUID] | None,
+) -> AccountMatch:
+    """The account the digits (and institution) of bank statement ``index`` name.
+
+    In a document the parser split at its accounts' summaries, statements
+    may carry the same last four digits (two accounts printed under one
+    masked number), and the digits then name none of them. A statement of
+    such a document goes to the account with its digits that has the type
+    its summary names (:func:`match_shared_number`): never to an account
+    of another type, and to none when it names no type while another
+    statement carries its digits, or when another names its type too. One
+    that names no type and has digits of its own is matched by them.
+    Anywhere else the same digits are the same account (two months of one
+    account in an OFX file).
+    """
+    account = result.statements[index].account
+    named = [(s.account.last4, s.account.account_type) for s in result.statements]
+    split = result.parse is not None and SPLIT_BY_SUMMARY in result.parse.warnings
+    shared = account.last4 in shared_numbers(named)
+    if split and account.last4 and (shared or account.account_type):
+        return match_shared_number(
+            db,
+            household_id,
+            last4=account.last4,
+            account_type=account.account_type,
+            name=account.name,
+            told_apart=named.count((account.last4, account.account_type)) == 1,
+            allowed=allowed,
+        )
+    return match_account(
+        db,
+        household_id,
+        last4=account.last4,
+        institution=institution or account.institution,
+        allowed=allowed,
+    )
+
+
 def _import_statements(run: _Run, result: ExtractResult, *, account_id: uuid.UUID | None) -> None:
     single = len(result.statements) == 1 and not _several_kinds(result)
     for index, statement in enumerate(result.statements):
@@ -1239,10 +1297,11 @@ def _import_statements(run: _Run, result: ExtractResult, *, account_id: uuid.UUI
         ):
             account = _usable_account(run, run.document.account_id)
         if account is None:
-            match = match_account(
+            match = statement_match(
                 run.db,
                 run.household_id,
-                last4=parsed.last4,
+                result,
+                index,
                 institution=parsed.institution,
                 allowed=run.allowed,
             )
