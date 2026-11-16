@@ -1,0 +1,16 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Words that say what was bought, for a payee the merchant list does not
+# know. Read in this order: the first word found in a descriptor's core
+# answers. A keyword is a suggestion unless it is `strong`.
+#
+# `via` ties an entry to a payment processor (the name clean-up gives it).
+# With no `word`, the entry covers everything that processor fronts.
+keywords:
+  # Toast is a point-of-sale system sold to restaurants only.
+  - via: toast
+    category: food.restaurants
+    strong: true
+  - word: pizza
+    category: food.restaurants
+  - word: pizzeria
+    category: food.restaurants

@@ -1,0 +1,320 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Video streaming services. Format and sources: ../README.md.
+#
+# A service whose name is an everyday word ("Max", "Peacock", "Paramount",
+# "Philo", "Sling") is matched only by a form that cannot be a shop, a
+# cinema or a place: a wrong fact is worse than no answer.
+merchants:
+  - key: netflix
+    name: Netflix
+    category: leisure.subscriptions
+    series: subscription
+    cadences: [monthly]
+    match: [netflix]
+
+  - key: hulu
+    name: Hulu
+    category: leisure.subscriptions
+    series: subscription
+    cadences: [monthly, annual]
+    match: [hulu, hlu hulu]
+
+  - key: disney plus
+    name: Disney+
+    category: leisure.subscriptions
+    series: subscription
+    cadences: [monthly, annual]
+    match: [disney plus, disneyplus]
+
+  - key: hbo max
+    name: Max (HBO)
+    category: leisure.subscriptions
+    series: subscription
+    cadences: [monthly, annual]
+    match: [hbo, hbo max, hbomax, help max com]
+
+  - key: paramount plus
+    name: Paramount+
+    category: leisure.subscriptions
+    series: subscription
+    cadences: [monthly, annual]
+    match: [paramount plus, paramountplus]
+
+  - key: peacock
+    name: Peacock
+    category: leisure.subscriptions
+    series: subscription
+    cadences: [monthly, annual]
+    match: [peacocktv, peacock tv, peacock premium]
+
+  # Rentals and purchases are billed under the same name, so no series.
+  - key: prime video
+    name: Prime Video
+    category: leisure.subscriptions
+    match: [prime video, primevideo, amazon prime video]
+
+  - key: youtube tv
+    name: YouTube TV
+    category: leisure.subscriptions
+    series: subscription
+    cadences: [monthly]
+    match: [youtube tv ~, youtubetv ~]
+
+  - key: youtube premium
+    name: YouTube Premium
+    category: leisure.subscriptions
+    series: subscription
+    cadences: [monthly, annual]
+    match: [youtube premium ~, youtubepremium ~]
+
+  - key: sling tv
+    name: Sling TV
+    category: leisure.subscriptions
+    series: subscription
+    cadences: [monthly]
+    match: [sling tv, slingtv]
+
+  - key: fubotv
+    name: Fubo
+    category: leisure.subscriptions
+    series: subscription
+    cadences: [monthly]
+    match: [fubo, fubotv]
+
+  - key: philo
+    name: Philo
+    category: leisure.subscriptions
+    series: subscription
+    cadences: [monthly]
+    match: [philo tv, philotv]
+
+  - key: discovery plus
+    name: discovery+
+    category: leisure.subscriptions
+    series: subscription
+    cadences: [monthly, annual]
+    match: [discovery plus, discoveryplus]
+
+  - key: espn plus
+    name: ESPN+
+    category: leisure.subscriptions
+    series: subscription
+    cadences: [monthly, annual]
+    match: [espn, espnplus]
+
+  - key: starz
+    name: Starz
+    category: leisure.subscriptions
+    series: subscription
+    cadences: [monthly, annual]
+    match: [starz]
+
+  - key: amc plus
+    name: AMC+
+    category: leisure.subscriptions
+    series: subscription
+    cadences: [monthly, annual]
+    match: [amc plus, amcplus]
+
+  - key: britbox
+    name: BritBox
+    category: leisure.subscriptions
+    series: subscription
+    cadences: [monthly, annual]
+    match: [britbox]
+
+  - key: acorn tv
+    name: Acorn TV
+    category: leisure.subscriptions
+    series: subscription
+    cadences: [monthly, annual]
+    match: [acorn tv, acorntv]
+
+  - key: crunchyroll
+    name: Crunchyroll
+    category: leisure.subscriptions
+    series: subscription
+    cadences: [monthly, annual]
+    match: [crunchyroll]
+
+  - key: shudder
+    name: Shudder
+    category: leisure.subscriptions
+    series: subscription
+    cadences: [monthly, annual]
+    match: [shudder]
+
+  - key: criterion channel
+    name: The Criterion Channel
+    category: leisure.subscriptions
+    series: subscription
+    cadences: [monthly, annual]
+    match: [criterion channel, criterionchannel]
+
+  - key: mubi
+    name: MUBI
+    category: leisure.subscriptions
+    series: subscription
+    cadences: [monthly, annual]
+    match: [mubi]
+
+  - key: curiosity stream
+    name: Curiosity Stream
+    category: leisure.subscriptions
+    series: subscription
+    cadences: [monthly, annual]
+    match: [curiosity stream, curiositystream]
+
+  - key: hallmark plus
+    name: Hallmark+
+    category: leisure.subscriptions
+    series: subscription
+    cadences: [monthly, annual]
+    match: [hallmark plus, hallmarkplus, hallmark movies now]
+
+  - key: bet plus
+    name: BET+
+    category: leisure.subscriptions
+    series: subscription
+    cadences: [monthly, annual]
+    match: [bet plus, betplus]
+
+  - key: mgm plus
+    name: MGM+
+    category: leisure.subscriptions
+    series: subscription
+    cadences: [monthly, annual]
+    match: [mgm plus, mgmplus, epix]
+
+  # Roku bills the channels a person subscribed to on the device.
+  - key: roku
+    name: Roku
+    category: leisure.subscriptions
+    series: subscription
+    cadences: [monthly, annual]
+    match: [roku]
+
+  - key: dazn
+    name: DAZN
+    category: leisure.subscriptions
+    series: subscription
+    cadences: [monthly, annual]
+    match: [dazn]
+
+  - key: mlb tv
+    name: MLB.TV
+    category: leisure.subscriptions
+    series: subscription
+    cadences: [monthly, annual]
+    match: [mlb tv, mlbtv]
+
+  - key: nba league pass
+    name: NBA League Pass
+    category: leisure.subscriptions
+    series: subscription
+    cadences: [monthly, annual]
+    match: [nba league pass, nbaleaguepass]
+
+  - key: nfl plus
+    name: NFL+
+    category: leisure.subscriptions
+    series: subscription
+    cadences: [monthly, annual]
+    match: [nfl plus, nflplus]
+
+  - key: ufc fight pass
+    name: UFC Fight Pass
+    category: leisure.subscriptions
+    series: subscription
+    cadences: [monthly, annual]
+    match: [ufc fight pass, ufcfightpass]
+
+  - key: f1 tv
+    name: F1 TV
+    category: leisure.subscriptions
+    series: subscription
+    cadences: [monthly, annual]
+    match: [f1 tv, f1tv]
+
+  - key: frndly tv
+    name: Frndly TV
+    category: leisure.subscriptions
+    series: subscription
+    cadences: [monthly, annual]
+    match: [frndly, frndlytv]
+
+  - key: viki
+    name: Rakuten Viki
+    category: leisure.subscriptions
+    series: subscription
+    cadences: [monthly, annual]
+    match: [rakuten viki, viki pass]
+
+  - key: hidive
+    name: HIDIVE
+    category: leisure.subscriptions
+    series: subscription
+    cadences: [monthly, annual]
+    match: [hidive]
+
+  - key: sundance now
+    name: Sundance Now
+    category: leisure.subscriptions
+    series: subscription
+    cadences: [monthly, annual]
+    match: [sundance now, sundancenow]
+
+  # Films bought or rented one at a time: no series.
+  - key: fandango at home
+    name: Fandango at Home (Vudu)
+    category: leisure.subscriptions
+    match: [vudu, fandango at home]
+
+  - key: pure flix
+    name: Pure Flix
+    category: leisure.subscriptions
+    series: subscription
+    cadences: [monthly, annual]
+    match: [pure flix, pureflix]
+
+  - key: dropout
+    name: Dropout
+    category: leisure.subscriptions
+    series: subscription
+    cadences: [monthly, annual]
+    match: [dropout tv, dropouttv]
+
+  - key: hayu
+    name: Hayu
+    category: leisure.subscriptions
+    series: subscription
+    cadences: [monthly, annual]
+    match: [hayu]
+
+  - key: kocowa
+    name: KOCOWA
+    category: leisure.subscriptions
+    series: subscription
+    cadences: [monthly, annual]
+    match: [kocowa]
+
+  - key: lifetime movie club
+    name: Lifetime Movie Club
+    category: leisure.subscriptions
+    series: subscription
+    cadences: [monthly, annual]
+    match: [lifetime movie club]
+
+  - key: history vault
+    name: History Vault
+    category: leisure.subscriptions
+    series: subscription
+    cadences: [monthly, annual]
+    match: [history vault]
+
+  - key: broadwayhd
+    name: BroadwayHD
+    category: leisure.subscriptions
+    series: subscription
+    cadences: [monthly, annual]
+    match: [broadwayhd]

@@ -1,0 +1,6 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# The dictionary's version and the digest of its entries. They change
+# together: after editing any entry, add one to `version` and set `digest` to
+# the value the unit test prints (tests/unit/test_merchant_dictionary.py).
+version: 1
+digest: "31db356ac09f3d115fed2191fcd82a33aeb5908446a9c5fd3ec86f94b09fbd33"
