@@ -309,7 +309,7 @@ def test_accented_letters_are_folded_not_dropped() -> None:
 def test_the_patterns_are_constants() -> None:
     for pattern, _kind, _signal in (*cleanup.KIND_LINES, *cleanup.KIND_PREFIXES):
         assert isinstance(pattern, re.Pattern)
-    assert cleanup.CLEANER_VERSION == 2
+    assert cleanup.CLEANER_VERSION == 3
 
 
 @pytest.mark.parametrize(

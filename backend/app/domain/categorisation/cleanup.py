@@ -75,9 +75,10 @@ from typing import Final, Literal
 
 from app.domain.transactions.models import PAYEE_MAX
 
-#: Bumped when clean-up changes what it returns; a household whose rows were
-#: keyed with an older version is refreshed.
-CLEANER_VERSION: Final = 2
+#: Bumped when clean-up changes what it returns, or the merchant key the
+#: engine makes of it (3: no key of fewer than three letters and digits); a
+#: household whose rows were keyed with an older version is refreshed.
+CLEANER_VERSION: Final = 3
 
 DescriptorKind = Literal[
     "purchase",

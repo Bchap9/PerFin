@@ -60,6 +60,11 @@ if TYPE_CHECKING:
 APPLY_MIN: Final = Decimal("0.80")
 #: Tokens of the core that make the key of a merchant the dictionary does not know.
 KEY_TOKENS: Final = 4
+#: Letters and digits such a key needs at least. What is left of "E" or "XY
+#: #0042" is no name: as a key it would make one merchant of every such line,
+#: for what is learned, for a rule and for a series. A brand the dictionary
+#: knows by fewer ("BP") keeps the dictionary's key.
+KEY_CHARS_MIN: Final = 3
 
 _PLACES: Final = Decimal("0.01")
 
@@ -219,14 +224,18 @@ class Summary:
 
 
 def _key_of(core: str) -> str | None:
-    """The first :data:`KEY_TOKENS` tokens of ``core`` that fit a merchant key."""
+    """The first :data:`KEY_TOKENS` tokens of ``core`` that fit a merchant key.
+
+    ``None`` when they hold fewer than :data:`KEY_CHARS_MIN` letters and digits.
+    """
     tokens = core.split()[:KEY_TOKENS]
     while tokens and len(" ".join(tokens)) > MERCHANT_KEY_MAX:
         tokens.pop()
-    if tokens:
-        return " ".join(tokens)
     # One token longer than a key: its start still names the merchant.
-    return core[:MERCHANT_KEY_MAX].strip() or None
+    key = " ".join(tokens) if tokens else core[:MERCHANT_KEY_MAX].strip()
+    if sum(ch.isalnum() for ch in key) < KEY_CHARS_MIN:
+        return None
+    return key
 
 
 def display_name(key: str | None) -> str | None:

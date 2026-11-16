@@ -191,6 +191,15 @@ migration, no new setting, no new container, nothing new leaves the host
   `Reference`, `Debit`) was posted quietly. Its date and amount are kept, as
   they may be money that moved, but it is imported pending with a
   low-confidence item on its payee.
+- **A line that leaves one or two letters names no merchant.** What was
+  left of a line such as `E` or `XY #0042` became a merchant key, so every
+  such line of a household was one merchant: one correction, one "Always
+  use…" rule or one subscription covered rows that had nothing to do with
+  each other. Such a line now has no merchant key, like a transfer; a brand
+  the merchant list knows by two letters (`BP`) keeps its own. Rows keyed
+  before lose the key in the refresh that follows the upgrade (the hourly
+  `categorise.dispatch` queues it; clean-up version 3); their categories
+  stay, and what was learned under such a key no longer answers.
 
 ### Security
 
