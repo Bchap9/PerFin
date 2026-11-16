@@ -409,6 +409,13 @@ What remains (details in docs/ROADMAP.md):
   is split off; the second of two dates under one date heading and a
   short category printed left of its heading no longer end up in the
   date or the amount.
+- **A word of the margin or a watermark beside a date no longer loses
+  the row.** A notice printed up the side of the page, or a watermark
+  lying over the dates, could end up in the date column; the row was
+  then counted as skipped instead of imported. Such a line is read once
+  more without the words printed outside the table. A word printed
+  beside rows only (`Hold`), or over one row on one page only, still
+  keeps the row unread and counted.
 - **An amount printed on a line of its own under its row** (a card's
   purchase abroad, with the foreign amount and the rate between the
   two) is that row's amount; the lines between are its memo. Such a row

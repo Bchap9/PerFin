@@ -63,7 +63,14 @@ are read the same way:
    first is the row's and the second, its posting date, is dropped
    (:meth:`TableStatementParser._drop_posting_date`); a date beside a word
    or a third date is not read, and such a line takes no date from the
-   line above either: it is counted. An **amount printed in one cell with
+   line above either: it is counted. Before that, a line whose date
+   column holds a date among other words is read once more **without the
+   words printed outside the table**
+   (:meth:`TableStatementParser._without_outside_words`: a word of a
+   notice printed up the margin, which stands beside lines without a
+   date too, and a watermark, a word lying over the other words of its
+   cell and printed at the same place on another page); it is a row when
+   its date column then holds a date and nothing else. An **amount printed in one cell with
    the description** (``Amount Description`` over ``-$47.30 Card
    Purchase``) is split off it, where the header prints the two headings
    as one cell, on a dated line of a table with one money column that got
@@ -657,6 +664,9 @@ FUSED_DATE_SLACK: Final = 25.0
 #: Line heights an undated row may start below the row above it and still
 #: take that row's date (a date printed once per day).
 CARRY_LINES: Final = 2.5
+#: How far left of the table's leftmost heading a word must end to be a word
+#: of the page's margin (a notice printed up the page), not of the table.
+MARGIN_GAP: Final = 12.0
 #: The lines under a dated line without a figure among which the row's
 #: amount, printed alone, is looked for (the amount under its row).
 AMOUNT_BELOW_LINES: Final = 3
@@ -1164,6 +1174,19 @@ class _SummarySection:
     opened: Decimal | None
     #: The closing figures printed outside its tables, in order.
     closings: list[Decimal]
+
+
+@dataclass(frozen=True)
+class _OutsideWords:
+    """What the lines of a document say is printed outside its tables
+    (:meth:`TableStatementParser._outside_words`)."""
+
+    #: ``(page, x0, x1)`` (whole points) of the cells of the page's lines
+    #: that hold no date: where a word of the margin may stand.
+    margins: frozenset[tuple[int, int, int]]
+    #: ``(text, x0, x1)`` of the words printed at one place on two pages or
+    #: more: a watermark.
+    repeated: frozenset[tuple[str, int, int]]
 
 
 def section_name(title: str | None) -> tuple[str | None, str | None]:
@@ -1678,6 +1701,102 @@ class TableStatementParser(DocumentParser):
             join_cells(rest) if cell is fused[0] else cell for cell in cells["description"]
         ]
 
+    def _outside_words(self, lines: Sequence[ViewLine]) -> _OutsideWords:
+        """Where ``lines`` print words that are no part of a table: the
+        cells of the lines without a date (a notice printed up the margin
+        stands beside rows and beside other lines alike; a word printed
+        beside rows only may be a flag of theirs) and the words printed at
+        one place on several pages (a watermark; a stamp over one row is
+        printed once)."""
+        margins: set[tuple[int, int, int]] = set()
+        pages: dict[tuple[str, int, int], set[int]] = {}
+        for line in lines:
+            undated = not any(self._date_shaped(c.text.strip(_DATE_MARKS)) for c in line.cells)
+            for cell in line.cells:
+                if undated:
+                    margins.add((line.page, round(cell.x0), round(cell.x1)))
+                for text, x0, x1 in cell.words:
+                    pages.setdefault((text, round(x0), round(x1)), set()).add(line.page)
+        repeated = frozenset(key for key, found in pages.items() if len(found) > 1)
+        return _OutsideWords(frozenset(margins), repeated)
+
+    def _without_outside_words(
+        self, line: ViewLine, columns: Sequence[Column], outside: _OutsideWords
+    ) -> ViewLine | None:
+        """``line`` without the words printed outside the table, or None
+        when it has none.
+
+        A **word of the margin** is a cell that ends :data:`MARGIN_GAP` or
+        more left of the table's leftmost heading, is neither a date nor an
+        amount, and stands where a line without a date has a cell too. A
+        **watermark** is a word whose box holds every other word of its
+        cell and is printed at the same place on another page: it is taken
+        out and the cell's other words are cells of their own again.
+        """
+        left = min((column.x0 for column in columns), default=None)
+        if left is None:
+            return None
+        kept: list[Cell] = []
+        taken = False
+        for cell in line.cells:
+            if (
+                cell.x1 + MARGIN_GAP <= left
+                and (line.page, round(cell.x0), round(cell.x1)) in outside.margins
+                and not self._date_shaped(cell.text.strip(_DATE_MARKS))
+                and read_amount(cell.text) is None
+            ):
+                taken = True
+                continue
+            words = cell.words
+            over = [
+                at
+                for at, (text, x0, x1) in enumerate(words)
+                if len(words) > 1
+                and (text, round(x0), round(x1)) in outside.repeated
+                and all(x0 <= o0 and o1 <= x1 for _, o0, o1 in words)
+            ]
+            if len(over) == 1:
+                kept.extend(word for at, word in enumerate(cell.word_cells()) if at != over[0])
+                taken = True
+                continue
+            kept.append(cell)
+        if not kept or not taken:
+            return None
+        return replace(line, cells=tuple(kept), text=" ".join(cell.text for cell in kept))
+
+    def _columned(
+        self, line: ViewLine, columns: Sequence[Column], head: ViewLine
+    ) -> tuple[dict[Role, list[Cell]], list[Cell]]:
+        """The cells of ``line`` by the columns of the table under ``head``,
+        and those of the other copies of a table printed across the page."""
+        cells = self._assign(line, columns)
+        across = cells.pop("across", [])
+        self._split_lead(cells)
+        self._split_fused_date(cells, columns)
+        self._drop_posting_date(cells, columns, line)
+        self._split_fused_amount(cells, columns, head)
+        return cells, across
+
+    def _placed(
+        self,
+        line: ViewLine,
+        columns: Sequence[Column],
+        head: ViewLine,
+        outside: _OutsideWords,
+    ) -> tuple[dict[Role, list[Cell]], list[Cell]]:
+        """As :meth:`_columned`. A line whose date column holds a date among
+        other words is read once more without the words printed outside the
+        table (:meth:`_without_outside_words`); that reading is the line's
+        when its date column then holds a date and nothing else."""
+        cells, across = self._columned(line, columns, head)
+        if not self._dated(cells) and self._stray_date(cells):
+            bare = self._without_outside_words(line, columns, outside)
+            if bare is not None:
+                again, across_again = self._columned(bare, columns, head)
+                if self._dated(again):
+                    return again, across_again
+        return cells, across
+
     def _range_led(self, text: str) -> bool:
         """``text`` starts with a range of dates: a date (its first one to
         :data:`LEAD_DATE_WORDS` words), a range word (:data:`RANGE_WORDS`)
@@ -1724,6 +1843,7 @@ class TableStatementParser(DocumentParser):
         out: list[ViewLine] = []
         columns: list[Column] | None = None
         head: ViewLine | None = None
+        outside = self._outside_words(lines)
         for line in lines:
             header = self.columns(line)
             if header is not None:
@@ -1734,11 +1854,9 @@ class TableStatementParser(DocumentParser):
             if columns is None or head is None:
                 out.append(line)
                 continue
-            cells = self._assign(line, columns)
-            self._split_lead(cells)
-            self._split_fused_date(cells, columns)
-            self._drop_posting_date(cells, columns, line)
-            self._split_fused_amount(cells, columns, head)
+            cells, beside = self._placed(line, columns, head, outside)
+            if beside:
+                cells["across"] = beside
             date_text = " ".join(c.text for c in cells.get("date", [])).strip(_DATE_MARKS)
             if date_text and self._date_shaped(date_text):
                 continue
@@ -2248,6 +2366,7 @@ class TableStatementParser(DocumentParser):
                 if not (read and id(queued_line) in of_rows):
                     self._scan_summary(queued_line, summary)
 
+        outside = self._outside_words(lines)
         for index, line in enumerate(lines):
             if index in taken:
                 continue
@@ -2379,14 +2498,9 @@ class TableStatementParser(DocumentParser):
                 else:
                     self._scan_summary(line, summary)
                 continue
-            cells = self._assign(line, columns)
             # The other copies of a table printed across the page are no part
             # of the line as the left group's columns read it.
-            across = cells.pop("across", [])
-            self._split_lead(cells)
-            self._split_fused_date(cells, columns)
-            self._drop_posting_date(cells, columns, line)
-            self._split_fused_amount(cells, columns, head)
+            cells, across = self._placed(line, columns, head, outside)
             date_text = " ".join(c.text for c in cells.get("date", [])).strip(_DATE_MARKS)
             if not date_text or not self._date_shaped(date_text):
                 following = lines[index + 1] if index + 1 < len(lines) else None
@@ -3788,6 +3902,7 @@ class TableStatementParser(DocumentParser):
         balance: Decimal | None = None
         #: (opening row, the header it stands under) of each account found.
         starts: list[tuple[int, int]] = []
+        outside = self._outside_words(lines)
         for index, line in enumerate(lines):
             found = self.columns(line)
             if found is not None:
@@ -3798,11 +3913,9 @@ class TableStatementParser(DocumentParser):
             if self._header_like(line):
                 columns = None
                 continue
-            cells = self._assign(line, columns)
-            self._split_lead(cells)
-            self._split_fused_date(cells, columns)
-            self._drop_posting_date(cells, columns, line)
-            self._split_fused_amount(cells, columns, lines[header])
+            cells, beside = self._placed(line, columns, lines[header], outside)
+            if beside:
+                cells["across"] = beside
             opening = self._opening_row(cells)
             if opening is not None:
                 if balance is None or opening.value != balance:
@@ -3837,14 +3950,11 @@ class TableStatementParser(DocumentParser):
 
     # -- accounts told apart by their summaries -----------------------------------
 
-    def _dated_by(self, line: ViewLine, columns: list[Column], head: ViewLine) -> bool:
+    def _dated_by(
+        self, line: ViewLine, columns: list[Column], head: ViewLine, outside: _OutsideWords
+    ) -> bool:
         """``line`` has a date in the date column of the table under ``head``."""
-        cells = self._assign(line, columns)
-        cells.pop("across", None)
-        self._split_lead(cells)
-        self._split_fused_date(cells, columns)
-        self._drop_posting_date(cells, columns, line)
-        self._split_fused_amount(cells, columns, head)
+        cells, _ = self._placed(line, columns, head, outside)
         date_text = " ".join(c.text for c in cells.get("date", [])).strip(_DATE_MARKS)
         return bool(date_text) and self._date_shaped(date_text)
 
@@ -3858,6 +3968,7 @@ class TableStatementParser(DocumentParser):
         columns: list[Column] | None = None
         head: int | None = None
         last: int | None = None
+        outside = self._outside_words(lines)
         for index, line in enumerate(lines):
             found = self.columns(line)
             if found is not None or (columns is not None and self._header_like(line)):
@@ -3867,7 +3978,7 @@ class TableStatementParser(DocumentParser):
             elif (
                 columns is not None
                 and head is not None
-                and self._dated_by(line, columns, lines[head])
+                and self._dated_by(line, columns, lines[head], outside)
             ):
                 last = index
         if head is not None:

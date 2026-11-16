@@ -718,6 +718,23 @@ a child answering with parser output is `bad_output`.
     under one date heading the first is the row's; and where the header
     prints two headings as one cell (`Amount Description`), an amount
     printed in one cell with its description is split off it.
+  - *Words printed beside or over a row.* A notice printed up the margin
+    of the page puts a word left of some rows, and a tall line takes it
+    for a cell of the date column; a watermark lies over the dates and
+    is one cell with them. A line whose date column holds a date among
+    other words is read once more without the words printed outside the
+    table, and is a row when the column then holds a date and nothing
+    else. A word of the margin is a cell that ends 12 points or more
+    left of the table's leftmost heading, is neither a date nor an
+    amount, and stands where a line of the page without a date has a
+    cell too (a word printed beside rows only may be a flag of theirs:
+    `Hold`). A watermark is a word whose box holds every other word of
+    its cell and that is printed at the same place on another page (a
+    stamp over one row is printed once); the cell's other words go to
+    their own columns. Everything else is as before: such a line takes
+    no date from the line above and is counted. No row is ever given an
+    amount it does not print: a line without a figure in a money column
+    is counted.
   - *A marker in a column of its own.* A column of `CR`/`DR`/`DB` cells
     under a heading no word names (`Amount | DC`) signs the amounts
     beside it: the row takes the nearest such cell right of its amount
