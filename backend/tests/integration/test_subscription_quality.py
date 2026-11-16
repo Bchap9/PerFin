@@ -3,13 +3,27 @@
 
 The planted ledger (``tests/fixtures/synth_subscription_ledger.py``: 40
 series, 25 decoys, 24 months, three accounts) goes through the real pipeline
-(``quality.replay``): one CSV per account and month through the ingest job,
-the household's person filing what the engine left open the way the ledger
-says they would, and the daily detection job at the end of every month. What
-the household then holds is scored by ``quality.subscription_metrics``. One
-test per row of the table; a failing target prints the series behind it.
+(``quality.replay``): one CSV per account and month through the ingest job
+and the daily detection job at the end of every month. What the household
+then holds is scored by ``quality.subscription_metrics``.
 
-The replay takes about a minute, so it runs once for the module (once per
+It is replayed twice, and both runs are gates:
+
+- **filed**: the household's person files what the engine left open the way
+  the ledger says they would. The targets of the design note are measured on
+  this run, one test per row of its table.
+- **unfiled**: nobody files anything, which is what a household sees right
+  after its first import. Every bar is the same but one: the kind of a
+  series is held at the figure reached (:data:`KIND_RIGHT_UNFILED_MIN`), not
+  at the target. Rent, a loan, water and a local gym at merchants no
+  dictionary knows are kind ``other`` until somebody files a row, so the 90%
+  target is **not met** on this run. Whether it has to be is the owner's
+  decision (``docs/CATEGORISATION.md``); the gate keeps the run from getting
+  worse meanwhile.
+
+A failing target prints the series behind it.
+
+Each replay takes about a minute, so each runs once for the module (once per
 worker under ``pytest -n``).
 
 A threshold here is never lowered to make a change pass.
@@ -40,7 +54,27 @@ KIND_RIGHT_MIN = 0.90
 PRICE_CHANGES_FALSE_MAX = 0
 ENDED_WRONG_MAX = 0
 
-_measured: list[SubscriptionMetrics] = []
+#: Series kind right when nobody files anything: 33 of the 40 planted series,
+#: under the 90% target (module doc). Raised when the figure rises; never lowered.
+KIND_RIGHT_UNFILED_MIN = 0.825
+
+_measured: dict[bool, SubscriptionMetrics] = {}
+
+
+def _measure(
+    filed: bool,
+    factories: Factories,
+    ledger: LedgerFactories,
+    settings: Settings,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> SubscriptionMetrics:
+    if filed not in _measured:
+        planted = synth.build()
+        with open_home(factories, ledger, settings, tmp_path, monkeypatch) as home:
+            found = quality.replay(home, planted, filed=filed)
+        _measured[filed] = quality.subscription_metrics(found, planted)
+    return _measured[filed]
 
 
 @pytest.fixture
@@ -51,12 +85,20 @@ def metrics(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> SubscriptionMetrics:
-    if not _measured:
-        planted = synth.build()
-        with open_home(factories, ledger, settings, tmp_path, monkeypatch) as home:
-            found = quality.replay(home, planted, filed=True)
-        _measured.append(quality.subscription_metrics(found, planted))
-    return _measured[0]
+    """The run the targets are set for: a person files what the engine left open."""
+    return _measure(True, factories, ledger, settings, tmp_path, monkeypatch)
+
+
+@pytest.fixture
+def unfiled(
+    factories: Factories,
+    ledger: LedgerFactories,
+    settings: Settings,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> SubscriptionMetrics:
+    """The same ledger with nobody filing anything."""
+    return _measure(False, factories, ledger, settings, tmp_path, monkeypatch)
 
 
 def _report(name: str, value: object, metrics: SubscriptionMetrics, *others: str) -> str:
@@ -119,4 +161,48 @@ def test_every_stopped_series_is_ended(metrics: SubscriptionMetrics) -> None:
 def test_no_running_series_is_ended(metrics: SubscriptionMetrics) -> None:
     assert metrics.ended_wrong <= ENDED_WRONG_MAX, _report(
         "ended_wrong", metrics.ended_wrong, metrics
+    )
+
+
+# ---------------------------------------------------------------------------
+# Nobody files anything
+# ---------------------------------------------------------------------------
+
+
+def test_unfiled_planted_series_are_found(unfiled: SubscriptionMetrics) -> None:
+    assert unfiled.found >= FOUND_MIN, _report("found", unfiled.found, unfiled)
+    assert unfiled.found_active >= FOUND_ACTIVE_MIN, _report(
+        "found_active", unfiled.found_active, unfiled
+    )
+
+
+def test_unfiled_decoys_stay_out(unfiled: SubscriptionMetrics) -> None:
+    assert unfiled.decoys_active <= DECOYS_ACTIVE_MAX, _report(
+        "decoys_active", unfiled.decoys_active, unfiled
+    )
+    assert unfiled.decoys_suggested <= DECOYS_SUGGESTED_MAX, _report(
+        "decoys_suggested", unfiled.decoys_suggested, unfiled
+    )
+
+
+def test_unfiled_the_kind_of_a_series_does_not_get_worse(unfiled: SubscriptionMetrics) -> None:
+    # Under the target of KIND_RIGHT_MIN, and said so (module doc).
+    assert unfiled.kind_right is not None
+    assert unfiled.kind_right >= KIND_RIGHT_UNFILED_MIN, _report(
+        "kind_right", unfiled.kind_right, unfiled
+    )
+
+
+def test_unfiled_price_changes_and_endings_are_right(unfiled: SubscriptionMetrics) -> None:
+    assert unfiled.price_changes_flagged == unfiled.price_changes_planted, _report(
+        "price_changes_flagged", unfiled.price_changes_flagged, unfiled
+    )
+    assert unfiled.price_changes_false <= PRICE_CHANGES_FALSE_MAX, _report(
+        "price_changes_false", unfiled.price_changes_false, unfiled
+    )
+    assert unfiled.ended_right == unfiled.stopped_planted, _report(
+        "ended_right", unfiled.ended_right, unfiled
+    )
+    assert unfiled.ended_wrong <= ENDED_WRONG_MAX, _report(
+        "ended_wrong", unfiled.ended_wrong, unfiled
     )

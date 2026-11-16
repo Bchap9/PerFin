@@ -84,6 +84,9 @@ judged against what was uploaded, never against today.
    without a category at a store that sells everything (``habit_hint``: the
    dictionary's ``mixed`` stores, whose rows get a suggestion at most): what
    is bought there now and then is shopping whether or not anybody filed it.
+   Such a store also bills plans (a reading or delivery membership), so
+   there a series of one price to the cent with every gap regular is
+   suggested from the pattern's ordinary count on, not only from six.
 9. **Confidence** (0..1, two decimals): ``0.4 * regularity + 0.3 * stability
    + 0.2 * count + 0.1 * known``, where ``stability = 1 - spread / |median
    amount|`` (at least 0; counted as 1 for income and for a bill by its
@@ -410,6 +413,11 @@ class _Group:
         return _matches(self.category_key, HABIT_KEYS)
 
     @property
+    def general_plan(self) -> bool:
+        """A habit by the dictionary's word alone (step 8): nobody filed its rows."""
+        return self.category_key is None and self.general_store
+
+    @property
     def bill_like(self) -> bool:
         """A bill whatever its amounts do: the dictionary, the category or a loan says so."""
         return not self.inflow and (
@@ -495,7 +503,13 @@ def _candidate(
         )
     if wide and not (group.bill_like or group.inflow):
         return None
-    if group.habit and not (fixed and regularity == 1 and len(rows) >= HABIT_MIN_COUNT):
+    if group.habit and regularity < 1:
+        return None
+    # A habit is shown only as a plan: fixed and with six charges, or, at a
+    # general store whose rows nobody filed, one price to the cent on every
+    # charge (a plan billed through the store) as early as any series.
+    steady = fixed and len(rows) >= HABIT_MIN_COUNT
+    if group.habit and not (steady or (group.general_plan and spread == 0)):
         return None
     sure = confidence >= ACTIVE_MIN and len(rows) >= spec.min_count
     status: FoundStatus = "active"

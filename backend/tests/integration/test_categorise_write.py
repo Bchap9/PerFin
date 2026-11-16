@@ -310,6 +310,34 @@ def test_a_learned_merchant_is_categorised_from_memory(db: Session, home: Home) 
     assert stored["updated_at"] == stored["created_at"]
 
 
+def test_what_was_learned_under_a_shop_s_shorter_name_answers_and_the_key_stays(
+    db: Session, home: Home, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Clean-up leaves "<shop> <town or second word> <state>" open.
+    monkeypatch.setattr(
+        cleanup,
+        "clean",
+        lambda raw: Cleaned(core=_clean(raw).core, shorter=_clean(raw).core.split()[0]),
+    )
+    memory.record(db, home.household_id, "pinebrook", "out", home.other.id, at=T0)
+    row = home.row("PINEBROOK ALDERLY")
+    # A shop that only shares a first word nobody would use alone learns nothing.
+    memory.record(db, home.household_id, "the", "out", home.another.id, at=T0)
+    unrelated = home.row("THE LARKSPUR")
+
+    engine.categorise_rows(db, home.household_id, [row, unrelated])
+
+    assert _provenance(db, row) == (home.other.id, None, "learned", Decimal("0.80"))
+    assert _stored(db, row.id)["merchant_key"] == "pinebrook alderly"
+    assert _provenance(db, unrelated) == (None, None, None, None)
+    assert _stored(db, unrelated.id)["merchant_key"] == "the larkspur"
+    # The person's own word about the longer name comes first from then on.
+    memory.record(db, home.household_id, "pinebrook alderly", "out", home.another.id, at=T0)
+    again = home.row("PINEBROOK ALDERLY")
+    engine.categorise_rows(db, home.household_id, [again])
+    assert _provenance(db, again)[0] == home.another.id
+
+
 def test_rows_of_another_household_are_refused(db: Session, home: Home) -> None:
     elsewhere = make_household(db)
     foreign = make_transaction(db, make_account(db, elsewhere.id), raw_payee="CORNER GROCER")

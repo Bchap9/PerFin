@@ -54,9 +54,12 @@ every line of that shop alike, which a merchant key survives.
 Where that rule keeps a word that may as well be the city ("JUNEBUG ASHGROVE
 OH": a shop of one word in Ashgrove, or the shop "Junebug Ashgrove"?), the
 core keeps it and ``shorter`` is the core without it. A card line prints a
-city in front of the state far more often than nothing, so whoever knows the
-name by neither reading (``engine.identify``) takes the shorter one, and the
-shop is then the one a line "SQ *JUNEBUG" names too.
+city in front of the state more often than nothing, but the line cannot say
+which it is, and shops that share a first word must not become one merchant:
+the key is made of the core, and the shorter reading is only a second name
+under which the engine looks up what the household taught
+(``engine.learned_for``), so that what was filed for "SQ *JUNEBUG" answers
+for this line too.
 
 Every pattern is a module constant, anchored or guarded so that it cannot
 backtrack over the line, and none is built from data.
@@ -308,6 +311,8 @@ _DESCR_LOAN: Final = re.compile(
 #: "STUDENT LOAN" as a servicer's ACH entry prints it ("STDNT LOAN", "STUDNTLOAN"),
 #: on a line without labels.
 _STUDENT_LOAN: Final = re.compile(rf"{_START}(?:STUDENT|STUDNT|STDNT) ?(?:LOAN|LN)S?{_END}")
+#: The entry's own "payment" on such a line, which is nobody's name.
+_LOAN_PAYMENT_WORD: Final = re.compile(rf"{_START}(?:PMT|PYMT|PAYMT|PAYMENT){_END}")
 _DESCR_CARD: Final = "CRCARDPMT"
 _DESCR_PAYMENT: Final = frozenset(
     {
@@ -397,8 +402,10 @@ PROCESSORS: Final[tuple[tuple[str, str], ...]] = (
 #: :data:`_BARE_WORD_MIN` letters ("SP COPPERLINE"; not "SP 500" or "SP AG").
 _BARE: Final = frozenset({"SP "})
 _BARE_WORD_MIN: Final = 4
-#: First words that make such a prefix part of a company's own name ("SP PLUS").
-_NAME_AFTER: Final = frozenset({"PLUS"})
+#: First words that make such a prefix part of a company's own name ("SP PLUS",
+#: "SP GLOBAL"). Not a complete list: any other single word of four letters
+#: or more behind a bare "SP " is read as a Shopify shop.
+_NAME_AFTER: Final = frozenset({"PLUS", "GLOBAL", "GROUP", "PARKING"})
 
 # --- places and numbers --------------------------------------------------------
 
@@ -804,7 +811,7 @@ def clean(raw: str | None) -> Cleaned:
         return Cleaned(core="", kind=kind, signals=frozenset(signals))
     if kind in _ACH_OPEN and _STUDENT_LOAN.search(rest):
         kind = "loan_payment"
-        rest = _STUDENT_LOAN.sub(" ", rest)
+        rest = _LOAN_PAYMENT_WORD.sub(" ", _STUDENT_LOAN.sub(" ", rest))
     rest = _strip_trailers(rest)
     numbered = _LEADING_NUMBER.match(rest) if wording else None
     if numbered is not None:

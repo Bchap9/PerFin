@@ -339,6 +339,35 @@ def test_a_store_that_sells_everything_is_a_habit_while_nobody_filed_it() -> Non
     assert (only(detect(filed)).status, only(detect(filed)).kind) == ("active", "subscription")
 
 
+@pytest.mark.parametrize("count", [3, 5, 6, 12])
+def test_one_price_every_month_at_a_store_that_sells_everything_is_suggested_at_once(
+    count: int,
+) -> None:
+    # A plan billed through the store (the review's case: a reading plan at 11.99
+    # under the store's digital arm) is worth showing as soon as any other
+    # series would be, and is a person's to confirm.
+    days = monthly(add_months(date(2026, 6, 9), 1 - count), count)
+    plan = only(detect(rows(days, "-11.99", key="everymart digital", habit_hint=True)))
+    assert (plan.status, plan.kind, plan.fixed) == ("suggested", "other", True)
+    assert plan.occurrences >= 3
+    # Without the hint it was active from the third charge, as before.
+    assert only(detect(rows(days, "-11.99", key="everymart digital"))).status == "active"
+
+
+def test_about_the_same_price_at_a_store_that_sells_everything_is_still_a_habit() -> None:
+    # Three orders a month apart that differ by cents are orders, whatever "fixed" allows.
+    days = monthly(date(2026, 4, 9), 3)
+    near = rows(days, ["-11.99", "-12.19", "-11.89"], key="everymart", habit_hint=True)
+    assert detect(near) == []
+    assert len(detect(rows(days, ["-11.99", "-12.19", "-11.89"], key="everymart"))) == 1
+    # One charge a few days off, and it is no plan either.
+    late = [days[0], days[1] + timedelta(days=6), days[2]]
+    assert detect(rows(late, "-11.99", key="everymart", habit_hint=True)) == []
+    # In a habit category the rule is the old one: six charges.
+    filed = rows(days, "-11.99", key="everymart", habit_hint=True, category="shopping.general")
+    assert detect(filed) == []
+
+
 def test_two_charges_per_cycle_are_dropped() -> None:
     firsts = monthly(date(2025, 11, 3), 8)
     twice = rows(firsts, "-25.00", key="ferncliff dojo", category="health.fitness") + rows(

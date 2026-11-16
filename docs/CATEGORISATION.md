@@ -123,6 +123,18 @@ stay, and the next charge from that merchant is guessed without it. When you
 were unanimous three times or more and no rule covers the merchant, the
 entry offers "Always categorise ...".
 
+**A shop the list does not know, printed with its town.** `JUNEBUG ASHGROVE
+OH` may be the shop "Junebug" in Ashgrove or the shop "Junebug Ashgrove":
+the line cannot say. PerFin keeps both words as the merchant, so two shops
+that only begin alike ("The Hideout", "The Pantry") are never one merchant
+and never share a correction, a rule or a series. One thing carries over:
+when you have already filed the shop under its first word alone (from a line
+such as `SQ *JUNEBUG`), that answers for the longer line too, unless the
+first word is no name of its own (an article, a title, a colour, a
+direction, a word for what is sold, or fewer than five letters). It does
+not carry the other way: filing `JUNEBUG ASHGROVE OH` teaches that merchant
+and no other, so `SQ *JUNEBUG` may need its own first correction.
+
 ## The merchant list
 
 A list of merchants that ships inside PerFin: 1,427 United States merchants
@@ -145,6 +157,15 @@ keywords. Merchants outside the United States are not covered in 1.0.
   person. Then whole words are compared with the list: no wildcards and no
   regular expressions. The longest match wins (`amazon prime` beats
   `amazon`), and when two merchants match equally well, nobody is named.
+- **An order through a platform is the platform's.** A line that came
+  through DoorDash, Grubhub, Instacart or Eventbrite (`GRUBHUB*TACOBELL`,
+  `DD *HARBOR PIZZA`) names the platform as the merchant and takes the
+  platform's category (food delivery, groceries, events), whatever
+  restaurant, shop or event stands behind it: that is who was paid and what
+  the charge was. A rule on the restaurant therefore does not match its
+  delivery orders. The platform's own membership (DashPass, Instacart+) stays
+  its own merchant, and any other processor (Square, PayPal, Toast) only
+  fronts the merchant it names.
 - **Sources and licence**: the files are PerFin's own work under
   AGPL-3.0-or-later, written by hand from what the authors know about brand
   names and the shapes banks print. Brand names are used to name the
@@ -236,6 +257,15 @@ Kept out on purpose:
   subscription. They are dropped, unless the amount is the same every time,
   every gap is regular and there are at least six charges, and then the
   series is only suggested.
+- **Stores that sell everything.** Amazon, Walmart, Target, Costco and the
+  other general stores of the merchant list are treated as a habit while
+  their transactions have no category: a monthly order that happens to
+  cost about the same is not a subscription. A plan billed through such a
+  store (a reading or delivery membership) is still found: the same price
+  to the cent at a regular rhythm is suggested from the third monthly
+  charge, under "Needs a look", and counts in the cost once you confirm it.
+  Give its transactions a category that is not a habit (Subscriptions, say)
+  and it is read like any other series.
 - **Money moving between your own accounts**: transfers, card payments,
   cash, cheques, fees, interest, and anything in a transfer or ignored
   category.
@@ -339,10 +369,11 @@ tests: a change that drops one under its target fails the build
 | Suggestions that are right | none made | 100% | at least 80% |
 | Invented merchants given a wrong fact | 0% | 0% | at most 1% |
 | All lines with a fact | 0% | 70.4% | at least 60% |
-| Lines of one merchant that share one key | 44.0% | 98.4% | at least 95% |
+| Lines of one merchant that share one key | 44.0% | 97.6% | at least 95% |
 | Non-purchase lines recognised as such | 0% | 100% | at least 97% |
 | A person's name in a merchant key | 10 lines | none | none |
 | Same merchant right after one correction | 0% | 96.0% | at least 95% |
+| Lines of another merchant answered by that correction | 0 | 0 | none |
 | Planted series found (found or suggested) | 57.5% | 100% | at least 90% |
 | Planted series found without asking | 57.5% | 95.0% | at least 80% |
 | Decoys shown as found / as suggested | 6 / 0 | 0 / 1 | 0 / at most 2 |
@@ -363,8 +394,16 @@ What these figures are **not**:
   a suggestion, and why one correction outranks the list for good.
 - The subscription rows are measured with the household's person filing the
   transactions the engine left open, as a person would. With nobody filing
-  anything, the same run tells the kind apart for 82.5% instead of 100%;
-  the other rows are equal.
+  anything, which is what you see right after a first import, the same run
+  tells the kind apart for **82.5%** (33 of 40) instead of 100%, **under the
+  90% target**: rent, a car loan, water, sewer, a local gym, a swim school
+  and after-school care at merchants no list knows are found, at the right
+  rhythm and amount, but as "other" on the Calendar instead of on the Bills
+  or Subscriptions tab, until one of their transactions is given a category
+  or the series is told "This is a bill". The other rows are equal in both
+  runs (all 40 found, 38 without asking, no decoy found, one suggested).
+  Both runs are gates: the unfiled one holds every bar and holds the kind at
+  82.5%, so it cannot get worse unnoticed.
 - Nothing is measured outside the United States.
 
 ## What is not there in 1.0

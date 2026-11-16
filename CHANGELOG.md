@@ -108,7 +108,27 @@ docs/UPGRADING.md "1.0.0-rc.10").
   charge. On the planted two-year test ledger all 40 series are found
   (before: 23), 38 of them without asking, and none of the 25 decoys
   (weekly groceries, a coffee habit, fuel, a transfer to savings, a card
-  payment) is shown as found (before: 6); one is suggested.
+  payment) is shown as found (before: 6); one is suggested. That holds
+  whether or not anybody files a transaction. Which of them is a bill, a
+  subscription or income is right for all 40 once the transactions the
+  engine left open are filed, and for 33 of 40 (82.5%, under the 90%
+  target) straight after an import with nothing filed: the other seven
+  (rent, a loan, water, sewer and three local businesses) are listed as
+  "other" on the Calendar until then.
+- **An order through DoorDash, Grubhub, Instacart or Eventbrite is the
+  platform's**: `GRUBHUB*TACOBELL` is Grubhub, filed under food delivery,
+  not the restaurant behind it. The platform's own membership stays its
+  own merchant.
+- **A store that sells everything is not a subscription for being
+  regular.** Amazon, Walmart, Target, Costco and the like are a habit while
+  their transactions have no category; a plan billed through one (the same
+  price to the cent, at a regular rhythm) is suggested from the third
+  monthly charge.
+- **Two shops that begin alike stay two merchants.** An unknown shop
+  printed as two words and a state ("THE HIDEOUT TX", "BLUE HERON OH")
+  keeps both words as its merchant, so a correction, a rule or a series on
+  one never reaches the other. What you filed under a shop's first word
+  alone ("SQ *JUNEBUG") still answers for "JUNEBUG ASHGROVE OH".
 - **Decisions about a subscription stick.** Confirm, Not a subscription,
   Pause, Resume, End, Reopen and "This is a bill" / "This is a
   subscription" are recorded as yours, and detection never changes them. A
@@ -205,7 +225,8 @@ docs/UPGRADING.md "1.0.0-rc.10").
   invented data (1,200 labelled lines, a planted two-year ledger); with
   nobody filing the transactions the engine leaves open, the kind of a
   series (bill, subscription, income) is right for 82.5% of the planted
-  series instead of 100%. Categories from before this release are not
+  series instead of 100%, which is under the 90% target and is held at
+  that figure by its own test. Categories from before this release are not
   known to be a person's choice, so a re-applied rule can still change
   them. A rule that names a merchant keeps the key it was made with: when
   a later merchant list or clean-up renames that merchant, the rule stops

@@ -128,6 +128,28 @@ KIND_CATEGORIES: Final[Mapping[tuple[DescriptorKind, Direction], tuple[str, Deci
 #: platform's own membership, a dictionary entry with a ``series``, stays
 #: what it is.
 PLATFORMS: Final = frozenset({"doordash", "grubhub", "instacart", "eventbrite"})
+#: Letters the first of two words in front of a state needs to be a name the
+#: shop may also go by (:func:`_also`).
+ALSO_MIN: Final = 5
+#: First words many shops share, which are therefore nobody's name alone:
+#: articles, titles, saints and mounts, sizes, ages, colours, directions and
+#: what a street, a town or a trade is called.
+NOT_A_NAME: Final = frozenset(
+    {
+        *("the", "los", "las", "les", "casa", "villa", "saint", "santa", "mount", "point"),
+        *("north", "south", "east", "west", "upper", "lower", "central", "midtown"),
+        *("little", "great", "grand", "royal", "super", "happy", "lucky", "fresh"),
+        *("first", "second", "third", "prime", "premier", "family", "american", "national"),
+        *("black", "white", "green", "brown", "golden", "silver", "purple", "orange"),
+        *("yellow", "crimson", "scarlet"),
+        *("main", "street", "market", "corner", "village", "valley", "river", "harbor"),
+        *("harbour", "island", "mountain", "forest", "garden", "sunset", "sunrise", "downtown"),
+        *("uptown", "county", "country", "city", "town", "state", "union", "liberty"),
+        *("classic", "modern", "urban", "rustic", "simply", "quick", "express", "discount"),
+        *("house", "home", "shop", "store", "studio", "world", "planet", "global"),
+        *("doctor", "mister", "uncle", "auntie", "mama", "papa", "sister", "brother"),
+    }
+)
 #: Kinds that say nothing about what the money was for: never guessed, whatever
 #: the memory, the dictionary or a keyword would say.
 NEVER_GUESSED: Final[frozenset[DescriptorKind]] = frozenset({"check", "deposit", "p2p"})
@@ -145,6 +167,9 @@ class Identity:
     via: str | None
     hit: Hit | None
     core: str
+    #: A shorter name the same merchant may be filed under in the household's
+    #: memory (:func:`learned_for`); never a key of its own.
+    also: str | None = None
 
 
 @dataclass(frozen=True)
@@ -214,32 +239,61 @@ def _platform(cleaned: cleanup.Cleaned, hit: Hit | None) -> Hit | None:
     return hit if merchant is None else Hit(merchant=merchant, how="exact")
 
 
-def _unknown_name(cleaned: cleanup.Cleaned) -> str:
-    """The name of a merchant the dictionary does not know, without a city it may end with.
+def _also(cleaned: cleanup.Cleaned) -> str | None:
+    """The shorter name an unknown merchant may also go by (``Identity.also``), or ``None``.
 
-    Clean-up leaves "JUNEBUG ASHGROVE OH" open (``Cleaned.shorter``). The
-    last word is taken for the city, so that the shop has the key its other
-    lines give it, unless that word says what is sold there (a keyword is no
-    town) or the shorter name is somebody else's: a chain's name in front of
-    another word is left as the line prints it.
+    Clean-up leaves "JUNEBUG ASHGROVE OH" open (``Cleaned.shorter``): a shop
+    of one word in Ashgrove, or the shop "Junebug Ashgrove". The key keeps
+    both words, because shops that share a first word ("THE HIDEOUT TX" and
+    "THE PANTRY TX") must never become one merchant. The first word alone is
+    only a second name to look under in what the household taught
+    (:func:`learned_for`), and not even that when it is no name of its own:
+    a word in :data:`NOT_A_NAME`, one shorter than :data:`ALSO_MIN` letters,
+    a word that says what is sold (as does a keyword in the last word, which
+    is then no town), or the name of a merchant the dictionary knows.
     """
     shorter = cleaned.shorter
-    if not shorter or dictionary.lookup(shorter) is not None:
-        return cleaned.core
-    if dictionary.keyword(cleaned.core, None) != dictionary.keyword(shorter, None):
-        return cleaned.core
-    return shorter
+    if not shorter or " " in shorter or len(shorter) < ALSO_MIN or shorter in NOT_A_NAME:
+        return None
+    if dictionary.lookup(shorter) is not None or dictionary.keyword(cleaned.core, None) is not None:
+        return None
+    return _key_of(shorter)
 
 
 def identify(raw: str | None) -> Identity:
     """Who ``raw`` names: the dictionary's merchant, else the start of the core."""
     cleaned = cleanup.clean(raw)
     hit = _platform(cleaned, dictionary.lookup(cleaned.core) if cleaned.core else None)
-    key = hit.merchant.key if hit is not None else _key_of(_unknown_name(cleaned))
+    key = hit.merchant.key if hit is not None else _key_of(cleaned.core)
     name = hit.merchant.name if hit is not None else display_name(key)
+    also = _also(cleaned) if hit is None else None
     return Identity(
-        key=key, name=name, kind=cleaned.kind, via=cleaned.via, hit=hit, core=cleaned.core
+        key=key,
+        name=name,
+        kind=cleaned.kind,
+        via=cleaned.via,
+        hit=hit,
+        core=cleaned.core,
+        also=also if also != key else None,
     )
+
+
+def learned_for(
+    identity: Identity, direction: Direction, learned: Mapping[tuple[str, Direction], Learned]
+) -> Learned | None:
+    """What the household taught for the merchant of ``identity`` and ``direction``.
+
+    Under its key, else under the shorter name it may also go by
+    (``Identity.also``): a household that filed "SQ *JUNEBUG" has said what
+    "JUNEBUG ASHGROVE OH" is. Never the other way round: what was filed
+    under two words says nothing about a shop called by the first alone.
+    """
+    if identity.key is None:
+        return None
+    own = learned.get((identity.key, direction))
+    if own is not None or identity.also is None:
+        return own
+    return learned.get((identity.also, direction))
 
 
 def _guess(category_id: uuid.UUID | None, source: str, confidence: Decimal) -> Decision:
@@ -318,8 +372,8 @@ def decide(
     one that pays (``inflow``): earnings and payouts are not stored as
     spending taken back. ``categories`` is the household's
     ``system_key -> id`` map; a key it has neither itself nor by its group
-    answers nothing. ``learned`` is the memory's answer for ``identity.key``
-    and ``direction``, or ``None``.
+    answers nothing. ``learned`` is the memory's answer for the merchant and
+    ``direction`` (:func:`learned_for`), or ``None``.
     """
     if payee_default is not None:
         return _guess(payee_default, "payee", PAYEE_CONFIDENCE)
@@ -436,15 +490,20 @@ def _decisions(
     db: Session, household_id: uuid.UUID, known: _Known, rows: Sequence[_Open]
 ) -> dict[uuid.UUID, Decision]:
     """:func:`decide` for each of ``rows``, with the memory read once for all of them."""
-    keys = {(row.identity.key, row.direction) for row in rows if row.identity.key}
+    keys = {
+        (key, row.direction)
+        for row in rows
+        if row.identity.key
+        for key in (row.identity.key, row.identity.also)
+        if key
+    }
     learned = memory.lookup(db, household_id, keys) if keys else {}
     found: dict[uuid.UUID, Decision] = {}
     for row in rows:
-        key = row.identity.key
         found[row.id] = decide(
             row.identity,
             row.direction,
-            learned=learned.get((key, row.direction)) if key else None,
+            learned=learned_for(row.identity, row.direction, learned),
             payee_default=known.payee_defaults.get(row.payee_id) if row.payee_id else None,
             categories=known.categories,
             now=known.now,

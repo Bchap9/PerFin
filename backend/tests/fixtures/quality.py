@@ -403,7 +403,10 @@ class TeachingMetrics:
     merchants: int
     #: Those whose second line got the taught category as a fact.
     right: int
+    #: Lines of another invented merchant that one of those corrections answered for.
+    across: int = 0
     misses: tuple[str, ...] = field(default=(), compare=False)
+    crossed: tuple[str, ...] = field(default=(), compare=False)
 
     @property
     def taught_right(self) -> float | None:
@@ -417,11 +420,14 @@ def teaching_metrics(lines: Sequence[Labelled] = LABELLED) -> TeachingMetrics:
     (under the label's category, or :data:`TAUGHT_WHEN_UNLABELLED`). The
     memory then holds what ``engine.person_decided`` records: one decision
     for that line's merchant key and direction, if its descriptor is of a
-    teachable kind. The second line is right when the engine states the
-    taught category as a fact.
+    teachable kind. The second line is read against that memory as the engine
+    reads it (``engine.learned_for``), and is right when the engine states
+    the taught category as a fact. ``across`` counts the lines of every other
+    invented merchant that the same memory answers for: a correction must
+    teach about its own merchant only.
     """
     from app.domain.categorisation import cleanup, engine
-    from app.domain.categorisation.memory import Learned
+    from app.domain.categorisation.memory import Direction, Learned
 
     by_merchant: dict[str, list[Labelled]] = defaultdict(list)
     for line in lines:
@@ -430,18 +436,20 @@ def teaching_metrics(lines: Sequence[Labelled] = LABELLED) -> TeachingMetrics:
     pairs = {name: found for name, found in by_merchant.items() if len(found) >= 2}
     right = 0
     misses: list[str] = []
+    crossed: list[str] = []
+    others = [
+        (line, engine.identify(line.text))
+        for line in lines
+        if line.group == "invented" and line.merchant is not None
+    ]
     for name, (first, second, *_) in sorted(pairs.items()):
         taught = first.category or TAUGHT_WHEN_UNLABELLED
         corrected = engine.identify(first.text)
         again = engine.identify(second.text)
-        learned = None
-        if (
-            corrected.key
-            and corrected.kind in cleanup.TEACHABLE
-            and corrected.key == again.key
-            and first.sign == second.sign
-        ):
-            learned = Learned(
+        direction: Direction = "in" if first.sign > 0 else "out"
+        memory: dict[tuple[str, Direction], Learned] = {}
+        if corrected.key and corrected.kind in cleanup.TEACHABLE:
+            memory[(corrected.key, direction)] = Learned(
                 memory_id=uuid.uuid5(uuid.NAMESPACE_OID, f"memory:{name}"),
                 category_id=DEFAULT_CATEGORIES[taught],
                 decisions=1,
@@ -449,8 +457,11 @@ def teaching_metrics(lines: Sequence[Labelled] = LABELLED) -> TeachingMetrics:
                 share=Decimal(1),
                 last_decided_at=NOW,
                 merchant_key=corrected.key,
-                direction="in" if first.sign > 0 else "out",
+                direction=direction,
             )
+        # As the engine reads the memory: under the second line's own key,
+        # else under the shorter name it may also go by.
+        learned = engine.learned_for(again, "in" if second.sign > 0 else "out", memory)
         answer = engine_decide(second, learned)
         if answer == (taught, True):
             right += 1
@@ -460,7 +471,21 @@ def teaching_metrics(lines: Sequence[Labelled] = LABELLED) -> TeachingMetrics:
                 f"{first.text} [{corrected.key}] then {second.text} [{again.key}] "
                 f"[{taught}] -> {said}"
             )
-    return TeachingMetrics(merchants=len(pairs), right=right, misses=tuple(misses))
+        for line, identity in others:
+            if line.merchant == name:
+                continue
+            if engine.learned_for(identity, "in" if line.sign > 0 else "out", memory) is not None:
+                crossed.append(
+                    f"{first.text} [{corrected.key}] also answers for {line.text} "
+                    f"[{line.merchant}: {identity.key}]"
+                )
+    return TeachingMetrics(
+        merchants=len(pairs),
+        right=right,
+        across=len(crossed),
+        misses=tuple(misses),
+        crossed=tuple(crossed),
+    )
 
 
 def _months(first: date, last: date) -> list[tuple[int, int]]:
@@ -607,7 +632,8 @@ def categorisation_report(metrics: CategorisationMetrics) -> list[str]:
 def teaching_report(metrics: TeachingMetrics) -> list[str]:
     return [
         f"Merchant repeated after one correction: right: {_percent(metrics.taught_right)} "
-        f"({metrics.right} of {metrics.merchants})"
+        f"({metrics.right} of {metrics.merchants})",
+        f"Lines of another merchant answered by that correction: {metrics.across}",
     ]
 
 

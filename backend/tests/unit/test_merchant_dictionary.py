@@ -844,7 +844,7 @@ THE_CHAIN_ITSELF = (
     ("CHILI'S #8641 ALDERTON PA", "chilis"),
     ("REGAL CINEMAS 8060 ALDERTON MT", "regal"),
     ("AMC 06581 ONLINE", "amc theatres"),
-    ("AMC+ 888-555-0100 NY", "amc plus"),
+    ("AMC+ 888-555-0163 NY", "amc plus"),
     ("H&M 6211", "h and m"),
     ("JO-ANN STORE #7885 ALDERTON NJ", "joann"),
     ("PARAMOUNT+ 866-555-0127 CA", "paramount plus"),

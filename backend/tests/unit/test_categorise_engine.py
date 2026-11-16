@@ -493,14 +493,28 @@ def test_a_platform_order_is_a_fact_in_the_platform_s_category() -> None:
 @pytest.mark.parametrize(
     ("raw", "key"),
     [
-        # A shop nobody knows: the word in front of the state is the city.
-        ("JUNEBUG ASHGROVE OH", "junebug"),
-        ("SQ *BUTTONWOOD HARLOWTON GA", "buttonwood"),
-        ("POS PURCHASE STONECROP ELKTON FALLS MT", "stonecrop"),
-        # ... as its other lines say.
+        # Two words in front of a state: a shop of one word and its town, or a
+        # shop of two words. The line cannot say, so the key keeps both.
+        ("JUNEBUG ASHGROVE OH", "junebug ashgrove"),
+        ("SQ *BUTTONWOOD HARLOWTON GA", "buttonwood harlowton"),
+        ("POS PURCHASE STONECROP ELKTON FALLS MT", "stonecrop elkton"),
+        ("QUIET BEAN OR", "quiet bean"),
+        ("QUIET BEAN", "quiet bean"),
+        ("SQ *QUIET BEAN", "quiet bean"),
+        # Shops that only share a first word are not one merchant.
+        ("THE HIDEOUT TX", "the hideout"),
+        ("THE PANTRY TX", "the pantry"),
+        ("DR SMITH TX", "dr smith"),
+        ("DR PATEL TX", "dr patel"),
+        ("ST VINCENT IN", "st vincent"),
+        ("CAFE LUNA CA", "cafe luna"),
+        ("CAFE ROMA CA", "cafe roma"),
+        ("BLUE HERON OH", "blue heron"),
+        ("BLUE MOON OH", "blue moon"),
+        ("MAIN STREET OH", "main street"),
+        # Where the line does say, the city goes.
         ("IN *JUNEBUG", "junebug"),
         ("JUNEBUG #12 ASHGROVE OH", "junebug"),
-        # A word that says what is sold is no town.
         ("CORNER PHARMACY OH", "corner pharmacy"),
         ("LANTERN PIZZA TX", "lantern pizza"),
         # The dictionary knows the longer name.
@@ -512,12 +526,87 @@ def test_a_platform_order_is_a_fact_in_the_platform_s_category() -> None:
         ("TARGET SPORTS OH", "target sports"),
     ],
 )
-def test_an_unknown_shop_in_front_of_a_state_loses_the_city(raw: str, key: str) -> None:
+def test_two_words_in_front_of_a_state_stay_the_key(raw: str, key: str) -> None:
     assert engine.identify(raw).key == key
 
 
-def test_the_shorter_name_is_only_the_key() -> None:
+@pytest.mark.parametrize(
+    ("raw", "also"),
+    [
+        # The shop may be the one its other lines call by the first word alone.
+        ("JUNEBUG ASHGROVE OH", "junebug"),
+        ("SQ *BUTTONWOOD HARLOWTON GA", "buttonwood"),
+        ("POS PURCHASE STONECROP ELKTON FALLS MT", "stonecrop"),
+        ("QUIET BEAN OR", "quiet"),
+        # A first word that is no name of its own: an article, a title, a
+        # colour, a direction, a word for what is sold, or a short one.
+        ("THE HIDEOUT TX", None),
+        ("LOS PORTALES TX", None),
+        ("DR SMITH TX", None),
+        ("ST VINCENT IN", None),
+        ("BLUE HERON OH", None),
+        ("GREEN LANTERN OH", None),
+        ("NORTH FORK ID", None),
+        ("MAIN STREET OH", None),
+        ("LITTLE HARBOR ME", None),
+        ("CAFE LUNA CA", None),
+        ("LUNA NOVA CA", None),
+        # The last word says what is sold: it is no town.
+        ("CORNER PHARMACY OH", None),
+        # The first word is somebody else's name, or the line leaves no doubt.
+        ("SUBWAY ALDERTON TX", None),
+        ("MASSAGE ENVY CA", None),
+        ("JUNEBUG #12 ASHGROVE OH", None),
+        ("SQ *JUNEBUG", None),
+    ],
+)
+def test_the_shorter_reading_is_only_another_name_to_look_under(raw: str, also: str | None) -> None:
+    assert engine.identify(raw).also == also
+
+
+def test_what_was_learned_under_the_shorter_name_answers_for_the_longer() -> None:
+    short, long = engine.identify("SQ *JUNEBUG"), engine.identify("JUNEBUG ASHGROVE OH")
+    taught: dict[tuple[str, Direction], Learned] = {("junebug", "out"): _learned(1, 1)}
+    assert engine.learned_for(short, "out", taught) is taught[("junebug", "out")]
+    assert engine.learned_for(long, "out", taught) is taught[("junebug", "out")]
+    # Only for the direction it was taught in, and never the other way round:
+    # "junebug ashgrove" may be a shop of two words, which "SQ *JUNEBUG" is not.
+    assert engine.learned_for(long, "in", taught) is None
+    longer: dict[tuple[str, Direction], Learned] = {("junebug ashgrove", "out"): _learned(1, 1)}
+    assert engine.learned_for(short, "out", longer) is None
+    # What the household said about the line's own key comes first.
+    own = _learned(2, 2, category_id=CATEGORIES["food"])
+    both = {**taught, ("junebug ashgrove", "out"): own}
+    assert engine.learned_for(long, "out", both) is own
+
+
+@pytest.mark.parametrize(
+    ("filed", "other"),
+    [
+        ("THE HIDEOUT TX", "THE PANTRY TX"),
+        ("DR SMITH TX", "DR PATEL TX"),
+        ("CAFE LUNA CA", "CAFE ROMA CA"),
+        ("BLUE HERON OH", "BLUE MOON OH"),
+        ("QUIET BEAN OR", "QUIET HOURS OR"),
+    ],
+)
+def test_one_correction_says_nothing_about_a_shop_that_shares_a_first_word(
+    filed: str, other: str
+) -> None:
+    # What ``person_decided`` records for the filed line: one decision under its key.
+    first, second = engine.identify(filed), engine.identify(other)
+    assert first.key is not None
+    taught: dict[tuple[str, Direction], Learned] = {(first.key, "out"): _learned(1, 1)}
+    learned = engine.learned_for(second, "out", taught)
+    assert learned is None
+    assert _decide(second, learned=learned).category_id is None
+
+
+def test_the_shorter_name_is_not_the_key() -> None:
     identity = engine.identify("JUNEBUG ASHGROVE OH")
-    # The core, which keywords are read from, is what clean-up gave.
-    assert (identity.key, identity.core, identity.hit) == ("junebug", "junebug ashgrove", None)
-    assert identity.name == "Junebug"
+    assert (identity.key, identity.core, identity.hit) == (
+        "junebug ashgrove",
+        "junebug ashgrove",
+        None,
+    )
+    assert (identity.name, identity.also) == ("Junebug Ashgrove", "junebug")

@@ -19,6 +19,7 @@ from collections.abc import Sequence
 import pytest
 
 from tests.fixtures import quality
+from tests.fixtures.descriptors import Labelled
 from tests.fixtures.quality import MISSES_SHOWN, CategorisationMetrics, TeachingMetrics
 
 KNOWN_FACT_RIGHT_MIN = 0.85
@@ -30,6 +31,7 @@ ONE_KEY_PER_MERCHANT_MIN = 0.95
 KIND_RIGHT_MIN = 0.97
 PRIVATE_LEAKS_MAX = 0
 TAUGHT_RIGHT_MIN = 0.95
+TAUGHT_ACROSS_MAX = 0
 
 
 @pytest.fixture(scope="module")
@@ -117,3 +119,31 @@ def test_one_correction_teaches(taught: TeachingMetrics) -> None:
     value = taught.taught_right
     assert value is not None
     assert value >= TAUGHT_RIGHT_MIN, _report("taught_right", value, taught.misses)
+
+
+def test_one_correction_says_nothing_about_another_merchant(taught: TeachingMetrics) -> None:
+    # What a person filed for one invented merchant is never read for another.
+    assert taught.across <= TAUGHT_ACROSS_MAX, _report("across", taught.across, taught.crossed)
+
+
+def test_shops_that_share_a_first_word_do_not_share_a_correction() -> None:
+    # The labelled set holds no such pair, so the measure is shown to see one:
+    # two shops in front of a state whose names begin alike, each printed twice.
+    def line(text: str, merchant: str, category: str) -> Labelled:
+        return Labelled(text, "invented", merchant, category, "purchase")
+
+    lines = [
+        line("THE HIDEOUT TX", "The Hideout", "food.alcohol"),
+        line("POS DEBIT THE HIDEOUT TX", "The Hideout", "food.alcohol"),
+        line("THE PANTRY TX", "The Pantry", "food.groceries"),
+        line("POS DEBIT THE PANTRY TX", "The Pantry", "food.groceries"),
+        line("BLUE HERON OH", "Blue Heron", "food.restaurants"),
+        line("BLUE HERON OH", "Blue Heron", "food.restaurants"),
+        line("BLUE MOON OH", "Blue Moon", "leisure.hobbies"),
+        line("BLUE MOON OH", "Blue Moon", "leisure.hobbies"),
+        line("QUIET BEAN OR", "Quiet Bean", "food.coffee"),
+        line("SQ *QUIET BEAN", "Quiet Bean", "food.coffee"),
+    ]
+    measured = quality.teaching_metrics(lines)
+    assert (measured.merchants, measured.right) == (5, 5), measured.misses
+    assert measured.across == 0, measured.crossed

@@ -78,6 +78,11 @@ from a purchase are not here: they are code, in `../cleanup.py`.
   service (streaming, software, a gym, a box); a `bill` is what a household
   owes whatever it does (phone, internet, power, gas, water, an insurer, an
   alarm, a storage unit). A shop where people only often buy is neither.
+  A `mixed` entry without a `series` is read by detection as a general
+  store: its uncategorised charges are a habit, and only one price to the
+  cent at a regular rhythm is suggested as a series. Give a `mixed` entry a
+  `series` only when nearly everything billed under that name is a plan (an
+  app store), because a known series is suggested after a single charge.
   Every entry with a `series` names its `cadences`, from `weekly`,
   `biweekly`, `monthly`, `two_monthly`, `quarterly`, `half_yearly`, `annual`.
 - `mixed: true` makes the category a suggestion only. It is for a general
@@ -86,6 +91,12 @@ from a purchase are not here: they are code, in `../cleanup.py`.
   a company whose one billing name covers several lines (an insurer that
   sells car, home and life cover; a carrier's bare name). A product the
   statement does name is its own entry with a longer match.
+- An order through a delivery or ticket platform is the platform's:
+  `engine.PLATFORMS` (DoorDash, Grubhub, Instacart, Eventbrite) names the
+  processors whose `via` is the key of their own entry here, and a line
+  behind one of them takes that entry's key and category whatever merchant
+  it names. Such a platform needs an entry of its own; its membership is a
+  separate entry with a `series`, which is left as it is.
 - `inflow: true` is for a company that pays a person (a payroll processor);
   it answers for money coming in only.
 - No other field is read; an unknown field is an error.

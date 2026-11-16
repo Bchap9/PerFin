@@ -462,6 +462,11 @@ def test_processors(raw: str, core: str, via: str | None) -> None:
         # Shopify's bare prefix needs two words behind it, or one of four letters.
         ("SP AG", "sp ag"),
         ("SP", "sp"),
+        # ... and "SP" in front of a word companies carry in their own name is the name.
+        ("SP GLOBAL", "sp global"),
+        ("SP PARKING", "sp parking"),
+        ("SP GROUP", "sp group"),
+        ("SP PLUS PARKING", "sp plus parking"),
         # A processor with nobody behind it is all the line names.
         ("PAYPAL *", "paypal"),
         ("SQ *", "sq"),
@@ -1031,6 +1036,9 @@ def test_a_plus_that_ends_a_name_is_read(raw: str, core: str) -> None:
         ("ACH DEBIT NELNET STUDNTLOAN 719702316680", "loan_payment", "nelnet"),
         ("NELNET DES:STUDNTLOAN ID:M1KHGRE5ZV CO ID:2954119753 PPD", "loan_payment", "nelnet"),
         ("LANTERN SERVICING STUDENT LN PPD ID: 4410772913", "loan_payment", "lantern servicing"),
+        # "payment" behind the wording is the entry's, not the servicer's name.
+        ("ACH DEBIT MOHELA STUDENT LOAN PMT", "loan_payment", "mohela"),
+        ("ACH DEBIT MOHELA STDNT LOAN PAYMENT 7741", "loan_payment", "mohela"),
         # A shop is not a lender for a word that begins like one.
         ("STUDENT LOANERS BIKE HIRE", "unknown", "student loaners bike hire"),
         # A card purchase is a purchase, whatever the shop calls itself.
