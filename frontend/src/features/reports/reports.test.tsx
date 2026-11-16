@@ -503,6 +503,8 @@ describe("reports page: the section tab bar", () => {
     expect(bars[1]).toHaveClass("chart-series-2");
     expect(container.querySelector(".recharts-cartesian-grid .chart-grid")).not.toBeNull();
     expect(container.querySelectorAll(".chart-axis").length).toBeGreaterThanOrEqual(2);
+    // The net line's points take the report's own class, not a colour.
+    expect(container.querySelectorAll("circle.report-net-dot")).toHaveLength(2);
 
     // The trend chart: the months compared in the series colour, the others in the muted class.
     await userEvent.setup().click(viewLink("Trends"));
@@ -512,6 +514,8 @@ describe("reports page: the section tab bar", () => {
       expect(element.getAttribute("fill") ?? "").not.toMatch(/#|var\(/);
     }
     expect(container.querySelector(".recharts-bar")).toHaveClass("chart-series-1");
+    expect(container.querySelectorAll("path.recharts-rectangle.chart-series-1").length).toBeGreaterThan(0);
+    expect(container.querySelectorAll("path.recharts-rectangle.report-bar--muted").length).toBeGreaterThan(0);
   });
 
   it.each([
