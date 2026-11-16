@@ -219,10 +219,11 @@ migration, no new setting, no new container, nothing new leaves the host
   `AUTOMATIC WITHDRAWAL <name>` is a debit to that name. Rent (`RENT
   PAYMENT`, `APARTMENT RENT`), electricity (`ELECTRICITY`, `ELECTRIC
   BILL`), `UTILITY`, pay (`WAGES`, `SALARY`, `EMPLOYER`, money in only),
-  `DIVIDEND EARNED` (money in only), `CASH DEPOSIT`, `WITHDRAWAL` and
-  cinemas (`THEATERS`, `CINEMAS`) are suggested. "Rent" or "electric"
-  alone, inside another word or at the start of a shop's name suggests
-  nothing; cheques and deposits stay unguessed (merchant list version 8).
+  `DIVIDEND EARNED` (money in only), `CASH DEPOSIT` (money in only),
+  `WITHDRAWAL` (money out only) and cinemas (`THEATERS`, `CINEMAS`) are
+  suggested. "Rent" or "electric" alone, inside another word or at the
+  start of a shop's name suggests nothing; cheques (`CHECK WITHDRAWAL`
+  too) and deposits stay unguessed (merchant list version 8).
 - **The merchant list knows more cinemas and a few more forms.** Marcus,
   Harkins, Alamo Drafthouse, Landmark, Cineplex, Showcase, Studio Movie
   Grill, Cinépolis, Megaplex and Century (Cinemark); Napster, also as

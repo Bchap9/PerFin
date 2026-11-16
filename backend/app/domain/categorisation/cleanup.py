@@ -276,6 +276,7 @@ KIND_PREFIXES: Final[tuple[KindPattern, ...]] = (
     _p(rf"COUNTER CREDIT{_END}", "deposit"),
     _p(r"DEPOSIT(?:$| ID NUMBER(?![A-Z])| ?#)", "deposit"),
     _p(r"(?:CHECK|CHK|DRAFT)(?: PAID| NUMBER| NO)? ?#? ?\d{1,12}(?: PAID)?$", "check"),
+    _p(rf"(?:CHECK|CHK) (?:WITHDRAWAL|WITHDRWL|W/D){_END}", "check"),
     # Payroll. "DIRECT DEPOSIT" alone says only that money arrived (a tax
     # refund comes the same way); the word PAYROLL makes it pay (_PAYROLL_WORD).
     _p(rf"PAYROLL(?: DEPOSIT)?{_END}", "payroll"),

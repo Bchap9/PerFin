@@ -101,8 +101,13 @@ def test_wording_that_says_what_it_was_is_suggested(
         ("DIVIDEND EARNED", "out"),
         # Who an automatic withdrawal paid is not cash.
         ("AUTOMATIC WITHDRAWAL LANTERN ATHLETIC CLUB", "out"),
+        # Money coming in is no withdrawal, money going out no deposit.
+        ("WITHDRAWAL", "in"),
+        ("CASH DEPOSIT", "out"),
         # Cheques and deposits are never guessed.
         ("CHECK 1042", "out"),
+        ("CHECK WITHDRAWAL", "out"),
+        ("CHK WITHDRAWAL 1042", "out"),
         ("DEPOSIT", "in"),
         ("ATM CHECK DEPOSIT 04/12", "in"),
     ],

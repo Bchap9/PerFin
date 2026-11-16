@@ -197,6 +197,7 @@ keywords:
   - {word: employer, category: income.salary}
   - {word: dividend earned, category: income.dividends}
   # Cash into or out of the account at the counter. Last of all: any other
-  # word in the line says better what the money was.
+  # word in the line says better what the money was. Each answers one way
+  # only (engine.KEYWORD_DIRECTIONS); a cheque withdrawal is a cheque.
   - {word: cash deposit, category: transfers.cash}
   - {word: withdrawal, category: transfers.cash}

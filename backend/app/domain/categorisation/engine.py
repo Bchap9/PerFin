@@ -108,6 +108,12 @@ KEYWORD_STRONG_CONFIDENCE: Final = Decimal("0.80")
 #: Groups of categories a keyword answers for money coming in only: a word for
 #: pay ("wages") on money going out is pay for somebody else.
 INFLOW_ONLY_GROUPS: Final = frozenset({"income"})
+#: Keywords that say which way the money went, and answer only that way: no
+#: money comes in by a withdrawal, none goes out by a deposit.
+KEYWORD_DIRECTIONS: Final[Mapping[str, Direction]] = {
+    "withdrawal": "out",
+    "cash deposit": "in",
+}
 
 #: Money that is not spending at a merchant, read from the descriptor's kind:
 #: ``(kind, direction) -> (default category key, confidence)``. A pair that is
@@ -367,10 +373,9 @@ def _from_data(identity: Identity, direction: Direction) -> tuple[str, str, Deci
         confidence = _hit_confidence(identity, hit, direction)
         return None if confidence is None else ("dictionary", hit.merchant.category, confidence)
     word = dictionary.keyword(identity.core, identity.via) if identity.core else None
-    if (
-        word is not None
-        and direction == "out"
-        and word.category.partition(".")[0] in INFLOW_ONLY_GROUPS
+    if word is not None and (
+        (direction == "out" and word.category.partition(".")[0] in INFLOW_ONLY_GROUPS)
+        or KEYWORD_DIRECTIONS.get(word.word, direction) != direction
     ):
         return None
     if word is not None:
