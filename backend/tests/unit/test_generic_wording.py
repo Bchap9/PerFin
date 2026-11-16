@@ -143,3 +143,17 @@ def test_ambiguous_wording_answers_nothing_wrong(raw: str, direction: Direction)
         "income.interest",
         "transfers.cash",
     }, (raw, category)
+
+
+@pytest.mark.parametrize(
+    "raw",
+    [
+        "QUARRYVALE INS DES:INS PREM ID:%1 CO ID:0000000004 PPD",
+        "QUARRYVALE MUTUAL DES:INSURANCE PREMIUM ID:%1 CO ID:0000000005 PPD",
+        "ORIG CO NAME:QUARRYVALE LIFE CO ENTRY DESCR:INSURANCE",
+    ],
+)
+def test_an_insurance_premium_stays_unguessed_by_its_entry_description(raw: str) -> None:
+    # The owner's decision: "insurance premium" says nothing about which
+    # insurance, so the entry description suggests nothing either.
+    assert _answer(raw, "out") == (None, False)

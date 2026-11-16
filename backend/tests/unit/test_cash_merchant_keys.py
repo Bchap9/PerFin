@@ -36,6 +36,7 @@ _KEY_OF = {category_id: key for key, category_id in DEFAULT_CATEGORIES.items()}
         "Cash Deposit",
         "TELLER DEPOSIT",
         "COUNTER WITHDRAWAL",
+        "CHEQUE WITHDRAWAL",
         "CASH",
         "ATM",
         "ATM CASH",
