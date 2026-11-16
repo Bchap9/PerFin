@@ -2,7 +2,10 @@
 /**
  * One budget: the period report (budgeted, carried over, actual, forecast,
  * remaining per category) with period stepping, and an editor for its lines.
- * Each category links to its transactions for the period shown. A detail page
+ * Each category links to its transactions for the period shown. The
+ * transactions list matches a category exactly, while Actual also counts
+ * subcategories that have no line of their own, so such a line says which
+ * subcategories its link leaves out. A detail page
  * under Plan, so it carries the breadcrumbs "Plan / Budgets / <name>". Edit
  * and delete show only to who may write.
  */
@@ -66,21 +69,58 @@ export function lineBarLabel(line: BudgetReportLine): string {
   return lineStatus(line, line.kind) === "over" ? `${name}: ${used}, over budget` : `${name}: ${used}`;
 }
 
-export function ReportTable({ report, categories = [] }: { report: BudgetReport; categories?: readonly ColourCategory[] }) {
+/** A category as this page needs it: its colour, its place in the tree and its name. */
+type ReportCategory = ColourCategory & { name: string };
+
+/**
+ * The names of the subcategories whose spending the report counts under
+ * `categoryId`: those below it whose nearest budgeted category, walking up,
+ * is `categoryId` (the server's `nearest()`). Empty when it has none.
+ */
+export function rolledInNames(categoryId: string, budgeted: ReadonlySet<string>, categories: readonly ReportCategory[]): string[] {
+  const byId = new Map(categories.map((category) => [category.id, category]));
+  const nearest = (id: string): string | null => {
+    const seen = new Set<string>();
+    let current = byId.get(id);
+    while (current !== undefined && !seen.has(current.id)) {
+      if (budgeted.has(current.id)) {
+        return current.id;
+      }
+      seen.add(current.id);
+      current = current.parent_id === null ? undefined : byId.get(current.parent_id);
+    }
+    return null;
+  };
+  return categories.filter((category) => category.id !== categoryId && nearest(category.id) === categoryId).map((category) => category.name);
+}
+
+export function ReportTable({ report, categories = [] }: { report: BudgetReport; categories?: readonly ReportCategory[] }) {
   const currency = report.currency;
+  const budgeted = new Set(report.lines.map((line) => line.category_id));
   const columns: TableColumn<BudgetReportLine>[] = [
     {
       id: "name",
       header: "Category",
       rowHeader: true,
-      cell: (line) => (
-        <Link
-          to="/transactions"
-          search={{ category: line.category_id, date_from: report.period.start, date_to: report.period.end }}
-        >
-          <Chip colourClass={categoryColourClass(line.category_id, categories)}>{line.name ?? "Unknown"}</Chip>
-        </Link>
-      ),
+      cell: (line) => {
+        const name = line.name ?? "Unknown";
+        const rolledIn = rolledInNames(line.category_id, budgeted, categories);
+        return (
+          <>
+            <Link
+              to="/transactions"
+              search={{ category: line.category_id, date_from: report.period.start, date_to: report.period.end }}
+            >
+              <Chip colourClass={categoryColourClass(line.category_id, categories)}>{name}</Chip>
+            </Link>
+            {rolledIn.length === 0 ? null : (
+              <div className="muted">
+                The link lists {name} itself. Actual also counts its subcategories: {rolledIn.join(", ")}.
+              </div>
+            )}
+          </>
+        );
+      },
     },
     { id: "budgeted", header: "Budgeted", align: "end", cell: (line) => <MoneyText amount={line.budgeted.amount} currency={currency} tone="none" /> },
     { id: "carried", header: "Carried over", align: "end", cell: (line) => <MoneyText amount={line.carried_over.amount} currency={currency} tone="none" /> },
@@ -315,6 +355,9 @@ export function BudgetDetailPage() {
             <QueryState loading={reportQuery.isPending} error={reportQuery.error} label="the report">
               {report === undefined ? null : <ReportTable report={report} categories={categories.data ?? []} />}
             </QueryState>
+            {pending ? null : (
+              <p className="muted">Linked transaction lists also show transactions awaiting review, which Actual leaves out.</p>
+            )}
           </>
         )}
       </QueryState>

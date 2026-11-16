@@ -4,7 +4,7 @@ import userEvent from "@testing-library/user-event";
 
 import { ACCOUNT_CHECKING, money, ownerSession, referenceHandlers } from "../planning/testing";
 import { expectNoAxeViolations } from "../../test/axe";
-import { currentHref, json, mockApi, renderApp } from "../auth/testing";
+import { authedSession, currentHref, json, mockApi, renderApp } from "../auth/testing";
 
 const SCHEDULE = {
   id: "s-1",
@@ -70,6 +70,10 @@ describe("calendar", () => {
     renderApp("/plan/upcoming");
     await screen.findByRole("table", { name: "Upcoming days" });
     expect(screen.getAllByRole("term").map((term) => term.textContent)).toEqual(["Cash now", "Income expected", "Bills expected", "Net"]);
+    // They are the shared Stat figures, not a private list.
+    for (const term of screen.getAllByRole("term")) {
+      expect(term).toHaveClass("stat__label");
+    }
   });
 
   it("the tab is in the address", async () => {
@@ -142,6 +146,44 @@ describe("calendar", () => {
     // Suggested series are rows of the table now; the old pattern list is not asked for.
     expect(api.callsTo("GET", "/api/v1/recurring/candidates")).toHaveLength(0);
     expect(screen.queryByRole("heading", { name: "Suggestions" })).not.toBeInTheDocument();
+  });
+
+  it("a viewer sees the recurring items but no write controls", async () => {
+    mockApi({
+      ...referenceHandlers(),
+      "GET /api/v1/auth/session": authedSession({ role: "viewer" }),
+      "GET /api/v1/cashflow/calendar": () => json(CALENDAR),
+      "GET /api/v1/recurring": () => json({ items: [SCHEDULE, schedule("s-6", "Garden Club", { kind: "bill", status: "confirmed", status_source: "person", origin: "manual" })] }),
+    });
+    renderApp("/plan/upcoming?tab=recurring");
+    const table = await screen.findByRole("table", { name: "Recurring items" });
+    expect(within(table).getByRole("row", { name: /Streaming/ })).toBeInTheDocument();
+    expect(within(table).getByRole("row", { name: /Garden Club/ })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "New recurring item" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Find recurring items" })).toBeNull();
+    expect(within(table).queryByRole("button")).toBeNull();
+    expect(screen.getByRole("link", { name: "See subscriptions" })).toBeInTheDocument();
+  });
+
+  it("a row on an account the person may only view has no write controls", async () => {
+    const handlers = referenceHandlers();
+    const accounts = handlers["GET /api/v1/accounts"];
+    mockApi({
+      ...ownerSession(),
+      ...handlers,
+      // The same account, shared with the person to view only.
+      "GET /api/v1/accounts": async (call) => {
+        const response = accounts === undefined ? json({ items: [], next_cursor: null }) : await accounts(call);
+        const body = (await response.json()) as { items: Record<string, unknown>[]; next_cursor: null };
+        return json({ ...body, items: body.items.map((item) => ({ ...item, can_edit: false })) });
+      },
+      "GET /api/v1/cashflow/calendar": () => json(CALENDAR),
+      "GET /api/v1/recurring": () => json({ items: [SCHEDULE] }),
+    });
+    renderApp("/plan/upcoming?tab=recurring");
+    const table = await screen.findByRole("table", { name: "Recurring items" });
+    await within(table).findByText("Checking");
+    expect(within(table).queryByRole("button")).toBeNull();
   });
 
   it("the recurring tab shows kind and status and dismisses a detected item", async () => {

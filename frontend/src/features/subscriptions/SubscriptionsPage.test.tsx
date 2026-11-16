@@ -404,6 +404,10 @@ describe("subscriptions view", () => {
     setup([STREAMLY, CLOUD, GYM, WATER]);
     const cost = await screen.findByRole("group", { name: "Cost of subscriptions" });
     expect(within(cost).getAllByRole("term").map((term) => term.textContent)).toEqual(["Per month", "Per year"]);
+    // They are the shared Stat figures, not a private list.
+    for (const term of within(cost).getAllByRole("term")) {
+      expect(term).toHaveClass("stat__label");
+    }
     expect(within(cost).getAllByRole("definition").map((value) => value.textContent)).toEqual(["$58.98", "$707.76"]);
   });
 

@@ -4,7 +4,7 @@ import userEvent from "@testing-library/user-event";
 
 import { expectNoAxeViolations } from "../../test/axe";
 import { authedSession, json, mockApi, renderApp } from "../auth/testing";
-import { CAT_DINING, CAT_RENT, money, ownerSession, referenceHandlers } from "../planning/testing";
+import { CAT_DINING, CAT_FOOD, CAT_RENT, money, ownerSession, referenceHandlers } from "../planning/testing";
 import { barWidth, lineStatus, percentOf, steppedPeriod } from "./report";
 
 const STAMP = "2026-11-01T10:00:00Z";
@@ -173,6 +173,9 @@ describe("budget page", () => {
     expect(dining).toHaveAccessibleName("Dining: 125 percent of budget, over budget");
     expect(screen.getByRole("progressbar", { name: /^Rent:/ })).toHaveAccessibleName("Rent: 93 percent of budget");
     expect(screen.getByRole("progressbar", { name: /^Fun:/ })).toHaveAccessibleName("Fun: 20 percent of budget");
+    // The bar turns to the danger colour too, not only its name.
+    expect(dining).toHaveClass("progress--over");
+    expect(screen.getByRole("progressbar", { name: /^Rent:/ })).not.toHaveClass("progress--over");
   });
 
   it("a line links to its transactions for the period", async () => {
@@ -185,6 +188,57 @@ describe("budget page", () => {
     expect(href.searchParams.get("category")).toBe(CAT_DINING);
     expect(href.searchParams.get("date_from")).toBe("2026-11-01");
     expect(href.searchParams.get("date_to")).toBe("2026-11-30");
+    // The line carries its category's colour.
+    expect(link.querySelector(".chip")?.className).toMatch(/\bchip--s[1-6]\b/);
+    // Dining has no subcategories, so there is nothing to explain.
+    expect(within(table).queryByText(/subcategories/)).toBeNull();
+  });
+
+  it("a line on a parent category says its link lists that category itself only", async () => {
+    mockApi({
+      ...ownerSession(),
+      ...referenceHandlers(),
+      "GET /api/v1/budgets/:id": () => json({ ...BUDGET, lines: [{ id: "l-1", category_id: CAT_FOOD, amount: money("400.00") }] }),
+      "GET /api/v1/budgets/:id/report": () =>
+        json({ ...REPORT, lines: [line(CAT_FOOD, "Food", { budgeted: "400.00", actual: "320.00", forecast: "380.00" })] }),
+    });
+    renderApp("/plan/budgets/b-1");
+    const table = await screen.findByRole("region", { name: "Budget report by category" });
+    const row = within(table).getByRole("row", { name: /Food/ });
+    // Actual rolls Dining into Food; the transactions list matches Food exactly, so the row says so.
+    expect(await within(row).findByText("The link lists Food itself. Actual also counts its subcategories: Dining.")).toBeInTheDocument();
+    expect(within(row).getByRole("link", { name: "Food" })).toBeInTheDocument();
+  });
+
+  it("a parent line says nothing when each subcategory has a line of its own", async () => {
+    mockApi({
+      ...ownerSession(),
+      ...referenceHandlers(),
+      "GET /api/v1/budgets/:id": () => json(BUDGET),
+      "GET /api/v1/budgets/:id/report": () =>
+        json({
+          ...REPORT,
+          lines: [
+            line(CAT_FOOD, "Food", { budgeted: "100.00", actual: "20.00", forecast: "40.00" }),
+            line(CAT_DINING, "Dining", { budgeted: "200.00", actual: "250.00", forecast: "300.00" }),
+          ],
+        }),
+    });
+    renderApp("/plan/budgets/b-1");
+    const table = await screen.findByRole("region", { name: "Budget report by category" });
+    await within(table).findByRole("link", { name: "Food" });
+    expect(within(table).queryByText(/subcategories/)).toBeNull();
+  });
+
+  it("says the linked lists include transactions awaiting review until the report does too", async () => {
+    budgetApi();
+    renderApp("/plan/budgets/b-1");
+    const user = userEvent.setup();
+    await screen.findByRole("region", { name: "Budget report by category" });
+    const note = "Linked transaction lists also show transactions awaiting review, which Actual leaves out.";
+    expect(screen.getByText(note)).toBeInTheDocument();
+    await user.click(screen.getByRole("checkbox", { name: "Include transactions awaiting review" }));
+    await vi.waitFor(() => { expect(screen.queryByText(note)).toBeNull(); });
   });
 
   it("shows where it sits as Plan / Budgets / its name", async () => {

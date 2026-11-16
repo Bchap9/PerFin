@@ -12,6 +12,7 @@ import { MoneyText } from "../../components/MoneyText";
 import { Select } from "../../components/Select";
 import { Table, type TableColumn } from "../../components/Table";
 import { formatDate, todayIsoDate } from "../../lib/dates";
+import { useCanWrite } from "../accounts/api";
 import { labelOf } from "../investments/format";
 import { ErrorLine, QueryState } from "../planning/PlanningPage";
 import { nameLookup, useAccounts, useCategories, usePayees } from "../planning/queries";
@@ -182,10 +183,17 @@ const STATE_TONE = new Map<Schedule["status"], "success" | "info" | "warning">([
   ["paused", "warning"],
 ]);
 
+/**
+ * The recurring items. Adding, finding, pausing, deleting and dismissing show
+ * only to who may write, and a row's buttons only when its account may be
+ * changed: the server refuses the rest (Writer, ScheduleWriter).
+ */
 export function RecurringTab() {
   const query = useQuery({ queryKey: recurringKeys.list, queryFn: listSchedules });
+  const canWrite = useCanWrite();
   const accounts = useAccounts();
   const accountName = nameLookup(accounts.data);
+  const editableAccounts = new Set((accounts.data ?? []).filter((a) => a.can_edit).map((a) => a.id));
   const [adding, setAdding] = useState(false);
   // Pausing, confirming or dismissing here is the same decision the Subscriptions view shows.
   const invalidate = SUBSCRIPTION_FAMILIES;
@@ -198,20 +206,12 @@ export function RecurringTab() {
     success: (result) => `Found ${String(result.created)} new, updated ${String(result.updated)}`,
   });
 
-  const columns: TableColumn<Schedule>[] = [
-    { id: "name", header: "Name", rowHeader: true, cell: (s) => s.name },
-    { id: "account", header: "Account", cell: (s) => accountName(s.account_id) },
-    { id: "kind", header: "Kind", cell: (s) => kindText(s.kind) },
-    { id: "cadence", header: "Repeats", cell: (s) => cadenceText(s.cadence, s.interval_count) },
-    { id: "amount", header: "Amount", align: "end", cell: (s) => amountRange(s.amount_min, s.amount_max) },
-    { id: "next", header: "Next due", cell: (s) => formatDate(s.next_due) ?? s.next_due },
-    { id: "origin", header: "Source", cell: (s) => (s.origin === "detected" ? "From your statements" : "Added by you") },
-    { id: "state", header: "State", cell: (s) => <Badge tone={STATE_TONE.get(s.status) ?? "neutral"}>{statusText(s.status, s.kind)}</Badge> },
-    {
-      id: "actions",
-      header: <span className="visually-hidden">Actions</span>,
-      align: "end",
-      cell: (s) => (
+  const actionsColumn: TableColumn<Schedule> = {
+    id: "actions",
+    header: <span className="visually-hidden">Actions</span>,
+    align: "end",
+    cell: (s) =>
+      editableAccounts.has(s.account_id) ? (
         <span className="planning-actions">
           <Button size="sm" aria-label={`${toggleText(s)} ${s.name}`} onClick={() => void toggle.run(s)}>
             {toggleText(s)}
@@ -226,20 +226,33 @@ export function RecurringTab() {
             </Button>
           )}
         </span>
-      ),
-    },
+      ) : null,
+  };
+
+  const columns: TableColumn<Schedule>[] = [
+    { id: "name", header: "Name", rowHeader: true, cell: (s) => s.name },
+    { id: "account", header: "Account", cell: (s) => accountName(s.account_id) },
+    { id: "kind", header: "Kind", cell: (s) => kindText(s.kind) },
+    { id: "cadence", header: "Repeats", cell: (s) => cadenceText(s.cadence, s.interval_count) },
+    { id: "amount", header: "Amount", align: "end", cell: (s) => amountRange(s.amount_min, s.amount_max) },
+    { id: "next", header: "Next due", cell: (s) => formatDate(s.next_due) ?? s.next_due },
+    { id: "origin", header: "Source", cell: (s) => (s.origin === "detected" ? "From your statements" : "Added by you") },
+    { id: "state", header: "State", cell: (s) => <Badge tone={STATE_TONE.get(s.status) ?? "neutral"}>{statusText(s.status, s.kind)}</Badge> },
+    ...(canWrite ? [actionsColumn] : []),
   ];
 
   return (
     <div className="planning-stack">
-      <div className="planning-actions">
-        <Button variant="primary" onClick={() => { setAdding(true); }}>
-          New recurring item
-        </Button>
-        <Button loading={detect.busy} onClick={() => void detect.run()}>
-          Find recurring items
-        </Button>
-      </div>
+      {canWrite ? (
+        <div className="planning-actions">
+          <Button variant="primary" onClick={() => { setAdding(true); }}>
+            New recurring item
+          </Button>
+          <Button loading={detect.busy} onClick={() => void detect.run()}>
+            Find recurring items
+          </Button>
+        </div>
+      ) : null}
       <p className="muted">
         What subscriptions and bills cost, what changed and what needs a look is under Subscriptions.{" "}
         <Link to="/plan/subscriptions">See subscriptions</Link>
@@ -248,7 +261,7 @@ export function RecurringTab() {
       <QueryState loading={query.isPending} error={query.error} label="recurring items">
         <Table caption="Recurring items" columns={columns} rows={query.data ?? []} rowKey={(s) => s.id} maxHeight="none" empty="No recurring items yet." />
       </QueryState>
-      {adding ? <ScheduleDialog onClose={() => { setAdding(false); }} /> : null}
+      {canWrite && adding ? <ScheduleDialog onClose={() => { setAdding(false); }} /> : null}
     </div>
   );
 }

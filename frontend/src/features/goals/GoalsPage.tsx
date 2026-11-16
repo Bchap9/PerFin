@@ -41,14 +41,29 @@ import {
 } from "./api";
 import { goalBarWidth, projectionText } from "./progress";
 
-/** "On pace for July 2027" while a goal is open and has a projected completion; otherwise null. */
+/**
+ * "On pace for July 2027" while a goal is open, on track and has a projected
+ * completion. A goal the server marks as off track reads "Projected for July
+ * 2027" instead, so the line never contradicts its "Behind" badge. Otherwise null.
+ */
 export function onPaceText(goal: Goal): string | null {
   const projected = goal.progress.projected_completion;
   if (goal.achieved_at !== null || projected === null) {
     return null;
   }
   const month = formatMonth(projected, { style: "long" });
-  return month === null ? null : `On pace for ${month}`;
+  if (month === null) {
+    return null;
+  }
+  return goal.progress.on_track === false ? `Projected for ${month}` : `On pace for ${month}`;
+}
+
+/** The empty list's line: an invitation for who may add a goal, a plain statement for a viewer. */
+function emptyDescription(canWrite: boolean, archived: boolean): string {
+  if (canWrite) {
+    return "Set a target and track what you have saved towards it.";
+  }
+  return archived ? "No goal in this household is archived." : "No one in this household has set a goal yet.";
 }
 
 function GoalDialog({ goal, onClose }: { goal: Goal | null; onClose: () => void }) {
@@ -327,7 +342,7 @@ export function GoalsPage() {
     >
       <QueryState loading={query.isPending} error={query.error} label="goals">
         {goals.length === 0 ? (
-          <EmptyState title={archived ? "No archived goals" : "No goals yet"} description="Set a target and track what you have saved towards it." />
+          <EmptyState title={archived ? "No archived goals" : "No goals yet"} description={emptyDescription(canWrite, archived)} />
         ) : (
           <div className="planning-grid">
             {goals.map((goal) => (

@@ -59,7 +59,9 @@ describe("goals page", () => {
     renderApp("/plan/goals");
     const user = userEvent.setup();
     expect(await screen.findByRole("progressbar", { name: "Emergency fund: 25 percent complete" })).toBeInTheDocument();
-    expect(screen.getByText("On pace for July 2027")).toBeInTheDocument();
+    // Off track: the projected month is not called "on pace" next to the "Behind" badge.
+    expect(screen.getByText("Projected for July 2027")).toBeInTheDocument();
+    expect(screen.queryByText(/On pace for/)).toBeNull();
     expect(screen.getByText("Behind")).toBeInTheDocument();
     expect(screen.getByText(/after the Jun 1, 2027 target/)).toBeInTheDocument();
 
@@ -82,6 +84,29 @@ describe("goals page", () => {
     });
   });
 
+  it("an on-track goal is on pace for its projected month", async () => {
+    mockApi({
+      ...ownerSession(),
+      ...referenceHandlers(),
+      "GET /api/v1/goals": () => json({ items: [goal({ on_track: true, projected_completion: "2027-05-20" })], next_cursor: null }),
+    });
+    renderApp("/plan/goals");
+    expect(await screen.findByText("On pace for May 2027")).toBeInTheDocument();
+    expect(screen.queryByText(/Projected for/)).toBeNull();
+  });
+
+  it("a viewer with no goals is not asked to set one", async () => {
+    mockApi({
+      ...referenceHandlers(),
+      "GET /api/v1/auth/session": authedSession({ role: "viewer" }),
+      "GET /api/v1/goals": () => json({ items: [], next_cursor: null }),
+    });
+    renderApp("/plan/goals");
+    expect(await screen.findByText("No goals yet")).toBeInTheDocument();
+    expect(screen.getByText("No one in this household has set a goal yet.")).toBeInTheDocument();
+    expect(screen.queryByText(/Set a target/)).toBeNull();
+  });
+
   it("says nothing about pace when there is no projection", async () => {
     mockApi({
       ...ownerSession(),
@@ -90,7 +115,7 @@ describe("goals page", () => {
     });
     renderApp("/plan/goals");
     expect(await screen.findByText(/Not enough history/)).toBeInTheDocument();
-    expect(screen.queryByText(/On pace for/)).toBeNull();
+    expect(screen.queryByText(/On pace for|Projected for/)).toBeNull();
   });
 
   it("a viewer sees no New goal", async () => {
