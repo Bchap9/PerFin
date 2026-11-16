@@ -178,7 +178,7 @@ migration, no new setting, no new container, nothing new leaves the host
   prints a one-line message for any other git failure.
 - **The rolling-upgrade note for rc.10 says what fails.** docs/UPGRADING.md
   lists the writes of rc.9 pods that migration `0014` refuses and the
-  stop-then-migrate order for Helm.
+  stop-then-migrate order for Compose and Helm.
 - **A QIF opening balance is no transaction.** Quicken's own `Opening
   Balance` record (and `Balance brought forward` and the like, when it says
   nothing else) was imported as a transaction. It is now the statement's
