@@ -6,15 +6,14 @@ All notable changes to PerFin are recorded here. The format follows
 
 ## Status
 
-The current release candidate is `v1.0.0-rc.10`; the final `v1.0.0` follows the
+The current release candidate is `v1.0.0-rc.11`; the final `v1.0.0` follows the
 external security review. Every phase (0-7) is implemented. Alembic head is
 `0014`. On 2026-11-16: SPDX;
-backend ruff, ruff format, mypy --strict (801 source files), bandit, OpenAPI
-drift and 11898 pytest tests with `-n 4` (two failed only under load from
-other jobs in the same container and passed alone; the last fix of the
-release ran its targeted files, 475 tests); the whole suite then passed in
-CI on the merged branch; frontend eslint, tsc, 941 vitest tests in 81 files
-and the production build. As of rc.2: `pip-audit` finds no known vulnerabilities and
+backend ruff, ruff format, mypy --strict (806 source files), bandit, OpenAPI
+drift and 11916 pytest tests with `-n 4` (one worker crashed under load and
+its file, 71 tests, passed alone); the whole suite then passed in CI on the
+branch; frontend eslint, tsc, 1587 vitest tests in 112 files, the production
+build and the bundle budget. As of rc.2: `pip-audit` finds no known vulnerabilities and
 `npm audit --audit-level=high` passes with 10 moderate advisories in dev
 tooling (eslint, typescript-eslint, minimatch), none high.
 CI is green end to end on GitHub Actions for commit `21d2b38`: `ci` run
@@ -37,6 +36,10 @@ What remains (details in docs/ROADMAP.md):
   hosts, and contributed classifier samples.
 
 ## [Unreleased]
+
+Nothing yet.
+
+## [1.0.0-rc.11] - 2026-11-16
 
 The redesign, the third of four stages on the way to 1.0.0. PerFin is six
 sections and Settings, in a new look in light and dark. Each piece of data
