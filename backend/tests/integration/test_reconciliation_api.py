@@ -16,6 +16,10 @@ numbers).
   rows; a statement on an account the caller cannot see is left out.
 * A viewer reads and cannot edit; a document without a statement is ``409``.
 * ``read_printed`` reads a balance as a person types it.
+* The exits: confirming a statement that balances posts its rows, records
+  its balance and closes its findings; accepting one as read posts the rows
+  and records no balance; a removed row can be put back. A member who may
+  not edit the account is refused before anything changes.
 """
 
 from __future__ import annotations
@@ -29,7 +33,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-from sqlalchemy import delete, select
+from sqlalchemy import delete, select, update
 
 from app.auth.models import AccountGrant, GrantLevel, HouseholdRole
 from app.auth.principal import Principal, apply_rls_context
@@ -37,16 +41,18 @@ from app.core.crypto import Keyring
 from app.core.errors import ProblemError
 from app.core.settings import Settings
 from app.db.rls import set_context
-from app.domain.accounts.models import Account, AccountType
+from app.domain.accounts.models import Account, AccountType, BalanceSnapshot, BalanceSource
 from app.domain.documents.blobstore import LocalFSBlobStore
 from app.domain.documents.models import Document, DocumentStatus, ReviewItem, ReviewItemState
 from app.domain.documents.schemas import INGEST_JOB_TYPE
+from app.domain.imports.models import ImportTombstone, StatementRecord
 from app.domain.imports.schemas import APPLY_MAPPING_JOB_TYPE
 from app.domain.imports.service import import_extraction
 from app.domain.review.layout import stored_result
 from app.domain.review.reconciliation import read_printed
-from app.domain.transactions.models import Transaction
+from app.domain.transactions.models import ReviewState, Transaction
 from app.ingestion.intake.upload import receive_upload
+from app.ingestion.parsers.template import rebalance
 from app.ingestion.sandbox.protocol import ExtractResult
 from app.workers.handlers import ingest
 from tests.fixtures import synth_neutral_report as neutral
@@ -411,11 +417,28 @@ def _month(
     }
 
 
-def _stored(env: Env, *statements: dict[str, Any]) -> uuid.UUID:
-    """A PDF document whose stored extraction holds ``statements``, imported."""
-    extraction = ExtractResult.model_validate(
-        {"kind": "pdf", "ok": True, "statements": list(statements)}
-    ).model_dump(mode="json")
+def _stored(env: Env, *statements: dict[str, Any], checked: bool = False) -> uuid.UUID:
+    """A PDF document whose stored extraction holds ``statements``, imported.
+
+    ``checked``: each statement carries its check as a document parser
+    leaves it; one that does not add up has every row in doubt, so the
+    importer holds it.
+    """
+    read = ExtractResult.model_validate({"kind": "pdf", "ok": True, "statements": list(statements)})
+    if checked:
+        doubted = [
+            s.model_copy(
+                update={
+                    "transactions": [
+                        t.model_copy(update={"low_confidence": ["reconciliation"]})
+                        for t in s.transactions
+                    ]
+                }
+            )
+            for s in read.statements
+        ]
+        read = read.model_copy(update={"statements": [rebalance(s) for s in doubted]})
+    extraction = read.model_dump(mode="json")
     with env.factories.transaction() as db:
         document = make_document(
             db,
@@ -609,6 +632,441 @@ def test_document_without_a_statement_is_409(env: Env) -> None:
 
     assert refused.status_code == 409, refused.text
     assert problem_type(refused) == "statement-unavailable"
+
+
+# ---------------------------------------------------------------------------
+# The exits: confirm, accept, put back
+# ---------------------------------------------------------------------------
+
+
+def act(
+    client: AuthedClient, document_id: uuid.UUID, action: str, **body: Any
+) -> tuple[int, dict[str, Any]]:
+    response = client.post(f"{API}/documents/{document_id}/reconciliation/{action}", json=body)
+    found: dict[str, Any] = response.json()
+    return response.status_code, found
+
+
+def snapshots(env: Env, account: Account) -> list[BalanceSnapshot]:
+    return env.query(
+        select(BalanceSnapshot)
+        .where(BalanceSnapshot.account_id == account.id)
+        .order_by(BalanceSnapshot.as_of_date, BalanceSnapshot.id)
+    )
+
+
+def records(env: Env, document_id: uuid.UUID) -> list[StatementRecord]:
+    return env.query(
+        select(StatementRecord)
+        .where(StatementRecord.document_id == document_id)
+        .order_by(StatementRecord.period_start, StatementRecord.id)
+    )
+
+
+def items(env: Env, document_id: uuid.UUID) -> list[ReviewItem]:
+    return env.query(
+        select(ReviewItem)
+        .where(ReviewItem.document_id == document_id)
+        .order_by(ReviewItem.created_at, ReviewItem.id)
+    )
+
+
+def states(env: Env, account: Account) -> list[tuple[uuid.UUID, ReviewState]]:
+    return [(r.id, r.review_state) for r in env.transactions(account)]
+
+
+def test_confirm_writes_the_snapshot_and_closes_the_findings(env: Env) -> None:
+    stmt, account, document_id, forged = tampered(env, 71)
+    owner = env.client()
+    assert owner.delete(f"{API}/transactions/{forged.id}").status_code == 204
+    pending = [r for r in env.transactions(account) if r.review_state is ReviewState.PENDING]
+    assert len(env.transactions(account)) == len(stmt.transactions)
+    assert env.open_reviews(document_id)
+    assert env.document(document_id).status is DocumentStatus.NEEDS_REVIEW
+    assert snapshots(env, account) == []
+
+    status, got = act(owner, document_id, "confirm", statement=0)
+
+    assert status == 200, got
+    assert got["confirmed"] == len(pending)
+    assert got["snapshot"] is True
+    assert got["items_closed"] >= 1
+    assert (got["statement"]["status"], got["statement"]["verification"]) == (
+        "balanced",
+        "reconciled",
+    )
+    assert ReviewState.PENDING not in {state for _, state in states(env, account)}
+    assert "pending" not in {r["review_state"] for r in got["statement"]["rows"]}
+    (snapshot,) = snapshots(env, account)
+    assert snapshot.balance == stmt.closing_balance
+    assert snapshot.source is BalanceSource.STATEMENT
+    assert snapshot.source_document_id == document_id
+    assert snapshot.as_of_date == got_date(got["statement"]["period_end"])
+    (record,) = records(env, document_id)
+    assert record.verification == "reconciled"
+    assert env.open_reviews(document_id) == []
+    assert env.document(document_id).status is DocumentStatus.PROCESSED
+    closed = [i for i in items(env, document_id) if i.state is ReviewItemState.RESOLVED]
+    assert len(closed) == got["items_closed"]
+    for item in closed:
+        assert item.resolution is not None
+        assert item.resolution["reconciled"] is True
+        assert item.resolution["account_id"] == str(account.id)
+        assert item.resolution["statement"] == 0
+
+
+def got_date(text: str) -> date:
+    return date.fromisoformat(text)
+
+
+def test_confirm_refuses_while_off(env: Env) -> None:
+    stmt, account, document_id, _ = tampered(env, 72)
+    owner = env.client()
+    before = states(env, account)
+    stored = env.document(document_id).extraction
+    open_before = [i.id for i in env.open_reviews(document_id)]
+    assert open_before
+
+    status, got = act(owner, document_id, "confirm", statement=0)
+
+    assert status == 409, got
+    assert got["type"].endswith("statement-does-not-reconcile")
+    assert "777.77" in got["detail"]
+    # A typed balance that still leaves a difference is not kept either.
+    status, got = act(owner, document_id, "confirm", statement=0, closing_balance="1.00")
+    assert status == 409, got
+    assert got["type"].endswith("statement-does-not-reconcile")
+    status, got = act(owner, document_id, "confirm", statement=0, closing_balance="1,20")
+    assert (status, got["type"].rsplit(":", 1)[-1]) == (422, "invalid-amount")
+    status, got = act(owner, document_id, "confirm", statement=3)
+    assert status == 422, got
+    assert got["type"].endswith("statement-not-found")
+
+    assert states(env, account) == before
+    assert ReviewState.PENDING in {state for _, state in before}
+    assert snapshots(env, account) == []
+    assert [r.verification for r in records(env, document_id)] == ["unverified"]
+    assert [i.id for i in env.open_reviews(document_id)] == open_before
+    assert env.document(document_id).extraction == stored
+    assert env.document(document_id).status is DocumentStatus.NEEDS_REVIEW
+    assert Decimal(one(owner, document_id)["closing"]) == stmt.closing_balance
+
+
+def test_confirm_takes_card_balances_as_printed(env: Env) -> None:
+    card = env.ledger.account(
+        env.household_id, number_last4="7523", name="Daily card", type=AccountType.CREDIT_CARD
+    )
+    # 1,000.00 owed, 19.50 spent: 1,019.50 is owed at the end. The reading has 1,091.50.
+    document_id = _stored(
+        env,
+        _month(
+            "7523",
+            4,
+            30,
+            "-1000.00",
+            "-1091.50",
+            [(3, "-12.25", "Lamplight Books"), (9, "-7.25", "Corner Bakery")],
+        ),
+        checked=True,
+    )
+    assert {state for _, state in states(env, card)} == {ReviewState.PENDING}
+    assert snapshots(env, card) == []
+    owner = env.client()
+    held = one(owner, document_id)
+    assert (held["printed_sign"], held["closing"], held["status"]) == ("owed", "1091.50", "off")
+    assert Decimal(held["difference"]) == Decimal("72.00")
+
+    status, got = act(owner, document_id, "confirm", statement=0, closing_balance="$1,019.50")
+
+    assert status == 200, got
+    assert (got["statement"]["closing"], got["statement"]["status"]) == ("1019.50", "balanced")
+    assert (got["confirmed"], got["snapshot"]) == (2, True)
+    (snapshot,) = snapshots(env, card)
+    assert (snapshot.balance, snapshot.as_of_date) == (Decimal("-1019.50"), date(2026, 4, 30))
+    (record,) = records(env, document_id)
+    assert (record.verification, record.closing_balance) == ("reconciled", Decimal("-1019.50"))
+    stored = stored_result(env.document(document_id).extraction)
+    assert stored is not None
+    balance = stored.statements[0].ledger_balance
+    assert balance is not None
+    assert balance.amount == Decimal("-1019.50")
+    assert {state for _, state in states(env, card)} == {ReviewState.CONFIRMED}
+    assert env.open_reviews(document_id) == []
+
+
+def test_accept_posts_the_rows_and_writes_no_snapshot(env: Env) -> None:
+    stmt, account, document_id, forged = tampered(env, 73)
+    owner = env.client()
+    assert len(env.transactions(account)) == len(stmt.transactions) + 1
+    count = sum(1 for _, state in states(env, account) if state is ReviewState.PENDING)
+    assert count >= 1
+
+    status, got = act(owner, document_id, "accept", statement=0)
+
+    assert status == 200, got
+    assert (got["confirmed"], got["snapshot"]) == (count, False)
+    assert got["items_closed"] >= 1
+    assert (got["statement"]["status"], got["statement"]["verification"]) == ("off", "accepted")
+    assert Decimal(got["statement"]["difference"]) == forged.amount
+    assert [r.verification for r in records(env, document_id)] == ["accepted"]
+    assert snapshots(env, account) == []
+    assert (
+        env.query(select(BalanceSnapshot).where(BalanceSnapshot.source_document_id == document_id))
+        == []
+    )
+    assert ReviewState.PENDING not in {state for _, state in states(env, account)}
+    assert ReviewState.CONFIRMED in {state for _, state in states(env, account)}
+    assert env.open_reviews(document_id) == []
+    assert env.document(document_id).status is DocumentStatus.PROCESSED
+    closed = [i for i in items(env, document_id) if i.state is ReviewItemState.RESOLVED]
+    assert len(closed) == got["items_closed"]
+    for item in closed:
+        assert item.resolution is not None
+        assert item.resolution["accepted"] is True
+        assert item.resolution["account_id"] == str(account.id)
+        assert "reconciled" not in item.resolution
+
+
+def test_accept_on_a_balanced_statement_is_refused(env: Env) -> None:
+    _, account, document_id, forged = tampered(env, 74)
+    owner = env.client()
+    assert owner.delete(f"{API}/transactions/{forged.id}").status_code == 204
+    before = states(env, account)
+    open_before = [i.id for i in env.open_reviews(document_id)]
+
+    status, got = act(owner, document_id, "accept", statement=0)
+
+    assert status == 409, got
+    assert got["type"].endswith("statement-balanced")
+    assert states(env, account) == before
+    assert [r.verification for r in records(env, document_id)] == ["unverified"]
+    assert [i.id for i in env.open_reviews(document_id)] == open_before
+
+
+def test_restore_puts_a_deleted_row_back_pending(env: Env) -> None:
+    stmt, account, document_id, forged = tampered(env, 75)
+    owner = env.client()
+    assert owner.delete(f"{API}/transactions/{forged.id}").status_code == 204
+    (removed,) = one(owner, document_id)["removed"]
+
+    status, got = act(owner, document_id, "restore", tombstone_id=removed["tombstone_id"])
+
+    assert status == 200, got
+    assert (got["confirmed"], got["snapshot"], got["items_closed"]) == (0, False, 0)
+    assert got["statement"]["removed"] == []
+    assert got["statement"]["status"] == "off"
+    assert Decimal(got["statement"]["difference"]) == forged.amount
+    rows = env.transactions(account)
+    assert len(rows) == len(stmt.transactions) + 1
+    (back,) = [r for r in rows if r.amount == forged.amount]
+    assert back.id != forged.id
+    assert (back.posted_date, back.raw_payee) == (forged.posted_date, forged.raw_payee)
+    assert (back.review_state, back.source_document_id) == (ReviewState.PENDING, document_id)
+    assert back.import_hash == forged.import_hash
+    assert env.query(select(ImportTombstone).where(ImportTombstone.account_id == account.id)) == []
+    shown = next(r for r in got["statement"]["rows"] if r["transaction_id"] == str(back.id))
+    assert (shown["origin"], shown["review_state"]) == ("read", "pending")
+    # Taken back once: there is no such tombstone a second time.
+    status, again = act(owner, document_id, "restore", tombstone_id=removed["tombstone_id"])
+    assert (status, again["type"].rsplit(":", 1)[-1]) == (404, "tombstone-not-found")
+    assert len(env.transactions(account)) == len(rows)
+
+
+def test_a_row_put_back_into_a_confirmed_statement_unchecks_it(env: Env) -> None:
+    _, account, document_id, forged = tampered(env, 79)
+    owner = env.client()
+    assert owner.delete(f"{API}/transactions/{forged.id}").status_code == 204
+    status, got = act(owner, document_id, "confirm", statement=0)
+    assert (status, got["statement"]["verification"]) == (200, "reconciled")
+    (removed,) = got["statement"]["removed"]
+
+    status, got = act(owner, document_id, "restore", tombstone_id=removed["tombstone_id"])
+
+    assert status == 200, got
+    assert (got["statement"]["status"], got["statement"]["verification"]) == ("off", "unverified")
+    assert [r.verification for r in records(env, document_id)] == ["unverified"]
+    waiting = [i for i, state in states(env, account) if state is ReviewState.PENDING]
+    assert len(waiting) == 1
+
+
+def test_restore_refuses_a_tombstone_of_another_document(env: Env) -> None:
+    _, account, document_id, _ = tampered(env, 76)
+    other = synth.sample_national_statement(seed=77)
+    other_account = env.account(other)
+    other_document = env.ingest(synth.sample_national_pdf(other, tamper="extra_row"))
+    other_forged = next(
+        r for r in env.transactions(other_account) if r.amount == synth.FORGED.amount
+    )
+    owner = env.client()
+    assert owner.delete(f"{API}/transactions/{other_forged.id}").status_code == 204
+    (removed,) = one(owner, other_document)["removed"]
+    before = states(env, account), states(env, other_account)
+
+    status, got = act(owner, document_id, "restore", tombstone_id=removed["tombstone_id"])
+
+    assert (status, got["type"].rsplit(":", 1)[-1]) == (404, "tombstone-not-found")
+    status, got = act(owner, document_id, "restore", tombstone_id=str(uuid.uuid4()))
+    assert (status, got["type"].rsplit(":", 1)[-1]) == (404, "tombstone-not-found")
+    assert (states(env, account), states(env, other_account)) == before
+    assert [r["tombstone_id"] for r in one(owner, other_document)["removed"]] == [
+        removed["tombstone_id"]
+    ]
+
+
+def test_remove_earlier_changes_nothing_yet(env: Env) -> None:
+    _, account, document_id, _ = tampered(env, 78)
+    before = states(env, account)
+
+    status, got = act(env.client(), document_id, "remove-earlier", statement=0)
+
+    assert status == 200, got
+    assert (got["confirmed"], got["snapshot"], got["items_closed"]) == (0, False, 0)
+    assert got["statement"]["status"] == "off"
+    assert states(env, account) == before
+
+
+def test_member_without_edit_on_the_account_is_refused(env: Env) -> None:
+    member = env.user(HouseholdRole.MEMBER)
+    checking, savings, document_id = _neutral(env, uploader=member)
+    owner = env.client()
+    victim = env.transactions(savings)[0]
+    assert owner.delete(f"{API}/transactions/{victim.id}").status_code == 204
+    # The member uploaded the file and may still change it, but may only view the savings account.
+    with env.factories.transaction() as db:
+        set_context(db, env.household_id)
+        db.execute(
+            update(AccountGrant)
+            .where(AccountGrant.user_id == member.user.id, AccountGrant.account_id == savings.id)
+            .values(level=GrantLevel.VIEW)
+        )
+    asker = env.client(member)
+    shown = {s["account_id"]: s for s in view(asker, document_id)["statements"]}
+    assert shown[str(checking.id)]["can_edit"] is True
+    mine = shown[str(savings.id)]
+    assert mine["can_edit"] is False
+    (removed,) = mine["removed"]
+    before = (
+        states(env, savings),
+        [(r.account_id, r.verification) for r in records(env, document_id)],
+        [(i.id, i.state) for i in items(env, document_id)],
+        [(s.id, s.balance) for s in snapshots(env, savings)],
+        env.document(document_id).extraction,
+    )
+
+    answers = [
+        act(asker, document_id, "confirm", statement=mine["statement"], closing_balance="5.00"),
+        act(asker, document_id, "accept", statement=mine["statement"]),
+        act(asker, document_id, "restore", tombstone_id=removed["tombstone_id"]),
+        act(asker, document_id, "remove-earlier", statement=mine["statement"]),
+    ]
+
+    # What ``get_visible_account(need="edit")`` answers: the account is not theirs to change.
+    assert [(status, body["type"].rsplit(":", 1)[-1]) for status, body in answers] == [
+        (404, "account-not-found")
+    ] * 4
+    assert before == (
+        states(env, savings),
+        [(r.account_id, r.verification) for r in records(env, document_id)],
+        [(i.id, i.state) for i in items(env, document_id)],
+        [(s.id, s.balance) for s in snapshots(env, savings)],
+        env.document(document_id).extraction,
+    )
+    assert len(one_of(owner, document_id, savings)["removed"]) == 1
+    # A viewer, and a member who cannot see the file, never get that far.
+    viewer = env.user(HouseholdRole.VIEWER)
+    env.ledger.grant(env.household_id, viewer.user.id, savings, GrantLevel.VIEW)
+    status, _ = act(env.client(viewer), document_id, "accept", statement=mine["statement"])
+    assert status == 403
+    stranger = env.user(HouseholdRole.MEMBER)
+    status, _ = act(env.client(stranger), document_id, "accept", statement=mine["statement"])
+    assert status == 404
+
+
+def one_of(client: AuthedClient, document_id: uuid.UUID, account: Account) -> dict[str, Any]:
+    (found,) = [
+        s for s in view(client, document_id)["statements"] if s["account_id"] == str(account.id)
+    ]
+    statement: dict[str, Any] = found
+    return statement
+
+
+def test_other_findings_of_the_document_stay_open(env: Env) -> None:
+    account = env.ledger.account(env.household_id, number_last4="7306", name="Everyday")
+    document_id = _stored(
+        env,
+        # 100.00 - 19.50 is 80.50: the reading has 85.50.
+        _month(
+            "7306",
+            4,
+            30,
+            "100.00",
+            "85.50",
+            [(3, "-12.25", "Lamplight Books"), (9, "-7.25", "Corner Bakery")],
+        ),
+        _month("9914", 4, 30, "50.00", "45.00", [(5, "-5.00", "Ferry Kiosk")]),
+        checked=True,
+    )
+    open_before = env.open_reviews(document_id)
+    unknown = [i for i in open_before if i.kind.value == "unknown_account"]
+    assert len(unknown) == 1
+    assert any(i.payload["reason"] == "reconciliation_failed" for i in open_before)
+    owner = env.client()
+
+    status, got = act(owner, document_id, "confirm", statement=0, closing_balance="80.50")
+
+    assert status == 200, got
+    assert (got["confirmed"], got["snapshot"]) == (2, True)
+    assert got["items_closed"] == len(open_before) - 1
+    assert [i.id for i in env.open_reviews(document_id)] == [unknown[0].id]
+    assert env.document(document_id).status is DocumentStatus.NEEDS_REVIEW
+    (snapshot,) = snapshots(env, account)
+    assert snapshot.balance == Decimal("80.50")
+
+
+def test_confirming_one_statement_leaves_the_other_of_the_account(env: Env) -> None:
+    account = env.ledger.account(env.household_id, number_last4="7308", name="Everyday")
+    document_id = _stored(
+        env,
+        _month(
+            "7308",
+            4,
+            30,
+            "100.00",
+            "80.50",
+            [(3, "-12.25", "Lamplight Books"), (9, "-7.25", "Corner Bakery")],
+        ),
+        # 80.50 - 7.25 + 40.00 is 113.25: the printed closing is 9.00 short.
+        _month(
+            "7308",
+            5,
+            31,
+            "80.50",
+            "104.25",
+            [(9, "-7.25", "Corner Bakery"), (20, "40.00", "Refund Desk")],
+        ),
+        checked=True,
+    )
+    open_before = [i.id for i in env.open_reviews(document_id)]
+    assert open_before
+    owner = env.client()
+
+    status, got = act(owner, document_id, "confirm", statement=0)
+
+    assert status == 200, got
+    assert got["items_closed"] == 0
+    assert [i.id for i in env.open_reviews(document_id)] == open_before
+    may_rows = {r["transaction_id"] for r in view(owner, document_id)["statements"][1]["rows"]}
+    pending = {str(i) for i, state in states(env, account) if state is ReviewState.PENDING}
+    assert pending == may_rows
+    assert [s.as_of_date for s in snapshots(env, account)] == [date(2026, 4, 30)]
+
+    # May is accepted as read: its rows are posted, its balance is not recorded.
+    status, got = act(owner, document_id, "accept", statement=1)
+    assert status == 200, got
+    assert (got["confirmed"], got["snapshot"], got["items_closed"]) == (2, False, 1)
+    assert env.open_reviews(document_id) == []
+    assert [r.verification for r in records(env, document_id)] == ["reconciled", "accepted"]
+    assert [s.as_of_date for s in snapshots(env, account)] == [date(2026, 4, 30)]
 
 
 # ---------------------------------------------------------------------------

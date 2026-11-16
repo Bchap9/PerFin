@@ -44,9 +44,32 @@ A response carries what the caller may already read of the account (its
 rows) and boxes on pages of the document; causes carry ids, amounts and
 boxes only.
 
-**The actions** are declared only: each settles who may ask (a hidden
-document is ``404``, a read-only one ``403``) and then answers ``409
-statement-unavailable``.
+**The actions** each settle who may ask before anything is written: a hidden
+document is ``404``, a read-only one ``403``, and the statement's account
+must be one the caller may edit (``404`` otherwise, as for any account).
+
+* :func:`confirm`: the statement balances against the ledger (balances may
+  be typed as printed and are stored first). Its pending rows are confirmed,
+  its closing balance is recorded as a statement snapshot, its record
+  becomes ``reconciled`` and its findings are closed. ``409
+  statement-does-not-reconcile`` otherwise, and nothing is kept.
+* :func:`accept`: the statement is taken as read. Its pending rows are
+  confirmed and its findings closed; the record becomes ``accepted`` and
+  **no balance is recorded**. ``409 statement-balanced`` for a statement
+  that balances (it is confirmed instead).
+* :func:`restore`: a removed row is put back from the stored statement,
+  pending, with its original hash; ``404 tombstone-not-found`` for a
+  tombstone that is not of this document's statements.
+* :func:`remove_earlier`: removes the rows an earlier reading left behind;
+  none is known yet, so it changes nothing.
+
+"Finish later" is no request: the findings stay open.
+
+The findings of a statement are closed by
+:func:`app.domain.review.service.close_statement_items`; a question about
+another statement of the document (its account, a duplicate) stays open.
+Audit rows (``statement.reconcile``, ``statement.accept``,
+``tombstone.restore``) carry ids, counts and balances only.
 """
 
 from __future__ import annotations
@@ -64,18 +87,25 @@ from sqlalchemy.orm import Session
 from starlette.requests import HTTPConnection
 
 from app.auth.principal import Principal
+from app.core.audit import audit
 from app.core.errors import ProblemError
+from app.core.events import emit
 from app.core.money import AMOUNT_INTEGER_DIGITS, AMOUNT_PLACES, to_storage
 from app.domain.accounts import repo as accounts_repo
-from app.domain.accounts.models import LIABILITY_TYPES, Account
-from app.domain.accounts.visibility import can_edit_account, can_view_account
+from app.domain.accounts.models import LIABILITY_TYPES, Account, BalanceSource
+from app.domain.accounts.visibility import (
+    can_edit_account,
+    can_view_account,
+    get_visible_account,
+)
 from app.domain.documents.manage import can_edit_document, get_editable_document
 from app.domain.documents.models import Document
 from app.domain.documents.schemas import Verification
 from app.domain.documents.service import get_visible_document
 from app.domain.imports import tombstones
 from app.domain.imports.models import StatementRecord
-from app.domain.review import repo
+from app.domain.review import repo, service
+from app.domain.review.actions import correct_balances
 from app.domain.review.causes import Cause, LedgerRow, PageAmount, fee_lines, rank_causes
 from app.domain.review.layout import row_region, stored_result
 from app.domain.review.schemas import (
@@ -92,7 +122,13 @@ from app.domain.review.schemas import (
     StatementReconciliation,
 )
 from app.domain.transactions.import_hash import HashInput, assign_import_hashes
-from app.domain.transactions.models import Transaction
+from app.domain.transactions.models import (
+    MEMO_MAX,
+    PAYEE_MAX,
+    ReviewState,
+    Transaction,
+    TransactionStatus,
+)
 from app.ingestion.parsers.base import DocumentView
 from app.ingestion.reconcile import TOLERANCE
 from app.ingestion.sandbox.protocol import ExtractedTransaction, ExtractResult, Statement
@@ -587,6 +623,151 @@ def get_reconciliation(
     return DocumentReconciliation(document_id=document.id, statements=out)
 
 
+# ---------------------------------------------------------------------------
+# The actions
+# ---------------------------------------------------------------------------
+
+
+def statement_not_found() -> ProblemError:
+    return ProblemError(
+        422, "statement-not-found", "No such statement", "The document has no such statement."
+    )
+
+
+def tombstone_not_found() -> ProblemError:
+    return ProblemError(
+        404,
+        "tombstone-not-found",
+        "No such removed row",
+        "This document has no removed row with that id; it may have been put back already.",
+    )
+
+
+@dataclass(frozen=True)
+class _Open:
+    """One statement of a document the caller may change, with its ledger rows."""
+
+    document: Document
+    result: ExtractResult
+    placed: Placed
+    account: Account
+    group: _Rows
+    #: The document holds another statement of the same account.
+    shared: bool
+    #: Every statement of the document is a bank statement on a known account.
+    whole: bool
+
+
+def _group(db: Session, document: Document, all_placed: Sequence[Placed], placed: Placed) -> _Rows:
+    same = [p for p in all_placed if p.account.id == placed.account.id]
+    split = _split(db, document, placed.account, [p.statement for p in same])
+    return split[same.index(placed)]
+
+
+def _load(
+    db: Session, document: Document, index: int
+) -> tuple[ExtractResult, list[Placed], Placed]:
+    result = stored_result(document.extraction)
+    if result is None or not result.statements:
+        raise statement_unavailable()
+    if index >= len(result.statements):
+        raise statement_not_found()
+    all_placed = placed_statements(db, document, result)
+    placed = next((p for p in all_placed if p.index == index), None)
+    if placed is None:
+        # Its account is not known yet: that question comes first.
+        raise statement_unavailable()
+    return result, all_placed, placed
+
+
+def _open(db: Session, principal: Principal, document_id: uuid.UUID, index: int) -> _Open:
+    """Statement ``index`` of a document, for a change.
+
+    Who may ask is settled before anything is written: ``404`` for a hidden
+    document, ``403`` for a read-only one, then whatever
+    ``get_visible_account(need="edit")`` answers for the statement's account.
+    The document row is locked: two answers to one statement run in turn.
+    """
+    document = get_editable_document(db, principal, document_id, lock=True)
+    result, all_placed, placed = _load(db, document, index)
+    account = get_visible_account(db, principal, placed.account.id, need="edit", lock=True)
+    return _Open(
+        document=document,
+        result=result,
+        placed=placed,
+        account=account,
+        group=_group(db, document, all_placed, placed),
+        shared=sum(1 for p in all_placed if p.account.id == account.id) > 1,
+        whole=len(all_placed) == len(result.statements) and not result.investments,
+    )
+
+
+def _again(db: Session, opened: _Open) -> _Open:
+    """``opened`` read again from the database, after a change."""
+    db.flush()
+    result, all_placed, placed = _load(db, opened.document, opened.placed.index)
+    return _Open(
+        document=opened.document,
+        result=result,
+        placed=placed,
+        account=opened.account,
+        group=_group(db, opened.document, all_placed, placed),
+        shared=opened.shared,
+        whole=opened.whole,
+    )
+
+
+def _view(db: Session, opened: _Open) -> StatementReconciliation:
+    return _statement_out(
+        db, opened.document, opened.result, opened.placed, opened.group, can_edit=True
+    )
+
+
+def _settle(
+    db: Session,
+    principal: Principal,
+    opened: _Open,
+    resolution: dict[str, object],
+    *,
+    request: HTTPConnection | None,
+) -> tuple[int, int]:
+    """Post the statement's pending rows and close its findings; the two counts."""
+    confirmed = service.confirm_rows(
+        db,
+        principal,
+        [row.id for row in opened.group.rows if row.review_state is ReviewState.PENDING],
+        request=request,
+    )
+    closed = service.close_statement_items(
+        db,
+        principal,
+        opened.document,
+        opened.account.id,
+        {
+            **resolution,
+            "account_id": str(opened.account.id),
+            "statement": opened.placed.index,
+            "confirmed": confirmed,
+        },
+        statement=opened.placed.index,
+        transaction_ids=None if not opened.shared else {row.id for row in opened.group.rows},
+        whole_document=opened.whole,
+        request=request,
+    )
+    return confirmed, closed
+
+
+def _outcome(
+    db: Session, opened: _Open, *, confirmed: int = 0, snapshot: bool = False, closed: int = 0
+) -> ReconcileOutcome:
+    return ReconcileOutcome(
+        statement=_view(db, _again(db, opened)),
+        confirmed=confirmed,
+        snapshot=snapshot,
+        items_closed=closed,
+    )
+
+
 def confirm(
     db: Session,
     principal: Principal,
@@ -595,8 +776,82 @@ def confirm(
     *,
     request: HTTPConnection | None,
 ) -> ReconcileOutcome:
-    get_editable_document(db, principal, document_id)
-    raise statement_unavailable()
+    """The statement balances against the ledger: post it and record its balance.
+
+    Balances typed with the request (as printed) replace the stored ones
+    first. ``409 statement-does-not-reconcile`` while the rows and the
+    balances differ, or a balance is missing; nothing is kept then.
+    """
+    opened = _open(db, principal, document_id, body.statement)
+    typed = {
+        name: read_printed(text) if text is not None else None
+        for name, text in (("opening", body.opening_balance), ("closing", body.closing_balance))
+    }
+    if typed["opening"] is not None or typed["closing"] is not None:
+        correct_balances(
+            db,
+            opened.document,
+            None,
+            opening=typed["opening"],
+            closing=typed["closing"],
+            statement=body.statement,
+            as_printed=True,
+            account=opened.account,
+        )
+        opened = _again(db, opened)
+    shown = _view(db, opened)
+    if shown.status != "balanced":
+        raise ProblemError(
+            409,
+            "statement-does-not-reconcile",
+            "Still does not add up",
+            "Both balances are needed to check the statement; type the missing one."
+            if shown.status == "unchecked"
+            else f"With these balances the rows differ from the closing balance by "
+            f"{shown.difference}; correct the rows or the balances.",
+        )
+    statement, account, record = opened.placed.statement, opened.account, opened.placed.record
+    closing = statement.ledger_balance
+    if closing is None:  # pragma: no cover - a balanced statement has both balances
+        raise statement_unavailable()
+    confirmed, closed = _settle(db, principal, opened, {"reconciled": True}, request=request)
+    as_of = closing.as_of or statement.period_end
+    snapshot = False
+    if as_of is not None:
+        accounts_repo.upsert_snapshot(
+            db,
+            account,
+            as_of,
+            to_storage(closing.amount),
+            BalanceSource.STATEMENT,
+            source_document_id=opened.document.id,
+        )
+        emit(db, account.household_id, "balance.updated", {"account_id": str(account.id)})
+        snapshot = True
+    if record is not None:
+        record.verification = "reconciled"
+        record.closing_balance = to_storage(closing.amount)
+    db.flush()
+    audit(
+        db,
+        action="statement.reconcile",
+        target_type="document",
+        target_id=opened.document.id,
+        after={
+            "account_id": account.id,
+            "statement": opened.placed.index,
+            "opening": shown.opening,
+            "closing": shown.closing,
+            "balances_typed": sorted(name for name, value in typed.items() if value is not None),
+            "confirmed": confirmed,
+            "items_closed": closed,
+            "snapshot": snapshot,
+        },
+        household_id=account.household_id,
+        user_id=principal.user_id,
+        request=request,
+    )
+    return _outcome(db, opened, confirmed=confirmed, snapshot=snapshot, closed=closed)
 
 
 def accept(
@@ -607,8 +862,56 @@ def accept(
     *,
     request: HTTPConnection | None,
 ) -> ReconcileOutcome:
-    get_editable_document(db, principal, document_id)
-    raise statement_unavailable()
+    """Accept a statement as read without balancing it: rows posted, no balance recorded.
+
+    ``409 statement-balanced`` for a statement that balances: that one is
+    confirmed, which records its balance.
+    """
+    opened = _open(db, principal, document_id, body.statement)
+    shown = _view(db, opened)
+    if shown.status == "balanced":
+        raise ProblemError(
+            409,
+            "statement-balanced",
+            "The statement balances",
+            "The rows add up to the closing balance. Confirm it instead.",
+        )
+    confirmed, closed = _settle(db, principal, opened, {"accepted": True}, request=request)
+    if opened.placed.record is not None:
+        opened.placed.record.verification = "accepted"
+    db.flush()
+    audit(
+        db,
+        action="statement.accept",
+        target_type="document",
+        target_id=opened.document.id,
+        after={
+            "account_id": opened.account.id,
+            "statement": opened.placed.index,
+            "difference": shown.difference,
+            "confirmed": confirmed,
+            "items_closed": closed,
+            "snapshot": False,
+        },
+        household_id=opened.account.household_id,
+        user_id=principal.user_id,
+        request=request,
+    )
+    return _outcome(db, opened, confirmed=confirmed, closed=closed)
+
+
+def _removed(
+    db: Session, document: Document, all_placed: Sequence[Placed], tombstone_id: uuid.UUID
+) -> tuple[Placed, str] | None:
+    """The statement of the document one of whose rows ``tombstone_id`` removed, and the hash."""
+    for placed in all_placed:
+        hashes = [value for value, _ in _hashed(placed.statement, placed.account)]
+        for tombstone in tombstones.list_tombstones(
+            db, placed.account.household_id, placed.account.id, hashes
+        ):
+            if tombstone.id == tombstone_id:
+                return placed, str(tombstone.import_hash)
+    return None
 
 
 def restore(
@@ -619,8 +922,75 @@ def restore(
     *,
     request: HTTPConnection | None,
 ) -> ReconcileOutcome:
-    get_editable_document(db, principal, document_id)
-    raise statement_unavailable()
+    """Put a removed row of the document back, as the statement prints it, pending.
+
+    ``404 tombstone-not-found`` unless the tombstone stands for a row of one
+    of this document's statements. A statement that was confirmed as
+    balanced and no longer is goes back to ``unverified``.
+    """
+    document = get_editable_document(db, principal, document_id, lock=True)
+    result = stored_result(document.extraction)
+    if result is None or not result.statements:
+        raise statement_unavailable()
+    found = _removed(db, document, placed_statements(db, document, result), body.tombstone_id)
+    if found is None:
+        raise tombstone_not_found()
+    opened = _open(db, principal, document_id, found[0].index)
+    value, account = found[1], opened.account
+    printed = opened.group.read.get(value)
+    if printed is None:  # pragma: no cover - the hash was found among this statement's
+        raise tombstone_not_found()
+    tombstones.remove_tombstone(db, account.household_id, body.tombstone_id)
+    held = any(value in mine for mine in opened.group.hashes.values())
+    row: Transaction | None = None
+    if not held:
+        # As the importer writes a row it is unsure of; rules do not run again.
+        row = Transaction(
+            household_id=account.household_id,
+            account_id=account.id,
+            posted_date=printed.posted,
+            amount=to_storage(printed.amount),
+            currency=account.currency,
+            raw_payee=printed.payee[:PAYEE_MAX] if printed.payee else None,
+            memo=printed.memo[:MEMO_MAX] if printed.memo else None,
+            status=TransactionStatus.CLEARED,
+            source_document_id=document.id,
+            import_hash=value,
+            review_state=ReviewState.PENDING,
+        )
+        db.add(row)
+        db.flush()
+        emit(
+            db,
+            account.household_id,
+            "transaction.created",
+            {"id": str(row.id), "account_id": str(account.id)},
+        )
+    audit(
+        db,
+        action="tombstone.restore",
+        target_type="document",
+        target_id=document.id,
+        after={
+            "account_id": account.id,
+            "statement": opened.placed.index,
+            "tombstone_id": body.tombstone_id,
+            "transaction_id": row.id if row is not None else None,
+        },
+        household_id=account.household_id,
+        user_id=principal.user_id,
+        request=request,
+    )
+    after = _again(db, opened)
+    record = after.placed.record
+    if (
+        record is not None
+        and record.verification == "reconciled"
+        and _view(db, after).status != "balanced"
+    ):
+        record.verification = "unverified"
+        db.flush()
+    return _outcome(db, opened)
 
 
 def remove_earlier(
@@ -631,5 +1001,9 @@ def remove_earlier(
     *,
     request: HTTPConnection | None,
 ) -> ReconcileOutcome:
-    get_editable_document(db, principal, document_id)
-    raise statement_unavailable()
+    """Remove the rows an earlier reading of the statement left behind.
+
+    No row is known to be from an earlier reading yet: the statement is
+    returned as it is.
+    """
+    return _outcome(db, _open(db, principal, document_id, body.statement))

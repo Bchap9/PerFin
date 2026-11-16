@@ -63,7 +63,7 @@ from app.core.errors import ProblemError
 from app.core.events import emit
 from app.core.money import to_storage
 from app.domain.accounts import repo as accounts_repo
-from app.domain.accounts.models import Account, BalanceSource, Institution
+from app.domain.accounts.models import LIABILITY_TYPES, Account, BalanceSource, Institution
 from app.domain.accounts.visibility import get_visible_account, visible_account_filter
 from app.domain.documents.manage import can_edit_document, queue_ingestion
 from app.domain.documents.models import (
@@ -279,13 +279,25 @@ def correct_balances(
     opening: Decimal | None,
     closing: Decimal | None,
     statement: int | None = None,
+    as_printed: bool = False,
+    account: Account | None = None,
 ) -> BalanceOutcome:
     """Set a stored statement's opening/closing balance and reconcile it again.
 
     The corrected statement is kept in ``document.extraction`` (a re-import
     reads it); a ``reconciliation_*`` item's figures are brought up to date
     so the queue shows the new difference.
+
+    ``as_printed``: the balances are given the way the statement of
+    ``account`` prints them (a balance owed on a card or a loan is positive
+    on paper) and are stored in ledger terms.
     """
+    if as_printed:
+        if account is None:
+            raise ValueError("a balance as printed needs its account")
+        if account.type in LIABILITY_TYPES:
+            opening = -opening if opening else opening
+            closing = -closing if closing else closing
     result = stored_result(document.extraction)
     if result is None or not result.statements:
         raise ProblemError(

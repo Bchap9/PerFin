@@ -89,7 +89,7 @@ and emits ``review.resolved`` / ``review.dismissed``.
 from __future__ import annotations
 
 import uuid
-from collections.abc import Mapping, Sequence
+from collections.abc import Collection, Mapping, Sequence
 from datetime import date
 from typing import Any, Final
 
@@ -167,6 +167,18 @@ RESOLVABLE: Final = frozenset(
 #: ``low_confidence_field`` reasons whose confirmation covers every pending
 #: row of the document on the item's account (the statement as a whole).
 WHOLE_STATEMENT_REASONS: Final = frozenset({"reconciliation_failed", "reconciliation_unavailable"})
+#: Reasons of the findings a reconciled or accepted statement answers
+#: (:func:`close_statement_items`).
+STATEMENT_FINDINGS: Final = frozenset(
+    {
+        "reconciliation_failed",
+        "reconciliation_unavailable",
+        "lines_skipped",
+        "low_confidence",
+        "balance_mismatch",
+        "earlier_rows_kept",
+    }
+)
 #: Resolution keys of the two ways a held statement is imported again.
 IMPORT_ANYWAY: Final = statement_answers.IMPORT_ANYWAY
 IMPORT_AS_READ: Final = statement_answers.IMPORT_AS_READ
@@ -882,8 +894,17 @@ def confirm_pending(
     request: HTTPConnection | None,
 ) -> int:
     """Move the item's pending rows (the statement's, for a reconciliation item) to confirmed."""
-    count = 0
-    for row in _pending_rows(db, principal, item, document):
+    return _confirm(db, principal, _pending_rows(db, principal, item, document), request=request)
+
+
+def _confirm(
+    db: Session,
+    principal: Principal,
+    rows: Sequence[Transaction],
+    *,
+    request: HTTPConnection | None,
+) -> int:
+    for row in rows:
         transactions_service.update_transaction(
             db,
             principal,
@@ -891,8 +912,122 @@ def confirm_pending(
             TransactionUpdate(review_state=ReviewState.CONFIRMED),
             request=request,
         )
-        count += 1
-    return count
+    return len(rows)
+
+
+def confirm_rows(
+    db: Session,
+    principal: Principal,
+    transaction_ids: Sequence[uuid.UUID],
+    *,
+    request: HTTPConnection | None,
+) -> int:
+    """Move those of ``transaction_ids`` that still wait to confirmed; how many did.
+
+    Each row is read again for edit and locked; one that is gone, or no
+    longer pending, is passed over.
+    """
+    rows: list[Transaction] = []
+    for transaction_id in transaction_ids:
+        try:
+            row = transactions_service.get_visible_transaction(
+                db, principal, transaction_id, need="edit", lock=True
+            )
+        except ProblemError as exc:
+            if exc.slug != "transaction-not-found":
+                raise
+            continue  # removed meanwhile
+        if row.review_state is ReviewState.PENDING:
+            rows.append(row)
+    return _confirm(db, principal, rows, request=request)
+
+
+def _names_statement(
+    payload: Mapping[str, Any],
+    account_id: uuid.UUID,
+    statement: int | None,
+    transaction_ids: Collection[uuid.UUID] | None,
+) -> bool:
+    """A finding of ``account_id`` that is about the statement being closed."""
+    if payload.get("reason") not in STATEMENT_FINDINGS:
+        return False
+    if _uuid(payload.get("account_id")) != account_id:
+        return False
+    index = payload.get("statement")
+    if isinstance(index, int) and not isinstance(index, bool) and statement is not None:
+        return index == statement
+    if transaction_ids is None:
+        return True
+    listed = [
+        found
+        for entry in payload.get("transactions") or []
+        if isinstance(entry, dict) and (found := _uuid(entry.get("transaction_id")))
+    ]
+    # A finding that lists rows is this statement's when one of them is.
+    return not listed or any(found in transaction_ids for found in listed)
+
+
+def close_statement_items(
+    db: Session,
+    principal: Principal,
+    document: Document,
+    account_id: uuid.UUID,
+    resolution: dict[str, Any],
+    *,
+    statement: int | None = None,
+    transaction_ids: Collection[uuid.UUID] | None = None,
+    whole_document: bool = False,
+    request: HTTPConnection | None,
+) -> int:
+    """Resolve the open findings of one statement of ``document``; how many were.
+
+    The findings are the document's open items on ``account_id`` whose
+    reason is in :data:`STATEMENT_FINDINGS`. An item that names another
+    statement of the document (``statement``) is left, and so is one whose
+    rows are all outside ``transaction_ids`` when that is given (the
+    document holds another statement of the account). A finding about the
+    whole document (``lines_skipped`` with no account: lines no reader could
+    read) is closed only with ``whole_document`` (the caller knows every
+    statement of the document) and with the last question: when no other
+    item of the document would stay open. Every other item of the document
+    (an account to choose, a duplicate) is untouched.
+    """
+    found = list(
+        db.execute(
+            select(ReviewItem)
+            .where(
+                ReviewItem.household_id == document.household_id,
+                ReviewItem.document_id == document.id,
+                ReviewItem.state == ReviewItemState.OPEN,
+            )
+            .order_by(ReviewItem.created_at, ReviewItem.id)
+            .with_for_update()
+        ).scalars()
+    )
+    mine = [
+        item
+        for item in found
+        if _names_statement(item.payload or {}, account_id, statement, transaction_ids)
+    ]
+    if whole_document:
+        wide = [
+            item
+            for item in found
+            if (item.payload or {}).get("reason") in STATEMENT_FINDINGS
+            and (item.payload or {}).get("account_id") is None
+            # Rows of a brokerage table that did not read are another question.
+            and "unknown_activity" not in (item.payload or {})
+        ]
+        settled = {item.id for item in (*mine, *wide)}
+        if all(item.id in settled for item in found):
+            mine.extend(wide)
+    for item in mine:
+        answer = dict(resolution)
+        ref = (item.payload or {}).get("statement_ref")
+        if isinstance(ref, str):
+            answer["statement_ref"] = ref
+        close_item(db, principal, item, answer, request=request)
+    return len(mine)
 
 
 def _chosen_lines(payload: Mapping[str, Any], lines: Sequence[int] | None) -> list[int] | None:

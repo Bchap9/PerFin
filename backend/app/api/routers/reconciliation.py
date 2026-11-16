@@ -9,15 +9,18 @@
   (balances may be typed as printed): its rows are confirmed and the
   balance is recorded (``409 statement-does-not-reconcile`` otherwise).
 * ``POST /documents/{id}/reconciliation/accept``: accept the statement as
-  read without balancing it; no balance is recorded.
+  read without balancing it; no balance is recorded (``409
+  statement-balanced`` for one that balances: confirm it instead).
 * ``POST /documents/{id}/reconciliation/restore``: put a removed row back
   (``404 tombstone-not-found``).
 * ``POST /documents/{id}/reconciliation/remove-earlier``: remove the rows an
   earlier reading of the statement left behind.
 
 The four actions need member or above who can change the document and
-honour ``Idempotency-Key``. A document with no statement to check is ``409
-statement-unavailable``. Tokens need ``documents:read`` /
+honour ``Idempotency-Key``; the statement's account must be one the caller
+may edit (``404 account-not-found`` otherwise). A document with no statement
+to check is ``409 statement-unavailable``; a statement index the document
+does not have is ``422 statement-not-found``. Tokens need ``documents:read`` /
 ``documents:write``.
 """
 
