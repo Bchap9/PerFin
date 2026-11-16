@@ -59,7 +59,7 @@ export function RuleTestPanel({
   };
 
   return (
-    <Card title="Test this rule" headingLevel={2}>
+    <Card title="Test this rule">
       <div className="planning-form">
         <p className="muted">Nothing is changed. This shows what the rule would do to existing transactions.</p>
         <div className="planning-row">

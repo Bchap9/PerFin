@@ -346,6 +346,29 @@ describe.each(NEW_ROUTES.map((route) => [route]))("%s", (route) => {
   });
 });
 
+/** The headings of the Settings page beside the side list, as "h<level> <text>". */
+function settingsHeadings(): HTMLElement[] {
+  // The side list has headings of its own; the page sits beside it.
+  const page = document.querySelector<HTMLElement>(".settings-shell__page");
+  expect(page).not.toBeNull();
+  return within(page ?? document.body).getAllByRole("heading");
+}
+
+const outline = (headings: readonly HTMLElement[]): string[] =>
+  headings.map((heading) => `h${heading.tagName.slice(1)} ${heading.textContent}`);
+
+/** Every heading inside a card that does not sit under the card's title. */
+function besideTheirCard(headings: readonly HTMLElement[]): string[] {
+  return headings.flatMap((heading) => {
+    const card = heading.closest<HTMLElement>("section.card");
+    const title = card?.querySelector(".card__title");
+    if (card == null || title == null || title === heading) return [];
+    return Number(heading.tagName.slice(1)) > Number(title.tagName.slice(1))
+      ? []
+      : [`${heading.tagName} ${heading.textContent} in ${title.tagName} ${title.textContent}`];
+  });
+}
+
 // A Settings link says what the page it opens is called: the side list's
 // label is the page's title, word for word.
 describe.each(SETTINGS_GROUPS.flatMap((group) => group.pages.map((page) => [page.label, page.to])))(
@@ -353,34 +376,29 @@ describe.each(SETTINGS_GROUPS.flatMap((group) => group.pages.map((page) => [page
   (label, to) => {
     it("opens a page titled with the side list's label", async () => {
       await openRoute(to);
-      // The side list has headings of its own; the page sits beside it.
-      const page = document.querySelector<HTMLElement>(".settings-shell__page");
-      expect(page).not.toBeNull();
-      const titles = within(page ?? document.body)
-        .getAllByRole("heading", { level: 2 })
-        .map((heading) => heading.textContent);
-      expect(titles.at(0)).toBe(label);
+      const titles = settingsHeadings().filter((heading) => heading.tagName === "H2");
+      expect(titles.at(0)?.textContent).toBe(label);
     });
 
     it("has one h2, its title, and every other heading under it", async () => {
       await openRoute(to);
-      const page = document.querySelector<HTMLElement>(".settings-shell__page");
-      const headings = within(page ?? document.body).getAllByRole("heading");
-      const levels = headings.map((heading) => `h${heading.tagName.slice(1)} ${heading.textContent}`);
-      expect(levels.filter((line) => /^h[12] /.test(line))).toEqual([`h2 ${label}`]);
-      // A heading inside a card sits under the card's title.
-      const nested = headings.flatMap((heading) => {
-        const card = heading.closest<HTMLElement>("section.card");
-        const title = card?.querySelector(".card__title");
-        if (card == null || title == null || title === heading) return [];
-        return Number(heading.tagName.slice(1)) > Number(title.tagName.slice(1))
-          ? []
-          : [`${heading.tagName} ${heading.textContent} in ${title.tagName} ${title.textContent}`];
-      });
-      expect(nested).toEqual([]);
+      const headings = settingsHeadings();
+      expect(outline(headings).filter((line) => /^h[12] /.test(line))).toEqual([`h2 ${label}`]);
+      expect(besideTheirCard(headings)).toEqual([]);
     });
   },
 );
+
+// The Settings pages no side link opens: the rule editor, new and existing.
+describe.each([["/settings/rules/new"], ["/settings/rules/$ruleId"]])("Settings page %s", (route) => {
+  it("has one h2, its title, and every other heading under it", async () => {
+    await openRoute(route);
+    const headings = settingsHeadings();
+    expect(outline(headings).filter((line) => /^h[12] /.test(line))).toHaveLength(1);
+    expect(outline(headings).at(0)).toMatch(/^h2 /);
+    expect(besideTheirCard(headings)).toEqual([]);
+  });
+});
 
 /** The first item of a generated list body replaced by `patch`, keeping the body's shape. */
 function patchFirst(body: unknown, patch: Record<string, unknown>): unknown {

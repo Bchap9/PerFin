@@ -51,7 +51,10 @@ export function SettingsLayout() {
         {index ? null : <SettingsNav />}
         <div className="settings-shell__page">
           <SectionHeadingContext.Provider value={true}>
-            <Outlet />
+            {/* Every page here titles at h2, so its cards title at h3, under it. */}
+            <CardHeadingLevel.Provider value={3}>
+              <Outlet />
+            </CardHeadingLevel.Provider>
           </SectionHeadingContext.Provider>
         </div>
       </div>
@@ -59,15 +62,12 @@ export function SettingsLayout() {
   );
 }
 
-/**
- * A settings page: breadcrumbs back to Settings, its title (an `h2`), and
- * content, whose cards title at `h3` so they sit under the page's title.
- */
+/** A settings page: breadcrumbs back to Settings, its title (an `h2`), and content. */
 export function SettingsPage({ title, children }: { title: string; children: ReactNode }) {
   return (
     <div className="settings-stack">
       <PageHeader title={title} breadcrumbs={[{ to: "/settings", label: "Settings" }, { label: title }]} />
-      <CardHeadingLevel.Provider value={3}>{children}</CardHeadingLevel.Provider>
+      {children}
     </div>
   );
 }
