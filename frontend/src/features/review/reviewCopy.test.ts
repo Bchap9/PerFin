@@ -81,6 +81,9 @@ const REASONS: readonly [ReviewItem["kind"], string][] = [
   ["unparsed", "tax_form_unreadable"],
   ["unparsed", "loan_unreadable"],
   ["low_confidence_field", "plan_statement_does_not_add_up"],
+  ["possible_duplicate", "near_matches"],
+  ["possible_duplicate", "same_content_skipped"],
+  ["low_confidence_field", "earlier_rows_kept"],
 ];
 
 describe("review explanations", () => {
@@ -668,5 +671,64 @@ describe("what the import says about rows and accounts", () => {
         "USD",
       ),
     ).toContain("list of accounts prints $1,000.00");
+  });
+});
+
+describe("what the review cards say", () => {
+  const BUTTON = "Open “Check against the statement”.";
+
+  it("names the summary as the cause", () => {
+    const found = explain(
+      item("low_confidence_field", {
+        reason: "reconciliation_failed",
+        cause: "summary_totals_mismatch",
+      }),
+    );
+    expect(found.what).toBe(
+      "The opening balance, the rows and the closing balance agree, but the statement's own summary of payments and charges does not match the rows.",
+    );
+    const plain = explain(
+      item("low_confidence_field", { reason: "reconciliation_failed" }),
+    );
+    expect(plain.what).toBe(
+      "The rows read from this statement do not add up to its opening and closing balance.",
+    );
+  });
+
+  it.each(["reconciliation_failed", "reconciliation_unavailable"])(
+    "points %s at the one button",
+    (reason) => {
+      expect(explain(item("low_confidence_field", { reason })).steps).toEqual([
+        BUTTON,
+        "Correct, add or remove rows until the difference is zero, then confirm.",
+        "If the statement cannot be made to balance, accept it as read.",
+      ]);
+    },
+  );
+
+  it("counts the rows of several near duplicates and of an earlier reading", () => {
+    const near = explain(
+      item("possible_duplicate", { reason: "near_matches", count: 3 }),
+    );
+    expect(near.title).toBe("Rows that may already be in PerFin");
+    expect(near.what).toBe(
+      "3 rows of this statement have the same date and amount as rows already in the account.",
+    );
+    const kept = explain(
+      item("low_confidence_field", { reason: "earlier_rows_kept", count: 2 }),
+    );
+    expect(kept.title).toBe("Rows from an earlier reading");
+    expect(kept.what).toBe(
+      "PerFin read this file again. 2 rows from the earlier reading are not in the new one and were kept because they had been changed.",
+    );
+    expect(kept.steps[0]).toBe(BUTTON);
+    const copy = explain(
+      item("possible_duplicate", { reason: "same_content_skipped" }),
+    );
+    expect(copy.title).toBe("Already uploaded");
+    expect(copy.steps).toEqual([
+      "Nothing to do.",
+      "If you do want it read again, choose “Import it anyway”.",
+    ]);
   });
 });

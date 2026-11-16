@@ -18,8 +18,11 @@ import {
   payloadSuggestions,
   receiptResolution,
   reprocessResolution,
+  type ReviewCard,
   type ReviewItem,
+  type StatementReconciliation,
 } from "./api";
+import { explain } from "./reviewCopy";
 
 /** A held statement's key (``statement_key``): its digest, in letters. */
 const STATEMENT_KEY = "k".repeat(64);
@@ -46,25 +49,125 @@ function item(
   };
 }
 
+const DOCUMENT: ReviewCard["document"] = {
+  id: "d-1",
+  original_filename: "october-export.csv",
+  kind: "statement",
+  status: "needs_review",
+  mime_detected: "text/csv",
+  source: "upload",
+  created_at: NOW,
+  period_start: null,
+  period_end: null,
+  previewable: false,
+};
+
+const HELD = new Set([
+  "investment_reconciliation_failed",
+  "investment_low_confidence",
+  "investment_lines_held",
+]);
+const RECONCILE = new Set([
+  "reconciliation_failed",
+  "reconciliation_unavailable",
+  "earlier_rows_kept",
+]);
+const ACKNOWLEDGE = new Set([
+  "format_not_supported",
+  "encrypted",
+  "depth_limit",
+  "container_incomplete",
+]);
+
+/** The action the server names for a card of this one item (its ``card_action``). */
+function actionOf(one: ReviewItem): ReviewCard["action"] {
+  const reason = one.reason ?? (one.payload["reason"] as string | undefined);
+  switch (one.kind) {
+    case "unknown_account":
+      return "choose_account";
+    case "unknown_owner":
+      return "choose_owner";
+    case "receipt_match":
+      return "attach_receipt";
+    case "possible_duplicate":
+      return reason === "same_content_skipped"
+        ? "acknowledge"
+        : "confirm_duplicate";
+    case "unparsed":
+      if (one.payload["auto_import"] === "sign_unverified") {
+        return "answer_sign";
+      }
+      if (one.next_step === "column_mapping") {
+        return "map_columns";
+      }
+      return ACKNOWLEDGE.has(reason ?? "") ? "acknowledge" : "reprocess";
+    case "low_confidence_field":
+      if (RECONCILE.has(reason ?? "")) {
+        return "reconcile";
+      }
+      return Array.isArray(one.payload["transactions"]) ||
+        HELD.has(reason ?? "")
+        ? "check_rows"
+        : "acknowledge";
+    default:
+      return "acknowledge";
+  }
+}
+
+/** One card: the document's open items and the one action (of the first item). */
+function card(items: ReviewItem[], extra: Partial<ReviewCard> = {}): ReviewCard {
+  const first = items[0];
+  if (first === undefined) {
+    throw new Error("a card needs an item");
+  }
+  return {
+    document: first.document ?? DOCUMENT,
+    items,
+    action: actionOf(first),
+    action_item_id: first.id,
+    open: items.length,
+    notices: 0,
+    ...extra,
+  };
+}
+
+/** The queue: each item wrapped in a card of its own, or the cards given. */
 function reviewApi(
   items: ReviewItem[],
   role: SessionOptions["role"] = "member",
   extra: Record<string, Handler> = {},
+  cards: ReviewCard[] = items.map((one) => card([one])),
 ) {
   return mockApi({
     "GET /api/v1/auth/session": authedSession({ role }),
     ...lookupHandlers([account("a-1", "Everyday"), account("a-2", "Savings")]),
-    "GET /api/v1/review": () => json({ items, next_cursor: null }),
+    "GET /api/v1/review/cards": () =>
+      json({ cards, loose: [], next_cursor: null }),
     "GET /api/v1/transactions/:id": (call) =>
       json(
         tx(call.path.split("/").at(-1) ?? "", {
-          raw_payee: call.path.endsWith("new-1") ? "IMPORTED ROW" : "KEPT ROW",
+          raw_payee: call.path.includes("new-") ? "IMPORTED ROW" : "KEPT ROW",
         }),
       ),
     "GET /api/v1/documents/:id": () =>
       json({ id: "d-1", original_filename: "march.ofx" }),
     ...extra,
   });
+}
+
+/** Reads of one item's detail (the pattern also matches the cards list). */
+function detailCalls(api: ReturnType<typeof mockApi>) {
+  return api
+    .callsTo("GET", "/api/v1/review/:id")
+    .filter((call) => !call.path.endsWith("/cards"));
+}
+
+function cardOf(text: string | RegExp): HTMLElement {
+  const found = screen.getByText(text).closest(".review-card");
+  if (!(found instanceof HTMLElement)) {
+    throw new Error("no card");
+  }
+  return found;
 }
 
 describe("resolution builders", () => {
@@ -176,7 +279,8 @@ describe("review queue", () => {
         duplicate_of: "old-2",
       });
     });
-    expect(await screen.findByText("Item resolved")).toBeInTheDocument();
+    // No toast: the card itself says what happened.
+    expect(screen.queryByText("Item resolved")).not.toBeInTheDocument();
   });
 
   it("rejects a duplicate flag with 'not a duplicate'", async () => {
@@ -691,8 +795,9 @@ describe("review queue", () => {
     renderApp("/review");
     const user = userEvent.setup();
     const button = await screen.findByRole("button", {
-      name: "Import into this account",
+      name: "Use this account",
     });
+    // No ranking came with the item: nothing is chosen for the person.
     expect(button).toBeDisabled();
     await screen.findByRole("option", { name: "Savings" });
     await user.selectOptions(
@@ -856,7 +961,7 @@ describe("review queue", () => {
       screen.queryByRole("button", { name: "Dismiss" }),
     ).not.toBeInTheDocument();
     expect(
-      screen.queryByRole("button", { name: "Import into this account" }),
+      screen.queryByRole("button", { name: "Use this account" }),
     ).not.toBeInTheDocument();
   });
 
@@ -909,10 +1014,524 @@ describe("review queue", () => {
       "a-1",
     );
     await user.click(
-      within(dialog).getByRole("button", { name: "Import into this account" }),
+      within(dialog).getByRole("button", { name: "Use this account" }),
     );
     await waitFor(() => {
       expect(api.callsTo("POST", "/api/v1/review/:id/resolve")).toHaveLength(1);
     });
+  });
+});
+
+const FAILED = item(
+  "r-10",
+  "low_confidence_field",
+  {
+    reason: "reconciliation_failed",
+    account_id: "a-1",
+    statement: 0,
+    opening: "500.00",
+    closing: "434.50",
+    difference: "-12.00",
+  },
+  { reason: "reconciliation_failed", next_step: "correct_fields" },
+);
+const SKIPPED = item(
+  "r-11",
+  "low_confidence_field",
+  { reason: "lines_skipped", count: 2 },
+  { reason: "lines_skipped", next_step: "correct_fields" },
+);
+const DOUBTED = item(
+  "r-12",
+  "low_confidence_field",
+  {
+    reason: "low_confidence",
+    account_id: "a-1",
+    count: 1,
+    transactions: [{ transaction_id: "t-9", fields: ["amount"] }],
+  },
+  { reason: "low_confidence", next_step: "correct_fields" },
+);
+
+function threeFindings(): ReviewCard {
+  return card([FAILED, SKIPPED, DOUBTED], { action: "reconcile" });
+}
+
+const STATEMENT: StatementReconciliation = {
+  statement: 0,
+  account_id: "a-1",
+  account_name: "Everyday",
+  can_edit: true,
+  causes: [],
+  opening: "500.00",
+  closing: "434.50",
+  previous_closing: null,
+  currency: "USD",
+  total: "-77.50",
+  difference: "-12.00",
+  lines_skipped: 0,
+  period_start: "2026-10-01",
+  period_end: "2026-10-31",
+  printed_sign: "ledger",
+  removed: [],
+  rows: [],
+  rows_truncated: false,
+  status: "off",
+  verification: "unverified",
+};
+
+function accountItem(scores: readonly [number, number]): ReviewItem {
+  return item(
+    "r-20",
+    "unknown_account",
+    { reason: "account_not_found", statement: 0 },
+    {
+      reason: "account_not_found",
+      next_step: "choose_account",
+      alternatives: [
+        {
+          field: "account_id",
+          value: "a-2",
+          label: "Savings",
+          score: scores[0],
+          source: "ledger",
+        },
+        {
+          field: "account_id",
+          value: "a-1",
+          label: "Everyday",
+          score: scores[1],
+          source: "ledger",
+        },
+      ],
+    },
+  );
+}
+
+describe("review cards", () => {
+  it("shows one card for a document with three findings", async () => {
+    reviewApi([], "member", {}, [threeFindings()]);
+    const { container } = renderApp("/review");
+    expect(
+      await screen.findByRole("heading", { name: "3 thing(s) to settle" }),
+    ).toBeInTheDocument();
+    expect(container.querySelectorAll(".review-card")).toHaveLength(1);
+    const found = cardOf("october-export.csv");
+    for (const one of [FAILED, SKIPPED, DOUBTED]) {
+      expect(
+        within(found).getByRole("heading", { name: explain(one).title }),
+      ).toBeInTheDocument();
+    }
+    expect(within(found).getAllByRole("button", { name: "Dismiss" })).toHaveLength(3);
+  });
+
+  it("the card's only primary button is its action", async () => {
+    reviewApi([], "member", {}, [threeFindings()]);
+    renderApp("/review");
+    await screen.findByRole("heading", { name: "3 thing(s) to settle" });
+    const primary = cardOf("october-export.csv").querySelectorAll(".btn--primary");
+    expect(primary).toHaveLength(1);
+    expect(primary[0]).toHaveTextContent("Check against the statement");
+  });
+
+  it("says a card of notices is for information", async () => {
+    const notice = item(
+      "r-13",
+      "low_confidence_field",
+      { reason: "investment_figures_differ" },
+      { reason: "investment_figures_differ" },
+    );
+    reviewApi([], "member", {}, [
+      card([notice], { action: "acknowledge", open: 0, notices: 1 }),
+    ]);
+    renderApp("/review");
+    expect(
+      await screen.findByRole("heading", { name: "For your information" }),
+    ).toBeInTheDocument();
+  });
+
+  it("pre-selects the account that ranks first", async () => {
+    const ranked = accountItem([0.85, 0.15]);
+    const api = reviewApi([ranked], "member", {
+      "GET /api/v1/review/:id": () => json(ranked),
+      "POST /api/v1/review/:id/resolve": () =>
+        json({ ...ranked, state: "resolved" }),
+    });
+    renderApp("/review");
+    const user = userEvent.setup();
+    const select = await screen.findByLabelText("Account for this file");
+    await waitFor(() => {
+      expect(select).toHaveValue("a-2");
+    });
+    await user.click(screen.getByRole("button", { name: "Use this account" }));
+    await waitFor(() => {
+      expect(
+        api.callsTo("POST", "/api/v1/review/:id/resolve")[0]?.body,
+      ).toEqual({ kind: "unknown_account", account_id: "a-2", remember: true });
+    });
+  });
+
+  it("does not pre-select on a tie", async () => {
+    const tied = accountItem([0.15, 0.15]);
+    const api = reviewApi([tied], "member", {
+      "GET /api/v1/review/:id": () => json(tied),
+    });
+    renderApp("/review");
+    const select = await screen.findByLabelText("Account for this file");
+    await waitFor(() => {
+      expect(detailCalls(api)).toHaveLength(1);
+    });
+    await screen.findByRole("option", { name: "Savings" });
+    expect(select).toHaveValue("");
+    expect(screen.getByRole("button", { name: "Use this account" })).toBeDisabled();
+  });
+
+  it("answers the sign question in one click", async () => {
+    const sign = item(
+      "r-30",
+      "unparsed",
+      {
+        reason: "mapping_required",
+        auto_import: "sign_unverified",
+        scope: "mapping",
+        account_id: "a-1",
+        group: 0,
+        transactions: 14,
+      },
+      { reason: "mapping_required", next_step: "column_mapping" },
+    );
+    const api = reviewApi([sign], "member", {
+      "POST /api/v1/review/:id/resolve": () =>
+        json({ ...sign, state: "resolved" }),
+    });
+    renderApp("/review");
+    const user = userEvent.setup();
+    expect(
+      await screen.findByText("Positive amounts in this file are:"),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText(
+        "PerFin remembers the answer for files with the same columns.",
+      ),
+    ).toBeInTheDocument();
+    // The question is answered here: nobody is sent to the mapping editor.
+    expect(
+      screen.queryByRole("link", { name: "Map columns" }),
+    ).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Money in" })).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Money out" }));
+    await waitFor(() => {
+      expect(
+        api.callsTo("POST", "/api/v1/review/:id/resolve")[0]?.body,
+      ).toEqual({
+        kind: "unparsed",
+        action: "answer_sign",
+        positive_is: "money_out",
+      });
+    });
+  });
+
+  it("says a sign answer for one account stays with this file", async () => {
+    reviewApi([
+      item(
+        "r-31",
+        "unparsed",
+        {
+          reason: "mapping_required",
+          auto_import: "sign_unverified",
+          scope: "account",
+          account_id: "a-1",
+        },
+        { reason: "mapping_required", next_step: "column_mapping" },
+      ),
+    ]);
+    renderApp("/review");
+    expect(
+      await screen.findByText(
+        "The answer is kept for this account in this file.",
+      ),
+    ).toBeInTheDocument();
+  });
+
+  it("decides several near duplicates at once", async () => {
+    const near = item(
+      "r-40",
+      "possible_duplicate",
+      {
+        reason: "near_matches",
+        account_id: "a-1",
+        statement: 0,
+        count: 3,
+        rows: [
+          { transaction_id: "new-1", candidates: ["old-1"] },
+          { transaction_id: "new-2", candidates: ["old-2"] },
+          { transaction_id: "new-3", candidates: ["old-3"] },
+        ],
+      },
+      { reason: "near_matches", next_step: "confirm_duplicate" },
+    );
+    const api = reviewApi([near], "member", {
+      "POST /api/v1/review/:id/resolve": () =>
+        json({ ...near, state: "resolved" }),
+    });
+    renderApp("/review");
+    const user = userEvent.setup();
+    expect(
+      await screen.findByText(
+        "3 rows of this statement have the same date and amount as rows already in the account.",
+      ),
+    ).toBeInTheDocument();
+    const save = screen.getByRole("button", { name: "Save these answers" });
+    expect(save).toBeDisabled();
+    await user.click(
+      screen.getByRole("button", { name: "All are the same rows" }),
+    );
+    await user.click(
+      within(screen.getByRole("group", { name: "Row 3" })).getByLabelText(
+        "Different row",
+      ),
+    );
+    await user.click(save);
+    await waitFor(() => {
+      expect(
+        api.callsTo("POST", "/api/v1/review/:id/resolve")[0]?.body,
+      ).toEqual({
+        kind: "possible_duplicate",
+        decision: "confirm",
+        rows: [
+          { transaction_id: "new-1", decision: "confirm", duplicate_of: "old-1" },
+          { transaction_id: "new-2", decision: "confirm", duplicate_of: "old-2" },
+          { transaction_id: "new-3", decision: "reject" },
+        ],
+      });
+    });
+  });
+
+  it("offers no rule button and no confirm on a card with nothing pending", async () => {
+    // The rows the item listed are gone: its detail names none.
+    const api = reviewApi([DOUBTED], "member", {
+      "GET /api/v1/review/:id": () =>
+        json({ ...DOUBTED, regions: [], alternatives: [] }),
+    });
+    renderApp("/review");
+    await screen.findByRole("heading", { name: "1 thing(s) to settle" });
+    await waitFor(() => {
+      expect(detailCalls(api)).toHaveLength(1);
+    });
+    expect(await screen.findByRole("button", { name: "Dismiss" })).toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: "Confirm as read" }),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: "Create a rule from this" }),
+    ).not.toBeInTheDocument();
+  });
+
+  it("shows the row tools only for the item that lists rows", async () => {
+    const api = reviewApi([SKIPPED]);
+    renderApp("/review");
+    await screen.findByRole("heading", { name: "1 thing(s) to settle" });
+    expect(
+      screen.queryByRole("button", { name: "Confirm as read" }),
+    ).not.toBeInTheDocument();
+    expect(detailCalls(api)).toHaveLength(0);
+  });
+
+  it("an encrypted file can only be acknowledged or dismissed", async () => {
+    const locked = item(
+      "r-50",
+      "unparsed",
+      { reason: "encrypted" },
+      { reason: "encrypted", next_step: "reprocess" },
+    );
+    const api = reviewApi([locked], "member", {
+      "POST /api/v1/review/:id/dismiss": () =>
+        json({ ...locked, state: "dismissed" }),
+    });
+    renderApp("/review");
+    const user = userEvent.setup();
+    const ok = await screen.findByRole("button", { name: "OK" });
+    expect(screen.getByRole("button", { name: "Dismiss" })).toBeInTheDocument();
+    for (const name of ["Process again", "Teach PerFin", "Confirm as read"]) {
+      expect(screen.queryByRole("button", { name })).not.toBeInTheDocument();
+    }
+    expect(
+      screen.queryByRole("link", { name: "Map columns" }),
+    ).not.toBeInTheDocument();
+    await user.click(ok);
+    await waitFor(() => {
+      expect(api.callsTo("POST", "/api/v1/review/:id/dismiss")).toHaveLength(1);
+    });
+    expect(api.callsTo("POST", "/api/v1/review/:id/resolve")).toHaveLength(0);
+  });
+
+  it("acknowledges a skipped copy, or imports it anyway", async () => {
+    const copy = item(
+      "r-51",
+      "possible_duplicate",
+      { reason: "same_content_skipped", duplicate_of: "d-0" },
+      { reason: "same_content_skipped", next_step: "confirm_duplicate" },
+    );
+    const api = reviewApi(
+      [],
+      "member",
+      {
+        "POST /api/v1/review/:id/resolve": () =>
+          json({ ...copy, state: "resolved" }),
+      },
+      [card([copy], { open: 0, notices: 1 })],
+    );
+    renderApp("/review");
+    const user = userEvent.setup();
+    expect(await screen.findByText("Already uploaded")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "OK" })).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Import it anyway" }));
+    await waitFor(() => {
+      expect(
+        api.callsTo("POST", "/api/v1/review/:id/resolve")[0]?.body,
+      ).toEqual({ kind: "possible_duplicate", decision: "reject" });
+    });
+  });
+
+  it("opens the reconcile view from the card", async () => {
+    const api = reviewApi(
+      [],
+      "member",
+      {
+        "GET /api/v1/documents/:id/reconciliation": () =>
+          json({ document_id: "d-1", statements: [STATEMENT] }),
+      },
+      [threeFindings()],
+    );
+    renderApp("/review");
+    const user = userEvent.setup();
+    await user.click(
+      await screen.findByRole("button", { name: "Check against the statement" }),
+    );
+    const dialog = await screen.findByRole("dialog");
+    expect(
+      await within(dialog).findByRole("heading", {
+        name: "Check against the statement",
+      }),
+    ).toBeInTheDocument();
+    expect(
+      api.callsTo("GET", "/api/v1/documents/:id/reconciliation")[0]?.path,
+    ).toBe("/api/v1/documents/d-1/reconciliation");
+    await user.click(within(dialog).getByRole("button", { name: "Finish later" }));
+    await waitFor(() => {
+      expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    });
+  });
+
+  it("after the last answer the card says where the rows went", async () => {
+    const ranked = accountItem([0.85, 0.15]);
+    const api = reviewApi([ranked], "member", {
+      "GET /api/v1/review/:id": () => json(ranked),
+      "POST /api/v1/review/:id/resolve": () => {
+        api.on("GET /api/v1/review/cards", () =>
+          json({ cards: [], loose: [], next_cursor: null }),
+        );
+        return json({ ...ranked, state: "resolved" });
+      },
+      "GET /api/v1/documents/:id/imported": () =>
+        json({
+          transactions: 12,
+          investment_transactions: 0,
+          loan_payments: 0,
+          balance_snapshots: 0,
+          child_documents: 0,
+          skipped_lines: 0,
+          statements: [
+            {
+              account_id: "a-2",
+              account_name: "Savings",
+              kind: "bank",
+              outcome: "imported",
+              pending: 0,
+              period_start: null,
+              period_end: null,
+              source_format: "csv",
+              transactions: 12,
+              unchecked: false,
+              verification: "unverified",
+            },
+          ],
+        }),
+    });
+    renderApp("/review");
+    const user = userEvent.setup();
+    const select = await screen.findByLabelText("Account for this file");
+    await waitFor(() => {
+      expect(select).toHaveValue("a-2");
+    });
+    await user.click(screen.getByRole("button", { name: "Use this account" }));
+    expect(
+      await screen.findByText("Settled. 12 row(s) are in Savings."),
+    ).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "View the rows" })).toHaveAttribute(
+      "href",
+      "/transactions?document=d-1",
+    );
+    expect(screen.getByRole("link", { name: "Open the file" })).toHaveAttribute(
+      "href",
+      "/documents/d-1",
+    );
+    expect(screen.queryByText("Item resolved")).not.toBeInTheDocument();
+    expect(screen.queryByText("Nothing to review")).not.toBeInTheDocument();
+  });
+
+  it("filters to one document from the query string", async () => {
+    const other: ReviewCard["document"] = {
+      ...DOCUMENT,
+      id: "d-2",
+      original_filename: "november-export.csv",
+    };
+    reviewApi([], "member", {}, [
+      card([item("r-60", "unparsed", {}, { next_step: "reprocess" })]),
+      card(
+        [
+          item(
+            "r-61",
+            "unparsed",
+            {},
+            { next_step: "reprocess", document_id: "d-2", document: other },
+          ),
+        ],
+      ),
+    ]);
+    renderApp("/review?document=d-2");
+    expect(
+      await screen.findByRole("link", { name: "november-export.csv" }),
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByRole("link", { name: "october-export.csv" }),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.getByRole("link", { name: "Show every file" }),
+    ).toHaveAttribute("href", "/review");
+  });
+
+  it("lists resolved items of one document from the items endpoint", async () => {
+    const done = item(
+      "r-70",
+      "unparsed",
+      {},
+      { state: "resolved", document_id: "d-2" },
+    );
+    const api = reviewApi([], "member", {
+      "GET /api/v1/review": () => json({ items: [done], next_cursor: null }),
+    });
+    renderApp("/review?document=d-2");
+    const user = userEvent.setup();
+    await user.selectOptions(await screen.findByLabelText("Show"), "resolved");
+    expect(
+      await screen.findByRole("heading", { name: "Could not be read" }),
+    ).toBeInTheDocument();
+    expect(api.callsTo("GET", "/api/v1/review")[0]?.search).toContain(
+      "document=d-2",
+    );
+    expect(api.callsTo("GET", "/api/v1/review")[0]?.search).toContain(
+      "state=resolved",
+    );
   });
 });
