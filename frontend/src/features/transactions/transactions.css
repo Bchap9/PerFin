@@ -169,8 +169,10 @@
   font-size: var(--font-size-sm);
 }
 
+/* `.payee-cell__raw`: the bank's wording in the "always categorise" dialog. */
 .tx-merchant__raw,
-.tx-merchant__note {
+.tx-merchant__note,
+.payee-cell__raw {
   color: var(--color-text-muted);
   font-size: var(--font-size-sm);
   overflow-wrap: anywhere;
