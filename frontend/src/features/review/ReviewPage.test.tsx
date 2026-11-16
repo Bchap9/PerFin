@@ -22,6 +22,7 @@ import {
   type ReviewItem,
   type StatementReconciliation,
 } from "./api";
+import { settledText } from "./DocumentCard";
 import { explain } from "./reviewCopy";
 
 /** A held statement's key (``statement_key``): its digest, in letters. */
@@ -923,7 +924,10 @@ describe("review queue", () => {
     expect(
       await screen.findByText("This email was not accepted."),
     ).toBeInTheDocument();
-    await user.click(screen.getByRole("button", { name: "Dismiss" }));
+    // Nothing can be done about it but to have seen it: "OK" is the dismissal,
+    // and no second button does the same thing.
+    expect(screen.queryByRole("button", { name: "Dismiss" })).not.toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "OK" }));
     await waitFor(() => {
       expect(api.callsTo("POST", "/api/v1/review/:id/dismiss")).toHaveLength(1);
     });
@@ -1080,6 +1084,22 @@ const STATEMENT: StatementReconciliation = {
   verification: "unverified",
 };
 
+const SAVINGS: StatementReconciliation = {
+  ...STATEMENT,
+  statement: 1,
+  account_id: "a-2",
+  account_name: "Savings",
+};
+
+/** The box of DOUBTED's row on the page, as the item's detail carries it. */
+const ROW_BOX = {
+  page: 1,
+  bbox: [61.2, 79.2, 306, 396],
+  label: "transaction",
+  transaction_id: "t-9",
+  fields: ["amount"],
+};
+
 function accountItem(scores: readonly [number, number]): ReviewItem {
   return item(
     "r-20",
@@ -1163,11 +1183,41 @@ describe("review cards", () => {
     await waitFor(() => {
       expect(select).toHaveValue("a-2");
     });
+    // The account is PerFin's guess: one click must not make it a route
+    // every later file follows, so "Remember" starts unticked.
+    expect(
+      screen.getByLabelText("Remember this account for the next file"),
+    ).not.toBeChecked();
     await user.click(screen.getByRole("button", { name: "Use this account" }));
     await waitFor(() => {
       expect(
         api.callsTo("POST", "/api/v1/review/:id/resolve")[0]?.body,
-      ).toEqual({ kind: "unknown_account", account_id: "a-2", remember: true });
+      ).toEqual({ kind: "unknown_account", account_id: "a-2", remember: false });
+    });
+  });
+
+  it("remembers an account the person chose themselves", async () => {
+    const ranked = accountItem([0.85, 0.15]);
+    const api = reviewApi([ranked], "member", {
+      "GET /api/v1/review/:id": () => json(ranked),
+      "POST /api/v1/review/:id/resolve": () =>
+        json({ ...ranked, state: "resolved" }),
+    });
+    renderApp("/review");
+    const user = userEvent.setup();
+    const select = await screen.findByLabelText("Account for this file");
+    await waitFor(() => {
+      expect(select).toHaveValue("a-2");
+    });
+    await user.selectOptions(select, "a-1");
+    expect(
+      screen.getByLabelText("Remember this account for the next file"),
+    ).toBeChecked();
+    await user.click(screen.getByRole("button", { name: "Use this account" }));
+    await waitFor(() => {
+      expect(
+        api.callsTo("POST", "/api/v1/review/:id/resolve")[0]?.body,
+      ).toEqual({ kind: "unknown_account", account_id: "a-1", remember: true });
     });
   });
 
@@ -1218,8 +1268,14 @@ describe("review cards", () => {
     expect(
       screen.queryByRole("link", { name: "Map columns" }),
     ).not.toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Money in" })).toBeInTheDocument();
-    await user.click(screen.getByRole("button", { name: "Money out" }));
+    // The two answers belong to their question for a screen reader too.
+    const question = screen.getByRole("group", {
+      name: "Positive amounts in this file are:",
+    });
+    expect(
+      within(question).getByRole("button", { name: "Money in" }),
+    ).toBeInTheDocument();
+    await user.click(within(question).getByRole("button", { name: "Money out" }));
     await waitFor(() => {
       expect(
         api.callsTo("POST", "/api/v1/review/:id/resolve")[0]?.body,
@@ -1307,16 +1363,72 @@ describe("review cards", () => {
     });
   });
 
+  it("asks which row a near duplicate repeats when several fit", async () => {
+    const near = item(
+      "r-41",
+      "possible_duplicate",
+      {
+        reason: "near_matches",
+        account_id: "a-1",
+        statement: 0,
+        count: 2,
+        rows: [
+          { transaction_id: "new-1", candidates: ["old-1"] },
+          { transaction_id: "new-2", candidates: ["old-2", "old-3"] },
+        ],
+      },
+      { reason: "near_matches", next_step: "confirm_duplicate" },
+    );
+    const api = reviewApi([near], "member", {
+      "POST /api/v1/review/:id/resolve": () =>
+        json({ ...near, state: "resolved" }),
+    });
+    renderApp("/review");
+    const user = userEvent.setup();
+    const first = await screen.findByRole("group", { name: "Row 1" });
+    const second = screen.getByRole("group", { name: "Row 2" });
+    const save = screen.getByRole("button", { name: "Save these answers" });
+    await user.click(within(first).getByLabelText("Same row"));
+    expect(save).toBeEnabled();
+    await user.click(within(second).getByLabelText("Same row"));
+    // "Same row" of two candidates is no answer yet: nothing may be sent,
+    // not even the row that is answered.
+    expect(
+      within(second).getByText("Choose which row already in PerFin it repeats."),
+    ).toBeInTheDocument();
+    expect(save).toBeDisabled();
+    await user.click(
+      within(second).getAllByLabelText("Same row as this one")[1] ?? second,
+    );
+    expect(save).toBeEnabled();
+    await user.click(save);
+    await waitFor(() => {
+      expect(
+        api.callsTo("POST", "/api/v1/review/:id/resolve")[0]?.body,
+      ).toEqual({
+        kind: "possible_duplicate",
+        decision: "confirm",
+        rows: [
+          { transaction_id: "new-1", decision: "confirm", duplicate_of: "old-1" },
+          { transaction_id: "new-2", decision: "confirm", duplicate_of: "old-3" },
+        ],
+      });
+    });
+  });
+
   it("offers no rule button and no confirm on a card with nothing pending", async () => {
-    // The rows the item listed are gone: its detail names none.
+    // The row is still on the page, but it was confirmed elsewhere.
     const api = reviewApi([DOUBTED], "member", {
       "GET /api/v1/review/:id": () =>
-        json({ ...DOUBTED, regions: [], alternatives: [] }),
+        json({ ...DOUBTED, regions: [ROW_BOX], alternatives: [] }),
+      "GET /api/v1/transactions/:id": () =>
+        json(tx("t-9", { review_state: "confirmed" })),
     });
     renderApp("/review");
     await screen.findByRole("heading", { name: "1 thing(s) to settle" });
     await waitFor(() => {
       expect(detailCalls(api)).toHaveLength(1);
+      expect(api.callsTo("GET", "/api/v1/transactions/t-9")).not.toHaveLength(0);
     });
     expect(await screen.findByRole("button", { name: "Dismiss" })).toBeInTheDocument();
     expect(
@@ -1327,10 +1439,62 @@ describe("review cards", () => {
     ).not.toBeInTheDocument();
   });
 
+  it("offers no confirm when the rows of the item are gone", async () => {
+    reviewApi([DOUBTED], "member", {
+      "GET /api/v1/review/:id": () =>
+        json({ ...DOUBTED, regions: [], alternatives: [] }),
+      "GET /api/v1/transactions/:id": () => problem(404, "transaction-not-found"),
+    });
+    renderApp("/review");
+    expect(await screen.findByRole("button", { name: "Dismiss" })).toBeInTheDocument();
+    await waitFor(() => {
+      expect(screen.queryByText("Loading row")).not.toBeInTheDocument();
+    });
+    expect(
+      screen.queryByRole("button", { name: "Confirm as read" }),
+    ).not.toBeInTheDocument();
+  });
+
+  it("confirms a pending row that has no box on the page", async () => {
+    // A row corrected after the import (or read without a box) loses its
+    // region; it still waits, and Review is where it is confirmed.
+    const api = reviewApi([DOUBTED], "member", {
+      "GET /api/v1/review/:id": () =>
+        json({ ...DOUBTED, regions: [], alternatives: [] }),
+      "GET /api/v1/transactions/:id": () =>
+        json(tx("t-9", { review_state: "pending", raw_payee: "LANTERN CAFE" })),
+      "POST /api/v1/review/:id/resolve": () =>
+        json({ ...DOUBTED, state: "resolved" }),
+    });
+    renderApp("/review");
+    const user = userEvent.setup();
+    const confirm = await screen.findByRole("button", { name: "Confirm as read" });
+    expect(screen.getByRole("group", { name: "Row LANTERN CAFE" })).toBeInTheDocument();
+    await user.click(confirm);
+    await waitFor(() => {
+      expect(
+        api.callsTo("POST", "/api/v1/review/:id/resolve")[0]?.body,
+      ).toEqual({
+        kind: "low_confidence_field",
+        transactions: [],
+        confirm: true,
+        import_as_read: false,
+      });
+    });
+  });
+
   it("shows the row tools only for the item that lists rows", async () => {
-    const api = reviewApi([SKIPPED]);
+    // The server names `check_rows` for an item that lists no ledger row:
+    // the card offers no row tools and reads no detail for them.
+    const api = reviewApi(
+      [],
+      "member",
+      { "GET /api/v1/review/:id": () => json(SKIPPED) },
+      [card([SKIPPED], { action: "check_rows" })],
+    );
     renderApp("/review");
     await screen.findByRole("heading", { name: "1 thing(s) to settle" });
+    expect(await screen.findByRole("button", { name: "Dismiss" })).toBeInTheDocument();
     expect(
       screen.queryByRole("button", { name: "Confirm as read" }),
     ).not.toBeInTheDocument();
@@ -1351,8 +1515,8 @@ describe("review cards", () => {
     renderApp("/review");
     const user = userEvent.setup();
     const ok = await screen.findByRole("button", { name: "OK" });
-    expect(screen.getByRole("button", { name: "Dismiss" })).toBeInTheDocument();
-    for (const name of ["Process again", "Teach PerFin", "Confirm as read"]) {
+    // "OK" dismisses the item; a second button that does the same is not shown.
+    for (const name of ["Dismiss", "Process again", "Teach PerFin", "Confirm as read"]) {
       expect(screen.queryByRole("button", { name })).not.toBeInTheDocument();
     }
     expect(
@@ -1393,6 +1557,34 @@ describe("review cards", () => {
     });
   });
 
+  it("OK on a skipped copy records that it is a copy", async () => {
+    const copy = item(
+      "r-52",
+      "possible_duplicate",
+      { reason: "same_content_skipped", duplicate_of: "d-0" },
+      { reason: "same_content_skipped", next_step: "confirm_duplicate" },
+    );
+    const api = reviewApi(
+      [],
+      "member",
+      {
+        "POST /api/v1/review/:id/resolve": () =>
+          json({ ...copy, state: "resolved" }),
+      },
+      [card([copy], { open: 0, notices: 1 })],
+    );
+    renderApp("/review");
+    const user = userEvent.setup();
+    await user.click(await screen.findByRole("button", { name: "OK" }));
+    await waitFor(() => {
+      expect(
+        api.callsTo("POST", "/api/v1/review/:id/resolve")[0]?.body,
+      ).toEqual({ kind: "possible_duplicate", decision: "confirm" });
+    });
+    // The answer is kept as a resolution, not as a dismissal.
+    expect(api.callsTo("POST", "/api/v1/review/:id/dismiss")).toHaveLength(0);
+  });
+
   it("opens the reconcile view from the card", async () => {
     const api = reviewApi(
       [],
@@ -1421,6 +1613,109 @@ describe("review cards", () => {
     await waitFor(() => {
       expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
     });
+  });
+
+  it("opens the statement the finding names", async () => {
+    const second = item(
+      "r-14",
+      "low_confidence_field",
+      { reason: "reconciliation_failed", account_id: "a-2", statement: 1 },
+      { reason: "reconciliation_failed", next_step: "correct_fields" },
+    );
+    reviewApi(
+      [],
+      "member",
+      {
+        "GET /api/v1/documents/:id/reconciliation": () =>
+          json({ document_id: "d-1", statements: [STATEMENT, SAVINGS] }),
+      },
+      [card([second], { action: "reconcile" })],
+    );
+    renderApp("/review");
+    const user = userEvent.setup();
+    await user.click(
+      await screen.findByRole("button", { name: "Check against the statement" }),
+    );
+    const dialog = await screen.findByRole("dialog");
+    expect(await within(dialog).findByText(/^Savings,/)).toBeInTheDocument();
+    expect(within(dialog).queryByText(/^Everyday,/)).not.toBeInTheDocument();
+  });
+
+  it("opens the statement in doubt when the finding names none", async () => {
+    // An item raised before statements were numbered in the payload.
+    const unnamed = item(
+      "r-15",
+      "low_confidence_field",
+      { reason: "reconciliation_failed" },
+      { reason: "reconciliation_failed", next_step: "correct_fields" },
+    );
+    reviewApi(
+      [],
+      "member",
+      {
+        "GET /api/v1/documents/:id/reconciliation": () =>
+          json({
+            document_id: "d-1",
+            statements: [
+              {
+                ...STATEMENT,
+                closing: "422.50",
+                difference: "0.00",
+                status: "balanced",
+                verification: "reconciled",
+              },
+              SAVINGS,
+            ],
+          }),
+      },
+      [card([unnamed], { action: "reconcile" })],
+    );
+    renderApp("/review");
+    const user = userEvent.setup();
+    await user.click(
+      await screen.findByRole("button", { name: "Check against the statement" }),
+    );
+    const dialog = await screen.findByRole("dialog");
+    expect(await within(dialog).findByText(/^Savings,/)).toBeInTheDocument();
+    expect(within(dialog).queryByText(/^Everyday,/)).not.toBeInTheDocument();
+  });
+
+  it("marks the skipped lines on the page of the reconcile view", async () => {
+    const api = reviewApi(
+      [],
+      "member",
+      {
+        "GET /api/v1/documents/:id/reconciliation": () =>
+          json({
+            document_id: "d-1",
+            statements: [{ ...STATEMENT, lines_skipped: 2 }],
+          }),
+        "GET /api/v1/review/:id": () =>
+          json({
+            ...SKIPPED,
+            regions: [
+              { page: 1, bbox: [40, 300, 500, 314], label: "skipped_line" },
+              { page: 1, bbox: [40, 320, 500, 334], label: "skipped_line" },
+            ],
+          }),
+      },
+      [threeFindings()],
+    );
+    renderApp("/review");
+    const user = userEvent.setup();
+    await user.click(
+      await screen.findByRole("button", { name: "Check against the statement" }),
+    );
+    const dialog = await screen.findByRole("dialog");
+    expect(
+      await within(dialog).findByText(
+        "2 lines of the statement were not read. They are marked on the page.",
+      ),
+    ).toBeInTheDocument();
+    // The boxes are those of the finding about the skipped lines.
+    expect(detailCalls(api).map((call) => call.path)).toEqual([
+      "/api/v1/review/r-11",
+    ]);
   });
 
   it("after the last answer the card says where the rows went", async () => {
@@ -1478,6 +1773,74 @@ describe("review cards", () => {
     );
     expect(screen.queryByText("Item resolved")).not.toBeInTheDocument();
     expect(screen.queryByText("Nothing to review")).not.toBeInTheDocument();
+  });
+
+  it("says where the rows went on a card left with only a notice", async () => {
+    const ranked = accountItem([0.85, 0.15]);
+    const notice = item(
+      "r-21",
+      "low_confidence_field",
+      { reason: "investment_figures_differ" },
+      { reason: "investment_figures_differ" },
+    );
+    const api = reviewApi(
+      [],
+      "member",
+      {
+        "GET /api/v1/review/:id": () => json(ranked),
+        "POST /api/v1/review/:id/resolve": () => {
+          api.on("GET /api/v1/review/cards", () =>
+            json({
+              cards: [card([notice], { action: "acknowledge", open: 0, notices: 1 })],
+              loose: [],
+              next_cursor: null,
+            }),
+          );
+          return json({ ...ranked, state: "resolved" });
+        },
+        "GET /api/v1/documents/:id/imported": () =>
+          json({
+            transactions: 7,
+            investment_transactions: 0,
+            loan_payments: 0,
+            balance_snapshots: 0,
+            child_documents: 0,
+            skipped_lines: 0,
+            statements: [],
+          }),
+      },
+      [card([ranked, notice], { open: 1, notices: 1 })],
+    );
+    renderApp("/review");
+    const user = userEvent.setup();
+    const select = await screen.findByLabelText("Account for this file");
+    await waitFor(() => {
+      expect(select).toHaveValue("a-2");
+    });
+    expect(screen.queryByText(/^Settled\./)).not.toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Use this account" }));
+    expect(
+      await screen.findByRole("heading", { name: "For your information" }),
+    ).toBeInTheDocument();
+    expect(
+      await screen.findByText("Settled. 7 row(s) are in PerFin."),
+    ).toBeInTheDocument();
+  });
+
+  it("does not promise rows of a file that imported none", () => {
+    // A confirmed duplicate, or a file whose findings were all dismissed.
+    expect(
+      settledText({
+        transactions: 0,
+        investment_transactions: 0,
+        loan_payments: 0,
+        balance_snapshots: 0,
+        child_documents: 0,
+        skipped_lines: 0,
+        statements: [],
+      }),
+    ).toBe("Settled. No rows from this file are in PerFin.");
+    expect(settledText(undefined)).toBe("Settled.");
   });
 
   it("filters to one document from the query string", async () => {

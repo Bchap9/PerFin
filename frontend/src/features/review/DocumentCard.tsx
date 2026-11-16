@@ -10,7 +10,7 @@ import "./review.css";
 
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link } from "@tanstack/react-router";
-import { useState, type ReactNode } from "react";
+import { useId, useState, type ReactNode } from "react";
 
 import { Badge } from "../../components/Badge";
 import { Button } from "../../components/Button";
@@ -36,6 +36,7 @@ import {
   dismissItem,
   duplicateResolution,
   fixFromDraft,
+  getReviewItem,
   hasSuggestedKinds,
   importAsReadResolution,
   itemReason,
@@ -52,6 +53,7 @@ import {
   payloadSuggestions,
   receiptResolution,
   reprocessResolution,
+  reviewKeys,
   signResolution,
   type CardAction,
   type DuplicateDecision,
@@ -328,7 +330,10 @@ function AccountControl({ item, actionable, trailing }: ControlProps) {
   const accounts = useAccounts();
   const detail = useItemDetail(item, actionable);
   const [picked, setPicked] = useState<string | null>(null);
-  const [remember, setRemember] = useState(true);
+  // Untouched, "Remember" follows who chose the account: ticked for the
+  // person's own choice, not for PerFin's guess, which one click would
+  // otherwise turn into the route every later file takes.
+  const [remembered, setRemembered] = useState<boolean | null>(null);
   const [settingUp, setSettingUp] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const resolve = useResolve(item, setError);
@@ -350,6 +355,7 @@ function AccountControl({ item, actionable, trailing }: ControlProps) {
     first !== undefined &&
     (second === undefined || (first.score ?? 0) > (second.score ?? 0));
   const accountId = picked ?? (ahead ? first.value : "");
+  const remember = remembered ?? picked !== null;
   return (
     <>
       <Field label="Account for this file">
@@ -369,7 +375,7 @@ function AccountControl({ item, actionable, trailing }: ControlProps) {
         label="Remember this account for the next file"
         checked={remember}
         onChange={(event) => {
-          setRemember(event.target.checked);
+          setRemembered(event.target.checked);
         }}
       />
       <Refusal error={error} />
@@ -414,12 +420,13 @@ function AccountControl({ item, actionable, trailing }: ControlProps) {
 function SignControl({ item, actionable, trailing }: ControlProps) {
   const [error, setError] = useState<string | null>(null);
   const resolve = useResolve(item, setError);
+  const questionId = useId();
   if (!actionable) {
     return null;
   }
   return (
-    <>
-      <p>Positive amounts in this file are:</p>
+    <div role="group" aria-labelledby={questionId} className="ledger-stack">
+      <p id={questionId}>Positive amounts in this file are:</p>
       <Actions>
         <Button
           disabled={resolve.isPending}
@@ -445,7 +452,7 @@ function SignControl({ item, actionable, trailing }: ControlProps) {
           : "The answer is kept for this account in this file."}
       </p>
       <Refusal error={error} />
-    </>
+    </div>
   );
 }
 
@@ -859,6 +866,9 @@ function useDismiss(item: ReviewItem, onError: (message: string | null) => void)
 /**
  * `acknowledge`: nothing can be done about the item but to have seen it.
  * "OK" closes it. A copy PerFin skipped can still be read ("Import it anyway").
+ * "Dismiss" (`trailing`) is shown only for the copy, where "OK" is an answer
+ * of its own; elsewhere "OK" is the dismissal and a second button would do
+ * the same thing.
  */
 function AcknowledgeControl({ item, actionable, trailing }: ControlProps) {
   const [error, setError] = useState<string | null>(null);
@@ -897,7 +907,7 @@ function AcknowledgeControl({ item, actionable, trailing }: ControlProps) {
             Import it anyway
           </Button>
         ) : null}
-        {trailing}
+        {copy ? trailing : null}
       </Actions>
     </>
   );
@@ -944,6 +954,8 @@ function HeldControl({ item, actionable, trailing }: ControlProps) {
   const [drafts, setDrafts] = useState<ReadonlyMap<number, LineDraft>>(
     new Map(),
   );
+  // Lines the person said to leave out while correcting others.
+  const [left, setLeft] = useState<ReadonlySet<number>>(new Set());
   const [error, setError] = useState<string | null>(null);
   const resolve = useResolve(item, setError);
   const lines = payloadLines(item);
@@ -961,6 +973,9 @@ function HeldControl({ item, actionable, trailing }: ControlProps) {
   const correctable = lines.some(lineFixable);
   const fixes: LineFix[] = [];
   let invalid = false;
+  // Lines neither corrected nor left out. Importing the corrected lines
+  // drops every other line of the item for good, so none may be undecided.
+  let undecided = 0;
   for (const line of lines) {
     const draft = drafts.get(line.index);
     const fix =
@@ -969,9 +984,22 @@ function HeldControl({ item, actionable, trailing }: ControlProps) {
       invalid = true;
     } else if (fix !== null) {
       fixes.push(fix);
+    } else if (!left.has(line.index)) {
+      undecided += 1;
     }
   }
   const correcting = correctable && !asRead;
+  const setLeaving = (index: number, chosen: boolean): void => {
+    setLeft((before) => {
+      const next = new Set(before);
+      if (chosen) {
+        next.add(index);
+      } else {
+        next.delete(index);
+      }
+      return next;
+    });
+  };
   return (
     <>
       <HeldLines
@@ -1005,6 +1033,21 @@ function HeldControl({ item, actionable, trailing }: ControlProps) {
                   }
                   return next;
                 });
+                if (draft !== null) {
+                  // A line being corrected is not one to leave out.
+                  setLeaving(index, false);
+                }
+              },
+              left,
+              onLeave: (index: number, chosen: boolean) => {
+                setLeaving(index, chosen);
+                if (chosen) {
+                  setDrafts((before) => {
+                    const next = new Map(before);
+                    next.delete(index);
+                    return next;
+                  });
+                }
               },
             }
           : {})}
@@ -1017,11 +1060,21 @@ function HeldControl({ item, actionable, trailing }: ControlProps) {
       ) : null}
       {asRead ? <p className="ledger-muted">{asReadNote(item)}</p> : null}
       {correcting ? (
-        <p className="ledger-muted">
-          “Correct” lets you type the right date, amount, quantity or kind of a
-          line. Only the lines you corrected are imported; the other lines
-          listed here are left out, and PerFin does not ask about them again.
-        </p>
+        <>
+          <p className="ledger-muted">
+            “Correct” lets you type the right date, amount, quantity or kind of
+            a line. Only the lines you corrected are imported. Tick “Leave out”
+            for every other line: it is not imported, and PerFin does not ask
+            about it again.
+          </p>
+          {fixes.length > 0 && undecided > 0 ? (
+            <p role="status">
+              {undecided === 1
+                ? "1 line is neither corrected nor left out. Correct it, or tick “Leave out” for it."
+                : `${String(undecided)} lines are neither corrected nor left out. Correct them, or tick “Leave out” for them.`}
+            </p>
+          ) : null}
+        </>
       ) : null}
       <Refusal error={error} />
       <Actions>
@@ -1046,7 +1099,7 @@ function HeldControl({ item, actionable, trailing }: ControlProps) {
           <Button
             variant="primary"
             loading={resolve.isPending}
-            disabled={fixes.length === 0 || invalid}
+            disabled={fixes.length === 0 || invalid || undecided > 0}
             onClick={() => {
               resolve.mutate(
                 lineFixResolution(
@@ -1281,6 +1334,49 @@ function Section({
 
 // ---- the card ------------------------------------------------------------------
 
+/**
+ * The reconcile view for a card: the statement its finding names (the view
+ * chooses the one in doubt when it names none), with the boxes of the lines
+ * the reader skipped, which the document's `lines_skipped` finding carries.
+ */
+function CardReconcile({
+  documentId,
+  items,
+  asked,
+  onDone,
+  onTeach,
+}: {
+  documentId: string;
+  items: readonly ReviewItem[];
+  asked: ReviewItem | undefined;
+  onDone: () => void;
+  onTeach?: () => void;
+}) {
+  const skipped = items.find(
+    (item) =>
+      item.kind === "low_confidence_field" &&
+      itemReason(item) === "lines_skipped",
+  );
+  const detail = useQuery({
+    queryKey: reviewKeys.one(skipped?.id ?? ""),
+    queryFn: () => getReviewItem(skipped?.id ?? ""),
+    enabled: skipped !== undefined,
+  });
+  const regions = (detail.data?.regions ?? []).filter(
+    (region) => region.label === "skipped_line",
+  );
+  return (
+    <ReconcileView
+      documentId={documentId}
+      statement={asked === undefined ? null : payloadNumber(asked, "statement")}
+      accountId={asked === undefined ? null : payloadString(asked, "account_id")}
+      regions={regions}
+      onDone={onDone}
+      {...(onTeach === undefined ? {} : { onTeach })}
+    />
+  );
+}
+
 interface CardModel {
   document: ReviewDocument | null;
   items: readonly ReviewItem[];
@@ -1393,11 +1489,18 @@ function CardView({ model }: { model: CardModel }) {
           title={document.original_filename ?? "Statement"}
           size="lg"
         >
-          <ReconcileView
+          <CardReconcile
             documentId={document.id}
-            statement={
-              asked === undefined ? 0 : (payloadNumber(asked, "statement") ?? 0)
-            }
+            items={model.items}
+            asked={asked}
+            {...(canAct && previewable
+              ? {
+                  onTeach: () => {
+                    setReconciling(false);
+                    setTeaching(true);
+                  },
+                }
+              : {})}
             onDone={() => {
               setReconciling(false);
               void queryClient.invalidateQueries({ queryKey: queryRoots.review });
@@ -1518,7 +1621,7 @@ export function settledText(imported: DocumentImported | undefined): string {
   const counted = imported.transactions + imported.investment_transactions;
   return counted > 0
     ? `Settled. ${String(counted)} row(s) are in PerFin.`
-    : "Settled. No rows from this file are in PerFin yet.";
+    : "Settled. No rows from this file are in PerFin.";
 }
 
 /** Where a document's rows went, with the way to them and to the file. */

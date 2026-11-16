@@ -199,6 +199,23 @@ describe("review explanations", () => {
       }),
     );
     expect(found.title).toBe("Money in or money out?");
+    // The card asks with two buttons; the steps describe those, not the
+    // mapping editor the card no longer links to.
+    expect(found.steps.join(" ")).not.toContain("Map columns");
+    expect(found.steps.join(" ")).toContain("“Money out”");
+    expect(found.steps.join(" ")).toContain("“Money in”");
+  });
+
+  it("sends a doubted sign to the mapping editor when the file waits for its columns", () => {
+    const found = explain(
+      item("unparsed", {
+        reason: "mapping_required",
+        auto_import: "not_confident",
+        suggestion: { confident: false, doubts: ["sign_unverified"] },
+      }),
+    );
+    expect(found.title).toBe("Money in or money out?");
+    expect(found.steps[0]).toContain("Map columns");
   });
 
   it("asks about the columns of a file without a header before its sign", () => {

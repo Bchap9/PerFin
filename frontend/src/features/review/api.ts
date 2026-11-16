@@ -545,6 +545,27 @@ export function listsTransactions(item: ReviewItem): boolean {
   return Array.isArray(value) && value.length > 0;
 }
 
+/** The ledger rows an item lists (payload ``transactions``), by id. */
+export function payloadTransactionIds(item: ReviewItem): string[] {
+  const value: unknown = new Map(Object.entries(item.payload)).get(
+    "transactions",
+  );
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  const ids = new Set<string>();
+  for (const entry of value as unknown[]) {
+    if (typeof entry !== "object" || entry === null) {
+      continue;
+    }
+    const id = field(entry, "transaction_id");
+    if (typeof id === "string") {
+      ids.add(id);
+    }
+  }
+  return [...ids];
+}
+
 // ---- resolution builders ---------------------------------------------------------
 
 /** What a positive amount of the file means (an item held for its sign). */
@@ -563,8 +584,9 @@ export function nearMatchesResolution(
 
 /**
  * The held lines a person corrected, imported with their corrections.
- * ``lines``: the lines to import (as with "import as read", the item's other
- * lines are left out).
+ * ``lines``: the lines to import. As with "import as read", the item's other
+ * lines are left out for good, so the card sends this only once the person
+ * has said "leave out" for each of them.
  */
 export function lineFixResolution(
   lines: readonly number[],

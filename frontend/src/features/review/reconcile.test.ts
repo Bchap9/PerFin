@@ -7,6 +7,7 @@ import {
   liveDifference,
   readPrinted,
   skippedText,
+  statementToCheck,
   statusLine,
   teachHint,
 } from "./reconcile";
@@ -50,15 +51,40 @@ describe("readPrinted", () => {
   it("reads a balance the way it is printed", () => {
     expect(readPrinted("1,204.18")).toBe("1204.18");
     expect(readPrinted("$1,204.18")).toBe("1204.18");
-    expect(readPrinted("1 204.18 €")).toBe("1204.18");
+    expect(readPrinted("1,204.18 €")).toBe("1204.18");
+    expect(readPrinted("$ 1,204.18")).toBe("1204.18");
     expect(readPrinted("(12.00)")).toBe("-12.00");
+    expect(readPrinted("( 12.00 )")).toBe("-12.00");
     expect(readPrinted("-12")).toBe("-12");
     expect(readPrinted("-$12.00")).toBe("-12.00");
+    expect(readPrinted("$-12.00")).toBe("-12.00");
+    expect(readPrinted("- $ 12")).toBe("-12");
     expect(readPrinted(" 3 ")).toBe("3");
+    expect(readPrinted("12.123456")).toBe("12.123456");
+    expect(readPrinted("12345678901234")).toBe("12345678901234");
   });
 
   it("refuses what is not one amount", () => {
     for (const text of ["1,20", "12.3.4", "abc", "1e5", "", "$", "1,2345", "$12$", "(-12)", "12."]) {
+      expect(readPrinted(text)).toBeNull();
+    }
+  });
+
+  it("refuses what the server refuses", () => {
+    // The server's `read_printed` allows plain spaces around the sign, the
+    // symbol and the brackets only, and no more digits than the ledger holds.
+    for (const text of [
+      "1 204.18 €",
+      "1\u00a0204.18",
+      "12\t000",
+      "\t12",
+      "1.1234567",
+      "123456789012345",
+      "(12",
+      "12)",
+      "--12",
+      "-$-12",
+    ]) {
       expect(readPrinted(text)).toBeNull();
     }
   });
@@ -202,12 +228,47 @@ describe("teachHint", () => {
 
 describe("skippedText", () => {
   it("counts the lines that were not read", () => {
-    expect(skippedText(0)).toBeNull();
-    expect(skippedText(1)).toBe(
+    expect(skippedText(0, true)).toBeNull();
+    expect(skippedText(1, true)).toBe(
       "1 line of the statement was not read. It is marked on the page.",
     );
-    expect(skippedText(4)).toBe(
+    expect(skippedText(4, true)).toBe(
       "4 lines of the statement were not read. They are marked on the page.",
     );
+  });
+
+  it("does not say a line is marked when no box is drawn for it", () => {
+    expect(skippedText(1, false)).toBe("1 line of the statement was not read.");
+    expect(skippedText(4, false)).toBe("4 lines of the statement were not read.");
+  });
+});
+
+describe("statementToCheck", () => {
+  const settled = statement({
+    statement: 0,
+    status: "balanced",
+    verification: "reconciled",
+  });
+  const savings = statement({ statement: 1, account_id: "a-2" });
+  const third = statement({ statement: 2, account_id: "a-3" });
+
+  it("is the statement that was asked for", () => {
+    expect(statementToCheck([settled, savings], 0, null)).toBe(settled);
+    expect(statementToCheck([settled, savings], 1, null)).toBe(savings);
+    expect(statementToCheck([settled, savings], 5, null)).toBeUndefined();
+  });
+
+  it("is the first statement still in doubt when none was named", () => {
+    expect(statementToCheck([settled, savings, third], null, null)).toBe(savings);
+  });
+
+  it("prefers the statement of the account the finding names", () => {
+    expect(statementToCheck([settled, savings, third], null, "a-3")).toBe(third);
+    expect(statementToCheck([settled, savings, third], null, "a-9")).toBe(savings);
+  });
+
+  it("is the first statement when every one is settled", () => {
+    expect(statementToCheck([settled], null, null)).toBe(settled);
+    expect(statementToCheck([], null, null)).toBeUndefined();
   });
 });

@@ -248,14 +248,32 @@ const MAPPING_DOUBTS: readonly (readonly [string, ReturnType<Copy>])[] = [
   ],
 ];
 
+/**
+ * How to answer the sign question where the card asks it (two buttons, no
+ * mapping editor): a file held for nothing but the sign of its amounts.
+ */
+const SIGN_ANSWER_STEPS = [
+  "Find a row you recognise on the file, a purchase for example.",
+  "Choose “Money out” if purchases are printed as positive amounts, “Money in” otherwise.",
+  "The file is imported right away with your answer.",
+];
+
 /** `mapping_required`: the question of the suggestion's doubt, else the general words. */
 function mappingRequired(item: ReviewItem): ReturnType<Copy> {
   const doubts = suggestionDoubts(item);
-  if (payloadString(item, "auto_import") === "sign_unverified") {
+  const signOnly = payloadString(item, "auto_import") === "sign_unverified";
+  if (signOnly) {
     doubts.push("sign_unverified");
   }
   const found = MAPPING_DOUBTS.find(([doubt]) => doubts.includes(doubt));
-  return found === undefined ? MAPPING_REQUIRED : found[1];
+  if (found === undefined) {
+    return MAPPING_REQUIRED;
+  }
+  // The card answers a file held only for its sign in place; the mapping
+  // editor's steps would point at a link the card does not show.
+  return signOnly && found[0] === "sign_unverified"
+    ? { ...found[1], steps: SIGN_ANSWER_STEPS }
+    : found[1];
 }
 
 /** A statement to settle in the reconcile view: the one button, then what to do there. */

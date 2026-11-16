@@ -47,6 +47,7 @@ import {
   liveDifference,
   readPrinted,
   skippedText,
+  statementToCheck,
   statusText,
   teachHint,
 } from "./reconcile";
@@ -60,12 +61,20 @@ const NOT_A_DATE = "Enter the date of the row.";
 
 export interface ReconcileViewProps {
   documentId: string;
-  /** The statement's index among the document's statements. */
-  statement: number;
+  /**
+   * The statement's index among the document's statements. `null`: the
+   * caller does not know which; the first statement still in doubt is shown
+   * (`statementToCheck`), of `accountId` when that is given.
+   */
+  statement: number | null;
   /** Called after a confirmation or an acceptance, and for "Finish later". */
   onDone: () => void;
   /** More boxes to draw on the page (the lines a reader skipped). */
   regions?: readonly Region[];
+  /** The account the caller's finding names (used when `statement` is `null`). */
+  accountId?: string | null;
+  /** Opens "Teach PerFin" for the document; offered beside the teach hint. */
+  onTeach?: () => void;
 }
 
 export function ReconcileView({
@@ -73,6 +82,8 @@ export function ReconcileView({
   statement,
   onDone,
   regions = [],
+  accountId = null,
+  onTeach,
 }: ReconcileViewProps) {
   const query = useQuery({
     queryKey: reviewKeys.reconciliation(documentId),
@@ -83,7 +94,7 @@ export function ReconcileView({
   }
   const found = query.isError
     ? undefined
-    : query.data.statements.find((entry) => entry.statement === statement);
+    : statementToCheck(query.data.statements, statement, accountId);
   if (found === undefined) {
     return (
       <div className="reconcile">
@@ -104,6 +115,7 @@ export function ReconcileView({
       statement={found}
       onDone={onDone}
       regions={regions}
+      {...(onTeach === undefined ? {} : { onTeach })}
     />
   );
 }
@@ -149,6 +161,7 @@ interface StatementProps {
   statement: StatementReconciliation;
   onDone: () => void;
   regions: readonly Region[];
+  onTeach?: () => void;
 }
 
 interface Shown {
@@ -171,7 +184,7 @@ interface NewRow {
 
 const EMPTY_ROW: NewRow = { date: "", amount: "", description: "" };
 
-function Statement({ documentId, statement, onDone, regions }: StatementProps) {
+function Statement({ documentId, statement, onDone, regions, onTeach }: StatementProps) {
   const queryClient = useQueryClient();
   const headingId = useId();
   const rowsCaptionId = useId();
@@ -220,7 +233,10 @@ function Statement({ documentId, statement, onDone, regions }: StatementProps) {
   const flagged = new Set(statement.causes.flatMap((cause) => cause.transaction_ids));
   const hasEarlier = statement.causes.some((cause) => cause.kind === "earlier_reading");
   const hint = teachHint(edits);
-  const skipped = skippedText(statement.lines_skipped);
+  const skipped = skippedText(
+    statement.lines_skipped,
+    regions.some((region) => region.label === "skipped_line"),
+  );
   const period =
     statement.period_start !== null && statement.period_end !== null
       ? `${dateText(statement.period_start)} to ${dateText(statement.period_end)}`
@@ -418,7 +434,18 @@ function Statement({ documentId, statement, onDone, regions }: StatementProps) {
               ) : null}
             </div>
           )}
-          {hint === null ? null : <p role="status">{hint}</p>}
+          {hint === null ? null : (
+            <div className="ledger-stack">
+              <p role="status">{hint}</p>
+              {onTeach === undefined || !canEdit ? null : (
+                <div className="ledger-actions">
+                  <Button size="sm" onClick={onTeach}>
+                    Teach PerFin
+                  </Button>
+                </div>
+              )}
+            </div>
+          )}
           {failure === null ? null : (
             <p role="alert" className="ledger-error">
               {failure}
@@ -604,7 +631,7 @@ function Statement({ documentId, statement, onDone, regions }: StatementProps) {
           </div>
           {statement.rows_truncated ? (
             <p className="ledger-muted">
-              Only the first rows are listed. The total counts the listed rows.
+              Only the first rows are listed. The total counts every row.
             </p>
           ) : null}
           {formError === null ? null : (
@@ -777,6 +804,12 @@ function Statement({ documentId, statement, onDone, regions }: StatementProps) {
           }
         >
           <p>{ACCEPT_QUESTION}</p>
+          {/* The dialog covers the view: a refusal is said where the person is. */}
+          {exit.isError ? (
+            <p role="alert" className="ledger-error">
+              {errorMessage(exit.error)}
+            </p>
+          ) : null}
         </Dialog>
       ) : null}
     </section>

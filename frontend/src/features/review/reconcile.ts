@@ -3,7 +3,7 @@
  * The arithmetic and the words of the reconcile view, without React.
  *
  * Balances are typed as printed (`1,204.18`, `$12.00`, `(3.10)`); the server
- * reads them the same way and stays the authority. Sums use the exact
+ * reads them with the same pattern and stays the authority. Sums use the exact
  * decimals of lib/money.ts (scaled integers): nothing here is a float.
  */
 import {
@@ -29,11 +29,15 @@ export interface LiveDifference {
 
 /** Longest balance the server accepts (`PrintedAmount`). */
 const PRINTED_MAX = 32;
-const CURRENCY_SYMBOLS: ReadonlySet<string> = new Set(["$", "€", "£"]);
 /** The server's rounding tolerance: half a cent. */
 const TOLERANCE: Decimal = { units: 5n, scale: 3 };
-const DIGITS = /^\d+$/;
+/** Most digits the ledger holds before and after the point (`core/money.py`). */
+const INTEGER_DIGITS = 14;
+const PLACES = 6;
+const CURRENCY_SYMBOLS: ReadonlySet<string> = new Set(["$", "€", "£"]);
+const DIGITS = /^[0-9]+$/;
 
+/** The digits before the point, without their thousands separators. */
 function wholeDigits(text: string): string | null {
   if (!text.includes(",")) {
     return DIGITS.test(text) ? text : null;
@@ -50,41 +54,54 @@ function wholeDigits(text: string): string | null {
 
 /**
  * A balance as a person reads it off the page, as plain decimal text:
- * spaces, thousands separators and one currency symbol are dropped; a
- * leading minus or surrounding brackets make it negative. `null` for
- * anything else.
+ * thousands separators and one currency symbol are dropped; a leading minus
+ * or surrounding brackets make it negative. `null` for anything else.
+ *
+ * It follows the server's `read_printed` (`review/reconciliation.py`) piece
+ * by piece, so the view never calls a balance good that the server refuses:
+ * `(`, `-`, symbol, `-`, the number, symbol, `)`, with plain spaces allowed
+ * between those pieces only (never inside the number, and no tab or no-break
+ * space), one sign, one symbol, and no more digits than the ledger holds.
  */
 export function readPrinted(text: string): string | null {
-  let rest = text.replace(/\s+/g, "");
-  if (rest === "" || rest.length > PRINTED_MAX) {
+  if (text.length > PRINTED_MAX) {
     return null;
   }
-  let negative = false;
-  if (rest.startsWith("(") && rest.endsWith(")")) {
-    negative = true;
-    rest = rest.slice(1, -1);
-  }
-  const minus = (): boolean => {
-    if (!rest.startsWith("-")) {
-      return true;
-    }
-    if (negative) {
+  let rest = text;
+  const trimStart = (): void => {
+    rest = rest.replace(/^ +/, "");
+  };
+  const trimEnd = (): void => {
+    rest = rest.replace(/ +$/, "");
+  };
+  const takeStart = (wanted: (first: string) => boolean): boolean => {
+    trimStart();
+    if (rest === "" || !wanted(rest.charAt(0))) {
       return false;
     }
-    negative = true;
     rest = rest.slice(1);
     return true;
   };
-  if (!minus()) {
-    return null;
-  }
-  if (CURRENCY_SYMBOLS.has(rest.charAt(0))) {
-    rest = rest.slice(1);
-    if (!minus()) {
-      return null;
+  const takeEnd = (wanted: (last: string) => boolean): boolean => {
+    trimEnd();
+    if (rest === "" || !wanted(rest.charAt(rest.length - 1))) {
+      return false;
     }
-  } else if (CURRENCY_SYMBOLS.has(rest.charAt(rest.length - 1))) {
     rest = rest.slice(0, -1);
+    return true;
+  };
+  const isSymbol = (char: string): boolean => CURRENCY_SYMBOLS.has(char);
+  const open = takeStart((char) => char === "(");
+  let signs = open ? 1 : 0;
+  signs += takeStart((char) => char === "-") ? 1 : 0;
+  let symbols = takeStart(isSymbol) ? 1 : 0;
+  signs += takeStart((char) => char === "-") ? 1 : 0;
+  trimStart();
+  const close = takeEnd((char) => char === ")");
+  symbols += takeEnd(isSymbol) ? 1 : 0;
+  trimEnd();
+  if (open !== close || signs > 1 || symbols > 1) {
+    return null;
   }
   const parts = rest.split(".");
   if (parts.length > 2) {
@@ -92,14 +109,19 @@ export function readPrinted(text: string): string | null {
   }
   const whole = wholeDigits(parts[0] ?? "");
   const fraction = parts[1];
-  if (whole === null || (fraction !== undefined && !DIGITS.test(fraction))) {
+  if (
+    whole === null ||
+    whole.length > INTEGER_DIGITS ||
+    (fraction !== undefined &&
+      (!DIGITS.test(fraction) || fraction.length > PLACES))
+  ) {
     return null;
   }
   const plain = fraction === undefined ? whole : `${whole}.${fraction}`;
   if (tryParseDecimal(plain) === null) {
     return null;
   }
-  return negative ? `-${plain}` : plain;
+  return signs > 0 ? `-${plain}` : plain;
 }
 
 function printedDecimal(text: string): Decimal | null {
@@ -265,12 +287,46 @@ export function teachHint(edits: { flipped: number; removed: number }): string |
     : null;
 }
 
-/** The lines of the statement the reader passed over. */
-export function skippedText(count: number): string | null {
+/**
+ * The lines of the statement the reader passed over. `marked`: their boxes
+ * are drawn on the page (only then does the sentence say so).
+ */
+export function skippedText(count: number, marked: boolean): string | null {
   if (count <= 0) {
     return null;
   }
-  return count === 1
-    ? "1 line of the statement was not read. It is marked on the page."
-    : `${String(count)} lines of the statement were not read. They are marked on the page.`;
+  const said =
+    count === 1
+      ? "1 line of the statement was not read."
+      : `${String(count)} lines of the statement were not read.`;
+  if (!marked) {
+    return said;
+  }
+  return `${said} ${count === 1 ? "It is" : "They are"} marked on the page.`;
+}
+
+function inDoubt(statement: StatementReconciliation): boolean {
+  return statement.status !== "balanced" || statement.verification !== "reconciled";
+}
+
+/**
+ * The statement of a document to open in the reconcile view. `wanted`: its
+ * index, when the finding names one. Otherwise the first statement still in
+ * doubt (not balanced, or not recorded as reconciled), of the account the
+ * finding names when it names one; the first statement when none is in doubt.
+ */
+export function statementToCheck(
+  statements: readonly StatementReconciliation[],
+  wanted: number | null,
+  accountId: string | null,
+): StatementReconciliation | undefined {
+  if (wanted !== null) {
+    return statements.find((entry) => entry.statement === wanted);
+  }
+  const doubted = statements.filter(inDoubt);
+  return (
+    doubted.find((entry) => entry.account_id === accountId) ??
+    doubted[0] ??
+    statements[0]
+  );
 }

@@ -3,10 +3,10 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 
-import { json, mockApi, noContent, type Handler } from "../auth/testing";
+import { json, mockApi, noContent, problem, type Handler } from "../auth/testing";
 import { NOW, tx } from "../transactions/fixtures";
 import type { ReconcileRow, StatementReconciliation } from "./api";
-import { ReconcileView } from "./ReconcileView";
+import { ReconcileView, type ReconcileViewProps } from "./ReconcileView";
 
 function row(
   id: string,
@@ -108,6 +108,7 @@ function outcome(after: StatementReconciliation) {
 function setup(
   first: StatementReconciliation = statement(),
   extra: Record<string, Handler> = {},
+  props: Partial<ReconcileViewProps> = {},
 ) {
   const state = { current: first };
   const api = mockApi({
@@ -122,7 +123,7 @@ function setup(
   });
   render(
     <QueryClientProvider client={queryClient}>
-      <ReconcileView documentId="d-1" statement={0} onDone={onDone} />
+      <ReconcileView documentId="d-1" statement={0} onDone={onDone} {...props} />
     </QueryClientProvider>,
   );
   return { api, onDone, state, user: userEvent.setup() };
@@ -307,6 +308,32 @@ describe("ReconcileView", () => {
     ).toEqual({ statement: 0 });
   });
 
+  it("does not offer to accept a statement that balances", async () => {
+    const { user } = setup();
+    const accept = await screen.findByRole("button", { name: "Accept as read" });
+    expect(accept).toBeEnabled();
+    const closing = screen.getByLabelText("Closing balance");
+    await user.clear(closing);
+    await user.type(closing, "422.50");
+    expect(screen.getByTestId("reconcile-difference")).toHaveTextContent("Balanced.");
+    // A statement that balances is confirmed, with its balance recorded.
+    expect(accept).toBeDisabled();
+  });
+
+  it("says in the question why an acceptance was refused", async () => {
+    const { onDone, user } = setup(statement(), {
+      "POST /api/v1/documents/:id/reconciliation/accept": () =>
+        problem(409, "statement-unavailable"),
+    });
+    await user.click(await screen.findByRole("button", { name: "Accept as read" }));
+    const dialog = screen.getByRole("dialog");
+    await user.click(within(dialog).getByRole("button", { name: "Accept as read" }));
+    expect(await within(dialog).findByRole("alert")).toHaveTextContent(
+      "detail of statement-unavailable",
+    );
+    expect(onDone).not.toHaveBeenCalled();
+  });
+
   it("finish later calls onDone without a request", async () => {
     const { api, onDone, user } = setup();
     await user.click(await screen.findByRole("button", { name: "Finish later" }));
@@ -369,10 +396,57 @@ describe("ReconcileView", () => {
     expect(await screen.findByTestId("region-box")).toBeInTheDocument();
   });
 
-  it("suggests teaching the layout after three rows were removed", async () => {
-    const { user } = setup(statement(), {
-      "DELETE /api/v1/transactions/:id": () => noContent(),
+  it("a cause's button goes to the row it names and shows its box on the page", async () => {
+    const { user } = setup();
+    const flagged = await tableRow("Closing balance");
+    expect(flagged).not.toHaveClass("reconcile__row--chosen");
+    expect(screen.queryByTestId("region-box")).toBeNull();
+    // jsdom has no layout: scrolling is stood in for, to see that it is asked.
+    const scrolled = vi.fn();
+    Element.prototype.scrollIntoView = scrolled;
+    try {
+      await user.click(screen.getByRole("button", { name: "Show the row" }));
+    } finally {
+      Reflect.deleteProperty(Element.prototype, "scrollIntoView");
+    }
+    expect(flagged).toHaveClass("reconcile__row--chosen");
+    expect(await tableRow("Tram pass")).not.toHaveClass("reconcile__row--chosen");
+    expect(scrolled).toHaveBeenCalledTimes(1);
+    expect(flagged).toHaveFocus();
+    expect(await screen.findByTestId("region-box")).toBeInTheDocument();
+  });
+
+  it("opens the statement still in doubt when none is named", async () => {
+    const settled = statement({
+      causes: [],
+      difference: "0.00",
+      status: "balanced",
+      verification: "reconciled",
     });
+    const doubted = statement({
+      statement: 1,
+      account_id: "a-2",
+      account_name: "Savings",
+    });
+    setup(
+      settled,
+      {
+        "GET /api/v1/documents/:id/reconciliation": () =>
+          json({ document_id: "d-1", statements: [settled, doubted] }),
+      },
+      { statement: null },
+    );
+    expect(await screen.findByText(/^Savings,/)).toBeVisible();
+    expect(screen.queryByText(/^Everyday,/)).toBeNull();
+  });
+
+  it("suggests teaching the layout after three rows were removed", async () => {
+    const onTeach = vi.fn();
+    const { user } = setup(
+      statement(),
+      { "DELETE /api/v1/transactions/:id": () => noContent() },
+      { onTeach },
+    );
     for (const name of ["Closing balance", "Tram pass", "Harbour Grocer"]) {
       const target = await tableRow(name);
       await user.click(within(target).getByRole("button", { name: /^Remove/ }));
@@ -387,6 +461,26 @@ describe("ReconcileView", () => {
         "PerFin read several rows of this layout wrongly. Teach it the layout so the next statement reads right.",
       ),
     ).toBeVisible();
+    // The hint names an action, so the action is offered beside it.
+    await user.click(screen.getByRole("button", { name: "Teach PerFin" }));
+    expect(onTeach).toHaveBeenCalledTimes(1);
+  });
+
+  it("offers no teach button where teaching cannot be opened", async () => {
+    const { user } = setup(statement(), {
+      "DELETE /api/v1/transactions/:id": () => noContent(),
+    });
+    for (const name of ["Closing balance", "Tram pass", "Harbour Grocer"]) {
+      const target = await tableRow(name);
+      await user.click(within(target).getByRole("button", { name: /^Remove/ }));
+      await waitFor(() => {
+        expect(
+          within(target).getByRole("button", { name: /^Remove/ }),
+        ).toBeEnabled();
+      });
+    }
+    await screen.findByText(/^PerFin read several rows of this layout wrongly/);
+    expect(screen.queryByRole("button", { name: "Teach PerFin" })).toBeNull();
   });
 
   it("a viewer sees the figures and no actions", async () => {
@@ -444,10 +538,38 @@ describe("ReconcileView", () => {
   });
 
   it("says how many lines were not read", async () => {
+    // No box is drawn for the lines, so the page is not said to mark them.
     setup(statement({ lines_skipped: 2 }));
+    expect(
+      await screen.findByText("2 lines of the statement were not read."),
+    ).toBeVisible();
+    expect(screen.queryByText(/marked on the page/)).toBeNull();
+  });
+
+  it("says the skipped lines are marked when their boxes are drawn", async () => {
+    setup(
+      statement({ lines_skipped: 2 }),
+      {},
+      {
+        regions: [
+          { page: 1, bbox: [40, 300, 500, 314], label: "skipped_line" },
+          { page: 1, bbox: [40, 320, 500, 334], label: "skipped_line" },
+        ],
+      },
+    );
     expect(
       await screen.findByText(
         "2 lines of the statement were not read. They are marked on the page.",
+      ),
+    ).toBeVisible();
+    expect(await screen.findAllByTestId("region-box")).toHaveLength(2);
+  });
+
+  it("says the total counts every row when only the first are listed", async () => {
+    setup(statement({ rows_truncated: true }));
+    expect(
+      await screen.findByText(
+        "Only the first rows are listed. The total counts every row.",
       ),
     ).toBeVisible();
   });

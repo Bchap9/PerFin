@@ -101,7 +101,9 @@ function toolsApi(detail: ReviewItem, extra: Record<string, Handler> = {}) {
         original_filename: "scan.pdf",
         mime_detected: "application/pdf",
       }),
-    "GET /api/v1/transactions/:id": () => json(tx("t-1")),
+    // A row a review item lists waits for its confirmation.
+    "GET /api/v1/transactions/:id": () =>
+      json(tx("t-1", { review_state: "pending" })),
     ...extra,
   });
 }
@@ -434,6 +436,17 @@ describe("review tools", () => {
     const day = within(editor).getByLabelText("Date");
     await user.clear(day);
     await user.type(day, "2026-06-05");
+    // The other line cannot be corrected here. Importing would leave it out
+    // for good, so nothing is sent until the person says so for that line.
+    expect(send).toBeDisabled();
+    expect(
+      screen.getByText(/1 line is neither corrected nor left out/),
+    ).toBeInTheDocument();
+    const leave = within(table).getAllByRole("checkbox", { name: /^Leave out the line of/ });
+    expect(leave).toHaveLength(2);
+    expect(leave[1]).not.toBeChecked();
+    await user.click(leave[1] ?? table);
+    expect(send).toBeEnabled();
     await user.click(send);
     await waitFor(() => {
       expect(
