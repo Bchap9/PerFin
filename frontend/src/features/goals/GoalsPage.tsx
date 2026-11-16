@@ -1,4 +1,10 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
+/**
+ * Plan > Goals: each goal with its progress bar, "On pace for <month year>"
+ * when there is a projection, and its contributions. New goal, edit,
+ * contribute, archive and delete show only to who may write; a viewer can
+ * still read the contributions.
+ */
 import { useQuery } from "@tanstack/react-query";
 import { useState } from "react";
 
@@ -11,10 +17,12 @@ import { EmptyState } from "../../components/EmptyState";
 import { Field } from "../../components/Field";
 import { Input } from "../../components/Input";
 import { MoneyText } from "../../components/MoneyText";
+import { ProgressBar } from "../../components/ProgressBar";
 import { Table, type TableColumn } from "../../components/Table";
-import { formatDate, todayIsoDate } from "../../lib/dates";
+import { formatDate, formatMonth, todayIsoDate } from "../../lib/dates";
 import { isDecimalString } from "../../lib/money";
 import { queryRoots } from "../../lib/queryKeys";
+import { useCanWrite } from "../accounts/api";
 import { useHouseholdCurrency } from "../planning/currency";
 import { ErrorLine, PlanningPage, QueryState } from "../planning/PlanningPage";
 import { useAccounts } from "../planning/queries";
@@ -32,6 +40,16 @@ import {
   type Goal,
 } from "./api";
 import { goalBarWidth, projectionText } from "./progress";
+
+/** "On pace for July 2027" while a goal is open and has a projected completion; otherwise null. */
+export function onPaceText(goal: Goal): string | null {
+  const projected = goal.progress.projected_completion;
+  if (goal.achieved_at !== null || projected === null) {
+    return null;
+  }
+  const month = formatMonth(projected, { style: "long" });
+  return month === null ? null : `On pace for ${month}`;
+}
 
 function GoalDialog({ goal, onClose }: { goal: Goal | null; onClose: () => void }) {
   const accounts = useAccounts();
@@ -115,7 +133,7 @@ function GoalDialog({ goal, onClose }: { goal: Goal | null; onClose: () => void 
   );
 }
 
-function ContributionsDialog({ goal, onClose }: { goal: Goal; onClose: () => void }) {
+function ContributionsDialog({ goal, canWrite, onClose }: { goal: Goal; canWrite: boolean; onClose: () => void }) {
   const query = useQuery({ queryKey: goalKeys.contributions(goal.id), queryFn: () => listContributions(goal.id) });
   const [amount, setAmount] = useState("");
   const [date, setDate] = useState(todayIsoDate());
@@ -131,60 +149,62 @@ function ContributionsDialog({ goal, onClose }: { goal: Goal; onClose: () => voi
     { id: "date", header: "Date", rowHeader: true, cell: (row) => formatDate(row.contributed_on) ?? row.contributed_on },
     { id: "amount", header: "Amount", align: "end", cell: (row) => <MoneyText amount={row.amount.amount} currency={row.amount.currency} tone="none" /> },
     { id: "memo", header: "Memo", cell: (row) => row.memo ?? "" },
-    {
-      id: "remove",
-      header: <span className="visually-hidden">Remove</span>,
-      align: "end",
-      cell: (row) => (
-        <Button size="sm" variant="danger" aria-label={`Remove contribution of ${row.amount.amount} on ${row.contributed_on}`} onClick={() => void remove.run(row.id)}>
-          Remove
-        </Button>
-      ),
-    },
   ];
+  const removeColumn: TableColumn<Contribution> = {
+    id: "remove",
+    header: <span className="visually-hidden">Remove</span>,
+    align: "end",
+    cell: (row) => (
+      <Button size="sm" variant="danger" aria-label={`Remove contribution of ${row.amount.amount} on ${row.contributed_on}`} onClick={() => void remove.run(row.id)}>
+        Remove
+      </Button>
+    ),
+  };
   return (
     <Dialog open onClose={onClose} size="lg" title={`Contributions to ${goal.name}`} footer={<Button onClick={onClose}>Close</Button>}>
       <div className="planning-form">
-        <form
-          className="planning-row"
-          aria-label="Add a contribution"
-          onSubmit={(event) => {
-            event.preventDefault();
-            if (!isDecimalString(amount) || amount.startsWith("-")) {
-              setProblem("Enter an amount of zero or more.");
-              return;
-            }
-            setProblem(null);
-            void add
-              .run({ amount: { amount, currency: goal.target.currency }, contributed_on: date, ...(memo.trim() === "" ? {} : { memo: memo.trim() }) })
-              .then((done) => {
-                if (done !== undefined) {
-                  setAmount("");
-                  setMemo("");
-                }
-              });
-          }}
-        >
-          <Field label={`Amount (${goal.target.currency})`}>
-            <Input inputMode="decimal" value={amount} onChange={(event) => { setAmount(event.target.value); }} />
-          </Field>
-          <Field label="Date">
-            <Input type="date" value={date} onChange={(event) => { setDate(event.target.value); }} />
-          </Field>
-          <Field label="Memo">
-            <Input value={memo} onChange={(event) => { setMemo(event.target.value); }} />
-          </Field>
-          <Button type="submit" variant="primary" loading={add.busy}>
-            Add contribution
-          </Button>
-        </form>
+        {canWrite ? (
+          <form
+            className="planning-row"
+            aria-label="Add a contribution"
+            onSubmit={(event) => {
+              event.preventDefault();
+              if (!isDecimalString(amount) || amount.startsWith("-")) {
+                setProblem("Enter an amount of zero or more.");
+                return;
+              }
+              setProblem(null);
+              void add
+                .run({ amount: { amount, currency: goal.target.currency }, contributed_on: date, ...(memo.trim() === "" ? {} : { memo: memo.trim() }) })
+                .then((done) => {
+                  if (done !== undefined) {
+                    setAmount("");
+                    setMemo("");
+                  }
+                });
+            }}
+          >
+            <Field label={`Amount (${goal.target.currency})`}>
+              <Input inputMode="decimal" value={amount} onChange={(event) => { setAmount(event.target.value); }} />
+            </Field>
+            <Field label="Date">
+              <Input type="date" value={date} onChange={(event) => { setDate(event.target.value); }} />
+            </Field>
+            <Field label="Memo">
+              <Input value={memo} onChange={(event) => { setMemo(event.target.value); }} />
+            </Field>
+            <Button type="submit" variant="primary" loading={add.busy}>
+              Add contribution
+            </Button>
+          </form>
+        ) : null}
         {problem === null ? null : <ErrorLine message={problem} />}
         <ErrorLine message={add.error ?? remove.error} />
         <QueryState loading={query.isPending} error={query.error} label="contributions">
           <Table
             caption="Contributions"
             captionHidden
-            columns={columns}
+            columns={canWrite ? [...columns, removeColumn] : columns}
             rows={query.data ?? []}
             rowKey={(row) => row.id}
             maxHeight="md"
@@ -196,13 +216,14 @@ function ContributionsDialog({ goal, onClose }: { goal: Goal; onClose: () => voi
   );
 }
 
-function GoalCard({ goal, onEdit, onContribute }: { goal: Goal; onEdit: () => void; onContribute: () => void }) {
+function GoalCard({ goal, canWrite, onEdit, onContribute }: { goal: Goal; canWrite: boolean; onEdit: () => void; onContribute: () => void }) {
   const [confirming, setConfirming] = useState(false);
   const invalidate = [queryRoots.goals, queryRoots.dashboard];
   const archive = useAction(() => updateGoal(goal.id, { archived: !goal.archived }), { invalidate, success: goal.archived ? "Goal restored" : "Goal archived" });
   const remove = useAction(() => deleteGoal(goal.id), { invalidate, success: "Goal deleted" });
   const width = goalBarWidth(goal);
   const { progress } = goal;
+  const onPace = onPaceText(goal);
   return (
     <Card
       title={goal.name}
@@ -221,9 +242,8 @@ function GoalCard({ goal, onEdit, onContribute }: { goal: Goal; onEdit: () => vo
           <MoneyText amount={goal.target.amount} currency={goal.target.currency} tone="none" />
           {" "}({progress.percent}%)
         </p>
-        <span className="bar" role="img" aria-label={`${goal.name}: ${String(Math.round(width))} percent complete`}>
-          <span className="bar__fill" style={{ width: `${String(width)}%` }} />
-        </span>
+        <ProgressBar value={width} max={100} label={`${goal.name}: ${String(Math.round(width))} percent complete`} />
+        {onPace === null ? null : <p>{onPace}</p>}
         <p className="muted">
           Remaining <MoneyText amount={progress.remaining.amount} currency={progress.remaining.currency} tone="none" />
           {goal.target_date === null ? "" : `, target ${formatDate(goal.target_date) ?? goal.target_date}`}
@@ -236,19 +256,23 @@ function GoalCard({ goal, onEdit, onContribute }: { goal: Goal; onEdit: () => vo
           <Button size="sm" onClick={onContribute} aria-label={`Contributions to ${goal.name}`}>
             Contributions
           </Button>
-          <Button size="sm" onClick={onEdit} aria-label={`Edit ${goal.name}`}>
-            Edit
-          </Button>
-          <Button size="sm" loading={archive.busy} onClick={() => void archive.run()} aria-label={`${goal.archived ? "Restore" : "Archive"} ${goal.name}`}>
-            {goal.archived ? "Restore" : "Archive"}
-          </Button>
-          <Button size="sm" variant="danger" onClick={() => { setConfirming(true); }} aria-label={`Delete ${goal.name}`}>
-            Delete
-          </Button>
+          {canWrite ? (
+            <>
+              <Button size="sm" onClick={onEdit} aria-label={`Edit ${goal.name}`}>
+                Edit
+              </Button>
+              <Button size="sm" loading={archive.busy} onClick={() => void archive.run()} aria-label={`${goal.archived ? "Restore" : "Archive"} ${goal.name}`}>
+                {goal.archived ? "Restore" : "Archive"}
+              </Button>
+              <Button size="sm" variant="danger" onClick={() => { setConfirming(true); }} aria-label={`Delete ${goal.name}`}>
+                Delete
+              </Button>
+            </>
+          ) : null}
         </div>
         <ErrorLine message={archive.error} />
       </div>
-      {confirming ? (
+      {canWrite && confirming ? (
         <Dialog
           open
           onClose={() => { setConfirming(false); }}
@@ -282,6 +306,7 @@ function GoalCard({ goal, onEdit, onContribute }: { goal: Goal; onEdit: () => vo
 
 export function GoalsPage() {
   const [archived, setArchived] = useState(false);
+  const canWrite = useCanWrite();
   const query = useQuery({ queryKey: goalKeys.list(archived), queryFn: () => listGoals(archived) });
   const [editing, setEditing] = useState<Goal | "new" | null>(null);
   const [contributing, setContributing] = useState<Goal | null>(null);
@@ -292,9 +317,11 @@ export function GoalsPage() {
       actions={
         <>
           <Checkbox label="Show archived" checked={archived} onChange={(event) => { setArchived(event.target.checked); }} />
-          <Button variant="primary" onClick={() => { setEditing("new"); }}>
-            New goal
-          </Button>
+          {canWrite ? (
+            <Button variant="primary" onClick={() => { setEditing("new"); }}>
+              New goal
+            </Button>
+          ) : null}
         </>
       }
     >
@@ -307,6 +334,7 @@ export function GoalsPage() {
               <GoalCard
                 key={goal.id}
                 goal={goal}
+                canWrite={canWrite}
                 onEdit={() => { setEditing(goal); }}
                 onContribute={() => { setContributing(goal); }}
               />
@@ -314,8 +342,8 @@ export function GoalsPage() {
           </div>
         )}
       </QueryState>
-      {editing === null ? null : <GoalDialog goal={editing === "new" ? null : editing} onClose={() => { setEditing(null); }} />}
-      {contributing === null ? null : <ContributionsDialog goal={contributing} onClose={() => { setContributing(null); }} />}
+      {editing === null || !canWrite ? null : <GoalDialog goal={editing === "new" ? null : editing} onClose={() => { setEditing(null); }} />}
+      {contributing === null ? null : <ContributionsDialog goal={contributing} canWrite={canWrite} onClose={() => { setContributing(null); }} />}
     </PlanningPage>
   );
 }

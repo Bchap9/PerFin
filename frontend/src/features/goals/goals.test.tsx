@@ -2,7 +2,8 @@
 import { screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 
-import { json, mockApi, renderApp } from "../auth/testing";
+import { expectNoAxeViolations } from "../../test/axe";
+import { authedSession, json, mockApi, renderApp } from "../auth/testing";
 import { ACCOUNT_CHECKING, money, ownerSession, referenceHandlers } from "../planning/testing";
 import type { Goal } from "./api";
 import { goalBarWidth, projectionText } from "./progress";
@@ -55,9 +56,10 @@ describe("goals page", () => {
       "GET /api/v1/goals": () => json({ items: [goal()], next_cursor: null }),
       "POST /api/v1/goals": () => json(goal(), 201),
     });
-    renderApp("/goals");
+    renderApp("/plan/goals");
     const user = userEvent.setup();
-    expect(await screen.findByRole("img", { name: "Emergency fund: 25 percent complete" })).toBeInTheDocument();
+    expect(await screen.findByRole("progressbar", { name: "Emergency fund: 25 percent complete" })).toBeInTheDocument();
+    expect(screen.getByText("On pace for July 2027")).toBeInTheDocument();
     expect(screen.getByText("Behind")).toBeInTheDocument();
     expect(screen.getByText(/after the Jun 1, 2027 target/)).toBeInTheDocument();
 
@@ -78,5 +80,50 @@ describe("goals page", () => {
       target_date: null,
       account_ids: [ACCOUNT_CHECKING],
     });
+  });
+
+  it("says nothing about pace when there is no projection", async () => {
+    mockApi({
+      ...ownerSession(),
+      ...referenceHandlers(),
+      "GET /api/v1/goals": () => json({ items: [goal({ projected_completion: null })], next_cursor: null }),
+    });
+    renderApp("/plan/goals");
+    expect(await screen.findByText(/Not enough history/)).toBeInTheDocument();
+    expect(screen.queryByText(/On pace for/)).toBeNull();
+  });
+
+  it("a viewer sees no New goal", async () => {
+    mockApi({
+      ...referenceHandlers(),
+      "GET /api/v1/auth/session": authedSession({ role: "viewer" }),
+      "GET /api/v1/goals": () => json({ items: [goal()], next_cursor: null }),
+      "GET /api/v1/goals/:id/contributions": () =>
+        json({ items: [{ id: "k-1", goal_id: "g-1", amount: money("100.00"), contributed_on: "2026-10-01", memo: null, created_at: STAMP }], next_cursor: null }),
+    });
+    renderApp("/plan/goals");
+    expect(await screen.findByRole("progressbar", { name: "Emergency fund: 25 percent complete" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "New goal" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Edit Emergency fund" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Archive Emergency fund" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Delete Emergency fund" })).toBeNull();
+    // The contributions stay readable; adding and removing them does not show.
+    const user = userEvent.setup();
+    await user.click(screen.getByRole("button", { name: "Contributions to Emergency fund" }));
+    const dialog = await screen.findByRole("dialog", { name: "Contributions to Emergency fund" });
+    expect(await within(dialog).findByText("$100.00")).toBeInTheDocument();
+    expect(within(dialog).queryByRole("button", { name: "Add contribution" })).toBeNull();
+    expect(within(dialog).queryByRole("button", { name: /^Remove contribution/ })).toBeNull();
+  });
+
+  it("has no axe violations", async () => {
+    mockApi({
+      ...ownerSession(),
+      ...referenceHandlers(),
+      "GET /api/v1/goals": () => json({ items: [goal()], next_cursor: null }),
+    });
+    const { container } = renderApp("/plan/goals");
+    await screen.findByRole("progressbar", { name: "Emergency fund: 25 percent complete" });
+    await expectNoAxeViolations(container);
   });
 });
