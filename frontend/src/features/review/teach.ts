@@ -417,6 +417,10 @@ export function warningText(code: string): string {
       return "The review item stays open: what was taught does not settle it yet.";
     case "note_without_words":
       return "A note held only figures, so it was not kept (notes keep no numbers).";
+    case "table_order_guessed":
+      return "Two tables have the same header and one of them is missing on a page, so which rows are money in and which are money out is a guess. The statement waits in Review.";
+    case "date_order_guessed":
+      return "The dates could be read day first or month first; PerFin chose one. Check the dates of the rows.";
     default:
       return code;
   }

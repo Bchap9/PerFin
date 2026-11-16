@@ -201,7 +201,7 @@ describe("teach helpers", () => {
     };
     expect(problems([ready])).toEqual([]);
     const body = teachBody([ready], {
-      institutionName: " Quill Society ",
+      institutionName: " Finch Society ",
       remember: true,
       reprocessSimilar: false,
       itemId: null,
@@ -229,7 +229,7 @@ describe("teach helpers", () => {
       replace: false,
       resolve: false,
       preview: false,
-      institution_name: "Quill Society",
+      institution_name: "Finch Society",
     });
   });
 
@@ -458,7 +458,7 @@ describe("teach dialog", () => {
     const user = userEvent.setup();
     await user.click(await screen.findByRole("button", { name: "Teach PerFin" }));
     const dialog = await screen.findByRole("dialog", { name: "Teach PerFin" });
-    await user.type(within(dialog).getByLabelText("Institution"), "Quill Society");
+    await user.type(within(dialog).getByLabelText("Institution"), "Finch Society");
     expect(within(dialog).queryByLabelText(/Replace the layout remembered/)).toBeNull();
     await user.click(within(dialog).getByLabelText("Remember this layout for the next files"));
     expect(within(dialog).getByLabelText(/Replace the layout remembered/)).not.toBeChecked();
@@ -498,7 +498,7 @@ describe("teach dialog", () => {
     const user = userEvent.setup();
     await user.click(await screen.findByRole("button", { name: "Teach PerFin" }));
     const dialog = await screen.findByRole("dialog", { name: "Teach PerFin" });
-    await user.type(within(dialog).getByLabelText("Institution"), "Quill Society");
+    await user.type(within(dialog).getByLabelText("Institution"), "Finch Society");
     await user.click(within(dialog).getByLabelText("Remember this layout for the next files"));
     expect(within(dialog).getByText(/drop earlier lines, notes or labels taught by mistake/)).toBeInTheDocument();
     await user.click(within(dialog).getByLabelText(/Replace the layout remembered/));
@@ -839,6 +839,13 @@ describe("teach dialog", () => {
     expect(keptText(["account_number", "table:holdings"])).toBe("account number, the holdings table");
     expect(warningText("item_left_open")).toMatch(/stays open/);
     expect(warningText("note_without_words")).toMatch(/no numbers/);
+    // What the reader itself was unsure of is said in words, not as a code.
+    expect(warningText("table_order_guessed")).toBe(
+      "Two tables have the same header and one of them is missing on a page, so which rows are money in and which are money out is a guess. The statement waits in Review.",
+    );
+    expect(warningText("date_order_guessed")).toBe(
+      "The dates could be read day first or month first; PerFin chose one. Check the dates of the rows.",
+    );
   });
 
   it("enters the cost basis of an opening position", async () => {
