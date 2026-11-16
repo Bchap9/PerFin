@@ -1185,13 +1185,18 @@ def queue_apply(
     Internal: for a member who just made that rule
     (``app.domain.rules.merchant``), so without :func:`request_apply`'s admin
     check. The caller passes accounts the member may edit, at least one (an
-    empty scope would mean every account) and at most ``IDS_MAX``.
+    empty scope would mean every account) and at most ``IDS_MAX``. The job
+    is queued with ``guesses_only``: it changes what the rule's preview
+    counted as uncategorised and guessed, and nothing else.
     """
     household_id = _household(principal, HouseholdRole.MEMBER)
     if not account_ids:
         raise ValueError("queue_apply needs at least one account")
     payload = RunRulesJob(
-        rule_ids=[rule_id], account_ids=list(account_ids), requested_by=principal.user_id
+        rule_ids=[rule_id],
+        account_ids=list(account_ids),
+        requested_by=principal.user_id,
+        guesses_only=True,
     )
     return _queue(db, principal, household_id, payload, request=request)
 
@@ -1219,19 +1224,6 @@ def _queue(
     return job_id
 
 
-def _merchant_rules_only(
-    db: Session, household_id: uuid.UUID, rule_ids: Sequence[uuid.UUID] | None
-) -> frozenset[uuid.UUID] | None:
-    """``rule_ids`` when the job names rules and every one is a merchant rule, else ``None``."""
-    if not rule_ids:
-        return None
-    wanted = frozenset(rule_ids)
-    named = [rule for rule in rules_repo.list_rules(db, household_id) if rule.id in wanted]
-    if not named or not all(is_merchant_rule(rule) for rule in named):
-        return None
-    return wanted
-
-
 def run_rules(
     db: Session,
     household_id: uuid.UUID,
@@ -1248,14 +1240,15 @@ def run_rules(
     changed; every other field of such a row, and every other row, is the
     rules' to write as before.
 
-    A job that names only merchant rules (what "apply to existing" queues
-    when one is made from a row, :func:`queue_apply`) is narrower: it
-    categorises undecided rows, guesses and what those rules set earlier,
-    and leaves every category somebody decided (:func:`_is_decided`), which
-    is what the merchant rule's preview promised.
+    A job queued with ``guesses_only`` (what "apply to existing" queues when
+    a merchant rule is made from a row, :func:`queue_apply`) is narrower: it
+    categorises undecided rows, guesses and what its rules set earlier, and
+    leaves every category somebody decided (:func:`_is_decided`), which is
+    what the merchant rule's preview promised. Nothing is inferred from the
+    rules a job names.
     """
     summary = ApplySummary()
-    guesses_only = _merchant_rules_only(db, household_id, payload.rule_ids)
+    guesses_only = frozenset(payload.rule_ids or ()) if payload.guesses_only else None
     rules = compiled_rules(
         db, household_id, rule_ids=set(payload.rule_ids) if payload.rule_ids else None
     )

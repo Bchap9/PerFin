@@ -470,6 +470,10 @@ def test_create_with_apply_changes_undecided_and_guessed_rows_and_never_a_person
     assert payload.rule_ids == [rule_id]
     assert payload.account_ids == [mine.id]
     assert payload.requested_by == member.user.id
+    # The narrower job is asked for in so many words, and the audit row says so.
+    assert payload.guesses_only is True
+    assert requested.after is not None
+    assert requested.after["guesses_only"] is True
 
     for row in changes:
         after = _row(factories, hh, row.id)
@@ -497,6 +501,62 @@ def test_create_with_apply_changes_undecided_and_guessed_rows_and_never_a_person
         stays[6].id,
     }
     assert [_state(factories, hh, r.id) for r in stays[:2]] == before[:2]
+
+
+def test_an_admin_apply_naming_only_the_merchant_rule_is_the_general_job(
+    actors: Actors, factories: Factories, ledger: LedgerFactories
+) -> None:
+    """``POST /rules/apply`` means the same whichever rules it names."""
+    owner = actors.new(role="owner")
+    hh = _hid(owner)
+    account = ledger.account(hh)
+    target = ledger.category(hh, name="Groceries")
+    other = ledger.category(hh, name="Eating out")
+    old_rule = ledger.rule(
+        hh,
+        conditions={"type": "payee", "op": "contains", "value": "no such descriptor"},
+        actions=[{"type": "set_category", "category_id": str(other.id)}],
+    )
+    source = _grocer(ledger, account)
+    changes = [
+        _grocer(ledger, account, category=other, category_source="legacy"),
+        _grocer(ledger, account, category=other, category_source="file"),
+        _grocer(ledger, account, category=other, category_source="payee"),
+        _grocer(
+            ledger, account, category=other, category_source="rule", category_rule_id=old_rule.id
+        ),
+        _grocer(ledger, account, category=other, category_source="dictionary"),
+        _grocer(ledger, account),
+    ]
+    stays = [
+        _grocer(ledger, account, category=other, category_source="person"),
+        _grocer(ledger, account, category_source="person"),  # cleared by a person
+    ]
+    before = [_state(factories, hh, r.id) for r in stays]
+    made = _ok(owner.post(MERCHANT, json=_body(source, target)), 201)
+    rule_id = uuid.UUID(made["rule"]["id"])
+
+    accepted = owner.post(f"{RULES}/apply", json={"rule_ids": [str(rule_id)]})
+    assert accepted.status_code == 202, accepted.text
+    payload = _run_job(factories, hh, accepted.json()["job_id"])
+    assert payload.rule_ids == [rule_id]
+    # A rule job on request decides what a file, a payee, another rule or an
+    # earlier release decided, as it does for any other rule...
+    for row in changes:
+        assert _provenance(_row(factories, hh, row.id)) == (
+            target.id,
+            "rule",
+            rule_id,
+            Decimal("1.0000"),
+        )
+    # ... and never what a person did.
+    assert [_state(factories, hh, r.id) for r in stays] == before
+    assert _provenance(_row(factories, hh, source.id))[:2] == (target.id, "person")
+    # Nothing about the rule's shape made the job narrower, and the audit row says so.
+    assert payload.guesses_only is False
+    [requested] = household_audit(factories, hh, "rule.apply_requested")
+    assert requested.after is not None
+    assert requested.after["guesses_only"] is False
 
 
 def test_a_second_create_for_the_key_replaces_the_category(

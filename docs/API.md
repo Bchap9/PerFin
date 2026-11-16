@@ -1219,11 +1219,12 @@ count towards the 500. Unlike every other rule write they need only
   category or stops the run before the merchant rule is reached. The row
   it was made from becomes the person's own choice when the caller may
   edit it. With `apply_to_existing`, `job_id` is a `run_rules` job for
-  that one rule over the editable accounts that hold the merchant; a job
-  that names only merchant rules changes undecided rows, guesses and what
-  those rules set themselves, and leaves every category a person, a file,
-  a payee default, an earlier release or another rule decided, so it
-  changes what the preview counted. Audit `rule.create` or `rule.update`,
+  that one rule over the editable accounts that hold the merchant, queued
+  with `guesses_only` in its payload: it changes undecided rows, guesses
+  and what the rule set itself, and leaves every category a person, a
+  file, a payee default, an earlier release or another rule decided, so
+  it changes what the preview counted. (The same rule named in `POST
+  /rules/apply` is applied as any other rule.) Audit `rule.create` or `rule.update`,
   without the rule's name (it holds the merchant's).
 - `POST /rules/{id}/revert` answers `{"rule_id", "reverted", "job_id"}`:
   the rows whose `category_rule_id` is the rule go back to undecided

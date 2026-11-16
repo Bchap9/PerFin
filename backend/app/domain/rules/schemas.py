@@ -526,10 +526,19 @@ class RuleApply(_Scope):
 
 
 class RunRulesJob(_Scope):
-    """Payload of :data:`RUN_RULES_JOB_TYPE` (ids and dates only)."""
+    """Payload of :data:`RUN_RULES_JOB_TYPE` (ids and dates only).
+
+    ``guesses_only`` asks for the narrower job in so many words: only
+    undecided rows, guesses and what the named rules set themselves are
+    categorised, and every category somebody decided stays. Only "apply to
+    existing" of a merchant rule made from a row sets it (that is what its
+    preview promised); ``POST /rules/apply`` never does, whatever rules it
+    names.
+    """
 
     rule_ids: Ids | None = None
     requested_by: uuid.UUID | None = None
+    guesses_only: bool = False
 
 
 class MerchantRulePreviewIn(_In):
