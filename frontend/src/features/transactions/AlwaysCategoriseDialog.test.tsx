@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-/** "Always categorise <merchant> as...": from the row menu, and offered after a correction in the grid. */
+/** "Always categorise <merchant> as...": from the row menu, and offered after a suggestion is accepted in the grid. */
 import { cleanup, screen, waitFor, within } from "@testing-library/react";
 import userEvent, { type UserEvent } from "@testing-library/user-event";
 
@@ -270,21 +270,27 @@ describe("Always categorise a merchant, from the row", () => {
   });
 });
 
-describe("Offering the rule after a correction in the grid", () => {
-  const UNSET = tx("t-1", { ...MERCHANT, category_id: null });
+describe("Offering the rule after a suggestion is accepted in the grid", () => {
+  // Stage 2 offered it after a change in the grid's inline category select, which is gone (plan Task 10); Accept is what is left in the grid.
+  const UNSET = tx("t-1", { ...MERCHANT, category_id: null, suggested_category_id: "c-1", category_source: "dictionary", category_confidence: "0.60" });
   const PROMPT = /from now on\?/;
+  const ACCEPT = "Accept the suggestion for SQ *QUIET BEAN COFFEE 0042";
 
   function grid(body: MerchantRulePreview, rows = [UNSET]) {
     const api = setup(body, rows);
-    api.on("PATCH /api/v1/transactions/:id", (call) => json(tx("t-1", { ...MERCHANT, ...(call.body as object), category_source: "person" })));
+    api.on("POST /api/v1/transactions/bulk", (call) => {
+      const ids = (call.body as { ids: string[] }).ids;
+      return json({ action: "accept_suggestions", changed: ids.length, results: ids.map((id) => ({ id, result: "updated" })) });
+    });
     return api;
   }
 
-  it('changing a category offers the rule once and "Not now" hides it', async () => {
-    const api = grid(preview({ uncategorised: 3, guessed: 0, decided: 1, same_category: 1 }));
+  it('accepting a suggestion offers the rule once and "Not now" hides it', async () => {
+    const again = tx("t-4", { ...MERCHANT, raw_payee: "SQ *QUIET BEAN COFFEE 0099", category_id: null, suggested_category_id: "c-1" });
+    const api = grid(preview({ uncategorised: 3, guessed: 0, decided: 1, same_category: 1 }), [UNSET, again]);
     renderApp("/transactions");
     const user = userEvent.setup();
-    await user.selectOptions(await screen.findByLabelText("Category of SQ *QUIET BEAN COFFEE 0042"), "c-1");
+    await user.click(await screen.findByRole("button", { name: ACCEPT }));
     const prompt = await screen.findByRole("group", { name: "Make it a rule?" });
     expect(within(prompt).getByText("Use Groceries for Quiet Bean Coffee from now on? 3 other transactions have no category yet.")).toBeInTheDocument();
     expect(screen.getAllByText(PROMPT)).toHaveLength(1);
@@ -300,9 +306,9 @@ describe("Offering the rule after a correction in the grid", () => {
     expect(screen.queryByText(PROMPT)).not.toBeInTheDocument();
     // Not asked again for this merchant: no prompt, and the server is not even asked.
     const asked = api.callsTo("POST", "/api/v1/rules/merchant/preview").length;
-    await user.selectOptions(screen.getByLabelText("Category of SQ *QUIET BEAN COFFEE 0042"), "c-2");
+    await user.click(screen.getByRole("button", { name: "Accept the suggestion for SQ *QUIET BEAN COFFEE 0099" }));
     await waitFor(() => {
-      expect(api.callsTo("PATCH", "/api/v1/transactions/t-1")).toHaveLength(2);
+      expect(api.callsTo("POST", "/api/v1/transactions/bulk")).toHaveLength(2);
     });
     await waitFor(() => {
       expect(api.callsTo("GET", "/api/v1/transactions").length).toBeGreaterThan(2);
@@ -315,7 +321,7 @@ describe("Offering the rule after a correction in the grid", () => {
     grid(preview({ uncategorised: 0, guessed: 1, decided: 0, same_category: 1 }));
     renderApp("/transactions");
     const user = userEvent.setup();
-    await user.selectOptions(await screen.findByLabelText("Category of SQ *QUIET BEAN COFFEE 0042"), "c-1");
+    await user.click(await screen.findByRole("button", { name: ACCEPT }));
     expect(await screen.findByText("Use Groceries for Quiet Bean Coffee from now on? 1 other transaction has a different guess.")).toBeInTheDocument();
   });
 
@@ -331,7 +337,7 @@ describe("Offering the rule after a correction in the grid", () => {
       const api = grid(body);
       renderApp("/transactions");
       const user = userEvent.setup();
-      await user.selectOptions(await screen.findByLabelText("Category of SQ *QUIET BEAN COFFEE 0042"), "c-1");
+      await user.click(await screen.findByRole("button", { name: ACCEPT }));
       await waitFor(() => {
         expect(api.callsTo("POST", "/api/v1/rules/merchant/preview")).not.toHaveLength(0);
       });
@@ -343,17 +349,15 @@ describe("Offering the rule after a correction in the grid", () => {
     }
   });
 
-  it("no prompt for a cleared category or a row without a merchant", async () => {
+  it("no prompt for a row without a merchant", async () => {
     const api = grid(preview({ uncategorised: 3 }), [
-      tx("t-1", { ...MERCHANT, category_id: "c-1" }),
-      tx("t-2", { raw_payee: "CHECK 1042", payee_id: null, merchant_key: null, merchant: null, category_id: null }),
+      tx("t-2", { raw_payee: "CHECK 1042", payee_id: null, merchant_key: null, merchant: null, category_id: null, suggested_category_id: "c-1" }),
     ]);
     renderApp("/transactions");
     const user = userEvent.setup();
-    await user.selectOptions(await screen.findByLabelText("Category of SQ *QUIET BEAN COFFEE 0042"), "");
-    await user.selectOptions(screen.getByLabelText("Category of CHECK 1042"), "c-1");
+    await user.click(await screen.findByRole("button", { name: "Accept the suggestion for CHECK 1042" }));
     await waitFor(() => {
-      expect(api.callsTo("PATCH", "/api/v1/transactions/:id")).toHaveLength(2);
+      expect(api.callsTo("POST", "/api/v1/transactions/bulk")).toHaveLength(1);
     });
     await waitFor(() => {
       expect(api.callsTo("GET", "/api/v1/transactions").length).toBeGreaterThan(1);

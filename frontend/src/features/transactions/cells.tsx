@@ -1,26 +1,27 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-/** Inline-edit cells of the transactions grid. Each commit goes through `useEditTransaction` (optimistic, rolled back on failure). */
+/**
+ * Cells of the transactions grid. A category is a chip that says who or what
+ * decided it; a suggestion is a question with Accept, never a chip. The
+ * merchant cell keeps the bank's own wording beside the name, and the row's
+ * state, tags and note. Changing a category happens in the drawer or with
+ * the bulk bar, not in the grid.
+ */
 import "./transactions.css";
 
-import { useState } from "react";
+import { useId, useState } from "react";
 
 import { Button } from "../../components/Button";
-import { CategoryPicker } from "../../components/CategoryPicker";
-import { Checkbox } from "../../components/Checkbox";
+import { Chip } from "../../components/Chip";
+import { Dialog } from "../../components/Dialog";
+import { Field } from "../../components/Field";
 import { Input } from "../../components/Input";
-import { Select } from "../../components/Select";
-import type { Category, Payee, Tag, Transaction } from "./api";
+import { categoryColourClass } from "../../lib/categoryColour";
+import { merchantName, type Category, type Payee, type Tag, type Transaction } from "./api";
 import { useAcceptSuggestion, useEditTransaction } from "./optimistic";
 import { confidenceText, isGuess, isSuggestion, sourceLabel } from "./provenance";
 
 export function rowLabel(row: Transaction, payees: readonly Payee[]): string {
   return payees.find((payee) => payee.id === row.payee_id)?.name ?? row.raw_payee ?? "transaction";
-}
-
-interface CellProps {
-  row: Transaction;
-  editable: boolean;
-  label: string;
 }
 
 /** The small line under a category: who or what decided, and how sure a guess is. */
@@ -52,50 +53,32 @@ export function CategoryCell({
   categories,
   ruleNames,
   onCategorised,
-}: CellProps & {
+}: {
+  row: Transaction;
+  editable: boolean;
+  label: string;
   categories: readonly Category[];
   ruleNames?: ReadonlyMap<string, string> | undefined;
-  /** The server accepted a category the person chose for this row here (not a clearing). */
+  /** The server accepted the suggestion for this row (the category is the person's now). */
   onCategorised?: ((row: Transaction, categoryId: string) => void) | undefined;
 }) {
-  const edit = useEditTransaction();
   const accept = useAcceptSuggestion();
   if (row.splits.length > 0) {
-    return <span>Split ({row.splits.length})</span>;
+    return (
+      <span className="cat-cell">
+        <Chip>Split ({row.splits.length})</Chip>
+      </span>
+    );
   }
-  const name = categories.find((category) => category.id === row.category_id)?.name;
+  const why = <Why row={row} ruleNames={ruleNames} />;
   // A suggestion whose category is not in the list cannot be offered by name.
   const suggested = isSuggestion(row) ? categories.find((category) => category.id === row.suggested_category_id)?.name : undefined;
-  const why = <Why row={row} ruleNames={ruleNames} />;
-  const picker = (placeholder?: string) => (
-    <span className="cell-edit">
-      <CategoryPicker
-        aria-label={`Category of ${label}`}
-        categories={categories}
-        {...(placeholder === undefined ? {} : { placeholder })}
-        value={row.category_id ?? ""}
-        onChange={(event) => {
-          const chosen = event.target.value;
-          edit.mutate(
-            { id: row.id, patch: { category_id: chosen === "" ? null : chosen } },
-            {
-              onSuccess: () => {
-                if (chosen !== "") {
-                  onCategorised?.(row, chosen);
-                }
-              },
-            },
-          );
-        }}
-      />
-    </span>
-  );
   if (suggested !== undefined) {
     return (
       <span className="cat-cell">
-        <span className="cat-cell__suggestion">{suggested}?</span>
-        {editable ? (
-          <span className="cat-cell__choice">
+        <span className="cat-cell__choice">
+          <span className="cat-cell__suggestion">{suggested}?</span>
+          {editable ? (
             <Button
               size="sm"
               aria-label={`Accept the suggestion for ${label}`}
@@ -113,16 +96,20 @@ export function CategoryCell({
             >
               Accept
             </Button>
-            {picker("Choose another")}
-          </span>
-        ) : null}
+          ) : null}
+        </span>
         {why}
       </span>
     );
   }
+  const name = categories.find((category) => category.id === row.category_id)?.name;
   return (
     <span className="cat-cell">
-      {editable ? picker() : <span>{name ?? "Uncategorised"}</span>}
+      {row.category_id === null || name === undefined ? (
+        <span className="cat-cell__none">Uncategorised</span>
+      ) : (
+        <Chip colourClass={categoryColourClass(row.category_id, categories)}>{name}</Chip>
+      )}
       {why}
     </span>
   );
@@ -131,112 +118,107 @@ export function CategoryCell({
 const same = (a: string | null | undefined, b: string | null | undefined): boolean =>
   (a ?? "").trim().toLowerCase() === (b ?? "").trim().toLowerCase();
 
-/**
- * The payee, the merchant PerFin recognised (when that says more than the
- * payee or the descriptor already do) and, always, the bank's own wording.
- */
-export function PayeeCell({ row, editable, label, payees }: CellProps & { payees: readonly Payee[] }) {
-  const edit = useEditTransaction();
-  const payee = payees.find((item) => item.id === row.payee_id)?.name;
+/** The name a row goes by: its payee, else the merchant PerFin recognised, else the bank's wording. */
+export function displayName(row: Transaction, payees: readonly Payee[]): string | null {
+  const payee = payees.find((item) => item.id === row.payee_id)?.name ?? null;
   const raw = (row.raw_payee ?? "").trim() === "" ? null : row.raw_payee;
-  const merchant = (row.merchant ?? "").trim() === "" || same(row.merchant, raw) || same(row.merchant, payee) ? null : row.merchant;
-  // Read-only, a row without a payee is headed by its merchant or else its descriptor, said once.
-  const heading = payee ?? (merchant === null ? raw : null);
+  return payee ?? merchantName(row) ?? raw;
+}
+
+/**
+ * The merchant: the payee, else the merchant PerFin recognised, else the
+ * bank's wording. Under it the recognised merchant when it says more, the
+ * bank's own wording whenever it differs, the row's state, its tags and its
+ * note.
+ */
+export function MerchantCell({ row, payees, tags }: { row: Transaction; payees: readonly Payee[]; tags: readonly Tag[] }) {
+  const raw = (row.raw_payee ?? "").trim() === "" ? null : row.raw_payee;
+  const recognised = merchantName(row);
+  const name = displayName(row, payees);
+  const merchant = recognised !== null && name !== recognised && !same(recognised, raw) ? recognised : null;
+  const tagNames = row.tag_ids.map((id) => tags.find((tag) => tag.id === id)?.name).filter((tag): tag is string => tag !== undefined);
+  const notes = (row.notes ?? "").trim();
+  const pending = row.status === "pending";
+  const review = row.review_state === "pending";
+  const transfer = row.transfer !== null;
   return (
-    <span className="payee-cell">
-      {editable ? (
-        <span className="cell-edit">
-          <Select
-            aria-label={`Payee of ${label}`}
-            placeholder="No payee"
-            options={payees.map((item) => ({ value: item.id, label: item.name }))}
-            value={row.payee_id ?? ""}
-            onChange={(event) => {
-              edit.mutate({ id: row.id, patch: { payee_id: event.target.value === "" ? null : event.target.value } });
-            }}
-          />
+    <span className="tx-merchant">
+      <span className="tx-merchant__name">{name ?? "-"}</span>
+      {merchant === null ? null : <span className="tx-merchant__recognised">{merchant}</span>}
+      {raw === null || same(raw, name) ? null : <span className="tx-merchant__raw">{raw}</span>}
+      {pending || review || transfer ? (
+        <span className="tx-merchant__marks">
+          {pending ? <Chip tone="warn">Pending</Chip> : null}
+          {review ? <Chip tone="info">Needs review</Chip> : null}
+          {transfer ? <Chip>Transfer</Chip> : null}
         </span>
-      ) : heading === null ? null : (
-        <span>{heading}</span>
+      ) : null}
+      {tagNames.length === 0 ? null : (
+        <span className="tx-merchant__tags">
+          <span className="visually-hidden">Tags: </span>
+          {tagNames.map((tag) => (
+            <span key={tag} className="tx-merchant__tag">
+              {tag}
+            </span>
+          ))}
+        </span>
       )}
-      {merchant === null ? null : <span className="payee-cell__merchant">{merchant}</span>}
-      {raw === null || (!editable && heading === raw) ? null : <span className="payee-cell__raw">{raw}</span>}
-      {!editable && heading === null && merchant === null && raw === null ? <span>-</span> : null}
+      {notes === "" ? null : (
+        <span className="tx-merchant__note">
+          <span className="visually-hidden">Note: </span>
+          {notes}
+        </span>
+      )}
     </span>
   );
 }
 
-export function TagsCell({ row, editable, label, tags }: CellProps & { tags: readonly Tag[] }) {
+/** The note of one row, edited in a small dialog from the row menu. Saved optimistically, rolled back on failure. */
+export function NoteDialog({ row, label, onClose }: { row: Transaction; label: string; onClose: () => void }) {
   const edit = useEditTransaction();
-  const names = row.tag_ids.map((id) => tags.find((tag) => tag.id === id)?.name).filter((name): name is string => name !== undefined);
-  if (!editable) {
-    return <span>{names.join(", ") || "-"}</span>;
-  }
-  return (
-    <details className="cell-edit">
-      <summary aria-label={`Tags of ${label}`}>{names.join(", ") || "Add tags"}</summary>
-      <div className="tag-picker">
-        {tags.map((tag) => (
-          <Checkbox
-            key={tag.id}
-            label={tag.name}
-            checked={row.tag_ids.includes(tag.id)}
-            onChange={(event) => {
-              const next = event.target.checked ? [...row.tag_ids, tag.id] : row.tag_ids.filter((id) => id !== tag.id);
-              edit.mutate({ id: row.id, patch: { tag_ids: next } });
-            }}
-          />
-        ))}
-        {tags.length === 0 ? <span>No tags yet.</span> : null}
-      </div>
-    </details>
-  );
-}
-
-export function NotesCell({ row, editable, label }: CellProps) {
-  const edit = useEditTransaction();
-  const [draft, setDraft] = useState<string | null>(null);
-  if (!editable) {
-    return <span>{row.notes ?? ""}</span>;
-  }
-  if (draft === null) {
-    return (
-      <button
-        type="button"
-        className="cell-text-button"
-        aria-label={`Edit notes of ${label}`}
-        onClick={() => {
-          setDraft(row.notes ?? "");
-        }}
-      >
-        {row.notes === null || row.notes === "" ? "Add note" : row.notes}
-      </button>
-    );
-  }
-  const commit = (): void => {
+  const formId = useId();
+  const [draft, setDraft] = useState(row.notes ?? "");
+  const save = (): void => {
     const value = draft.trim();
-    setDraft(null);
     if (value !== (row.notes ?? "")) {
       edit.mutate({ id: row.id, patch: { notes: value === "" ? null : value } });
     }
+    onClose();
   };
   return (
-    <Input
-      autoFocus
-      aria-label={`Notes of ${label}`}
-      value={draft}
-      maxLength={2000}
-      onChange={(event) => {
-        setDraft(event.target.value);
-      }}
-      onBlur={commit}
-      onKeyDown={(event) => {
-        if (event.key === "Enter") {
-          commit();
-        } else if (event.key === "Escape") {
-          setDraft(null);
-        }
-      }}
-    />
+    <Dialog
+      open
+      onClose={onClose}
+      title={`Note on ${label}`}
+      size="sm"
+      footer={
+        <>
+          <Button variant="ghost" onClick={onClose}>
+            Cancel
+          </Button>
+          <Button variant="primary" type="submit" form={formId}>
+            Save note
+          </Button>
+        </>
+      }
+    >
+      <form
+        id={formId}
+        onSubmit={(event) => {
+          event.preventDefault();
+          save();
+        }}
+      >
+        <Field label="Note">
+          <Input
+            value={draft}
+            maxLength={2000}
+            onChange={(event) => {
+              setDraft(event.target.value);
+            }}
+          />
+        </Field>
+      </form>
+    </Dialog>
   );
 }
