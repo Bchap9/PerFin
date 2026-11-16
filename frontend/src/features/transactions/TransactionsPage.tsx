@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import "../accounts/ledger.css";
+import "./transactions.css";
 
 import { useInfiniteQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { Link, useSearch } from "@tanstack/react-router";
@@ -27,6 +28,8 @@ import {
   listTransactions,
   txKeys,
   useCategories,
+  useCategorisationSummary,
+  useRuleNames,
   usePayees,
   useTags,
   type ReviewState,
@@ -38,6 +41,7 @@ import { BulkBar } from "./BulkBar";
 import { CategoryCell, NotesCell, PayeeCell, rowLabel, TagsCell } from "./cells";
 import { DeleteTransactionDialog } from "./DeleteTransactionDialog";
 import { useEditTransaction } from "./optimistic";
+import { isSuggestion } from "./provenance";
 import { RememberCategoryDialog } from "./RememberCategoryDialog";
 import { RowActions, type RowAction } from "./RowActions";
 import { SplitEditor } from "./SplitEditor";
@@ -58,7 +62,7 @@ function initialFilters(search: Record<string, unknown>): TransactionFilters {
   // A link from a report, an account page or a document narrows the list:
   // `account`, `category` (an id, or "none"), `date_from`, `date_to` and
   // `document` (the file the rows were imported from), named like the filters
-  // of GET /transactions.
+  // of GET /transactions. `suggested=true` shows only the rows with a suggestion.
   const given = new Map(Object.entries(search));
   const text = (key: string): string => {
     const value = given.get(key);
@@ -72,6 +76,7 @@ function initialFilters(search: Record<string, unknown>): TransactionFilters {
     dateFrom: day("date_from"),
     dateTo: day("date_to"),
     document: text("document"),
+    suggested: given.get("suggested") === true || text("suggested") === "true",
   };
 }
 
@@ -116,6 +121,8 @@ export function TransactionsPage() {
     getNextPageParam: (last) => last.next_cursor,
   });
   const rows = useMemo(() => query.data?.pages.flatMap((page) => page.items) ?? [], [query.data]);
+  const summary = useCategorisationSummary();
+  const ruleNames = useRuleNames(rows.some((row) => row.category_source === "rule" && row.category_rule_id != null));
   const accountsById = useMemo(() => new Map((accounts.data ?? []).map((account) => [account.id, account])), [accounts.data]);
   const accountLabelOf = (id: string): string | undefined => {
     const account = accountsById.get(id);
@@ -145,6 +152,21 @@ export function TransactionsPage() {
     setFilters((current) => ({ ...current, document: "" }));
     setSelected(new Set());
   };
+
+  // The two quick filters apply at once and leave the rest of the form as it is.
+  const toggleSuggested = (): void => {
+    const next = !filters.suggested;
+    setDraft((current) => ({ ...current, suggested: next }));
+    setFilters((current) => ({ ...current, suggested: next }));
+    setSelected(new Set());
+  };
+  const toggleUncategorised = (): void => {
+    const next = filters.category === "none" ? "" : "none";
+    setDraft((current) => ({ ...current, category: next }));
+    setFilters((current) => ({ ...current, category: next }));
+    setSelected(new Set());
+  };
+  const counted = (label: string, count: number | undefined): string => (count === undefined ? label : `${label} (${String(count)})`);
 
   const editable = (row: Transaction): boolean => canWrite && accountsById.get(row.account_id)?.can_edit === true;
   const selectableRows = rows.filter(editable);
@@ -267,7 +289,9 @@ export function TransactionsPage() {
     {
       id: "category",
       header: "Category",
-      cell: (row) => <CategoryCell row={row} editable={editable(row)} label={rowLabel(row, payeeList)} categories={categoryList} />,
+      cell: (row) => (
+        <CategoryCell row={row} editable={editable(row)} label={rowLabel(row, payeeList)} categories={categoryList} ruleNames={ruleNames} />
+      ),
     },
     {
       id: "tags",
@@ -439,9 +463,18 @@ export function TransactionsPage() {
           </Button>
         </p>
       )}
+      <div className="tx-quick-filters" role="group" aria-label="Quick filters">
+        <Button size="sm" aria-pressed={filters.suggested} onClick={toggleSuggested}>
+          {counted("Suggestions", summary.data?.suggestions)}
+        </Button>
+        <Button size="sm" aria-pressed={filters.category === "none"} onClick={toggleUncategorised}>
+          {counted("No category", summary.data?.uncategorised)}
+        </Button>
+      </div>
       {selected.size > 0 ? (
         <BulkBar
           ids={[...selected]}
+          suggestionIds={rows.filter((row) => selected.has(row.id) && isSuggestion(row)).map((row) => row.id)}
           onDone={() => {
             setSelected(new Set());
           }}

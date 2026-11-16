@@ -9,6 +9,10 @@ export type CategoryCreate = Schemas["CategoryCreate"];
 export type CategoryUpdate = Schemas["CategoryUpdate"];
 export type PayeeCreate = Schemas["PayeeCreate"];
 export type PayeeUpdate = Schemas["PayeeUpdate"];
+export type CategorisationSummary = Schemas["CategorisationSummary"];
+
+/** How the transactions the caller may see got their categories, with the counts still open. */
+export const getCategorisationSummary = () => unwrap(api.GET("/api/v1/categorisation/summary"));
 
 export const createCategory = (body: CategoryCreate) => unwrap(api.POST("/api/v1/categories", { body }));
 

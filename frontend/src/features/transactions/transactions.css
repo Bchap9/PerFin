@@ -1,0 +1,56 @@
+/* SPDX-License-Identifier: AGPL-3.0-or-later */
+/* The transactions grid: how a category was decided, suggestions, and the
+   merchant beside the bank's own wording. Shared ledger styles are in
+   ../accounts/ledger.css. */
+
+.cat-cell,
+.payee-cell {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--space-1);
+  min-width: 0;
+}
+
+/* A suggestion is a question, not a category: set apart from a chosen one. */
+.cat-cell__suggestion {
+  color: var(--color-text-muted);
+  font-style: italic;
+}
+
+.cat-cell__choice {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.cat-cell__why {
+  display: flex;
+  flex-wrap: wrap;
+  column-gap: var(--space-2);
+  color: var(--color-text-muted);
+  font-size: var(--font-size-sm);
+}
+
+.payee-cell__merchant {
+  font-weight: 600;
+}
+
+.payee-cell__raw {
+  color: var(--color-text-muted);
+  font-size: var(--font-size-sm);
+  overflow-wrap: anywhere;
+}
+
+.tx-quick-filters {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.tx-quick-filters .btn[aria-pressed="true"] {
+  border-color: var(--color-accent);
+  background: var(--color-accent-soft);
+}

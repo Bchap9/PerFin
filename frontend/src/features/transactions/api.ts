@@ -1,10 +1,13 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 /** Typed calls for transactions and the category/payee/tag lookups. */
 import { useQuery, type QueryClient } from "@tanstack/react-query";
+import { useMemo } from "react";
 
 import { api, unwrap } from "../../lib/api/client";
 import type { components } from "../../lib/api/schema";
 import { queryRoots } from "../../lib/queryKeys";
+import { getCategorisationSummary } from "../categories/api";
+import { listRules, ruleKeys } from "../rules/api";
 
 export { newIdempotencyKey } from "../../lib/idempotency";
 
@@ -29,6 +32,8 @@ export const txKeys = {
   list: (filters: TransactionFilters) => [...queryRoots.transactions, "list", filters],
   one: (id: string) => [...queryRoots.transactions, "one", id],
   candidates: (id: string) => [...queryRoots.transactions, "candidates", id],
+  /** Under the transactions root, so every change to the ledger refreshes the counts. */
+  summary: [...queryRoots.transactions, "categorisation-summary"],
 } as const;
 
 export const taxonomyKeys = {
@@ -49,6 +54,8 @@ export interface TransactionFilters {
   q: string;
   /** A document id: only the rows imported from that file. Empty for all. */
   document: string;
+  /** Only rows that carry a suggestion and no category. */
+  suggested: boolean;
 }
 
 export const EMPTY_FILTERS: TransactionFilters = {
@@ -61,6 +68,7 @@ export const EMPTY_FILTERS: TransactionFilters = {
   reviewState: "",
   q: "",
   document: "",
+  suggested: false,
 };
 
 export const PAGE_SIZE = 50;
@@ -77,6 +85,7 @@ export function filterQuery(filters: TransactionFilters) {
     ...(filters.reviewState === "" ? {} : { review_state: [filters.reviewState] }),
     ...(filters.q.trim() === "" ? {} : { q: filters.q.trim() }),
     ...(filters.document === "" ? {} : { document: filters.document }),
+    ...(filters.suggested ? { suggested: true } : {}),
   };
 }
 
@@ -208,6 +217,20 @@ export function useCategories() {
 
 export function usePayees() {
   return useQuery({ queryKey: taxonomyKeys.payees, queryFn: listAllPayees });
+}
+
+/** The counts beside the "Suggestions" and "No category" toggles. */
+export function useCategorisationSummary() {
+  return useQuery({ queryKey: txKeys.summary, queryFn: getCategorisationSummary });
+}
+
+/**
+ * Rule names by id, for "Rule: <name>". Asked for only when a row on screen
+ * was categorised by a rule; `undefined` until the answer is there.
+ */
+export function useRuleNames(enabled: boolean): ReadonlyMap<string, string> | undefined {
+  const rules = useQuery({ queryKey: ruleKeys.list, queryFn: listRules, enabled });
+  return useMemo(() => (rules.data === undefined ? undefined : new Map(rules.data.map((rule) => [rule.id, rule.name]))), [rules.data]);
 }
 
 export function useTags() {

@@ -12,13 +12,24 @@ import { useMutation, useQueryClient, type InfiniteData, type QueryClient, type 
 import { useToast } from "../../components/Toast";
 import { errorMessage } from "../../lib/api/client";
 import { queryRoots } from "../../lib/queryKeys";
-import { txKeys, updateTransaction, type Transaction, type TransactionPage, type TransactionUpdate } from "./api";
+import {
+  bulkAction,
+  invalidateLedger,
+  txKeys,
+  updateTransaction,
+  type BulkResult,
+  type Transaction,
+  type TransactionPage,
+  type TransactionUpdate,
+} from "./api";
+import { isSuggestion } from "./provenance";
 
 /** The row with the fields of `patch` applied the way the server would apply them. */
 export function applyPatch(row: Transaction, patch: TransactionUpdate): Transaction {
   const next: Transaction = { ...row };
   if (patch.category_id !== undefined) {
-    next.category_id = patch.category_id;
+    // A category set or cleared by hand is the person's choice, and it ends any suggestion.
+    Object.assign(next, decidedByPerson(patch.category_id));
   }
   if (patch.payee_id !== undefined) {
     next.payee_id = patch.payee_id;
@@ -41,21 +52,39 @@ export function applyPatch(row: Transaction, patch: TransactionUpdate): Transact
   return next;
 }
 
+/** The category fields of a row after a person decided its category. */
+function decidedByPerson(categoryId: string | null): Partial<Transaction> {
+  return {
+    category_id: categoryId,
+    category_source: "person",
+    category_confidence: "1.00",
+    category_rule_id: null,
+    suggested_category_id: null,
+  };
+}
+
+/** The row after its suggestion was accepted; a row without one is returned as it was. */
+export function acceptSuggestion(row: Transaction): Transaction {
+  return isSuggestion(row) ? { ...row, ...decidedByPerson(row.suggested_category_id ?? null) } : row;
+}
+
 type Cached = InfiniteData<TransactionPage, string | null> | undefined;
 
-/** Pages with row `id` patched; pages without it are returned as they were. */
-export function patchPages(data: Cached, id: string, patch: TransactionUpdate): Cached {
+function mapRow(data: Cached, id: string, change: (row: Transaction) => Transaction): Cached {
   if (data === undefined) {
     return data;
   }
   return {
     ...data,
     pages: data.pages.map((page) =>
-      page.items.some((row) => row.id === id)
-        ? { ...page, items: page.items.map((row) => (row.id === id ? applyPatch(row, patch) : row)) }
-        : page,
+      page.items.some((row) => row.id === id) ? { ...page, items: page.items.map((row) => (row.id === id ? change(row) : row)) } : page,
     ),
   };
+}
+
+/** Pages with row `id` patched; pages without it are returned as they were. */
+export function patchPages(data: Cached, id: string, patch: TransactionUpdate): Cached {
+  return mapRow(data, id, (row) => applyPatch(row, patch));
 }
 
 export interface EditContext {
@@ -64,9 +93,13 @@ export interface EditContext {
 
 /** Apply `patch` to every cached list and return what is needed to undo it. */
 export function applyOptimistic(queryClient: QueryClient, id: string, patch: TransactionUpdate): EditContext {
+  return changeEverywhere(queryClient, id, (row) => applyPatch(row, patch));
+}
+
+function changeEverywhere(queryClient: QueryClient, id: string, change: (row: Transaction) => Transaction): EditContext {
   const snapshots = queryClient.getQueriesData<InfiniteData<TransactionPage, string | null>>({ queryKey: txKeys.lists });
   for (const [key, data] of snapshots) {
-    queryClient.setQueryData<Cached>(key, patchPages(data, id, patch));
+    queryClient.setQueryData<Cached>(key, mapRow(data, id, change));
   }
   return { snapshots };
 }
@@ -97,6 +130,37 @@ export function useEditTransaction() {
     },
     onSettled: () => {
       void queryClient.invalidateQueries({ queryKey: queryRoots.transactions });
+    },
+  });
+}
+
+/**
+ * Accept the suggested category of one row. It shows at once as the person's
+ * choice, is put back if the server refuses, and the server is told through
+ * the bulk action (`accept_suggestions` with the one id).
+ */
+export function useAcceptSuggestion() {
+  const queryClient = useQueryClient();
+  const toast = useToast();
+  return useMutation<BulkResult, unknown, string, EditContext>({
+    mutationFn: (id) => bulkAction({ action: "accept_suggestions", ids: [id] }),
+    onMutate: async (id) => {
+      await queryClient.cancelQueries({ queryKey: txKeys.lists });
+      return changeEverywhere(queryClient, id, acceptSuggestion);
+    },
+    onSuccess: (result) => {
+      if (result.changed === 0) {
+        // Somebody else, or a refresh, got there first; the refetch shows what is true now.
+        toast.notify({ title: "That suggestion is no longer there", tone: "warning" });
+      }
+    },
+    onError: (error, _id, context) => {
+      rollback(queryClient, context);
+      toast.notify({ title: "Could not accept the suggestion", description: errorMessage(error), tone: "error" });
+    },
+    onSettled: () => {
+      // A category counts in budgets and reports; a suggestion did not.
+      invalidateLedger(queryClient);
     },
   });
 }

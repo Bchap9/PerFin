@@ -2,6 +2,7 @@
 /** Synthetic fixtures for the ledger tests (imported by tests only). */
 import type { Account } from "../accounts/api";
 import { json, type Handler } from "../auth/testing";
+import type { CategorisationSummary } from "../categories/api";
 import type { Category, Payee, Tag, Transaction } from "./api";
 
 export const NOW = "2026-11-03T10:00:00Z";
@@ -38,28 +39,21 @@ export function account(
   };
 }
 
-export const CATEGORIES: Category[] = [
-  {
-    id: "c-1",
-    name: "Groceries",
+export function category(id: string, name: string, extra: Partial<Category> = {}): Category {
+  return {
+    id,
+    name,
     kind: "expense",
     parent_id: null,
     system_key: null,
     tax_treatment: null,
     created_at: NOW,
     updated_at: NOW,
-  },
-  {
-    id: "c-2",
-    name: "Dining",
-    kind: "expense",
-    parent_id: null,
-    system_key: null,
-    tax_treatment: null,
-    created_at: NOW,
-    updated_at: NOW,
-  },
-];
+    ...extra,
+  };
+}
+
+export const CATEGORIES: Category[] = [category("c-1", "Groceries"), category("c-2", "Dining")];
 export const PAYEES: Payee[] = [
   {
     id: "p-1",
@@ -90,12 +84,34 @@ export function tx(id: string, extra: Partial<Transaction> = {}): Transaction {
     status: "cleared",
     review_state: "none",
     confidence: null,
+    merchant: null,
+    merchant_key: null,
+    category_source: null,
+    category_confidence: null,
+    category_rule_id: null,
+    suggested_category_id: null,
+    subscription_id: null,
     transfer: null,
     source_document_id: null,
     tag_ids: [],
     splits: [],
     created_at: NOW,
     updated_at: NOW,
+    ...extra,
+  };
+}
+
+/** A `GET /categorisation/summary` body. */
+export function summary(extra: Partial<CategorisationSummary> = {}): CategorisationSummary {
+  return {
+    by_source: [],
+    cleaner_version: 1,
+    dictionary_merchants: 0,
+    dictionary_version: 1,
+    learned_merchants: 0,
+    suggestions: 0,
+    uncategorised: 0,
+    up_to_date: true,
     ...extra,
   };
 }

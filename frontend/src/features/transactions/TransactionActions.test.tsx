@@ -6,7 +6,7 @@ import userEvent, { type UserEvent } from "@testing-library/user-event";
 import { todayIsoDate } from "../../lib/dates";
 import { authedSession, json, mockApi, noContent, problem, renderApp } from "../auth/testing";
 import { autoPairSummary } from "./autoPair";
-import { account, lookupHandlers, page, tx } from "./fixtures";
+import { account, category, lookupHandlers, page, tx } from "./fixtures";
 
 const ROWS = [tx("x-1"), tx("x-2", { payee_id: null, raw_payee: "ACME", category_id: null })];
 
@@ -359,6 +359,56 @@ describe("confirm a flagged transaction", () => {
       expect(api.callsTo("POST", "/api/v1/transactions/bulk")[0]?.body).toEqual({ action: "confirm", ids: ["x-1"] });
     });
     expect(await screen.findByText("1 transaction changed")).toBeInTheDocument();
+  });
+});
+
+describe("suggestions in bulk", () => {
+  const WITH_SUGGESTION = [
+    tx("x-1"),
+    tx("x-2", { payee_id: null, raw_payee: "ACME", category_id: null, suggested_category_id: "c-2" }),
+    tx("x-3", { payee_id: null, raw_payee: "BOLT HARDWARE", category_id: null }),
+  ];
+
+  it("accepts the suggestions of the selected rows that have one", async () => {
+    const api = setup(WITH_SUGGESTION);
+    api.on("POST /api/v1/transactions/bulk", () => json({ action: "accept_suggestions", changed: 1, results: [] }));
+    renderApp("/transactions");
+    const user = userEvent.setup();
+    await user.click(await screen.findByLabelText("Select all loaded transactions"));
+    await user.click(screen.getByRole("button", { name: "Accept suggestions" }));
+    await waitFor(() => {
+      expect(api.callsTo("POST", "/api/v1/transactions/bulk")[0]?.body).toEqual({ action: "accept_suggestions", ids: ["x-2"] });
+    });
+    expect(await screen.findByText("1 transaction changed")).toBeInTheDocument();
+  });
+
+  it("does not offer it when no selected row has a suggestion", async () => {
+    setup(WITH_SUGGESTION);
+    renderApp("/transactions");
+    const user = userEvent.setup();
+    await user.click(await screen.findByLabelText("Select Corner Market"));
+    await user.click(screen.getByLabelText("Select BOLT HARDWARE"));
+    expect(screen.getByRole("group", { name: "Actions for 2 selected" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Accept suggestions" })).not.toBeInTheDocument();
+  });
+
+  it("groups the category list in the bulk bar and in the dialog", async () => {
+    const api = setup();
+    api.on(
+      "GET /api/v1/categories",
+      page([category("c-9", "Food"), category("c-1", "Groceries", { parent_id: "c-9" }), category("c-2", "Dining", { parent_id: "c-9" })]),
+    );
+    renderApp("/transactions");
+    const user = userEvent.setup();
+    await user.click(await screen.findByLabelText("Select Corner Market"));
+    const bulk = screen.getByLabelText("Bulk category");
+    expect(within(bulk).getByRole("group", { name: "Food" })).toBeInTheDocument();
+    expect(within(bulk).getByRole("option", { name: "Choose category" })).toHaveValue("");
+    await chooseAction(user, "Corner Market", "Edit");
+    const dialog = await screen.findByRole("dialog");
+    const picker = within(dialog).getByLabelText("Category");
+    expect(within(picker).getByRole("group", { name: "Food" })).toBeInTheDocument();
+    expect(picker).toHaveValue("c-1");
   });
 });
 
