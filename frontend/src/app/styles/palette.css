@@ -27,6 +27,11 @@
   font-size: var(--font-size-md);
 }
 
+.palette__input::placeholder {
+  color: var(--color-text-muted);
+  opacity: 1;
+}
+
 .palette__input:focus-visible {
   outline: var(--focus-ring-width) solid var(--color-focus);
   outline-offset: 1px;
