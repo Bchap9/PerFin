@@ -182,7 +182,9 @@ migration, no new setting, no new container, nothing new leaves the host
 - **A QIF opening balance is no transaction.** Quicken's own `Opening
   Balance` record (and `Balance brought forward` and the like, when it says
   nothing else) was imported as a transaction. It is now the statement's
-  opening balance when it comes first; a closing balance record, or an
+  opening balance when it comes first (as of the day before its date, so a
+  transaction on that same day still counts toward the balance of an
+  account set up from it); a closing balance record, or an
   opening one further down, is left out and counted in the document's
   warnings. QIF files read before are read this way on "Process again"
   (extractor `qif/2`).

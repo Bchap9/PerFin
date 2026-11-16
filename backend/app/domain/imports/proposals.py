@@ -139,7 +139,8 @@ class _Found:
     #: The subtype the document prints (an account index's group, a PDF parser).
     subtype: str | None = None
     #: The day whose end ``opening_balance`` is the balance at, when the
-    #: source says (a table's opening row); else ``period_start``.
+    #: source says (a table's opening row, the statement's ``as_of``); else
+    #: ``period_start``.
     opening_date: date | None = None
     #: Tables only: the header names a card export; the mapping's sign is on trust.
     card_named: bool = False
@@ -173,6 +174,9 @@ def _bank(index: int, statement: Statement) -> _Found:
         ),
         transactions=len(statement.transactions),
         subtype=account.subtype,
+        opening_date=(
+            statement.opening_balance.as_of if statement.opening_balance is not None else None
+        ),
     )
 
 

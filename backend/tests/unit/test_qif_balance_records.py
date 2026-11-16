@@ -16,6 +16,7 @@ from decimal import Decimal
 
 import pytest
 
+from app.domain.imports import proposals
 from app.ingestion.extract.qif import extract_qif
 from app.ingestion.parsers.structured import from_statement
 from app.ingestion.sandbox.protocol import Balance, ExtractOptions
@@ -58,7 +59,7 @@ def test_qif_first_record_that_is_an_opening_balance_is_the_opening_balance(paye
     result = extract_qif(_qif(opening, BODY), OPTIONS, "qif")
     (statement,) = result.statements
     assert [t.payee for t in statement.transactions] == ["Orchard Row Market", "Stipend"]
-    assert statement.opening_balance == Balance(amount=Decimal("1250.00"), as_of=date(2026, 3, 1))
+    assert statement.opening_balance == Balance(amount=Decimal("1250.00"), as_of=date(2026, 2, 28))
     # The register starts on the opening balance's day.
     assert statement.period_start == date(2026, 3, 1)
     assert statement.period_end == date(2026, 3, 27)
@@ -70,7 +71,7 @@ def test_qif_opening_balance_of_zero_is_still_no_transaction() -> None:
     result = extract_qif(_qif(opening, BODY), OPTIONS, "qif")
     (statement,) = result.statements
     assert len(statement.transactions) == 2
-    assert statement.opening_balance == Balance(amount=Decimal("0.00"), as_of=date(2026, 3, 1))
+    assert statement.opening_balance == Balance(amount=Decimal("0.00"), as_of=date(2026, 2, 28))
 
 
 def test_qif_opening_balance_without_a_category_is_the_opening_balance() -> None:
@@ -112,8 +113,8 @@ def test_each_section_has_its_own_opening_balance() -> None:
     )
     result = extract_qif(data, OPTIONS, "qif")
     assert [s.opening_balance for s in result.statements] == [
-        Balance(amount=Decimal("10.00"), as_of=date(2026, 3, 1)),
-        Balance(amount=Decimal("-55.00"), as_of=date(2026, 3, 2)),
+        Balance(amount=Decimal("10.00"), as_of=date(2026, 2, 28)),
+        Balance(amount=Decimal("-55.00"), as_of=date(2026, 3, 1)),
     ]
     assert [len(s.transactions) for s in result.statements] == [2, 2]
 
@@ -145,3 +146,17 @@ def test_qif_opening_balance_reaches_the_parsed_statement() -> None:
     assert parsed.opening_balance == Decimal("1250.00")
     assert parsed.closing_balance is None
     assert len(parsed.transactions) == 2
+
+
+def test_qif_opening_balance_is_proposed_as_of_the_day_before_its_record() -> None:
+    # Quicken's opening record is the balance before that day's other
+    # records; a snapshot is the balance at the end of its day, so one dated
+    # on the record's own day would leave out a transaction sharing it.
+    opening = b"D03/14/2026\nT1250.00\nPOpening Balance\nL[Everyday]\n^\n"
+    (statement,) = extract_qif(_qif(opening, BODY), OPTIONS, "qif").statements
+    assert statement.period_start == date(2026, 3, 14)
+    proposal = proposals._proposal(proposals._bank(0, statement), None, "USD")
+    assert (proposal.opening_balance, proposal.opening_balance_date) == (
+        "1250.00",
+        date(2026, 3, 13),
+    )

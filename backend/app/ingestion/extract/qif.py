@@ -28,8 +28,10 @@
   brought forward``...) and that says nothing else (no split, no check
   number, no memo but a balance phrase, no category but an account in
   brackets, as Quicken writes its own opening balance ``L[Account]``) is the
-  section's ``opening_balance`` (as of its date, which starts the period)
-  when it is of an opening kind and no transaction was read before it.
+  section's ``opening_balance`` when it is of an opening kind and no
+  transaction was read before it. Its date starts the period; the balance
+  is ``as_of`` the day before (the end of that day, as a balance snapshot
+  means), since it is the balance before that day's other records.
   Any other such record (a closing balance, an opening one further down) is
   left out and counted in one ``balance_record_skipped:<n>`` warning for the
   file: a figure, not money that moved, and not a record the file lost.
@@ -46,7 +48,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass, field
-from datetime import date
+from datetime import date, timedelta
 from decimal import Decimal
 from typing import Final, Literal
 
@@ -287,6 +289,8 @@ def extract_qif(data: bytes, options: ExtractOptions, kind: str) -> ExtractResul
     for section in sections:
         transactions: list[ExtractedTransaction] = []
         opening: Balance | None = None
+        #: The opening record's own date (the balance is as of the day before).
+        opened: date | None = None
         unread = section.unread
         for record in section.records:
             parts = _date_parts(record.date_raw or "")
@@ -297,7 +301,8 @@ def extract_qif(data: bytes, options: ExtractOptions, kind: str) -> ExtractResul
                 continue
             end = _balance_record(record)
             if end == "opening" and opening is None and not transactions:
-                opening = Balance(amount=amount, as_of=posted)
+                opening = Balance(amount=amount, as_of=posted - timedelta(days=1))
+                opened = posted
                 continue
             if end is not None:
                 balances_skipped += 1
@@ -322,8 +327,8 @@ def extract_qif(data: bytes, options: ExtractOptions, kind: str) -> ExtractResul
             warnings.add(f"transactions_truncated:{options.max_transactions}")
         skipped.append(unread)
         dates = [t.posted for t in transactions]
-        if opening is not None and opening.as_of is not None:
-            dates.append(opening.as_of)
+        if opened is not None:
+            dates.append(opened)
         statements.append(
             Statement(
                 source_format="qif",
