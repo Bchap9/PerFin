@@ -53,7 +53,10 @@ Stage 4 of four on the way to 1.0.0: the release review.
   plumber as often), `TUITION`, and the entry description of a labelled ACH line
   (`<name> DES:RENT PMT`, `DES:TUITION`) when the name holds no telling
   word, though never cash there (`<name> DES:WITHDRAWAL` is a company
-  paid, not a withdrawal at the counter); `SWIM SCHOOL` is a pastime, not school (merchant list version 11).
+  paid, not a withdrawal at the counter); lessons are a pastime, not
+  school: `SWIM SCHOOL`, `SWIMMING SCHOOL`, `DANCE SCHOOL`, `MUSIC SCHOOL`,
+  `KARATE` and `MARTIAL ARTS` suggest hobbies (a `DRIVING SCHOOL` is still
+  education) (merchant list version 12).
   With nobody filing anything, the kind of a planted series is right for
   92.5% (was 82.5%).
 

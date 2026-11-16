@@ -165,7 +165,7 @@ conditions and disclaimer to this section in the same change.
    merchant, every category a default key, no match that is a keyword or a
    processor prefix, the names other businesses carry (`NOT_THE_CHAIN`) and
    the store-card payments (`STORE_CARD_PAYMENTS`) naming nobody, a cadence for every series, the size (800 to 1,500
-   merchants, 100 to 150 keywords), and the digest pinned to the version.
+   merchants, 100 to 160 keywords), and the digest pinned to the version.
 
 The version is what makes installed households catch up: each household
 records the version it was last evaluated with, and a newer one queues a

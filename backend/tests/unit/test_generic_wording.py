@@ -93,6 +93,15 @@ def test_a_bank_s_own_line_is_stated(raw: str, direction: Direction, category: s
         ("ORIG CO NAME:QUARRYVALE MGMT CO ENTRY DESCR:RENT PMT", "out", "housing.rent"),
         # Lessons in a sport are a pastime, not school.
         ("PINEGATE SWIM SCHOOL", "out", "leisure.hobbies"),
+        ("ELKTON SWIMMING SCHOOL 0412", "out", "leisure.hobbies"),
+        ("WILLOWMERE DANCE SCHOOL", "out", "leisure.hobbies"),
+        ("BRISTLECONE MUSIC SCHOOL 0412", "out", "leisure.hobbies"),
+        ("QUARRYVALE KARATE SCHOOL", "out", "leisure.hobbies"),
+        ("LANTERN KARATE 0412", "out", "leisure.hobbies"),
+        ("PINEGATE MARTIAL ARTS", "out", "leisure.hobbies"),
+        # A driving school, and a school of no other word, are school.
+        ("ELKTON DRIVING SCHOOL", "out", "family.education"),
+        ("WILLOWMERE SCHOOL 0412", "out", "family.education"),
     ],
 )
 def test_wording_that_says_what_it_was_is_suggested(

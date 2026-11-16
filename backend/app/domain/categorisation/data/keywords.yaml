@@ -122,8 +122,14 @@ keywords:
   - {word: montessori, category: family.childcare}
   - {word: tutoring, category: family.education}
   - {word: tuition, category: family.education}
-  # Lessons in a sport are a pastime, not school: said before "school".
+  # Lessons in a sport or an art are a pastime, not school: said before
+  # "school". A driving school stays school.
   - {word: swim school, category: leisure.hobbies}
+  - {word: swimming school, category: leisure.hobbies}
+  - {word: dance school, category: leisure.hobbies}
+  - {word: music school, category: leisure.hobbies}
+  - {word: karate, category: leisure.hobbies}
+  - {word: martial arts, category: leisure.hobbies}
   - {word: university, category: family.education}
   - {word: college, category: family.education}
   - {word: school, category: family.education}

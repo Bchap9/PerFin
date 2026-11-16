@@ -320,7 +320,7 @@ need it ([PORTABILITY.md](PORTABILITY.md)).
   `CHEQUE` or `CHQ` spelling (`CHEQUE #0042`, `CHQ 0042`, a bare `CHEQUE`
   or `CHECK`), which is now read as a cheque like `CHECK 0042`. Rows keyed
   before lose it in the refresh the hourly `categorise.dispatch` job
-  queues after the upgrade (clean-up version 3, merchant list version 11);
+  queues after the upgrade (clean-up version 3, merchant list version 12);
   nothing needs to be run by hand, and an admin's "Check again" (Settings,
   What PerFin learned) runs it at once. Categories on those rows stay;
   what was learned under such a key no longer answers, and the cash
@@ -336,7 +336,9 @@ need it ([PORTABILITY.md](PORTABILITY.md)).
   a series of cheques. The same refresh suggests rent, water, a sewer
   district and tuition for more lines, and the next daily detection then
   shows a recurring series of such rows as a bill instead of "other",
-  unless somebody set its kind.
+  unless somebody set its kind. A lesson school (`DANCE SCHOOL`, `MUSIC
+  SCHOOL`, `KARATE`, `MARTIAL ARTS`, `SWIMMING SCHOOL`) is suggested as a
+  hobby instead of education, so such a series is no longer called a bill.
 - **An investment account's chart changes.** The balance history of a
   brokerage or retirement account (`GET /accounts/{id}/balances`, the
   account page's chart) is now cash plus holdings on each day, as the

@@ -431,7 +431,7 @@ def test_no_entry_for_p2p_or_card_issuers() -> None:
 # --- what the shipped files hold: subscriptions, bills and keywords -------------
 
 MERCHANTS_MIN, MERCHANTS_MAX = 800, 1500
-KEYWORDS_MIN, KEYWORDS_MAX = 100, 150
+KEYWORDS_MIN, KEYWORDS_MAX = 100, 160
 SUBSCRIPTIONS_MIN = 150
 BILLS_MIN = 60
 
