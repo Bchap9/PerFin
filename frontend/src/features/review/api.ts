@@ -504,6 +504,19 @@ export function payloadSuggestions(item: ReviewItem): ReceiptSuggestion[] {
 }
 
 /**
+ * A ``near_match`` item that names no row already in the account: its row has
+ * the date and amount of one the person deleted. Saying it is that row
+ * removes it again; there is nothing to compare it with.
+ */
+export function resemblesRemoved(item: ReviewItem): boolean {
+  return (
+    payloadString(item, "reason") === "near_match" &&
+    payloadString(item, "transaction_id") !== null &&
+    payloadIds(item, "candidates").length === 0
+  );
+}
+
+/**
  * One imported row of a ``near_matches`` item (payload ``rows``) and the
  * rows already in the account it may repeat.
  */

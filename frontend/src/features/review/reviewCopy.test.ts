@@ -731,6 +731,31 @@ describe("what the review cards say", () => {
     expect(near.what).toBe(
       "3 rows of this statement have the same date and amount as rows already in the account.",
     );
+    const removed = explain(
+      item("possible_duplicate", {
+        reason: "near_match",
+        transaction_id: "t-1",
+        candidates: [],
+      }),
+    );
+    expect(removed.title).toBe("A row you deleted?");
+    expect(removed.what).toBe(
+      "A row of this file has the same date and amount as a row you deleted from this account.",
+    );
+    expect(removed.steps).toEqual([
+      "“Remove it again” if it is the row you deleted.",
+      "“Keep it” if it is another payment of that amount on that day.",
+    ]);
+    // With a row to compare it is the usual question.
+    expect(
+      explain(
+        item("possible_duplicate", {
+          reason: "near_match",
+          transaction_id: "t-1",
+          candidates: ["t-0"],
+        }),
+      ).title,
+    ).toBe("Possible duplicate row");
     const kept = explain(
       item("low_confidence_field", { reason: "earlier_rows_kept", count: 2 }),
     );

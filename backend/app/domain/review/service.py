@@ -32,7 +32,11 @@ editable by the caller as well. A closed item is ``409 review-item-closed``.
 * ``possible_duplicate`` / ``near_match``: *confirm* -> the imported row is
   deleted and its ``import_hash`` recorded for the kept transaction (the
   kept row takes the hash when it has none, else an ``import_hash_alias``);
-  *reject* -> the imported row is ``confirmed``.
+  *reject* -> the imported row is ``confirmed``. A row with no candidate
+  (``candidates: []``) names no live row: it has the date and amount of a
+  row a person deleted. *confirm* without ``duplicate_of`` removes it again
+  and writes a tombstone for its hash (resolution ``removed_again``);
+  *reject* keeps it.
 * ``possible_duplicate`` / ``near_matches`` (several such rows of one
   statement, :func:`_resolve_near_matches`): the same decision per listed
   row, all in one request (``rows``; without it ``decision`` is for every
@@ -863,6 +867,9 @@ def _decide_duplicate(
 
     *confirm*: the imported row is deleted and its hash recorded for the
     kept one; *reject*: it is confirmed (module doc). Edit on the account.
+    With no candidate and no ``duplicate_of`` the row resembles one a person
+    deleted: *confirm* removes it again and leaves a tombstone
+    (``removed_again``), *reject* keeps it.
     """
     try:
         imported: Transaction | None = transactions_service.get_visible_transaction(
@@ -884,6 +891,17 @@ def _decide_duplicate(
             )
         return {"decision": "reject", "transaction_id": str(transaction_id)}
     kept_id = duplicate_of
+    if kept_id is None and not candidates:
+        # It names no live row: it resembles a row a person deleted
+        # (``dedupe.DedupePlan.resembles_removed``). Saying it is that row
+        # removes it again, as a person's delete: with a tombstone, so this
+        # spelling stays out as well.
+        if imported is not None:
+            transactions_service.delete_transaction(
+                db, principal, imported, request=request, tombstone=True
+            )
+            db.flush()
+        return {"decision": "confirm", "removed_again": True, "deleted": imported is not None}
     if kept_id is None:
         if len(candidates) != 1:
             raise _invalid("Name the transaction this row duplicates in duplicate_of.")

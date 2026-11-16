@@ -15,6 +15,7 @@ import {
   payloadNumber,
   payloadSections,
   payloadString,
+  resemblesRemoved,
   type Difference,
   type ReviewItem,
   type SectionDifference,
@@ -361,14 +362,24 @@ const COPY: Readonly<Record<string, Copy>> = {
       "“Not a duplicate” to import it anyway.",
     ],
   }),
-  "possible_duplicate:near_match": () => ({
-    title: "Possible duplicate row",
-    what: "A row of this file has the same date and amount as a transaction already recorded.",
-    steps: [
-      "Compare the two rows.",
-      "“It is a duplicate” removes the new one; “Not a duplicate” keeps both.",
-    ],
-  }),
+  "possible_duplicate:near_match": (item) =>
+    resemblesRemoved(item)
+      ? {
+          title: "A row you deleted?",
+          what: "A row of this file has the same date and amount as a row you deleted from this account.",
+          steps: [
+            "“Remove it again” if it is the row you deleted.",
+            "“Keep it” if it is another payment of that amount on that day.",
+          ],
+        }
+      : {
+          title: "Possible duplicate row",
+          what: "A row of this file has the same date and amount as a transaction already recorded.",
+          steps: [
+            "Compare the two rows.",
+            "“It is a duplicate” removes the new one; “Not a duplicate” keeps both.",
+          ],
+        },
   "possible_duplicate:near_matches": (item) => ({
     title: "Rows that may already be in PerFin",
     what: `${count(item, "count")} rows of this statement have the same date and amount as rows already in the account.`,

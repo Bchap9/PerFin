@@ -33,7 +33,7 @@ from app.domain.documents.models import (
     ReviewKind,
 )
 from app.domain.documents.schemas import INGEST_JOB_TYPE
-from app.domain.imports.models import ImportMapping
+from app.domain.imports.models import ImportMapping, ImportTombstone
 from app.domain.imports.schemas import APPLY_MAPPING_JOB_TYPE, MappingSpec
 from app.domain.review import repo as review_repo
 from app.domain.review.models import ImportHashAlias
@@ -379,6 +379,106 @@ def test_near_match_confirm_deletes_and_records_the_hash(
         assert aliases == []
     # The last open item: the document is processed.
     assert load(factories, hh, Document, doc.id).status is DocumentStatus.PROCESSED
+    # The row lives on in the kept one: a confirmed duplicate leaves no tombstone.
+    assert tombstones_of(factories, hh, account) == []
+
+
+def tombstones_of(
+    factories: Factories, household_id: uuid.UUID, account: Account
+) -> list[ImportTombstone]:
+    with factories.transaction() as db:
+        set_context(db, household_id)
+        return list(
+            db.execute(
+                select(ImportTombstone).where(ImportTombstone.account_id == account.id)
+            ).scalars()
+        )
+
+
+def resembles_removed(
+    factories: Factories, store: LocalFSBlobStore, household_id: uuid.UUID, account: Account
+) -> tuple[Document, ReviewItem, Transaction]:
+    """A pending row held because it resembles a row a person deleted: no candidate."""
+    doc = document(factories, store, household_id, account_id=account.id)
+    with factories.transaction() as db:
+        imported = make_transaction(
+            db,
+            account,
+            amount="-7.25",
+            raw_payee="SYNTH BAKERY 0042",
+            with_import_hash=True,
+            review_state=ReviewState.PENDING,
+            source_document_id=doc.id,
+        )
+    row = item(
+        factories,
+        doc,
+        ReviewKind.POSSIBLE_DUPLICATE,
+        {
+            "reason": "near_match",
+            "account_id": str(account.id),
+            "transaction_id": str(imported.id),
+            "candidates": [],
+        },
+    )
+    return doc, row, imported
+
+
+def test_a_row_that_resembles_a_removed_one_is_removed_again(
+    home: dict[str, AuthedClient], factories: Factories, store: LocalFSBlobStore
+) -> None:
+    owner, member = home["owner"], home["member"]
+    hh = hh_of(owner)
+    account = new_account(factories, hh, {member.user.id: GrantLevel.EDIT})
+    doc, row, imported = resembles_removed(factories, store, hh, account)
+
+    response = resolve(member, row.id, {"kind": "possible_duplicate", "decision": "confirm"})
+
+    assert response.status_code == 200, response.text
+    resolution = response.json()["resolution"]
+    assert (resolution["decision"], resolution["deleted"]) == ("confirm", True)
+    assert resolution["removed_again"] is True
+    assert "duplicate_of" not in resolution
+    assert load(factories, hh, Transaction, imported.id) is None
+    # Deleted by a person, so this spelling stays out too.
+    (stone,) = tombstones_of(factories, hh, account)
+    assert (stone.import_hash, stone.amount, stone.deleted_by) == (
+        imported.import_hash,
+        imported.amount,
+        member.user.id,
+    )
+    assert load(factories, hh, Document, doc.id).status is DocumentStatus.PROCESSED
+
+
+def test_a_row_that_resembles_a_removed_one_can_be_kept(
+    home: dict[str, AuthedClient], factories: Factories, store: LocalFSBlobStore
+) -> None:
+    owner, member = home["owner"], home["member"]
+    hh = hh_of(owner)
+    account = new_account(factories, hh, {member.user.id: GrantLevel.EDIT})
+    _, row, imported = resembles_removed(factories, store, hh, account)
+
+    response = resolve(member, row.id, {"kind": "possible_duplicate", "decision": "reject"})
+
+    assert response.status_code == 200, response.text
+    assert load(factories, hh, Transaction, imported.id).review_state is ReviewState.CONFIRMED
+    assert tombstones_of(factories, hh, account) == []
+
+
+def test_removing_again_needs_edit_on_the_account(
+    home: dict[str, AuthedClient], factories: Factories, store: LocalFSBlobStore
+) -> None:
+    owner, member = home["owner"], home["member"]
+    hh = hh_of(owner)
+    account = new_account(factories, hh, {member.user.id: GrantLevel.VIEW})
+    _, row, imported = resembles_removed(factories, store, hh, account)
+
+    response = resolve(member, row.id, {"kind": "possible_duplicate", "decision": "confirm"})
+
+    assert response.status_code in (403, 404), response.text
+    assert load(factories, hh, Transaction, imported.id) is not None
+    assert tombstones_of(factories, hh, account) == []
+    assert load(factories, hh, ReviewItem, row.id).state is ReviewItemState.OPEN
 
 
 def test_near_match_reject_confirms_the_imported_row(
@@ -1038,6 +1138,49 @@ def test_near_matches_are_decided_in_one_request(
         (kept[2].id, imported[2].import_hash),
     }
     assert load(factories, hh, Document, doc.id).status is DocumentStatus.PROCESSED
+
+
+def test_a_listed_row_that_resembles_a_removed_one_is_removed_again(
+    home: dict[str, AuthedClient], factories: Factories, store: LocalFSBlobStore
+) -> None:
+    owner, member = home["owner"], home["member"]
+    hh = hh_of(owner)
+    account = new_account(factories, hh, {member.user.id: GrantLevel.EDIT})
+    _, row, kept, imported = near_matches(factories, store, hh, account)
+    # The first listed row names no live row: it resembles one a person deleted.
+    with factories.transaction() as db:
+        set_context(db, hh)
+        stored = db.get(ReviewItem, row.id)
+        assert stored is not None
+        rows = [dict(entry) for entry in stored.payload["rows"]]
+        rows[0]["candidates"] = []
+        stored.payload = {**stored.payload, "rows": rows}
+
+    response = resolve(
+        member,
+        row.id,
+        {
+            "kind": "possible_duplicate",
+            "decision": "confirm",
+            "rows": [
+                {"transaction_id": str(imported[0].id), "decision": "confirm"},
+                {"transaction_id": str(imported[1].id), "decision": "confirm"},
+                {"transaction_id": str(imported[2].id), "decision": "reject"},
+            ],
+        },
+    )
+
+    assert response.status_code == 200, response.text
+    first, second, _ = response.json()["resolution"]["rows"]
+    assert first["removed_again"] is True
+    assert "removed_again" not in second
+    assert load(factories, hh, Transaction, imported[0].id) is None
+    assert load(factories, hh, Transaction, imported[1].id) is None
+    assert load(factories, hh, Transaction, kept[0].id) is not None
+    # Only the row removed again leaves a tombstone; the confirmed duplicate lives on in its twin.
+    assert [t.import_hash for t in tombstones_of(factories, hh, account)] == [
+        imported[0].import_hash
+    ]
 
 
 def test_near_matches_decided_in_part_keep_the_rest_open(

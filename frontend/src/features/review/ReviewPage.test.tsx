@@ -1363,6 +1363,110 @@ describe("review cards", () => {
     });
   });
 
+  it("removes a row again that looks like one the person deleted", async () => {
+    const held = item("r-42", "possible_duplicate", {
+      reason: "near_match",
+      account_id: "a-1",
+      transaction_id: "new-1",
+      candidates: [],
+    });
+    const api = reviewApi([held], "member", {
+      "POST /api/v1/review/:id/resolve": () =>
+        json({ ...held, state: "resolved" }),
+    });
+    renderApp("/review");
+    const user = userEvent.setup();
+    expect(
+      await screen.findByText(
+        "A row of this file has the same date and amount as a row you deleted from this account.",
+      ),
+    ).toBeInTheDocument();
+    expect(await screen.findByText("IMPORTED ROW")).toBeInTheDocument();
+    // There is no kept row to compare with, so the duplicate wording is not used.
+    expect(
+      screen.queryByRole("button", { name: "It is a duplicate" }),
+    ).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Keep it" })).toBeEnabled();
+    await user.click(screen.getByRole("button", { name: "Remove it again" }));
+    await waitFor(() => {
+      expect(
+        api.callsTo("POST", "/api/v1/review/:id/resolve")[0]?.body,
+      ).toEqual({ kind: "possible_duplicate", decision: "confirm" });
+    });
+  });
+
+  it("keeps a row that looks like a deleted one", async () => {
+    const held = item("r-43", "possible_duplicate", {
+      reason: "near_match",
+      account_id: "a-1",
+      transaction_id: "new-1",
+      candidates: [],
+    });
+    const api = reviewApi([held], "member", {
+      "POST /api/v1/review/:id/resolve": () =>
+        json({ ...held, state: "resolved" }),
+    });
+    renderApp("/review");
+    const user = userEvent.setup();
+    await user.click(await screen.findByRole("button", { name: "Keep it" }));
+    await waitFor(() => {
+      expect(
+        api.callsTo("POST", "/api/v1/review/:id/resolve")[0]?.body,
+      ).toEqual({ kind: "possible_duplicate", decision: "reject" });
+    });
+  });
+
+  it("answers a listed row that looks like a deleted one without naming a twin", async () => {
+    const near = item(
+      "r-44",
+      "possible_duplicate",
+      {
+        reason: "near_matches",
+        account_id: "a-1",
+        statement: 0,
+        count: 2,
+        rows: [
+          { transaction_id: "new-1", candidates: ["old-1"] },
+          { transaction_id: "new-2", candidates: [] },
+        ],
+      },
+      { reason: "near_matches", next_step: "confirm_duplicate" },
+    );
+    const api = reviewApi([near], "member", {
+      "POST /api/v1/review/:id/resolve": () =>
+        json({ ...near, state: "resolved" }),
+    });
+    renderApp("/review");
+    const user = userEvent.setup();
+    const second = await screen.findByRole("group", { name: "Row 2" });
+    expect(
+      within(second).getByText(
+        "Has the date and amount of a row you deleted from this account.",
+      ),
+    ).toBeInTheDocument();
+    expect(within(second).queryByLabelText("Same row")).not.toBeInTheDocument();
+    // "All are the same rows" speaks of rows that are still there: it leaves
+    // the row that looks like a deleted one for its own answer.
+    await user.click(
+      screen.getByRole("button", { name: "All are the same rows" }),
+    );
+    expect(within(second).getByLabelText("Remove it again")).not.toBeChecked();
+    await user.click(within(second).getByLabelText("Remove it again"));
+    await user.click(screen.getByRole("button", { name: "Save these answers" }));
+    await waitFor(() => {
+      expect(
+        api.callsTo("POST", "/api/v1/review/:id/resolve")[0]?.body,
+      ).toEqual({
+        kind: "possible_duplicate",
+        decision: "confirm",
+        rows: [
+          { transaction_id: "new-1", decision: "confirm", duplicate_of: "old-1" },
+          { transaction_id: "new-2", decision: "confirm" },
+        ],
+      });
+    });
+  });
+
   it("asks which row a near duplicate repeats when several fit", async () => {
     const near = item(
       "r-41",

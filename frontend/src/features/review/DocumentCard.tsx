@@ -46,6 +46,7 @@ import {
   listsTransactions,
   nearMatchesResolution,
   payloadIds,
+  resemblesRemoved,
   payloadLines,
   payloadNearMatches,
   payloadNumber,
@@ -475,6 +476,7 @@ function DuplicateControl({ item, actionable, trailing }: ControlProps) {
   const resolve = useResolve(item, setError);
   const candidates = payloadIds(item, "candidates");
   const overlap = isStatementOverlap(item);
+  const removed = resemblesRemoved(item);
   return (
     <>
       <DuplicateBody
@@ -497,7 +499,9 @@ function DuplicateControl({ item, actionable, trailing }: ControlProps) {
               ? "Same statement — skip"
               : payloadString(item, "transaction_id") === null
                 ? "Reject this upload"
-                : "It is a duplicate"}
+                : removed
+                  ? "Remove it again"
+                  : "It is a duplicate"}
           </Button>
           <Button
             disabled={resolve.isPending}
@@ -505,7 +509,7 @@ function DuplicateControl({ item, actionable, trailing }: ControlProps) {
               resolve.mutate(duplicateResolution(item, "reject", null));
             }}
           >
-            {overlap ? "Import anyway" : "Not a duplicate"}
+            {overlap ? "Import anyway" : removed ? "Keep it" : "Not a duplicate"}
           </Button>
           {trailing}
         </Actions>
@@ -527,6 +531,10 @@ function nearDecision(
 ): DuplicateDecision | null {
   if (answer.decision === "reject") {
     return { transaction_id: row.transactionId, decision: "reject" };
+  }
+  if (row.candidates.length === 0) {
+    // It names no row to repeat: "confirm" removes it again.
+    return { transaction_id: row.transactionId, decision: "confirm" };
   }
   const duplicateOf =
     answer.duplicateOf ??
@@ -555,6 +563,8 @@ function NearRow({
 }) {
   const name = `near-${row.transactionId}`;
   const several = row.candidates.length > 1;
+  // No row already in the account: it looks like one the person deleted.
+  const removed = row.candidates.length === 0;
   return (
     <li>
       <div
@@ -564,6 +574,11 @@ function NearRow({
       >
         <div className="side-by-side">
           <TransactionLookup id={row.transactionId} title="Row of this file" />
+          {removed ? (
+            <p className="ledger-muted">
+              Has the date and amount of a row you deleted from this account.
+            </p>
+          ) : null}
           {row.candidates.map((candidate, place) => (
             <div key={candidate}>
               <TransactionLookup
@@ -607,7 +622,7 @@ function NearRow({
                   });
                 }}
               />{" "}
-              Same row
+              {removed ? "Remove it again" : "Same row"}
             </label>
             <label>
               <input
@@ -618,7 +633,7 @@ function NearRow({
                   onAnswer({ decision: "reject", duplicateOf: null });
                 }}
               />{" "}
-              Different row
+              {removed ? "Keep it" : "Different row"}
             </label>
             {several &&
             answer?.decision === "confirm" &&
@@ -699,19 +714,21 @@ function NearMatchesControl({ item, actionable, trailing }: ControlProps) {
           <Button
             disabled={resolve.isPending}
             onClick={() => {
-              setAnswers(
-                (before) =>
-                  new Map(
-                    rows.map((row) => [
-                      row.transactionId,
-                      {
-                        decision: "confirm" as const,
-                        duplicateOf:
-                          before.get(row.transactionId)?.duplicateOf ?? null,
-                      },
-                    ]),
-                  ),
-              );
+              // A row that names no twin is not "the same row" as anything:
+              // it keeps the answer it has (or none).
+              setAnswers((before) => {
+                const next = new Map(before);
+                for (const row of rows) {
+                  if (row.candidates.length > 0) {
+                    next.set(row.transactionId, {
+                      decision: "confirm",
+                      duplicateOf:
+                        before.get(row.transactionId)?.duplicateOf ?? null,
+                    });
+                  }
+                }
+                return next;
+              });
             }}
           >
             All are the same rows
