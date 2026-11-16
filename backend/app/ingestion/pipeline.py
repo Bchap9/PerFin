@@ -46,7 +46,10 @@ Phase 2 routes only **structured** formats (CSV, TSV, OFX, QFX, QIF):
   fingerprint's learned template, "Teach PerFin",
   ``app.ingestion.parsers.template``, then reads its labelled tables and
   fills the period, account digits and balances; a ``lines_skipped`` item
-  carries the boxes of skipped lines): statements with
+  carries the boxes of skipped lines, and is raised only when a statement
+  of the document does not reconcile (:func:`_all_reconciled`): on one
+  whose balances agree the count is only kept,
+  ``confidence["parse"]["skipped_lines"]``): statements with
   per-field confidence and a reconciliation (``app.ingestion.reconcile``)
   go through the structured importer like an OFX statement (rows below
   ``confidence_threshold`` or of a statement that does not reconcile are
@@ -593,6 +596,20 @@ def _vocabulary_batches(
     ]
 
 
+def _all_reconciled(
+    statements: Sequence[Statement], investments: Sequence[InvestmentStatement]
+) -> bool:
+    """Every statement the parsers read was checked and its figures agree.
+
+    At least one statement, and each (bank and brokerage) has a
+    reconciliation with status ``ok``: one that failed, one that could not
+    be checked and a document with no statement (a payslip, a receipt) do
+    not count.
+    """
+    checks = [s.reconciliation for s in statements] + [i.reconciliation for i in investments]
+    return bool(checks) and all(c is not None and c.status == "ok" for c in checks)
+
+
 def _parse_document(
     db: Session,
     document: Document,
@@ -763,6 +780,7 @@ def _parse_document(
             "low_confidence_rows": sum(
                 1 for s in parsed for t in s.transactions if t.low_confidence
             ),
+            "skipped_lines": info.skipped_lines,
             "payslip": info.payslip.confidence if info.payslip else None,
             "receipt": info.receipt.confidence if info.receipt else None,
             "investments": [i.confidence for i in brokerage],
@@ -771,7 +789,10 @@ def _parse_document(
             ],
         },
     }
-    if info.skipped_lines:
+    if info.skipped_lines and not _all_reconciled(parsed, brokerage):
+        # A statement whose balances agree with its rows lost no row to a
+        # skipped line: the count stays in the stage facts and on the
+        # document (``confidence["parse"]["skipped_lines"]``), nobody is asked.
         _review(
             db,
             document,

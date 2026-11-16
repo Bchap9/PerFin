@@ -136,6 +136,16 @@ The flow (INGESTION.md "Parse", "Match and deduplicate", "Commit"):
      does not reconcile (``app.ingestion.reconcile``) has all its rows
      pending, a ``reconciliation_failed``/``reconciliation_unavailable``
      item with the figures, and writes no balance snapshot (SECURITY.md C12).
+     The exception is a **clean read** (:func:`clean_read`): a statement
+     that prints nothing to check against (reconciliation ``unavailable``),
+     whose rows carry no other doubt and whose document the parser neither
+     skipped a line of nor warned about (:data:`CONTRADICTION_WARNINGS`).
+     It is imported as posted (a row waits only as a near duplicate), no
+     item is raised for it and no snapshot is written; its record says
+     ``unverified`` (``statement_record.verification``; ``reconciled`` when
+     a statement's own balances agreed) and the run summary counts it
+     (``unverified_statements``), which the pages show as "not checked
+     against a balance". One doubt anywhere and the whole statement waits.
    * Records the extractor could not read (OFX, QFX and QIF: a record with
      no date or amount, an investment activity of a kind it does not read)
      are counted in its ``transaction_skipped:<n>`` warnings, one per
@@ -206,6 +216,7 @@ from app.domain.documents.models import (
     ReviewItemState,
     ReviewKind,
 )
+from app.domain.documents.schemas import Verification
 from app.domain.documents.service import get_visible_document
 from app.domain.imports import repo
 from app.domain.imports.models import NAME_MAX, ImportMapping
@@ -290,7 +301,12 @@ from app.ingestion.parsers.structured import (
     spec_fingerprint,
     suggest_mapping,
 )
-from app.ingestion.sandbox.protocol import ExtractResult, InvestmentStatement, Table
+from app.ingestion.sandbox.protocol import (
+    DOCUMENT_STATEMENT_FORMATS,
+    ExtractResult,
+    InvestmentStatement,
+    Table,
+)
 
 if TYPE_CHECKING:
     from starlette.requests import HTTPConnection
@@ -316,6 +332,14 @@ IMPORTABLE_STATUSES: Final = frozenset({DocumentStatus.NEEDS_REVIEW, DocumentSta
 AUTO_MAPPING_KINDS: Final = frozenset({"csv", "tsv", "xlsx"})
 #: Longest name given to a mapping saved from a suggestion (the editor's limit).
 SUGGESTED_NAME_MAX: Final = 120
+#: Parse warnings that say the document's own figures contradict its rows
+#: (``table_statement``): a statement of such a document is never a clean
+#: read (:func:`clean_read`).
+CONTRADICTION_WARNINGS: Final = frozenset(
+    {"summary_totals_mismatch", "section_total_mismatch", "rows_outside_account"}
+)
+#: The one doubt a clean read may carry on a row: nothing to check it against.
+UNCHECKED_FIELD: Final = "reconciliation"
 
 
 # ---------------------------------------------------------------------------
@@ -762,6 +786,15 @@ class _Run:
     answers: StatementAnswers = field(default_factory=StatementAnswers)
     #: Statements held (``statement_overlap``) or skipped as already imported.
     overlaps: int = 0
+    #: What the document parsers said about the whole document
+    #: (``ExtractResult.parse``): lines they counted as skipped, and their
+    #: warnings. Zero and empty for a file no document parser read.
+    parse_skipped: int = 0
+    parse_warnings: tuple[str, ...] = ()
+    #: Statements of a document format (PDF, image) committed without a
+    #: balance that vouches for them: the ones shown as "not checked against
+    #: a balance" (``statement_record.verification = unverified``).
+    unverified_statements: int = 0
     _payees: PayeeMatcher | None = None
     _payee_categories: dict[uuid.UUID, uuid.UUID] | None = None
     _categories: dict[str, uuid.UUID] | None = None
@@ -824,6 +857,7 @@ class _Run:
             "statements": self.statements,
             "low_confidence": self.low_confidence,
             "statement_overlaps": self.overlaps,
+            "unverified_statements": self.unverified_statements,
             "accounts": [str(a) for a in self.accounts],
             "mapping_id": str(self.mapping_id) if self.mapping_id else None,
             "mapping_suggested": self.mapping_suggested,
@@ -866,9 +900,53 @@ def _category_id(run: _Run, name: str | None) -> uuid.UUID | None:
     return run.categories().get(name.strip().casefold())
 
 
-def _row_problems(run: _Run, parsed: ParsedStatement, account: Account) -> None:
+def clean_read(run: _Run, parsed: ParsedStatement) -> bool:
+    """A statement that read cleanly and that nothing contradicts (module doc).
+
+    The owner's policy, "import clean reads, flag quietly": a PDF or image
+    statement that prints nothing to check its rows against (no opening or
+    closing balance, no running balance: reconciliation ``unavailable``) is
+    imported as posted when that is its **only** doubt. It is one only when
+    all of this holds:
+
+    * it has at least one row, and every row's ``low_confidence`` is empty
+      or exactly ``reconciliation`` (the parser's cap for an unchecked row);
+    * the importer skipped no row of it, no running balance disagrees, it
+      was not truncated and its date order was not assumed;
+    * the document's parse counted no skipped line and carries no warning of
+      :data:`CONTRADICTION_WARNINGS`.
+
+    One doubt anywhere and the whole statement waits as before. A statement
+    whose check failed (``mismatch``) is never one; neither is a format
+    that is not a document (OFX, QIF, CSV), which was never held for this.
+    Pure on its arguments: of ``run`` only the parse facts are read.
+    """
+    check = parsed.reconciliation
+    if parsed.source_format not in DOCUMENT_STATEMENT_FORMATS:
+        return False
+    if check is None or check.status != "unavailable":
+        return False
+    if not parsed.transactions:
+        return False
+    if any(set(t.low_confidence) - {UNCHECKED_FIELD} for t in parsed.transactions):
+        return False
+    if (
+        parsed.skipped_rows
+        or parsed.balance_mismatches
+        or parsed.truncated
+        or parsed.date_order_assumed
+    ):
+        return False
+    return not run.parse_skipped and not CONTRADICTION_WARNINGS.intersection(run.parse_warnings)
+
+
+def _row_problems(
+    run: _Run, parsed: ParsedStatement, account: Account, *, clean: bool = False
+) -> None:
     # Footers and pending rows are not problems: ``rows_skipped`` is raised
     # for the rows that should have read (``parsed.skipped_rows``) only.
+    # ``clean``: a clean read (:func:`clean_read`) is not asked about: its
+    # record says ``unverified`` instead of a ``reconciliation_unavailable`` item.
     run.footer_rows += len(parsed.footer_rows)
     run.pending_rows += len(parsed.pending_rows)
     if parsed.skipped_rows:
@@ -908,9 +986,10 @@ def _row_problems(run: _Run, parsed: ParsedStatement, account: Account) -> None:
             ReviewKind.LOW_CONFIDENCE_FIELD,
             {"reason": "truncated", "account_id": str(account.id)},
         )
-    if not parsed.reconciled and parsed.reconciliation is not None:
+    if not parsed.reconciled and parsed.reconciliation is not None and not clean:
         # SECURITY.md C12: the statement's own figures disagree (or cannot be
-        # checked); its rows are imported pending and no snapshot is written.
+        # checked and something else is in doubt); its rows are imported
+        # pending and no snapshot is written.
         check = parsed.reconciliation
         run.review(
             ReviewKind.LOW_CONFIDENCE_FIELD,
@@ -982,10 +1061,20 @@ def _low_confidence_review(
 
 def _commit_statement(
     run: _Run, parsed: ParsedStatement, account: Account, *, statement_index: int | None
-) -> bool:
+) -> Verification | None:
     """Write one statement's new transactions, review items and closing balance.
 
-    False when nothing could be written (the statement is in another currency).
+    None when nothing could be written (the statement is in another
+    currency). Else how far the statement was checked, for its record:
+    ``reconciled`` when a document parser's reconciliation passed,
+    ``unverified`` for everything else (a statement that does not add up or
+    cannot be checked; OFX, QIF and tables, which carry no reconciliation).
+
+    A *clean read* (:func:`clean_read`, with no row left out for its
+    currency) is imported as posted: a row of it is ``pending`` only when it
+    is a near duplicate, no ``reconciliation_unavailable`` and no
+    ``low_confidence`` item is raised for it, and, as for every statement
+    that did not reconcile, no balance snapshot is written.
     """
     db = run.db
     if parsed.currency is not None and parsed.currency != account.currency:
@@ -999,7 +1088,7 @@ def _commit_statement(
                 "account_currency": account.currency,
             },
         )
-        return False
+        return None
     run.statements += 1
     if account.id not in run.accounts:
         run.accounts.append(account.id)
@@ -1016,7 +1105,9 @@ def _commit_statement(
                 "count": foreign,
             },
         )
-    _row_problems(run, parsed, account)
+    # A row left out for its currency is a doubt of its own: not a clean read.
+    clean = not foreign and clean_read(run, parsed)
+    _row_problems(run, parsed, account, clean=clean)
     plan = dedupe(
         db,
         run.household_id,
@@ -1045,7 +1136,7 @@ def _commit_statement(
             import_hash=plan.hashes[index],
             review_state=(
                 ReviewState.PENDING
-                if index in plan.near or txn.low_confidence
+                if index in plan.near or (txn.low_confidence and not clean)
                 else ReviewState.NONE
             ),
             confidence=_confidence(txn.confidence),
@@ -1106,7 +1197,7 @@ def _commit_statement(
         [
             (created[positions[index]][0], rows[index])
             for index in plan.to_insert
-            if rows[index].low_confidence
+            if rows[index].low_confidence and not clean
         ],
     )
     if parsed.closing_balance is not None and parsed.reconciled:
@@ -1148,7 +1239,26 @@ def _commit_statement(
                 "ids": [str(i) for i in ids[:IDS_MAX]],
             },
         )
-    return True
+    check = parsed.reconciliation
+    return "reconciled" if check is not None and check.status == "ok" else "unverified"
+
+
+def _record_committed(
+    run: _Run, account: Account, facts: StatementFacts, verification: Verification
+) -> None:
+    """Record a committed statement with how far it was checked.
+
+    A recorded statement of a document format (PDF, image) that is
+    ``unverified`` is the one shown as "not checked against a balance":
+    counted for the run's summary (``unverified_statements``).
+    """
+    recorded = record_statement(run.db, run.document, account, facts, verification=verification)
+    if (
+        recorded
+        and verification == "unverified"
+        and facts.source_format in DOCUMENT_STATEMENT_FORMATS
+    ):
+        run.unverified_statements += 1
 
 
 def _guarded(
@@ -1326,8 +1436,9 @@ def _import_statements(run: _Run, result: ExtractResult, *, account_id: uuid.UUI
         facts = bank_facts(statement)
         if not _guarded(run, account, facts, index, key):
             continue
-        if _commit_statement(run, parsed, account, statement_index=index):
-            record_statement(run.db, run.document, account, facts)
+        verification = _commit_statement(run, parsed, account, statement_index=index)
+        if verification is not None:
+            _record_committed(run, account, facts, verification)
 
 
 class _GroupFacts(BaseModel):
@@ -1735,11 +1846,11 @@ def _import_table(
                 },
             )
             continue
-        if _commit_statement(run, item.parsed, item.account, statement_index=None):
+        verification = _commit_statement(run, item.parsed, item.account, statement_index=None)
+        if verification is not None:
             closing = item.parsed.closing_balance
-            record_statement(
-                run.db,
-                run.document,
+            _record_committed(
+                run,
                 item.account,
                 table_facts(
                     item.parsed.source_format,
@@ -1747,6 +1858,7 @@ def _import_table(
                     item.parsed.period_end,
                     closing.amount if closing is not None else None,
                 ),
+                verification,
             )
         committed = True
     if not committed:
@@ -2104,6 +2216,8 @@ def import_extraction(
         assigned={(a.target, a.index): a.account_id for a in assignments},
         allow_overlap=frozenset(allow_overlap),
         answers=document_answers(db, document),
+        parse_skipped=result.parse.skipped_lines if result.parse is not None else 0,
+        parse_warnings=tuple(result.parse.warnings) if result.parse is not None else (),
     )
     statements: Sequence[InvestmentStatement] = result.investments
     if unread is not None and result.parse is not None and result.parse.parser is not None:

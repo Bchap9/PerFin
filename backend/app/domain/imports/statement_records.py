@@ -300,8 +300,14 @@ def record_statement(
     facts: StatementFacts,
     *,
     outcome: Literal["imported", "skipped"] = "imported",
+    verification: str = "unverified",
 ) -> bool:
-    """Record a committed (or skipped) statement; False when it has no period."""
+    """Record a committed (or skipped) statement; False when it has no period.
+
+    ``verification`` is how far the statement was checked against its own
+    balances (``imports.models.STATEMENT_VERIFICATIONS``): what this run
+    reached replaces what the record said.
+    """
     period = facts.period
     if period is None:
         return False
@@ -311,6 +317,7 @@ def record_statement(
         "document_id": document.id,
         "kind": facts.kind,
         "outcome": outcome,
+        "verification": verification,
         "period_start": period[0],
         "period_end": period[1],
         "period_stated": facts.stated,
