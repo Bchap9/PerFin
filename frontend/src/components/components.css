@@ -181,6 +181,14 @@ a.btn--danger:hover {
   grid-column: 2;
 }
 
+/* A checkbox in a table cell or beside header buttons has no form gap under
+   it, so it centres on its row. */
+.table .checkbox,
+.page-header__actions > .checkbox,
+.page-header__actions > .field {
+  margin-bottom: 0;
+}
+
 /* Touch screens: every control is at least 44px tall (WCAG 2.5.8 asks 24px,
    platform guidelines 44px). */
 @media (pointer: coarse) {

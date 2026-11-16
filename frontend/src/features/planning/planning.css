@@ -38,6 +38,23 @@
   gap: var(--space-3);
 }
 
+/* Fields and checkboxes in a row line up with its buttons (no stacked-form
+   gap under them); a checkbox or a bare label centres on the inputs. */
+.planning-row > .field,
+.planning-row > .checkbox,
+.planning-actions > .field,
+.planning-actions > .checkbox {
+  margin-bottom: 0;
+}
+
+.planning-row > .checkbox {
+  min-height: 2.5rem;
+}
+
+.planning-row > strong {
+  align-self: center;
+}
+
 /* A list of rows: a hairline between items, none above the first. */
 .planning-list {
   list-style: none;
