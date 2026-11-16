@@ -171,6 +171,9 @@ function DrawerBody({ row, alwaysOpen, onDeleted }: DrawerBodyProps) {
   const tags = useTags();
   const ruleNames = useRuleNames(row.category_source === "rule" && row.category_rule_id != null);
   const edit = useEditTransaction();
+  // Tags save through their own mutation: a tag clicked while a category change is
+  // still saving must not replace that call, whose success says "your choice".
+  const tagEdit = useEditTransaction();
   const accept = useAcceptSuggestion();
   const [open, setOpen] = useState<Open>(null);
   const [change, setChange] = useState<Change | null>(null);
@@ -226,7 +229,7 @@ function DrawerBody({ row, alwaysOpen, onDeleted }: DrawerBodyProps) {
 
   const toggleTag = (tagId: string, on: boolean): void => {
     const next = on ? [...row.tag_ids, tagId] : row.tag_ids.filter((id) => id !== tagId);
-    edit.mutate({ id: row.id, patch: { tag_ids: next } });
+    tagEdit.mutate({ id: row.id, patch: { tag_ids: next } });
   };
 
   const undo = (): void => {
@@ -423,9 +426,9 @@ function DrawerBody({ row, alwaysOpen, onDeleted }: DrawerBodyProps) {
       ) : null}
 
       {/* The toast region is behind the modal drawer: a refusal is said here too. */}
-      {edit.isError || accept.isError ? (
+      {edit.isError || tagEdit.isError || accept.isError ? (
         <p role="alert" className="ledger-error">
-          {errorMessage(edit.isError ? edit.error : accept.error)}
+          {errorMessage(edit.isError ? edit.error : tagEdit.isError ? tagEdit.error : accept.error)}
         </p>
       ) : null}
 

@@ -147,6 +147,38 @@ describe("the transaction drawer", () => {
     expect(await panel.findByText("Dining is back, as your choice.")).toBeInTheDocument();
   });
 
+  it("a tag changed while the category is still saving does not lose the category's notice", async () => {
+    const api = setup();
+    // The category's PATCH waits until the tag has been clicked.
+    let release: () => void = () => undefined;
+    const held = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    let current: typeof ROW = ROW;
+    api.on("PATCH /api/v1/transactions/:id", async (call) => {
+      const patch = call.body as Partial<typeof ROW>;
+      if ("category_id" in patch) {
+        await held;
+      }
+      current = { ...current, ...patch, category_source: "person", category_confidence: "1.00", suggested_category_id: null };
+      return json(current);
+    });
+    renderApp("/transactions?tx=t-1");
+    const user = userEvent.setup();
+    const panel = within(await drawer());
+    await user.selectOptions(panel.getByLabelText("Category"), "c-1");
+    await waitFor(() => {
+      expect(api.callsTo("PATCH", "/api/v1/transactions/t-1")).toHaveLength(1);
+    });
+    const tags = within(await panel.findByRole("group", { name: "Tags" }));
+    await user.click(tags.getByRole("checkbox", { name: "trip" }));
+    await waitFor(() => {
+      expect(api.callsTo("PATCH", "/api/v1/transactions/t-1")).toHaveLength(2);
+    });
+    release();
+    expect(await panel.findByRole("status")).toHaveTextContent("Groceries is your choice for this transaction.");
+  });
+
   it("after a guess, going back says it becomes the person's choice", async () => {
     const api = setup();
     renderApp("/transactions?tx=t-1");
