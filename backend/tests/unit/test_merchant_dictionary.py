@@ -268,6 +268,162 @@ def test_whole_tokens_only() -> None:
     assert table.lookup("lantern") is None
 
 
+# --- what the shipped files hold: everyday merchants ---------------------------
+
+#: Merchants each sector file must hold, at least.
+SECTOR_FLOORS = {
+    "groceries.yaml": 60,
+    "restaurants.yaml": 120,
+    "fuel_transport.yaml": 50,
+    "shopping.yaml": 120,
+    "health.yaml": 40,
+    "travel.yaml": 50,
+    "home.yaml": 40,
+}
+
+#: A store that sells everything, by a core a statement gives it and its key.
+MIXED_STORES = (
+    ("amzn mktp us", "amazon"),
+    ("wal mart", "walmart"),
+    ("wm supercenter", "walmart"),
+    ("target", "target"),
+    ("costco whse", "costco"),
+    ("samsclub", "sams club"),
+    ("bjs wholesale", "bjs wholesale club"),
+    ("meijer", "meijer"),
+    ("fred meyer", "fred meyer"),
+    ("dollar general", "dollar general"),
+    ("dollar tree", "dollar tree"),
+    ("family dollar", "family dollar"),
+    ("ebay o 12 34567", "ebay"),
+    ("temu", "temu"),
+)
+
+#: A brand's core and key, then its sub-brand's core, key and category.
+SUB_BRANDS = (
+    ("costco whse", "costco", "costco gas", "costco gas", "transport.fuel"),
+    ("costco whse", "costco", "costco annual renewal", "costco membership", "leisure.memberships"),
+    ("sam club", "sams club", "sam club fuel", "sams club fuel", "transport.fuel"),
+    ("bjs wholesale", "bjs wholesale club", "bjs fuel", "bjs fuel", "transport.fuel"),
+    ("kroger", "kroger", "kroger fuel", "kroger fuel", "transport.fuel"),
+    ("kroger", "kroger", "kroger pharmacy", "kroger pharmacy", "health.pharmacy"),
+    ("safeway", "safeway", "safeway fuel", "safeway fuel", "transport.fuel"),
+    ("uber trip", "uber", "uber eats", "uber eats", "food.delivery"),
+    ("amazon", "amazon", "amazon prime", "amazon prime", "leisure.memberships"),
+    ("amzn mktp us", "amazon", "amazon fresh", "amazon fresh", "food.groceries"),
+)
+
+#: Paying a person, paying a card, or a bank: never a merchant.
+NOT_MERCHANTS = (
+    "venmo",
+    "venmo payment",
+    "zelle",
+    "zelle payment",
+    "cash app",
+    "paypal",
+    "apple cash",
+    "chase",
+    "chase credit crd",
+    "chase card",
+    "capital one",
+    "capital one mobile pmt",
+    "amex epayment",
+    "american express",
+    "discover",
+    "discover e payment",
+    "citi",
+    "citi card online",
+    "barclaycard us",
+    "synchrony bank",
+    "bank of america",
+    "wells fargo",
+    "us bank",
+    "pnc bank",
+    "td bank",
+    "navy federal",
+    "ally bank",
+    "sofi",
+    "chime",
+)
+
+
+def test_size_after_everyday_merchants() -> None:
+    assert len(dictionary.merchants()) >= 600
+
+
+def test_sector_floors() -> None:
+    held: dict[str, int] = {}
+    for file, _ in _shipped_merchants():
+        held[file] = held.get(file, 0) + 1
+    short = {
+        file: (held.get(file, 0), floor)
+        for file, floor in SECTOR_FLOORS.items()
+        if held.get(file, 0) < floor
+    }
+    assert not short, f"sector files below their floor (held, floor): {short}"
+    # The two smaller sectors ship too.
+    assert held.get("family_education.yaml", 0) > 0
+    assert held.get("financial.yaml", 0) > 0
+
+
+def test_mixed_stores_are_marked() -> None:
+    assert len({key for _, key in MIXED_STORES}) >= 12
+    for core, key in MIXED_STORES:
+        hit = dictionary.lookup(core)
+        assert hit is not None, core
+        assert hit.merchant.key == key, core
+        assert hit.merchant.mixed is True, core
+    # A shop with one trade is not a general store.
+    for core in ("netflix", "kroger", "chevron", "olive garden"):
+        hit = dictionary.lookup(core)
+        assert hit is not None, core
+        assert hit.merchant.mixed is False, core
+
+
+def test_sub_brands_win_over_the_brand() -> None:
+    assert len(SUB_BRANDS) >= 10
+    for brand_core, brand_key, sub_core, sub_key, sub_category in SUB_BRANDS:
+        brand = dictionary.lookup(brand_core)
+        assert brand is not None, brand_core
+        assert brand.merchant.key == brand_key, brand_core
+        for core in (sub_core, f"{sub_core} 0412"):
+            sub = dictionary.lookup(core)
+            assert sub is not None, core
+            assert sub.merchant.key == sub_key, core
+            assert sub.merchant.category == sub_category, core
+        assert brand.merchant.category != sub_category, sub_core
+        # The sub-brand's words alone, in another order, are not the sub-brand.
+        tail = sub_core.split()[-1]
+        other = dictionary.lookup(f"{tail} {brand_core}")
+        assert other is None or other.merchant.key != sub_key, sub_core
+
+
+def test_no_entry_for_p2p_or_card_issuers() -> None:
+    for core in NOT_MERCHANTS:
+        assert dictionary.lookup(core) is None, core
+    # Names that share a first word with one of them are still found, as themselves.
+    for core, key in (
+        ("citi bike nyc", "citi bike"),
+        ("american airlines", "american airlines"),
+        ("capital grille", "capital grille"),
+    ):
+        hit = dictionary.lookup(core)
+        assert hit is not None, core
+        assert hit.merchant.key == key, core
+    # Money moved is recognised from the descriptor's kind, never from a merchant.
+    moved = sorted(
+        key
+        for key, merchant in dictionary.merchants().items()
+        if merchant.category.partition(".")[0] in ("transfers", "excluded")
+    )
+    assert moved == []
+    # Who pays money in is a payroll processor or a benefits office, and says so.
+    for key, merchant in dictionary.merchants().items():
+        assert merchant.inflow == (merchant.category.partition(".")[0] == "income"), key
+    assert dictionary.merchants()["adp"].inflow is True
+    assert dictionary.merchants()["adp"].category == "income.salary"
+
+
 # --- the matcher, on tables built here ---------------------------------------
 
 STREAMBOX: dict[str, Any] = {

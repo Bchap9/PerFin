@@ -1,0 +1,146 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Fuel and charging, rides, public transit, parking and tolls, and what a
+# car needs. Format and sources: ../README.md. One entry a line here: the
+# lists are long.
+#
+# A convenience chain with pumps (Wawa, Sheetz, QuikTrip...) sells fuel and
+# food under one name, so it is `mixed`: its category is only ever a
+# suggestion. A warehouse club's or a grocer's fuel is its own entry with a
+# longer match than the store's. A brand whose name is an everyday word or a
+# place ("Shell", "Pilot", "Marathon", "Gulf", "Sinclair", "Firestone",
+# "Napa", "Bart") is matched only together with its second word.
+merchants:
+  # Fuel brands.
+  - {key: shell, name: Shell, category: transport.fuel, match: [shell oil, shell service, shell station, shell gas]}
+  - {key: exxon, name: Exxon, category: transport.fuel, match: [exxon, exxonmobil]}
+  - {key: mobil, name: Mobil, category: transport.fuel, match: [mobil]}
+  - {key: chevron, name: Chevron, category: transport.fuel, match: [chevron]}
+  - {key: texaco, name: Texaco, category: transport.fuel, match: [texaco]}
+  - {key: bp, name: BP, category: transport.fuel, match: [bp]}
+  - {key: amoco, name: Amoco, category: transport.fuel, match: [amoco]}
+  - {key: arco, name: ARCO, category: transport.fuel, match: [arco]}
+  - {key: marathon, name: Marathon, category: transport.fuel, match: [marathon petro, marathon petroleum, marathon gas]}
+  - {key: speedway, name: Speedway, category: transport.fuel, match: [speedway]}
+  - {key: sunoco, name: Sunoco, category: transport.fuel, match: [sunoco]}
+  - {key: valero, name: Valero, category: transport.fuel, match: [valero]}
+  - {key: phillips 66, name: Phillips 66, category: transport.fuel, match: [phillips 66]}
+  - {key: conoco, name: Conoco, category: transport.fuel, match: [conoco]}
+  - {key: union 76, name: "76", category: transport.fuel, match: [union 76, 76 station]}
+  - {key: citgo, name: CITGO, category: transport.fuel, match: [citgo]}
+  - {key: sinclair, name: Sinclair, category: transport.fuel, match: [sinclair oil, sinclair gas]}
+  - {key: gulf oil, name: Gulf, category: transport.fuel, match: [gulf oil, gulf gas]}
+  - {key: murphy usa, name: Murphy USA, category: transport.fuel, match: [murphy usa, murphy express, murphy oil]}
+  - {key: pilot flying j, name: Pilot Flying J, category: transport.fuel, match: [pilot travel, pilot flying j, flying j]}
+  - {key: loves travel stops, name: Love's Travel Stops, category: transport.fuel, match: [loves, love travel, love country, love outside]}
+  - {key: travelcenters of america, name: TravelCenters of America, category: transport.fuel, match: [ta travel, travelcenters of america, petro stopping]}
+  - {key: cenex, name: Cenex, category: transport.fuel, match: [cenex]}
+  - {key: kwik fill, name: Kwik Fill, category: transport.fuel, match: [kwik fill]}
+  - {key: irving oil, name: Irving Oil, category: transport.fuel, match: [irving oil]}
+
+  # Convenience chains with pumps: fuel or food, so a suggestion only.
+  - {key: 7 eleven, name: 7-Eleven, category: food.coffee, mixed: true, match: [7 eleven, 7 11, 7eleven]}
+  - {key: circle k, name: Circle K, category: transport.fuel, mixed: true, match: [circle k, circlek]}
+  - {key: wawa, name: Wawa, category: transport.fuel, mixed: true, match: [wawa]}
+  - {key: sheetz, name: Sheetz, category: transport.fuel, mixed: true, match: [sheetz]}
+  - {key: quiktrip, name: QuikTrip, category: transport.fuel, mixed: true, match: [quiktrip, qt]}
+  - {key: racetrac, name: RaceTrac, category: transport.fuel, mixed: true, match: [racetrac]}
+  - {key: kwik trip, name: Kwik Trip, category: transport.fuel, mixed: true, match: [kwik trip, kwik star]}
+  - {key: kum and go, name: Kum & Go, category: transport.fuel, mixed: true, match: [kum go, kum and go]}
+  - {key: caseys, name: Casey's, category: transport.fuel, mixed: true, match: [caseys, casey gen, casey general]}
+  - {key: buc ees, name: Buc-ee's, category: transport.fuel, mixed: true, match: [buc ee, buc ees, bucees]}
+  - {key: maverik, name: Maverik, category: transport.fuel, mixed: true, match: [maverik]}
+  - {key: holiday stationstores, name: Holiday Stationstores, category: transport.fuel, mixed: true, match: [holiday stationstore, holiday stationstores, holiday station]}
+  - {key: cumberland farms, name: Cumberland Farms, category: transport.fuel, mixed: true, match: [cumberland farms, cumberland farm]}
+  - {key: getgo, name: GetGo, category: transport.fuel, mixed: true, match: [getgo]}
+  - {key: royal farms, name: Royal Farms, category: transport.fuel, mixed: true, match: [royal farms]}
+  - {key: thorntons, name: Thorntons, category: transport.fuel, mixed: true, match: [thorntons]}
+  - {key: ampm, name: ampm, category: transport.fuel, mixed: true, match: [ampm]}
+
+  # A club's or a grocer's pumps: longer than the store's match, so they win.
+  - {key: costco gas, name: Costco Gas, category: transport.fuel, match: [costco gas, costco gasoline, costco fuel]}
+  - {key: sams club fuel, name: Sam's Club Fuel, category: transport.fuel, match: [sams club fuel, sam club fuel, samsclub fuel, sams fuel, sam fuel, sams club gas, sam club gas, samsclub gas]}
+  - {key: bjs fuel, name: BJ's Gas, category: transport.fuel, match: [bjs fuel, bj fuel, bjs gas, bj gas]}
+  - {key: walmart fuel, name: Walmart Fuel, category: transport.fuel, match: [walmart fuel, wal mart fuel, walmart gas, wal mart gas]}
+  - {key: kroger fuel, name: Kroger Fuel, category: transport.fuel, match: [kroger fuel, kroger gas]}
+  - {key: safeway fuel, name: Safeway Fuel, category: transport.fuel, match: [safeway fuel, safeway gas]}
+  - {key: h e b gas, name: H-E-B Fuel, category: transport.fuel, match: [h e b gas, h e b fuel, heb gas, heb fuel]}
+  - {key: hy vee gas, name: Hy-Vee Gas, category: transport.fuel, match: [hy vee gas, hyvee gas]}
+  - {key: fred meyer fuel, name: Fred Meyer Fuel, category: transport.fuel, match: [fred meyer fuel]}
+  - {key: king soopers fuel, name: King Soopers Fuel, category: transport.fuel, match: [king soopers fuel]}
+  - {key: frys fuel, name: Fry's Fuel, category: transport.fuel, match: [frys fuel, fry fuel]}
+  - {key: smiths fuel, name: Smith's Fuel, category: transport.fuel, match: [smiths fuel, smith fuel]}
+  - {key: meijer gas, name: Meijer Gas, category: transport.fuel, match: [meijer gas, meijer express]}
+
+  # Charging.
+  - {key: chargepoint, name: ChargePoint, category: transport.fuel, match: [chargepoint]}
+  - {key: electrify america, name: Electrify America, category: transport.fuel, match: [electrify america]}
+  - {key: evgo, name: EVgo, category: transport.fuel, match: [evgo]}
+  - {key: tesla supercharger, name: Tesla Supercharger, category: transport.fuel, match: [tesla supercharger, tesla supercharging]}
+  - {key: blink charging, name: Blink Charging, category: transport.fuel, match: [blink charging]}
+
+  # Rides. A ride service's food delivery is in restaurants.yaml.
+  - {key: uber, name: Uber, category: transport.taxi, match: [uber]}
+  - {key: lyft, name: Lyft, category: transport.taxi, match: [lyft]}
+  - {key: curb, name: Curb, category: transport.taxi, match: [curb mobility, curb taxi]}
+
+  # Public transit and shared bikes.
+  - {key: mta, name: MTA, category: transport.public_transit, match: [mta]}
+  - {key: nj transit, name: NJ Transit, category: transport.public_transit, match: [nj transit, njt]}
+  - {key: septa, name: SEPTA, category: transport.public_transit, match: [septa]}
+  - {key: wmata, name: WMATA, category: transport.public_transit, match: [wmata, smartrip]}
+  - {key: mbta, name: MBTA, category: transport.public_transit, match: [mbta]}
+  - {key: ventra, name: Ventra, category: transport.public_transit, match: [ventra, cta ventra]}
+  - {key: metra, name: Metra, category: transport.public_transit, match: [metra]}
+  - {key: clipper, name: Clipper, category: transport.public_transit, match: [clipper systems, clipper card, bart clipper]}
+  - {key: caltrain, name: Caltrain, category: transport.public_transit, match: [caltrain]}
+  - {key: trimet, name: TriMet, category: transport.public_transit, match: [trimet]}
+  - {key: orca, name: ORCA, category: transport.public_transit, match: [orca card, myorca]}
+  - {key: marta, name: MARTA, category: transport.public_transit, match: [marta breeze, marta atlanta]}
+  - {key: citi bike, name: Citi Bike, category: transport.public_transit, match: [citi bike, citibik, citibike]}
+  - {key: divvy, name: Divvy, category: transport.public_transit, match: [divvy bike, divvy bikes]}
+
+  # Parking and tolls.
+  - {key: e zpass, name: E-ZPass, category: transport.parking, match: [e zpass, ezpass, ez pass, e z pass]}
+  - {key: fastrak, name: FasTrak, category: transport.parking, match: [fastrak]}
+  - {key: sunpass, name: SunPass, category: transport.parking, match: [sunpass]}
+  - {key: illinois tollway, name: Illinois Tollway, category: transport.parking, match: [il tollway, illinois tollway]}
+  - {key: txtag, name: TxTag, category: transport.parking, match: [txtag]}
+  - {key: ntta, name: NTTA, category: transport.parking, match: [ntta]}
+  - {key: peach pass, name: Peach Pass, category: transport.parking, match: [peach pass]}
+  - {key: pikepass, name: PIKEPASS, category: transport.parking, match: [pikepass]}
+  - {key: the toll roads, name: The Toll Roads, category: transport.parking, match: [the toll roads]}
+  - {key: parkmobile, name: ParkMobile, category: transport.parking, match: [parkmobile]}
+  - {key: spothero, name: SpotHero, category: transport.parking, match: [spothero]}
+  - {key: paybyphone, name: PayByPhone, category: transport.parking, match: [paybyphone]}
+  - {key: parkwhiz, name: ParkWhiz, category: transport.parking, match: [parkwhiz]}
+  - {key: laz parking, name: LAZ Parking, category: transport.parking, match: [laz parking]}
+  - {key: ace parking, name: Ace Parking, category: transport.parking, match: [ace parking]}
+  - {key: impark, name: Impark, category: transport.parking, match: [impark]}
+  - {key: premium parking, name: Premium Parking, category: transport.parking, match: [premium parking]}
+
+  # Service, parts, tyres and washes.
+  - {key: jiffy lube, name: Jiffy Lube, category: transport.car_maintenance, match: [jiffy lube]}
+  - {key: valvoline, name: Valvoline Instant Oil Change, category: transport.car_maintenance, match: [valvoline]}
+  - {key: take 5 oil change, name: Take 5 Oil Change, category: transport.car_maintenance, match: [take 5]}
+  - {key: firestone, name: Firestone Complete Auto Care, category: transport.car_maintenance, match: [firestone complete, firestone auto, firestone tire, firestone store]}
+  - {key: goodyear, name: Goodyear, category: transport.car_maintenance, match: [goodyear]}
+  - {key: discount tire, name: Discount Tire, category: transport.car_maintenance, match: [discount tire, america tire, americas tire]}
+  - {key: pep boys, name: Pep Boys, category: transport.car_maintenance, match: [pep boys]}
+  - {key: midas, name: Midas, category: transport.car_maintenance, match: [midas]}
+  - {key: meineke, name: Meineke, category: transport.car_maintenance, match: [meineke]}
+  - {key: autozone, name: AutoZone, category: transport.car_maintenance, match: [autozone, auto zone]}
+  - {key: oreilly auto parts, name: O'Reilly Auto Parts, category: transport.car_maintenance, match: [oreilly, o reilly]}
+  - {key: advance auto parts, name: Advance Auto Parts, category: transport.car_maintenance, match: [advance auto]}
+  - {key: napa auto parts, name: NAPA Auto Parts, category: transport.car_maintenance, match: [napa auto]}
+  - {key: les schwab, name: Les Schwab Tire Centers, category: transport.car_maintenance, match: [les schwab]}
+  - {key: big o tires, name: Big O Tires, category: transport.car_maintenance, match: [big o tires]}
+  - {key: mavis, name: Mavis Tires & Brakes, category: transport.car_maintenance, match: [mavis tire, mavis tires, mavis discount]}
+  - {key: ntb, name: NTB Tire & Service, category: transport.car_maintenance, match: [ntb]}
+  - {key: tires plus, name: Tires Plus, category: transport.car_maintenance, match: [tires plus]}
+  - {key: safelite, name: Safelite AutoGlass, category: transport.car_maintenance, match: [safelite]}
+  - {key: maaco, name: Maaco, category: transport.car_maintenance, match: [maaco]}
+  - {key: caliber collision, name: Caliber Collision, category: transport.car_maintenance, match: [caliber collision]}
+  - {key: christian brothers automotive, name: Christian Brothers Automotive, category: transport.car_maintenance, match: [christian brothers auto]}
+  - {key: mister car wash, name: Mister Car Wash, category: transport.car_maintenance, match: [mister car wash]}
+  - {key: zips car wash, name: Zips Car Wash, category: transport.car_maintenance, match: [zips car wash]}
+  - {key: quick quack car wash, name: Quick Quack Car Wash, category: transport.car_maintenance, match: [quick quack]}

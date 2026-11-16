@@ -1,0 +1,87 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Pharmacies, eye care, dentists, laboratories and clinics. Format and
+# sources: ../README.md. One entry a line here: the lists are long.
+#
+# A grocer's or a club's pharmacy is its own entry with a longer match than
+# the store's, so it wins. Health insurers and gyms are not here (they are
+# bills and subscriptions, with their own files).
+merchants:
+  # Pharmacies.
+  - {key: cvs, name: CVS Pharmacy, category: health.pharmacy, match: [cvs]}
+  - {key: walgreens, name: Walgreens, category: health.pharmacy, match: [walgreens, walgreen]}
+  - {key: rite aid, name: Rite Aid, category: health.pharmacy, match: [rite aid, riteaid]}
+  - {key: duane reade, name: Duane Reade, category: health.pharmacy, match: [duane reade]}
+  - {key: walmart pharmacy, name: Walmart Pharmacy, category: health.pharmacy, match: [walmart pharmacy, wal mart pharmacy]}
+  - {key: kroger pharmacy, name: Kroger Pharmacy, category: health.pharmacy, match: [kroger pharmacy]}
+  - {key: costco pharmacy, name: Costco Pharmacy, category: health.pharmacy, match: [costco pharmacy]}
+  - {key: sams club pharmacy, name: Sam's Club Pharmacy, category: health.pharmacy, match: [sams club pharmacy, sam club pharmacy, samsclub pharmacy]}
+  - {key: safeway pharmacy, name: Safeway Pharmacy, category: health.pharmacy, match: [safeway pharmacy]}
+  - {key: publix pharmacy, name: Publix Pharmacy, category: health.pharmacy, match: [publix pharmacy]}
+  - {key: h e b pharmacy, name: H-E-B Pharmacy, category: health.pharmacy, match: [h e b pharmacy, heb pharmacy]}
+  - {key: amazon pharmacy, name: Amazon Pharmacy, category: health.pharmacy, match: [amazon pharmacy, amzn pharmacy]}
+  - {key: express scripts, name: Express Scripts, category: health.pharmacy, match: [express scripts]}
+  - {key: optum rx, name: Optum Rx, category: health.pharmacy, match: [optumrx, optum rx]}
+  - {key: cvs caremark, name: CVS Caremark, category: health.pharmacy, match: [caremark, cvs caremark]}
+  - {key: goodrx, name: GoodRx, category: health.pharmacy, match: [goodrx]}
+  - {key: capsule pharmacy, name: Capsule Pharmacy, category: health.pharmacy, match: [capsule pharmacy]}
+  - {key: pillpack, name: PillPack, category: health.pharmacy, match: [pillpack]}
+  - {key: health mart, name: Health Mart, category: health.pharmacy, match: [health mart]}
+  - {key: medicine shoppe, name: The Medicine Shoppe, category: health.pharmacy, match: [medicine shoppe, the medicine shoppe]}
+  - {key: genoa healthcare, name: Genoa Healthcare, category: health.pharmacy, match: [genoa healthcare]}
+  - {key: the vitamin shoppe, name: The Vitamin Shoppe, category: health.pharmacy, match: [vitamin shoppe, the vitamin shoppe]}
+  - {key: gnc, name: GNC, category: health.pharmacy, match: [gnc]}
+
+  # Eye care.
+  - {key: lenscrafters, name: LensCrafters, category: health.medical, match: [lenscrafters]}
+  - {key: pearle vision, name: Pearle Vision, category: health.medical, match: [pearle vision]}
+  - {key: visionworks, name: Visionworks, category: health.medical, match: [visionworks]}
+  - {key: americas best contacts, name: America's Best Contacts & Eyeglasses, category: health.medical, match: [americas best contacts, america best contacts, americas best]}
+  - {key: warby parker, name: Warby Parker, category: health.medical, match: [warby parker, warbyparker]}
+  - {key: 1 800 contacts, name: 1-800 Contacts, category: health.medical, match: [1 800 contacts, 1800 contacts, 1800contacts]}
+  - {key: target optical, name: Target Optical, category: health.medical, match: [target optical]}
+  - {key: costco optical, name: Costco Optical, category: health.medical, match: [costco optical]}
+  - {key: myeyedr, name: MyEyeDr., category: health.medical, match: [myeyedr]}
+  - {key: eyemart express, name: Eyemart Express, category: health.medical, match: [eyemart express]}
+  - {key: zenni optical, name: Zenni Optical, category: health.medical, match: [zenni]}
+
+  # Dentists and orthodontics.
+  - {key: aspen dental, name: Aspen Dental, category: health.dental, match: [aspen dental]}
+  - {key: western dental, name: Western Dental, category: health.dental, match: [western dental]}
+  - {key: gentle dental, name: Gentle Dental, category: health.dental, match: [gentle dental]}
+  - {key: comfort dental, name: Comfort Dental, category: health.dental, match: [comfort dental]}
+  - {key: monarch dental, name: Monarch Dental, category: health.dental, match: [monarch dental]}
+  - {key: castle dental, name: Castle Dental, category: health.dental, match: [castle dental]}
+  - {key: bright now dental, name: Bright Now! Dental, category: health.dental, match: [bright now dental]}
+  - {key: great expressions dental, name: Great Expressions Dental Centers, category: health.dental, match: [great expressions]}
+  - {key: affordable dentures, name: Affordable Dentures & Implants, category: health.dental, match: [affordable dentures]}
+  - {key: invisalign, name: Invisalign, category: health.dental, match: [invisalign]}
+  - {key: smile direct club, name: SmileDirectClub, category: health.dental, match: [smile direct, smiledirectclub]}
+
+  # Laboratories, clinics and other care.
+  - {key: labcorp, name: Labcorp, category: health.medical, match: [labcorp, laboratory corp]}
+  - {key: quest diagnostics, name: Quest Diagnostics, category: health.medical, match: [quest diagnostics, quest diag]}
+  - {key: bioreference, name: BioReference, category: health.medical, match: [bioreference]}
+  - {key: any lab test now, name: Any Lab Test Now, category: health.medical, match: [any lab test now]}
+  - {key: minuteclinic, name: MinuteClinic, category: health.medical, match: [minuteclinic, minute clinic]}
+  - {key: concentra, name: Concentra, category: health.medical, match: [concentra]}
+  - {key: carbon health, name: Carbon Health, category: health.medical, match: [carbon health]}
+  - {key: one medical, name: One Medical, category: health.medical, match: [one medical]}
+  - {key: citymd, name: CityMD, category: health.medical, match: [citymd]}
+  - {key: medexpress, name: MedExpress Urgent Care, category: health.medical, match: [medexpress]}
+  - {key: nextcare, name: NextCare Urgent Care, category: health.medical, match: [nextcare]}
+  - {key: patient first, name: Patient First, category: health.medical, match: [patient first]}
+  - {key: gohealth urgent care, name: GoHealth Urgent Care, category: health.medical, match: [gohealth]}
+  - {key: fastmed, name: FastMed Urgent Care, category: health.medical, match: [fastmed]}
+  - {key: american family care, name: American Family Care, category: health.medical, match: [american family care, afc urgent care]}
+  - {key: kaiser permanente, name: Kaiser Permanente, category: health.medical, match: [kaiser permanente, kaiser perm]}
+  - {key: planned parenthood, name: Planned Parenthood, category: health.medical, match: [planned parenthood]}
+  - {key: teladoc, name: Teladoc Health, category: health.medical, match: [teladoc]}
+  - {key: mdlive, name: MDLIVE, category: health.medical, match: [mdlive]}
+  - {key: davita, name: DaVita, category: health.medical, match: [davita]}
+  - {key: the joint chiropractic, name: The Joint Chiropractic, category: health.medical, match: [the joint chiro, the joint chiropractic]}
+  - {key: athletico, name: Athletico Physical Therapy, category: health.medical, match: [athletico]}
+  - {key: ati physical therapy, name: ATI Physical Therapy, category: health.medical, match: [ati physical therapy, ati pt]}
+  - {key: select physical therapy, name: Select Physical Therapy, category: health.medical, match: [select physical therapy]}
+  - {key: miracle ear, name: Miracle-Ear, category: health.medical, match: [miracle ear]}
+  - {key: beltone, name: Beltone, category: health.medical, match: [beltone]}
+  - {key: hearinglife, name: HearingLife, category: health.medical, match: [hearinglife]}

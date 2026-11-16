@@ -1,0 +1,81 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# The home: hardware and building supplies, furniture and furnishings, and
+# the firms that come to fix, clean or spray. Format and sources:
+# ../README.md. One entry a line here: the lists are long.
+#
+# Clean-up drops a possessive, so "LOWE'S" arrives as `lowe`. Alarm,
+# storage and utility companies are bills and are not here.
+merchants:
+  # Hardware, building supplies and farm stores.
+  - {key: the home depot, name: The Home Depot, category: housing.improvement, match: [home depot, the home depot, homedepot]}
+  - {key: lowes, name: Lowe's, category: housing.improvement, match: [lowes, lowe]}
+  - {key: menards, name: Menards, category: housing.improvement, match: [menards]}
+  - {key: ace hardware, name: Ace Hardware, category: housing.improvement, match: [ace hardware, ace hdwe, ace hdw]}
+  - {key: true value, name: True Value, category: housing.improvement, match: [true value]}
+  - {key: do it best, name: Do it Best, category: housing.improvement, match: [do it best]}
+  - {key: harbor freight, name: Harbor Freight Tools, category: housing.improvement, match: [harbor freight]}
+  - {key: tractor supply, name: Tractor Supply Co., category: housing.improvement, match: [tractor supply]}
+  - {key: northern tool, name: Northern Tool + Equipment, category: housing.improvement, match: [northern tool]}
+  - {key: sherwin williams, name: Sherwin-Williams, category: housing.improvement, match: [sherwin williams]}
+  - {key: benjamin moore, name: Benjamin Moore, category: housing.improvement, match: [benjamin moore]}
+  - {key: floor and decor, name: Floor & Decor, category: housing.improvement, match: [floor decor, floor and decor]}
+  - {key: ll flooring, name: LL Flooring, category: housing.improvement, match: [lumber liquidators, ll flooring]}
+  - {key: 84 lumber, name: 84 Lumber, category: housing.improvement, match: [84 lumber]}
+  - {key: rural king, name: Rural King, category: housing.improvement, match: [rural king]}
+  - {key: fleet farm, name: Fleet Farm, category: housing.improvement, match: [fleet farm]}
+  - {key: blains farm and fleet, name: Blain's Farm & Fleet, category: housing.improvement, match: [blains farm, blain farm]}
+
+  # Furniture, bedding and furnishings.
+  - {key: ikea, name: IKEA, category: shopping.home, match: [ikea]}
+  - {key: bed bath and beyond, name: Bed Bath & Beyond, category: shopping.home, match: [bed bath beyond, bed bath and beyond]}
+  - {key: homegoods, name: HomeGoods, category: shopping.home, match: [homegoods, home goods]}
+  - {key: at home, name: At Home, category: shopping.home, match: [at home store, at home stores]}
+  - {key: crate and barrel, name: Crate & Barrel, category: shopping.home, match: [crate barrel, crate and barrel]}
+  - {key: cb2, name: CB2, category: shopping.home, match: [cb2]}
+  - {key: pottery barn, name: Pottery Barn, category: shopping.home, match: [pottery barn, potterybarn]}
+  - {key: williams sonoma, name: Williams Sonoma, category: shopping.home, match: [williams sonoma]}
+  - {key: west elm, name: West Elm, category: shopping.home, match: [west elm, westelm]}
+  - {key: restoration hardware, name: RH, category: shopping.home, match: [restoration hardware]}
+  - {key: wayfair, name: Wayfair, category: shopping.home, match: [wayfair]}
+  - {key: overstock, name: Overstock, category: shopping.home, match: [overstock]}
+  - {key: ashley furniture, name: Ashley Furniture, category: shopping.home, match: [ashley furniture, ashley homestore, ashley home]}
+  - {key: rooms to go, name: Rooms To Go, category: shopping.home, match: [rooms to go]}
+  - {key: bobs discount furniture, name: Bob's Discount Furniture, category: shopping.home, match: [bobs discount, bob discount]}
+  - {key: la z boy, name: La-Z-Boy, category: shopping.home, match: [la z boy, lazboy]}
+  - {key: ethan allen, name: Ethan Allen, category: shopping.home, match: [ethan allen]}
+  - {key: havertys, name: Havertys, category: shopping.home, match: [havertys]}
+  - {key: raymour and flanigan, name: Raymour & Flanigan, category: shopping.home, match: [raymour flanigan, raymour and flanigan]}
+  - {key: value city furniture, name: Value City Furniture, category: shopping.home, match: [value city furn, value city furniture]}
+  - {key: american furniture warehouse, name: American Furniture Warehouse, category: shopping.home, match: [american furniture warehouse, american furniture whse]}
+  - {key: living spaces, name: Living Spaces, category: shopping.home, match: [living spaces]}
+  - {key: mattress firm, name: Mattress Firm, category: shopping.home, match: [mattress firm]}
+  - {key: sleep number, name: Sleep Number, category: shopping.home, match: [sleep number]}
+  - {key: tempur pedic, name: Tempur-Pedic, category: shopping.home, match: [tempur pedic, tempurpedic]}
+  - {key: casper, name: Casper, category: shopping.home, match: [casper sleep]}
+  - {key: the container store, name: The Container Store, category: shopping.home, match: [container store, the container store]}
+  - {key: kirklands, name: Kirkland's Home, category: shopping.home, match: [kirklands, kirkland home]}
+  - {key: world market, name: World Market, category: shopping.home, match: [world market, cost plus world]}
+  - {key: yankee candle, name: Yankee Candle, category: shopping.home, match: [yankee candle]}
+  - {key: z gallerie, name: Z Gallerie, category: shopping.home, match: [z gallerie]}
+  - {key: arhaus, name: Arhaus, category: shopping.home, match: [arhaus]}
+  - {key: lamps plus, name: Lamps Plus, category: shopping.home, match: [lamps plus]}
+  - {key: frontgate, name: Frontgate, category: shopping.home, match: [frontgate]}
+
+  # Repairs, cleaning, pests and the lawn.
+  - {key: terminix, name: Terminix, category: housing.maintenance, match: [terminix]}
+  - {key: orkin, name: Orkin, category: housing.maintenance, match: [orkin]}
+  - {key: trugreen, name: TruGreen, category: housing.maintenance, match: [trugreen]}
+  - {key: lawn doctor, name: Lawn Doctor, category: housing.maintenance, match: [lawn doctor]}
+  - {key: roto rooter, name: Roto-Rooter, category: housing.maintenance, match: [roto rooter, rotorooter]}
+  - {key: mr rooter, name: Mr. Rooter Plumbing, category: housing.maintenance, match: [mr rooter]}
+  - {key: servpro, name: SERVPRO, category: housing.maintenance, match: [servpro]}
+  - {key: stanley steemer, name: Stanley Steemer, category: housing.maintenance, match: [stanley steemer]}
+  - {key: chem dry, name: Chem-Dry, category: housing.maintenance, match: [chem dry]}
+  - {key: molly maid, name: Molly Maid, category: housing.maintenance, match: [molly maid]}
+  - {key: merry maids, name: Merry Maids, category: housing.maintenance, match: [merry maids]}
+  - {key: mr handyman, name: Mr. Handyman, category: housing.maintenance, match: [mr handyman]}
+  - {key: one hour heating, name: One Hour Heating & Air Conditioning, category: housing.maintenance, match: [one hour heating]}
+  - {key: aire serv, name: Aire Serv, category: housing.maintenance, match: [aire serv]}
+  - {key: angi, name: Angi, category: housing.maintenance, match: [angies list, angie list, angi services, angi homeservices]}
+  - {key: thumbtack, name: Thumbtack, category: housing.maintenance, match: [thumbtack]}
+  - {key: taskrabbit, name: Taskrabbit, category: housing.maintenance, match: [taskrabbit]}
