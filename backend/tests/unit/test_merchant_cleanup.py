@@ -811,9 +811,6 @@ def test_not_p2p_behind_a_bank_prefix(raw: str, kind: str, core: str) -> None:
         ("FUNDS TRANSFER 4410", "transfer"),
         ("FUNDS TRANSFER", "transfer"),
         ("ONLINE BANKING TRANSFER #4410 XXXX7731", "transfer"),
-        ("WIRE TRANSFER OUTGOING 5512098871", "transfer"),
-        # A wire names a person or a company: never a merchant key.
-        ("WIRE TRANSFER TO JORDAN SAMPLE", "transfer"),
     ],
 )
 def test_card_payments_and_transfers_in_other_wording(raw: str, kind: str) -> None:
@@ -824,6 +821,27 @@ def test_card_payments_and_transfers_in_other_wording(raw: str, kind: str) -> No
         None,
         frozenset(),
     )
+
+
+@pytest.mark.parametrize(
+    "raw",
+    [
+        "WIRE TRANSFER OUTGOING 5512098871",
+        # A wire names a person or a company: never a merchant key.
+        "WIRE TRANSFER TO JORDAN SAMPLE",
+        "ONLINE WIRE TRANSFER TO HARBOUR TITLE CO",
+        "WIRE XFER FROM JORDAN SAMPLE",
+    ],
+)
+def test_a_wire_is_a_transfer_that_says_it_may_leave_the_household(raw: str) -> None:
+    assert clean(raw) == Cleaned(core="", kind="transfer", signals=frozenset({"wire"}))
+
+
+def test_a_transfer_that_is_no_wire_carries_no_wire_signal() -> None:
+    assert clean("ONLINE TRANSFER TO SAV 4410").signals == frozenset()
+    assert clean("FUNDS TRANSFER TO WIRE WORKS 4410").signals == frozenset()
+    # Not a transfer at all: the word alone says nothing.
+    assert clean("WIRE TRANSFER FEE") == Cleaned(core="", kind="fee")
 
 
 @pytest.mark.parametrize(

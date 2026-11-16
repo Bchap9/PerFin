@@ -411,7 +411,10 @@ What the columns and the two tables mean to a person is in
   category removes its entries; merging one folds them into the target.
   When a newer clean-up or dictionary renames a merchant, the refresh that
   re-keys the rows carries the entries to the new key in the same
-  transaction. Not exposed to AI clients (`classification: denied`).
+  transaction, and with them the `merchant` conditions of the household's
+  rules and `scheduled_transaction.merchant_key` (only when every row of
+  the old key went to one new key, and never onto a merchant that already
+  has its own merchant rule). Not exposed to AI clients (`classification: denied`).
 - **Household state**: setting `categorisation.state` (`cleaner`,
   `dictionary`, `taxonomy`, `memory_seeded`): the versions the household's
   rows were last evaluated with (`cleanup.CLEANER_VERSION`,

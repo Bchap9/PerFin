@@ -140,6 +140,11 @@ _TRANSFER_LEAD: Final = (
     "|ACCOUNT|ACH|WIRE|INSTANT|KEEP THE CHANGE|SAVE AS YOU GO|OVERDRAFT PROTECTION"
 )
 _TRANSFER_WORD: Final = r"(?:BANKING )?(?:TRANSFER|XFER)(?: (?:DEBIT|CREDIT|OUTGOING|INCOMING))?"
+#: A transfer the bank calls a wire: WIRE among the words in front of TRANSFER.
+#: Such a line may pay a person or a company (signal :data:`WIRE_SIGNAL`).
+_WIRE: Final = re.compile(r"(?:[A-Z]+ ){0,3}WIRE (?:[A-Z]+ ){0,2}(?:TRANSFER|XFER)\b")
+#: The signal of a transfer that is a wire: it need not stay in the household.
+WIRE_SIGNAL: Final = "wire"
 #: An account or reference number, masked or not ("4410", "#4410", "XXXX7731").
 _ACCOUNT_NUMBER: Final = r"[#X*.]{0,24}\d[A-Z0-9-]{0,23}"
 
@@ -807,6 +812,8 @@ def clean(raw: str | None) -> Cleaned:
         rest = _RECURRING_TAIL.sub("", rest)
     if signal is not None:
         signals.add(signal)
+    if kind == "transfer" and _WIRE.match(text):
+        signals.add(WIRE_SIGNAL)
     if kind in _NO_CORE:
         return Cleaned(core="", kind=kind, signals=frozenset(signals))
     if kind in _ACH_OPEN and _STUDENT_LOAN.search(rest):

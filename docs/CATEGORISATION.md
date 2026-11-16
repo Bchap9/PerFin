@@ -73,7 +73,9 @@ Money that is not spending is recognised from the wording of the line, not
 from a merchant: a card payment, a transfer between your own accounts, a
 loan payment and cash from an ATM go to the transfer categories, which
 reports leave out of spending; a salary to "Salary", interest to interest
-received or paid, a bank fee to "Bank fees". A cheque, a deposit and a
+received or paid, a bank fee to "Bank fees". A wire transfer is only
+suggested as a transfer between your accounts, because a wire may as well
+pay somebody else. A cheque, a deposit and a
 payment between people (Zelle, Venmo, Cash App) are **never** guessed: the
 line does not say what the money was for.
 

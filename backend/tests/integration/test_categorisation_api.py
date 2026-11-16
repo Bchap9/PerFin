@@ -38,7 +38,13 @@ from app.domain.categorisation.dictionary import Hit, Merchant
 from app.domain.categorisation.memory import Direction
 from app.domain.categorisation.models import MerchantMemory
 from app.domain.transactions import categories
-from app.domain.transactions.models import Category, Transaction
+from app.domain.transactions.models import (
+    Category,
+    Rule,
+    ScheduledTransaction,
+    ScheduleOrigin,
+    Transaction,
+)
 from app.workers.registry import JobContext
 from tests.fixtures.factories import AuthedClient, Factories, make_household
 from tests.fixtures.households import (
@@ -53,6 +59,8 @@ from tests.fixtures.ledger import (
     household_context,
     make_account,
     make_category,
+    make_rule,
+    make_scheduled_transaction,
     make_transaction,
 )
 
@@ -578,6 +586,148 @@ def test_when_a_key_splits_only_the_decisions_of_the_rows_that_moved_go_with_the
         ("amber orchard one", "out", home.other.id, 1),
     }
     assert result.summary.memory_moved == 2
+
+
+def _always(category: Category) -> list[dict[str, str]]:
+    return [{"type": "set_category", "category_id": str(category.id)}]
+
+
+def _series(db: Session, home: Home, key: str, status: str) -> ScheduledTransaction:
+    """A detected series for ``key`` as a person's decision left it."""
+    series = make_scheduled_transaction(db, home.account, origin=ScheduleOrigin.DETECTED)
+    series.merchant_key = key
+    series.status = status
+    series.status_source = "person"
+    db.flush()
+    return series
+
+
+def test_a_merchant_rule_and_a_series_follow_the_merchant_s_new_name(
+    db: Session, home: Home, known: dict[str, Merchant], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    hh = home.household_id
+    _store_state(db, hh, _versions())
+    old = "velvet picture house 03"
+    early = home.row("VELVET PICTURE HOUSE 03")
+    engine.categorise_rows(db, hh, [early])
+    assert _stored(db, early.id)["merchant_key"] == old
+    # "Always categorise this merchant as...", and a general rule that names it too.
+    always = make_rule(
+        db, hh, conditions={"type": "merchant", "key": old}, actions=_always(home.other)
+    )
+    general = make_rule(
+        db,
+        hh,
+        sort_order=1,
+        conditions={
+            "type": "all",
+            "conditions": [
+                {"type": "merchant", "key": old},
+                {"type": "not", "condition": {"type": "merchant", "key": "mossy bookshop"}},
+            ],
+        },
+        actions=_always(home.groceries),
+    )
+    # A merchant whose name does not move.
+    bookshop = make_rule(
+        db,
+        hh,
+        sort_order=2,
+        conditions={"type": "merchant", "key": "mossy bookshop"},
+        actions=_always(home.other),
+    )
+    dismissed = _series(db, home, old, "dismissed")
+    paused = _series(db, home, "mossy bookshop", "paused")
+
+    _ship_a_release_that_renames_the_cinema(known, monkeypatch)
+    service.refresh(db, hh)
+    db.expire_all()
+
+    # The rule still means the merchant it was made for...
+    assert db.get(Rule, always.id).conditions == {"type": "merchant", "key": RENAMED.key}  # type: ignore[union-attr]
+    assert db.get(Rule, general.id).conditions == {  # type: ignore[union-attr]
+        "type": "all",
+        "conditions": [
+            {"type": "merchant", "key": RENAMED.key},
+            {"type": "not", "condition": {"type": "merchant", "key": "mossy bookshop"}},
+        ],
+    }
+    assert db.get(Rule, bookshop.id).conditions == {"type": "merchant", "key": "mossy bookshop"}  # type: ignore[union-attr]
+    # ... and so does the series a person dismissed: the decision stays where
+    # the next detection looks for it.
+    kept = db.get(ScheduledTransaction, dismissed.id)
+    assert kept is not None
+    assert (kept.merchant_key, kept.status, kept.status_source, kept.active) == (
+        RENAMED.key,
+        "dismissed",
+        "person",
+        False,
+    )
+    other = db.get(ScheduledTransaction, paused.id)
+    assert other is not None
+    assert (other.merchant_key, other.status) == ("mossy bookshop", "paused")
+
+    # The next charge is the rule's, as before the new name.
+    later = home.row("VELVET PICTURE HOUSE 03")
+    engine.categorise_rows(db, hh, [later])
+    stored = _stored(db, later.id)
+    assert (
+        stored["merchant_key"],
+        stored["category_id"],
+        stored["category_source"],
+        stored["category_rule_id"],
+    ) == (RENAMED.key, home.other.id, "rule", always.id)
+
+    # The audit row counts what followed and names nobody.
+    [entry] = _audits(db, hh, "categorise.refresh")
+    assert entry.after is not None
+    assert (entry.after["rules_moved"], entry.after["series_moved"]) == (2, 1)
+    text = [part for part in _flat([entry.before, entry.after]) if isinstance(part, str)]
+    assert not [part for part in text if "velvet" in part.lower() or "picture" in part.lower()]
+
+
+def test_a_rule_does_not_follow_a_split_key_or_onto_a_merchant_that_has_its_rule(
+    db: Session, home: Home, known: dict[str, Merchant], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    hh = home.household_id
+    _store_state(db, hh, _versions())
+    old = "velvet picture house 03"
+    home.row("VELVET PICTURE HOUSE 03", merchant_key=old)
+    # The household already said where the merchant's new name goes.
+    theirs = make_rule(
+        db, hh, conditions={"type": "merchant", "key": RENAMED.key}, actions=_always(home.groceries)
+    )
+    always = make_rule(
+        db,
+        hh,
+        sort_order=1,
+        conditions={"type": "merchant", "key": old},
+        actions=_always(home.other),
+    )
+    # Rows that carried one key and now carry two: nobody can say which the rule meant.
+    home.row("LAMPLIGHT CINEMA 4", merchant_key="evening shows")
+    home.row("CORNER GROCER 0417", merchant_key="evening shows")
+    split = make_rule(
+        db,
+        hh,
+        sort_order=2,
+        conditions={"type": "merchant", "key": "evening shows"},
+        actions=_always(home.other),
+    )
+    series = _series(db, home, "evening shows", "dismissed")
+
+    _ship_a_release_that_renames_the_cinema(known, monkeypatch)
+    service.refresh(db, hh)
+    db.expire_all()
+
+    # Two merchant rules for one merchant would let the earlier one win: the old one stays put.
+    assert db.get(Rule, theirs.id).conditions == {"type": "merchant", "key": RENAMED.key}  # type: ignore[union-attr]
+    assert db.get(Rule, always.id).conditions == {"type": "merchant", "key": old}  # type: ignore[union-attr]
+    assert db.get(Rule, split.id).conditions == {"type": "merchant", "key": "evening shows"}  # type: ignore[union-attr]
+    assert db.get(ScheduledTransaction, series.id).merchant_key == "evening shows"  # type: ignore[union-attr]
+    [entry] = _audits(db, hh, "categorise.refresh")
+    assert entry.after is not None
+    assert (entry.after["rules_moved"], entry.after["series_moved"]) == (0, 0)
 
 
 def test_dispatch_queues_only_households_behind(db: Session) -> None:

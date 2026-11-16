@@ -122,6 +122,9 @@ KIND_CATEGORIES: Final[Mapping[tuple[DescriptorKind, Direction], tuple[str, Deci
     ("payroll", "in"): ("income.salary", Decimal("0.85")),
     ("refund", "in"): ("income.refunds", Decimal("0.80")),
 }
+#: The most a wire is trusted as a transfer between the household's own
+#: accounts: it may as well pay a person or a company, so it is a suggestion.
+WIRE_MAX: Final = Decimal("0.70")
 #: Processors that are who was paid: an order through a delivery or ticket
 #: platform is the platform's (its ``via`` is the key of its dictionary
 #: entry), whatever restaurant, shop or event the line names behind it. The
@@ -170,6 +173,8 @@ class Identity:
     #: A shorter name the same merchant may be filed under in the household's
     #: memory (:func:`learned_for`); never a key of its own.
     also: str | None = None
+    #: What clean-up read on the way (``Cleaned.signals``).
+    signals: frozenset[str] = frozenset()
 
 
 @dataclass(frozen=True)
@@ -200,6 +205,10 @@ class Summary:
     changed_accounts: set[uuid.UUID] = field(default_factory=set)
     #: Learned entries (memory rows) carried over to a merchant's new key.
     memory_moved: int = 0
+    #: After a pass that computed every key again: for each merchant key a row
+    #: carried, the keys those rows carry now (``None``: a row that names
+    #: nobody any more). Read with :func:`key_now`; never stored or audited.
+    renamed: dict[str, frozenset[str | None]] = field(default_factory=dict)
 
 
 def _key_of(core: str) -> str | None:
@@ -275,6 +284,7 @@ def identify(raw: str | None) -> Identity:
         hit=hit,
         core=cleaned.core,
         also=also if also != key else None,
+        signals=cleaned.signals,
     )
 
 
@@ -330,7 +340,10 @@ def _from_data(identity: Identity, direction: Direction) -> tuple[str, str, Deci
     by_kind = KIND_CATEGORIES.get((identity.kind, direction))
     hit = identity.hit
     if by_kind is not None and not (identity.kind == "refund" and hit is not None):
-        return ("dictionary", *by_kind)
+        key, sure = by_kind
+        if identity.kind == "transfer" and cleanup.WIRE_SIGNAL in identity.signals:
+            sure = min(sure, WIRE_MAX)
+        return ("dictionary", key, sure)
     if hit is not None:
         confidence = _hit_confidence(identity, hit, direction)
         return None if confidence is None else ("dictionary", hit.merchant.category, confidence)
@@ -772,6 +785,27 @@ def person_decided(
 type _Taught = tuple[str, str, uuid.UUID, str]
 
 
+def key_now(old: str, renamed: Mapping[str, Collection[str | None]]) -> str | None:
+    """The one key the merchant ``old`` has after a re-key, or ``None``.
+
+    For whatever names a merchant by its key outside the ledger (a merchant
+    rule's condition, a recurring series). ``renamed`` is
+    :attr:`Summary.renamed`. Answers the new key when every row that carried
+    ``old`` carries that one key now, or, when no row carries ``old`` at all,
+    when the dictionary reads ``old`` as a merchant under another key.
+    ``None`` when the key did not move, when its rows went to several keys
+    (nobody can say which was meant) or when they name nobody any more.
+    """
+    now = renamed.get(old)
+    if now is None:
+        hit = dictionary.lookup(old)
+        return hit.merchant.key if hit is not None and hit.merchant.key != old else None
+    if len(now) != 1:
+        return None
+    [only] = now
+    return only if only != old else None
+
+
 def _move_memory(
     db: Session,
     household_id: uuid.UUID,
@@ -1011,5 +1045,6 @@ def reconsider(
             break
     if moving:
         summary.memory_moved = _move_memory(db, household_id, renamed, taught)
+        summary.renamed = {old: frozenset(now) for old, now in renamed.items()}
     _announce(db, household_id, summary)
     return summary

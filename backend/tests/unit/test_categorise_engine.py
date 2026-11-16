@@ -58,6 +58,7 @@ def _identity(
     how: Literal["exact", "prefix", "anywhere"] = "exact",
     kind: DescriptorKind = "purchase",
     via: str | None = None,
+    signals: frozenset[str] = frozenset(),
 ) -> Identity:
     hit = Hit(merchant=merchant, how=how) if merchant is not None else None
     key = merchant.key if merchant is not None else (core or None)
@@ -68,6 +69,7 @@ def _identity(
         via=via,
         hit=hit,
         core=core or (merchant.key if merchant is not None else ""),
+        signals=signals,
     )
 
 
@@ -360,6 +362,29 @@ def test_payroll_only_for_money_in() -> None:
         "income.salary", "dictionary", "0.85"
     )
     assert _decide(_identity("maple studio", kind="payroll"), "out") == Decision()
+
+
+@pytest.mark.usefixtures("no_keywords")
+@pytest.mark.parametrize("direction", ["out", "in"])
+def test_a_wire_is_only_suggested_as_a_transfer_between_accounts(direction: Direction) -> None:
+    """A wire may pay somebody else: "between accounts" is not stated as a fact."""
+    wire = _identity(kind="transfer", signals=frozenset({"wire"}))
+    assert _decide(wire, direction) == _suggestion(
+        "transfers.between_accounts", "dictionary", "0.70"
+    )
+    # Through the real clean-up too.
+    assert engine.identify("WIRE TRANSFER TO JORDAN SAMPLE").signals == frozenset({"wire"})
+    assert _decide(engine.identify("WIRE TRANSFER TO JORDAN SAMPLE"), "out") == _suggestion(
+        "transfers.between_accounts", "dictionary", "0.70"
+    )
+    # Negative: a transfer the bank words as one between accounts is still a fact,
+    # and the signal means nothing on another kind.
+    assert _decide(engine.identify("ONLINE TRANSFER TO SAV 4410"), direction) == _fact(
+        "transfers.between_accounts", "dictionary", "0.80"
+    )
+    assert _decide(_identity(kind="cash", signals=frozenset({"wire"})), direction) == _fact(
+        "transfers.cash", "dictionary", "0.90"
+    )
 
 
 @pytest.mark.usefixtures("no_keywords")

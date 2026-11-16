@@ -14,7 +14,9 @@ is behind what this version ships (:func:`current_versions`),
 2. looks again at the rows nobody decided (``engine.reconsider``),
    recomputing every merchant key first when the clean-up or the dictionary
    moved; what the household taught about a merchant goes with its rows to
-   the new key, so a correction is not lost to a new name;
+   the new key, so a correction is not lost to a new name, and so do the
+   merchant conditions of its rules and the merchant of its recurring
+   series (:func:`_follow_keys`);
 3. once per household, counts the categories it set before provenance
    existed as decisions (``memory.seed_from_legacy``);
    and looks again when step 2 moved or step 3 added something learned;
@@ -74,7 +76,12 @@ from app.domain.rules import engine as rules_engine
 from app.domain.rules import repo as rules_repo
 from app.domain.rules.schemas import JobAccepted
 from app.domain.transactions import categories
-from app.domain.transactions.models import Transaction, TransactionSplit
+from app.domain.transactions.models import (
+    Rule,
+    ScheduledTransaction,
+    Transaction,
+    TransactionSplit,
+)
 from app.domain.transactions.schemas import CategorySource
 
 if TYPE_CHECKING:
@@ -243,6 +250,87 @@ def _add(total: Summary, part: Summary) -> None:
     total.changed += part.changed
     total.changed_accounts |= part.changed_accounts
     total.memory_moved += part.memory_moved
+    total.renamed.update(part.renamed)
+
+
+def _renamed_conditions(
+    node: Any, renamed: Mapping[str, frozenset[str | None]]
+) -> tuple[Any, bool]:
+    """``node`` (a rule's condition tree) with every merchant leaf under its key of now."""
+    if isinstance(node, list):
+        parts = [_renamed_conditions(child, renamed) for child in node]
+        return [part for part, _ in parts], any(moved for _, moved in parts)
+    if not isinstance(node, dict):
+        return node, False
+    key = node.get("key")
+    if node.get("type") == "merchant" and isinstance(key, str):
+        new = engine.key_now(key, renamed)
+        return ({**node, "key": new}, True) if new is not None else (node, False)
+    out = dict(node)
+    moved = False
+    for name in ("conditions", "condition"):
+        if name in node:
+            out[name], changed = _renamed_conditions(node[name], renamed)
+            moved = moved or changed
+    return out, moved
+
+
+def _follow_keys(
+    db: Session, household_id: uuid.UUID, renamed: Mapping[str, frozenset[str | None]]
+) -> tuple[int, int]:
+    """Carry merchant rules and recurring series over to their merchants' new keys.
+
+    After a pass that computed every merchant key again
+    (``Summary.renamed``, :func:`engine.key_now`): a rule's ``merchant``
+    condition and a series' ``merchant_key`` name the merchant as its rows
+    are keyed now, so "always categorise" keeps firing and a person's
+    decision about a series stays where the next detection looks for it.
+    Nothing else of the rule or the series is written. A merchant rule is
+    left as it is when the household already has one for the new key (the
+    earlier of two would win). Returns ``(rules, series)`` changed.
+    """
+    rules = list(
+        db.execute(
+            select(Rule)
+            .where(Rule.household_id == household_id)
+            .order_by(Rule.id)
+            .with_for_update()
+        ).scalars()
+    )
+    held = {
+        document[0]
+        for rule in rules
+        if (document := rules_engine.merchant_document(rule.conditions, rule.actions)) is not None
+    }
+    rules_moved = 0
+    for rule in rules:
+        conditions, moved = _renamed_conditions(rule.conditions, renamed)
+        if not moved:
+            continue
+        before = rules_engine.merchant_document(rule.conditions, rule.actions)
+        after = rules_engine.merchant_document(conditions, rule.actions)
+        if before is not None and after is not None:
+            if after[0] in held:
+                continue
+            held.add(after[0])
+        rule.conditions = conditions
+        rules_moved += 1
+    series_moved = 0
+    for series in db.execute(
+        select(ScheduledTransaction)
+        .where(
+            ScheduledTransaction.household_id == household_id,
+            ScheduledTransaction.merchant_key.is_not(None),
+        )
+        .order_by(ScheduledTransaction.id)
+        .with_for_update()
+    ).scalars():
+        new = engine.key_now(cast(str, series.merchant_key), renamed)
+        if new is not None:
+            series.merchant_key = new
+            series_moved += 1
+    db.flush()
+    return rules_moved, series_moved
 
 
 def refresh(
@@ -284,6 +372,9 @@ def refresh(
         total,
         engine.reconsider(db, household_id, rekey=rekey, check_cancelled=check_cancelled),
     )
+    rules_moved = series_moved = 0
+    if rekey:
+        rules_moved, series_moved = _follow_keys(db, household_id, total.renamed)
     seeded = 0
     if not before.memory_seeded:
         # After the keys: the seed counts ``legacy`` rows by their merchant key.
@@ -310,6 +401,8 @@ def refresh(
             "categories_added": added,
             "memory_seeded": seeded,
             "memory_moved": total.memory_moved,
+            "rules_moved": rules_moved,
+            "series_moved": series_moved,
         },
         household_id=household_id,
         user_id=user_id,

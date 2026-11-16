@@ -228,10 +228,10 @@ docs/UPGRADING.md "1.0.0-rc.10").
   series instead of 100%, which is under the 90% target and is held at
   that figure by its own test. Categories from before this release are not
   known to be a person's choice, so a re-applied rule can still change
-  them. A rule that names a merchant keeps the key it was made with: when
-  a later merchant list or clean-up renames that merchant, the rule stops
-  matching until it is made again, while what was learned follows the new
-  key. A format 2 archive written before migration `0009` (before
+  them. When a later merchant list or clean-up renames a merchant, what
+  was learned, the rules that name it and its recurring series follow the
+  new name; when that one merchant becomes two, a rule or a series that
+  named it stays with the old name and has to be made again. A format 2 archive written before migration `0009` (before
   1.0.0-rc.3) is refused whole, as it already was (docs/UPGRADING.md).
   There is no category model, no merchant category code, no automatic
   payee, no merchant editor and no guess for the lines of a split.
