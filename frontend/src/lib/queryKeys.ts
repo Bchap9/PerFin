@@ -28,6 +28,8 @@ export const queryRoots = {
   dashboard: ["dashboard"],
   settings: ["settings"],
   notifications: ["notifications"],
+  /** What waits on a person: the Inbox count (app/inboxSummary.ts). */
+  inbox: ["inbox"],
 } as const satisfies Record<string, readonly string[]>;
 
 export type QueryRoot = (typeof queryRoots)[keyof typeof queryRoots];

@@ -197,7 +197,7 @@ a.btn--danger:hover {
   }
 
   .card__actions a,
-  .app-header a {
+  .app-rail__foot a {
     display: inline-flex;
     align-items: center;
     min-height: 2.75rem;

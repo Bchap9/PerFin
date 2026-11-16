@@ -171,8 +171,10 @@ function Valuations({ asset }: { asset: Asset }) {
   );
 }
 
-export function AssetDetailPage() {
-  const assetId = useRouteParam("assetId");
+/** `assetId` is given by the account hub (Stage 3 bridge); otherwise the route parameter is used. */
+export function AssetDetailPage({ assetId: given }: { assetId?: string } = {}) {
+  const fromRoute = useRouteParam("assetId");
+  const assetId = given ?? fromRoute;
   const navigate = useNavigate();
   const query = useQuery({ queryKey: assetKeys.one(assetId), queryFn: () => getAsset(assetId), enabled: assetId !== "" });
   const [editing, setEditing] = useState(false);

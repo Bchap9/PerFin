@@ -800,7 +800,7 @@ describe("review queue", () => {
     });
     // No ranking came with the item: nothing is chosen for the person.
     expect(button).toBeDisabled();
-    await screen.findByRole("option", { name: "Savings" });
+    await within(screen.getByLabelText("Account for this file")).findByRole("option", { name: "Savings" });
     await user.selectOptions(
       screen.getByLabelText("Account for this file"),
       "a-2",
@@ -1231,7 +1231,7 @@ describe("review cards", () => {
     await waitFor(() => {
       expect(detailCalls(api)).toHaveLength(1);
     });
-    await screen.findByRole("option", { name: "Savings" });
+    await within(select).findByRole("option", { name: "Savings" });
     expect(select).toHaveValue("");
     expect(screen.getByRole("button", { name: "Use this account" })).toBeDisabled();
   });

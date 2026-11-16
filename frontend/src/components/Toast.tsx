@@ -113,11 +113,14 @@ export function ToastProvider({ children }: { children: ReactNode }) {
             <ToastView key={toast.id} toast={toast} onDismiss={dismiss} />
           ))}
         </ul>
-        <ul className="toast-list" role="alert" aria-live="assertive">
-          {assertive.map((toast) => (
-            <ToastView key={toast.id} toast={toast} onDismiss={dismiss} />
-          ))}
-        </ul>
+        {/* A list may not take role="alert" (axe aria-allowed-role): the alert wraps it. */}
+        <div role="alert" aria-live="assertive">
+          <ul className="toast-list">
+            {assertive.map((toast) => (
+              <ToastView key={toast.id} toast={toast} onDismiss={dismiss} />
+            ))}
+          </ul>
+        </div>
       </div>
     </ToastContext.Provider>
   );

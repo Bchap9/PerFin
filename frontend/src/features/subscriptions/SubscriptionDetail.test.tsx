@@ -116,7 +116,7 @@ describe("one subscription up close", () => {
     expect(within(changes).getAllByRole("listitem").map((item) => item.textContent)).toEqual(["Aug 10, 2026: New"]);
 
     // The list stays behind the dialog.
-    expect(screen.getByRole("heading", { level: 1, name: "Subscriptions" })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { level: 2, name: "Subscriptions" })).toBeInTheDocument();
   });
 
   it("says who set the status and when nothing is expected or has changed", async () => {
@@ -146,9 +146,9 @@ describe("one subscription up close", () => {
     expect(link).toHaveAttribute("href", "/subscriptions/s-1");
     await user.click(link);
     const detail = await screen.findByRole("dialog", { name: "Streamly" });
-    expect(currentHref(router)).toBe("/subscriptions/s-1");
+    expect(currentHref(router)).toBe("/plan/subscriptions/s-1");
     await user.click(within(detail).getByRole("button", { name: "Close" }));
-    await vi.waitFor(() => { expect(currentHref(router)).toBe("/subscriptions"); });
+    await vi.waitFor(() => { expect(currentHref(router)).toBe("/plan/subscriptions"); });
     expect(screen.queryByRole("dialog", { name: "Streamly" })).not.toBeInTheDocument();
     expect(screen.getByRole("table", { name: "Active" })).toBeInTheDocument();
   });
@@ -156,7 +156,7 @@ describe("one subscription up close", () => {
   it("is a page of its own on a narrow screen, with a way back", async () => {
     narrowScreen();
     setup();
-    expect(await screen.findByRole("heading", { level: 1, name: "Streamly" })).toBeInTheDocument();
+    expect(await screen.findByRole("heading", { level: 2, name: "Streamly" })).toBeInTheDocument();
     expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
     expect(screen.queryByRole("table", { name: "Active" })).not.toBeInTheDocument();
     expect(screen.getByRole("table", { name: "Charges" })).toBeInTheDocument();

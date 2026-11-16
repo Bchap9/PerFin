@@ -205,6 +205,11 @@ jobs:
         run: npm test
       - name: Production build
         run: npm run build
+      # Spec 2026-11-16-ui-redesign-design.md, section 10: fails with the figures.
+      - name: Bundle budget
+        run: |
+          node --test scripts/check-bundle.test.mjs
+          npm run check:bundle
       - name: Generated API types match backend/openapi.json
         run: |
           npm run gen:api

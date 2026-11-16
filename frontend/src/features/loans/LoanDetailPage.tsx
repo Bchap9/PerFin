@@ -67,8 +67,10 @@ function ScheduleTab({ loan }: { loan: Loan }) {
   );
 }
 
-export function LoanDetailPage() {
-  const loanId = useRouteParam("loanId");
+/** `loanId` is given by the account hub (Stage 3 bridge); otherwise the route parameter is used. */
+export function LoanDetailPage({ loanId: given }: { loanId?: string } = {}) {
+  const fromRoute = useRouteParam("loanId");
+  const loanId = given ?? fromRoute;
   const navigate = useNavigate();
   const query = useQuery({ queryKey: loanKeys.one(loanId), queryFn: () => getLoan(loanId), enabled: loanId !== "" });
   const accounts = useAccounts();

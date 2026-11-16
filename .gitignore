@@ -37,6 +37,7 @@ backups/
 # Source packages whose names match the data patterns above.
 !backend/app/domain/documents/
 !frontend/src/features/documents/
+!frontend/src/features/inbox/
 
 # Editors / OS
 .idea/

@@ -58,6 +58,7 @@ describe("loans", () => {
       ...ownerSession(),
       ...referenceHandlers(),
       "GET /api/v1/loans/:id": () => json(loan),
+      "GET /api/v1/loans": () => json({ items: [loan], next_cursor: null }),
       "GET /api/v1/loans/:id/schedule": () => json({ loan_id: LOAN, basis: "projected", start_balance: money("190000.00"), rows: [], totals: { payments: 327, principal: money("190000.00"), interest: money("205000.00"), extra: money("0"), escrow: money("0"), paid: money("395000.00"), payoff_date: "2054-01-15" } }),
       "POST /api/v1/loans/:id/simulate": () =>
         json({
@@ -185,6 +186,7 @@ describe("recording a loan payment", () => {
       ...ownerSession(),
       ...referenceHandlers(),
       "GET /api/v1/loans/:id": () => json(loan),
+      "GET /api/v1/loans": () => json({ items: [loan], next_cursor: null }),
       "GET /api/v1/loans/:id/schedule": () => json(schedule),
       "GET /api/v1/loans/:id/payments": () => json({ items: state.items }),
       "POST /api/v1/loans/:id/payments": () => {
@@ -248,6 +250,7 @@ describe("editing a loan", () => {
     ...ownerSession(),
     ...referenceHandlers(),
     "GET /api/v1/loans/:id": () => json(loan),
+    "GET /api/v1/loans": () => json({ items: [loan], next_cursor: null }),
     "GET /api/v1/loans/:id/schedule": () => json(schedule),
     ...extra,
   });

@@ -1,8 +1,9 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 /**
- * The header's account area: "Sign in" when nobody is, otherwise the
- * household switcher (when the user belongs to more than one household), the
- * user's name and "Sign out". Switching household rotates the session
+ * The account area at the foot of the rail (the top bar on a phone): "Sign
+ * in" when nobody is, otherwise the household switcher (when the user belongs
+ * to more than one household) and a menu named after the user with Profile,
+ * Settings and "Sign out". On a phone Settings is reached from this menu. Switching household rotates the session
  * (`POST /auth/session/household`) and refetches everything on screen.
  * Signing out of an OIDC session also ends it at the identity provider when
  * the server returns an end-session URL.
@@ -11,7 +12,7 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link } from "@tanstack/react-router";
 import { useId, useState } from "react";
 
-import { Button } from "../../components/Button";
+import { Menu } from "../../components/Menu";
 import { useToast } from "../../components/Toast";
 import { isApiError } from "../../lib/api/client";
 import { queryRoots } from "../../lib/queryKeys";
@@ -136,6 +137,7 @@ export function useSignOut(): { signOut: () => Promise<void>; busy: boolean } {
 export function AccountMenu() {
   const { state, session } = useAuthSession();
   const { signOut, busy } = useSignOut();
+  const goTo = useGoTo();
 
   if (state?.status === "anonymous") {
     return (
@@ -150,19 +152,26 @@ export function AccountMenu() {
   return (
     <div className="account-menu">
       <HouseholdSwitcher session={session} />
-      <Link to="/settings/profile" className="account-menu__user" title={`Signed in as ${session.user.username}`}>
-        {session.user.display_name}
-      </Link>
-      <Button
-        size="sm"
-        variant="secondary"
-        loading={busy}
-        onClick={() => {
-          void signOut();
-        }}
-      >
-        Sign out
-      </Button>
+      <Menu
+        label={`Account: ${session.user.display_name}`}
+        trigger={
+          <span className="account-menu__user" title={`Signed in as ${session.user.username}`}>
+            {session.user.display_name}
+          </span>
+        }
+        items={[
+          { id: "profile", label: "Profile", onSelect: () => void goTo("/settings/profile") },
+          { id: "settings", label: "Settings", onSelect: () => void goTo("/settings") },
+          {
+            id: "sign-out",
+            label: "Sign out",
+            disabled: busy,
+            onSelect: () => {
+              void signOut();
+            },
+          },
+        ]}
+      />
     </div>
   );
 }

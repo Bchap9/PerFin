@@ -34,9 +34,10 @@ backend-check:
 	cd $(BACKEND) && uv run perfin openapi | diff -u openapi.json - \
 		|| { echo "backend/openapi.json is stale; run 'make openapi'" >&2; exit 1; }
 
-## frontend-check: eslint, tsc, vitest, production build
+## frontend-check: eslint, tsc, vitest, production build, bundle budget
 frontend-check:
-	cd $(FRONTEND) && npm run lint && npm run typecheck && npm test && npm run build
+	cd $(FRONTEND) && npm run lint && npm run typecheck && npm test && node --test scripts/check-bundle.test.mjs \
+		&& npm run build && npm run check:bundle
 
 ## audit: known-vulnerability scans of locked dependencies
 audit:

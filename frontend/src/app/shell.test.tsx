@@ -1,23 +1,15 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import { QueryClient } from "@tanstack/react-query";
-import {
-  createMemoryHistory,
-  createRootRoute,
-  createRoute,
-  createRouter,
-  Outlet,
-  RouterProvider,
-  type AnyRoute,
-} from "@tanstack/react-router";
-import { render, screen, within } from "@testing-library/react";
+import { createMemoryHistory, createRootRoute, createRoute, createRouter, Outlet, RouterProvider } from "@tanstack/react-router";
+import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 
+import { authedSession, json, mockApi, problem, renderApp } from "../features/auth/testing";
 import { ApiError } from "../lib/api/client";
+import { expectNoAxeViolations } from "../test/axe";
 import { ErrorBoundary } from "./ErrorBoundary";
-import { NAV_ITEMS } from "./nav";
 import { RouteErrorPage } from "./pages";
 import { createAppRouter } from "./router";
-import { normalizedPath, shellRoutes } from "./shellRoutes";
 
 function renderAt(path: string) {
   const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
@@ -26,113 +18,116 @@ function renderAt(path: string) {
   return router;
 }
 
+const SUMMARY = { documents: 2, loose: 1, subscriptions: 0, suggestions: 0, uncategorised: 0 };
+
+function railNames(): string[] {
+  const rail = screen.getByRole("navigation", { name: "Sections" });
+  return within(rail)
+    .getAllByRole("link")
+    .map((link) => link.textContent);
+}
+
 describe("app shell", () => {
-  it("shows every navigation section and marks the current one", async () => {
-    renderAt("/tax");
-    const nav = await screen.findByRole("navigation", { name: "Main" });
-    const labels = within(nav)
-      .getAllByRole("link")
-      .map((link) => link.textContent);
-    expect(labels).toEqual([
-      "Dashboard",
-      "Accounts",
-      "Transactions",
-      "Budgets",
-      "Reports",
-      "Goals",
-      "Rules",
-      "Investments",
-      "Loans",
-      "Assets",
-      "Net worth",
-      "Calendar",
-      "Subscriptions",
-      "Documents",
-      "Review",
-      "Tax",
-      "Settings",
-    ]);
-    expect(within(nav).getByRole("link", { name: "Tax" })).toHaveAttribute("aria-current", "page");
-    expect(within(nav).getByRole("link", { name: "Dashboard" })).not.toHaveAttribute("aria-current");
-    expect(await screen.findByRole("heading", { level: 1, name: "Tax" })).toBeInTheDocument();
-    // Every section is a real feature now (Phases 5+6 built the last ones).
-    expect(screen.queryByText("Not built yet")).not.toBeInTheDocument();
+  it("the rail lists the six sections in order, then Settings", async () => {
+    mockApi({ "GET /api/v1/auth/session": authedSession() });
+    renderApp("/settings");
+    await screen.findByRole("navigation", { name: "Sections" });
+    expect(railNames()).toEqual(["Home", "Inbox", "Transactions", "Accounts", "Plan", "Reports", "Settings"]);
+    const rail = screen.getByRole("navigation", { name: "Sections" });
+    expect(within(rail).getByRole("link", { name: "Plan" })).toHaveAttribute("href", "/plan/subscriptions");
+    expect(screen.getByRole("link", { name: "PerFin" })).toHaveAttribute("href", "/");
+    expect(screen.getByRole("button", { name: /^Theme: / })).toBeInTheDocument();
+  });
+
+  it("the current section is aria-current", async () => {
+    mockApi({ "GET /api/v1/auth/session": authedSession() });
+    const user = userEvent.setup();
+    const router = renderAt("/tax");
+    const rail = await screen.findByRole("navigation", { name: "Sections" });
+    await waitFor(() => {
+      expect(router.state.location.pathname).toBe("/reports/tax");
+    });
+    expect(within(rail).getByRole("link", { name: "Reports" })).toHaveAttribute("aria-current", "page");
+    expect(within(rail).getByRole("link", { name: "Home" })).not.toHaveAttribute("aria-current");
+
+    await user.click(within(rail).getByRole("link", { name: "Plan" }));
+    expect(await screen.findByRole("heading", { level: 1, name: "Plan" })).toBeInTheDocument();
+    expect(within(rail).getByRole("link", { name: "Plan" })).toHaveAttribute("aria-current", "page");
+    expect(within(rail).getByRole("link", { name: "Reports" })).not.toHaveAttribute("aria-current");
+
+    await user.click(within(rail).getByRole("link", { name: "Settings" }));
+    await waitFor(() => {
+      expect(within(rail).getByRole("link", { name: "Settings" })).toHaveAttribute("aria-current", "page");
+    });
+    expect(within(rail).getByRole("link", { name: "Plan" })).not.toHaveAttribute("aria-current");
+  });
+
+  it("the Inbox badge shows the card count and hides at zero and on error", async () => {
+    let answer: () => Response = () => json({ cards: 3, ...SUMMARY });
+    mockApi({ "GET /api/v1/auth/session": authedSession(), "GET /api/v1/inbox/summary": () => answer() });
+    const first = renderApp("/settings");
+    const rail = await screen.findByRole("navigation", { name: "Sections" });
+    expect(await within(rail).findByRole("link", { name: "Inbox, 3 things need you" })).toHaveAttribute("href", "/inbox");
+    first.unmount();
+
+    answer = () => json({ cards: 0, ...SUMMARY });
+    const second = renderApp("/settings");
+    const quiet = await screen.findByRole("navigation", { name: "Sections" });
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(within(quiet).getByRole("link", { name: "Inbox" })).toBeInTheDocument();
+    second.unmount();
+
+    answer = () => problem(500, "server-error");
+    renderApp("/settings");
+    const failed = await screen.findByRole("navigation", { name: "Sections" });
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(within(failed).getByRole("link", { name: "Inbox" })).toBeInTheDocument();
+    expect(within(failed).queryByText(/0/)).not.toBeInTheDocument();
+  });
+
+  it("bare pages have no rail", async () => {
+    renderAt("/login");
+    expect(await screen.findByRole("heading", { level: 1, name: "Sign in" })).toBeInTheDocument();
+    expect(screen.queryByRole("navigation", { name: "Sections" })).not.toBeInTheDocument();
+  });
+
+  it("the skip link targets main", async () => {
+    mockApi({ "GET /api/v1/auth/session": authedSession() });
+    renderApp("/settings");
+    await screen.findByRole("navigation", { name: "Sections" });
     expect(screen.getByRole("link", { name: "Skip to content" })).toHaveAttribute("href", "#main");
     expect(screen.getByRole("main")).toHaveAttribute("id", "main");
   });
 
-  it("the nav has a Subscriptions entry and its route renders", async () => {
+  it("the account menu has Settings and Sign out", async () => {
+    mockApi({ "GET /api/v1/auth/session": authedSession() });
     const user = userEvent.setup();
-    renderAt("/calendar");
-    const nav = await screen.findByRole("navigation", { name: "Main" });
-    const link = within(nav).getByRole("link", { name: "Subscriptions" });
-    expect(link).toHaveAttribute("href", "/subscriptions");
-    await user.click(link);
-    expect(await screen.findByRole("heading", { level: 1, name: "Subscriptions" })).toBeInTheDocument();
-    expect(link).toHaveAttribute("aria-current", "page");
-    expect(screen.queryByText("Not built yet")).not.toBeInTheDocument();
+    const { router } = renderApp("/plan/goals");
+    await user.click(await screen.findByRole("button", { name: "Account: Alice" }));
+    const menu = screen.getByRole("menu", { name: "Account: Alice" });
+    expect(
+      within(menu)
+        .getAllByRole("menuitem")
+        .map((item) => item.textContent),
+    ).toEqual(["Profile", "Settings", "Sign out"]);
+    await user.click(within(menu).getByRole("menuitem", { name: "Settings" }));
+    await waitFor(() => {
+      expect(router.state.location.pathname).toBe("/settings");
+    });
   });
 
-  it("navigates between sections", async () => {
-    const user = userEvent.setup();
-    renderAt("/loans");
-    expect(await screen.findByRole("heading", { level: 1, name: "Loans" })).toBeInTheDocument();
-    await user.click(screen.getByRole("link", { name: "Net worth" }));
-    expect(await screen.findByRole("heading", { level: 1, name: "Net worth" })).toBeInTheDocument();
-    expect(screen.getByRole("link", { name: "Net worth" })).toHaveAttribute("aria-current", "page");
-  });
-
-  it("toggles the mobile navigation", async () => {
-    const user = userEvent.setup();
-    renderAt("/tax");
-    const toggle = await screen.findByRole("button", { name: "Open navigation" });
-    expect(toggle).toHaveAttribute("aria-expanded", "false");
-    expect(toggle).toHaveAttribute("aria-controls", "app-sidebar");
-    await user.click(toggle);
-    expect(screen.getByRole("button", { name: "Close navigation" })).toHaveAttribute("aria-expanded", "true");
-    expect(screen.getByRole("navigation", { name: "Main" })).toHaveClass("app-sidebar--open");
-  });
-
-  it("closes the mobile navigation on Escape, on a tap outside it and when a link is chosen", async () => {
-    const user = userEvent.setup();
-    renderAt("/tax");
-    const open = async () => {
-      await user.click(await screen.findByRole("button", { name: "Open navigation" }));
-      expect(screen.getByRole("navigation", { name: "Main" })).toHaveClass("app-sidebar--open");
-    };
-    const closed = () => {
-      expect(screen.getByRole("navigation", { name: "Main" })).not.toHaveClass("app-sidebar--open");
-      expect(screen.getByRole("button", { name: "Open navigation" })).toHaveAttribute("aria-expanded", "false");
-    };
-    await open();
-    await user.keyboard("{Escape}");
-    closed();
-
-    await open();
-    const backdrop = document.querySelector(".app-nav-backdrop");
-    if (backdrop === null) {
-      throw new Error("the drawer backdrop is missing");
-    }
-    await user.click(backdrop);
-    closed();
-    expect(document.querySelector(".app-nav-backdrop")).toBeNull();
-
-    await open();
-    await user.click(screen.getByRole("link", { name: "Loans" }));
-    expect(await screen.findByRole("heading", { level: 1, name: "Loans" })).toBeInTheDocument();
-    closed();
+  it("has no axe violations", async () => {
+    mockApi({ "GET /api/v1/auth/session": authedSession(), "GET /api/v1/inbox/summary": () => json({ cards: 3, ...SUMMARY }) });
+    const { container } = renderApp("/settings");
+    const rail = await screen.findByRole("navigation", { name: "Sections" });
+    await within(rail).findByRole("link", { name: "Inbox, 3 things need you" });
+    await expectNoAxeViolations(container);
   });
 
   it("renders a 404 page for unknown paths", async () => {
     renderAt("/no/such/page");
     expect(await screen.findByRole("heading", { level: 1, name: "Page not found" })).toBeInTheDocument();
-    expect(screen.getByRole("link", { name: "Go to dashboard" })).toHaveAttribute("href", "/");
-  });
-
-  it("renders the login placeholder without the navigation chrome", async () => {
-    renderAt("/login");
-    expect(await screen.findByRole("heading", { level: 1, name: "Sign in" })).toBeInTheDocument();
-    expect(screen.queryByRole("navigation", { name: "Main" })).not.toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "Go to Home" })).toHaveAttribute("href", "/");
   });
 
   it("sends an anonymous visitor to sign-in, remembering where they were going", async () => {
@@ -151,7 +146,7 @@ describe("app shell", () => {
     expect(await screen.findByRole("heading", { level: 1, name: "Sign in" })).toBeInTheDocument();
     expect(router.state.location.pathname).toBe("/login");
     expect(new URLSearchParams(router.state.location.searchStr).get("return_to")).toBe("/settings");
-    expect(screen.queryByRole("navigation", { name: "Main" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("navigation", { name: "Sections" })).not.toBeInTheDocument();
   });
 
   it("does not show sign-in while the session endpoint does not exist (404)", async () => {
@@ -161,39 +156,6 @@ describe("app shell", () => {
       expect(fetch).toHaveBeenCalled();
     });
     expect(screen.queryByRole("link", { name: "Sign in" })).not.toBeInTheDocument();
-  });
-});
-
-describe("shell routes", () => {
-  it("provides a placeholder per nav item plus login", () => {
-    const paths = shellRoutes({} as AnyRoute).map(normalizedPath);
-    expect(paths).toEqual([...NAV_ITEMS.map((item) => item.to.replace(/^\//, "")), "login"]);
-  });
-
-  it("has a feature route for every navigation section (no placeholder left)", () => {
-    const router = createAppRouter({ queryClient: new QueryClient() }, createMemoryHistory({ initialEntries: ["/"] }));
-    const children = (router.routeTree.children ?? []) as AnyRoute[];
-    const placeholderPaths = new Set(shellRoutes({} as AnyRoute).map(normalizedPath));
-    const served = children.filter((route) => placeholderPaths.has(normalizedPath(route)));
-    // Each nav path (and login) appears once; none of them is the shell's placeholder.
-    expect(served.map(normalizedPath).sort()).toEqual([...placeholderPaths].sort());
-    for (const route of served) {
-      expect((route.options as { component?: { name?: string } }).component?.name).not.toBe("Placeholder");
-    }
-  });
-
-  it("normalises paths for comparison", () => {
-    const parent = {} as AnyRoute;
-    const route = createRoute({ getParentRoute: () => parent, path: "/accounts/" });
-    expect(normalizedPath(route as unknown as AnyRoute)).toBe("accounts");
-  });
-
-  it("lets a feature's route replace the placeholder (the dashboard serves /)", async () => {
-    renderAt("/");
-    expect(await screen.findByRole("heading", { level: 1, name: "Dashboard" })).toBeInTheDocument();
-    const nav = screen.getByRole("navigation", { name: "Main" });
-    expect(within(nav).getByRole("link", { name: "Dashboard" })).toHaveAttribute("aria-current", "page");
-    expect(screen.queryByText("Not built yet")).not.toBeInTheDocument();
   });
 });
 

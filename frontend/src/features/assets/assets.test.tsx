@@ -33,6 +33,7 @@ describe("assets", () => {
     const api = mockApi({
       ...ownerSession(),
       ...referenceHandlers(),
+      "GET /api/v1/assets": () => json({ items: [asset], next_cursor: null }),
       "GET /api/v1/assets/:id": () => json(asset),
       "GET /api/v1/assets/:id/valuations": () => json({ items: [valuation("v2", "2026-06-01", "330000.00"), valuation("v1", "2025-06-01", "300000.00")] }),
       "POST /api/v1/assets/:id/valuations": () => json(valuation("v3", "2026-11-03", "335000.00"), 201),

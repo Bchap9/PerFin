@@ -1,24 +1,29 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
+/**
+ * The shell: a rail of the six sections (Home, Inbox, Transactions, Accounts,
+ * Plan, Reports), then Settings, the account menu and the theme toggle at its
+ * foot; the AI banner and the page in `main`.
+ *
+ * Every link exists once. The widths are CSS only (layout.css):
+ * - 1024 px and wider: the rail with labels;
+ * - 820 to 1023 px: an icon rail, labels visually hidden but still the names;
+ * - under 820 px: the rail's brand and foot become a top bar and its section
+ *   links a bottom bar; Settings is reached from the account menu.
+ */
 import { useQuery } from "@tanstack/react-query";
 import { Link, Outlet, useRouterState } from "@tanstack/react-router";
-import { useCallback, useEffect, useState } from "react";
 
 import { cx } from "../components/cx";
+import { GearIcon } from "../components/icons";
 import { AccountMenu } from "../features/auth/AccountMenu";
-import { AiBanner } from "../features/settings/ai/AiBanner";
 import { isBarePath } from "../features/auth/guard";
-import { IconButton } from "../components/IconButton";
-import { CloseIcon, MenuIcon } from "../components/icons";
+import { AiBanner } from "../features/settings/ai/AiBanner";
 import { sessionQueryOptions } from "../lib/session";
-import { NAV_ITEMS } from "./nav";
-import { LOGIN_PATH } from "./shellRoutes";
+import { CommandPalette } from "./CommandPalette";
+import { InboxBadge } from "./InboxBadge";
+import { SECTIONS, sectionForPath } from "./routeMap";
 import { ThemeToggle } from "./ThemeProvider";
 import { useLiveUpdates } from "./useLiveUpdates";
-
-/** Paths rendered without the navigation chrome (sign-in, setup, reset; see features/auth). */
-function isBare(pathname: string): boolean {
-  return pathname === LOGIN_PATH || isBarePath(pathname);
-}
 
 function SessionIndicator() {
   const session = useQuery(sessionQueryOptions());
@@ -26,93 +31,73 @@ function SessionIndicator() {
   return <AccountMenu />;
 }
 
+function Rail({ pathname }: { pathname: string }) {
+  const current = sectionForPath(pathname);
+  const inSettings = pathname === "/settings" || pathname.startsWith("/settings/");
+  return (
+    <div className="app-rail">
+      <Link to="/" className="app-brand" activeProps={{}}>
+        Per<span className="app-brand__accent">Fin</span>
+      </Link>
+      <nav className="app-nav" aria-label="Sections">
+        <ul className="app-nav__list">
+          {SECTIONS.map((section) => {
+            const Icon = section.icon;
+            return (
+              <li key={section.id} className="app-nav__item">
+                <Link
+                  to={section.to}
+                  className="app-nav__link"
+                  aria-current={current === section.id ? "page" : undefined}
+                  activeOptions={{ exact: true, includeSearch: true }}
+                  activeProps={{}}
+                >
+                  <Icon className="app-nav__icon" />
+                  <span className="app-nav__label">{section.label}</span>
+                  {section.id === "inbox" ? <InboxBadge /> : null}
+                </Link>
+              </li>
+            );
+          })}
+          <li className="app-nav__item app-nav__item--settings">
+            <Link
+              to="/settings"
+              className="app-nav__link"
+              aria-current={inSettings ? "page" : undefined}
+              activeOptions={{ exact: true, includeSearch: true }}
+              activeProps={{}}
+            >
+              <GearIcon className="app-nav__icon" />
+              <span className="app-nav__label">Settings</span>
+            </Link>
+          </li>
+        </ul>
+      </nav>
+      <div className="app-rail__foot">
+        <SessionIndicator />
+        <ThemeToggle />
+      </div>
+    </div>
+  );
+}
+
 export function RootLayout() {
   const pathname = useRouterState({ select: (state) => state.location.pathname });
-  // The drawer is open for one path: navigating elsewhere closes it.
-  const [openAt, setOpenAt] = useState<string | null>(null);
-  const navOpen = openAt === pathname;
-  const setNavOpen = useCallback(
-    (open: boolean | ((value: boolean) => boolean)): void => {
-      setOpenAt((current) => ((typeof open === "function" ? open(current === pathname) : open) ? pathname : null));
-    },
-    [pathname],
-  );
-  const bare = isBare(pathname);
-
-  // The small-screen drawer closes on Escape.
-  useEffect(() => {
-    if (!navOpen) {
-      return undefined;
-    }
-    const onKey = (event: KeyboardEvent): void => {
-      if (event.key === "Escape") {
-        setNavOpen(false);
-      }
-    };
-    document.addEventListener("keydown", onKey);
-    return () => {
-      document.removeEventListener("keydown", onKey);
-    };
-  }, [navOpen, setNavOpen]);
+  const bare = isBarePath(pathname);
 
   return (
     <div className={cx("app-shell", bare && "app-shell--bare")}>
       <a className="skip-link" href="#main">
         Skip to content
       </a>
-      {bare ? null : (
-        <header className="app-header">
-          <IconButton
-            className="app-nav-toggle"
-            label={navOpen ? "Close navigation" : "Open navigation"}
-            icon={navOpen ? <CloseIcon /> : <MenuIcon />}
-            aria-expanded={navOpen}
-            aria-controls="app-sidebar"
-            onClick={() => {
-              setNavOpen((open) => !open);
-            }}
-          />
-          <Link to="/" className="app-brand">
-            PerFin
-          </Link>
-          <span className="app-header__spacer" />
-          <SessionIndicator />
-          <ThemeToggle />
-        </header>
-      )}
-      {bare || !navOpen ? null : (
-        <div
-          className="app-nav-backdrop"
-          aria-hidden="true"
-          onClick={() => {
-            setNavOpen(false);
-          }}
-        />
-      )}
-      {bare ? null : (
-        <nav id="app-sidebar" className={cx("app-sidebar", navOpen && "app-sidebar--open")} aria-label="Main">
-          <ul className="app-nav__list">
-            {NAV_ITEMS.map((item) => (
-              <li key={item.to}>
-                <Link
-                  to={item.to}
-                  className="app-nav__link"
-                  activeOptions={{ exact: item.to === "/" }}
-                  onClick={() => {
-                    setNavOpen(false);
-                  }}
-                >
-                  {item.label}
-                </Link>
-              </li>
-            ))}
-          </ul>
-        </nav>
-      )}
+      {bare ? null : <Rail pathname={pathname} />}
       <main id="main" className="app-main" tabIndex={-1}>
-        {bare ? null : <AiBanner />}
-        <Outlet />
+        <div className="app-main__inner">
+          {bare ? null : <AiBanner />}
+          <Outlet />
+        </div>
       </main>
+      {bare ? null : <CommandPalette />}
     </div>
   );
 }

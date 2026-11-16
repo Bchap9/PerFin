@@ -1,4 +1,15 @@
 /* SPDX-License-Identifier: AGPL-3.0-or-later */
+/*
+ * The shell (app/RootLayout.tsx). One rail holds the brand, the six section
+ * links, Settings, the account menu and the theme toggle; every link exists
+ * once and only CSS moves it (spec section 9):
+ *   1024 px and wider: the rail with labels;
+ *   820 to 1023 px:    an icon rail, labels visually hidden but still names;
+ *   under 820 px:      the brand and foot become a top bar, the section links
+ *                      a bottom bar; Settings is in the account menu.
+ * Media queries use the literal widths (no custom property can be read there).
+ */
+
 .skip-link {
   position: absolute;
   top: var(--space-2);
@@ -17,70 +28,51 @@
 
 .app-shell {
   display: grid;
-  grid-template-columns: 1fr;
-  grid-template-rows: var(--header-height) 1fr;
-  grid-template-areas:
-    "header"
-    "main";
+  grid-template-columns: var(--rail-width) minmax(0, 1fr);
   min-height: 100vh;
+  background: var(--color-bg);
 }
 
-.app-header {
-  grid-area: header;
-  min-width: 0;
+/* ---- Rail ---- */
+
+.app-rail {
   position: sticky;
   top: 0;
   z-index: 20;
   display: flex;
-  align-items: center;
-  gap: var(--space-3);
-  padding: 0 var(--space-4);
-  border-bottom: 1px solid var(--color-border);
+  flex-direction: column;
+  gap: var(--space-1);
+  height: 100vh;
+  overflow-y: auto;
+  padding: var(--space-5) var(--space-3) var(--space-4);
+  border-right: 1px solid var(--color-border);
   background: var(--color-surface);
 }
 
 .app-brand {
+  padding: var(--space-1) var(--space-3) var(--space-4);
+  font-family: var(--font-display);
+  font-size: var(--font-size-xl);
   font-weight: 700;
-  font-size: var(--font-size-lg);
+  letter-spacing: -0.01em;
   color: var(--color-text);
   text-decoration: none;
 }
 
-.app-header__spacer {
+.app-brand__accent {
+  color: var(--color-accent);
+}
+
+.app-nav {
+  display: flex;
   flex: 1;
-}
-
-.app-nav-toggle {
-  display: inline-flex;
-  flex-shrink: 0;
-}
-
-.app-sidebar {
-  position: fixed;
-  inset: var(--header-height) auto 0 0;
-  z-index: 15;
-  width: min(var(--sidebar-width), 85vw);
-  overflow-y: auto;
-  padding: var(--space-3);
-  border-right: 1px solid var(--color-border);
-  background: var(--color-surface);
-  box-shadow: var(--shadow-md);
-}
-
-.app-sidebar:not(.app-sidebar--open) {
-  display: none;
-}
-
-/* Dims the page behind the open small-screen drawer; a tap on it closes the drawer. */
-.app-nav-backdrop {
-  position: fixed;
-  inset: var(--header-height) 0 0 0;
-  z-index: 14;
-  background: rgb(0 0 0 / 40%);
+  flex-direction: column;
+  min-height: 0;
 }
 
 .app-nav__list {
   display: flex;
+  flex: 1;
   flex-direction: column;
   gap: 2px;
   margin: 0;
@@ -88,13 +80,22 @@
   list-style: none;
 }
 
+/* Settings sits at the foot of the rail, after a spacer. */
+.app-nav__item--settings {
+  margin-top: auto;
+  padding-top: var(--space-3);
+}
+
 .app-nav__link {
+  position: relative;
   display: flex;
   align-items: center;
-  min-height: 2.75rem;
+  gap: var(--space-3);
+  min-height: 2.5rem;
   padding: var(--space-2) var(--space-3);
   border-radius: var(--radius-md);
-  color: var(--color-text);
+  color: var(--color-text-muted);
+  font-weight: 500;
   text-decoration: none;
 }
 
@@ -105,32 +106,100 @@
 
 .app-nav__link[aria-current="page"] {
   background: var(--color-accent-soft);
-  color: var(--color-accent);
+  color: var(--color-text);
   font-weight: 600;
 }
 
-.app-main {
-  grid-area: main;
-  width: 100%;
-  /* A grid item's min-width defaults to its content's: let wide tables
-     scroll inside their .table-wrap instead of widening the page. */
+.app-nav__icon {
+  flex: none;
+  width: 1.125rem;
+  height: 1.125rem;
+}
+
+.app-nav__label {
   min-width: 0;
-  max-width: var(--content-max);
-  padding: var(--space-5) var(--space-4);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* The Inbox count: a pill at the end of the link (its words are in the link's name). */
+.app-nav__link .badge--count {
+  margin-left: auto;
+  padding: 1px var(--space-2);
+  background: var(--color-warning-soft);
+  color: var(--color-warning);
+  font-weight: 700;
+}
+
+.app-rail__foot {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+  min-width: 0;
+  margin-top: var(--space-2);
+  padding: var(--space-3) var(--space-2) 0;
+  border-top: 1px solid var(--color-border);
+}
+
+.app-rail__foot .account-menu {
+  flex: 1;
+  flex-wrap: wrap;
+}
+
+/* ---- Content ---- */
+
+.app-main {
+  min-width: 0;
+  padding: var(--space-6) var(--space-6) var(--space-7);
 }
 
 .app-main:focus {
   outline: none;
 }
 
+/* A grid item's min-width defaults to its content's: let wide tables scroll
+   inside their .table-wrap instead of widening the page. */
+.app-main__inner {
+  width: 100%;
+  min-width: 0;
+  max-width: var(--content-max);
+  margin: 0 auto;
+}
+
 .app-shell--bare {
-  grid-template-areas: "main";
-  grid-template-rows: 1fr;
+  grid-template-columns: minmax(0, 1fr);
   place-items: center;
 }
 
+/* The bare pages (sign-in, setup, reset) centre one card; main keeps the full width. */
 .app-shell--bare .app-main {
+  width: 100%;
+}
+
+.app-shell--bare .app-main__inner {
   max-width: 28rem;
+}
+
+/* The section's own heading, description and tab bar (app/SectionLayout.tsx). */
+.section-header {
+  display: grid;
+  gap: var(--space-2);
+  margin-bottom: var(--space-5);
+}
+
+.section-header__title {
+  margin: 0;
+  font-family: var(--font-display);
+  font-size: var(--font-size-2xl);
+  line-height: 1.1;
+  letter-spacing: -0.02em;
+}
+
+.section-header__description {
+  margin: 0;
+  color: var(--color-text-muted);
 }
 
 .page-header {
@@ -152,39 +221,180 @@
   justify-items: start;
 }
 
-@media (min-width: 56rem) {
+/* ---- 820 to 1023 px: the icon rail ---- */
+
+@media (min-width: 820px) and (max-width: 1023px) {
   .app-shell {
-    grid-template-columns: var(--sidebar-width) 1fr;
-    grid-template-areas:
-      "header header"
-      "sidebar main";
-  }
-
-  .app-nav-toggle {
-    display: none;
-  }
-
-  .app-nav-backdrop {
-    display: none;
-  }
-
-  .app-sidebar,
-  .app-sidebar:not(.app-sidebar--open) {
-    position: sticky;
-    top: var(--header-height);
-    display: block;
-    grid-area: sidebar;
-    width: auto;
-    height: calc(100vh - var(--header-height));
-    box-shadow: none;
-  }
-
-  .app-main {
-    padding: var(--space-6);
+    grid-template-columns: var(--rail-width-icon) minmax(0, 1fr);
   }
 
   .app-shell--bare {
-    grid-template-columns: 1fr;
-    grid-template-areas: "main";
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .app-rail {
+    align-items: stretch;
+    padding: var(--space-4) var(--space-2);
+  }
+
+  .app-brand {
+    padding: var(--space-1) 0 var(--space-3);
+    font-size: var(--font-size-sm);
+    text-align: center;
+  }
+
+  .app-nav__link {
+    justify-content: center;
+    padding: var(--space-2);
+  }
+
+  /* The label stays the link's name; only the icon shows. */
+  .app-nav__label {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    margin: -1px;
+    overflow: hidden;
+    clip: rect(0 0 0 0);
+    white-space: nowrap;
+  }
+
+  /* The count is a dot here; the number stays in the link's name. */
+  .app-nav__link .badge--count {
+    position: absolute;
+    top: var(--space-1);
+    right: var(--space-1);
+    width: 0.625rem;
+    height: 0.625rem;
+    margin: 0;
+    padding: 0;
+    overflow: hidden;
+    background: var(--color-warning);
+    font-size: 0;
+  }
+
+  .app-rail__foot {
+    flex-direction: column;
+    padding: var(--space-3) 0 0;
+  }
+
+  .app-rail__foot .account-menu {
+    flex-direction: column;
+    width: 100%;
+  }
+
+  .app-rail__foot .select__control,
+  .app-rail__foot .menu__button {
+    max-width: 100%;
+  }
+}
+
+/* ---- Under 820 px: a top bar and a bottom bar ---- */
+
+@media (max-width: 819px) {
+  /* Focus is never hidden under the sticky top bar or the bottom bar (WCAG 2.4.11). */
+  html {
+    scroll-padding-top: 4rem;
+    scroll-padding-bottom: calc(var(--bottom-bar-height) + env(safe-area-inset-bottom, 0px));
+  }
+
+  .app-shell {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: auto 1fr;
+  }
+
+  .app-rail {
+    flex-direction: row;
+    align-items: center;
+    gap: var(--space-2);
+    height: auto;
+    overflow: visible;
+    padding: var(--space-2) max(var(--space-4), env(safe-area-inset-right, 0px)) var(--space-2)
+      max(var(--space-4), env(safe-area-inset-left, 0px));
+    border-right: 0;
+    border-bottom: 1px solid var(--color-border);
+  }
+
+  .app-brand {
+    margin-right: auto;
+    padding: 0;
+    font-size: var(--font-size-lg);
+  }
+
+  .app-rail__foot {
+    flex-wrap: nowrap;
+    margin: 0;
+    padding: 0;
+    border-top: 0;
+  }
+
+  .app-rail__foot .account-menu {
+    flex-wrap: nowrap;
+  }
+
+  .app-nav {
+    position: fixed;
+    inset: auto 0 0;
+    z-index: 20;
+    flex: none;
+    min-height: var(--bottom-bar-height);
+    padding: var(--space-1) max(var(--space-1), env(safe-area-inset-right, 0px))
+      calc(var(--space-1) + env(safe-area-inset-bottom, 0px)) max(var(--space-1), env(safe-area-inset-left, 0px));
+    border-top: 1px solid var(--color-border);
+    background: var(--color-surface);
+  }
+
+  .app-nav__list {
+    flex-direction: row;
+    justify-content: space-around;
+    gap: 0;
+  }
+
+  .app-nav__item {
+    flex: 1;
+    min-width: 0;
+  }
+
+  /* Settings is in the account menu on a phone. */
+  .app-nav__item--settings {
+    display: none;
+  }
+
+  .app-nav__link {
+    flex-direction: column;
+    justify-content: center;
+    gap: 2px;
+    min-height: 3rem;
+    padding: var(--space-1) 2px;
+    font-size: 0.6875rem;
+    text-align: center;
+  }
+
+  .app-nav__label {
+    max-width: 100%;
+  }
+
+  .app-nav__link .badge--count {
+    position: absolute;
+    top: 0;
+    right: 10%;
+    margin: 0;
+    padding: 0 5px;
+    font-size: 0.625rem;
+  }
+
+  .app-main {
+    padding: var(--space-4) max(var(--space-4), env(safe-area-inset-right, 0px))
+      calc(var(--bottom-bar-height) + var(--space-6) + env(safe-area-inset-bottom, 0px))
+      max(var(--space-4), env(safe-area-inset-left, 0px));
+    scroll-padding-bottom: var(--bottom-bar-height);
+  }
+
+  .app-shell--bare {
+    grid-template-rows: 1fr;
+  }
+
+  .app-shell--bare .app-main {
+    padding-bottom: var(--space-6);
   }
 }

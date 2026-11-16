@@ -206,7 +206,7 @@ describe("deleting a tax year", () => {
     expect(api.callsTo("DELETE", "/api/v1/tax-years/:year")).toHaveLength(0);
     await user.click(within(dialog).getByRole("button", { name: "Delete tax year" }));
     await vi.waitFor(() => {
-      expect(currentHref(router)).toBe("/tax");
+      expect(currentHref(router)).toBe("/reports/tax");
     });
     const calls = api.callsTo("DELETE", "/api/v1/tax-years/2025");
     expect(calls).toHaveLength(1);
@@ -225,7 +225,7 @@ describe("deleting a tax year", () => {
     const dialog = await screen.findByRole("dialog", { name: "Delete tax year 2025?" });
     await user.click(within(dialog).getByRole("button", { name: "Delete tax year" }));
     expect(await within(dialog).findByText("detail of forbidden")).toBeInTheDocument();
-    expect(currentHref(router)).toBe("/tax/2025");
+    expect(currentHref(router)).toBe("/reports/tax/2025");
   });
 
   it("is offered to owners and admins only", async () => {

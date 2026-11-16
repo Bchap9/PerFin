@@ -490,7 +490,7 @@ describe("mapping editor", () => {
       ).toHaveLength(1);
     });
     await waitFor(() => {
-      expect(currentHref(router)).toBe("/documents/d-1");
+      expect(currentHref(router)).toBe("/inbox/documents/d-1");
     });
   });
 
