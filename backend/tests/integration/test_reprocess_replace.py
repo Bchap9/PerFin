@@ -56,7 +56,7 @@ from app.core.crypto import Keyring
 from app.core.settings import Settings
 from app.db.models import AuditLog
 from app.db.rls import set_context
-from app.domain.accounts.models import Account, AccountType
+from app.domain.accounts.models import Account, AccountType, BalanceSnapshot
 from app.domain.documents.blobstore import LocalFSBlobStore
 from app.domain.documents.models import (
     Document,
@@ -1018,6 +1018,59 @@ def test_kept_rows_are_an_earlier_reading_in_the_view_and_can_be_removed(env: En
 
 #: Rows the first sheet prints above its first subtotal line.
 SHORT_ROWS = 8
+
+
+def test_removing_earlier_rows_from_a_confirmed_statement_takes_back_its_balance(
+    env: Env,
+) -> None:
+    account, document_id, bogus = _first_and_second(env, "4433")
+    owner = env.client()
+    edited = owner.patch(f"{API}/transactions/{bogus.id}", json={"memo": "Looked at"})
+    assert edited.status_code == 200, edited.text
+    # Read again without the bogus row, under balances that count it: the
+    # reading does not add up, the ledger (which kept the row) does.
+    reading = _balanced("4433", [*MARCH, BOGUS])
+    reading["transactions"] = [t for t in reading["transactions"] if t["payee"] != BOGUS[2]]
+    for row in reading["transactions"]:
+        row["low_confidence"] = ["reconciliation"]
+    total = sum((Decimal(amount) for _, amount, _ in MARCH), Decimal(0))
+    reading["reconciliation"] = {
+        **reading["reconciliation"],
+        "status": "mismatch",
+        "total": str(total),
+        "difference": str(-Decimal(BOGUS[1])),
+    }
+    _read(env, document_id, reading)
+    confirmed = owner.post(
+        f"{API}/documents/{document_id}/reconciliation/confirm", json={"statement": 0}
+    )
+    assert confirmed.status_code == 200, confirmed.text
+    assert confirmed.json()["snapshot"] is True
+
+    def balances() -> list[BalanceSnapshot]:
+        return env.query(select(BalanceSnapshot).where(BalanceSnapshot.account_id == account.id))
+
+    def verifications() -> list[str]:
+        return [
+            r.verification
+            for r in env.query(
+                select(StatementRecord).where(StatementRecord.document_id == document_id)
+            )
+        ]
+
+    assert verifications() == ["reconciled"]
+    assert [s.source_document_id for s in balances()] == [document_id]
+
+    removed = owner.post(
+        f"{API}/documents/{document_id}/reconciliation/remove-earlier", json={"statement": 0}
+    )
+
+    assert removed.status_code == 200, removed.text
+    assert removed.json()["statement"]["status"] == "off"
+    assert verifications() == ["unverified"]
+    # Confirmed as balanced with the earlier row, and off without it: no
+    # balance stands for the statement.
+    assert balances() == []
 
 
 def _words(document: Document) -> list[Word]:

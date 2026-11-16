@@ -65,9 +65,10 @@ from sqlalchemy import and_, case, delete, func, select
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.orm import Session
 
+from app.core.events import emit
 from app.core.ids import uuid7
 from app.core.money import to_storage
-from app.domain.accounts.models import Account
+from app.domain.accounts.models import Account, BalanceSnapshot, BalanceSource
 from app.domain.documents.models import Document, ReviewKind
 from app.domain.imports.models import StatementRecord
 from app.ingestion.sandbox.protocol import (
@@ -358,6 +359,45 @@ def record_statement(
             constraint="uq_statement_record_account_document_kind_start", set_=update
         )
     )
+    return True
+
+
+def withdraw_snapshot(
+    db: Session, document: Document, account: Account, statement: Statement
+) -> bool:
+    """Take back the balance ``document`` recorded for ``statement``; True when one stood.
+
+    A statement of a document format (PDF, image) that reconciled wrote its
+    closing balance as a statement snapshot. When its record no longer says
+    ``reconciled`` (accepted without balancing; ``unverified`` again after
+    a re-read that does not add up, a row put back or earlier rows
+    removed), no balance stands for it: the snapshot of this document,
+    account and closing day is removed. So no statement snapshot of a
+    document remains for a bank or card statement record of a document
+    format that is ``unverified``.
+
+    A balance another document or a person recorded is never touched, and
+    neither is the balance a bank file (OFX, QFX, QIF) or a table states:
+    such a file declares its balance itself, whatever its rows are.
+    """
+    closing = statement.ledger_balance
+    as_of = (closing.as_of if closing is not None else None) or statement.period_end
+    if statement.source_format not in DOCUMENT_STATEMENT_FORMATS or as_of is None:
+        return False
+    found = db.execute(
+        select(BalanceSnapshot).where(
+            BalanceSnapshot.household_id == account.household_id,
+            BalanceSnapshot.account_id == account.id,
+            BalanceSnapshot.source == BalanceSource.STATEMENT,
+            BalanceSnapshot.source_document_id == document.id,
+            BalanceSnapshot.as_of_date == as_of,
+        )
+    ).scalar_one_or_none()
+    if found is None:
+        return False
+    db.delete(found)
+    db.flush()
+    emit(db, account.household_id, "balance.updated", {"account_id": str(account.id)})
     return True
 
 

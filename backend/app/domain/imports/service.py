@@ -342,6 +342,7 @@ from app.domain.imports.statement_records import (
     drop_stale_records,
     record_statement,
     table_facts,
+    withdraw_snapshot,
 )
 from app.domain.investments.statement_import import import_investment_statements
 from app.domain.loans.models import LoanPayment
@@ -1939,6 +1940,20 @@ def _import_statements(run: _Run, result: ExtractResult, *, account_id: uuid.UUI
         )
         if verification is not None:
             _record_committed(run, account, facts, verification)
+            if verification == "unverified":
+                _withdraw(run, account, statement)
+
+
+def _withdraw(run: _Run, account: Account, statement: Statement) -> None:
+    """Take back the balance an earlier run of the document recorded for ``statement``.
+
+    For a statement this run records as ``unverified``: an ``unverified``
+    statement of a document (PDF, image) vouches for no balance, so the
+    snapshot it wrote while it was ``reconciled`` does not outlive that
+    (``statement_records.withdraw_snapshot``; nothing is removed for a
+    bank file or a table, and nothing another document recorded).
+    """
+    withdraw_snapshot(run.db, run.document, account, statement)
 
 
 def _standing(
@@ -2030,7 +2045,11 @@ def _settle_standing(run: _Run, account: Account) -> None:
         _record_committed(run, account, item.facts, verdict, lower_accepted=True)
         if verdict == "reconciled":
             _write_snapshot(run, item.parsed, account)
-        elif not item.clean:
+            continue
+        if verdict == "unverified":
+            # Reconciled until this run: the balance it recorded goes with it.
+            _withdraw(run, account, item.statement)
+        if not item.clean:
             _reconciliation_review(
                 run, item.parsed, account, statement_index=item.index, ref=item.ref
             )

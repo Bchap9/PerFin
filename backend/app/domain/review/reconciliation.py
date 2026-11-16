@@ -114,7 +114,7 @@ from app.core.errors import ProblemError
 from app.core.events import emit
 from app.core.money import AMOUNT_INTEGER_DIGITS, AMOUNT_PLACES, to_storage
 from app.domain.accounts import repo as accounts_repo
-from app.domain.accounts.models import LIABILITY_TYPES, Account, BalanceSnapshot, BalanceSource
+from app.domain.accounts.models import LIABILITY_TYPES, Account, BalanceSource
 from app.domain.accounts.visibility import (
     can_edit_account,
     can_view_account,
@@ -127,6 +127,7 @@ from app.domain.documents.service import get_visible_document
 from app.domain.imports import tombstones
 from app.domain.imports.models import StatementRecord
 from app.domain.imports.statement_answers import REF_FIELD, statement_refs
+from app.domain.imports.statement_records import withdraw_snapshot
 from app.domain.review import repo, service
 from app.domain.review.actions import correct_balances
 from app.domain.review.causes import Cause, LedgerRow, PageAmount, fee_lines, rank_causes
@@ -158,7 +159,6 @@ from app.ingestion.parsers.confidence import PERIOD_GRACE_DAYS
 from app.ingestion.parsers.structured import ParsedStatement
 from app.ingestion.reconcile import TOLERANCE
 from app.ingestion.sandbox.protocol import (
-    DOCUMENT_STATEMENT_FORMATS,
     ExtractedTransaction,
     ExtractResult,
     Statement,
@@ -1094,34 +1094,32 @@ def accept(
 
 
 def _withdraw_snapshot(db: Session, opened: _Open) -> bool:
-    """Take back the balance this document recorded for an accepted statement.
+    """Take back the balance this document recorded for the statement.
 
-    A statement of a document format (PDF, image) that was imported as
-    reconciled wrote its closing balance as a statement snapshot. Accepted
-    without balancing (its rows were changed since), no balance stands for
-    it: the snapshot of this document, account and closing day is removed.
-    A balance another document or a person recorded is never touched, and
-    neither is the balance a bank file (OFX, QIF) states.
+    For a statement whose record no longer says ``reconciled``: accepted
+    without balancing, or back to ``unverified`` (:func:`_uncheck`). See
+    ``statement_records.withdraw_snapshot`` for what is never touched.
     """
-    statement, account = opened.placed.statement, opened.account
-    closing = statement.ledger_balance
-    as_of = (closing.as_of if closing is not None else None) or statement.period_end
-    if statement.source_format not in DOCUMENT_STATEMENT_FORMATS or as_of is None:
+    return withdraw_snapshot(db, opened.document, opened.account, opened.placed.statement)
+
+
+def _uncheck(db: Session, after: _Open) -> bool:
+    """A statement confirmed as balanced that no longer is goes back to ``unverified``.
+
+    True when it did. The balance its confirmation (or its import) recorded
+    is taken back with it: an ``unverified`` statement of a document vouches
+    for no balance.
+    """
+    record = after.placed.record
+    if (
+        record is None
+        or record.verification != "reconciled"
+        or _view(db, after).status == "balanced"
+    ):
         return False
-    found = db.execute(
-        select(BalanceSnapshot).where(
-            BalanceSnapshot.household_id == account.household_id,
-            BalanceSnapshot.account_id == account.id,
-            BalanceSnapshot.source == BalanceSource.STATEMENT,
-            BalanceSnapshot.source_document_id == opened.document.id,
-            BalanceSnapshot.as_of_date == as_of,
-        )
-    ).scalar_one_or_none()
-    if found is None:
-        return False
-    db.delete(found)
+    record.verification = "unverified"
+    _withdraw_snapshot(db, after)
     db.flush()
-    emit(db, account.household_id, "balance.updated", {"account_id": str(account.id)})
     return True
 
 
@@ -1206,15 +1204,7 @@ def restore(
         user_id=principal.user_id,
         request=request,
     )
-    after = _again(db, opened)
-    record = after.placed.record
-    if (
-        record is not None
-        and record.verification == "reconciled"
-        and _view(db, after).status != "balanced"
-    ):
-        record.verification = "unverified"
-        db.flush()
+    _uncheck(db, _again(db, opened))
     return _outcome(db, opened)
 
 
@@ -1285,14 +1275,6 @@ def remove_earlier(
             {"removed": len(mine), "account_id": str(account.id), "statement": body.statement},
             request=request,
         )
-    after = _again(db, opened)
-    record = after.placed.record
-    if (
-        mine
-        and record is not None
-        and record.verification == "reconciled"
-        and _view(db, after).status != "balanced"
-    ):
-        record.verification = "unverified"
-        db.flush()
+    if mine:
+        _uncheck(db, _again(db, opened))
     return _outcome(db, opened, closed=closed)

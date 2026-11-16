@@ -1703,6 +1703,91 @@ def test_a_reconciled_statement_read_with_another_balance_is_asked_about(env: En
     assert reasons(env, document_id) == ["reconciliation_failed"]
 
 
+def stale_snapshots(env: Env) -> list[BalanceSnapshot]:
+    """Balances that stand for a PDF statement nothing vouches for (there must be none).
+
+    A statement snapshot a document wrote, on an account for which that
+    document's bank statement record says ``unverified``.
+    """
+    unverified = {
+        (r.document_id, r.account_id)
+        for r in env.query(
+            select(StatementRecord).where(
+                StatementRecord.kind == "bank",
+                StatementRecord.source_format == "pdf",
+                StatementRecord.verification == "unverified",
+            )
+        )
+    }
+    found: list[BalanceSnapshot] = env.query(
+        select(BalanceSnapshot).where(BalanceSnapshot.source == BalanceSource.STATEMENT)
+    )
+    return [s for s in found if (s.source_document_id, s.account_id) in unverified]
+
+
+def test_a_re_read_that_no_longer_reconciles_takes_back_the_balance(env: Env) -> None:
+    account, document_id = _reconciled(env, "7335")
+    # Another month of the account from another file: its balance is not this one's.
+    _stored(
+        env,
+        _month("7335", 5, 31, "110.00", "100.00", [(4, "-10.00", "Ferry Kiosk")]),
+        checked=True,
+    )
+    may = (date(2026, 5, 31), Decimal("100.00"))
+    june = (date(2026, 6, 30), Decimal("75.50"))
+
+    def balances() -> list[tuple[date, Decimal]]:
+        return [(s.as_of_date, s.balance) for s in snapshots(env, account)]
+
+    assert balances() == [may, june]
+
+    def closing_read_differently(statements: list[Statement]) -> list[Statement]:
+        balance = statements[0].ledger_balance
+        assert balance is not None
+        fixed = statements[0].model_copy(
+            update={"ledger_balance": balance.model_copy(update={"amount": Decimal("70.00")})}
+        )
+        return [rebalance(fixed)]
+
+    reread(env, document_id, closing_read_differently)
+
+    assert [r.verification for r in records(env, document_id)] == ["unverified"]
+    # The balance the first reading recorded stands for nothing now.
+    assert balances() == [may]
+    assert stale_snapshots(env) == []
+
+    # Read as it was again, it reconciles and its balance is back.
+    def closing_as_printed(statements: list[Statement]) -> list[Statement]:
+        balance = statements[0].ledger_balance
+        assert balance is not None
+        fixed = statements[0].model_copy(
+            update={"ledger_balance": balance.model_copy(update={"amount": Decimal("75.50")})}
+        )
+        return [rebalance(fixed)]
+
+    reread(env, document_id, closing_as_printed)
+    assert [r.verification for r in records(env, document_id)] == ["reconciled"]
+    assert balances() == [may, june]
+
+
+def test_a_row_put_back_into_a_confirmed_statement_takes_back_its_balance(env: Env) -> None:
+    _, account, document_id, forged = tampered(env, 83)
+    owner = env.client()
+    assert owner.delete(f"{API}/transactions/{forged.id}").status_code == 204
+    status, got = act(owner, document_id, "confirm", statement=0)
+    assert (status, got["snapshot"]) == (200, True)
+    assert len(snapshots(env, account)) == 1
+    (removed,) = got["statement"]["removed"]
+
+    status, got = act(owner, document_id, "restore", tombstone_id=removed["tombstone_id"])
+
+    assert status == 200, got
+    assert got["statement"]["verification"] == "unverified"
+    # Confirmed as balanced, and no longer: the balance it recorded is taken back.
+    assert snapshots(env, account) == []
+    assert stale_snapshots(env) == []
+
+
 def test_rows_kept_from_an_earlier_reading_are_not_listed_again_after_accepting(
     env: Env,
 ) -> None:
