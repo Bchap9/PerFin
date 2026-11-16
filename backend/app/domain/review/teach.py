@@ -47,6 +47,22 @@ with a role per column, a line to ignore, or "Other — describe it").
    not answer the item (an institution for an unknown account or a
    possible duplicate) leaves it open (warning ``item_left_open``).
 
+6. With ``preview`` nothing of the above happens. The labels and the
+   template are read exactly as an apply reads them, and the answer says
+   what an apply would get (:func:`_preview`): the first rows in reading
+   order with the table each came from, how many there are, whether they
+   meet the balances, how many other waiting documents of the layout would
+   be read again, and the account the rows would go to. **Nothing is
+   written**: no document field, no stored extraction, no institution, no
+   layout, no review item, no job, no audit row. The request is checked as
+   an apply checks it (the account, the period, the institution a layout
+   needs), so what a preview accepts an apply accepts.
+
+Each transactions table carries its ``direction`` (what an unsigned amount
+means) and whether it ``continues`` on pages that do not repeat its header
+(:class:`app.ingestion.parsers.template.TableTemplate`); a layout takes up
+to four transactions tables and one holdings table (``422 invalid-table``).
+
 Callers: member or above who may change the document
 (``can_edit_document``); an ``item_id`` must be an open item of the
 document the caller may resolve. Audited as ``document.teach`` (field
@@ -60,6 +76,7 @@ from datetime import date
 from decimal import Decimal, InvalidOperation
 from typing import Any, Final
 
+from pydantic import ValidationError
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 from starlette.requests import HTTPConnection
@@ -73,7 +90,7 @@ from app.core.events import emit
 from app.domain.accounts.models import Institution
 from app.domain.accounts.service import find_or_create_institution
 from app.domain.accounts.visibility import get_visible_account
-from app.domain.documents.manage import can_edit_document
+from app.domain.documents.manage import can_edit_document, may_download
 from app.domain.documents.models import (
     Document,
     DocumentKind,
@@ -85,16 +102,21 @@ from app.domain.documents.service import get_visible_document
 from app.domain.imports import service as imports_service
 from app.domain.imports.schemas import ApplyMapping
 from app.domain.review import actions, service
-from app.domain.review.layout import stored_result
+from app.domain.review.layout import derive_match, stored_result
 from app.domain.review.schemas import (
+    TEACH_PREVIEW_ROWS_MAX,
     TaughtColumn,
     TaughtField,
+    TaughtRow,
     TaughtTable,
     TeachOut,
+    TeachPreview,
     TeachRequest,
 )
 from app.domain.review.service import WHOLE_STATEMENT_REASONS
 from app.domain.transactions.models import Transaction
+from app.ingestion.classify import fingerprints
+from app.ingestion.match.institutions import pick
 from app.ingestion.parsers.base import DocumentView
 from app.ingestion.parsers.confidence import DEFAULT_THRESHOLD
 from app.ingestion.parsers.template import (
@@ -105,6 +127,7 @@ from app.ingestion.parsers.template import (
     FieldRead,
     LayoutTemplate,
     TableTemplate,
+    TemplateOutcome,
     derive_anchor,
     label_text,
     note_text,
@@ -188,12 +211,20 @@ class _Lesson:
         return clean
 
     def template(self) -> LayoutTemplate:
-        return LayoutTemplate(
-            fields=list(self.anchors.values()),
-            tables=self.tables,
-            ignore=self.ignore[:MAX_IGNORED],
-            notes=self.notes,
-        )
+        try:
+            return LayoutTemplate(
+                fields=list(self.anchors.values()),
+                tables=self.tables,
+                ignore=self.ignore[:MAX_IGNORED],
+                notes=self.notes,
+            )
+        except ValidationError as exc:
+            # More tables of a kind than a layout takes.
+            errors = exc.errors()
+            detail = str(errors[0].get("msg", "")) if errors else ""
+            raise _invalid(
+                "invalid-table", "Table not understood", detail[:300] or "invalid tables"
+            ) from None
 
 
 def _read_labels(lesson: _Lesson, body: TeachRequest) -> None:
@@ -245,9 +276,15 @@ def _read_labels(lesson: _Lesson, body: TeachRequest) -> None:
                 lesson.note(column.note)
         columns = [(c.x0, c.x1, "ignore" if c.role == "other" else c.role) for c in table.columns]
         try:
-            lesson.tables.append(table_from_selection(view, page, table.bbox, table.kind, columns))
+            found_table = table_from_selection(view, page, table.bbox, table.kind, columns)
         except ValueError as exc:
             raise _invalid("invalid-table", "Table not understood", str(exc)[:300]) from None
+        # What the person said about the table: neither is read off the page.
+        lesson.tables.append(
+            found_table.model_copy(
+                update={"direction": table.direction, "continues": table.continues}
+            )
+        )
 
 
 def _institution(
@@ -391,6 +428,175 @@ def _settles(
     return False
 
 
+def _taught_period(lesson: _Lesson) -> tuple[date | None, date | None]:
+    """The period the labels give (``422`` when it ends before it starts)."""
+    start = (
+        date.fromisoformat(lesson.values["period_start"].value)
+        if ("period_start" in lesson.values)
+        else None
+    )
+    end = (
+        date.fromisoformat(lesson.values["period_end"].value)
+        if ("period_end" in lesson.values)
+        else None
+    )
+    if start is not None and end is not None and start > end:
+        raise _invalid(
+            "invalid-correction", "Invalid correction", "The period ends before it starts."
+        )
+    return start, end
+
+
+def _institution_required() -> ProblemError:
+    return _invalid(
+        "institution-required",
+        "Institution required",
+        "Say which institution the document is from to remember its layout.",
+    )
+
+
+def _tables_out(template: LayoutTemplate, taught: TemplateOutcome) -> list[TaughtTable]:
+    """Each taught table with the rows it read (a transactions table: its own rows)."""
+    return [
+        TaughtTable(
+            kind=table.kind,
+            rows=taught.row_tables.count(index)
+            if table.kind == "transactions"
+            else sum(len(i.positions) for i in taught.investments),
+            columns=[TaughtColumn(header=c.header, role=c.role) for c in table.columns],
+        )
+        for index, table in enumerate(template.tables)
+    ]
+
+
+def _named_institution(
+    db: Session, principal: Principal, body: TeachRequest, lesson: _Lesson
+) -> tuple[uuid.UUID | None, str] | None:
+    """The institution an apply would use, **without creating it**: its id and name.
+
+    The id is ``None`` for a name the household does not have yet; ``None``
+    when the request names no institution.
+    """
+    rows = db.execute(
+        select(Institution.id, Institution.name).where(
+            Institution.household_id == principal.household_id
+        )
+    ).all()
+    if body.institution_id is not None:
+        for institution_id, name in rows:
+            if institution_id == body.institution_id:
+                return institution_id, name
+        raise ProblemError(404, "institution-not-found", "Institution not found")
+    name = " ".join((body.institution_name or lesson.institution or "").split())[:200]
+    if not name:
+        return None
+    found = pick(name, [(institution_id, existing) for institution_id, existing in rows])
+    if found is not None:
+        return found, next(existing for institution_id, existing in rows if institution_id == found)
+    return None, name
+
+
+def _similar_waiting(
+    db: Session,
+    principal: Principal,
+    document: Document,
+    result: ExtractResult,
+    named: tuple[uuid.UUID | None, str] | None,
+) -> int:
+    """Other waiting documents remembering this layout would read again.
+
+    The rules are the ones :func:`app.domain.review.actions.store_layout`
+    derives from the document's header; nothing is stored. ``0`` when no
+    institution is named or the header has nothing to recognise a layout by.
+    """
+    if named is None:
+        return 0
+    match = derive_match(result)
+    if match is None:
+        return 0
+    kind = document.kind if document.kind is not DocumentKind.UNKNOWN else DocumentKind.STATEMENT
+    try:
+        spec = fingerprints.FingerprintSpec.model_validate(
+            {
+                "schema": fingerprints.SCHEMA_VERSION,
+                "key": "household-new",
+                "institution": named[1],
+                "kind": kind.value,
+                "parser": TAUGHT_PARSER,
+                "version": 1,
+                "match": match,
+            }
+        )
+    except ValidationError:
+        return 0
+    compiled = fingerprints.compile_fingerprint(spec, origin="household", institution_id=named[0])
+    return len(actions._similar(db, principal, document, compiled))
+
+
+def _preview(
+    db: Session,
+    principal: Principal,
+    document: Document,
+    result: ExtractResult,
+    body: TeachRequest,
+    lesson: _Lesson,
+    template: LayoutTemplate,
+    taught: TemplateOutcome,
+) -> TeachOut:
+    """What an apply of ``body`` would read; writes nothing (module doc, 6)."""
+    named = _named_institution(db, principal, body, lesson)
+    if body.account_id is not None:
+        get_visible_account(db, principal, body.account_id, need="edit")
+    _taught_period(lesson)
+    if body.remember and named is None:
+        raise _institution_required()
+    warnings = list(lesson.warnings)
+    if template.tables and not taught.read:
+        warnings.append("table_without_rows")
+    elif taught.read and not body.remember and _has_rows(db, document):
+        warnings.append("rows_already_imported")
+    # The one statement the transaction tables make, as an apply stores it:
+    # its rows in reading order and its check against the balances given.
+    statement = taught.statements[0] if taught.statements else None
+    transactions = statement.transactions if statement is not None else []
+    check = statement.reconciliation if statement is not None else None
+    content = may_download(db, principal)
+    rows = [
+        TaughtRow(
+            posted_date=row.posted,
+            amount=f"{row.amount:f}",
+            payee=row.payee if content else None,
+            table=table,
+            page=row.page or body.tables[table].page,
+        )
+        for row, table in zip(
+            transactions[:TEACH_PREVIEW_ROWS_MAX], taught.row_tables, strict=False
+        )
+    ]
+    similar = (
+        _similar_waiting(db, principal, document, result, named) if body.reprocess_similar else 0
+    )
+    return TeachOut(
+        document_id=document.id,
+        fields=lesson.fields,
+        tables=_tables_out(template, taught),
+        ignored=len(template.ignore),
+        notes=lesson.notes,
+        applied=[],
+        warnings=list(dict.fromkeys([*warnings, *taught.warnings]))[:50],
+        preview=TeachPreview(
+            rows=rows,
+            row_count=len(transactions),
+            reconciliation=check.status if check is not None else None,
+            difference=f"{check.difference:f}"
+            if check is not None and check.difference is not None
+            else None,
+            similar_waiting=similar,
+            account_id=body.account_id if body.account_id is not None else document.account_id,
+        ),
+    )
+
+
 def teach(
     db: Session,
     principal: Principal,
@@ -409,6 +615,8 @@ def teach(
     _read_labels(lesson, body)
     template = lesson.template()
     taught = read_template(view, template, threshold=DEFAULT_THRESHOLD, given=lesson.values)
+    if body.preview:
+        return _preview(db, principal, document, result, body, lesson, template, taught)
 
     applied: list[str] = []
     before: dict[str, Any] = {}
@@ -423,20 +631,7 @@ def teach(
             before["account_id"] = document.account_id
             document.account_id = body.account_id
             applied.append("account_id")
-    start = (
-        date.fromisoformat(lesson.values["period_start"].value)
-        if ("period_start" in lesson.values)
-        else None
-    )
-    end = (
-        date.fromisoformat(lesson.values["period_end"].value)
-        if ("period_end" in lesson.values)
-        else None
-    )
-    if start is not None and end is not None and start > end:
-        raise _invalid(
-            "invalid-correction", "Invalid correction", "The period ends before it starts."
-        )
+    start, end = _taught_period(lesson)
     for name, value in (("period_start", start), ("period_end", end)):
         if value is not None and getattr(document, name) != value:
             before[name] = getattr(document, name)
@@ -494,11 +689,7 @@ def teach(
     reprocessed: list[uuid.UUID] = []
     if body.remember:
         if institution is None:
-            raise _invalid(
-                "institution-required",
-                "Institution required",
-                "Say which institution the document is from to remember its layout.",
-            )
+            raise _institution_required()
         stored_layout = actions.store_layout(
             db,
             principal,
@@ -536,16 +727,7 @@ def teach(
             )
             rerun, job_id = "import", accepted.job_id
 
-    tables_out = [
-        TaughtTable(
-            kind=table.kind,
-            rows=sum(len(s.transactions) for s in taught.statements)
-            if table.kind == "transactions"
-            else sum(len(i.positions) for i in taught.investments),
-            columns=[TaughtColumn(header=c.header, role=c.role) for c in table.columns],
-        )
-        for table in template.tables
-    ]
+    tables_out = _tables_out(template, taught)
     out_item = None
     if item is not None:
         settled = (
