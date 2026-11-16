@@ -57,12 +57,12 @@ migration, no new setting, no new container, nothing new leaves the host
   way around" (docs/USING.md) says what lives where.
 - **One Inbox for everything that waits on a person**, with its count on
   the rail ("Inbox, 3 things need you"). It replaces Review and the
-  Documents upload page: Upload and a drop zone at the top, then one card
-  per thing to answer, the documents whose money is wrong until someone
+  Documents upload page: Upload at the top, then one card per thing to
+  answer, the documents whose money is wrong until someone
   answers first, then those that cannot import, then notes, loose items,
   subscription series that are suggested or changed, the merchants with
-  the most suggested categories and "Make it a rule" offers. "Imported
-  recently" lists the files of the last 14 days with their account and
+  the most suggested categories and "Make it a rule" offers, then the drop
+  zone, which every "add documents" link opens. "Imported recently" lists the files of the last 14 days with their account and
   period. The document library, each document's page (now saying where
   its rows went) and the answered items are its other tabs. The count on
   the rail, Home's "Needs you" and the cards agree, and each counts only
@@ -91,7 +91,7 @@ migration, no new setting, no new container, nothing new leaves the host
   Rate changes and Payoff for a loan, Valuations for a manual asset.
   Accounts lists every account in groups (Cash, Cards and credit,
   Investments, Loans, Property and other) under net worth and its change
-  over the last month, each row saying how current its balance is.
+  this month (the same figure as Home), each row saying how current its balance is.
   Investments across all accounts is its own tab.
 - **Plan** holds Subscriptions, Budgets, Goals and Upcoming (the
   cash-flow calendar and the recurring items). **Reports** holds
@@ -162,6 +162,13 @@ migration, no new setting, no new container, nothing new leaves the host
   for many rows from the selection bar. The prompt that offered a rule
   after a correction in the list went with it; the drawer's "Always use…"
   box replaces it.
+
+### Fixed
+
+- **An investment account's balance counts its holdings.** Accounts and an
+  account's own page showed a brokerage or retirement account at its cash
+  alone (often 0.00) while net worth counted its cash plus holdings; both
+  now show the same value.
 
 ## [1.0.0-rc.10] - 2026-11-16
 
