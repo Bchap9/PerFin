@@ -2,8 +2,9 @@
 /**
  * Plan > Upcoming: the cash-flow calendar and the recurring items list. The
  * tab is in the address (`?tab=recurring`; the calendar is the default and
- * is left out), so a view can be bookmarked and shared. The page's title is
- * its tab's name, "Upcoming". The calendar's look-ahead sits on the tab row
+ * is left out), so a view can be bookmarked and shared. The page's title,
+ * "Upcoming", is for screen readers only: the Plan section's Upcoming tab
+ * already shows it. The calendar's look-ahead sits on the tab row
  * (as the investment account filter does) and only while the calendar shows.
  */
 import { useState } from "react";
@@ -23,7 +24,7 @@ export function CalendarPage() {
   const [tab, setTab] = useTabParam<UpcomingTab>(TABS, "calendar");
   const [days, setDays] = useState<number>(30);
   return (
-    <PlanningPage title="Upcoming">
+    <PlanningPage title="Upcoming" titleHidden>
       <Tabs
         label="Upcoming"
         {...(tab === "calendar"

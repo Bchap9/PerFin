@@ -60,8 +60,9 @@ describe("calendar", () => {
     });
     renderApp("/plan/upcoming");
     const table = await screen.findByRole("table", { name: "Upcoming days" });
-    // The page is named after its tab.
-    expect(screen.getByRole("heading", { name: "Upcoming" })).toBeInTheDocument();
+    // The page keeps its h2 for screen readers; the Plan tab already shows
+    // its name, so it is not repeated as a visible heading.
+    expect(screen.getByRole("heading", { level: 2, name: "Upcoming" })).toHaveClass("visually-hidden");
     expect(within(table).getAllByRole("row")).toHaveLength(2);
     expect(within(table).getByText("Streaming")).toBeInTheDocument();
     expect(within(table).getByText("$1,184.51")).toBeInTheDocument();

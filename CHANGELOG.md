@@ -67,6 +67,9 @@ Stage 4 of four on the way to 1.0.0: the release review.
 
 ### Fixed
 
+- **Plan › Upcoming shows its name once.** The page drew a second
+  "Upcoming" heading under the Plan section's Upcoming tab; the heading is
+  now for screen readers only, as on Plan › Subscriptions.
 - **`scripts/check_spdx.py` runs in a container.** In a checkout that
   reports another owner (a bind mount), git refused the repository and the
   script stopped with a traceback; it now checks that one checkout and
