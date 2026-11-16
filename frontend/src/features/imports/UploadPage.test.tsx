@@ -3,13 +3,9 @@ import { screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 
 import { authedSession, json, mockApi, renderApp } from "../auth/testing";
-import { lookupHandlers, NOW } from "../transactions/fixtures";
+import { account, lookupHandlers, NOW } from "../transactions/fixtures";
 import { uploadDocument } from "./api";
-import {
-  mappableDocuments,
-  readAsActivity,
-  readAsPositions,
-} from "./UploadPage";
+import { readAsActivity, readAsPositions } from "./UploadPage";
 
 class FakeXhr {
   static last: FakeXhr | null = null;
@@ -153,7 +149,7 @@ describe("upload page", () => {
     can_resolve: true,
   });
 
-  it("lists uploads with their status and links a file that needs mapping", async () => {
+  it("lists uploads with their status", async () => {
     mockApi({
       "GET /api/v1/auth/session": authedSession({ role: "member" }),
       ...lookupHandlers(),
@@ -165,6 +161,108 @@ describe("upload page", () => {
           ],
           next_cursor: null,
         }),
+    });
+    renderApp("/documents");
+    expect(await screen.findByText("bank.csv")).toBeInTheDocument();
+    expect(screen.getByText("Needs review")).toBeInTheDocument();
+    expect(screen.getByText("Imported")).toBeInTheDocument();
+  });
+
+  it("links each recent upload to its document", async () => {
+    mockApi({
+      "GET /api/v1/auth/session": authedSession({ role: "viewer" }),
+      ...lookupHandlers(),
+      "GET /api/v1/documents": () =>
+        json({
+          items: [
+            doc("d-1", "needs_review", "bank.csv"),
+            doc("d-2", "processed", "march.ofx"),
+            { ...doc("d-3", "failed", "scan.png"), original_filename: null },
+          ],
+          next_cursor: null,
+        }),
+    });
+    renderApp("/documents");
+    expect(
+      await screen.findByRole("link", { name: "bank.csv" }),
+    ).toHaveAttribute("href", "/documents/d-1");
+    expect(screen.getByRole("link", { name: "march.ofx" })).toHaveAttribute(
+      "href",
+      "/documents/d-2",
+    );
+    expect(screen.getByRole("link", { name: "Unnamed file" })).toHaveAttribute(
+      "href",
+      "/documents/d-3",
+    );
+  });
+
+  it("a processed file names its account and links its rows", async () => {
+    mockApi({
+      "GET /api/v1/auth/session": authedSession({ role: "member" }),
+      ...lookupHandlers([account("a-1", "Everyday")]),
+      "GET /api/v1/documents": () =>
+        json({
+          items: [
+            { ...doc("d-1", "processed", "march.ofx"), account_id: "a-1" },
+            // Several accounts, or one the person cannot see: the rows only.
+            { ...doc("d-2", "processed", "both.pdf"), account_id: "a-9" },
+            // A file that is not a statement has no rows in the ledger.
+            { ...doc("d-3", "processed", "till.jpg"), kind: "receipt" },
+            { ...doc("d-4", "needs_review", "held.pdf"), account_id: "a-1" },
+          ],
+          next_cursor: null,
+        }),
+    });
+    renderApp("/documents");
+    const uploads = within(await screen.findByRole("table"));
+    expect(
+      await uploads.findByRole("link", { name: "Everyday" }),
+    ).toHaveAttribute("href", "/accounts/a-1");
+    expect(uploads.getAllByRole("link", { name: "Everyday" })).toHaveLength(1);
+    expect(
+      uploads
+        .getAllByRole("link", { name: "View the rows" })
+        .map((link) => link.getAttribute("href")),
+    ).toEqual(["/transactions?document=d-1", "/transactions?document=d-2"]);
+  });
+
+  it("shows the quiet marker", async () => {
+    mockApi({
+      "GET /api/v1/auth/session": authedSession({ role: "viewer" }),
+      ...lookupHandlers(),
+      "GET /api/v1/documents": () =>
+        json({
+          items: [
+            { ...doc("d-1", "processed", "clean.pdf"), unchecked: true },
+            { ...doc("d-2", "processed", "balanced.pdf"), unchecked: false },
+            doc("d-3", "processed", "older.pdf"),
+          ],
+          next_cursor: null,
+        }),
+    });
+    renderApp("/documents");
+    expect(await screen.findByText("clean.pdf")).toBeInTheDocument();
+    expect(
+      screen.getAllByText("Not checked against a balance"),
+    ).toHaveLength(1);
+  });
+
+  it("offers no Map columns link in the list", async () => {
+    const activity = (id: string, name: string) => ({
+      ...doc(id, "needs_review", name),
+      parser_version: "brokerage_activity_table/1",
+    });
+    const api = mockApi({
+      "GET /api/v1/auth/session": authedSession({ role: "member" }),
+      ...lookupHandlers(),
+      "GET /api/v1/documents": () =>
+        json({
+          items: [
+            doc("d-1", "needs_review", "bank.csv"),
+            activity("d-4", "activity.csv"),
+          ],
+          next_cursor: null,
+        }),
       "GET /api/v1/review": () =>
         json({
           items: [waiting("r-1", "d-1", "mapping_required", "column_mapping")],
@@ -173,88 +271,18 @@ describe("upload page", () => {
     });
     renderApp("/documents");
     expect(await screen.findByText("bank.csv")).toBeInTheDocument();
-    expect(screen.getByText("Needs review")).toBeInTheDocument();
-    expect(screen.getByText("Imported")).toBeInTheDocument();
+    const uploads = within(screen.getByRole("table"));
+    // Every file that waits leads to its own questions in the review queue,
+    // where the card offers the column mapping when it applies.
     expect(
-      await screen.findByRole("link", { name: "Map columns" }),
-    ).toHaveAttribute("href", "/documents/d-1/mapping");
-  });
-
-  it("offers Map columns only for files the mapping editor answers", async () => {
-    const activity = (id: string, name: string) => ({
-      ...doc(id, "needs_review", name),
-      parser_version: "brokerage_activity_table/1",
-    });
-    mockApi({
-      "GET /api/v1/auth/session": authedSession({ role: "member" }),
-      ...lookupHandlers(),
-      "GET /api/v1/documents": () =>
-        json({
-          items: [
-            doc("d-1", "needs_review", "bank.csv"),
-            doc("d-2", "needs_review", "empty.csv"),
-            activity("d-3", "unread-activity.csv"),
-            activity("d-4", "activity.csv"),
-            doc("d-5", "needs_review", "statement.ofx"),
-          ],
-          next_cursor: null,
-        }),
-      "GET /api/v1/review": () =>
-        json({
-          items: [
-            waiting("r-1", "d-1", "mapping_required", "column_mapping"),
-            waiting("r-2", "d-2", "no_rows", "reprocess"),
-            waiting("r-3", "d-3", "activity_unreadable", "column_mapping"),
-            waiting(
-              "r-4",
-              "d-4",
-              "account_not_found",
-              "choose_account",
-              "unknown_account",
-            ),
-            waiting(
-              "r-5",
-              "d-5",
-              "lines_skipped",
-              "correct_fields",
-              "low_confidence_field",
-            ),
-          ],
-          next_cursor: null,
-        }),
-    });
-    renderApp("/documents");
-    expect(await screen.findByText("empty.csv")).toBeInTheDocument();
-    const uploads = within(screen.getByRole("table"));
-    await waitFor(() => {
-      expect(
-        uploads
-          .getAllByRole("link", { name: "Map columns" })
-          .map((link) => link.getAttribute("href")),
-      ).toEqual(["/documents/d-1/mapping", "/documents/d-3/mapping"]);
-    });
-    // Every file that waits still leads to the review queue.
-    expect(uploads.getAllByRole("link", { name: "Review" })).toHaveLength(5);
-    // Activity that was read keeps its note; the unread one is mapped instead.
-    expect(uploads.getAllByText("Read as investment activity")).toHaveLength(1);
-  });
-
-  it("offers no Map columns while the review queue cannot be read", async () => {
-    mockApi({
-      "GET /api/v1/auth/session": authedSession({ role: "member" }),
-      ...lookupHandlers(),
-      "GET /api/v1/documents": () =>
-        json({
-          items: [doc("d-1", "needs_review", "bank.csv")],
-          next_cursor: null,
-        }),
-      "GET /api/v1/review": () => json({ title: "Unavailable" }, 503),
-    });
-    renderApp("/documents");
-    expect(await screen.findByText("bank.csv")).toBeInTheDocument();
-    const uploads = within(screen.getByRole("table"));
-    expect(uploads.getByRole("link", { name: "Review" })).toBeInTheDocument();
+      uploads
+        .getAllByRole("link", { name: "Review" })
+        .map((link) => link.getAttribute("href")),
+    ).toEqual(["/review?document=d-1", "/review?document=d-4"]);
     expect(uploads.queryByRole("link", { name: "Map columns" })).toBeNull();
+    expect(uploads.getAllByText("Read as investment activity")).toHaveLength(1);
+    // The list no longer reads the queue to decide what to offer.
+    expect(api.callsTo("GET", "/api/v1/review")).toHaveLength(0);
   });
 
   it("uploads a chosen file", async () => {
@@ -289,6 +317,11 @@ describe("upload page", () => {
     });
     sent.onload?.();
     expect(await screen.findByText("Uploaded")).toBeInTheDocument();
+    // The finished row leads to the document it became.
+    expect(screen.getByRole("link", { name: "new.csv" })).toHaveAttribute(
+      "href",
+      "/documents/d-3",
+    );
   });
 
   it("offers no upload to a viewer", async () => {
@@ -302,19 +335,6 @@ describe("upload page", () => {
       await screen.findByText("You have read-only access."),
     ).toBeInTheDocument();
     expect(screen.queryByLabelText("Choose files")).not.toBeInTheDocument();
-  });
-});
-
-describe("mappableDocuments", () => {
-  it("names the documents with an item the mapping editor answers", () => {
-    expect([
-      ...mappableDocuments([
-        { document_id: "d-1", next_step: "column_mapping" },
-        { document_id: "d-2", next_step: "reprocess" },
-        { document_id: null, next_step: "column_mapping" },
-        { document_id: "d-3", next_step: null },
-      ]),
-    ]).toEqual(["d-1"]);
   });
 });
 

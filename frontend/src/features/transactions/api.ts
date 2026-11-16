@@ -47,6 +47,8 @@ export interface TransactionFilters {
   tag: string;
   reviewState: ReviewState | "";
   q: string;
+  /** A document id: only the rows imported from that file. Empty for all. */
+  document: string;
 }
 
 export const EMPTY_FILTERS: TransactionFilters = {
@@ -58,6 +60,7 @@ export const EMPTY_FILTERS: TransactionFilters = {
   tag: "",
   reviewState: "",
   q: "",
+  document: "",
 };
 
 export const PAGE_SIZE = 50;
@@ -73,6 +76,7 @@ export function filterQuery(filters: TransactionFilters) {
     ...(filters.tag === "" ? {} : { tag: [filters.tag] }),
     ...(filters.reviewState === "" ? {} : { review_state: [filters.reviewState] }),
     ...(filters.q.trim() === "" ? {} : { q: filters.q.trim() }),
+    ...(filters.document === "" ? {} : { document: filters.document }),
   };
 }
 

@@ -2,7 +2,13 @@
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 
-import { authedSession, json, mockApi, renderApp } from "../auth/testing";
+import {
+  authedSession,
+  currentHref,
+  json,
+  mockApi,
+  renderApp,
+} from "../auth/testing";
 import { account, lookupHandlers } from "../transactions/fixtures";
 import { SuggestionNote } from "./MappingEditor";
 import {
@@ -452,6 +458,88 @@ describe("mapping editor", () => {
     ).toEqual({ mapping_id: "m-1", account_id: "a-1" });
   });
 
+  it("returns to the document after saving", async () => {
+    const api = mockApi({
+      "GET /api/v1/auth/session": authedSession({ role: "member" }),
+      ...lookupHandlers([account("a-1", "Everyday")]),
+      "GET /api/v1/imports/:id/preview": () => json(PREVIEW),
+      "POST /api/v1/imports/mappings": () => json({ id: "m-1" }, 201),
+      "POST /api/v1/imports/:id/apply-mapping": () =>
+        json({ document_id: "d-1", job_id: "j-1", state: "queued" }, 202),
+    });
+    const { router } = renderApp("/documents/d-1/mapping");
+    const user = userEvent.setup();
+    await user.selectOptions(
+      await screen.findByLabelText("Column 1 holds"),
+      "date",
+    );
+    // Leaving without saving goes back to the file too.
+    expect(screen.getByRole("link", { name: "Cancel" })).toHaveAttribute(
+      "href",
+      "/documents/d-1",
+    );
+    await user.selectOptions(screen.getByLabelText("Column 2 holds"), "payee");
+    await user.selectOptions(screen.getByLabelText("Column 3 holds"), "amount");
+    await user.selectOptions(screen.getByLabelText("Account"), "a-1");
+    await user.click(
+      screen.getByRole("button", { name: "Save mapping and import" }),
+    );
+    await waitFor(() => {
+      expect(
+        api.callsTo("POST", "/api/v1/imports/:id/apply-mapping"),
+      ).toHaveLength(1);
+    });
+    await waitFor(() => {
+      expect(currentHref(router)).toBe("/documents/d-1");
+    });
+  });
+
+  it("names a new mapping after its header", async () => {
+    const wide = [
+      "Posting date of the entry",
+      "Description as the bank printed it",
+      "Amount in the account currency",
+      "Running balance",
+    ];
+    let preview: unknown = PREVIEW;
+    mockApi({
+      "GET /api/v1/auth/session": authedSession({ role: "member" }),
+      ...lookupHandlers(),
+      "GET /api/v1/imports/:id/preview": () => json(preview),
+    });
+    const first = renderApp("/documents/d-1/mapping");
+    expect(await screen.findByLabelText(/Mapping name/)).toHaveValue(
+      "Posted, Description, Amount",
+    );
+    first.unmount();
+
+    // Three cells at most, and never longer than a name can usefully be.
+    preview = {
+      ...PREVIEW,
+      tables: [{ ...PREVIEW.tables[0], column_count: 4, rows: [wide] }],
+    };
+    const second = renderApp("/documents/d-1/mapping");
+    const cut = await screen.findByLabelText(/Mapping name/);
+    expect(cut).toHaveValue(wide.slice(0, 3).join(", ").slice(0, 60));
+    second.unmount();
+
+    // Without a header row the first line is data, not a name.
+    preview = {
+      ...PREVIEW,
+      tables: [
+        {
+          ...PREVIEW.tables[0],
+          has_header: false,
+          rows: [["2026-10-01", "CORNER MARKET", "-12.50"]],
+        },
+      ],
+    };
+    renderApp("/documents/d-1/mapping");
+    expect(await screen.findByLabelText(/Mapping name/)).toHaveValue(
+      "CSV import",
+    );
+  });
+
   it("shows what is missing instead of saving", async () => {
     const api = mockApi({
       "GET /api/v1/auth/session": authedSession({ role: "member" }),
@@ -477,10 +565,26 @@ describe("mapping editor", () => {
       "GET /api/v1/imports/:id/preview": () =>
         json({ ...PREVIEW, kind: "pdf" }),
       "GET /api/v1/documents/:id": () =>
+        // Whole, because the editor returns to the document's page after saving.
         json({
           id: "d-1",
           original_filename: "thrift.pdf",
           mime_detected: "application/pdf",
+          kind: "statement",
+          status: "parsing",
+          source: "upload",
+          size: 2048,
+          created_at: "2026-11-03T10:00:00Z",
+          period_start: null,
+          period_end: null,
+          tax_year: null,
+          error: null,
+          quarantined: false,
+          downloadable: false,
+          can_edit: false,
+          previewable: false,
+          open_review_items: 0,
+          links: [],
         }),
       "GET /api/v1/documents/:id/regions": () =>
         json({

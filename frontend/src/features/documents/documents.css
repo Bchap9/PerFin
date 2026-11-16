@@ -102,3 +102,46 @@
   grid-template-columns: repeat(auto-fill, minmax(10rem, 1fr));
   gap: var(--space-2);
 }
+
+/* What a file imported: one line of facts per statement. */
+.imported-list {
+  display: flex;
+  flex-direction: column;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.imported-statement {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  align-items: flex-start;
+  padding: var(--space-3) 0;
+  border-bottom: 1px solid var(--color-border, #8884);
+}
+
+.imported-statement:first-child {
+  padding-top: 0;
+}
+
+.imported-statement__facts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2) var(--space-4);
+  align-items: baseline;
+}
+
+.imported-statement__account {
+  font-weight: 600;
+}
+
+.imported-note {
+  margin: 0;
+  max-width: 44rem;
+  color: var(--color-text-muted);
+}
+
+.imported-check {
+  margin-top: var(--space-4);
+}

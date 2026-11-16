@@ -2,7 +2,7 @@
 import "../accounts/ledger.css";
 
 import { useInfiniteQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { useSearch } from "@tanstack/react-router";
+import { Link, useSearch } from "@tanstack/react-router";
 import { useMemo, useState, type FormEvent } from "react";
 
 import { Badge } from "../../components/Badge";
@@ -55,16 +55,24 @@ function isReviewState(value: string): value is ReviewState | "" {
 }
 
 function initialFilters(search: Record<string, unknown>): TransactionFilters {
-  // A link from a report or an account page narrows the list: `account`,
-  // `category` (an id, or "none"), `date_from` and `date_to`, named like the
-  // filters of GET /transactions.
+  // A link from a report, an account page or a document narrows the list:
+  // `account`, `category` (an id, or "none"), `date_from`, `date_to` and
+  // `document` (the file the rows were imported from), named like the filters
+  // of GET /transactions.
   const given = new Map(Object.entries(search));
   const text = (key: string): string => {
     const value = given.get(key);
     return typeof value === "string" ? value : "";
   };
   const day = (key: string): string => (isIsoDate(text(key)) ? text(key) : "");
-  return { ...EMPTY_FILTERS, account: text("account"), category: text("category"), dateFrom: day("date_from"), dateTo: day("date_to") };
+  return {
+    ...EMPTY_FILTERS,
+    account: text("account"),
+    category: text("category"),
+    dateFrom: day("date_from"),
+    dateTo: day("date_to"),
+    document: text("document"),
+  };
 }
 
 export function TransactionsPage() {
@@ -128,6 +136,13 @@ export function TransactionsPage() {
   const reset = (): void => {
     setDraft(EMPTY_FILTERS);
     setFilters(EMPTY_FILTERS);
+    setSelected(new Set());
+  };
+  // The file filter has no field in the form: it comes from a link and goes
+  // with its chip, leaving the other filters as they are.
+  const showEveryFile = (): void => {
+    setDraft((current) => ({ ...current, document: "" }));
+    setFilters((current) => ({ ...current, document: "" }));
     setSelected(new Set());
   };
 
@@ -414,6 +429,16 @@ export function TransactionsPage() {
           </div>
         </form>
       </Card>
+      {filters.document === "" ? null : (
+        <p className="ledger-actions">
+          <Link to="/documents/$documentId" params={{ documentId: filters.document }}>
+            From one file
+          </Link>
+          <Button variant="ghost" size="sm" aria-label="Remove the file filter" onClick={showEveryFile}>
+            Remove
+          </Button>
+        </p>
+      )}
       {selected.size > 0 ? (
         <BulkBar
           ids={[...selected]}
