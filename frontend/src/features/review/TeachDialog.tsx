@@ -228,6 +228,13 @@ function SelectionEditor({
 }
 
 function Outcome({ out }: { out: TeachOut }) {
+  // Several tables of one kind are told apart by a number; the only one needs none.
+  const named = out.tables.map((table, at) => {
+    const name = table.kind === "transactions" ? "Transaction table" : "Holdings table";
+    const same = out.tables.filter((other) => other.kind === table.kind).length;
+    const nth = out.tables.slice(0, at).filter((other) => other.kind === table.kind).length + 1;
+    return { name: same > 1 ? `${name} ${String(nth)}` : name, rows: table.rows };
+  });
   return (
     <div role="status" className="ledger-stack">
       <p>
@@ -244,11 +251,8 @@ function Outcome({ out }: { out: TeachOut }) {
             : ""}
         </p>
       )}
-      {out.tables.map((table) => (
-        <p key={table.kind}>
-          {table.kind === "transactions" ? "Transaction table" : "Holdings table"}: {table.rows}{" "}
-          row(s) read.
-        </p>
+      {named.map((table) => (
+        <p key={table.name}>{`${table.name}: ${String(table.rows)} row(s) read.`}</p>
       ))}
       {(out.warnings ?? []).length > 0 ? (
         <ul>
@@ -285,8 +289,9 @@ function PreviewBlock({
 }) {
   const { preview, warnings } = shown;
   return (
-    <section role="status" aria-label="Preview" className="ledger-stack">
-      <p>{previewSummary(preview)}</p>
+    <section aria-label="Preview" className="ledger-stack">
+      {/* Only the summary is announced: the rows below would be read out cell by cell. */}
+      <p role="status">{previewSummary(preview)}</p>
       {preview.rows.length === 0 ? null : (
         <div className="mapping-grid" role="region" aria-label="First rows read" tabIndex={0}>
           <table className="table table--compact">
@@ -354,6 +359,8 @@ export function TeachDialog({
   /** The account picked here (undefined: not touched, the document's own). */
   const [pickedAccount, setPickedAccount] = useState<string | null | undefined>(undefined);
   const [shown, setShown] = useState<Shown | null>(null);
+  /** The request the last successful apply sent (null: nothing applied yet). */
+  const [applied, setApplied] = useState<string | null>(null);
   const detail = useQuery({
     queryKey: docKeys.one(documentId),
     queryFn: () => getDocumentDetail(documentId),
@@ -403,9 +410,10 @@ export function TeachDialog({
     onError,
   });
   const teach = useMutation({
-    mutationFn: () => teachDocument(documentId, body(false)),
-    onSuccess: () => {
+    mutationFn: (sent: TeachRequest) => teachDocument(documentId, sent),
+    onSuccess: (_out, sent) => {
       setError(null);
+      setApplied(JSON.stringify(sent));
       void queryClient.invalidateQueries({ queryKey: queryRoots.review });
       void queryClient.invalidateQueries({ queryKey: queryRoots.documents });
       void queryClient.invalidateQueries({ queryKey: queryRoots.transactions });
@@ -413,6 +421,8 @@ export function TeachDialog({
     },
     onError,
   });
+  // What was just applied is not offered again until something asked for changes.
+  const done = applied !== null && applied === JSON.stringify(body(false));
   const incomplete = missing.length > 0 || (selections.length === 0 && !remember);
   const tableNames = selections.flatMap((s, index) =>
     isTable(s.kind) ? [`Selection ${String(index + 1)}`] : [],
@@ -533,7 +543,7 @@ export function TeachDialog({
               {error}
             </p>
           )}
-          {previewed === null ? null : (
+          {previewed === null || done ? null : (
             <PreviewBlock shown={previewed} tableNames={tableNames} rereads={remember && similar} />
           )}
           {previewed === null && !incomplete ? (
@@ -557,11 +567,12 @@ export function TeachDialog({
               disabled={
                 incomplete ||
                 previewed === null ||
+                done ||
                 (remember && institutionName.trim() === "" && named === undefined)
               }
               loading={teach.isPending}
               onClick={() => {
-                teach.mutate();
+                teach.mutate(body(false));
               }}
             >
               {remember ? "Apply and remember" : "Apply to this file"}

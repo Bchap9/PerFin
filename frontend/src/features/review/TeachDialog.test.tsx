@@ -125,6 +125,14 @@ function teachHandler(shown: unknown, applied: unknown = appliedOut()): Handler 
   return (call) => json(isPreview(call.body) ? shown : applied);
 }
 
+/** The action the server names for a card of this one item. */
+function cardAction(detail: ReviewItem): string {
+  if (detail.kind === "unparsed") {
+    return "reprocess";
+  }
+  return detail.reason === "reconciliation_failed" ? "reconcile" : "acknowledge";
+}
+
 function reviewApi(
   detail: ReviewItem,
   extra: Record<string, Handler> = {},
@@ -135,6 +143,22 @@ function reviewApi(
     ...lookupHandlers([account("a-1", "Everyday"), account("a-2", "Rainy day")]),
     "GET /api/v1/documents/:id": () => json({ id: "d-1", account_id: documentAccount }),
     "GET /api/v1/review": () => json({ items: [detail], next_cursor: null }),
+    // The queue as cards by document: the one item and the action it asks for.
+    "GET /api/v1/review/cards": () =>
+      json({
+        cards: [
+          {
+            document: detail.document,
+            items: [detail],
+            action: cardAction(detail),
+            action_item_id: detail.id,
+            open: 1,
+            notices: 0,
+          },
+        ],
+        loose: [],
+        next_cursor: null,
+      }),
     "GET /api/v1/review/:id": () => json(detail),
     "GET /api/v1/documents/:id/regions": () => json(PAGE),
     ...extra,
@@ -287,6 +311,9 @@ describe("teach helpers", () => {
     );
     expect(previewSummary({ ...base, reconciliation: "mismatch", difference: "-81.40" })).toBe(
       "12 rows read. They differ from the balances by -81.40.",
+    );
+    expect(previewSummary({ ...base, reconciliation: "mismatch", difference: null })).toBe(
+      "12 rows read. They do not add up to the balances.",
     );
     expect(previewSummary({ ...base, reconciliation: "unavailable", difference: null })).toBe(
       "12 rows read. There are no balances to check them against.",
@@ -593,6 +620,134 @@ describe("teach dialog", () => {
     // A viewer who may not see the file's content gets no payee text.
     expect(within(rows).getByText("Not shown")).toBeInTheDocument();
     expect(within(dialog).getByText("The first 2 of 14 rows are shown.")).toBeInTheDocument();
+    // Only the summary is announced; the rows are not read out cell by cell.
+    expect(
+      within(dialog).getByText("14 rows read. They differ from the balances by -81.40."),
+    ).toHaveAttribute("role", "status");
+    expect(rows.closest('[role="status"]')).toBeNull();
+    expect(within(dialog).getByRole("region", { name: "Preview" })).toContainElement(rows);
+  });
+
+  it("any change to a selection clears the preview", async () => {
+    reviewApi(item(), {
+      "POST /api/v1/documents/:id/teach": teachHandler(
+        previewOut({ rows: SHOWN_ROWS, row_count: 2 }),
+      ),
+    });
+    renderApp("/review");
+    const user = userEvent.setup();
+    const dialog = await openWithTable(user);
+    const apply = within(dialog).getByRole("button", { name: "Apply to this file" });
+    const preview = within(dialog).getByRole("button", { name: "Preview" });
+    const again = async () => {
+      await user.click(preview);
+      await waitFor(() => {
+        expect(apply).toBeEnabled();
+      });
+    };
+    await again();
+    // The role of a column.
+    await user.selectOptions(within(dialog).getByLabelText("Column 2: Narrative"), "memo");
+    expect(within(dialog).queryByText(/2 rows read\./)).toBeNull();
+    expect(apply).toBeDisabled();
+    await again();
+    // The institution the count of waiting files was taken for.
+    await user.type(within(dialog).getByLabelText("Institution"), "H");
+    expect(apply).toBeDisabled();
+    await again();
+    // A selection added, then what it is, then the selection removed.
+    await user.selectOptions(within(dialog).getByLabelText("Choose a line"), "0");
+    await user.click(within(dialog).getByRole("button", { name: "Add this line" }));
+    expect(apply).toBeDisabled();
+    const second = within(dialog).getAllByLabelText("What is this?")[1];
+    expect(second).toBeDefined();
+    if (second === undefined) {
+      return;
+    }
+    await user.selectOptions(second, "closing_balance");
+    await again();
+    await user.selectOptions(second, "opening_balance");
+    expect(apply).toBeDisabled();
+    await again();
+    await user.click(within(dialog).getByRole("button", { name: "Remove selection 2" }));
+    expect(within(dialog).queryByText(/2 rows read\./)).toBeNull();
+    expect(apply).toBeDisabled();
+  });
+
+  it("names each table of the outcome when several were taught", async () => {
+    const columns = [{ header: "Booked", role: "date" }];
+    reviewApi(item(), {
+      "POST /api/v1/documents/:id/teach": teachHandler(
+        previewOut({ rows: SHOWN_ROWS, row_count: 12 }),
+        appliedOut({
+          tables: [
+            { kind: "transactions", rows: 7, columns },
+            { kind: "transactions", rows: 5, columns },
+            { kind: "holdings", rows: 3, columns },
+          ],
+        }),
+      ),
+    });
+    const logged = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    renderApp("/review");
+    const user = userEvent.setup();
+    const dialog = await openWithTable(user);
+    await user.click(within(dialog).getByRole("button", { name: "Preview" }));
+    const apply = within(dialog).getByRole("button", { name: "Apply to this file" });
+    await waitFor(() => {
+      expect(apply).toBeEnabled();
+    });
+    await user.click(apply);
+    expect(
+      await within(dialog).findByText("Transaction table 1: 7 row(s) read."),
+    ).toBeInTheDocument();
+    expect(within(dialog).getByText("Transaction table 2: 5 row(s) read.")).toBeInTheDocument();
+    // The only table of its kind needs no number.
+    expect(within(dialog).getByText("Holdings table: 3 row(s) read.")).toBeInTheDocument();
+    const duplicateKeys = logged.mock.calls.filter((call) =>
+      call.some((part) => typeof part === "string" && part.includes("same key")),
+    );
+    logged.mockRestore();
+    expect(duplicateKeys).toEqual([]);
+  });
+
+  it("after an apply the preview is gone and the same apply cannot be sent twice", async () => {
+    const api = reviewApi(item(), {
+      "POST /api/v1/documents/:id/teach": teachHandler(
+        previewOut({ rows: SHOWN_ROWS, row_count: 2 }),
+        appliedOut({ tables: [{ kind: "transactions", rows: 2, columns: [] }] }),
+      ),
+    });
+    renderApp("/review");
+    const user = userEvent.setup();
+    const dialog = await openWithTable(user);
+    await user.type(within(dialog).getByLabelText("Institution"), "Harbourmoss Mutual");
+    await user.click(within(dialog).getByRole("button", { name: "Preview" }));
+    const apply = within(dialog).getByRole("button", { name: "Apply to this file" });
+    await waitFor(() => {
+      expect(apply).toBeEnabled();
+    });
+    expect(within(dialog).getByText("Nothing is saved until you apply.")).toBeInTheDocument();
+    await user.click(apply);
+    expect(await within(dialog).findByText(/Applied to this file\./)).toBeInTheDocument();
+    expect(within(dialog).getByText("Transaction table: 2 row(s) read.")).toBeInTheDocument();
+    expect(within(dialog).queryByText("Nothing is saved until you apply.")).toBeNull();
+    expect(within(dialog).queryByRole("table", { name: "First rows read" })).toBeNull();
+    expect(apply).toBeDisabled();
+    await user.click(apply);
+    expect(api.callsTo("POST", "/api/v1/documents/:id/teach")).toHaveLength(2);
+    // Asking for something else (remembering the layout) is a new apply.
+    await user.click(within(dialog).getByLabelText("Remember this layout for the next files"));
+    const remember = within(dialog).getByRole("button", { name: "Apply and remember" });
+    expect(remember).toBeEnabled();
+    await user.click(remember);
+    await waitFor(() => {
+      expect(api.callsTo("POST", "/api/v1/documents/:id/teach")).toHaveLength(3);
+    });
+    expect(api.callsTo("POST", "/api/v1/documents/:id/teach")[2]?.body).toMatchObject({
+      preview: false,
+      remember: true,
+    });
   });
 
   it("says how many waiting files will be read again", async () => {
