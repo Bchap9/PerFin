@@ -25,7 +25,7 @@ export function DeleteTaxYearButton({ year }: { year: TaxYear }) {
     async () => {
       await deleteTaxYear(year.year);
       // Leave before the tax queries refresh: this page would only find the year gone.
-      await navigate({ to: "/tax" });
+      await navigate({ to: "/reports/tax" });
     },
     { invalidate: [queryRoots.tax], success: `Tax year ${String(year.year)} deleted` },
   );

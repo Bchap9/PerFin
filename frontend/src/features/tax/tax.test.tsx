@@ -2,6 +2,7 @@
 import { screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 
+import { expectNoAxeViolations } from "../../test/axe";
 import { authedSession, currentHref, json, mockApi, noContent, problem, renderApp } from "../auth/testing";
 import { CAT_FOOD, money, ownerSession, referenceHandlers } from "../planning/testing";
 import type { ChecklistItem, TaxYear } from "./api";
@@ -108,7 +109,7 @@ describe("tax reminders", () => {
 describe("tax years page", () => {
   it("lists years with the reminder and opens a new year", async () => {
     const api = mockApi(taxHandlers({ "POST /api/v1/tax-years": () => json(year({ year: 2026 }), 201) }));
-    renderApp("/tax");
+    renderApp("/reports/tax");
     const user = userEvent.setup();
     expect(await screen.findByRole("link", { name: "2025" })).toBeInTheDocument();
     expect(screen.getByText(/1 expected document still missing/)).toBeInTheDocument();
@@ -128,9 +129,9 @@ describe("tax years page", () => {
 describe("tax year page checklist", () => {
   it("shows issuer, linked document and amounts by box label", async () => {
     mockApi(taxHandlers());
-    renderApp("/tax/2025");
+    renderApp("/reports/tax/2025");
     expect(await screen.findByText("Acme Corp")).toBeInTheDocument();
-    expect(screen.getByRole("link", { name: "Open document" })).toHaveAttribute("href", `/documents/${DOC}`);
+    expect(screen.getByRole("link", { name: "Open document" })).toHaveAttribute("href", `/inbox/documents/${DOC}`);
     expect(await screen.findByText("Wages, tips, other compensation")).toBeInTheDocument();
     expect(screen.getByText("52000.00")).toBeInTheDocument();
     expect(screen.getByText(/1 expected document still missing/)).toBeInTheDocument();
@@ -141,7 +142,7 @@ describe("tax year page checklist", () => {
     const api = mockApi(
       taxHandlers({ "PATCH /api/v1/tax-years/:year/checklist/:id": () => json(item("i-2", "1099-INT", "not_applicable")) }),
     );
-    renderApp("/tax/2025");
+    renderApp("/reports/tax/2025");
     const user = userEvent.setup();
     const select = await screen.findByRole("combobox", { name: "Status of 1099-INT from First Bank" });
     await user.selectOptions(select, "not_applicable");
@@ -153,7 +154,7 @@ describe("tax year page checklist", () => {
 
   it("adds an expected document", async () => {
     const api = mockApi(taxHandlers({ "POST /api/v1/tax-years/:year/checklist": () => json(item("i-3", "1098", "expected"), 201) }));
-    renderApp("/tax/2025");
+    renderApp("/reports/tax/2025");
     const user = userEvent.setup();
     await user.click(await screen.findByRole("button", { name: "Add document" }));
     const dialog = await screen.findByRole("dialog", { name: "Add an expected document" });
@@ -170,7 +171,7 @@ describe("tax year page checklist", () => {
 
   it("is read only for a viewer and for a closed year", async () => {
     mockApi(taxHandlers({ "GET /api/v1/auth/session": authedSession({ role: "viewer" }) }));
-    const { unmount } = renderApp("/tax/2025");
+    const { unmount } = renderApp("/reports/tax/2025");
     expect(await screen.findByText("Acme Corp")).toBeInTheDocument();
     expect(screen.queryByRole("combobox", { name: /Status of/ })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Add document" })).not.toBeInTheDocument();
@@ -178,10 +179,55 @@ describe("tax year page checklist", () => {
     unmount();
 
     mockApi(taxHandlers({ "GET /api/v1/tax-years/:year": () => json(year({ state: "closed" })) }));
-    renderApp("/tax/2025");
+    renderApp("/reports/tax/2025");
     expect(await screen.findByText("Acme Corp")).toBeInTheDocument();
     expect(screen.queryByRole("combobox", { name: /Status of/ })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Add document" })).not.toBeInTheDocument();
+  });
+});
+
+describe("tax pages under Reports", () => {
+  it("a year links to its page under Reports", async () => {
+    mockApi(taxHandlers());
+    renderApp("/reports/tax");
+    expect(await screen.findByRole("link", { name: "2025" })).toHaveAttribute("href", "/reports/tax/2025");
+  });
+
+  it("a year page has breadcrumbs Reports / Tax / the year", async () => {
+    mockApi(taxHandlers());
+    renderApp("/reports/tax/2025");
+    const crumbs = await screen.findByRole("navigation", { name: "Breadcrumbs" });
+    expect(within(crumbs).getByRole("link", { name: "Reports" })).toHaveAttribute("href", "/reports");
+    expect(within(crumbs).getByRole("link", { name: "Tax" })).toHaveAttribute("href", "/reports/tax");
+    expect(within(crumbs).getByText("2025")).toHaveAttribute("aria-current", "page");
+    expect(screen.getAllByRole("heading", { level: 1 })).toHaveLength(1);
+  });
+
+  it("a document link goes to the Inbox", async () => {
+    mockApi(taxHandlers());
+    renderApp("/reports/tax/2025");
+    expect(await screen.findByRole("link", { name: "Open document" })).toHaveAttribute("href", `/inbox/documents/${DOC}`);
+  });
+
+  it("tax hints link to Settings", async () => {
+    mockApi(taxHandlers());
+    const { unmount } = renderApp("/reports/tax");
+    expect(await screen.findByRole("link", { name: "Tax hints" })).toHaveAttribute("href", "/settings/categories?tab=tax");
+    unmount();
+    renderApp("/reports/tax/2025");
+    expect(await screen.findByRole("link", { name: "Edit tax hints" })).toHaveAttribute("href", "/settings/categories?tab=tax");
+  });
+
+  it.each([
+    ["the year list", "/reports/tax", ["2025"]],
+    ["a year", "/reports/tax/2025", ["Acme Corp", "Wages, tips, other compensation", "Schedule A Line 12"]],
+  ])("has no axe violations: %s", async (_page, path, texts) => {
+    mockApi(taxHandlers());
+    const { container } = renderApp(path);
+    for (const text of texts) {
+      await screen.findAllByText(text);
+    }
+    await expectNoAxeViolations(container);
   });
 });
 
@@ -197,7 +243,7 @@ describe("deleting a tax year", () => {
         },
       }),
     );
-    const { router } = renderApp("/tax/2025");
+    const { router } = renderApp("/reports/tax/2025");
     const user = userEvent.setup();
     await user.click(await screen.findByRole("button", { name: "Delete tax year" }));
     const dialog = await screen.findByRole("dialog", { name: "Delete tax year 2025?" });
@@ -219,7 +265,7 @@ describe("deleting a tax year", () => {
 
   it("shows the server's refusal and stays on the year", async () => {
     mockApi(taxHandlers({ "DELETE /api/v1/tax-years/:year": () => problem(403, "forbidden") }));
-    const { router } = renderApp("/tax/2025");
+    const { router } = renderApp("/reports/tax/2025");
     const user = userEvent.setup();
     await user.click(await screen.findByRole("button", { name: "Delete tax year" }));
     const dialog = await screen.findByRole("dialog", { name: "Delete tax year 2025?" });
@@ -230,7 +276,7 @@ describe("deleting a tax year", () => {
 
   it("is offered to owners and admins only", async () => {
     mockApi(taxHandlers({ "GET /api/v1/auth/session": authedSession({ role: "member" }) }));
-    renderApp("/tax/2025");
+    renderApp("/reports/tax/2025");
     expect(await screen.findByRole("button", { name: "Mark as filed" })).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Delete tax year" })).not.toBeInTheDocument();
   });
@@ -271,7 +317,7 @@ describe("accountant export", () => {
           state.stepUps < 2 ? problem(403, "step-up-required") : new Response("ZIPDATA", { status: 200, headers: { "content-type": "application/zip" } }),
       }),
     );
-    renderApp("/tax/2025");
+    renderApp("/reports/tax/2025");
     const user = userEvent.setup();
     await user.click(await screen.findByRole("button", { name: "Start export" }));
     await stepUp(user);

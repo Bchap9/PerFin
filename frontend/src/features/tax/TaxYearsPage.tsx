@@ -73,7 +73,7 @@ export function TaxYearsPage() {
       header: "Year",
       rowHeader: true,
       cell: (row) => (
-        <Link to="/tax/$year" params={{ year: String(row.year) }}>
+        <Link to="/reports/tax/$year" params={{ year: String(row.year) }}>
           {String(row.year)}
         </Link>
       ),
@@ -93,8 +93,8 @@ export function TaxYearsPage() {
       title="Tax"
       actions={
         <>
-          <Link to="/tax/mapping" className="btn btn--secondary btn--md">
-            Schedule hints
+          <Link to="/settings/categories" search={{ tab: "tax" }} className="btn btn--secondary btn--md">
+            Tax hints
           </Link>
           <Button
             variant="primary"
@@ -115,7 +115,7 @@ export function TaxYearsPage() {
         ))}
         <Card title="Tax years">
           <Table
-            caption="Tax years"
+            caption="Tax years and their checklists"
             captionHidden
             columns={columns}
             rows={years}
