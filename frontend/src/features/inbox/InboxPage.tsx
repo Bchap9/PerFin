@@ -260,7 +260,19 @@ export function InboxPage() {
           <p className="muted">Nothing waits on this file.</p>
         ) : null}
 
-        <ReviewCardList documentId={documentId} sort={orderCards} label="Waiting on you" after={after} />
+        <ReviewCardList
+          documentId={documentId}
+          sort={orderCards}
+          label="Waiting on you"
+          after={after}
+          empty={
+            allClear ? (
+              <Card className="inbox-clear" title="All clear">
+                <p className="muted">Every document you added is imported. Drop new statements here any time.</p>
+              </Card>
+            ) : null
+          }
+        />
 
         {uncategorised > 0 ? (
           <p className="inbox-uncategorised">
@@ -290,11 +302,6 @@ export function InboxPage() {
           </ul>
         )}
 
-        {allClear ? (
-          <Card className="inbox-clear" title="All clear">
-            <p className="muted">Every document you added is imported. Drop new statements here any time.</p>
-          </Card>
-        ) : null}
       </div>
     </div>
   );

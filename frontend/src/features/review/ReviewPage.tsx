@@ -156,24 +156,27 @@ interface Entry {
 /**
  * The open cards without the page header and the "Show" filter, for the
  * Inbox: a list named `label`, one item per card, followed by the caller's
- * own items (`after`, already list items). Nothing is rendered when the list
- * would be empty. It shares the cards query with the caller, which shows the
- * loading and error states.
+ * own items (`after`, already list items). When the list would be empty it
+ * renders `empty` instead, so an empty state never sits beside a card that
+ * was just answered. It shares the cards query with the caller, which shows
+ * the loading and error states.
  */
 export function ReviewCardList({
   documentId,
   sort,
   label,
   after = [],
+  empty = null,
 }: {
   documentId: string | null;
   sort?: CardSort;
   label: string;
   after?: readonly ReactNode[];
+  empty?: ReactNode;
 }) {
   const { entries } = useCardEntries(documentId, sort, true);
   if (entries.length === 0 && after.length === 0) {
-    return null;
+    return empty;
   }
   return (
     <ul className="review-list" aria-label={label}>

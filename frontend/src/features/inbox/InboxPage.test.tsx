@@ -321,7 +321,8 @@ describe("Inbox, Needs you", () => {
     expect(await screen.findByRole("heading", { name: "Lumen Streaming" })).toBeInTheDocument();
     expect(screen.getByRole("heading", { name: "Quill Notes" })).toBeInTheDocument();
     expect(await screen.findByText("Groceries?")).toBeInTheDocument();
-    expect(await screen.findByText(/Corner Market/, { selector: ".inbox-offer__text" })).toBeInTheDocument();
+    const offer = await screen.findByRole("region", { name: "Always Groceries for Corner Market?" });
+    expect(within(offer).getByText(/You chose Groceries for Corner Market 3 of 3 times/)).toBeInTheDocument();
     for (const name of [/^Confirm/, /^Not a subscription/, /^Got it/, /^Accept/, /^Not now/]) {
       expect(screen.queryByRole("button", { name })).not.toBeInTheDocument();
     }
@@ -330,7 +331,7 @@ describe("Inbox, Needs you", () => {
 
   it("the number of cards that need an answer equals the summary's cards", async () => {
     const changed = series("s-2", "Quill Notes", { open_events: 1 });
-    inboxApi({
+    const api = inboxApi({
       cards: [NOTE_OLD, MONEY_NEW],
       loose: [LOOSE],
       // A suggested series with an open change is one card.
@@ -347,6 +348,12 @@ describe("Inbox, Needs you", () => {
     // 2 documents + 1 loose + 2 series + 1 suggestions card; the rule offer is not counted.
     expect(entries).toHaveLength(6);
     expect(await screen.findByRole("link", { name: "Needs you, 6" })).toBeInTheDocument();
+    // The cards read what the summary counts.
+    const query = (path: string) => new URLSearchParams(api.callsTo("GET", path)[0]?.search ?? "");
+    expect(query("/api/v1/subscriptions").getAll("status")).toEqual(["suggested"]);
+    expect(query("/api/v1/subscriptions/events").get("state")).toBe("open");
+    expect(query("/api/v1/transactions").get("suggested")).toBe("true");
+    expect(query("/api/v1/transactions").get("limit")).toBe("200");
   });
 
   it("?document= shows one card", async () => {
