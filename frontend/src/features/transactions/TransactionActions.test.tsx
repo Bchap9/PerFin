@@ -167,6 +167,10 @@ describe("add a transaction", () => {
     });
     renderApp("/accounts/a-2");
     const user = userEvent.setup();
+    // The account page loads on demand and then fetches the account; on a
+    // slow runner that takes longer than the default 1 s, so wait for its
+    // heading (the page is ready) before looking for the button.
+    await screen.findByRole("heading", { level: 1, name: "Wallet" }, { timeout: 5000 });
     const dialog = await openAddDialog(user);
     await waitFor(() => {
       expect(within(dialog).getByLabelText(/^Account/)).toHaveValue("a-2");
