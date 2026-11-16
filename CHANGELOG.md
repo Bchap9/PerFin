@@ -52,7 +52,7 @@ Stage 4 of four on the way to 1.0.0: the release review.
   `SEWER DIST` (a sewer district's or a city's wording; `SEWER` alone is a
   plumber as often), `TUITION`, and the entry description of a labelled ACH line
   (`<name> DES:RENT PMT`, `DES:TUITION`) when the name holds no telling
-  word, for a bill only (`<name> DES:WITHDRAWAL` is a company paid, not a
+  word, for a bill or for pay coming in only (`<name> DES:WITHDRAWAL` is a company paid, not a
   withdrawal at the counter, and `DES:PHARMACY` or `DES:GYM` is the
   company's own wording, not what the household bought); lessons are a pastime, not
   school: `SWIM SCHOOL`, `SWIMMING SCHOOL`, `DANCE SCHOOL`, `MUSIC SCHOOL`,

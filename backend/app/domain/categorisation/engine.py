@@ -405,14 +405,18 @@ def _described(identity: Identity) -> dictionary.KeywordHit | None:
 
     Read only when the company's name holds none: "<name> DES:TUITION" is
     tuition at a business no list knows. Only a bill's word answers there
-    (:data:`DESCRIBED`): a company that pulls money by ACH ("<name>
-    DES:WITHDRAWAL") was paid, it handed out no cash.
+    (:data:`DESCRIBED`), or pay's word (an ``income`` category, which the
+    caller allows for money in only): a company that pulls money by ACH
+    ("<name> DES:WITHDRAWAL") was paid, it handed out no cash.
     """
     for signal in sorted(identity.signals):
         prefix, _, described = signal.partition(":")
         if prefix == "descr" and described:
             hit = dictionary.keyword(described, None)
-            return hit if hit is not None and _is_bill(hit.category) else None
+            if hit is None:
+                return None
+            group = hit.category.partition(".")[0]
+            return hit if _is_bill(hit.category) or group in INFLOW_ONLY_GROUPS else None
     return None
 
 

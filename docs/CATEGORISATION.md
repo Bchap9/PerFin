@@ -40,7 +40,7 @@ For each transaction, the first of these that has an answer wins:
 | 4 | The default category of the transaction's payee | "Payee default" | 0.95 |
 | 5 | What PerFin learned from your corrections for this merchant | "Learned from you" | 0.80, 0.90 or 0.95 after one, two, or three and more decisions, times the share of your decisions that agree |
 | 6 | The merchant list, or the kind of line (a card payment, an ATM withdrawal, a salary, interest, a bank fee) | "Merchant list" | 0.90 for a merchant; less in the cases below |
-| 7 | A telling word in the description ("pizza", "pharmacy"), or a bill's word (rent, a utility, insurance, taxes, childcare, tuition) in a labelled ACH line's entry description (`DES:TUITION`) when the name has none | "Keyword" | 0.60 |
+| 7 | A telling word in the description ("pizza", "pharmacy"), or a bill's word (rent, a utility, insurance, taxes, childcare, tuition) or pay's word for money in (`DES:WAGES`), in a labelled ACH line's entry description (`DES:TUITION`) when the name has none | "Keyword" | 0.60 |
 | 8 | Nothing | no category | |
 
 Categories a transaction had before PerFin recorded this (before

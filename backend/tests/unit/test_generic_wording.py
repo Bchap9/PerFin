@@ -91,6 +91,8 @@ def test_a_bank_s_own_line_is_stated(raw: str, direction: Direction, category: s
             "family.education",
         ),
         ("ORIG CO NAME:QUARRYVALE MGMT CO ENTRY DESCR:RENT PMT", "out", "housing.rent"),
+        # Pay coming in by ACH says so in its entry description too.
+        ("QUARRYVALE HOLDINGS DES:WAGES ID:%1 CO ID:0000000003 PPD", "in", "income.salary"),
         # Lessons in a sport are a pastime, not school.
         ("PINEGATE SWIM SCHOOL", "out", "leisure.hobbies"),
         ("ELKTON SWIMMING SCHOOL 0412", "out", "leisure.hobbies"),
@@ -126,6 +128,7 @@ def test_wording_that_says_what_it_was_is_suggested(
         ("EMPLOYEE WAGES", "out"),
         ("EMPLOYER", "out"),
         ("DIVIDEND EARNED", "out"),
+        ("QUARRYVALE HOLDINGS DES:WAGES ID:%1 CO ID:0000000003 PPD", "out"),
         # Who an automatic withdrawal paid is not cash.
         ("AUTOMATIC WITHDRAWAL LANTERN ATHLETIC CLUB", "out"),
         # Money coming in is no withdrawal, money going out no deposit.
