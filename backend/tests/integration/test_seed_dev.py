@@ -158,6 +158,32 @@ def test_ledger_budgets_goals_rules(admin_client: TestClient) -> None:
     assert spending.status_code == 200, spending.text
 
 
+def test_the_card_shows_the_engine_and_a_subscription(admin_client: TestClient) -> None:
+    accounts = {str(a["type"]): str(a["id"]) for a in items(admin_client, "/accounts")}
+    card = admin_client.get(
+        f"{API}/transactions", params={"account": accounts["credit_card"], "limit": 200}
+    ).json()["items"]
+    # Nobody chose a category on the card: what is there, the engine decided.
+    sources = {row["category_source"] for row in card}
+    assert "person" not in sources
+    assert "dictionary" in sources
+    assert any(row["suggested_category_id"] for row in card)
+    summary = admin_client.get(f"{API}/categorisation/summary")
+    assert summary.status_code == 200, summary.text
+    by_source = {row["source"]: row["transactions"] for row in summary.json()["by_source"]}
+    assert by_source.get("dictionary", 0) >= 10
+    listed = admin_client.get(f"{API}/subscriptions")
+    assert listed.status_code == 200, listed.text
+    running = [
+        row
+        for row in listed.json()["items"]
+        if (row["kind"], row["status"]) == ("subscription", "active")
+    ]
+    assert running, listed.json()["items"]
+    assert {row["account_id"] for row in running} == {accounts["credit_card"]}
+    assert listed.json()["subscriptions"]["count"] == len(running)
+
+
 def test_investments_loans_assets_and_net_worth(admin_client: TestClient) -> None:
     holdings = admin_client.get(f"{API}/investments/holdings")
     assert holdings.status_code == 200, holdings.text

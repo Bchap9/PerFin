@@ -14,7 +14,10 @@
 # `via` ties an entry to a payment processor (the name clean-up gives it).
 # With no `word`, the entry covers everything that processor fronts.
 keywords:
-  # Toast is a point-of-sale system sold to restaurants only.
+  # Toast is a point-of-sale system sold to places that serve food and
+  # drink. Nearly all are restaurants, so that is stated; where the name
+  # itself says coffee, bread or beer, that word answers instead, as a
+  # suggestion (the matcher's rule for a `strong` entry).
   - via: toast
     category: food.restaurants
     strong: true
@@ -57,6 +60,7 @@ keywords:
   # Coffee, bread and sweets.
   - {word: cafe, category: food.coffee}
   - {word: coffee, category: food.coffee}
+  - {word: espresso, category: food.coffee}
   - {word: bakery, category: food.coffee}
   - {word: donut, category: food.coffee}
   - {word: bagel, category: food.coffee}

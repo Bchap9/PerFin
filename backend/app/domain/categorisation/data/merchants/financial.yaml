@@ -30,6 +30,18 @@ merchants:
   - {key: social security, name: Social Security Administration, category: income.other, inflow: true, match: [ssa treas]}
   - {key: veterans benefits, name: Veterans Benefits Administration, category: income.other, inflow: true, match: [va benef, vacp treas]}
 
+  # Brokerages and investing apps: money sent to one is put aside, not
+  # spent. Only the forms a transfer to the investment account prints: the
+  # same firm's card, bank account, subscription or advice fee has no entry,
+  # so a one-word name counts only alone or with the word its transfers carry.
+  - {key: fidelity, name: Fidelity Investments, category: transfers.investments, match: [fid bkg svc]}
+  - {key: vanguard, name: Vanguard, category: transfers.investments, match: [vanguard buy, vanguard investment]}
+  - {key: charles schwab, name: Charles Schwab, category: transfers.investments, match: [schwab brokerage]}
+  - {key: robinhood, name: Robinhood, category: transfers.investments, match: [robinhood =, robinhood debits, robinhood securities]}
+  - {key: acorns, name: Acorns, category: transfers.investments, match: [acorns invest, acorns investing]}
+  - {key: betterment, name: Betterment, category: transfers.investments, match: [betterment =, betterment transfer, betterment deposit]}
+  - {key: wealthfront, name: Wealthfront, category: transfers.investments, match: [wealthfront =, wealthfront edi, wealthfront transfer, wealthfront deposit]}
+
   # Tax offices.
   - {key: irs, name: Internal Revenue Service, category: financial.taxes, match: [irs]}
   - {key: eftps, name: EFTPS, category: financial.taxes, match: [eftps]}

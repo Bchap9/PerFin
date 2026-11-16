@@ -107,7 +107,9 @@ A keyword is a word that says what was bought. A surname or a place is not
 one, nor is a word that fits any business (`market`, `shop`, `club`). A word
 that opens a listed merchant's name (`pizza` in Pizza Hut) may be a keyword
 only in that merchant's group of categories. Only an entry with `via` and no
-`word` may be `strong`.
+`word` may be `strong`. A `strong` entry still gives way to a word in the
+line that names another category (`TST* NORTHSIDE ESPRESSO BAR` is coffee,
+as a suggestion): PerFin does not state what the line itself contradicts.
 
 ## Sources
 

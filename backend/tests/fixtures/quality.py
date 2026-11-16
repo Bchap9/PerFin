@@ -422,9 +422,21 @@ def today_categories() -> dict[str, tuple[str | None, bool]]:
             engine.dispose()
 
 
+#: The kind of a default category, by the group its key starts with.
+_GROUP_KINDS: Final = MappingProxyType(
+    {"income": "income", "transfers": "transfer", "excluded": "ignore"}
+)
+
+
 def today_series(ledger: Ledger) -> list[FoundSeries]:
-    """The ledger through the detector as it is: every candidate is written as active."""
-    from app.domain.recurring.detection import Observed, detect
+    """The ledger through the detector as it is, with the categories its rows are labelled with.
+
+    Each row is described the way ``recurring.service`` describes a ledger
+    row: who it names (``engine.identify``), what the dictionary says about
+    that merchant, and its category.
+    """
+    from app.domain.categorisation import engine
+    from app.domain.recurring.detection import Observed, detect, normalize_payee
 
     accounts = {name: uuid.uuid5(uuid.NAMESPACE_OID, name) for name in ledger.coverage}
     names = {account_id: name for name, account_id in accounts.items()}
@@ -435,27 +447,40 @@ def today_series(ledger: Ledger) -> list[FoundSeries]:
         row_id = uuid.uuid5(uuid.NAMESPACE_OID, f"row:{index}")
         index_of[row_id] = index
         category_id = None
+        category_kind = None
         if row.category is not None:
             category_id = categories.setdefault(
                 row.category, uuid.uuid5(uuid.NAMESPACE_OID, row.category)
             )
+            category_kind = _GROUP_KINDS.get(row.category.partition(".")[0], "expense")
+        identity = engine.identify(row.text)
+        merchant = identity.hit.merchant if identity.hit is not None else None
         observed.append(
             Observed(
                 id=row_id,
                 account_id=accounts[row.account],
                 posted_date=row.posted,
                 amount=row.amount,
-                raw_payee=row.text,
+                merchant_key=identity.key,
+                text_key=normalize_payee(row.text) or None,
+                kind=identity.kind,
+                category_key=row.category,
+                category_kind=category_kind,
+                series_hint=merchant.series if merchant is not None else None,
                 category_id=category_id,
+                label=row.text,
+                cadence_hints=frozenset(merchant.cadences) if merchant is not None else frozenset(),
             )
         )
+    clock = {accounts[name]: day for name, day in ledger.coverage.items()}
     return [
         FoundSeries(
             account=names[candidate.account_id],
             rows=frozenset(index_of[i] for i in candidate.transaction_ids),
-            status="active",
+            status=candidate.status,
+            kind=candidate.kind,
         )
-        for candidate in detect(observed, synth.TODAY)
+        for candidate in detect(observed, clock)
     ]
 
 

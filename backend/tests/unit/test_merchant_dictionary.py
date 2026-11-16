@@ -410,13 +410,17 @@ def test_no_entry_for_p2p_or_card_issuers() -> None:
         hit = dictionary.lookup(core)
         assert hit is not None, core
         assert hit.merchant.key == key, core
-    # Money moved is recognised from the descriptor's kind, never from a merchant.
-    moved = sorted(
-        key
+    # Money moved is recognised from the descriptor's kind, never from a
+    # merchant, with one exception: a brokerage is somebody, and what is sent
+    # to it is put aside (test_money_sent_to_a_brokerage_is_a_transfer_to_investments).
+    moved = {
+        key: merchant.category
         for key, merchant in dictionary.merchants().items()
         if merchant.category.partition(".")[0] in ("transfers", "excluded")
+    }
+    assert moved == dict.fromkeys(
+        sorted({key for _, key in TO_INVESTMENTS}), "transfers.investments"
     )
-    assert moved == []
     # Who pays money in is a payroll processor or a benefits office, and says so.
     for key, merchant in dictionary.merchants().items():
         assert merchant.inflow == (merchant.category.partition(".")[0] == "income"), key
@@ -518,6 +522,7 @@ TELLING_WORDS = (
     ("harbor pizza", "pizza", "food.restaurants"),
     ("maple grill", "grill", "food.restaurants"),
     ("lantern cafe", "cafe", "food.coffee"),
+    ("northside espresso", "espresso", "food.coffee"),
     ("corner pharmacy", "pharmacy", "health.pharmacy"),
     ("maple family dental", "dental", "health.dental"),
     ("harbor vet clinic", "vet", "family.pets"),
@@ -851,6 +856,41 @@ def test_a_name_other_businesses_carry_is_the_chain_only_alone() -> None:
         assert core not in dictionary.merchants(), raw
 
 
+#: Money sent to a brokerage or an investing app (the tails are invented).
+TO_INVESTMENTS = (
+    ("FID BKG SVC LLC DES:MONEYLINE ID:4KQ7ZD2M1 CO ID:3317740925 PPD", "fidelity"),
+    ("FID BKG SVC LLC MONEYLINE PPD ID: 7730915528", "fidelity"),
+    ("VANGUARD BUY DES:INVESTMENT ID:9PL2XW4R7C CO ID:5510847732 PPD", "vanguard"),
+    ("ACH DEBIT VANGUARD BUY INVESTMENT 402117530968", "vanguard"),
+    ("ACH DEBIT SCHWAB BROKERAGE MONEYLINK 771530042186", "charles schwab"),
+    ("ACH DEBIT ROBINHOOD DEBITS 630418872215", "robinhood"),
+    ("ROBINHOOD DES:DEBITS ID:H2M8QT5LX0 CO ID:4408815207 PPD", "robinhood"),
+    ("ACORNS INVEST DES:TRANSFER ID:K7R1WZ9B3D CO ID:6120097731 TEL", "acorns"),
+    ("BETTERMENT TRANSFER", "betterment"),
+    ("ACH DEBIT WEALTHFRONT EDI PYMNTS 518830274461", "wealthfront"),
+)
+#: Something else sold under the same name is not money put aside.
+NOT_AN_INVESTMENT = (
+    "ROBINHOOD GOLD SUBSCRIPTION",
+    "ACORNS SUBSCRIPTION",
+    "VANGUARD ANIMAL HOSPITAL",
+    "FIDELITY NATIONAL TITLE",
+    "SCHWAB TIRE CENTER",
+    "BETTERMENT YOGA STUDIO",
+)
+
+
+def test_money_sent_to_a_brokerage_is_a_transfer_to_investments() -> None:
+    lost = {raw: _found(raw) for raw, key in TO_INVESTMENTS if _found(raw) != key}
+    assert lost == {}
+    for _, key in TO_INVESTMENTS:
+        merchant = dictionary.merchants()[key]
+        # Not spending, and never a subscription or a bill.
+        assert (merchant.category, merchant.series) == ("transfers.investments", None), key
+    wrong = {raw: _found(raw) for raw in NOT_AN_INVESTMENT if _found(raw) is not None}
+    assert wrong == {}
+
+
 def test_paying_a_store_card_is_not_shopping_there() -> None:
     wrong = {raw: _found(raw) for raw in STORE_CARD_PAYMENTS if _found(raw) is not None}
     assert wrong == {}
@@ -1054,6 +1094,44 @@ def test_keyword_and_via_keyword() -> None:
     assert dictionary.keyword("harbor lantern", "square") is None
     assert dictionary.keyword("harbor pizza", "square") == KeywordHit(
         category="food.restaurants", word="pizza", strong=False
+    )
+
+
+def test_behind_toast_a_word_for_another_trade_answers_and_only_as_a_suggestion() -> None:
+    # A coffee bar, a bakery and a brewery sell through Toast too: where the
+    # name itself says so, "a restaurant" is not stated against it.
+    for core, word, category in (
+        ("driftwood coffee co", "coffee", "food.coffee"),
+        ("northside espresso bar", "espresso", "food.coffee"),
+        ("maple bakery", "bakery", "food.coffee"),
+        ("lantern brewery", "brewery", "food.alcohol"),
+    ):
+        assert dictionary.keyword(core, "toast") == KeywordHit(
+            category=category, word=word, strong=False
+        ), core
+    # A word of the same trade changes nothing: still sure enough to state.
+    for core in ("harbor grill", "maple pizza kitchen"):
+        assert dictionary.keyword(core, "toast") == KeywordHit(
+            category="food.restaurants", word="toast", strong=True
+        ), core
+
+
+def test_only_a_processor_sure_of_its_trade_gives_way_to_a_word() -> None:
+    table = _table(
+        {"a.yaml": [STREAMBOX]},
+        [
+            {"via": "toast", "category": "food.restaurants", "strong": True},
+            {"via": "doordash", "category": "food.delivery"},
+            {"word": "coffee", "category": "food.coffee"},
+            {"word": "grill", "category": "food.restaurants"},
+        ],
+    )
+    assert table.keyword("harbor coffee", "toast") == KeywordHit("food.coffee", "coffee", False)
+    assert table.keyword("harbor grill", "toast") == KeywordHit("food.restaurants", "toast", True)
+    assert table.keyword("harbor", "toast") == KeywordHit("food.restaurants", "toast", True)
+    # A delivery is a delivery whatever was in the bag: it was a suggestion anyway.
+    assert table.keyword("harbor coffee", "doordash") == KeywordHit(
+        "food.delivery", "doordash", False
     )
 
 

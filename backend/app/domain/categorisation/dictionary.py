@@ -245,20 +245,31 @@ class Table:
         """A telling word in ``core`` (or behind the processor ``via``), or ``None``.
 
         The keywords tied to ``via`` are read first, then the others; in each
-        group the first in file order that is in the core wins.
+        group the first in file order that is in the core wins. One exception:
+        a ``strong`` keyword that covers everything behind its processor gives
+        way to a word in the core that names another category (a coffee bar
+        sells through a restaurant till too). What would have been stated is
+        then contradicted by the line itself, so the word answers, as the
+        suggestion every word is.
         """
         tokens = tuple(core.split())
-        if via is not None:
-            for word in self._via.get(via, ()):
-                if not word.tokens or any(
-                    _at(tokens, start, word.tokens) for start in range(len(tokens))
-                ):
-                    return word.hit
         first: _Word | None = None
         for start, token in enumerate(tokens):
             for word in self._words.get(token, ()):
                 if (first is None or word.order < first.order) and _at(tokens, start, word.tokens):
                     first = word
+        if via is not None:
+            for word in self._via.get(via, ()):
+                if not word.tokens:
+                    if (
+                        word.hit.strong
+                        and first is not None
+                        and first.hit.category != word.hit.category
+                    ):
+                        return first.hit
+                    return word.hit
+                if any(_at(tokens, start, word.tokens) for start in range(len(tokens))):
+                    return word.hit
         return first.hit if first is not None else None
 
 
