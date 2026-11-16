@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-import { render, screen, waitFor } from "@testing-library/react";
+import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+
+import { expectNoAxeViolations } from "../../test/axe";
 
 import {
   authedSession,
@@ -492,6 +494,27 @@ describe("mapping editor", () => {
     await waitFor(() => {
       expect(currentHref(router)).toBe("/inbox/documents/d-1");
     });
+  });
+
+  it("sits under its document in the Inbox, with one h1 and no axe violations", async () => {
+    mockApi({
+      "GET /api/v1/auth/session": authedSession({ role: "member" }),
+      ...lookupHandlers([account("a-1", "Everyday")]),
+      "GET /api/v1/imports/:id/preview": () => json(PREVIEW),
+      "GET /api/v1/documents/:id": () =>
+        json({ id: "d-1", original_filename: "october.csv", mime_detected: "text/csv" }),
+    });
+    const { container } = renderApp("/inbox/documents/d-1/mapping");
+    expect(await screen.findByLabelText("Column 1 holds")).toBeInTheDocument();
+    const crumbs = within(screen.getByRole("navigation", { name: "Breadcrumbs" }));
+    expect(crumbs.getByRole("link", { name: "Documents" })).toHaveAttribute("href", "/inbox/documents");
+    expect(await crumbs.findByRole("link", { name: "october.csv" })).toHaveAttribute(
+      "href",
+      "/inbox/documents/d-1",
+    );
+    expect(screen.getAllByRole("heading", { level: 1 })).toHaveLength(1);
+    expect(screen.getByRole("heading", { level: 1, name: "Map columns" })).toBeInTheDocument();
+    await expectNoAxeViolations(container);
   });
 
   it("names a new mapping after its header", async () => {
