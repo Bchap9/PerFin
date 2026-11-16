@@ -238,14 +238,7 @@ def test_trailers_are_removed() -> None:
     cleaned = clean(
         "PURCHASE AUTHORIZED ON 04/12 HARBOR FUEL 0091234 SPRINGFIELD IL S385102345678901 CARD 1234"
     )
-    assert cleaned.kind == "purchase"
-    tokens = cleaned.core.split()
-    assert tokens[:2] == ["harbor", "fuel"]
-    assert "04" not in tokens
-    assert "12" not in tokens
-    assert "s385102345678901" not in tokens
-    assert "card" not in tokens
-    assert "1234" not in tokens
+    assert cleaned == Cleaned(core="harbor fuel", kind="purchase")
 
 
 @pytest.mark.parametrize(
@@ -304,6 +297,15 @@ def test_the_core_keeps_the_key_form() -> None:
         assert KEY_FORM.match(clean(raw).core), raw
 
 
+def test_accented_letters_are_folded_not_dropped() -> None:
+    assert clean("Café Lumière #12").core == "cafe lumiere"
+    assert clean("CAFE\u0301 LUMIE\u0300RE #12").core == "cafe lumiere"
+    assert clean("CAFE LUMIERE #12").core == "cafe lumiere"
+    assert clean("PEÑA'S TAQUERÍA").core == "pena taqueria"
+    # A letter with no plain form is still a break, as before.
+    assert clean("SMØRREBRØD HOUSE").core == "sm rrebr d house"
+
+
 def test_the_patterns_are_constants() -> None:
     for pattern, _kind, _signal in (*cleanup.KIND_LINES, *cleanup.KIND_PREFIXES):
         assert isinstance(pattern, re.Pattern)
@@ -335,6 +337,12 @@ def test_the_patterns_are_constants() -> None:
         "'S ",
         "ALDER IL ",
         "INC ",
+        "ONLINE ",
+        "KEEP THE CHANGE ",
+        "FUNDS TRANSFER 4410 ",
+        "TRANSFER #X*.",
+        "WITHDRAWAL PAYMENT ",
+        "PAYMENT 5512098871 ",
     ],
 )
 def test_long_and_hostile_input_is_linear(unit: str) -> None:
@@ -671,3 +679,267 @@ def test_processors_are_literal_and_longest_first() -> None:
         assert prefix == prefix.upper()
         # No later prefix is hidden behind an earlier, shorter one.
         assert not any(prefix.startswith(earlier) for earlier in prefixes[:index]), prefix
+
+
+# --- review of lane C ---------------------------------------------------------
+
+#: What a bank prints in front of whoever was paid, one of each kind of prefix.
+BANK_PREFIXES = (
+    "POS DEBIT",
+    "POS DEBIT 0042",
+    "POS DEBIT 4412",
+    "DEBIT CARD PURCHASE XXXXX7731",
+    "PURCHASE AUTHORIZED ON 04/12",
+    "CHECKCARD 0412",
+    "VISA DDA PUR 448120",
+    "RECURRING PAYMENT AUTHORIZED ON 04/12",
+    "RECURRING DEBIT CARD",
+    "ACH DEBIT",
+    "ACH CREDIT",
+    "ELECTRONIC WITHDRAWAL",
+    "ONLINE PAYMENT TO",
+    "BILL PAY",
+    "POS REFUND",
+    "DIRECT DEPOSIT",
+)
+#: A payment between people as each service prints it, and the service.
+P2P_LINES = (
+    ("ZELLE JORDAN SAMPLE", "zelle"),
+    ("ZELLE PAYMENT TO JORDAN SAMPLE", "zelle"),
+    ("ZELLE TO JORDAN SAMPLE ON 04/12 REF # A1B2C3D4E5F6 RENT", "zelle"),
+    ("VENMO* JORDAN SAMPLE", "venmo"),
+    ("VENMO *JORDAN SAMPLE VISA DIRECT NY", "venmo"),
+    ("VENMO PAYMENT 1029384756123 JORDAN SAMPLE", "venmo"),
+    ("CASH APP*JORDAN SAMPLE", "cash app"),
+    ("CASH APP*JORDAN SAMPLE 8005550142 CA", "cash app"),
+    ("CASH APP*JORDAN SAMPLE CA S385102345678901 CARD 1234", "cash app"),
+    ("SQC*JORDAN SAMPLE", "cash app"),
+)
+
+
+@pytest.mark.parametrize("prefix", BANK_PREFIXES)
+@pytest.mark.parametrize(("line", "service"), P2P_LINES)
+def test_p2p_behind_a_bank_prefix_is_the_service(prefix: str, line: str, service: str) -> None:
+    cleaned = clean(f"{prefix} {line}")
+    assert (cleaned.core, cleaned.kind, cleaned.via) == (service, "p2p", None)
+
+
+@pytest.mark.parametrize(
+    ("raw", "core"),
+    [
+        (
+            "ACH DEBIT VENMO DES:PAYMENT ID:1029384756123 INDN:JORDAN SAMPLE CO ID:1020304050 WEB",
+            "venmo",
+        ),
+        (
+            "ORIG CO NAME:VENMO ORIG ID:5512098871 DESC DATE:260412 CO ENTRY DESCR:PAYMENT "
+            "SEC:WEB IND ID:004512887 IND NAME:JORDAN SAMPLE",
+            "venmo",
+        ),
+        # A bank word between the bank's wording, or the start, and the service.
+        ("WITHDRAWAL ZELLE TO JORDAN SAMPLE", "zelle"),
+        ("ELECTRONIC WITHDRAWAL ONLINE PAYMENT ZELLE JORDAN SAMPLE", "zelle"),
+        ("INSTANT PAYMENT CREDIT VENMO JORDAN SAMPLE", "venmo"),
+        # Square's own print of Cash App.
+        ("SQC*JORDAN SAMPLE", "cash app"),
+        ("SQC *JORDAN SAMPLE", "cash app"),
+    ],
+)
+def test_p2p_in_other_wrappings(raw: str, core: str) -> None:
+    cleaned = clean(raw)
+    assert (cleaned.core, cleaned.kind, cleaned.via) == (core, "p2p", None)
+
+
+def test_p2p_behind_a_recurring_prefix_keeps_the_signal() -> None:
+    cleaned = clean("RECURRING PAYMENT AUTHORIZED ON 04/12 CASH APP*JORDAN SAMPLE")
+    assert cleaned == Cleaned(core="cash app", kind="p2p", signals=frozenset({"recurring"}))
+
+
+@pytest.mark.parametrize(
+    ("raw", "kind", "core"),
+    [
+        # A shop whose name only begins like a service, behind the same prefixes.
+        ("POS DEBIT ZELLERS MARKET", "purchase", "zellers market"),
+        (
+            "DEBIT CARD PURCHASE XXXXX7731 VENMORE GARDEN SUPPLY",
+            "purchase",
+            "venmore garden supply",
+        ),
+        ("PURCHASE AUTHORIZED ON 04/12 CASH APPLIANCE OUTLET", "purchase", "cash appliance outlet"),
+        ("ACH DEBIT CASH APPAREL CO", "ach_debit", "cash apparel"),
+        ("POS DEBIT SQCUP COFFEE", "purchase", "sqcup coffee"),
+        ("SQCUP COFFEE", "unknown", "sqcup coffee"),
+        # The service's name further along is part of a shop's name.
+        ("POS DEBIT LANTERN CASH APP KIOSK", "purchase", "lantern cash app kiosk"),
+        ("WITHDRAWAL SYMPTOMS RECORDS", "unknown", "withdrawal symptoms records"),
+    ],
+)
+def test_not_p2p_behind_a_bank_prefix(raw: str, kind: str, core: str) -> None:
+    cleaned = clean(raw)
+    assert (cleaned.kind, cleaned.core) == (kind, core)
+
+
+@pytest.mark.parametrize(
+    ("raw", "kind"),
+    [
+        # A card payment in the wording of other issuers.
+        ("INTERNET PAYMENT - THANK YOU", "card_payment"),
+        ("ELECTRONIC PAYMENT THANK YOU", "card_payment"),
+        ("WEB PAYMENT, THANK YOU", "card_payment"),
+        ("ONLINE PYMT THANK YOU", "card_payment"),
+        ("PMT - THANK YOU", "card_payment"),
+        ("ONLINE PAYMENT 5512098871 TO CHASE CARD ENDING IN 4410", "card_payment"),
+        ("CAPITAL ONE MOBILE PMT 5512098871 WEB ID: 1020304050", "card_payment"),
+        ("CITI CARD ONLINE PAYMENT 5512098871 WEB ID: 1020304050", "card_payment"),
+        ("DISCOVER ONLINE PMT 4410", "card_payment"),
+        # Money between a person's own accounts, in other wording.
+        ("ONLINE SCHEDULED TRANSFER TO CHK 4410 CONFIRMATION# 5512098871", "transfer"),
+        ("KEEP THE CHANGE TRANSFER TO ACCT 4410 FOR 04/12", "transfer"),
+        ("SAVE AS YOU GO TRANSFER DEBIT TO XXXXXXXXXXX4410", "transfer"),
+        ("XFER TO SAV 4410", "transfer"),
+        ("ONLINE XFER TO SAVINGS 4410", "transfer"),
+        ("ACH TRANSFER TO SAVINGS 4410", "transfer"),
+        ("TRANSFER 4410 TO SAVINGS", "transfer"),
+        ("FUNDS TRANSFER 4410", "transfer"),
+        ("FUNDS TRANSFER", "transfer"),
+        ("ONLINE BANKING TRANSFER #4410 XXXX7731", "transfer"),
+        ("WIRE TRANSFER OUTGOING 5512098871", "transfer"),
+        # A wire names a person or a company: never a merchant key.
+        ("WIRE TRANSFER TO JORDAN SAMPLE", "transfer"),
+    ],
+)
+def test_card_payments_and_transfers_in_other_wording(raw: str, kind: str) -> None:
+    cleaned = clean(raw)
+    assert (cleaned.core, cleaned.kind, cleaned.via, cleaned.signals) == (
+        "",
+        kind,
+        None,
+        frozenset(),
+    )
+
+
+@pytest.mark.parametrize(
+    ("raw", "kind", "core"),
+    [
+        ("ELECTRONIC PAYMENT THANKFUL HARVEST FARM", "ach_debit", "thankful harvest farm"),
+        ("INTERNET PAYMENT RIVERBEND WATER", "ach_debit", "riverbend water"),
+        # The reference a bank prints before "TO" leaves with the wording.
+        ("ONLINE PAYMENT 5512098871 TO RIVERBEND WATER", "ach_debit", "riverbend water"),
+        ("ONLINE PAYMENT TO CARDINAL HEATING", "ach_debit", "cardinal heating"),
+        # An issuer's name in front of something that is not its payment line.
+        ("CITI BIKE ONLINE PAYMENT", "unknown", "citi bike online payment"),
+        ("CAPITAL ONE CAFE MOBILE ORDER", "unknown", "capital one cafe mobile order"),
+        ("DISCOVERY ONLINE PAYMENT", "unknown", "discovery online payment"),
+        # A bank word in front of TRANSFER does not make a shop a transfer.
+        ("TRANSFER STATION CAFE", "unknown", "transfer station cafe"),
+        ("FUNDS TRANSFER STATION CAFE", "unknown", "funds transfer station cafe"),
+        ("ONLINE TRANSFER STATION 4410", "unknown", "online transfer station"),
+        ("TRANSFER 4410", "unknown", "transfer"),
+        ("KEEP THE CHANGE LAUNDROMAT", "unknown", "keep the change laundromat"),
+        ("WIRE TRANSFERENCE RECORDS", "unknown", "wire transference records"),
+        ("XFERA MOBILE TO GO", "unknown", "xfera mobile to go"),
+        ("WIRE TRANSFER FEE", "fee", ""),
+    ],
+)
+def test_not_a_card_payment_or_transfer(raw: str, kind: str, core: str) -> None:
+    cleaned = clean(raw)
+    assert (cleaned.kind, cleaned.core) == (kind, core)
+
+
+@pytest.mark.parametrize(
+    ("raw", "core"),
+    [
+        # A name that begins with a number keeps it behind every bank prefix...
+        ("POS DEBIT 365 MARKET", "365 market"),
+        ("CHECKCARD 0412 360 FITNESS", "360 fitness"),
+        ("PURCHASE AUTHORIZED ON 04/12 1800 FLOWERS", "1800 flowers"),
+        ("DEBIT CARD PURCHASE 5280 BURGER BAR", "5280 burger bar"),
+        ("DEBIT CARD PURCHASE 800 DEGREES PIZZA", "800 degrees pizza"),
+        ("POS DEBIT 365 MARKET #12 SPRINGFIELD IL", "365 market"),
+        # ... as it does with none.
+        ("365 MARKET", "365 market"),
+        ("1800 FLOWERS", "1800 flowers"),
+        ("5280 BURGER BAR", "5280 burger bar"),
+        # A terminal or sequence number is what cannot be a name: it begins
+        # with a zero or has six digits or more.
+        ("POS DEBIT 0042 365 MARKET", "365 market"),
+        ("POS DEBIT 0042 QUIET BEAN COFFEE", "quiet bean coffee"),
+        ("POS DEBIT 007 QUIET BEAN COFFEE", "quiet bean coffee"),
+        ("VISA DDA PUR 448120 CORNER GROCER", "corner grocer"),
+        ("VISA DDA PUR 448120 365 MARKET", "365 market"),
+        ("POS DEBIT 0042 MARKET", "market"),
+    ],
+)
+def test_a_number_behind_a_bank_prefix(raw: str, core: str) -> None:
+    assert clean(raw).core == core
+
+
+@pytest.mark.parametrize(
+    ("raw", "kind", "core", "via"),
+    [
+        # RETURN alone begins a shop's name; with a bank word or a number it is a refund.
+        ("RETURN TO NATURE FOODS", "unknown", "return to nature foods", None),
+        ("RETURN OF THE MAC REPAIRS", "unknown", "return of the mac repairs", None),
+        ("POS RETURN LANTERN BOOKS", "refund", "lantern books", None),
+        ("MERCHANDISE RETURN LANTERN BOOKS", "refund", "lantern books", None),
+        ("RETURN CREDIT LANTERN BOOKS", "refund", "lantern books", None),
+        ("RETURN 04/12 LANTERN BOOKS", "refund", "lantern books", None),
+        ("RETURN", "refund", "", None),
+        ("REFUND LANTERN BOOKS", "refund", "lantern books", None),
+        # PAYROLL in the middle of an unlabelled line is a product, not pay.
+        ("QUICKBOOKS PAYROLL 800-555-0142 CA", "unknown", "quickbooks payroll", None),
+        ("ALDER PAYROLL SERVICES FEE", "unknown", "alder payroll services fee", None),
+        ("MAPLE STUDIO PAYROLL", "payroll", "maple studio", None),
+        ("MAPLE STUDIO PAYROLL PPD ID: 5512098871", "payroll", "maple studio", None),
+        ("ACH CREDIT MAPLE STUDIO PAYROLL 5512098871", "payroll", "maple studio", None),
+        ("DIRECT DEP MAPLE STUDIO PAYROLL", "payroll", "maple studio", None),
+        # SP PLUS is a company; Shopify's bare prefix does not take it apart.
+        ("SP PLUS PARKING", "unknown", "sp plus parking", None),
+        ("SP PLUS CORP ALDERTON IL", "unknown", "sp plus", None),
+        ("SP LANTERN BOOKS", "unknown", "lantern books", "shopify"),
+        ("SP * PLUS SIZE OUTLET", "unknown", "plus size outlet", "shopify"),
+    ],
+)
+def test_kind_patterns_that_matched_too_much(
+    raw: str, kind: str, core: str, via: str | None
+) -> None:
+    cleaned = clean(raw)
+    assert (cleaned.kind, cleaned.core, cleaned.via) == (kind, core, via)
+
+
+@pytest.mark.parametrize(
+    ("raw", "core"),
+    [
+        # An order number behind "*" that happens to hold no digit has no vowel either.
+        ("AMZN Mktp US*VCVNJCPZQ", "amzn mktp us"),
+        ("AMZN Mktp US*AB12CD34E", "amzn mktp us"),
+        ("STREAMBOX *BCDFGHJK", "streambox"),
+        # A word behind "*" stays, abbreviated or not.
+        ("STREAMBOX *MONTHLY", "streambox monthly"),
+        ("STREAMBOX *MEMBERSHIP", "streambox membership"),
+        ("STREAMBOX *SUBSCR", "streambox subscr"),
+        # The price: an abbreviation with no vowel goes too, on every line alike.
+        ("STREAMBOX *PRMPLN", "streambox"),
+    ],
+)
+def test_an_order_number_without_a_digit(raw: str, core: str) -> None:
+    assert clean(raw).core == core
+
+
+@pytest.mark.parametrize(
+    ("raw", "core"),
+    [
+        # Two letters behind a single word are as likely the name as a state.
+        ("UNCLE AL", "uncle al"),
+        ("PHOTO ID", "photo id"),
+        # With a number, a telephone or a web address in front, it is a state.
+        ("STREAMBOX 800-555-0142 AL", "streambox"),
+        ("STREAMBOX #12 ALDERTON AL", "streambox"),
+        ("STREAMBOX STREAMBOX.COM AL", "streambox"),
+        ("STREAMBOX.COM AL", "streambox"),
+        # Behind two words it is read as a state, as before.
+        ("MASSAGE ENVY CA", "massage envy"),
+    ],
+)
+def test_a_state_behind_one_word(raw: str, core: str) -> None:
+    assert clean(raw).core == core

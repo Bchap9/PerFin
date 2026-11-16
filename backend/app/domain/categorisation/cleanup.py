@@ -20,7 +20,12 @@ The steps, in order (design note, section 3):
    merchant). The matched wording leaves the text, except for a
    person-to-person service, which is the only name such a line may keep.
 3. Bank trailers go: card suffixes, references, dates and times, a final
-   country, and the ids a bank prints after an ACH entry.
+   country, and the ids a bank prints after an ACH entry. A number between
+   the bank's wording and the merchant goes when it cannot begin a name
+   (:data:`_LEADING_NUMBER`). What is left is read once more for a
+   person-to-person service (:data:`_P2P`): behind ``POS DEBIT`` or ``ACH
+   DEBIT`` the line is as much a payment between people as with nothing in
+   front of it.
 4. A processor in front of the merchant (:data:`PROCESSORS`: ``SQ *``,
    ``TST*``, ``PAYPAL *``...) leaves the text and is recorded as ``via``. A
    marketplace or platform (``APPLE.COM/BILL``, ``GOOGLE *``, ``AMZN``,
@@ -113,6 +118,18 @@ _FEE_WORDS: Final = (
     "|CASH|ADVANCE|ACCOUNT|INSUFFICIENT|FUNDS|STOP|BALANCE|MINIMUM|OUTGOING|INCOMING|PROTECTION"
 )
 
+#: The reference some banks print between "PAYMENT" and "TO".
+_REFERENCE_TO: Final = r"(?: #?\d{4,17}(?= TO ))?"
+
+#: What a bank puts in front of TRANSFER; by itself none makes a line a transfer.
+_TRANSFER_LEAD: Final = (
+    "ONLINE|MOBILE|INTERNET|FUNDS|WITHDRAWAL|DEPOSIT|RECURRING|EXTERNAL|AUTOMATIC|SCHEDULED"
+    "|ACCOUNT|ACH|WIRE|INSTANT|KEEP THE CHANGE|SAVE AS YOU GO|OVERDRAFT PROTECTION"
+)
+_TRANSFER_WORD: Final = r"(?:BANKING )?(?:TRANSFER|XFER)(?: (?:DEBIT|CREDIT|OUTGOING|INCOMING))?"
+#: An account or reference number, masked or not ("4410", "#4410", "XXXX7731").
+_ACCOUNT_NUMBER: Final = r"[#X*.]{0,24}\d[A-Z0-9-]{0,23}"
+
 #: Lines a bank writes about itself, read before the prefixes because they
 #: begin with the same words ("POS REFUND", "TRANSFER TO LOAN", "ONLINE
 #: PAYMENT, THANK YOU"). Matched from the start of the line; first match wins.
@@ -125,20 +142,22 @@ KIND_LINES: Final[tuple[KindPattern, ...]] = (
     _p(rf"MORTGAGE (?:PAYMENT|PMT){_END}", "loan_payment"),
     _p(rf"(?:TRANSFER|PAYMENT) TO LOAN{_END}", "loan_payment"),
     _p(
-        r"(?:(?:ONLINE|MOBILE|AUTOPAY|AUTOMATIC) )?PAYMENT(?: RECEIVED)?(?: ?[-,] ?| )"
+        r"(?:(?:ONLINE|MOBILE|INTERNET|ELECTRONIC|WEB|AUTOPAY|AUTOMATIC) )?"
+        r"(?:PAYMENT|PYMT|PMT)(?: RECEIVED)?(?: ?[-,] ?| )"
         rf"THANK YOU{_END}(?: ?- ?(?:WEB|MOBILE|ONLINE){_END})?",
         "card_payment",
     ),
     _p(r"AUTOPAY(?: PAYMENT)?$", "card_payment"),
     _p(
-        r"(?:(?:ONLINE|MOBILE) )?(?:BANKING )?(?:PAYMENT|PMT) TO (?:[A-Z]+ ){0,2}"
-        rf"(?:CARD|CRD){_END}",
+        r"(?:(?:ONLINE|MOBILE|INTERNET|ELECTRONIC|WEB) )?(?:BANKING )?(?:PAYMENT|PYMT|PMT)"
+        rf"{_REFERENCE_TO} TO (?:[A-Z]+ ){{0,2}}(?:CARD|CRD){_END}",
         "card_payment",
     ),
     _p(
         r"(?:DISCOVER|AMEX|AMERICAN EXPRESS|CAPITAL ONE|CHASE|CITI|BARCLAYCARD|SYNCHRONY)"
         r"(?: CARD| CREDIT CARD| CREDIT CRD)? "
-        rf"(?:E-?PAYMENT|EPAY|CRCARDPMT|CARD PAYMENT|CARD PMT|AUTOPAY|ACH PMT){_END}",
+        r"(?:E-?PAYMENT|EPAY|CRCARDPMT|CARD PAYMENT|CARD PMT|AUTOPAY|ACH PMT"
+        rf"|(?:MOBILE|ONLINE) (?:PAYMENT|PYMT|PMT)){_END}",
         "card_payment",
     ),
     _p(rf"(?:(?:{_FEE_WORDS}) ){{1,5}}FEES?(?:$|(?=[ -]))", "fee"),
@@ -150,10 +169,18 @@ KIND_LINES: Final[tuple[KindPattern, ...]] = (
     ),
     _p(r"INTEREST$", "interest"),
     _p(
-        r"(?:(?:POS|DEBIT CARD|MERCHANT|PURCHASE|MERCHANDISE) )?(?:REFUND|RETURN)"
+        r"(?:(?:POS|DEBIT CARD|MERCHANT|PURCHASE|MERCHANDISE) )?REFUND"
         rf"(?: CREDIT| AUTHORIZED ON)?{_END}",
         "refund",
     ),
+    _p(
+        r"(?:POS|DEBIT CARD|MERCHANT|PURCHASE|MERCHANDISE) RETURN"
+        rf"(?: CREDIT| AUTHORIZED ON)?{_END}",
+        "refund",
+    ),
+    # RETURN alone begins a shop's name as easily ("RETURN TO NATURE FOODS"):
+    # a refund only with the bank's next word, a number, or nothing behind it.
+    _p(rf"RETURN(?: CREDIT{_END}| AUTHORIZED ON{_END}|$|(?= #?\d))", "refund"),
     _p(rf"CREDIT VOUCHER{_END}", "refund"),
 )
 
@@ -195,21 +222,27 @@ KIND_PREFIXES: Final[tuple[KindPattern, ...]] = (
     # Online and mobile payment (bill pay).
     _p(
         r"(?:ONLINE|MOBILE|INTERNET|WEB) (?:BANKING )?(?:BILL )?(?:PAYMENT|PMT|PAY)"
-        rf"(?: TO)?{_END}",
+        rf"{_REFERENCE_TO}(?: TO)?{_END}",
         "ach_debit",
     ),
     _p(rf"BILL ?PAY(?:MENT)?(?: TO)?{_END}", "ach_debit"),
-    # Between a person's own accounts.
+    # Between a person's own accounts (and a wire, which names a person or a
+    # company and never a merchant): TRANSFER or XFER, then TO or FROM.
     _p(
-        r"(?:(?:ONLINE|MOBILE|INTERNET|FUNDS|WITHDRAWAL|DEPOSIT|RECURRING|EXTERNAL|AUTOMATIC"
-        r"|SCHEDULED|ACCOUNT) )?(?:BANKING )?TRANSFER(?: REF ?# ?[A-Z0-9]{1,24})? "
-        rf"(?:TO|FROM){_END}",
+        rf"(?:(?:{_TRANSFER_LEAD}) ){{0,3}}{_TRANSFER_WORD}"
+        rf"(?: REF ?# ?[A-Z0-9]{{1,24}}| {_ACCOUNT_NUMBER})? (?:TO|FROM){_END}",
         "transfer",
     ),
-    # Between people: the service is the only name the line may keep.
+    # With no TO or FROM: a bank's word in front and nothing but numbers behind.
+    _p(
+        rf"(?:(?:{_TRANSFER_LEAD}) ){{1,3}}{_TRANSFER_WORD}(?: {_ACCOUNT_NUMBER}){{0,3}}$",
+        "transfer",
+    ),
+    # Between people: the service is the only name the line may keep (:data:`_P2P`).
     _p(rf"ZELLE{_END}", "p2p"),
     _p(rf"VENMO{_END}", "p2p"),
     _p(rf"CASH APP{_END}", "p2p"),
+    _p(r"SQC ?\*", "p2p"),
     # Cash.
     _p(rf"(?:NON-[A-Z]+ )?ATM (?:CASH )?(?:WITHDRAWAL|WITHDRAW|WITHDRWL|W/D){_END}", "cash"),
     _p(rf"(?:[A-Z]+ )?ATM \d\d/\d\d #?\d{{1,12}} (?:WITHDRAWAL|WITHDRWL){_END}", "cash"),
@@ -229,9 +262,23 @@ KIND_PREFIXES: Final[tuple[KindPattern, ...]] = (
 #: Kinds whose matched wording stays in the text: it names the service.
 _KEEPS_WORDING: Final[frozenset[DescriptorKind]] = frozenset({"p2p"})
 
+#: A person-to-person service where the merchant would stand: at the start,
+#: or behind the bank's wording, a number and a few more of the bank's words.
+#: ``SQC*`` is how Square prints Cash App. The group is the service.
+_P2P: Final = re.compile(
+    r"(?:\d{3,17} )?"
+    r"(?:(?:ONLINE|MOBILE|INSTANT|EXTERNAL|WITHDRAWAL|DEPOSIT|PAYMENT|DEBIT|CREDIT|TRANSFER) )"
+    rf"{{0,3}}(?:(ZELLE|VENMO|CASH APP){_END}|SQC ?\*)"
+)
+_SQUARE_CASH: Final = "CASH APP"
+
 _PAYROLL_WORD: Final = re.compile(rf"{_START}PAYROLL{_END}")
 #: Kinds the word PAYROLL may still turn into payroll.
 _PAYROLL_FROM: Final[frozenset[DescriptorKind]] = frozenset({"unknown", "ach_credit"})
+#: With no wording from the bank the word counts only where a company's
+#: entry ends ("MAPLE STUDIO PAYROLL"), not inside a product's name
+#: ("QUICKBOOKS PAYROLL 800-555-0142").
+_PAYROLL_LAST: Final = re.compile(rf"{_START}PAYROLL$")
 _RECURRING_TAIL: Final = re.compile(r" RECURRING$")
 
 # --- labelled ACH ----------------------------------------------------------
@@ -293,8 +340,10 @@ _TRAILERS: Final[tuple[re.Pattern[str], ...]] = (
 )
 _COUNTRIES: Final = frozenset({"US", "USA"})
 #: The terminal or sequence number some banks print between their own wording
-#: and the merchant ("POS DEBIT 0042 ...", "VISA DDA PUR 448120 ...").
-_LEADING_NUMBER: Final = re.compile(r"\d{3,} (?=\S)")
+#: and the merchant ("POS DEBIT 0042 ...", "VISA DDA PUR 448120 ..."). Only a
+#: number that cannot begin a name: it starts with a zero or has six digits
+#: or more ("365 MARKET", "1800 FLOWERS" and "5280 BURGER BAR" are names).
+_LEADING_NUMBER: Final = re.compile(r"(?:0\d{2,}|\d{6,}) (?=\S)")
 
 # --- processors ----------------------------------------------------------------
 
@@ -331,6 +380,8 @@ PROCESSORS: Final[tuple[tuple[str, str], ...]] = (
 #: Prefixes with nothing but a space to tell them from a name: read as a
 #: processor only when at least two words follow.
 _NEEDS_TWO: Final = frozenset({"SP "})
+#: First words that make such a prefix part of a company's own name ("SP PLUS").
+_NAME_AFTER: Final = frozenset({"PLUS"})
 
 # --- places and numbers --------------------------------------------------------
 
@@ -349,8 +400,10 @@ _PHONE: Final = re.compile(
 #: "#123", "# 123", "#R7731": never at the very start ("#1 NOODLE HOUSE").
 _HASH_NUMBER: Final = re.compile(r"(?<=.)# ?[A-Z]?\d[A-Z0-9-]*")
 _STORE_NUMBER: Final = re.compile(rf"(?<=[A-Z0-9] )(?:STORE|STR) (?:- )?#?\d{{1,12}}{_END}")
-#: What follows a "*": an order number when it holds a digit (:func:`_star_code`).
+#: What follows a "*": an order number when it holds a digit or, as one in
+#: some twenty does, no digit and no vowel either (:func:`_star_code`).
 _STAR_CODE: Final = re.compile(r"\* ?([A-Z0-9]{6,})")
+_VOWELS: Final = frozenset("AEIOU")
 #: A ZIP or a longer reference at the end of the line.
 _LONG_NUMBER: Final = re.compile(r"\d{5,}|\d{5}-\d{4}")
 #: A store or terminal code: "F12345", "T-1234".
@@ -438,8 +491,11 @@ def canonical(raw: str | None) -> str:
 
 
 def _fold(text: str) -> str:
-    """Lower-case ``a-z0-9`` tokens joined by single spaces."""
-    folded = "".join(ch if ch in _KEPT else " " for ch in text.lower())
+    """Lower-case ``a-z0-9`` tokens joined by single spaces; an accent leaves its letter."""
+    plain = (
+        ch for ch in unicodedata.normalize("NFKD", text.lower()) if not unicodedata.combining(ch)
+    )
+    folded = "".join(ch if ch in _KEPT else " " for ch in plain)
     return " ".join(folded.split())
 
 
@@ -487,6 +543,13 @@ def _kind(text: str) -> tuple[DescriptorKind, str | None, str, str]:
     return "unknown", None, text, ""
 
 
+def _says_payroll(kind: DescriptorKind, rest: str, *, labelled: bool) -> bool:
+    """Whether the word PAYROLL in ``rest`` makes the line pay (:data:`_PAYROLL_LAST`)."""
+    if kind != "unknown" or labelled:
+        return _PAYROLL_WORD.search(rest) is not None
+    return _PAYROLL_LAST.search(_strip_trailers(rest)) is not None
+
+
 def _ach_kind(kind: DescriptorKind, company: str, descr: str) -> DescriptorKind:
     """What a labelled line is, from its description and who the company is."""
     if _DESCR_PAYROLL.search(descr):
@@ -519,8 +582,12 @@ def _processor(text: str) -> tuple[str | None, str]:
         if not text.startswith(prefix):
             continue
         rest = text[len(prefix) :].lstrip(" *")
-        named = sum(1 for token in rest.split() if any(ch.isalnum() for ch in token))
-        if named >= (_NAME_TOKENS_MIN if prefix in _NEEDS_TWO else 1):
+        words = rest.split()
+        named = sum(1 for token in words if any(ch.isalnum() for ch in token))
+        bare = prefix in _NEEDS_TWO
+        if bare and words and words[0] in _NAME_AFTER:
+            return None, text
+        if named >= (_NAME_TOKENS_MIN if bare else 1):
             return via, rest
         # Nobody stands behind it: the line names the processor itself.
         return None, text
@@ -529,7 +596,9 @@ def _processor(text: str) -> tuple[str | None, str]:
 
 def _star_code(found: re.Match[str]) -> str:
     """A mark for an order number behind a ``*``; a word ("*MONTHLY") is left alone."""
-    return _MARKED if any(ch.isdigit() for ch in found.group(1)) else found.group(0)
+    code = found.group(1)
+    coded = any(ch.isdigit() for ch in code) or not _VOWELS.intersection(code)
+    return _MARKED if coded else found.group(0)
 
 
 def _is_word(token: str) -> bool:
@@ -585,6 +654,9 @@ def _strip_place(tokens: list[str]) -> None:
         del tokens[before - words :]
         return
     if state in _STATE_NEEDS_NUMBER or (state == "IN" and tokens[-2] in _BEFORE_IN):
+        return
+    # Two letters behind a single word are as likely its name ("UNCLE AL").
+    if before < _NAME_TOKENS_MIN and not _is_web(tokens[0]):
         return
     tokens.pop()
     # No number: one word of city, two when the pair is shaped like a town's name.
@@ -669,7 +741,7 @@ def clean(raw: str | None) -> Cleaned:
     kind, signal, rest, wording = _kind(text)
     if labelled is not None:
         kind = _ach_kind(kind, rest, descr)
-    if kind in _PAYROLL_FROM and _PAYROLL_WORD.search(rest):
+    if kind in _PAYROLL_FROM and _says_payroll(kind, rest, labelled=labelled is not None):
         kind = "payroll"
         rest = _PAYROLL_WORD.sub(" ", rest)
     if kind == "purchase" and _RECURRING_TAIL.search(rest):
@@ -679,12 +751,15 @@ def clean(raw: str | None) -> Cleaned:
         signals.add(signal)
     if kind in _NO_CORE:
         return Cleaned(core="", kind=kind, signals=frozenset(signals))
-    if kind in _KEEPS_WORDING:
-        # Between people the service is the only name: never the other person.
-        return Cleaned(core=_bounded(_fold(wording).split()), kind=kind, signals=frozenset(signals))
     rest = _strip_trailers(rest)
     numbered = _LEADING_NUMBER.match(rest) if wording else None
     if numbered is not None:
         rest = rest[numbered.end() :]
+    service = _P2P.match(rest)
+    if service is not None:
+        # Between people the service is the only name: never the other person,
+        # whatever the bank printed in front of the service.
+        core = _fold(service.group(1) or _SQUARE_CASH)
+        return Cleaned(core=core, kind="p2p", signals=frozenset(signals))
     via, rest = _processor(rest)
     return Cleaned(core=_core(rest), kind=kind, via=via, signals=frozenset(signals))
