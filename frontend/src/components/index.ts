@@ -3,7 +3,7 @@
 export { Badge, type BadgeProps, type BadgeTone } from "./Badge";
 export { Breadcrumbs, type Crumb } from "./Breadcrumbs";
 export { Button, type ButtonProps, type ButtonSize, type ButtonVariant } from "./Button";
-export { Card, type CardProps } from "./Card";
+export { Card, CardHeadingLevel, type CardProps } from "./Card";
 export { CategoryPicker, NEW_CATEGORY_VALUE, type CategoryPickerProps, type PickerCategory } from "./CategoryPicker";
 export { Checkbox, type CheckboxProps } from "./Checkbox";
 export { Chip, type ChipProps, type ChipTone } from "./Chip";

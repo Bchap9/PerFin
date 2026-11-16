@@ -7,6 +7,7 @@ import {
   Badge,
   Button,
   Card,
+  CardHeadingLevel,
   CategoryPicker,
   Checkbox,
   Dialog,
@@ -377,5 +378,24 @@ describe("icons", () => {
       expect(svg, name).toHaveAttribute("stroke", "currentColor");
       unmount();
     }
+  });
+});
+
+describe("Card heading level", () => {
+  it("takes its level from CardHeadingLevel when none is given, and an explicit level wins", () => {
+    render(
+      <>
+        <Card title="Outside">a</Card>
+        <CardHeadingLevel.Provider value={3}>
+          <Card title="Under a page title">b</Card>
+          <Card title="Chosen" headingLevel={4}>
+            c
+          </Card>
+        </CardHeadingLevel.Provider>
+      </>,
+    );
+    expect(screen.getByRole("heading", { name: "Outside" }).tagName).toBe("H2");
+    expect(screen.getByRole("heading", { name: "Under a page title" }).tagName).toBe("H3");
+    expect(screen.getByRole("heading", { name: "Chosen" }).tagName).toBe("H4");
   });
 });

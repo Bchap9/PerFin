@@ -137,15 +137,15 @@ export function MfaSection() {
             empty="No second factor yet."
             maxHeight="none"
           />
-          <h3 className="auth-subheading">Add a security key or passkey</h3>
+          <h4 className="auth-subheading">Add a security key or passkey</h4>
           <WebAuthnSetup onAdded={onAdded} />
           {hasTotp ? null : (
             <>
-              <h3 className="auth-subheading">Add an authenticator app</h3>
-              <TotpSetup onAdded={onAdded} />
+              <h4 className="auth-subheading">Add an authenticator app</h4>
+              <TotpSetup onAdded={onAdded} headingLevel={5} />
             </>
           )}
-          <h3 className="auth-subheading">Recovery codes</h3>
+          <h4 className="auth-subheading">Recovery codes</h4>
           <p>
             <Badge tone={status.data.recovery_codes_remaining > 2 ? "success" : "warning"}>
               {`${String(status.data.recovery_codes_remaining)} unused`}

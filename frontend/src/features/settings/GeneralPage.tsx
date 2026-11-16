@@ -37,7 +37,7 @@ function HouseholdForm({ household, canEdit }: { household: Household; canEdit: 
     }
   };
   return (
-    <Card title="Household" headingLevel={2}>
+    <Card title="Household">
       <form
         className="planning-form"
         noValidate

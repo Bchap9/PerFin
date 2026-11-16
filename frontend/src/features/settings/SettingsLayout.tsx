@@ -5,6 +5,7 @@ import "./settings.css";
 import { Link, Outlet, useRouterState } from "@tanstack/react-router";
 import type { ReactNode } from "react";
 
+import { CardHeadingLevel } from "../../components/Card";
 import { PAGE_TITLE_ID, PageHeader, SectionHeadingContext } from "../../components/PageHeader";
 import { formatDateTime } from "../../lib/dates";
 import { StepUpProvider } from "../auth/StepUp";
@@ -49,12 +50,15 @@ export function SettingsLayout() {
   );
 }
 
-/** A settings page: breadcrumbs back to Settings, its title, and content. */
+/**
+ * A settings page: breadcrumbs back to Settings, its title (an `h2`), and
+ * content, whose cards title at `h3` so they sit under the page's title.
+ */
 export function SettingsPage({ title, children }: { title: string; children: ReactNode }) {
   return (
     <div className="settings-stack">
       <PageHeader title={title} breadcrumbs={[{ to: "/settings", label: "Settings" }, { label: title }]} />
-      {children}
+      <CardHeadingLevel.Provider value={3}>{children}</CardHeadingLevel.Provider>
     </div>
   );
 }
