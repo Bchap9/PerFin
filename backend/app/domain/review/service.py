@@ -129,6 +129,7 @@ from app.domain.imports.schemas import ApplyMapping, AssignmentTarget, MappingUp
 from app.domain.investments import statement_import
 from app.domain.review import assist, repo
 from app.domain.review.schemas import (
+    CardAction,
     NextStep,
     ResolveDuplicate,
     ResolveLowConfidence,
@@ -136,6 +137,7 @@ from app.domain.review.schemas import (
     ResolveUnknownAccount,
     ResolveUnknownOwner,
     ResolveUnparsed,
+    ReviewCard,
     ReviewCardPage,
     ReviewDocument,
     ReviewItemOut,
@@ -395,14 +397,148 @@ def list_items(
 #: Page size of ``GET /review/cards`` (it counts documents).
 CARDS_DEFAULT_PAGE: Final = 25
 CARDS_MAX_PAGE: Final = 100
+#: Most items of no document on the first page of cards.
+LOOSE_MAX: Final = 100
+#: ``low_confidence_field`` reasons the reconcile view answers whatever the
+#: document holds (rows an earlier reading left behind are settled there).
+RECONCILE_REASONS: Final = WHOLE_STATEMENT_REASONS | {"earlier_rows_kept"}
+#: Reasons the reconcile view answers when the document has a stored bank
+#: statement to check against (without one their rows are checked one by one).
+STATEMENT_ROW_REASONS: Final = frozenset({"lines_skipped", "low_confidence", "balance_mismatch"})
+#: ``unparsed`` reasons "Teach PerFin" answers, on a document with pages to show.
+TEACH_REASONS: Final = frozenset({"no_records", "no_rows"})
+#: ``unparsed`` reasons nothing can be done about here: reading the file
+#: again would end the same way.
+UNREADABLE_REASONS: Final = frozenset(
+    {"format_not_supported", "encrypted", "depth_limit", "container_incomplete"}
+)
+
+
+def _reason(item: ReviewItem) -> str | None:
+    reason = (item.payload or {}).get("reason")
+    return reason if isinstance(reason, str) else None
+
+
+def is_notice(item: ReviewItem) -> bool:
+    """Whether the item only tells a person something (``repo.NOTICE_REASONS``)."""
+    return _reason(item) in repo.NOTICE_REASONS
+
+
+def _lists_transactions(item: ReviewItem) -> bool:
+    listed = (item.payload or {}).get("transactions")
+    return isinstance(listed, list) and any(isinstance(entry, dict) for entry in listed)
+
+
+def card_action(
+    items: Sequence[ReviewItem], *, bank_statement: bool = False, previewable: bool = False
+) -> tuple[CardAction, uuid.UUID]:
+    """The one thing a document's open ``items`` ask for next, and the item that asks.
+
+    ``items`` are oldest first and not empty. The first rule that an item
+    meets wins, in this order (within a rule, the oldest item): where the
+    rows go (the account, then the owner), how they are read (the sign,
+    then the columns), whether the file is a copy, whether the statement
+    adds up, single rows, a receipt's transaction, then a file that was not
+    read (taught, processed again, or only acknowledged). A notice never
+    comes before an item that waits on a person; anything no rule names is
+    acknowledged.
+
+    ``bank_statement``: the document's stored extraction holds a bank
+    statement (the reconcile view has something to check against).
+    ``previewable``: its pages can be shown (needed to teach a layout).
+    """
+    waiting = [item for item in items if not is_notice(item)]
+    if not waiting:
+        return "acknowledge", items[0].id
+
+    def first(kind: ReviewKind, reasons: Collection[str] | None = None) -> ReviewItem | None:
+        return next(
+            (
+                item
+                for item in waiting
+                if item.kind is kind and (reasons is None or _reason(item) in reasons)
+            ),
+            None,
+        )
+
+    if (found := first(ReviewKind.UNKNOWN_ACCOUNT)) is not None:
+        return "choose_account", found.id
+    if (found := first(ReviewKind.UNKNOWN_OWNER)) is not None:
+        return "choose_owner", found.id
+    unparsed = [item for item in waiting if item.kind is ReviewKind.UNPARSED]
+    for item in unparsed:
+        if (item.payload or {}).get("auto_import") == "sign_unverified":
+            return "answer_sign", item.id
+    if (found := first(ReviewKind.UNPARSED, MAPPING_REASONS)) is not None:
+        return "map_columns", found.id
+    if (found := first(ReviewKind.POSSIBLE_DUPLICATE)) is not None:
+        return "confirm_duplicate", found.id
+    doubts = [item for item in waiting if item.kind is ReviewKind.LOW_CONFIDENCE_FIELD]
+    # The finding about the statement as a whole names the action before one
+    # about its rows or lines, whichever was raised first.
+    if (found := first(ReviewKind.LOW_CONFIDENCE_FIELD, RECONCILE_REASONS)) is not None:
+        return "reconcile", found.id
+    if bank_statement and (found := first(ReviewKind.LOW_CONFIDENCE_FIELD, STATEMENT_ROW_REASONS)):
+        return "reconcile", found.id
+    for item in doubts:
+        if _lists_transactions(item):
+            return "check_rows", item.id
+    if (found := first(ReviewKind.RECEIPT_MATCH)) is not None:
+        return "attach_receipt", found.id
+    if previewable and (found := first(ReviewKind.UNPARSED, TEACH_REASONS)) is not None:
+        return "teach", found.id
+    for item in unparsed:
+        if _reason(item) not in UNREADABLE_REASONS:
+            return "reprocess", item.id
+    return "acknowledge", waiting[0].id
 
 
 def list_cards(
     db: Session, principal: Principal, *, cursor: uuid.UUID | None, limit: int
 ) -> ReviewCardPage:
-    """The open items grouped by document. Declared; no card is built yet."""
-    _household(principal)
-    return ReviewCardPage(cards=[], loose=[], next_cursor=None)
+    """The open items the caller may see, one card per document (by document id).
+
+    ``limit`` counts documents. ``loose`` (open items of no document) is
+    filled on the first page only. A card holds only the items the caller
+    may see, and its action is chosen among those.
+    """
+    household_id = _household(principal)
+    visible = visible_filter(principal)
+    ids = repo.open_documents(db, household_id, visible, cursor=cursor, limit=limit + 1)
+    more = len(ids) > limit
+    ids = ids[:limit]
+    by_document: dict[uuid.UUID, list[ReviewItem]] = {}
+    for row in repo.open_items(db, household_id, visible, ids):
+        if row.document_id is not None:
+            by_document.setdefault(row.document_id, []).append(row)
+    loose = repo.loose_items(db, household_id, visible, limit=LOOSE_MAX) if cursor is None else []
+    documents = _documents(db, principal, [row for rows in by_document.values() for row in rows])
+    with_statement = repo.documents_with_statements(db, household_id, ids)
+    cards: list[ReviewCard] = []
+    for document_id in ids:
+        rows = by_document.get(document_id) or []
+        document = documents.get(document_id)
+        if not rows or document is None:
+            continue  # resolved since the ids were read
+        action, action_item_id = card_action(
+            rows, bank_statement=document_id in with_statement, previewable=document.previewable
+        )
+        notices = sum(1 for row in rows if is_notice(row))
+        cards.append(
+            ReviewCard(
+                document=document,
+                items=[_out(db, principal, row, documents=documents) for row in rows],
+                action=action,
+                action_item_id=action_item_id,
+                open=len(rows) - notices,
+                notices=notices,
+            )
+        )
+    return ReviewCardPage(
+        cards=cards,
+        loose=[_out(db, principal, row, documents={}) for row in loose],
+        next_cursor=ids[-1] if more and ids else None,
+    )
 
 
 def _get(db: Session, principal: Principal, item_id: uuid.UUID, *, lock: bool) -> ReviewItem:
