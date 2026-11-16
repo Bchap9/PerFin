@@ -122,6 +122,10 @@ only in that merchant's group of categories. Only an entry with `via` and no
 `word` may be `strong`. A `strong` entry still gives way to a word in the
 line that names another category (`TST* NORTHSIDE ESPRESSO BAR` is coffee,
 as a suggestion): PerFin does not state what the line itself contradicts.
+A keyword in an `income.` category (`wages`, `dividend earned`) answers
+money coming in only (`engine.INFLOW_ONLY_GROUPS`). A word that is only
+the bank's own wording about itself (a fee, interest) is not a keyword: it
+is a kind, read by `../cleanup.py`, and stated.
 
 ## Sources
 

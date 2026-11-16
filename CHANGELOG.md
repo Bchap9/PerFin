@@ -206,6 +206,17 @@ migration, no new setting, no new container, nothing new leaves the host
   before lose the key in the refresh that follows the upgrade (the hourly
   `categorise.dispatch` queues it; clean-up version 3); their categories
   stay, and what was learned under such a key no longer answers.
+- **More of a bank's own lines are read, and more plain wording is
+  suggested.** `BANK FEE`, `OVERLIMIT FEE`, `RETURNED CHECK FEE` are bank
+  fees, `INTEREST FEE` interest paid and `SAVINGS INTEREST CREDIT`
+  interest earned, stated as for the other fee and interest lines;
+  `AUTOMATIC WITHDRAWAL <name>` is a debit to that name. Rent (`RENT
+  PAYMENT`, `APARTMENT RENT`), electricity (`ELECTRICITY`, `ELECTRIC
+  BILL`), `UTILITY`, pay (`WAGES`, `SALARY`, `EMPLOYER`, money in only),
+  `DIVIDEND EARNED` (money in only), `CASH DEPOSIT`, `WITHDRAWAL` and
+  cinemas (`THEATERS`, `CINEMAS`) are suggested. "Rent" or "electric"
+  alone, inside another word or at the start of a shop's name suggests
+  nothing; cheques and deposits stay unguessed (merchant list version 8).
 
 ### Security
 

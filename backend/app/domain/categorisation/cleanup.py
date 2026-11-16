@@ -130,6 +130,7 @@ _FEE_WORDS: Final = (
     "MONTHLY|ANNUAL|MAINTENANCE|SERVICE|OVERDRAFT|ITEM|NON-[A-Z]+|ATM|FOREIGN|INTERNATIONAL"
     "|DOMESTIC|TRANSACTION|WIRE|TRANSFER|LATE|PAYMENT|MEMBERSHIP|RETURNED|NSF|PAPER|STATEMENT"
     "|CASH|ADVANCE|ACCOUNT|INSUFFICIENT|FUNDS|STOP|BALANCE|MINIMUM|OUTGOING|INCOMING|PROTECTION"
+    "|BANK|CHECK|OVERLIMIT|OVER-LIMIT|OVER|LIMIT"
 )
 
 #: The reference some banks print between "PAYMENT" and "TO".
@@ -182,8 +183,8 @@ KIND_LINES: Final[tuple[KindPattern, ...]] = (
     _p(rf"(?:(?:{_FEE_WORDS}) ){{1,5}}FEES?(?:$|(?=[ -]))", "fee"),
     _p(rf"(?:MONTHLY )?SERVICE CHARGE{_END}", "fee"),
     _p(
-        r"(?:(?:MONTHLY|MINIMUM|PURCHASE|PURCHASES|CASH ADVANCE) )?"
-        rf"INTEREST (?:PAYMENT|PAID|EARNED|CREDIT|CHARGED?){_END}",
+        r"(?:(?:MONTHLY|MINIMUM|PURCHASE|PURCHASES|CASH ADVANCE|SAVINGS|CHECKING) )?"
+        rf"INTEREST (?:PAYMENT|PAID|EARNED|CREDIT|CHARGED?|FEE){_END}",
         "interest",
     ),
     _p(r"INTEREST$", "interest"),
@@ -257,6 +258,9 @@ KIND_PREFIXES: Final[tuple[KindPattern, ...]] = (
         rf"(?:(?:{_TRANSFER_LEAD}) ){{1,3}}{_TRANSFER_WORD}(?: {_ACCOUNT_NUMBER}){{0,3}}$",
         "transfer",
     ),
+    # The bank's word for a debit it was told to make; who was paid follows.
+    # After the transfers: "AUTOMATIC WITHDRAWAL TRANSFER TO SAVINGS" is one.
+    _p(rf"(?:AUTOMATIC|AUTO) WITHDRAWAL{_END}", "ach_debit"),
     # Between people: the service is the only name the line may keep (:data:`_P2P`).
     _p(rf"ZELLE{_END}", "p2p"),
     _p(rf"VENMO{_END}", "p2p"),

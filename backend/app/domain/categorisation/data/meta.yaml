@@ -2,5 +2,5 @@
 # The dictionary's version and the digest of its entries. They change
 # together: after editing any entry, add one to `version` and set `digest` to
 # the value the unit test prints (tests/unit/test_merchant_dictionary.py).
-version: 7
-digest: "131a7aa8477bffad19eeb481c67b8ff4580621deb280de09dec95e4894908baa"
+version: 8
+digest: "41dbf46a9ceed6f9aaf7aa97c97921b3364774479cf2a968fd56329d1ea90110"

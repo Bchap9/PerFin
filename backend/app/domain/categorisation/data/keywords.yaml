@@ -140,6 +140,9 @@ keywords:
   - {word: cinema, category: leisure.events}
   - {word: theatre, category: leisure.events}
   - {word: theater, category: leisure.events}
+  - {word: theaters, category: leisure.events}
+  - {word: theatres, category: leisure.events}
+  - {word: cinemas, category: leisure.events}
   - {word: bowling, category: leisure.events}
   - {word: museum, category: leisure.events}
   - {word: zoo, category: leisure.events}
@@ -160,11 +163,21 @@ keywords:
   - {word: pest control, category: housing.maintenance}
   - {word: locksmith, category: housing.maintenance}
   - {word: apartments, category: housing.rent}
+  # "rent" alone opens shops' names ("Rent-A-Center"): only with a word
+  # that makes it the household's rent.
+  - {word: rent payment, category: housing.rent}
+  - {word: apartment rent, category: housing.rent}
+  - {word: monthly rent, category: housing.rent}
+  - {word: rent pmt, category: housing.rent}
   - {word: self storage, category: housing.fees}
   - {word: furniture, category: shopping.home}
   - {word: water dept, category: utilities.water}
   - {word: water district, category: utilities.water}
+  # "electric" alone is a guitar shop as often as a bill.
+  - {word: electricity, category: utilities.electricity}
+  - {word: electric bill, category: utilities.electricity}
   - {word: utilities, category: utilities.other}
+  - {word: utility, category: utilities.other}
 
   # Shops and offices.
   - {word: boutique, category: shopping.clothing}
@@ -175,3 +188,15 @@ keywords:
   - {word: attorney, category: financial.services}
   - {word: law office, category: financial.services}
   - {word: cpa, category: financial.services}
+
+  # Money in that names nobody. A word for pay or a dividend answers money
+  # coming in only (engine.INFLOW_ONLY_GROUPS): paid out, it is somebody
+  # else's.
+  - {word: wages, category: income.salary}
+  - {word: salary, category: income.salary}
+  - {word: employer, category: income.salary}
+  - {word: dividend earned, category: income.dividends}
+  # Cash into or out of the account at the counter. Last of all: any other
+  # word in the line says better what the money was.
+  - {word: cash deposit, category: transfers.cash}
+  - {word: withdrawal, category: transfers.cash}

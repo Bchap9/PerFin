@@ -1066,3 +1066,57 @@ def test_a_plus_that_ends_a_name_is_read(raw: str, core: str) -> None:
 def test_a_student_loan_is_a_loan_payment(raw: str, kind: str, core: str) -> None:
     cleaned = clean(raw)
     assert (cleaned.kind, cleaned.core) == (kind, core)
+
+
+@pytest.mark.parametrize(
+    ("raw", "kind"),
+    [
+        # A bank names its fees in more words than the usual ones.
+        ("BANK FEE", "fee"),
+        ("OVERLIMIT FEE", "fee"),
+        ("OVER LIMIT FEE", "fee"),
+        ("OVER-LIMIT FEE 04/12", "fee"),
+        ("RETURNED CHECK FEE", "fee"),
+        ("RETURNED CHECK FEE CHECK 1042", "fee"),
+        # Interest on an account the line names first, and interest as a fee.
+        ("SAVINGS INTEREST CREDIT", "interest"),
+        ("SAVINGS INTEREST PAID", "interest"),
+        ("INTEREST FEE", "interest"),
+    ],
+)
+def test_more_of_a_bank_s_own_wording(raw: str, kind: str) -> None:
+    cleaned = clean(raw)
+    assert (cleaned.kind, cleaned.core) == (kind, "")
+
+
+@pytest.mark.parametrize(
+    ("raw", "kind", "core"),
+    [
+        # Those words in a shop's name do not make its line a bank's.
+        ("BANKSIDE FEED AND SEED", "unknown", "bankside feed and seed"),
+        ("FOOD BANK FEE DONATION", "unknown", "food bank fee donation"),
+        ("CHECKERED FLAG FEE", "unknown", "checkered flag fee"),
+        ("SPEED LIMIT CYCLES", "unknown", "speed limit cycles"),
+        ("SAVINGS INTEREST BOOKS", "unknown", "savings interest books"),
+        ("INTEREST FEED STORE", "unknown", "interest feed store"),
+    ],
+)
+def test_a_shop_with_a_bank_s_word_is_still_a_shop(raw: str, kind: str, core: str) -> None:
+    cleaned = clean(raw)
+    assert (cleaned.kind, cleaned.core) == (kind, core)
+
+
+@pytest.mark.parametrize(
+    ("raw", "kind", "core"),
+    [
+        # An automatic withdrawal is the bank's word for a debit: who was paid follows.
+        ("AUTOMATIC WITHDRAWAL LANTERN ATHLETIC CLUB", "ach_debit", "lantern athletic club"),
+        ("AUTO WITHDRAWAL LANTERN ATHLETIC CLUB", "ach_debit", "lantern athletic club"),
+        ("AUTOMATIC WITHDRAWAL", "ach_debit", ""),
+        # A transfer stays a transfer.
+        ("AUTOMATIC WITHDRAWAL TRANSFER TO SAVINGS 4410", "transfer", ""),
+    ],
+)
+def test_an_automatic_withdrawal_is_a_debit(raw: str, kind: str, core: str) -> None:
+    cleaned = clean(raw)
+    assert (cleaned.kind, cleaned.core) == (kind, core)
