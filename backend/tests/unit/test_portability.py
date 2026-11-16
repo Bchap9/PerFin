@@ -337,6 +337,7 @@ def test_columns_added_in_format_3_are_left_out_of_an_older_archive() -> None:
         "status",
         "status_source",
         "merchant_key",
+        "split_keys",
         "first_seen_on",
         "occurrences",
         "confidence",

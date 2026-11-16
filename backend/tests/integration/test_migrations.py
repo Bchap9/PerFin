@@ -2088,6 +2088,7 @@ SERIES_COLUMNS = frozenset(
         "status",
         "status_source",
         "merchant_key",
+        "split_keys",
         "first_seen_on",
         "occurrences",
         "confidence",

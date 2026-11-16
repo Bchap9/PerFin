@@ -803,6 +803,15 @@ class _Importer:
         def transform(row: dict[str, Any], _: uuid.UUID) -> dict[str, Any]:
             if self.has_provenance:
                 self.check_merchant_key("scheduled_transactions", row["merchant_key"])
+                split = row["split_keys"] if row["split_keys"] is not None else []
+                if not isinstance(split, list) or not all(isinstance(k, str) for k in split):
+                    raise _fail(
+                        "archive-invalid-value",
+                        "scheduled_transactions.split_keys: not a list of merchant keys",
+                    )
+                for key in split:
+                    self.check_merchant_key("scheduled_transactions", key)
+                row["split_keys"] = split
                 return row
             # As migration 0014 did for the series of its time.
             row.update(dict.fromkeys(SERIES_FACTS))
@@ -818,6 +827,7 @@ class _Importer:
                 status=status,
                 status_source=decider,
                 occurrences=0,
+                split_keys=[],
             )
             return row
 

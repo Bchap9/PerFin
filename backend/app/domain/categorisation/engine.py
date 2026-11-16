@@ -209,6 +209,13 @@ class Summary:
     #: carried, the keys those rows carry now (``None``: a row that names
     #: nobody any more). Read with :func:`key_now`; never stored or audited.
     renamed: dict[str, frozenset[str | None]] = field(default_factory=dict)
+    #: The same, for the rows of one account and direction only:
+    #: ``(account, direction, old key) -> keys now``. What lives on one account
+    #: (a recurring series) follows its own rows, not a stray row of the same
+    #: key elsewhere (:func:`keys_at`).
+    renamed_at: dict[tuple[uuid.UUID, Direction, str], frozenset[str | None]] = field(
+        default_factory=dict
+    )
 
 
 def _key_of(core: str) -> str | None:
@@ -788,8 +795,9 @@ type _Taught = tuple[str, str, uuid.UUID, str]
 def key_now(old: str, renamed: Mapping[str, Collection[str | None]]) -> str | None:
     """The one key the merchant ``old`` has after a re-key, or ``None``.
 
-    For whatever names a merchant by its key outside the ledger (a merchant
-    rule's condition, a recurring series). ``renamed`` is
+    For whatever names a merchant by its key across the household (a
+    merchant rule's condition; a recurring series lives on one account and
+    follows its own rows instead, :func:`keys_at`). ``renamed`` is
     :attr:`Summary.renamed`. Answers the new key only when rows carried
     ``old`` and every one of them carries that one key now. ``None`` when the
     key did not move, when its rows went to several keys (nobody can say
@@ -804,6 +812,23 @@ def key_now(old: str, renamed: Mapping[str, Collection[str | None]]) -> str | No
         return None
     [only] = now
     return only if only != old else None
+
+
+def keys_at(
+    account_id: uuid.UUID,
+    direction: Direction,
+    old: str,
+    renamed_at: Mapping[tuple[uuid.UUID, Direction, str], Collection[str | None]],
+) -> frozenset[str]:
+    """The keys the rows of ``account_id`` and ``direction`` that carried ``old`` carry now.
+
+    For a recurring series (``Summary.renamed_at``): rows that name nobody
+    any more are left out, since no series can be found for them. Empty when
+    no such row carried ``old``; ``{old}`` alone when the key did not move.
+    """
+    return frozenset(
+        key for key in renamed_at.get((account_id, direction, old), ()) if key is not None
+    )
 
 
 def _move_memory(
@@ -956,6 +981,7 @@ def reconsider(
     #: Only a pass over every row knows where all the rows of a key went.
     moving = rekey and transaction_ids is None
     renamed: dict[str, set[str | None]] = {}
+    renamed_at: dict[tuple[uuid.UUID, Direction, str], set[str | None]] = {}
     taught: Counter[_Taught] = Counter()
     after: tuple[Any, uuid.UUID] | None = None
     while True:
@@ -998,6 +1024,8 @@ def reconsider(
                 summary.keyed += 1
             if moving and found.merchant_key is not None:
                 renamed.setdefault(found.merchant_key, set()).add(identity.key)
+                place = (found.account_id, memory.direction_of(found.amount), found.merchant_key)
+                renamed_at.setdefault(place, set()).add(identity.key)
                 if (
                     identity.key is not None
                     and identity.key != found.merchant_key
@@ -1046,5 +1074,6 @@ def reconsider(
     if moving:
         summary.memory_moved = _move_memory(db, household_id, renamed, taught)
         summary.renamed = {old: frozenset(now) for old, now in renamed.items()}
+        summary.renamed_at = {place: frozenset(now) for place, now in renamed_at.items()}
     _announce(db, household_id, summary)
     return summary

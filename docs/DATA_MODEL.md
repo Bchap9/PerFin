@@ -172,7 +172,8 @@ scheduled_transaction (household, account, name, cadence: daily|weekly|monthly|
                        active, last_seen_on?,
                        kind: subscription|bill|income|other, kind_source: detector|person,
                        status: suggested|active|confirmed|paused|ended|dismissed,
-                       status_source: detector|person, merchant_key?, first_seen_on?,
+                       status_source: detector|person, merchant_key?, split_keys[],
+                       first_seen_on?,
                        occurrences, confidence?, last_amount?, previous_amount?,
                        price_changed_on?, ended_on?)
 merchant_memory       (household, merchant_key, direction: out|in, category,
@@ -446,7 +447,9 @@ What the columns and the two tables mean to a person is in
   tombstone that stops it from coming back: `DELETE /recurring/{id}` on a
   detected series sets `dismissed`, on a manual one it deletes.
   `merchant_key` (how detection finds the series again; denied for AI
-  access), `first_seen_on`, `occurrences`, `confidence`, `last_amount`,
+  access), `split_keys` (the other keys the series' rows went to when a
+  re-key split its merchant: a dismissed or ended series holds there too;
+  denied for AI access), `first_seen_on`, `occurrences`, `confidence`, `last_amount`,
   `previous_amount`, `price_changed_on` and `ended_on` are the facts the
   Subscriptions view shows. `UNIQUE (household_id, id)` is added for the
   references to it.

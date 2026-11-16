@@ -81,7 +81,7 @@ it), so that a person's decisions travel:
 | Entity | Columns since format 3 |
 | --- | --- |
 | `transactions` | `merchant_key`, `category_source`, `category_confidence`, `suggested_category_id` (a reference to `categories`) |
-| `scheduled_transactions` | `kind`, `kind_source`, `status`, `status_source`, `merchant_key`, `first_seen_on`, `occurrences`, `confidence`, `last_amount`, `previous_amount`, `price_changed_on`, `ended_on` |
+| `scheduled_transactions` | `kind`, `kind_source`, `status`, `status_source`, `merchant_key`, `split_keys`, `first_seen_on`, `occurrences`, `confidence`, `last_amount`, `previous_amount`, `price_changed_on`, `ended_on` |
 
 So a category arrives with how it was decided (yours stays yours and is
 never guessed over on the new instance), a suggestion arrives as a

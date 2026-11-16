@@ -44,7 +44,10 @@ pairs are taken first and a series matches at most one candidate per run.
   dismissed one stopped is not that series: it is created, as ``suggested``
   whatever the evidence, and stays a suggestion until a person decides, like
   every other series detection finds while a dismissed one of the same
-  merchant (or name) stands on the account.
+  merchant (or name) stands on the account. So is one found under a key a
+  dismissed or ended series' rows went to when a re-key split its merchant
+  (``split_keys``, written by ``categorisation.service``), and that one is
+  not announced as new either.
 * A **manual** match wins over a detected one and is never rewritten
   (``skipped_manual``); its charges are linked to it.
 * Any other match has its facts refreshed (the cadence, the amount range,
@@ -169,6 +172,7 @@ if TYPE_CHECKING:
 LIQUID_TYPES: Final = frozenset({AccountType.CHECKING, AccountType.SAVINGS, AccountType.CASH})
 DEFAULT_NAME: Final = "Recurring"
 DISMISSED: Final = "dismissed"
+ENDED: Final = "ended"
 #: An account, detection's group key and the direction (money in).
 type _GroupKey = tuple[uuid.UUID, str, bool]
 DETECTOR: Final = "detector"
@@ -822,6 +826,22 @@ def _shadowed(schedules: Iterable[ScheduledTransaction], candidate: Candidate) -
     )
 
 
+def _split_from(schedules: Iterable[ScheduledTransaction], candidate: Candidate) -> bool:
+    """Whether the candidate's merchant is one a dismissed or ended series' rows went to.
+
+    A re-key that split a merchant (``ScheduledTransaction.split_keys``)
+    leaves the series under one key; what is found under another of them on
+    the same account and direction is not new.
+    """
+    return candidate.merchant_key is not None and any(
+        row.status in (DISMISSED, ENDED)
+        and row.account_id == candidate.account_id
+        and (row.amount_min >= 0) == candidate.inflow
+        and candidate.merchant_key in row.split_keys
+        for row in schedules
+    )
+
+
 def _create(
     db: Session,
     household_id: uuid.UUID,
@@ -954,6 +974,9 @@ def persist(
     resolved: list[tuple[Candidate, ScheduledTransaction, bool]] = []
     #: Series that stay a suggestion: a dismissed one of the same merchant stands.
     held: set[uuid.UUID] = set()
+    #: ...of which these are not announced as new: they are a person's
+    #: dismissed or ended series under another of its merchant's keys.
+    unannounced: set[uuid.UUID] = set()
     for index, candidate in enumerate(found):
         match = matches.get(index)
         if match is not None and match.status == DISMISSED:
@@ -964,7 +987,8 @@ def persist(
             continue
         name = _name(candidate, payees)
         currency = currencies[candidate.account_id]
-        shadowed = _shadowed(existing, candidate)
+        split_from = _split_from(existing, candidate)
+        shadowed = split_from or _shadowed(existing, candidate)
         if match is None:
             status = "suggested" if shadowed else candidate.status
             row = _create(db, household_id, candidate, name, currency, status=status)
@@ -974,6 +998,8 @@ def persist(
             row = match
         if shadowed:
             held.add(row.id)
+        if split_from:
+            unannounced.add(row.id)
         for row_id in candidate.transaction_ids:
             if ledger.links.get(row_id) != row.id:
                 charges[row_id] = {"scheduled_transaction_id": row.id}
@@ -1017,6 +1043,7 @@ def persist(
             as_of,
             quiet=quiet,
             created=created,
+            announce_new=row.id not in unannounced,
             loose=[charge for key in sorted(keys) for charge in loose.get(key, ())],
         )
         for event in events:
