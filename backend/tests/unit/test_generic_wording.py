@@ -75,6 +75,22 @@ def test_a_bank_s_own_line_is_stated(raw: str, direction: Direction, category: s
         ("WITHDRAWAL", "out", "transfers.cash"),
         ("LANTERN GRAND THEATERS", "out", "leisure.events"),
         ("MAPLE CINEMAS 12", "out", "leisure.events"),
+        # A bill of a business nobody's dictionary knows.
+        ("QUARRYVALE APTS DES:RENT ID:U0000001 CO ID:0000000001 WEB", "out", "housing.rent"),
+        ("BRISTLECONE WATER DIST BILLPAY", "out", "utilities.water"),
+        ("ELKTON SEWER DIST PPD ID: 0000000001", "out", "utilities.water"),
+        ("LANTERN CITY SEWER", "out", "utilities.water"),
+        ("WILLOWMERE TUITION 0412", "out", "family.education"),
+        # The entry description of a labelled ACH line says what the company
+        # was paid for when its name does not.
+        (
+            "WILLOWMERE ACADEMY DES:TUITION ID:%1 CO ID:0000000002 PPD",
+            "out",
+            "family.education",
+        ),
+        ("ORIG CO NAME:QUARRYVALE MGMT CO ENTRY DESCR:RENT PMT", "out", "housing.rent"),
+        # Lessons in a sport are a pastime, not school.
+        ("PINEGATE SWIM SCHOOL", "out", "leisure.hobbies"),
     ],
 )
 def test_wording_that_says_what_it_was_is_suggested(
@@ -110,6 +126,9 @@ def test_wording_that_says_what_it_was_is_suggested(
         ("CHK WITHDRAWAL 1042", "out"),
         ("DEPOSIT", "in"),
         ("ATM CHECK DEPOSIT 04/12", "in"),
+        # An entry description of no telling word answers nothing.
+        ("QUARRYVALE MGMT DES:PAYMENT ID:%1 CO ID:0000000003 PPD", "out"),
+        ("QUARRYVALE INS DES:INS PREM ID:%1 CO ID:0000000004 PPD", "out"),
     ],
 )
 def test_ambiguous_wording_answers_nothing_wrong(raw: str, direction: Direction) -> None:

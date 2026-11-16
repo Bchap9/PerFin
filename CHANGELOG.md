@@ -39,6 +39,22 @@ What remains (details in docs/ROADMAP.md):
 
 Stage 4 of four on the way to 1.0.0: the release review.
 
+### Changed
+
+- **A series nobody filed is a bill when its suggested category is a
+  bill's.** Recurring detection took only a category somebody (or the
+  engine, as a fact) gave the rows as a hint for the kind, so rent, water,
+  sewer and tuition at a business no list knows were kind "other" until a
+  row was filed. A suggested category of a bill (housing, utilities, a loan
+  payment, insurance, taxes, childcare, education) now makes such a series
+  a bill; it changes nothing else about it, and a stated category still
+  wins. More such bills are suggested: `APTS` (rent), `WATER DIST`,
+  `SEWER`, `TUITION`, and the entry description of a labelled ACH line
+  (`<name> DES:RENT PMT`, `DES:TUITION`) when the name holds no telling
+  word; `SWIM SCHOOL` is a pastime, not school (merchant list version 10).
+  With nobody filing anything, the kind of a planted series is right for
+  92.5% (was 82.5%).
+
 ### Fixed
 
 - **`scripts/check_spdx.py` runs in a container.** In a checkout that

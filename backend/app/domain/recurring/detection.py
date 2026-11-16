@@ -77,8 +77,13 @@ judged against what was uploaded, never against today.
    ``subscription`` for a dictionary subscription with a fixed amount;
    ``bill`` for a category in :data:`BILL_KEYS` or a loan payment; ``bill``
    for an amount that is not fixed; ``subscription`` for a fixed amount in
-   any other expense category; else ``other`` (fixed, and nothing says what
-   it is).
+   any other expense category; ``bill`` when nobody filed the rows and the
+   category the engine suggested for them is in :data:`BILL_KEYS`
+   (``suggested_key``: rent, water, tuition at a business no dictionary
+   knows); else ``other`` (fixed, and nothing says what it is). A suggested
+   category says the kind and nothing else: it does not make a series a
+   bill for its amounts, its confidence or a habit, and a suggestion of any
+   other category says nothing.
 8. **Habits.** A series whose category is in :data:`HABIT_KEYS` (groceries,
    restaurants, coffee, fuel, parking, fares, shopping) is dropped unless its
    amount is fixed, every gap is regular and it has
@@ -245,8 +250,10 @@ class Observed:
     ``p2p``. ``category_key`` is the category's ``system_key`` and
     ``category_kind`` its kind. ``series_hint``, ``cadence_hints`` and
     ``habit_hint`` (a store that sells everything and bills no series) are
-    what the dictionary says about the merchant. ``category_id`` and ``label``
-    (the text to name a series by) are carried through to the candidate.
+    what the dictionary says about the merchant. ``suggested_key`` is the
+    ``system_key`` of the category the engine suggested for a row nobody
+    filed (step 7). ``category_id`` and ``label`` (the text to name a series
+    by) are carried through to the candidate.
     """
 
     id: uuid.UUID
@@ -264,6 +271,7 @@ class Observed:
     label: str | None = None
     cadence_hints: frozenset[str] = frozenset()
     habit_hint: bool = False
+    suggested_key: str | None = None
 
 
 @dataclass(frozen=True)
@@ -407,6 +415,8 @@ class _Group:
     annual_ok: bool
     #: A store that sells everything, by the dictionary (step 8).
     general_store: bool = False
+    #: The category most suggested for its rows (step 7, the kind only).
+    suggested_key: str | None = None
 
     @property
     def known(self) -> bool:
@@ -477,6 +487,8 @@ def _kind(group: _Group, fixed: bool) -> SeriesKind:
         return "bill"
     if group.category_key is not None and group.category_kind == "expense":
         return "subscription"
+    if group.category_key is None and _matches(group.suggested_key, BILL_KEYS):
+        return "bill"
     return "other"
 
 
@@ -675,6 +687,7 @@ def _describe(key: str, inflow: bool, members: Sequence[Observed]) -> _Group:
         loan=_most_common(r.kind for r in members) == "loan_payment",
         annual_ok=not hints or bool(hints & ANNUAL_HINTS),
         general_store=any(r.habit_hint for r in members),
+        suggested_key=_most_common(r.suggested_key for r in members),
     )
 
 

@@ -43,6 +43,7 @@ def rows(
     account: uuid.UUID = ACCOUNT,
     cadence_hints: frozenset[str] = frozenset(),
     habit_hint: bool = False,
+    suggested: str | None = None,
 ) -> list[Observed]:
     day_list = list(days)
     if isinstance(amounts, (Decimal, str)):
@@ -66,6 +67,7 @@ def rows(
             payee_id=payee_id,
             cadence_hints=cadence_hints,
             habit_hint=habit_hint,
+            suggested_key=suggested,
         )
         for d, v in zip(day_list, values, strict=True)
     ]
@@ -613,6 +615,47 @@ def test_rows_without_a_merchant_key_meet_on_their_text() -> None:
     found = only(detect(ledger))
     assert (found.merchant_key, found.text_key) == (None, "quarry lane studio")
     assert found.kind == "other"  # fixed, but nothing says what it is
+
+
+@pytest.mark.parametrize(
+    ("suggested", "kind"),
+    [
+        ("housing.rent", "bill"),
+        ("utilities.water", "bill"),
+        ("transfers.loan_payment", "bill"),
+        ("family.education", "bill"),
+        # Only a bill-like suggestion says what the series is.
+        ("health.fitness", "other"),
+        ("leisure.hobbies", "other"),
+        (None, "other"),
+    ],
+)
+def test_a_bill_like_suggestion_makes_an_unfiled_series_a_bill(
+    suggested: str | None, kind: str
+) -> None:
+    # Nobody filed the rows; the engine suggested a category for them.
+    days = monthly(date(2026, 1, 6), 6)
+    ledger = rows(days, "-1850.00", key="hollowbrook apts", suggested=suggested)
+    assert only(detect(ledger)).kind == kind
+
+
+def test_a_stated_category_beats_a_suggested_one() -> None:
+    days = monthly(date(2026, 1, 6), 6)
+    ledger = rows(days[:3], "-32.00", key="riverbend swim", category="leisure.hobbies") + rows(
+        days[3:], "-32.00", key="riverbend swim", suggested="family.education"
+    )
+    assert only(detect(ledger)).kind == "subscription"
+
+
+def test_a_suggestion_moves_nothing_but_the_kind() -> None:
+    # A bill by its suggestion alone is not judged on its amounts as a bill
+    # is: amounts that swing widely still make no series.
+    days = monthly(date(2026, 1, 6), 6)
+    swinging = ["-40.00", "-95.00", "-52.00", "-130.00", "-61.00", "-77.00"]
+    ledger = rows(days, swinging, key="ashgrove water dist", suggested="utilities.water")
+    assert detect(ledger) == []
+    filed = rows(days, swinging, key="ashgrove water dist", category="utilities.water")
+    assert only(detect(filed)).kind == "bill"
 
 
 @pytest.mark.parametrize("text", ["e", "xy", "j k"])

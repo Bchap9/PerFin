@@ -113,7 +113,7 @@ from decimal import Decimal
 from typing import TYPE_CHECKING, Any, Final, cast
 
 from sqlalchemy import Select, and_, func, select
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, aliased
 
 from app.auth.authz import forbidden, role_at_least
 from app.auth.models import HouseholdRole
@@ -507,6 +507,7 @@ def _read(
         .group_by(Transaction.account_id)
     )
     as_of = {account_id: min(on, day) for account_id, day in latest}
+    suggested = aliased(Category)
     found = db.execute(
         select(
             Transaction.id,
@@ -520,12 +521,20 @@ def _read(
             Transaction.scheduled_transaction_id,
             Category.system_key,
             Category.kind,
+            suggested.system_key,
         )
         .outerjoin(
             Category,
             and_(
                 Category.household_id == Transaction.household_id,
                 Category.id == Transaction.category_id,
+            ),
+        )
+        .outerjoin(
+            suggested,
+            and_(
+                suggested.household_id == Transaction.household_id,
+                suggested.id == Transaction.suggested_category_id,
             ),
         )
         .where(
@@ -551,6 +560,7 @@ def _read(
         schedule_id,
         category_key,
         category_kind,
+        suggested_key,
     ) in found:
         identity = identities.get(raw_payee)
         if identity is None:
@@ -575,6 +585,7 @@ def _read(
                 label=raw_payee,
                 cadence_hints=frozenset(merchant.cadences) if merchant is not None else frozenset(),
                 habit_hint=merchant is not None and merchant.mixed and merchant.series is None,
+                suggested_key=suggested_key,
             )
         )
     return _Ledger(rows, as_of, links)

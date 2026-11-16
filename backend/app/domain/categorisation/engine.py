@@ -393,6 +393,19 @@ def _hit_confidence(identity: Identity, hit: Hit, direction: Direction) -> Decim
     return confidence
 
 
+def _described(identity: Identity) -> dictionary.KeywordHit | None:
+    """A keyword in the entry description of a labelled ACH line (``DES:RENT``), or ``None``.
+
+    Read only when the company's name holds none: "<name> DES:TUITION" is
+    tuition at a business no list knows.
+    """
+    for signal in sorted(identity.signals):
+        prefix, _, described = signal.partition(":")
+        if prefix == "descr" and described:
+            return dictionary.keyword(described, None)
+    return None
+
+
 def _from_data(identity: Identity, direction: Direction) -> tuple[str, str, Decimal] | None:
     """The kind's, the merchant's or a keyword's answer: ``(source, key, confidence)``.
 
@@ -410,6 +423,8 @@ def _from_data(identity: Identity, direction: Direction) -> tuple[str, str, Deci
         confidence = _hit_confidence(identity, hit, direction)
         return None if confidence is None else ("dictionary", hit.merchant.category, confidence)
     word = dictionary.keyword(identity.core, identity.via) if identity.core else None
+    if word is None:
+        word = _described(identity)
     if word is not None and (
         (direction == "out" and word.category.partition(".")[0] in INFLOW_ONLY_GROUPS)
         or KEYWORD_DIRECTIONS.get(word.word, direction) != direction
@@ -443,7 +458,8 @@ def decide(
        ``memory.STALE_DAYS``);
     4. the descriptor's kind (:data:`KIND_CATEGORIES`, ``dictionary``);
     5. the dictionary's merchant (``dictionary``);
-    6. a telling word (``keyword``).
+    6. a telling word (``keyword``), in the core or else in a labelled ACH
+       line's entry description.
 
     When the household is split on the merchant (a share below the minimum),
     steps 4 to 6 give a suggestion at most. So do steps 5 and 6 for money

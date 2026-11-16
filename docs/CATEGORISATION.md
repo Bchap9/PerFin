@@ -40,7 +40,7 @@ For each transaction, the first of these that has an answer wins:
 | 4 | The default category of the transaction's payee | "Payee default" | 0.95 |
 | 5 | What PerFin learned from your corrections for this merchant | "Learned from you" | 0.80, 0.90 or 0.95 after one, two, or three and more decisions, times the share of your decisions that agree |
 | 6 | The merchant list, or the kind of line (a card payment, an ATM withdrawal, a salary, interest, a bank fee) | "Merchant list" | 0.90 for a merchant; less in the cases below |
-| 7 | A telling word in the description ("pizza", "pharmacy") | "Keyword" | 0.60 |
+| 7 | A telling word in the description ("pizza", "pharmacy"), or in a labelled ACH line's entry description (`DES:TUITION`) when the name has none | "Keyword" | 0.60 |
 | 8 | Nothing | no category | |
 
 Categories a transaction had before PerFin recorded this (before
@@ -413,15 +413,17 @@ What these figures are **not**:
 - The subscription rows are measured with the household's person filing the
   transactions the engine left open, as a person would. With nobody filing
   anything, which is what you see right after a first import, the same run
-  tells the kind apart for **82.5%** (33 of 40) instead of 100%, **under the
-  90% target**: rent, a car loan, water, sewer, a local gym, a swim school
-  and after-school care at merchants no list knows are found, at the right
-  rhythm and amount, but as "other" on Plan, Upcoming instead of on the Bills
-  or Subscriptions tab, until one of their transactions is given a category
-  or the series is told "This is a bill". The other rows are equal in both
-  runs (all 40 found, 38 without asking, no decoy found, one suggested).
-  Both runs are gates: the unfiled one holds every bar and holds the kind at
-  82.5%, so it cannot get worse unnoticed.
+  tells the kind apart for **92.5%** (37 of 40) instead of 100%: rent,
+  water, sewer and after-school tuition at merchants no list knows are bills
+  by the category suggested for their rows (a bill's category suggested is
+  enough to call a series a bill; it changes nothing else about it). A car
+  loan whose entry says only `RETAIL PMT`, a local climbing gym and a swim
+  school are found, at the right rhythm and amount, but as "other" on Plan,
+  Upcoming instead of on the Bills or Subscriptions tab, until one of their
+  transactions is given a category or the series is told "This is a bill".
+  The other rows are equal in both runs (all 40 found, 38 without asking, no
+  decoy found, one suggested). Both runs are gates: the unfiled one holds
+  every bar and holds the kind at 92.5%, so it cannot get worse unnoticed.
 - Nothing is measured outside the United States.
 
 ## What is not there in 1.0
