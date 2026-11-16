@@ -30,10 +30,11 @@ email, and PerFin works out what it is looking at and files it away.
 > when unsure; investments, loans, manual assets and net worth; a tax vault;
 > a read-only MCP server for AI assistants behind an identity denylist;
 > notification channels, a configurable dashboard, a PWA, encrypted
-> backup/restore, master-key rotation and a Helm chart. Before the `v1.0.0`
-> tag: an external security review is still required, and the release
-> workflow (signed images, SBOMs, provenance) runs for the first time on that
-> tag. See [docs/ROADMAP.md](docs/ROADMAP.md) for what is done and what is
+> backup/restore, master-key rotation and a Helm chart. The `v1.0.0` gate is
+> an internal release review; no external security review or penetration
+> test has been done, so run it on a private network only (see
+> [SECURITY.md](SECURITY.md)). Every release candidate tag already runs the
+> release workflow (signed images, SBOMs, provenance). See [docs/ROADMAP.md](docs/ROADMAP.md) for what is done and what is
 > open, [docs/security/CONTROLS.md](docs/security/CONTROLS.md) for the status
 > of every security control, and [CHANGELOG.md](CHANGELOG.md).
 

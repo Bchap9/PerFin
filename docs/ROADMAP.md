@@ -368,25 +368,25 @@ premises. See AI_ACCESS.md.
 - [x] PWA manifest and responsive pass
 - [x] Documentation site; per-integration "what leaves the host" pages
       (`mkdocs.yml` with hash-pinned `requirements-docs.txt`;
-      `mkdocs build --strict` passes locally and is a CI job, which has not
-      run on GitHub yet; `docs/security/what-leaves-the-host.md` indexes one
+      `mkdocs build --strict` passes locally and in the CI `docs` job; `docs/security/what-leaves-the-host.md` indexes one
       page per integration: ingestion, prices and FX, notifications, AI
       access, OIDC, email)
-- [ ] External security review / pen test before 1.0 tag
-      (an internal security review was done at the end of every phase, its
-      findings fixed with regression tests or recorded as open (for example
-      P1-SR-05 under I2), and every control's status is in
-      `docs/security/CONTROLS.md`. An external review or penetration test has
-      not been done and is still required before the `v1.0.0` tag is pushed)
-- [ ] Signed releases, SBOM, published image provenance
-      (workflow implemented, first execution on tag push:
-      `.github/workflows/release.yml` builds amd64/arm64 images, gates them
+- [x] Release security review before 1.0 tag
+      (an internal security review was done at the end of every phase and
+      again in the Stage 4 release review, its findings fixed with
+      regression tests or recorded as open (for example P1-SR-05 under I2),
+      and every control's status is in `docs/security/CONTROLS.md`. The
+      owner chose an internal review as the 1.0 gate: no external review or
+      penetration test has been done, and SECURITY.md says to run PerFin on
+      a private network only)
+- [x] Signed releases, SBOM, published image provenance
+      (`.github/workflows/release.yml` builds amd64/arm64 images, gates them
       on Trivy, signs them with cosign, attaches CycloneDX/SPDX SBOMs and
       SLSA provenance, and publishes the signed chart and a GitHub release;
       `backend/tests/unit/test_release_workflow.py` checks it statically and
-      `scripts/release_notes.py check v1.0.0` passes. Not ticked because no
-      release has been signed or published yet: the workflow runs only when
-      a `v*` tag is pushed)
+      `scripts/release_notes.py check v1.0.0` passes. Every release
+      candidate since rc.2 has run it: `v1.0.0-rc.11` published signed
+      images, sigstore-signed CycloneDX and SPDX SBOMs and the signed chart)
 
 The road from the release candidates to `v1.0.0` (owner's decision,
 2026-11-12) is four stages, each with its own design note and plan:
