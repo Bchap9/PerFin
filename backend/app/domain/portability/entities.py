@@ -273,6 +273,10 @@ NOT_EXPORTED: Final[Mapping[str, str]] = MappingProxyType(
             "the statement duplicate guard's history of this instance's imports; documents "
             "imported again record their statements anew"
         ),
+        "import_tombstone": (
+            "the hash of a deleted imported row contains the account id and cannot be "
+            "recomputed for new account ids"
+        ),
         # Jobs and workflow history of this instance's pipelines.
         "portability_archive": "the export and import jobs themselves",
         "tax_export": "a transient, one-time accountant export (like portability_archive)",

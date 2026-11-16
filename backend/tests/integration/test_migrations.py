@@ -36,11 +36,16 @@ run as the owner, exactly like ``perfin migrate`` in production, and then:
 * 0011 adds ``parser_fingerprint.template`` (NULL for existing rows), and its
   downgrade removes exactly that column;
 * 0012 lets ``security.symbol`` be NULL (unique only where there is one), and
-  its downgrade restores ``NOT NULL`` and the unique constraint.
+  its downgrade restores ``NOT NULL`` and the unique constraint;
+* 0013 adds ``statement_record.verification`` (backfilled from the snapshots
+  and the answered review items of earlier imports) and creates
+  ``import_tombstone`` under forced RLS with a household-consistent key to
+  the account; its downgrade removes exactly that column and that table.
 """
 
 from __future__ import annotations
 
+import json
 import logging
 import os
 import secrets
@@ -177,6 +182,8 @@ PHASE7_TABLES = frozenset({"notification_channel"})
 PHASE7_ENUM_TYPES = frozenset({"notification_channel_type"})
 #: Statement records (revision 0010), household-scoped.
 STATEMENT_RECORD_TABLES = frozenset({"statement_record"})
+#: Import tombstones (revision 0013), household-scoped.
+IMPORT_TRUST_TABLES = frozenset({"import_tombstone"})
 #: Enum types created by revision 0002 (identity).
 PHASE1_ENUM_TYPES = frozenset(
     {
@@ -340,6 +347,7 @@ def test_single_head_and_linear_history() -> None:
     assert script.get_base() == "0001"
     # One revision per phase, each on top of the previous one.
     assert [rev.revision for rev in script.walk_revisions("base", "heads")] == [
+        "0013",
         "0012",
         "0011",
         "0010",
@@ -385,6 +393,7 @@ def test_upgrade_head_matches_models_without_drift(migrated: Scratch) -> None:
         | PHASE6B_TABLES
         | PHASE7_TABLES
         | STATEMENT_RECORD_TABLES
+        | IMPORT_TRUST_TABLES
     )
 
 
@@ -468,7 +477,13 @@ def test_every_household_scoped_table_has_forced_rls(migrated: Scratch) -> None:
     assert {"household_member", "account_grant", "api_token"} <= set(scoped)
     assert (
         set(scoped)
-        >= PHASE2_TABLES | PHASE34_TABLES | PHASE56_TABLES | PHASE6B_TABLES | PHASE7_TABLES
+        >= PHASE2_TABLES
+        | PHASE34_TABLES
+        | PHASE56_TABLES
+        | PHASE6B_TABLES
+        | PHASE7_TABLES
+        | STATEMENT_RECORD_TABLES
+        | IMPORT_TRUST_TABLES
     )
     for table in scoped:
         assert rows[table] == (True, True), table
@@ -663,6 +678,7 @@ def test_app_role_privileges_are_least(migrated: Scratch) -> None:
         | PHASE6B_TABLES
         | PHASE7_TABLES
         | STATEMENT_RECORD_TABLES
+        | IMPORT_TRUST_TABLES
     )
     for table in sorted(all_tables - {"audit_log"}):
         assert {p for t, p in privileges if t == table} == {
@@ -1578,7 +1594,7 @@ def test_downgrade_0008_removes_only_the_mapping_sign_column(migrated: Scratch) 
             )
         command.upgrade(cfg, "head")
         command.check(cfg)
-        assert _public_tables(engine) == tables | STATEMENT_RECORD_TABLES
+        assert _public_tables(engine) == tables | STATEMENT_RECORD_TABLES | IMPORT_TRUST_TABLES
         with engine.begin() as conn:
             set_context(conn, household)
             flag = conn.execute(
@@ -1714,7 +1730,7 @@ def test_0010_statement_record_is_household_isolated_and_downgrades(migrated: Sc
         tables = _public_tables(engine)
         assert tables >= STATEMENT_RECORD_TABLES
         command.downgrade(cfg, "0009")
-        assert _public_tables(engine) == tables - STATEMENT_RECORD_TABLES
+        assert _public_tables(engine) == tables - STATEMENT_RECORD_TABLES - IMPORT_TRUST_TABLES
         command.upgrade(cfg, "head")
         command.check(cfg)
         assert _public_tables(engine) == tables
@@ -1742,7 +1758,7 @@ def test_0011_fingerprint_template_column_downgrades(migrated: Scratch) -> None:
         tables = _public_tables(engine)
         command.downgrade(cfg, "0010")
         assert "template" not in _fingerprint_columns(engine)
-        assert _public_tables(engine) == tables
+        assert _public_tables(engine) == tables - IMPORT_TRUST_TABLES
         command.upgrade(cfg, "head")
         command.check(cfg)
         assert "template" in _fingerprint_columns(engine)
@@ -1812,3 +1828,213 @@ def test_0012_securities_without_a_symbol(migrated: Scratch) -> None:
         command.check(cfg)
     finally:
         app.dispose()
+
+
+def _statement_columns(engine: Engine) -> set[str]:
+    with engine.connect() as conn:
+        rows = conn.execute(
+            text(
+                "SELECT column_name FROM information_schema.columns "
+                "WHERE table_schema = 'public' AND table_name = 'statement_record'"
+            )
+        ).scalars()
+        return {str(r) for r in rows}
+
+
+def _insert_earlier_record(
+    conn: Connection, household: uuid.UUID, kind: str, source_format: str
+) -> tuple[uuid.UUID, uuid.UUID, uuid.UUID]:
+    """An account, a document and one imported statement record as 0012 stores it."""
+    account = _insert_account(conn, household)
+    document = _insert_document(conn, household, None)
+    record = uuid.uuid4()
+    conn.execute(
+        text(
+            "INSERT INTO statement_record (id, household_id, account_id, document_id, kind, "
+            "period_start, period_end, period_stated, source_format, currency) VALUES "
+            "(:id, :h, :a, :d, :k, '2026-03-01', '2026-03-31', true, :f, 'USD')"
+        ),
+        {"id": record, "h": household, "a": account, "d": document, "k": kind, "f": source_format},
+    )
+    return account, document, record
+
+
+def _insert_resolved_item(
+    conn: Connection,
+    household: uuid.UUID,
+    document: uuid.UUID,
+    payload: dict[str, str],
+    resolution: dict[str, object],
+) -> None:
+    conn.execute(
+        text(
+            "INSERT INTO review_item (id, household_id, document_id, kind, payload, state, "
+            "resolved_at, resolution) VALUES (:id, :h, :d, 'low_confidence_field', "
+            "CAST(:p AS jsonb), 'resolved', now(), CAST(:r AS jsonb))"
+        ),
+        {
+            "id": uuid.uuid4(),
+            "h": household,
+            "d": document,
+            "p": json.dumps(payload),
+            "r": json.dumps(resolution),
+        },
+    )
+
+
+def _insert_tombstone(conn: Connection, household: uuid.UUID, account: uuid.UUID) -> uuid.UUID:
+    tombstone = uuid.uuid4()
+    conn.execute(
+        text(
+            "INSERT INTO import_tombstone (id, household_id, account_id, import_hash, "
+            "deleted_at) VALUES (:id, :h, :a, :hash, now())"
+        ),
+        {"id": tombstone, "h": household, "a": account, "hash": secrets.token_hex(32)},
+    )
+    return tombstone
+
+
+def test_0013_verification_is_backfilled_and_tombstones_are_isolated(
+    scratch_factory: Callable[[], Scratch],
+) -> None:
+    """0013 backfills ``statement_record.verification`` from what earlier imports left
+    (a statement snapshot, an answered review item) and creates ``import_tombstone``
+    under forced RLS; its downgrade removes exactly the column and the table."""
+    scratch = scratch_factory()
+    cfg = scratch.config()
+    command.upgrade(cfg, "0012")
+    app = scratch.app_engine()
+    a, b = uuid.uuid4(), uuid.uuid4()
+    try:
+        for household in (a, b):
+            with app.begin() as conn:
+                set_context(conn, household)
+                conn.execute(
+                    text("INSERT INTO household (id, name) VALUES (:id, 'Synthetic')"),
+                    {"id": household},
+                )
+        with app.begin() as conn:
+            set_context(conn, a)
+            # A PDF bank statement that reconciled: it wrote a statement snapshot.
+            account, document, with_snapshot = _insert_earlier_record(conn, a, "bank", "pdf")
+            conn.execute(
+                text(
+                    "INSERT INTO balance_snapshot (id, household_id, account_id, as_of_date, "
+                    "balance, currency, source, source_document_id) VALUES (:id, :h, :a, "
+                    "'2026-03-31', 10, 'USD', 'statement', :d)"
+                ),
+                {"id": uuid.uuid4(), "h": a, "a": account, "d": document},
+            )
+            # A PDF bank statement that did not: a person answered the item.
+            account, document, answered = _insert_earlier_record(conn, a, "bank", "pdf")
+            _insert_resolved_item(
+                conn,
+                a,
+                document,
+                {"reason": "reconciliation_failed", "account_id": str(account)},
+                {"confirmed": 2},
+            )
+            # A PDF bank statement whose answered item names another account.
+            account, document, other_account = _insert_earlier_record(conn, a, "bank", "pdf")
+            _insert_resolved_item(
+                conn,
+                a,
+                document,
+                {"reason": "reconciliation_failed", "account_id": str(uuid.uuid4())},
+                {"confirmed": 1},
+            )
+            # An OFX file carries nothing to reconcile.
+            _, _, structured = _insert_earlier_record(conn, a, "bank", "ofx")
+            # A PDF brokerage statement imported as read.
+            account, document, as_read = _insert_earlier_record(conn, a, "investment", "pdf")
+            _insert_resolved_item(
+                conn,
+                a,
+                document,
+                {"reason": "investment_reconciliation_failed", "account_id": str(account)},
+                {"import_as_read": True, "account_id": str(account)},
+            )
+            # A PDF brokerage statement that was imported because it added up.
+            _, _, added_up = _insert_earlier_record(conn, a, "investment", "pdf")
+        command.upgrade(cfg, "head")
+        command.check(cfg)
+        with app.begin() as conn:
+            set_context(conn, a)
+            found = {
+                row.id: str(row.verification)
+                for row in conn.execute(text("SELECT id, verification FROM statement_record"))
+            }
+            assert found == {
+                with_snapshot: "reconciled",
+                answered: "accepted",
+                other_account: "unverified",
+                structured: "unverified",
+                as_read: "accepted",
+                added_up: "reconciled",
+            }
+            account_a = _insert_account(conn, a)
+            tombstone_a = _insert_tombstone(conn, a, account_a)
+            # A record written from now on is unverified until something says more.
+            _, _, later = _insert_earlier_record(conn, a, "bank", "pdf")
+            assert (
+                conn.execute(
+                    text("SELECT verification FROM statement_record WHERE id = :id"),
+                    {"id": later},
+                ).scalar_one()
+                == "unverified"
+            )
+        with app.begin() as conn:
+            set_context(conn, b)
+            assert conn.execute(text("SELECT count(*) FROM import_tombstone")).scalar_one() == 0
+            removed = conn.execute(
+                text("DELETE FROM import_tombstone WHERE id = :id"), {"id": tombstone_a}
+            )
+            assert removed.rowcount == 0
+            account_b = _insert_account(conn, b)
+        with app.connect() as conn, conn.begin():
+            set_context(conn, a)
+            # Household A's tombstone cannot name household B's account.
+            with pytest.raises(DBAPIError, match="foreign key"):
+                _insert_tombstone(conn, a, account_b)
+        with app.connect() as conn, conn.begin():
+            set_context(conn, a)
+            # Nor can a row of household B be written from household A's context.
+            with pytest.raises(DBAPIError, match="row-level security"):
+                _insert_tombstone(conn, b, account_b)
+        with app.connect() as conn, conn.begin():
+            set_context(conn, a)
+            with pytest.raises(DBAPIError, match="check constraint"):
+                conn.execute(
+                    text("UPDATE statement_record SET verification = 'maybe' WHERE id = :id"),
+                    {"id": with_snapshot},
+                )
+        with app.connect() as conn, conn.begin():
+            set_context(conn, a)
+            with pytest.raises(DBAPIError, match="check constraint"):
+                conn.execute(
+                    text(
+                        "INSERT INTO import_tombstone (id, household_id, account_id, "
+                        "import_hash, deleted_at) VALUES (:id, :h, :a, 'not a hash', now())"
+                    ),
+                    {"id": uuid.uuid4(), "h": a, "a": account_a},
+                )
+        with app.begin() as conn:
+            set_context(conn, a)
+            # The tombstone goes with its account.
+            conn.execute(text("DELETE FROM account WHERE id = :id"), {"id": account_a})
+            assert conn.execute(text("SELECT count(*) FROM import_tombstone")).scalar_one() == 0
+    finally:
+        app.dispose()
+    engine = scratch.owner_engine()
+    try:
+        tables = _public_tables(engine)
+        assert tables >= IMPORT_TRUST_TABLES
+        command.downgrade(cfg, "0012")
+        assert _public_tables(engine) == tables - IMPORT_TRUST_TABLES
+        assert "verification" not in _statement_columns(engine)
+        command.upgrade(cfg, "head")
+        command.check(cfg)
+        assert _public_tables(engine) == tables
+        assert "verification" in _statement_columns(engine)
+    finally:
+        engine.dispose()
