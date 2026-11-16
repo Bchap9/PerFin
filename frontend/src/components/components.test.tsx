@@ -1,12 +1,13 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import { act, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { useState } from "react";
+import { useState, type ComponentType } from "react";
 
 import {
   Badge,
   Button,
   Card,
+  CategoryPicker,
   Checkbox,
   Dialog,
   EmptyState,
@@ -22,6 +23,7 @@ import {
   useToast,
 } from ".";
 import { icons } from ".";
+import { expectNoAxeViolations } from "../test/axe";
 
 describe("design system smoke test", () => {
   it("renders every component accessibly", () => {
@@ -235,5 +237,145 @@ describe("Table on narrow screens", () => {
     const cells = container.querySelectorAll("tbody td");
     expect(cells[0]).toHaveAttribute("data-label", "Kind");
     expect(cells[1]).not.toHaveAttribute("data-label");
+  });
+});
+
+describe("CategoryPicker", () => {
+  const categories = [
+    { id: "c-food", name: "Food", parent_id: null },
+    { id: "c-groceries", name: "Groceries", parent_id: "c-food" },
+  ];
+
+  it("offers New category last when onCreate is set, and calls it instead of onChange", async () => {
+    const user = userEvent.setup();
+    const onCreate = vi.fn();
+    const onChange = vi.fn();
+    render(
+      <Field label="Category">
+        <CategoryPicker categories={categories} value="c-groceries" onChange={onChange} onCreate={onCreate} />
+      </Field>,
+    );
+    const picker = screen.getByRole("combobox", { name: "Category" });
+    const options = within(picker).getAllByRole("option");
+    expect(options.at(-1)).toHaveTextContent("New category…");
+    expect(options.at(-1)).toHaveValue("__new__");
+
+    await user.selectOptions(picker, "__new__");
+    expect(onCreate).toHaveBeenCalledTimes(1);
+    expect(onChange).not.toHaveBeenCalled();
+    // The picker does not stay on "New category…".
+    expect(picker).toHaveValue("c-groceries");
+
+    await user.selectOptions(picker, "c-food");
+    expect(onChange).toHaveBeenCalledTimes(1);
+    expect(onCreate).toHaveBeenCalledTimes(1);
+  });
+
+  it("has no New category entry without onCreate", () => {
+    render(
+      <Field label="Category">
+        <CategoryPicker categories={categories} value="" onChange={() => undefined} />
+      </Field>,
+    );
+    expect(screen.queryByRole("option", { name: "New category…" })).not.toBeInTheDocument();
+  });
+});
+
+describe("Table rowLink", () => {
+  interface Row {
+    id: string;
+    name: string;
+    amount: string;
+  }
+  const rows: Row[] = [
+    { id: "t-1", name: "Coffee Corner", amount: "4.50" },
+    { id: "t-2", name: "Fuel Stop", amount: "40.00" },
+  ];
+  const columns = [
+    { id: "date", header: "Date", cell: () => "3 Mar" },
+    { id: "amount", header: "Amount", align: "end" as const, cell: (row: Row) => row.amount },
+    { id: "act", header: <span className="visually-hidden">Actions</span>, cell: () => <button type="button">Split</button> },
+  ];
+
+  it("puts a button in the first cell that the row click and Enter forward to", async () => {
+    const user = userEvent.setup();
+    const opened: string[] = [];
+    render(
+      <Table
+        caption="Transactions"
+        columns={columns}
+        rows={rows}
+        rowKey={(row) => row.id}
+        rowLink={(row) => (row.id === "t-2" ? null : { label: `Open ${row.name}`, onOpen: () => opened.push(row.id) })}
+      />,
+    );
+    const button = screen.getByRole("button", { name: "Open Coffee Corner" });
+    expect(button).toHaveClass("table__row-link");
+    expect(button.closest("td, th")).toBe(button.closest("tr")?.firstElementChild);
+    expect(screen.queryByRole("button", { name: "Open Fuel Stop" })).not.toBeInTheDocument();
+
+    await user.click(button);
+    expect(opened).toEqual(["t-1"]);
+
+    button.focus();
+    await user.keyboard("{Enter}");
+    expect(opened).toEqual(["t-1", "t-1"]);
+
+    // A click anywhere else on the row forwards to the button.
+    await user.click(screen.getByText("4.50"));
+    expect(opened).toEqual(["t-1", "t-1", "t-1"]);
+
+    // Other controls in the row keep their own click.
+    const [split] = screen.getAllByRole("button", { name: "Split" });
+    if (split === undefined) throw new Error("no Split button");
+    await user.click(split);
+    expect(opened).toEqual(["t-1", "t-1", "t-1"]);
+
+    // A row without a link does nothing on click.
+    await user.click(screen.getByText("40.00"));
+    expect(opened).toEqual(["t-1", "t-1", "t-1"]);
+  });
+
+  it("has no axe violations", async () => {
+    const { container } = render(
+      <Table
+        caption="Transactions"
+        columns={columns}
+        rows={rows}
+        rowKey={(row) => row.id}
+        rowLink={(row) => ({ label: `Open ${row.name}`, onOpen: () => undefined })}
+      />,
+    );
+    await expectNoAxeViolations(container);
+  });
+});
+
+describe("icons", () => {
+  it("has the section icons, decorative and drawn in the current colour", () => {
+    const names = [
+      "HomeIcon",
+      "InboxIcon",
+      "ListIcon",
+      "CardIcon",
+      "TargetIcon",
+      "BarsIcon",
+      "GearIcon",
+      "SearchIcon",
+      "MoreIcon",
+      "ChevronRightIcon",
+      "UploadIcon",
+      "CheckIcon",
+    ] as const;
+    const all = new Map<string, unknown>(Object.entries(icons));
+    for (const name of names) {
+      const Icon = all.get(name) as ComponentType | undefined;
+      expect(Icon, name).toBeTypeOf("function");
+      if (Icon === undefined) continue;
+      const { container, unmount } = render(<Icon />);
+      const svg = container.querySelector("svg");
+      expect(svg, name).toHaveAttribute("aria-hidden", "true");
+      expect(svg, name).toHaveAttribute("stroke", "currentColor");
+      unmount();
+    }
   });
 });

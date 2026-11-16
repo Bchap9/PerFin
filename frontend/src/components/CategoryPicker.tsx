@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-import { forwardRef } from "react";
+import { forwardRef, useRef } from "react";
 
 import { Select, type SelectProps } from "./Select";
 
@@ -12,7 +12,16 @@ export interface PickerCategory {
 
 export interface CategoryPickerProps extends Omit<SelectProps, "options" | "children"> {
   categories: readonly PickerCategory[];
+  /**
+   * Offer "New category…" as the last option. Choosing it calls `onCreate`
+   * (open `NewCategoryDialog`) instead of `onChange`, and the picker keeps its
+   * current value.
+   */
+  onCreate?: () => void;
 }
+
+/** The value of the "New category…" option. */
+export const NEW_CATEGORY_VALUE = "__new__";
 
 interface Group {
   top: PickerCategory;
@@ -60,11 +69,27 @@ function groupCategories(categories: readonly PickerCategory[]): Group[] {
  * the props of `Select`.
  */
 export const CategoryPicker = forwardRef<HTMLSelectElement, CategoryPickerProps>(function CategoryPicker(
-  { categories, placeholder = "Uncategorised", ...rest },
+  { categories, placeholder = "Uncategorised", onCreate, onChange, ...rest },
   ref,
 ) {
+  // The value an uncontrolled picker showed before "New category…" was chosen.
+  const shown = useRef(typeof rest.defaultValue === "string" ? rest.defaultValue : "");
   return (
-    <Select ref={ref} placeholder={placeholder} {...rest}>
+    <Select
+      ref={ref}
+      placeholder={placeholder}
+      onChange={(event) => {
+        if (onCreate !== undefined && event.target.value === NEW_CATEGORY_VALUE) {
+          // Put the select back on what it showed: the controlled value, else the last one chosen.
+          event.target.value = typeof rest.value === "string" ? rest.value : shown.current;
+          onCreate();
+          return;
+        }
+        shown.current = event.target.value;
+        onChange?.(event);
+      }}
+      {...rest}
+    >
       {groupCategories(categories).map(({ top, below }) =>
         below.length === 0 ? (
           <option key={top.id} value={top.id}>
@@ -81,6 +106,7 @@ export const CategoryPicker = forwardRef<HTMLSelectElement, CategoryPickerProps>
           </optgroup>
         ),
       )}
+      {onCreate === undefined ? null : <option value={NEW_CATEGORY_VALUE}>New category…</option>}
     </Select>
   );
 });

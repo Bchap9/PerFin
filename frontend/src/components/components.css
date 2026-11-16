@@ -302,11 +302,12 @@ a.btn--danger:hover {
 }
 
 /* ---- Card ------------------------------------------------------------------ */
+/* The mock-up's panel: a flat surface with a hairline border. */
 .card {
+  min-width: 0;
   border: 1px solid var(--color-border);
   border-radius: var(--radius-lg);
   background: var(--color-surface);
-  box-shadow: var(--shadow-sm);
 }
 
 .card__header {
@@ -314,12 +315,13 @@ a.btn--danger:hover {
   align-items: center;
   justify-content: space-between;
   gap: var(--space-3);
-  padding: var(--space-4) var(--space-4) 0;
+  padding: 1.125rem 1.125rem 0;
 }
 
 .card__title {
   margin: 0;
-  font-size: var(--font-size-lg);
+  font-size: 1.0625rem;
+  letter-spacing: -0.01em;
 }
 
 .card__actions {
@@ -328,11 +330,15 @@ a.btn--danger:hover {
 }
 
 .card__body {
-  padding: var(--space-4);
+  padding: 1.125rem;
+}
+
+.card__header + .card__body {
+  padding-top: var(--space-3);
 }
 
 .card__footer {
-  padding: var(--space-3) var(--space-4);
+  padding: var(--space-3) 1.125rem;
   border-top: 1px solid var(--color-border);
 }
 
@@ -340,7 +346,7 @@ a.btn--danger:hover {
 .table-wrap {
   overflow: auto;
   border: 1px solid var(--color-border);
-  border-radius: var(--radius-md);
+  border-radius: var(--radius-lg);
   background: var(--color-surface);
 }
 
@@ -371,7 +377,7 @@ a.btn--danger:hover {
 
 .table th,
 .table td {
-  padding: var(--space-3) var(--space-4);
+  padding: 0.625rem var(--space-3);
   border-bottom: 1px solid var(--color-border);
   text-align: start;
   vertical-align: middle;
@@ -397,10 +403,12 @@ a.btn--danger:hover {
   position: sticky;
   top: 0;
   z-index: 1;
-  background: var(--color-surface-sunken);
+  background: var(--color-surface);
   color: var(--color-text-muted);
-  font-size: var(--font-size-sm);
+  font-size: var(--font-size-xs);
   font-weight: 600;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
   white-space: nowrap;
 }
 
@@ -435,7 +443,7 @@ a.btn--danger:hover {
 /* Narrow screens: a row becomes a card of "label: value" pairs. The header row
    stays in the accessibility tree (visually hidden) so screen readers still get
    column names; each cell shows its own label from data-label. */
-@media (max-width: 40rem) {
+@media (max-width: 719px) {
   .table-wrap {
     overflow: visible;
     max-height: none;
@@ -579,6 +587,13 @@ a.btn--danger:hover {
   gap: var(--space-2);
   width: min(24rem, calc(100vw - 2 * var(--space-4)));
   pointer-events: none;
+}
+
+@media (max-width: 819px) {
+  .toast-region {
+    right: var(--space-4);
+    bottom: calc(var(--bottom-bar-height) + var(--space-3) + env(safe-area-inset-bottom, 0px));
+  }
 }
 
 .toast-list {
@@ -747,7 +762,9 @@ a.btn--danger:hover {
 }
 
 .tabs__tab {
-  padding: var(--space-2) var(--space-4);
+  min-height: 2.25rem;
+  margin-bottom: -1px;
+  padding: var(--space-2) 0.875rem;
   border: 0;
   border-bottom: 2px solid transparent;
   background: none;
@@ -763,7 +780,7 @@ a.btn--danger:hover {
 
 .tabs__tab--selected {
   border-bottom-color: var(--color-accent);
-  color: var(--color-accent);
+  color: var(--color-text);
 }
 
 .tabs__tab:disabled {
@@ -797,4 +814,586 @@ a.btn--danger:hover {
 
 .money--invalid {
   color: var(--color-text-muted);
+}
+
+/* ---- Table row link ----------------------------------------------------------
+   A row that opens something: its first cell starts with a real button; the
+   row only forwards clicks to it. */
+.table__row--link {
+  cursor: pointer;
+}
+
+.table__row-link {
+  display: block;
+  min-height: 1.5rem;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--color-text);
+  font-weight: 600;
+  text-align: start;
+  cursor: pointer;
+}
+
+.table__row-link:hover {
+  color: var(--color-accent);
+  text-decoration: underline;
+}
+
+/* ---- Menu (components/Menu.tsx) ------------------------------------------- */
+.menu {
+  display: inline-flex;
+}
+
+.menu__button--icon {
+  width: 2rem;
+  padding: 0;
+}
+
+.menu__list {
+  position: fixed;
+  z-index: 40;
+  display: grid;
+  min-width: 11rem;
+  max-width: calc(100vw - 1rem);
+  padding: var(--space-1);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: var(--color-surface-raised);
+  box-shadow: var(--shadow-md);
+}
+
+.menu__item {
+  min-height: 2.25rem;
+  padding: var(--space-2) var(--space-3);
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: none;
+  color: var(--color-text);
+  text-align: start;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.menu__item:hover,
+.menu__item:focus {
+  background: var(--color-surface-sunken);
+}
+
+.menu__item--danger {
+  color: var(--color-danger);
+}
+
+.menu__item[aria-disabled="true"] {
+  color: var(--color-text-muted);
+  cursor: not-allowed;
+}
+
+@media (pointer: coarse) {
+  .menu__button--icon {
+    width: 2.75rem;
+  }
+
+  .menu__item {
+    min-height: 2.75rem;
+  }
+}
+
+/* ---- Drawer ------------------------------------------------------------------
+   A right-hand panel; under 820px a full-height sheet. It slides in only when
+   the person has not asked for less motion. */
+.drawer {
+  position: fixed;
+  inset: 0 0 0 auto;
+  width: min(26.25rem, 100vw);
+  max-width: 100vw;
+  height: 100%;
+  max-height: 100%;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  border-left: 1px solid var(--color-border);
+  background: var(--color-surface);
+  color: var(--color-text);
+  box-shadow: var(--shadow-drawer);
+  overflow: auto;
+}
+
+.drawer[open] {
+  display: flex;
+  flex-direction: column;
+}
+
+.drawer::backdrop {
+  background: var(--color-backdrop);
+}
+
+.drawer__header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--space-3);
+  padding: calc(1.375rem + env(safe-area-inset-top, 0px)) max(1.375rem, env(safe-area-inset-right, 0px)) 0 1.375rem;
+}
+
+.drawer__title {
+  margin: 0;
+  font-size: var(--font-size-xl);
+  overflow-wrap: anywhere;
+}
+
+.drawer__description {
+  margin: var(--space-1) 0 0;
+  color: var(--color-text-muted);
+  font-size: var(--font-size-sm);
+}
+
+.drawer__body {
+  display: grid;
+  flex: 1;
+  align-content: start;
+  gap: var(--space-4);
+  padding: var(--space-4) max(1.375rem, env(safe-area-inset-right, 0px)) var(--space-4) 1.375rem;
+}
+
+.drawer__footer {
+  position: sticky;
+  bottom: 0;
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: var(--space-2);
+  padding: var(--space-3) max(1.375rem, env(safe-area-inset-right, 0px)) calc(var(--space-3) + env(safe-area-inset-bottom, 0px)) 1.375rem;
+  border-top: 1px solid var(--color-border);
+  background: var(--color-surface);
+}
+
+@media (max-width: 819px) {
+  .drawer {
+    width: 100vw;
+    border-left: 0;
+  }
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .drawer[open] {
+    animation: drawer-in 180ms ease-out;
+  }
+}
+
+@keyframes drawer-in {
+  from {
+    transform: translateX(1.5rem);
+    opacity: 0.4;
+  }
+
+  to {
+    transform: none;
+    opacity: 1;
+  }
+}
+
+/* ---- Section nav (a section's tab bar of links) ---------------------------- */
+.section-nav {
+  border-bottom: 1px solid var(--color-border);
+}
+
+.section-nav__list {
+  display: flex;
+  gap: var(--space-1);
+  margin: 0;
+  padding: 0;
+  overflow-x: auto;
+  list-style: none;
+}
+
+.section-nav__link {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-height: 2.5rem;
+  margin-bottom: -1px;
+  padding: var(--space-2) 0.875rem;
+  border-bottom: 2px solid transparent;
+  color: var(--color-text-muted);
+  font-weight: 600;
+  text-decoration: none;
+  white-space: nowrap;
+}
+
+.section-nav__link:hover {
+  color: var(--color-text);
+  text-decoration: none;
+}
+
+.section-nav__link[aria-current="page"] {
+  border-bottom-color: var(--color-accent);
+  color: var(--color-text);
+}
+
+.section-nav__count {
+  padding: 0 var(--space-2);
+  border-radius: var(--radius-pill);
+  background: var(--color-warning-soft);
+  color: var(--color-warning);
+  font-size: var(--font-size-xs);
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+
+@media (pointer: coarse) {
+  .section-nav__link {
+    min-height: 2.75rem;
+  }
+}
+
+/* ---- Page header and breadcrumbs --------------------------------------------- */
+.page-header.page-header--stacked {
+  display: grid;
+  gap: var(--space-2);
+}
+
+.page-header__row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: var(--space-3);
+}
+
+.page-header__text {
+  min-width: 0;
+}
+
+.page-header__title {
+  margin: 0;
+  line-height: 1.1;
+  letter-spacing: -0.02em;
+  text-wrap: balance;
+}
+
+h2.page-header__title {
+  font-size: var(--font-size-xl);
+}
+
+.page-header__description {
+  margin: var(--space-1) 0 0;
+  color: var(--color-text-muted);
+  font-size: var(--font-size-sm);
+}
+
+.page-header__actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.breadcrumbs__list {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-1);
+  margin: 0;
+  padding: 0;
+  color: var(--color-text-muted);
+  font-size: var(--font-size-sm);
+  list-style: none;
+}
+
+.breadcrumbs__item + .breadcrumbs__item::before {
+  content: "/";
+  margin-inline-end: var(--space-1);
+  color: var(--color-text-muted);
+}
+
+.breadcrumbs a {
+  display: inline-flex;
+  align-items: center;
+  min-height: 1.5rem;
+  color: var(--color-text-muted);
+  font-weight: 600;
+  text-decoration: none;
+}
+
+.breadcrumbs a:hover {
+  color: var(--color-accent);
+  text-decoration: underline;
+}
+
+.breadcrumbs [aria-current="page"] {
+  color: var(--color-text);
+}
+
+/* ---- Stat ------------------------------------------------------------------- */
+.stat-group {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(8.125rem, 1fr));
+  gap: var(--space-3);
+  margin: 0;
+}
+
+.stat {
+  display: grid;
+  align-content: start;
+  gap: var(--space-1);
+  min-width: 0;
+}
+
+.stat__label {
+  color: var(--color-text-muted);
+  font-size: var(--font-size-xs);
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.stat__value,
+.stat__change {
+  margin: 0;
+}
+
+.stat__value {
+  font-family: var(--font-display);
+  font-size: var(--font-size-lg);
+  font-weight: 700;
+  overflow-wrap: anywhere;
+}
+
+.stat--display .stat__value {
+  font-size: var(--font-size-display);
+  line-height: 1;
+  letter-spacing: -0.02em;
+}
+
+.stat__change {
+  font-size: var(--font-size-sm);
+  font-weight: 600;
+}
+
+.stat__change--up {
+  color: var(--color-accent);
+}
+
+.stat__change--down {
+  color: var(--color-danger);
+}
+
+.stat__change--neutral {
+  color: var(--color-text-muted);
+}
+
+@media (max-width: 819px) {
+  .stat--display .stat__value {
+    font-size: 1.875rem;
+  }
+}
+
+/* ---- Chip ----------------------------------------------------------------------
+   The colour classes (chip--s1 … s6) set --chip-colour from the series tokens;
+   the dot, a stack bar part and its legend swatch read it. */
+.chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.375rem;
+  min-height: 1.5rem;
+  padding: 0.125rem 0.625rem;
+  border: 1px solid transparent;
+  border-radius: var(--radius-pill);
+  font-size: 0.8125rem;
+  font-weight: 600;
+  line-height: 1.3;
+  white-space: nowrap;
+}
+
+.chip--neutral {
+  background: var(--color-surface-sunken);
+  color: var(--color-text);
+}
+
+.chip--ok {
+  background: var(--color-accent-soft);
+  color: var(--color-accent);
+}
+
+.chip--warn {
+  background: var(--color-warning-soft);
+  color: var(--color-warning);
+}
+
+.chip--bad {
+  background: var(--color-danger-soft);
+  color: var(--color-danger);
+}
+
+.chip--info {
+  background: var(--color-info-soft);
+  color: var(--color-info);
+}
+
+.chip--button {
+  cursor: pointer;
+}
+
+.chip--button:hover {
+  border-color: var(--color-border-strong);
+}
+
+.chip--button[aria-pressed="true"] {
+  border-color: var(--color-accent);
+  background: var(--color-accent-soft);
+  color: var(--color-text);
+}
+
+.chip__dot {
+  flex: none;
+  width: 0.5rem;
+  height: 0.5rem;
+  border-radius: 50%;
+  background: var(--chip-colour, var(--color-text-muted));
+}
+
+.chip--s1 {
+  --chip-colour: var(--color-series-1);
+}
+
+.chip--s2 {
+  --chip-colour: var(--color-series-2);
+}
+
+.chip--s3 {
+  --chip-colour: var(--color-series-3);
+}
+
+.chip--s4 {
+  --chip-colour: var(--color-series-4);
+}
+
+.chip--s5 {
+  --chip-colour: var(--color-series-5);
+}
+
+.chip--s6 {
+  --chip-colour: var(--color-series-6);
+}
+
+/* No category: a hollow dot. */
+.chip--none .chip__dot {
+  border: 1px solid var(--color-border-strong);
+  background: transparent;
+}
+
+@media (pointer: coarse) {
+  .chip--button {
+    min-height: 2.75rem;
+  }
+}
+
+/* ---- ProgressBar ------------------------------------------------------------ */
+.progress {
+  display: block;
+  width: 100%;
+  height: 0.5rem;
+}
+
+.progress__track {
+  fill: var(--color-surface-sunken);
+}
+
+.progress__value {
+  fill: var(--color-accent);
+}
+
+.progress--over .progress__value {
+  fill: var(--color-danger);
+}
+
+/* ---- StackBar --------------------------------------------------------------- */
+.stack {
+  display: grid;
+  gap: var(--space-3);
+}
+
+.stack__bar {
+  display: block;
+  width: 100%;
+  height: 0.875rem;
+  border-radius: var(--radius-pill);
+}
+
+.stack__track {
+  fill: var(--color-surface-sunken);
+}
+
+.stack__part {
+  fill: var(--chip-colour, var(--color-series-6));
+}
+
+.stack__legend {
+  display: grid;
+  gap: var(--space-2);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.stack__item {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.stack__swatch {
+  width: 0.5rem;
+  height: 0.5rem;
+  border-radius: 50%;
+  background: var(--chip-colour, var(--color-series-6));
+}
+
+.stack__label {
+  overflow-wrap: anywhere;
+}
+
+.stack__value {
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+/* ---- Sparkline -------------------------------------------------------------- */
+.sparkline {
+  display: block;
+  width: 100%;
+  height: 7.5rem;
+}
+
+.sparkline__area {
+  fill: var(--color-accent-soft);
+  stroke: none;
+}
+
+.sparkline__line {
+  fill: none;
+  stroke: var(--color-accent);
+  stroke-width: 2;
+  stroke-linejoin: round;
+  stroke-linecap: round;
+}
+
+/* ---- QuietNote: a muted dot and text ("not checked", "estimate") ------------- */
+.quiet {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3125rem;
+  color: var(--color-text-muted);
+  font-size: 0.8125rem;
+}
+
+.quiet::before {
+  content: "";
+  flex: none;
+  width: 0.375rem;
+  height: 0.375rem;
+  border-radius: 50%;
+  background: currentColor;
 }
