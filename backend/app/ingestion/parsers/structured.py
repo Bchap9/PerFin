@@ -164,6 +164,10 @@ class ParsedStatement:
     #: that hold no transaction (totals, closing lines): not reported as
     #: skipped (:func:`_split_footers`).
     footer_rows: list[int] = field(default_factory=list)
+    #: Of ``note_rows``: rows that repeat the header row, and rows that only
+    #: print a balance (:func:`_balance_row`), counted in the import's summary.
+    header_rows: list[int] = field(default_factory=list)
+    balance_rows: list[int] = field(default_factory=list)
     #: Table rows whose date cell says ``Pending``: not yet a transaction,
     #: neither imported nor reported, only counted.
     pending_rows: list[int] = field(default_factory=list)
@@ -850,10 +854,12 @@ def _read_rows(
             continue
         if header is not None and _header_names(row) == header:
             parsed.note_rows.append(index)
+            parsed.header_rows.append(index)
             continue
         end = _balance_row(row, spec)
         if end is not None:
             parsed.note_rows.append(index)
+            parsed.balance_rows.append(index)
             if end == "opening" and parsed.opening_balance is None:
                 parsed.opening_balance = _balance_figure(row, spec, printed_negative)
                 raw_opening = _cell(row, spec.date_column)
@@ -1076,12 +1082,16 @@ def from_table_grouped(table: Table, spec: MappingSpec) -> list[ParsedStatement]
     orphans: list[int] = []
     notes: list[int] = []
     pending: list[int] = []
+    headers: list[int] = []
+    balance_rows: list[int] = []
     for key, indexes in rows.items():
         parsed = _read_rows(table, spec, indexes, printed_negative)
         if not parsed.transactions:
             orphans.extend(parsed.skipped_rows)
             notes.extend(parsed.note_rows)
             pending.extend(parsed.pending_rows)
+            headers.extend(parsed.header_rows)
+            balance_rows.extend(parsed.balance_rows)
             continue
         parsed.last4 = key[0] if key[0] is not None and shared[key[0]] == 1 else None
         first = parsed.transactions[0].row
@@ -1097,6 +1107,8 @@ def from_table_grouped(table: Table, spec: MappingSpec) -> list[ParsedStatement]
                 skipped_rows=sorted(orphans),
                 note_rows=sorted(notes),
                 pending_rows=sorted(pending),
+                header_rows=sorted(headers),
+                balance_rows=sorted(balance_rows),
                 truncated=table.truncated,
             )
         ]
@@ -1106,6 +1118,10 @@ def from_table_grouped(table: Table, spec: MappingSpec) -> list[ParsedStatement]
         statements[0].note_rows = sorted([*statements[0].note_rows, *notes])
     if pending:
         statements[0].pending_rows = sorted([*statements[0].pending_rows, *pending])
+    if headers:
+        statements[0].header_rows = sorted([*statements[0].header_rows, *headers])
+    if balance_rows:
+        statements[0].balance_rows = sorted([*statements[0].balance_rows, *balance_rows])
     _split_footers(table, spec, statements)
     return statements
 

@@ -200,7 +200,9 @@ migration, no new setting, no new container, nothing new leaves the host
   transaction. Both are now note rows, and an opening balance row gives
   the statement's opening balance, proposed for a new account as of the
   day before the row, so transactions on the row's own day still count
-  toward the balance.
+  toward the balance. The import's summary counts both kinds of row
+  (`header_rows`, `balance_rows`), so a dropped closing balance row is
+  still on record.
 - **A line that leaves one or two letters names no merchant.** What was
   left of a line such as `E` or `XY #0042` became a merchant key, so every
   such line of a household was one merchant: one correction, one "Always

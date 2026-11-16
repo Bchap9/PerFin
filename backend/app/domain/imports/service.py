@@ -910,6 +910,11 @@ class _Run:
     #: rows the bank had not booked yet (``Pending``): counted, never reported.
     footer_rows: int = 0
     pending_rows: int = 0
+    #: Table rows that repeat the header, and rows that only print a balance
+    #: (an opening one gives the statement's opening balance): counted, never
+    #: imported or reported.
+    header_rows: int = 0
+    balance_rows: int = 0
     skipped_currency: int = 0
     snapshots: int = 0
     #: Rows a rule categorised, and rows that took their payee's default
@@ -1040,6 +1045,8 @@ class _Run:
             "skipped_rows": self.skipped_rows,
             "footer_rows": self.footer_rows,
             "pending_rows": self.pending_rows,
+            "header_rows": self.header_rows,
+            "balance_rows": self.balance_rows,
             "skipped_currency": self.skipped_currency,
             "snapshots": self.snapshots,
             "rules_changed": self.rules_changed,
@@ -1248,6 +1255,8 @@ def _row_problems(
     # asked about again is decided when the run ends (:func:`_settle_standing`).
     run.footer_rows += len(parsed.footer_rows)
     run.pending_rows += len(parsed.pending_rows)
+    run.header_rows += len(parsed.header_rows)
+    run.balance_rows += len(parsed.balance_rows)
     if parsed.skipped_rows:
         run.skipped_rows += len(parsed.skipped_rows)
         run.review(
