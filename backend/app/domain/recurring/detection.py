@@ -102,8 +102,11 @@ judged against what was uploaded, never against today.
    dictionary subscription or bill.
 10. **Status.** ``active`` when the confidence is at least
     :data:`ACTIVE_MIN` and the unreduced ``min_count`` is met; else
-    ``suggested``. A habit, a person-to-person series and a merchant seen once
-    are ``suggested`` whatever the confidence.
+    ``suggested``. A habit, a person-to-person series, a merchant seen once
+    and cash that names nobody (rows without a merchant key that nobody
+    filed, whose suggested category is :data:`CASH_KEY`: the same
+    ``WITHDRAWAL`` or ``CASH DEPOSIT`` every month) are ``suggested``
+    whatever the confidence.
 
 Amounts are exact ``Decimal``; no floats. No regular expression is applied to
 a merchant key; :func:`normalize_payee` (the letters-only ``text_key``) uses
@@ -184,6 +187,8 @@ BILL_KEYS: Final = (
     "family.childcare",
     "family.education",
 )
+#: The suggestion of a withdrawal or a cash deposit (step 10).
+CASH_KEY: Final = "transfers.cash"
 #: Names the dictionary may use for a yearly cadence (``Observed.cadence_hints``).
 ANNUAL_HINTS: Final = frozenset({"annual", "yearly"})
 
@@ -434,6 +439,15 @@ class _Group:
         return self.category_key is None and self.general_store
 
     @property
+    def cash(self) -> bool:
+        """Cash that names nobody (step 10): no merchant key, unfiled, suggested as cash."""
+        return (
+            self.merchant_key is None
+            and self.category_key is None
+            and self.suggested_key == CASH_KEY
+        )
+
+    @property
     def bill_like(self) -> bool:
         """A bill whatever its amounts do: the dictionary, the category or a loan says so."""
         return not self.inflow and (
@@ -531,7 +545,7 @@ def _candidate(
         return None
     sure = confidence >= ACTIVE_MIN and len(rows) >= spec.min_count
     status: FoundStatus = "active"
-    if once or group.habit or group.p2p or not sure:
+    if once or group.habit or group.p2p or group.cash or not sure:
         status = "suggested"
     last = rows[-1]
     return Candidate(

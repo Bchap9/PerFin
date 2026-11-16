@@ -336,7 +336,10 @@ need it ([PORTABILITY.md](PORTABILITY.md)).
   a series of cheques. The same refresh suggests rent, water, a sewer
   district and tuition for more lines, and the next daily detection then
   shows a recurring series of such rows as a bill instead of "other",
-  unless somebody set its kind. A lesson school (`DANCE SCHOOL`, `MUSIC
+  unless somebody set its kind. Detection no longer finds a new running
+  series of the same withdrawal or cash deposit every month, only a
+  suggested one; one already running stays as it is until dismissed or
+  ended. A lesson school (`DANCE SCHOOL`, `MUSIC
   SCHOOL`, `KARATE`, `MARTIAL ARTS`, `SWIMMING SCHOOL`) is suggested as a
   hobby instead of education, so such a series is no longer called a bill.
 - **An investment account's chart changes.** The balance history of a

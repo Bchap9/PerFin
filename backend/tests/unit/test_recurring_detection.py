@@ -639,6 +639,47 @@ def test_a_bill_like_suggestion_makes_an_unfiled_series_a_bill(
     assert only(detect(ledger)).kind == kind
 
 
+@pytest.mark.parametrize(
+    ("text", "amount"),
+    [("withdrawal", "-200.00"), ("cash deposit", "500.00")],
+)
+def test_a_fixed_monthly_cash_line_naming_nobody_is_only_suggested(text: str, amount: str) -> None:
+    # A withdrawal or a cash deposit names nobody: no merchant key, and only
+    # a cash suggestion. Taking out the same sum each month may be a habit
+    # or a payment to somebody, so it is asked about, never shown as running.
+    days = monthly(date(2026, 1, 6), 6)
+    ledger = rows(days, amount, key=None, text=text, kind="unknown", suggested="transfers.cash")
+    assert only(detect(ledger)).status == "suggested"
+
+
+@pytest.mark.parametrize(
+    ("key", "suggested", "category"),
+    [
+        # A merchant key names somebody.
+        ("quarry lane studio", "transfers.cash", None),
+        # Another suggestion, or none, says nothing about cash.
+        (None, "leisure.hobbies", None),
+        (None, None, None),
+        # A category somebody filed outranks the suggestion.
+        (None, "transfers.cash", "leisure.hobbies"),
+    ],
+)
+def test_only_a_cash_suggestion_on_rows_naming_nobody_holds_a_series_back(
+    key: str | None, suggested: str | None, category: str | None
+) -> None:
+    days = monthly(date(2026, 1, 6), 6)
+    ledger = rows(
+        days,
+        "-200.00",
+        key=key,
+        text="quarry lane studio",
+        kind="unknown",
+        suggested=suggested,
+        category=category,
+    )
+    assert only(detect(ledger)).status == "active"
+
+
 def test_a_stated_category_beats_a_suggested_one() -> None:
     days = monthly(date(2026, 1, 6), 6)
     ledger = rows(days[:3], "-32.00", key="riverbend swim", category="leisure.hobbies") + rows(

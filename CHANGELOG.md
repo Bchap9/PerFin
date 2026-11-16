@@ -60,6 +60,10 @@ Stage 4 of four on the way to 1.0.0: the release review.
   education) (merchant list version 12).
   With nobody filing anything, the kind of a planted series is right for
   92.5% (was 82.5%).
+- **The same cash every month is only suggested.** A fixed monthly
+  `WITHDRAWAL` or `CASH DEPOSIT` on lines that name nobody and that nobody
+  gave a category was found as a running series; detection now only
+  suggests it, since it may be pocket money or a payment to somebody.
 
 ### Fixed
 

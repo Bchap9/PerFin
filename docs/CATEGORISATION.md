@@ -285,6 +285,9 @@ Kept out on purpose:
   category.
 - A regular payment to a person (rent by Zelle, say) is a suggested bill at
   most: PerFin cannot tell rent from splitting dinner.
+- The same withdrawal or cash deposit every month, on lines that name
+  nobody and that nobody gave a category, is only suggested: it may be
+  pocket money or a payment to somebody, and only you know which.
 
 ### Bill or subscription
 
