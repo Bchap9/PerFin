@@ -3,6 +3,7 @@ import { screen, within } from "@testing-library/react";
 
 import { expectNoAxeViolations } from "../../test/axe";
 import { authedSession, json, mockApi, renderApp } from "../auth/testing";
+import { ownerSession, referenceHandlers } from "../planning/testing";
 
 const PREFERENCES = { display_name: "Alice", locale: "en-US", theme: "system", timezone: "UTC" };
 
@@ -38,6 +39,21 @@ describe("the settings side list", () => {
     const nav = await sideList();
     expect(within(nav).getByRole("link", { name: "Profile" })).toHaveAttribute("aria-current", "page");
     expect(within(nav).getByRole("link", { name: "Security" })).not.toHaveAttribute("aria-current");
+  });
+
+  it("marks the page a nested page or a tab belongs to", async () => {
+    mockApi({ ...ownerSession(), ...referenceHandlers(), "GET /api/v1/rules": () => json({ items: [] }) });
+    const rule = renderApp("/settings/rules/new");
+    let nav = await sideList();
+    expect(within(nav).getByRole("link", { name: "Rules" })).toHaveAttribute("aria-current", "page");
+    expect(within(nav).getAllByRole("link").filter((link) => link.getAttribute("aria-current") === "page")).toHaveLength(1);
+    rule.unmount();
+
+    mockApi({ ...ownerSession(), ...referenceHandlers(), "GET /api/v1/tax-category-map": () => json({ items: [] }) });
+    renderApp("/settings/categories?tab=tax");
+    nav = await sideList();
+    expect(within(nav).getByRole("link", { name: "Categories" })).toHaveAttribute("aria-current", "page");
+    expect(within(nav).getAllByRole("link").filter((link) => link.getAttribute("aria-current") === "page")).toHaveLength(1);
   });
 
   it("Users only for instance administrators", async () => {

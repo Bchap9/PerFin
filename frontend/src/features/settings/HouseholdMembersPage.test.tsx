@@ -2,6 +2,7 @@
 import { screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 
+import { expectNoAxeViolations } from "../../test/axe";
 import { authedSession, json, mockApi, noContent, problem, renderApp, type Handler, type SessionOptions } from "../auth/testing";
 import type { Member } from "./api";
 import { assignableRoles, canEditMember } from "./HouseholdMembersPage";
@@ -189,5 +190,14 @@ describe("household members page", () => {
     membersApi({ household: false });
     renderApp("/settings/household");
     expect(await screen.findByText(/not a member of a household yet/)).toBeInTheDocument();
+  });
+});
+
+describe("members page accessibility", () => {
+  it("has no axe violations", async () => {
+    membersApi({ role: "owner" });
+    const { container } = renderApp("/settings/household");
+    await screen.findByText("Carol");
+    await expectNoAxeViolations(container);
   });
 });

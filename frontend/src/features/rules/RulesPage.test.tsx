@@ -105,6 +105,51 @@ describe("rules list", () => {
   });
 });
 
+describe("who may change rules", () => {
+  const as = (role: "admin" | "member" | "viewer") => ({
+    ...referenceHandlers(),
+    "GET /api/v1/auth/session": authedSession({ role }),
+    "GET /api/v1/rules": () => json({ items: RULES }),
+    "GET /api/v1/rules/:id": () => json(RULES[0]),
+  });
+
+  it("an owner or admin sees every way to change the rules", async () => {
+    mockApi(as("admin"));
+    renderApp("/settings/rules");
+    expect(await screen.findByRole("button", { name: "Delete Alpha" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Disable Alpha" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Move Beta up" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Apply to existing transactions" })).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "New rule" })).toBeInTheDocument();
+  });
+
+  it.each(["member", "viewer"] as const)("a %s sees the rules but no control the API refuses", async (role) => {
+    mockApi(as(role));
+    const list = renderApp("/settings/rules");
+    expect(await screen.findByRole("link", { name: "Alpha" })).toBeInTheDocument();
+    // Export is open to every role.
+    expect(screen.getByRole("button", { name: /Export/ })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /^(Move|Enable|Disable|Delete) / })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Apply to existing transactions" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("link", { name: "New rule" })).not.toBeInTheDocument();
+    list.unmount();
+
+    mockApi(as(role));
+    const editor = renderApp("/settings/rules/r-1");
+    expect(await screen.findByLabelText(/^Rule name/)).toHaveValue("Alpha");
+    // Testing a rule is open to every role; saving is an owner's or admin's.
+    expect(screen.getByRole("button", { name: "Run test" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Save rule" })).not.toBeInTheDocument();
+    expect(screen.getByText("Only an owner or admin can change a rule. You can still test it here.")).toBeInTheDocument();
+    editor.unmount();
+
+    mockApi(as(role));
+    renderApp("/settings/rules/new");
+    expect(await screen.findByLabelText(/^Rule name/)).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Save rule" })).not.toBeInTheDocument();
+  });
+});
+
 describe("undoing a rule", () => {
   const MERCHANT = rule("r-3", "Quiet Bean Coffee: Dining", 2, { conditions: { type: "merchant", key: "quiet bean coffee" } });
 
@@ -200,7 +245,7 @@ describe("undoing a rule", () => {
 
     mockApi(handlers("viewer"));
     renderApp("/settings/rules");
-    await screen.findByRole("button", { name: "Delete Alpha" });
+    await screen.findByRole("link", { name: "Alpha" });
     expect(screen.queryByRole("button", { name: /^Undo / })).not.toBeInTheDocument();
   });
 

@@ -2,6 +2,7 @@
 import { screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 
+import { expectNoAxeViolations } from "../../test/axe";
 import { authedSession, json, mockApi, problem, renderApp } from "../auth/testing";
 
 const PREFERENCES = { display_name: "Alice", locale: "en-US", theme: "system", timezone: "UTC" };
@@ -57,5 +58,18 @@ describe("profile and settings overview", () => {
     await user.click(screen.getByRole("button", { name: "Save profile" }));
     expect(await screen.findByText("unknown time zone")).toBeInTheDocument();
     expect(screen.getByLabelText(/^Time zone/)).toHaveAttribute("aria-invalid", "true");
+  });
+});
+
+describe("profile page accessibility", () => {
+  it("has no axe violations", async () => {
+    mockApi({
+      "GET /api/v1/auth/session": authedSession(),
+      "GET /api/v1/households": () => json([]),
+      "GET /api/v1/settings/user": () => json(PREFERENCES),
+    });
+    const { container } = renderApp("/settings/profile");
+    expect(await screen.findByLabelText(/^Display name/)).toHaveValue("Alice");
+    await expectNoAxeViolations(container);
   });
 });

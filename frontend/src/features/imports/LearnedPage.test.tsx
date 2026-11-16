@@ -3,7 +3,7 @@ import { screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 
 import { expectNoAxeViolations } from "../../test/axe";
-import { authedSession, json, mockApi, renderApp } from "../auth/testing";
+import { authedSession, currentHref, json, mockApi, renderApp } from "../auth/testing";
 import type { CategorisationSummary, LearnedCategory } from "../categories/api";
 import { lookupHandlers, NOW, summary } from "../transactions/fixtures";
 import type { LearnedLayout, LearnedWording, Mapping } from "./api";
@@ -257,14 +257,18 @@ describe("LearnedPage", () => {
   });
 
   it("Make it a rule opens the drawer link", async () => {
-    mockApi(handlers("member"));
-    renderApp("/settings/learned");
+    const api = mockApi(handlers("member"));
+    const view = renderApp("/settings/learned");
+    const user = userEvent.setup();
     const table = await screen.findByRole("table", { name: "Categories learned from you" });
-    // The transactions page opens the drawer for that row with "Always use" ticked; nothing is saved before Save.
-    expect(within(table).getByRole("link", { name: "Make Quiet Bean Coffee a rule" })).toHaveAttribute(
-      "href",
-      "/transactions?always=t-7",
-    );
+    // Following it lands on the transactions page with that row's drawer asked for; the
+    // "Always use" choice is made there, so nothing is saved by following the link.
+    await user.click(within(table).getByRole("link", { name: "Make Quiet Bean Coffee a rule" }));
+    await waitFor(() => {
+      expect(currentHref(view.router)).toBe("/transactions?always=t-7");
+    });
+    expect(api.callsTo("POST", "/api/v1/rules/merchant")).toHaveLength(0);
+    expect(api.callsTo("POST", "/api/v1/rules")).toHaveLength(0);
   });
 
   it("says where rules are made and links to its documents in the Inbox", async () => {

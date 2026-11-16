@@ -157,7 +157,7 @@ export function ClientsSection() {
         ) : null}
         {clients.isSuccess ? (
           <Table
-            caption="AI clients"
+            caption="Each AI client, what it may see and its status"
             captionHidden
             columns={columns}
             rows={clients.data}

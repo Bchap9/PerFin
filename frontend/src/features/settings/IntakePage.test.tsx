@@ -2,6 +2,7 @@
 import { screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 
+import { expectNoAxeViolations } from "../../test/axe";
 import { authedSession, json, mockApi, renderApp } from "../auth/testing";
 import { buildUpdate, describeTest, formFrom } from "./intake";
 import type { MailIntake } from "./api";
@@ -70,5 +71,18 @@ describe("intake settings page", () => {
     renderApp("/settings/intake");
     expect(await screen.findByText(/Only a household owner or administrator/)).toBeInTheDocument();
     expect(api.callsTo("GET", "/api/v1/settings/intake")).toHaveLength(0);
+  });
+});
+
+describe("intake page accessibility", () => {
+  it("has no axe violations", async () => {
+    mockApi({
+      "GET /api/v1/auth/session": authedSession({ role: "owner" }),
+      "GET /api/v1/settings/intake": () => json(INTAKE),
+      "GET /api/v1/households/:id/members": () => json([]),
+    });
+    const { container } = renderApp("/settings/intake");
+    expect(await screen.findByTestId("alias-token")).toHaveTextContent("tok-abc123");
+    await expectNoAxeViolations(container);
   });
 });

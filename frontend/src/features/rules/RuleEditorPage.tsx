@@ -7,6 +7,7 @@ import { Button } from "../../components/Button";
 import type { Crumb } from "../../components/Breadcrumbs";
 import { Card } from "../../components/Card";
 import { queryRoots } from "../../lib/queryKeys";
+import { canManageMembers, useAuthSession } from "../auth/session";
 import { PlanningPage, QueryState, ErrorLine } from "../planning/PlanningPage";
 import { nameLookup, useAccounts, useCategories, usePayees, useTags } from "../planning/queries";
 import { useAction } from "../planning/useAction";
@@ -52,6 +53,9 @@ function useReferences() {
 
 function Editor({ ruleId, initial, conditionsEditable }: { ruleId: string | null; initial: RuleDraft; conditionsEditable: boolean }) {
   const navigate = useNavigate();
+  const { session } = useAuthSession();
+  // Adding or changing a rule is an owner's or admin's (`authz_policy.py`); testing one is open to every role.
+  const canSave = canManageMembers(session?.household?.role);
   const { refs, names, loading, error } = useReferences();
   const [draft, setDraft] = useState(initial);
   const [shown, setShown] = useState(false);
@@ -95,12 +99,15 @@ function Editor({ ruleId, initial, conditionsEditable }: { ruleId: string | null
         onChange={setDraft}
       />
       <ErrorLine message={save.error} />
+      {canSave ? null : <p className="muted">Only an owner or admin can change a rule. You can still test it here.</p>}
       <div className="planning-actions">
-        <Button variant="primary" loading={save.busy} onClick={() => void submit()}>
-          Save rule
-        </Button>
+        {canSave ? (
+          <Button variant="primary" loading={save.busy} onClick={() => void submit()}>
+            Save rule
+          </Button>
+        ) : null}
         <Link to="/settings/rules" className="btn btn--ghost btn--md">
-          Cancel
+          {canSave ? "Cancel" : "Back to rules"}
         </Link>
       </div>
       <RuleTestPanel target={target} disabled={invalid} names={names} />

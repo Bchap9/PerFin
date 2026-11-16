@@ -149,6 +149,21 @@ describe("categories page", () => {
     expect(screen.queryByRole("textbox", { name: /^Schedule for/ })).not.toBeInTheDocument();
   });
 
+  it("an owner or admin sees merge and delete on categories and tags", async () => {
+    mockApi({ ...ownerSession(), ...referenceHandlers(), "GET /api/v1/tax-category-map": () => json({ items: [] }) });
+    let view = renderApp("/settings/categories");
+    expect(await screen.findByRole("button", { name: "Merge Food" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Delete Rent" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Edit Food" })).toBeInTheDocument();
+    view.unmount();
+
+    mockApi({ ...ownerSession(), ...referenceHandlers() });
+    view = renderApp("/settings/categories?tab=tags");
+    expect(await screen.findByRole("button", { name: "Delete fun" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Rename fun" })).toBeInTheDocument();
+    view.unmount();
+  });
+
   it("payees and tags show each role only what the API lets it do", async () => {
     const as = (role: "member" | "viewer") => ({ ...referenceHandlers(), "GET /api/v1/auth/session": authedSession({ role }) });
     mockApi(as("member"));

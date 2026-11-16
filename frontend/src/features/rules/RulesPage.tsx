@@ -152,11 +152,12 @@ export function RulesPage() {
   const tags = useTags();
   const accounts = useAccounts();
   const { session } = useAuthSession();
-  // The server lets any role export; only an owner or admin may import.
-  const canImport = canManageMembers(session?.household?.role);
+  // The server lets any role export and test; only an owner or admin may import, add, edit,
+  // reorder, enable, delete or apply rules (`authz_policy.py`).
+  const canManage = canManageMembers(session?.household?.role);
   // The server lets a member undo a merchant rule ("always categorise...") and an owner or admin any rule.
   const canWrite = canWriteLedger(session?.household?.role);
-  const canUndo = (rule: Rule): boolean => !rule.redacted && (canImport || (canWrite && merchantRuleKey(rule) !== null));
+  const canUndo = (rule: Rule): boolean => !rule.redacted && (canManage || (canWrite && merchantRuleKey(rule) !== null));
   const [applying, setApplying] = useState(false);
   const [importing, setImporting] = useState(false);
   const [deleting, setDeleting] = useState<Rule | null>(null);
@@ -217,6 +218,15 @@ export function RulesPage() {
       cell: (rule) => {
         const up = movedOrder(ids, rule.id, -1);
         const down = movedOrder(ids, rule.id, 1);
+        if (!canManage) {
+          return canUndo(rule) ? (
+            <span className="planning-actions">
+              <Button size="sm" aria-label={`Undo ${rule.name}`} onClick={() => { setUndoing(rule); }}>
+                Undo
+              </Button>
+            </span>
+          ) : null;
+        }
         return (
           <span className="planning-actions">
             <Button size="sm" aria-label={`Move ${rule.name} up`} disabled={up === null} onClick={() => up !== null && void reorder.run(up)}>
@@ -249,17 +259,19 @@ export function RulesPage() {
       actions={
         <>
           <ExportRulesButton rules={rules} />
-          {canImport ? (
-            <Button onClick={() => { setImporting(true); }}>
-              Import rules
-            </Button>
+          {canManage ? (
+            <>
+              <Button onClick={() => { setImporting(true); }}>
+                Import rules
+              </Button>
+              <Button disabled={rules.length === 0} onClick={() => { setApplying(true); }}>
+                Apply to existing transactions
+              </Button>
+              <Link to="/settings/rules/new" className="btn btn--primary btn--md">
+                New rule
+              </Link>
+            </>
           ) : null}
-          <Button disabled={rules.length === 0} onClick={() => { setApplying(true); }}>
-            Apply to existing transactions
-          </Button>
-          <Link to="/settings/rules/new" className="btn btn--primary btn--md">
-            New rule
-          </Link>
         </>
       }
     >
