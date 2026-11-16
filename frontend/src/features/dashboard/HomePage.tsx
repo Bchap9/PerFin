@@ -12,6 +12,7 @@ import { Link } from "@tanstack/react-router";
 import { PageHeader } from "../../components/PageHeader";
 import { Spinner } from "../../components/Spinner";
 import { todayIsoDate } from "../../lib/dates";
+import { useCanWrite } from "../accounts/api";
 import { useAuthSession } from "../auth/session";
 import { useAccounts } from "../planning/queries";
 import { GettingStarted } from "./GettingStarted";
@@ -21,6 +22,7 @@ import { ComingUpPanel, LatestPanel, NeedsYouPanel, NetWorthPanel, SpendingPanel
 export function HomePage() {
   const { session } = useAuthSession();
   const accounts = useAccounts();
+  const canWrite = useCanWrite();
   const now = new Date();
   const today = todayIsoDate(undefined, now);
   const name = session?.user.display_name.trim() ?? "";
@@ -31,9 +33,12 @@ export function HomePage() {
         title={title}
         description="Your money at a glance."
         actions={
-          <Link to="/inbox" className="btn btn--primary btn--md home-add">
-            Add documents
-          </Link>
+          // A viewer's Inbox has no uploader, so the action would lead nowhere.
+          canWrite ? (
+            <Link to="/inbox" className="btn btn--primary btn--md home-add">
+              Add documents
+            </Link>
+          ) : undefined
         }
       />
       {accounts.isPending ? (

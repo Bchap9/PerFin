@@ -4,7 +4,7 @@ import { api, unwrap } from "../../lib/api/client";
 import type { components } from "../../lib/api/schema";
 import { queryRoots } from "../../lib/queryKeys";
 import { listSchedules, type Schedule } from "../calendar/api";
-import { listSubscriptions, type Subscription } from "../subscriptions/api";
+import { listOpenEvents, listSubscriptions, type Subscription, type SubscriptionEvent } from "../subscriptions/api";
 
 type Schemas = components["schemas"];
 
@@ -22,6 +22,7 @@ export const homeKeys = {
   ],
   netWorthSeries: [...queryRoots.netWorth, "home-series"],
   comingUp: [...queryRoots.subscriptions, "home-coming-up"],
+  seriesNeedingYou: [...queryRoots.subscriptions, "home-needs-you"],
   latest: [...queryRoots.transactions, "home-latest"],
 } as const;
 
@@ -50,3 +51,9 @@ export async function getComingUp(): Promise<{ subscriptions: Subscription[]; re
 }
 
 export const getRecentTransactions = (limit = 5) => unwrap(api.GET("/api/v1/transactions", { params: { query: { limit } } }));
+
+/** The suggested series and every open change, for the subscription rows of Needs you. */
+export async function getSeriesNeedingYou(): Promise<{ suggested: Subscription[]; events: SubscriptionEvent[] }> {
+  const [list, events] = await Promise.all([listSubscriptions(), listOpenEvents()]);
+  return { suggested: list.items.filter((row) => row.status === "suggested"), events };
+}

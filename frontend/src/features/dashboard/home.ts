@@ -370,6 +370,102 @@ export function needsYouRows(
   ];
 }
 
+/** A suggested series, as much of it as Needs you shows. */
+export interface SeriesWords {
+  id: string;
+  name: string;
+  kind: string;
+  occurrences: number;
+}
+
+/** An open change of a series, as much of it as Needs you shows. */
+export interface ChangeWords {
+  id: string;
+  schedule_id: string;
+  name: string;
+  kind: "new" | "price_changed" | "missed" | "ended" | "charged_after_end" | "renewal_due" | "trial_converted";
+  occurred_on: string;
+  amount_before: MoneyValue | null;
+  amount_after: MoneyValue | null;
+}
+
+function changeDate(iso: string): string {
+  return formatDate(iso) ?? iso;
+}
+
+function changeCost(value: MoneyValue | null): string | null {
+  return value === null ? null : formatMoney(magnitude(value.amount), value.currency);
+}
+
+/** One open change in words (the Inbox's subscription card says the same). */
+function changeText(change: ChangeWords): string {
+  const on = changeDate(change.occurred_on);
+  switch (change.kind) {
+    case "price_changed": {
+      const before = changeCost(change.amount_before);
+      const after = changeCost(change.amount_after);
+      return `${before === null || after === null ? "Price changed" : `Price went from ${before} to ${after}`} on ${on}`;
+    }
+    case "missed":
+      return `Expected on ${on}, not seen`;
+    case "ended":
+      return `Stopped on ${on}`;
+    case "new":
+      return `First seen on ${on}`;
+    case "charged_after_end":
+      return `Charged after you ended it, on ${on}`;
+    case "renewal_due":
+      return `Renews on ${on}`;
+    case "trial_converted":
+      return `Trial became paid on ${on}`;
+  }
+}
+
+/**
+ * The subscription cards of the Inbox (spec section 4.2, group 5) as rows:
+ * one per series, the series with an open change first (newest change
+ * first), then the suggested series with none (most charges first). A row
+ * names the series and its newest change; a suggested series with no change
+ * reads as a guess. A local copy of `inbox/order.ts::subscriptionCards`,
+ * which Task 21 may import instead.
+ */
+export function needsYouSeriesRows(suggested: readonly SeriesWords[], changes: readonly ChangeWords[]): NeedsYouRow[] {
+  const entries = new Map<string, { name: string; series: SeriesWords | null; changes: ChangeWords[] }>();
+  for (const series of suggested) {
+    entries.set(series.id, { name: series.name, series, changes: [] });
+  }
+  for (const change of changes) {
+    const entry = entries.get(change.schedule_id);
+    if (entry === undefined) {
+      entries.set(change.schedule_id, { name: change.name, series: null, changes: [change] });
+    } else {
+      entry.changes.push(change);
+    }
+  }
+  const all = [...entries].map(([id, entry]) => ({
+    id,
+    ...entry,
+    changes: [...entry.changes].sort((a, b) => b.occurred_on.localeCompare(a.occurred_on)),
+  }));
+  const changed = all
+    .filter((entry) => entry.changes.length > 0)
+    .sort((a, b) => (b.changes[0]?.occurred_on ?? "").localeCompare(a.changes[0]?.occurred_on ?? ""));
+  const quiet = all
+    .filter((entry) => entry.changes.length === 0)
+    .sort((a, b) => (b.series?.occurrences ?? 0) - (a.series?.occurrences ?? 0));
+  return [...changed, ...quiet].map((entry) => {
+    const [newest, ...rest] = entry.changes;
+    const more = rest.length === 0 ? "" : `, and ${String(rest.length)} more ${rest.length === 1 ? "change" : "changes"}`;
+    const guess = entry.series?.kind === "subscription" ? "Might be a subscription" : "Might be recurring";
+    return {
+      id: `series:${entry.id}`,
+      title: entry.name,
+      question: newest === undefined ? guess : `${changeText(newest)}${more}`,
+      document: null,
+    };
+  });
+}
+
 // ---- Latest transactions ----------------------------------------------------------
 
 const SOURCES: ReadonlyMap<string, string> = new Map([

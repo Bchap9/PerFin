@@ -26,7 +26,14 @@ import { getLatest, netWorthKeys } from "../networth/api";
 import { nameLookup, useCategories } from "../planning/queries";
 import { listReviewCards, reviewKeys } from "../review/api";
 import { merchantName, type Transaction } from "../transactions/api";
-import { getComingUp, getNetWorthSeries, getRecentTransactions, getSpendingComparison, homeKeys } from "./api";
+import {
+  getComingUp,
+  getNetWorthSeries,
+  getRecentTransactions,
+  getSeriesNeedingYou,
+  getSpendingComparison,
+  homeKeys,
+} from "./api";
 import { monthName } from "./helpers";
 import {
   categorySourceText,
@@ -34,6 +41,7 @@ import {
   comparison,
   netWorthChange,
   needsYouRows,
+  needsYouSeriesRows,
   OTHER_KEY,
   spendingPeriods,
   topCategories,
@@ -156,22 +164,33 @@ export function NeedsYouPanel() {
   const summary = useInboxSummary();
   const cards = useQuery({ queryKey: reviewKeys.cards(), queryFn: () => listReviewCards() });
   const counts = summary.data;
-  const rows = cards.data === undefined ? [] : needsYouRows(cards.data.cards, cards.data.loose).slice(0, NEEDS_YOU_ROWS);
-  const seriesRow = counts !== undefined && counts.subscriptions > 0 && rows.length < NEEDS_YOU_ROWS;
+  const documentRows = cards.data === undefined ? [] : needsYouRows(cards.data.cards, cards.data.loose);
+  // The subscription cards come after every document and loose item, so they are asked for only when there is room.
+  const seriesWanted = counts !== undefined && counts.subscriptions > 0 && cards.isSuccess && documentRows.length < NEEDS_YOU_ROWS;
+  const series = useQuery({ queryKey: homeKeys.seriesNeedingYou, queryFn: getSeriesNeedingYou, enabled: seriesWanted });
+  const seriesRows = seriesWanted && series.data !== undefined ? needsYouSeriesRows(series.data.suggested, series.data.events) : [];
+  const rows = [...documentRows, ...seriesRows].slice(0, NEEDS_YOU_ROWS);
   const uncategorisedRow = counts !== undefined && (counts.uncategorised > 0 || counts.suggestions > 0);
   return (
     <Card title="Needs you" className="home-panel" actions={<PanelLink to="/inbox">Open Inbox</PanelLink>}>
       <PanelState
-        pending={summary.isPending || cards.isPending}
-        error={summary.error ?? cards.error}
+        pending={summary.isPending || cards.isPending || (seriesWanted && series.isPending)}
+        error={summary.error ?? cards.error ?? (seriesWanted ? series.error : null)}
         label="what needs you"
         onRetry={() => {
           void summary.refetch();
           void cards.refetch();
+          if (seriesWanted) {
+            void series.refetch();
+          }
         }}
       >
-        {rows.length === 0 && !seriesRow ? <p className="home-empty">Nothing is waiting. Every document is imported.</p> : null}
-        {rows.length === 0 && !seriesRow && !uncategorisedRow ? null : (
+        {rows.length === 0 ? (
+          <p className="home-empty">
+            {uncategorisedRow ? "Every document is imported." : "Nothing is waiting. Every document is imported."}
+          </p>
+        ) : null}
+        {rows.length === 0 && !uncategorisedRow ? null : (
           <ul className="home-rows" aria-label="What needs you">
             {rows.map((row) => (
               <li key={row.id}>
@@ -183,16 +202,6 @@ export function NeedsYouPanel() {
                 </Link>
               </li>
             ))}
-            {seriesRow ? (
-              <li>
-                <Link className="home-row" to="/inbox">
-                  <span className="home-row__main">
-                    <span className="home-row__title">{plural(counts.subscriptions, "subscription needs a look", "subscriptions need a look")}</span>
-                    <span className="home-row__sub">A new series, or a change to one you have</span>
-                  </span>
-                </Link>
-              </li>
-            ) : null}
             {uncategorisedRow ? (
               <li>
                 <Link className="home-row" to="/transactions" search={{ category: "none" }}>

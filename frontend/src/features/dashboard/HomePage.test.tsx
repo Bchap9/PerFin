@@ -245,6 +245,103 @@ describe("Home", () => {
     expect(within(panel).getByRole("link", { name: "Open Inbox" })).toHaveAttribute("href", "/inbox");
   });
 
+  it("needs you names each subscription change after fewer than three document cards", async () => {
+    const api = mockApi(
+      handlers({
+        "GET /api/v1/inbox/summary": () => json({ ...SUMMARY, cards: 3, documents: 1, subscriptions: 2 }),
+        "GET /api/v1/review/cards": () => json({ cards: [CARDS[2]], loose: [], next_cursor: null }),
+        "GET /api/v1/subscriptions": () =>
+          json({
+            as_of: "2026-11-16",
+            items: [SUBSCRIPTION, { ...SUBSCRIPTION, id: "s-gym", name: "Ironworks Gym", status: "suggested", occurrences: 3 }],
+            needs_look: 2,
+            bills: { count: 0, monthly: money("0"), yearly: money("0") },
+            subscriptions: { count: 2, monthly: money("17.99"), yearly: money("215.88") },
+          }),
+        "GET /api/v1/subscriptions/events": () =>
+          json({
+            items: [
+              {
+                id: "e-price",
+                schedule_id: "s-stream",
+                name: "Streamly Plus",
+                kind: "price_changed",
+                occurred_on: "2026-11-12",
+                amount_before: money("-15.99"),
+                amount_after: money("-17.99"),
+                state: "open",
+                transaction_id: null,
+              },
+            ],
+            next_cursor: null,
+            open: 1,
+          }),
+      }),
+    );
+    renderApp("/");
+    const panel = await screen.findByRole("region", { name: "Needs you" });
+    const list = await within(panel).findByRole("list", { name: "What needs you" });
+    await within(list).findByText("Ironworks Gym");
+    const links = within(list).getAllByRole("link");
+    expect(links.map((link) => link.getAttribute("href"))).toEqual([
+      "/inbox?document=d-money",
+      "/inbox",
+      "/inbox",
+      "/transactions?category=none",
+    ]);
+    expect(links[1]).toHaveTextContent("Streamly Plus");
+    expect(links[1]).toHaveTextContent("Price went from $15.99 to $17.99 on Nov 12, 2026");
+    expect(links[2]).toHaveTextContent("Ironworks Gym");
+    expect(links[2]).toHaveTextContent("Might be a subscription");
+    expect(within(panel).queryByText(/subscriptions? needs? a look/)).not.toBeInTheDocument();
+    expect(within(panel).queryByText(/Nothing is waiting/)).not.toBeInTheDocument();
+    expect(api.callsTo("GET", "/api/v1/subscriptions/events").length).toBeGreaterThan(0);
+  });
+
+  it("needs you does not ask for subscriptions when three document cards fill it", async () => {
+    const api = mockApi(handlers());
+    renderApp("/");
+    const panel = await screen.findByRole("region", { name: "Needs you" });
+    await within(panel).findByText("Everyday statement.pdf");
+    expect(api.callsTo("GET", "/api/v1/subscriptions/events")).toHaveLength(0);
+    expect(within(panel).queryByText(/Nothing is waiting/)).not.toBeInTheDocument();
+  });
+
+  it("needs you lists an item of no document after the documents", async () => {
+    mockApi(
+      handlers({
+        "GET /api/v1/inbox/summary": () => json({ ...SUMMARY, cards: 2, documents: 1, loose: 1, subscriptions: 0 }),
+        "GET /api/v1/review/cards": () =>
+          json({ cards: [CARDS[1]], loose: [{ id: "l-dup", kind: "possible_duplicate" }], next_cursor: null }),
+      }),
+    );
+    renderApp("/");
+    const panel = await screen.findByRole("region", { name: "Needs you" });
+    const list = await within(panel).findByRole("list", { name: "What needs you" });
+    const links = within(list).getAllByRole("link");
+    expect(links.map((link) => link.getAttribute("href"))).toEqual([
+      "/inbox?document=d-import",
+      "/inbox",
+      "/transactions?category=none",
+    ]);
+    expect(links[1]).toHaveTextContent("An item of no document");
+    expect(links[1]).toHaveTextContent("Is this a duplicate?");
+  });
+
+  it("needs you does not say nothing is waiting above the uncategorised line", async () => {
+    mockApi(
+      handlers({
+        "GET /api/v1/inbox/summary": () => json({ cards: 0, documents: 0, loose: 0, subscriptions: 0, suggestions: 0, uncategorised: 7 }),
+        "GET /api/v1/review/cards": () => json({ cards: [], loose: [], next_cursor: null }),
+      }),
+    );
+    renderApp("/");
+    const panel = await screen.findByRole("region", { name: "Needs you" });
+    expect(await within(panel).findByText("7 transactions have no category")).toBeInTheDocument();
+    expect(within(panel).getByText("Every document is imported.")).toBeInTheDocument();
+    expect(within(panel).queryByText(/Nothing is waiting/)).not.toBeInTheDocument();
+  });
+
   it("needs you says nothing is waiting", async () => {
     mockApi(
       handlers({
@@ -303,6 +400,81 @@ describe("Home", () => {
     expect(guess).toHaveTextContent("Food?");
     expect(guess).toHaveTextContent("Suggestion");
     expect(within(panel).getByRole("link", { name: "All transactions" })).toHaveAttribute("href", "/transactions");
+  });
+
+  it("latest transactions say when a row is split or has no category", async () => {
+    mockApi(
+      handlers({
+        "GET /api/v1/transactions": () =>
+          json({
+            next_cursor: null,
+            items: [
+              transaction("t-split", {
+                raw_payee: "HARBOR GROCERY",
+                splits: [
+                  { id: "sp-1", amount: money("-6.00"), category_id: CAT_FOOD, memo: null },
+                  { id: "sp-2", amount: money("-6.00"), category_id: CAT_DINING, memo: null },
+                ],
+              }),
+              transaction("t-bare", { raw_payee: "KIOSK 17" }),
+            ],
+          }),
+      }),
+    );
+    renderApp("/");
+    const panel = await screen.findByRole("region", { name: "Latest transactions" });
+    const split = await within(panel).findByRole("link", { name: /HARBOR GROCERY/ });
+    expect(split).toHaveTextContent("Split");
+    const bare = within(panel).getByRole("link", { name: /KIOSK 17/ });
+    expect(bare).toHaveTextContent("No category");
+    expect(bare).not.toHaveTextContent("Suggestion");
+  });
+
+  it("net worth says when only the 12-month line failed, without hiding the figure", async () => {
+    mockApi(
+      handlers({
+        "GET /api/v1/networth": () => json({ type: "urn:perfin:problem:server-error", title: "Boom", status: 500 }, 500),
+      }),
+    );
+    renderApp("/");
+    const panel = await screen.findByRole("region", { name: "Net worth" });
+    expect(await within(panel).findByText("The 12-month line could not be loaded.")).toBeInTheDocument();
+    expect(within(panel).getByText("$184,620.00")).toBeInTheDocument();
+    expect(within(panel).queryByRole("button", { name: "Retry" })).not.toBeInTheDocument();
+    expect(within(panel).queryByRole("img", { name: /over the last 12 months/ })).not.toBeInTheDocument();
+  });
+
+  it("net worth names the currencies it left out", async () => {
+    mockApi(
+      handlers({
+        "GET /api/v1/networth/latest": () =>
+          json({
+            as_of: "2026-11-16",
+            currency: "USD",
+            net: money("184620.00"),
+            assets: money("200000.00"),
+            liabilities: money("-15380.00"),
+            accounts: [],
+            by_class: {},
+            by_type: {},
+            last_snapshot_date: null,
+            scope: "household",
+            unconverted: ["CHF", "NOK"],
+            unpriced_security_ids: [],
+          }),
+      }),
+    );
+    renderApp("/");
+    const panel = await screen.findByRole("region", { name: "Net worth" });
+    expect(await within(panel).findByText("Leaves out CHF, NOK, which have no exchange rate")).toBeInTheDocument();
+  });
+
+  it("a viewer is not offered to add documents", async () => {
+    mockApi(handlers({ ...ownerSession({ displayName: "Robin Vale", role: "viewer" }) }));
+    renderApp("/");
+    expect(await screen.findByRole("heading", { level: 1, name: "Good morning, Robin Vale" })).toBeInTheDocument();
+    await screen.findByRole("region", { name: "Net worth" });
+    expect(screen.queryByRole("link", { name: "Add documents" })).not.toBeInTheDocument();
   });
 
   it("a household with no accounts sees Start here", async () => {

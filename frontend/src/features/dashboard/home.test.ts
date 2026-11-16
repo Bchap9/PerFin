@@ -1,5 +1,14 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-import { comingUp, comparison, greeting, needsYouRows, netWorthChange, spendingPeriods, topCategories } from "./home";
+import {
+  comingUp,
+  comparison,
+  greeting,
+  needsYouRows,
+  needsYouSeriesRows,
+  netWorthChange,
+  spendingPeriods,
+  topCategories,
+} from "./home";
 
 const money = (amount: string, currency = "USD") => ({ amount, currency });
 
@@ -184,5 +193,49 @@ describe("needs you rows", () => {
   it("puts an action it does not know with the notes", () => {
     const rows = needsYouRows([card("odd", "something_new", "2026-11-01T00:00:00Z"), card("ask", "teach", "2026-11-05T00:00:00Z")], []);
     expect(rows.map((row) => row.id)).toEqual(["ask", "odd"]);
+  });
+});
+
+describe("needs you series rows", () => {
+  const series = (id: string, name: string, occurrences: number, kind: "subscription" | "bill" = "subscription") => ({
+    id,
+    name,
+    kind,
+    occurrences,
+  });
+  const change = (
+    id: string,
+    schedule_id: string,
+    name: string,
+    kind: "price_changed" | "missed" | "new",
+    occurred_on: string,
+    before: string | null = null,
+    after: string | null = null,
+  ) => ({
+    id,
+    schedule_id,
+    name,
+    kind,
+    occurred_on,
+    amount_before: before === null ? null : money(before),
+    amount_after: after === null ? null : money(after),
+  });
+
+  it("puts series with a change first, newest change first, then suggested series by most charges", () => {
+    const rows = needsYouSeriesRows(
+      [series("s-few", "Puzzle Club", 2), series("s-many", "Cloud Locker", 6, "bill"), series("s-old", "Paper Weekly", 4)],
+      [
+        change("e-1", "s-tv", "Streamly Plus", "price_changed", "2026-11-02", "-15.99", "-17.99"),
+        change("e-2", "s-old", "Paper Weekly", "missed", "2026-11-09"),
+        change("e-3", "s-tv", "Streamly Plus", "missed", "2026-10-01"),
+      ],
+    );
+    expect(rows.map((row) => row.id)).toEqual(["series:s-old", "series:s-tv", "series:s-many", "series:s-few"]);
+    expect(rows.map((row) => row.title)).toEqual(["Paper Weekly", "Streamly Plus", "Cloud Locker", "Puzzle Club"]);
+    expect(rows[0]?.question).toBe("Expected on Nov 9, 2026, not seen");
+    expect(rows[1]?.question).toBe("Price went from $15.99 to $17.99 on Nov 2, 2026, and 1 more change");
+    expect(rows[2]?.question).toBe("Might be recurring");
+    expect(rows[3]?.question).toBe("Might be a subscription");
+    expect(rows.every((row) => row.document === null)).toBe(true);
   });
 });
