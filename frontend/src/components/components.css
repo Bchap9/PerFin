@@ -525,6 +525,15 @@ a.btn--danger:hover {
     min-width: 0;
   }
 
+  /* A badge, chip or button keeps its own width instead of filling the
+     value column. */
+  .table td > .badge,
+  .table td > .chip,
+  .table td > .btn,
+  .table tbody th > .badge {
+    justify-self: start;
+  }
+
   .table__empty {
     display: block;
   }
