@@ -54,6 +54,26 @@ def test_reports_files_without_header(repo: Path) -> None:
     assert check.main(["--root", str(repo)]) == 1
 
 
+def test_checkout_owned_by_another_user_still_checks(
+    repo: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # A bind-mounted checkout (the dev container's /work) can report another
+    # owner than the user running the script; git then refuses the repository
+    # ("dubious ownership") unless it is listed in safe.directory. Git's own
+    # test switch stands in for the foreign owner.
+    check = _load()
+    monkeypatch.setenv("GIT_TEST_ASSUME_DIFFERENT_OWNER", "1")
+    _write(repo, "ok.py", HEADER)
+    _write(repo, "bad.py", "x = 1\n")
+    assert check.find_missing(repo) == ["bad.py"]
+
+
+def test_git_failure_is_a_message_not_a_traceback(tmp_path: Path) -> None:
+    check = _load()
+    with pytest.raises(SystemExit, match="check_spdx: git ls-files failed"):
+        check.find_missing(tmp_path)  # not a git repository
+
+
 def test_clean_repo_passes(repo: Path, capsys: pytest.CaptureFixture[str]) -> None:
     check = _load()
     _write(repo, "ok.py", HEADER)
