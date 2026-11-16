@@ -78,6 +78,7 @@ from app.domain.investments.statement_import import (
     LINES_HELD,
     OPENING_MEMO,
     acceptable_as_read,
+    clean_read,
 )
 from app.domain.investments.statement_import import RECONCILIATION_FAILED as RECONCILIATION
 from app.domain.review import service as review_service
@@ -88,9 +89,16 @@ from app.domain.review.schemas import (
 )
 from app.domain.transactions import transfers
 from app.domain.transactions.models import ReviewState, Transaction
+from app.ingestion import pipeline
 from app.ingestion.intake.upload import receive_upload
 from app.ingestion.parsers.vocabulary import Vocabulary
-from app.ingestion.sandbox.protocol import ExtractResult
+from app.ingestion.sandbox.protocol import (
+    ExtractResult,
+    InvestmentActivity,
+    InvestmentReconciliation,
+    InvestmentStatement,
+    StatementAccount,
+)
 from app.workers.handlers import ingest
 from tests.fixtures import synth_brokerage as synth
 from tests.fixtures import synth_fidelity as fid
@@ -2433,3 +2441,95 @@ def test_reconciled_brokerage_statement_is_recorded_reconciled(env: Env) -> None
     (record,) = _records(env, account)
     assert record.verification == "reconciled"
     assert len(env.snapshots(account)) == 1
+
+
+def test_positions_only_statement_does_not_hide_a_skipped_line(env: Env) -> None:
+    """Each holding multiplies out, nothing checks the activity, two buys were not read.
+
+    ``positions`` is the only check that could run and it holds, but it says
+    nothing about the activity section: the lines the parser left unread are
+    still named (``lines_skipped``), the document waits, and the record does
+    not claim the statement was checked.
+    """
+    january, _ = synth.brokerage_series(seed=85)
+    account = env.brokerage(january)
+    data = synth.placeholder_pdf(january, totals=False, prices=True, relabel={"buy": "Zorblat"})
+    document_id = env.ingest(data, "statement.pdf")
+
+    document = env.document(document_id)
+    stored = ExtractResult.model_validate(document.extraction)
+    (statement,) = stored.investments
+    assert statement.reconciliation is not None
+    assert (statement.reconciliation.status, statement.reconciliation.checks) == (
+        "ok",
+        ["positions"],
+    )
+    assert stored.parse is not None
+    assert stored.parse.skipped_lines > 0
+    assert len(statement.activity) < len(january.activity)
+    assert "lines_skipped" in env.reasons(document_id)
+    assert document.status is DocumentStatus.NEEDS_REVIEW
+    assert [r.verification for r in _records(env, account)] == ["unverified"]
+    assert env.snapshots(account) == []
+
+
+def test_positions_only_statement_that_reads_whole_is_imported_unverified(env: Env) -> None:
+    """The same layout with every line read: imported, and marked as not checked."""
+    january, _ = synth.brokerage_series(seed=86)
+    account = env.brokerage(january)
+    data = synth.placeholder_pdf(january, totals=False, prices=True)
+    document_id = env.ingest(data, "statement.pdf")
+
+    assert env.document(document_id).status is DocumentStatus.PROCESSED, env.reasons(document_id)
+    assert env.activity(account) == _expected(january)
+    assert env.holdings(account) == _positions(january)
+    assert [r.verification for r in _records(env, account)] == ["unverified"]
+    assert env.snapshots(account) == []
+
+
+def _check(*checks: str, status: Literal["ok", "mismatch", "unavailable"] = "ok") -> Any:
+    return InvestmentReconciliation(status=status, checks=list(checks), tolerance=Decimal("0.01"))
+
+
+def test_only_checks_that_cover_the_activity_vouch_for_skipped_lines() -> None:
+    """``_all_reconciled``: what lets a skipped line of a brokerage statement go unasked."""
+
+    def brokerage(*checks: str) -> InvestmentStatement:
+        return InvestmentStatement(
+            source_format="pdf", account=StatementAccount(), reconciliation=_check(*checks)
+        )
+
+    whole = brokerage("positions", "holdings_total", "cash", "total_value")
+    assert pipeline._all_reconciled([], [whole]) is True
+    assert pipeline._all_reconciled([], [brokerage("roll_forward", "roll_forward_rows")]) is True
+    assert pipeline._all_reconciled([], [brokerage("positions")]) is False
+    assert pipeline._all_reconciled([], [brokerage("positions", "holdings_total")]) is False
+    assert pipeline._all_reconciled([], [brokerage("positions", "cash")]) is False
+    assert pipeline._all_reconciled([], [whole, brokerage("positions")]) is False
+    assert pipeline._all_reconciled([], []) is False
+
+
+def test_a_truncated_or_unread_brokerage_statement_is_never_a_clean_read() -> None:
+    def unchecked(**kwargs: Any) -> InvestmentStatement:
+        return InvestmentStatement(
+            source_format=kwargs.pop("source_format", "pdf"),
+            account=StatementAccount(),
+            period_start=date(2026, 3, 1),
+            period_end=date(2026, 3, 31),
+            activity=[
+                InvestmentActivity(
+                    type="dividend",
+                    trade_date=date(2026, 3, 12),
+                    amount=Decimal("4.20"),
+                    low_confidence=["reconciliation"],
+                )
+            ],
+            **kwargs,
+        )
+
+    nothing = _check(status="unavailable")
+    assert clean_read(unchecked(), nothing) is True
+    assert clean_read(unchecked(truncated=True), nothing) is False
+    assert clean_read(unchecked(), nothing, unread=True) is False
+    assert clean_read(unchecked(), _check("positions")) is False
+    assert clean_read(unchecked(source_format="ofx"), nothing) is False

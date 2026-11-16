@@ -410,6 +410,7 @@ def placeholder_pdf(
     institution: str = INSTITUTION,
     totals: bool = True,
     relabel: Mapping[str, str] | None = None,
+    prices: bool | None = None,
 ) -> bytes:
     """The Placeholder Brokerage statement as a PDF (module doc).
 
@@ -417,8 +418,12 @@ def placeholder_pdf(
     against: no portfolio summary, no holdings total, and holdings listed
     without a price (quantity, market value and cost basis only), so not
     even a row multiplies out. ``relabel``: the word printed in the
-    *Activity* column for a type, in place of the usual one.
+    *Activity* column for a type, in place of the usual one. ``prices``:
+    whether the holdings print their Price column (default: as ``totals``);
+    ``totals=False, prices=True`` is a statement on which each holding
+    multiplies out and nothing says anything about the activity.
     """
+    priced = totals if prices is None else prices
     activity = _activity_lines(_printed_activity(stmt, tamper), relabel)
     positions = list(stmt.positions)
     values = [p.market_value for p in positions]
@@ -463,7 +468,7 @@ def placeholder_pdf(
             c.drawString(h["symbol"], y, "Symbol")
             c.drawString(h["desc"], y, "Description")
             c.drawRightString(h["qty"], y, "Quantity")
-            if totals:
+            if priced:
                 c.drawRightString(h["price"], y, "Price")
             c.drawRightString(h["value"], y, "Market Value")
             c.drawRightString(h["cost"], y, "Cost Basis")
@@ -473,7 +478,7 @@ def placeholder_pdf(
                 c.drawString(h["symbol"], y, position.symbol)
                 c.drawString(h["desc"], y, position.security.name)
                 c.drawRightString(h["qty"], y, _qty_text(position.quantity))
-                if totals:
+                if priced:
                     c.drawRightString(h["price"], y, f"{position.price:,.4f}")
                 c.drawRightString(h["value"], y, _money_text(value))
                 c.drawRightString(h["cost"], y, _money_text(position.cost))

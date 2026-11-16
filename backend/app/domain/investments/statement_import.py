@@ -76,7 +76,11 @@ statements"). Per statement:
    imported whole with no item, and its record says ``unverified``
    (``statement_record.verification``: ``reconciled`` when the figures
    agree and all of it was written, ``accepted`` when it was imported as
-   read, else ``unverified``). It writes no balance snapshot (step 9). One
+   read, else ``unverified``). It writes no balance snapshot (step 9). A
+   document statement on which the only check that could run is
+   ``positions`` (each holding multiplies out) is imported and recorded
+   ``unverified`` too, with no snapshot: no printed figure agreed with
+   anything (:func:`checked_against_figures`). One
    other doubt (a guessed date, a line the parser skipped, no printed
    period) and the whole statement waits as above.
 
@@ -896,17 +900,43 @@ def clean_read(
     return bool(rows) and not any(set(fields) - {RECONCILIATION_DOUBT} for fields in rows)
 
 
+def checked_against_figures(
+    statement: InvestmentStatement, check: InvestmentReconciliation
+) -> bool:
+    """The statement's checks held and they say something about what was read.
+
+    On a page that was read (a PDF or an image), ``positions`` alone (each
+    holding's quantity x price is its market value) is arithmetic inside a
+    row: it compares nothing with a total, a cash balance or an account
+    value the statement prints, and never looks at the activity. A document
+    statement on which only it ran was not checked against a balance: it is
+    imported like any statement whose checks held, recorded ``unverified``
+    and gives no balance snapshot. A file the broker's system wrote (OFX, an
+    export) is not a reading, and its checks holding is all there is to ask.
+    """
+    if check.status != "ok":
+        return False
+    if statement.source_format not in DOCUMENT_STATEMENT_FORMATS:
+        return True
+    return bool(set(check.checks) - {"positions"})
+
+
 def _verification(
-    check: InvestmentReconciliation, *, accepted: bool, kept: _Kept | None = None
+    statement: InvestmentStatement,
+    check: InvestmentReconciliation,
+    *,
+    accepted: bool,
+    kept: _Kept | None = None,
 ) -> str:
     """How far a committed statement was checked (``statement_record.verification``).
 
-    ``reconciled``: its own figures agree and all of it was written (rows
-    that wait or were left out are not in the ledger the figures describe);
-    ``accepted``: a person said to import it as read; else ``unverified``.
+    ``reconciled``: its own figures agree (:func:`checked_against_figures`)
+    and all of it was written (rows that wait or were left out are not in
+    the ledger the figures describe); ``accepted``: a person said to import
+    it as read; else ``unverified``.
     """
     whole = kept is None or not (kept.lines_held or kept.positions_held or kept.lines_left_out)
-    if check.status == "ok" and whole:
+    if checked_against_figures(statement, check) and whole:
         return "reconciled"
     return "accepted" if accepted else "unverified"
 
@@ -2429,7 +2459,7 @@ def _commit(
             },
         )
     if (
-        _value_holds(check, accepted=accepted)
+        _value_holds(statement, check, accepted=accepted)
         and not positions_held
         and on is not None
         and cash is not None
@@ -2651,15 +2681,19 @@ def _commit_balance(
     return True
 
 
-def _value_holds(check: InvestmentReconciliation, *, accepted: bool) -> bool:
+def _value_holds(
+    statement: InvestmentStatement, check: InvestmentReconciliation, *, accepted: bool
+) -> bool:
     """The statement's holdings and closing cash may be the account's balance.
 
-    Every check held; or (not for a statement accepted as read) the parser
+    Every check held and one of them is against a printed figure
+    (:func:`checked_against_figures`); or (not for a statement accepted as read) the parser
     said where the failure lies (``localise``), only the ``cash`` activity
     check failed and holdings + closing cash is the printed account value.
     """
     if check.status == "ok":
-        return True
+        # Not from holdings that only multiply out (no printed figure agreed).
+        return checked_against_figures(statement, check)
     return (
         not accepted
         and check.doubtful_activity is not None
@@ -2805,7 +2839,7 @@ def import_investment_statements(
                     document,
                     account,
                     facts,
-                    verification=_verification(check, accepted=False),
+                    verification=_verification(statement, check, accepted=False),
                 )
             else:
                 ctx.result.held += 1
@@ -2841,7 +2875,7 @@ def import_investment_statements(
                 document,
                 account,
                 facts,
-                verification=_verification(check, accepted=accepted, kept=kept),
+                verification=_verification(statement, check, accepted=accepted, kept=kept),
             )
         else:
             ctx.result.held += 1

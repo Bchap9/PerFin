@@ -2223,6 +2223,46 @@ def test_account_sign_answer_is_applied_on_the_next_run(env: Env) -> None:
     assert len(env.transactions(card)) == len(synth_trust.CSV_CARD)
 
 
+def test_account_sign_answer_outlives_the_question(env: Env) -> None:
+    """Once the layout's sign is no longer on trust, the card's answer is still read.
+
+    A person saves the mapping in the editor (its sign is theirs now), or a
+    run names the mapping: the card group no longer waits, and reading it
+    with the mapping's sign instead of the answer would add every card row a
+    second time with the sign turned.
+    """
+    checking, card = _mixed_accounts(env)
+    document_id = env.ingest(synth_trust.mixed_sign_accounts_csv(), name="all.csv")
+    (item,) = env.open_reviews(document_id)
+    _answer_sign(env, item, card, "outflow_positive")
+    _import_again(env, document_id)
+    flipped = _printed(synth_trust.CSV_CARD, flipped=True)
+    assert _amounts(env.transactions(card)) == flipped
+    (mapping,) = _mappings(env)
+    with env.factories.transaction() as db:
+        set_context(db, env.household_id)
+        saved = db.get(ImportMapping, mapping.id)
+        assert saved is not None
+        saved.sign_unverified = False
+
+    again = _import_again(env, document_id)
+    assert again.summary["imported"] == 0
+    assert _amounts(env.transactions(card)) == flipped
+
+    with env.factories.transaction() as db:
+        set_context(db, env.household_id)
+        document = db.get(Document, document_id)
+        assert document is not None
+        result = ExtractResult.model_validate(document.extraction)
+        named = imports_service.import_extraction(
+            db, document, result, user_id=env.owner.user.id, mapping_id=mapping.id
+        )
+    assert named.summary["imported"] == 0
+    assert _amounts(env.transactions(card)) == flipped
+    assert _amounts(env.transactions(checking)) == _printed(synth_trust.CSV_CHECKING)
+    assert env.open_reviews(document_id) == []
+
+
 def test_a_sign_answer_that_agrees_with_the_file_imports_it_as_printed(env: Env) -> None:
     _, card = _mixed_accounts(env)
     document_id = env.ingest(synth_trust.mixed_sign_accounts_csv(), name="all.csv")

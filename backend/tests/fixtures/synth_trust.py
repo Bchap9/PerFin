@@ -27,6 +27,8 @@ account number and the same six dated rows with signed amounts.
   that agree with the six rows, no running balance column, plus the row
   dated before the period (:data:`STRAY`). It is off by exactly that row,
   which alone is in doubt, and the row's date is a doubt of its own.
+* :func:`no_balances_without_digits`: the first without the account number
+  line: nothing on the page names an account but the bank's own name.
 * :func:`mixed_sign_accounts_csv`: not a PDF but a CSV export of two
   accounts under one ``Account Number`` column and one signed ``Amount``
   column: a checking account (:data:`CSV_CHECKING`, money out negative) and
@@ -104,13 +106,14 @@ def _pdf(
     unread_after: int | None = None,
     running: bool = True,
     closing: Decimal = CLOSING,
+    digits: bool = True,
 ) -> bytes:
     """One page: heading, period, account, a table of ``rows``.
 
     ``balances`` prints the opening and closing balances (``closing`` is
     the closing balance printed) and, with ``running``, a running balance
     column; ``unread_after`` prints the unreadable dated line after that
-    many rows.
+    many rows; ``digits=False`` leaves the account number line out.
     """
     buf = io.BytesIO()
     c = canvas.Canvas(buf, pagesize=letter)
@@ -119,7 +122,8 @@ def _pdf(
     c.setFont(FONT, 10)
     c.drawString(72, 732, "Account statement")
     c.drawString(72, 716, f"Statement period: {_us(PERIOD_START)} - {_us(PERIOD_END)}")
-    c.drawString(72, 700, f"Account number: ****{LAST4}")
+    if digits:
+        c.drawString(72, 700, f"Account number: ****{LAST4}")
     if balances:
         c.drawString(72, 684, f"Opening balance: {_money(OPENING)}")
         c.drawString(300, 684, f"Closing balance: {_money(closing)}")
@@ -156,6 +160,11 @@ def _pdf(
 def no_balances_statement() -> bytes:
     """Six rows, a period and an account number; no balance of any kind."""
     return _pdf(ROWS)
+
+
+def no_balances_without_digits() -> bytes:
+    """The same six rows and period; no account number is printed."""
+    return _pdf(ROWS, digits=False)
 
 
 def no_balances_with_a_stray_row() -> bytes:

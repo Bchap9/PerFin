@@ -26,6 +26,7 @@ PDFs come from ``tests/fixtures/synth_trust.py`` (an invented bank).
 
 from __future__ import annotations
 
+import copy
 import uuid
 from decimal import Decimal
 from typing import Any, cast
@@ -34,15 +35,35 @@ import pytest
 from sqlalchemy import select
 
 from app.auth.principal import apply_rls_context
-from app.domain.accounts.models import Account
-from app.domain.documents.models import DocumentStatus, IngestJob, IngestStage, ReviewKind
+from app.db.rls import set_context
+from app.domain.accounts.models import Account, AccountType
+from app.domain.documents.models import (
+    Document,
+    DocumentStatus,
+    IngestJob,
+    IngestStage,
+    ReviewKind,
+)
 from app.domain.documents.schemas import INGEST_JOB_TYPE
 from app.domain.imports.models import StatementRecord
-from app.domain.imports.service import CONTRADICTION_WARNINGS, _Run, clean_read
+from app.domain.imports.service import (
+    CONTRADICTION_WARNINGS,
+    _Run,
+    clean_read,
+    import_extraction,
+    liability_side,
+    same_side,
+    statement_match,
+)
 from app.domain.transactions.models import ReviewState
 from app.ingestion.intake.upload import receive_upload
 from app.ingestion.parsers.structured import ParsedStatement, ParsedTransaction
-from app.ingestion.sandbox.protocol import Reconciliation
+from app.ingestion.sandbox.protocol import (
+    ExtractResult,
+    Reconciliation,
+    Statement,
+    StatementAccount,
+)
 from tests.fixtures import synth_card_statement as card
 from tests.fixtures import synth_pdf_statements as synth
 from tests.fixtures import synth_trust as trust
@@ -177,6 +198,162 @@ def test_an_unread_line_holds_the_whole_statement(env: Env) -> None:
     (record,) = _records(env, document_id)
     assert record.verification == "unverified"
     assert env.snapshots(account) == []
+
+
+def test_clean_read_is_not_posted_into_a_card_the_parser_did_not_read_as_one(env: Env) -> None:
+    """The page says "Account statement"; its digits are a credit card's.
+
+    The parser read a bank statement (no account type, amounts as printed).
+    On a liability account nothing proves what a positive amount means, so
+    the read is not clean: every row waits and the question is asked.
+    """
+    card_account = env.ledger.account(
+        env.household_id, number_last4=trust.LAST4, type="credit_card", currency=trust.CURRENCY
+    )
+    document_id = env.ingest(trust.no_balances_statement())
+
+    stored = ExtractResult.model_validate(env.document(document_id).extraction)
+    assert stored.statements[0].account.account_type is None
+    rows = env.transactions(card_account)
+    assert len(rows) == 6
+    assert [r.review_state for r in rows] == [ReviewState.PENDING] * 6
+    assert _reasons(env, document_id) == {"reconciliation_unavailable"}
+    assert env.document(document_id).status is DocumentStatus.NEEDS_REVIEW
+    (record,) = _records(env, document_id)
+    assert record.verification == "unverified"
+    assert env.snapshots(card_account) == []
+
+
+def test_the_side_a_statement_was_read_as_must_be_the_accounts() -> None:
+    checking, savings, card_type = (
+        AccountType.CHECKING,
+        AccountType.SAVINGS,
+        AccountType.CREDIT_CARD,
+    )
+    assert liability_side(None) is None
+    assert liability_side("checking") is False
+    assert liability_side("creditcard") is True
+    assert liability_side("credit_card") is True
+    assert liability_side("creditline") is True
+    assert liability_side("LINE_OF_CREDIT") is True
+    # A statement that names no type was read as money in positive: an asset.
+    assert same_side(checking, None) is True
+    assert same_side(savings, "checking") is True
+    assert same_side(card_type, None) is False
+    assert same_side(AccountType.LOAN, None) is False
+    assert same_side(card_type, "creditcard") is True
+    assert same_side(checking, "creditcard") is False
+
+
+def test_a_row_in_another_currency_is_never_a_clean_read(env: Env) -> None:
+    """One row left out for its currency: the rest of the statement waits too."""
+    document_id = env.ingest(trust.no_balances_statement())
+    assert _reasons(env, document_id) == {"account_not_found"}
+    account = _account(env)
+    with env.factories.transaction() as db:
+        set_context(db, env.household_id)
+        document = db.get(Document, document_id)
+        assert document is not None
+        assert document.extraction is not None
+        stored = copy.deepcopy(document.extraction)
+        stored["statements"][0]["transactions"][2]["currency"] = "EUR"
+        result = ExtractResult.model_validate(stored)
+        import_extraction(db, document, result, user_id=env.owner.user.id)
+
+    rows = env.transactions(account)
+    assert len(rows) == 5
+    assert [r.review_state for r in rows] == [ReviewState.PENDING] * 5
+    assert {"currency_mismatch", "reconciliation_unavailable"} <= _reasons(env, document_id)
+    assert env.snapshots(account) == []
+
+
+# ---------------------------------------------------------------------------
+# A statement that prints no account digits
+# ---------------------------------------------------------------------------
+
+
+def test_statement_without_digits_lands_on_the_sole_account_of_its_institution(env: Env) -> None:
+    institution = env.ledger.institution(env.household_id, name=trust.INSTITUTION)
+    account = env.ledger.account(
+        env.household_id,
+        number_last4="6058",
+        type="checking",
+        currency=trust.CURRENCY,
+        institution_id=institution.id,
+    )
+    document_id = env.ingest(trust.no_balances_without_digits())
+
+    document = env.document(document_id)
+    assert document.institution_id == institution.id
+    stored = ExtractResult.model_validate(document.extraction)
+    assert stored.statements[0].account.last4 is None
+    assert _ledger(env, account) == _six(trust.expected())
+    assert env.open_reviews(document_id) == []
+    assert document.status is DocumentStatus.PROCESSED
+
+
+@pytest.mark.parametrize("accounts", [("credit_card",), ("checking", "savings")])
+def test_statement_without_digits_is_asked_about_when_no_one_account_fits(
+    env: Env, accounts: tuple[str, ...]
+) -> None:
+    """The bank's only account is a card, or it has two: a person says which."""
+    institution = env.ledger.institution(env.household_id, name=trust.INSTITUTION)
+    made = [
+        env.ledger.account(
+            env.household_id,
+            number_last4=f"60{index}8",
+            type=kind,
+            currency=trust.CURRENCY,
+            institution_id=institution.id,
+        )
+        for index, kind in enumerate(accounts)
+    ]
+    document_id = env.ingest(trust.no_balances_without_digits())
+
+    assert all(env.transactions(account) == [] for account in made)
+    (item,) = env.open_reviews(document_id)
+    assert item.kind is ReviewKind.UNKNOWN_ACCOUNT
+    assert item.payload["reason"] == "account_ambiguous"
+    assert sorted(item.payload["candidates"]) == sorted(str(a.id) for a in made)
+
+
+def _digitless(account_type: str | None, count: int = 1) -> ExtractResult:
+    statement = Statement(
+        source_format="pdf",
+        account=StatementAccount(account_type=account_type),
+        transactions=[],
+    )
+    return ExtractResult(kind="pdf", ok=True, statements=[statement] * count)
+
+
+def test_a_card_statement_without_digits_stays_off_the_banks_checking_account(env: Env) -> None:
+    institution = env.ledger.institution(env.household_id, name=trust.INSTITUTION)
+    checking = env.ledger.account(
+        env.household_id, number_last4="6058", type="checking", institution_id=institution.id
+    )
+
+    def match(result: ExtractResult, institution_id: uuid.UUID | None) -> uuid.UUID | None:
+        with env.factories.transaction() as db:
+            set_context(db, env.household_id)
+            found = statement_match(
+                db, env.household_id, result, 0, allowed=None, institution_id=institution_id
+            )
+            return found.account_id
+
+    assert match(_digitless("creditcard"), institution.id) is None
+    assert match(_digitless(None), institution.id) == checking.id
+    assert match(_digitless("checking"), institution.id) == checking.id
+    # Without the document's institution nothing is matched, as before.
+    assert match(_digitless(None), None) is None
+    # Two statements without digits in one document: which is whose is not known.
+    assert match(_digitless(None, 2), institution.id) is None
+    card_account = env.ledger.account(
+        env.household_id, number_last4="6059", type="credit_card", institution_id=institution.id
+    )
+    assert match(_digitless("creditcard"), institution.id) == card_account.id
+    # A statement that names no type could be either's: a person says which.
+    assert match(_digitless(None), institution.id) is None
+    assert match(_digitless("checking"), institution.id) == checking.id
 
 
 # ---------------------------------------------------------------------------

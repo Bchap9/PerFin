@@ -170,6 +170,11 @@ The flow (INGESTION.md "Parse", "Match and deduplicate", "Commit"):
      a statement's own balances agreed) and the run summary counts it
      (``unverified_statements``), which the pages show as "not checked
      against a balance". One doubt anywhere and the whole statement waits.
+     So does one that lands on an account of the other side of the balance
+     sheet than it was read for (:func:`same_side`: a page not read as a
+     card statement whose digits are a credit card's): the sign of its
+     amounts is on trust, and a sign on trust is never used to write into
+     a liability account unasked.
    * Records the extractor could not read (OFX, QFX and QIF: a record with
      no date or amount, an investment activity of a kind it does not read)
      are counted in its ``transaction_skipped:<n>`` warnings, one per
@@ -228,7 +233,7 @@ from app.core.events import emit
 from app.core.money import sum_amounts, to_storage
 from app.db.queue import enqueue
 from app.domain.accounts import repo as accounts_repo
-from app.domain.accounts.models import LIABILITY_TYPES, Account, BalanceSource
+from app.domain.accounts.models import LIABILITY_TYPES, Account, AccountType, BalanceSource
 from app.domain.accounts.visibility import get_visible_account, visible_account_filter
 from app.domain.documents import repo as documents_repo
 from app.domain.documents.models import (
@@ -932,6 +937,38 @@ def _category_id(run: _Run, name: str | None) -> uuid.UUID | None:
     return run.categories().get(name.strip().casefold())
 
 
+#: Liability account types as a statement may spell them (``creditcard``,
+#: OFX ``CREDITLINE``): compared without case and underscores.
+_LIABILITY_WORDS: Final = frozenset(
+    {str(kind).replace("_", "") for kind in LIABILITY_TYPES} | {"creditline"}
+)
+
+
+def liability_side(account_type: str | None) -> bool | None:
+    """Whether the type a statement names for its account is a liability.
+
+    None when it names none: the reader then took the amounts as printed,
+    money in positive (a bank statement).
+    """
+    if not account_type:
+        return None
+    return account_type.replace("_", "").lower() in _LIABILITY_WORDS
+
+
+def same_side(account_type: AccountType, read_as: str | None) -> bool:
+    """The account is on the side of the balance sheet its statement was read for.
+
+    A reader that knows it has a card statement turns the printed amounts
+    (a purchase is printed positive) into the ledger's signs; one that does
+    not takes them as printed. So a statement read without a type, or as an
+    asset account's, is a bank statement, and what a positive amount means
+    on a liability account is something nothing on it proves: the table
+    importer never writes into a liability account on such a sign
+    (:func:`_sign_held`) and neither does a clean read.
+    """
+    return (account_type in LIABILITY_TYPES) is bool(liability_side(read_as))
+
+
 def clean_read(run: _Run, parsed: ParsedStatement) -> bool:
     """A statement that read cleanly and that nothing contradicts (module doc).
 
@@ -1190,7 +1227,8 @@ def _commit_statement(
     cannot be checked; OFX, QIF and tables, which carry no reconciliation).
 
     A *clean read* (:func:`clean_read`, with no row left out for its
-    currency) is imported as posted: a row of it is ``pending`` only when it
+    currency, on an account of the side it was read for: :func:`same_side`)
+    is imported as posted: a row of it is ``pending`` only when it
     is a near duplicate, no ``reconciliation_unavailable`` and no
     ``low_confidence`` item is raised for it, and, as for every statement
     that did not reconcile, no balance snapshot is written.
@@ -1225,7 +1263,9 @@ def _commit_statement(
             },
         )
     # A row left out for its currency is a doubt of its own: not a clean read.
-    clean = not foreign and clean_read(run, parsed)
+    # Neither is a statement read for the other side of the balance sheet
+    # than its account's (:func:`same_side`): its sign is on trust.
+    clean = not foreign and same_side(account.type, parsed.account_type) and clean_read(run, parsed)
     _row_problems(run, parsed, account, clean=clean, statement_index=statement_index)
     plan = dedupe(
         db,
@@ -1465,8 +1505,16 @@ def statement_match(
     *,
     institution: str | None = None,
     allowed: Collection[uuid.UUID] | None,
+    institution_id: uuid.UUID | None = None,
 ) -> AccountMatch:
     """The account the digits (and institution) of bank statement ``index`` name.
+
+    A statement that prints no digits goes to the one open account at the
+    document's institution (``institution_id``; ``match_account``), on the
+    side of the balance sheet its type names (:func:`liability_side`): a
+    card statement never lands on the bank's lone checking account. Only
+    when it is the document's one statement: of two without digits nothing
+    says which is whose.
 
     In a document the parser split at its accounts' summaries, statements
     may carry the same last four digits (two accounts printed under one
@@ -1493,12 +1541,15 @@ def statement_match(
             told_apart=named.count((account.last4, account.account_type)) == 1,
             allowed=allowed,
         )
+    alone = len(result.statements) == 1 and not result.investments
     return match_account(
         db,
         household_id,
         last4=account.last4,
         institution=institution or account.institution,
         allowed=allowed,
+        institution_id=institution_id if alone else None,
+        liability=liability_side(account.account_type),
     )
 
 
@@ -1528,6 +1579,7 @@ def _import_statements(run: _Run, result: ExtractResult, *, account_id: uuid.UUI
                 index,
                 institution=parsed.institution,
                 allowed=run.allowed,
+                institution_id=run.document.institution_id,
             )
             candidates = match.candidates
             if account_id is not None and (match.account_id is None or single):
@@ -1854,8 +1906,15 @@ def _save_suggested(run: _Run, table: Table, suggestion: MappingSuggestion) -> I
     return mapping
 
 
-#: How the first filled cell of a total line starts (case-folded).
-_TOTAL_WORDS: Final = ("total", "totals", "balance", "ending balance", "closing balance")
+#: The first filled cell of a total line, whole: a total word alone, with
+#: punctuation after it, or with one of the tails a summary line prints
+#: (``Total for period``, ``Total debits``). A payee that only starts with
+#: the word (``Total Wine Shop``, ``Balance Transfer Fee``) is no total.
+_TOTAL_LABEL: Final = re.compile(
+    r"(?:totals?|(?:(?:ending|closing)\s+)?balance)"
+    r"(?:\s*[:.\-]*|\s+(?:for|of|as\s+of|amount|debits?|credits?|deposits?|withdrawals?)\b.*)",
+    re.IGNORECASE,
+)
 #: A cell that may be a date: digits around two separators, eight digits in
 #: a row, or a month name beside a digit. Wide on purpose: a row with such
 #: a cell is never called a total line.
@@ -1873,9 +1932,9 @@ def _date_shaped(cell: str) -> bool:
 
 
 def _total_line(row: Sequence[str]) -> bool:
-    """A row that only sums up: it starts with a total word and carries no date."""
+    """A row that only sums up: a total's label (:data:`_TOTAL_LABEL`) and no date."""
     cells = [cell.strip() for cell in row if cell.strip()]
-    if not cells or not cells[0].casefold().startswith(_TOTAL_WORDS):
+    if not cells or _TOTAL_LABEL.fullmatch(cells[0]) is None:
         return False
     return not any(_date_shaped(cell) for cell in cells)
 
