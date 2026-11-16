@@ -365,11 +365,23 @@ No new setting, no new container, no new outbound connection.
   has a category or a split and to every recurring item (one pass each, in
   plain SQL, which does not move `updated_at`), so on a large ledger it
   takes longer than the earlier revisions; take the backup first, as
-  always. The new columns are nullable or have defaults, but a check now
-  ties `scheduled_transaction.active` to the new `status` column: finish
-  the migration before the new pods take traffic, and do not leave pods of
-  rc.9 running against the migrated database longer than the rollout
-  needs.
+  always. The new columns are nullable or have defaults, but two new checks
+  refuse some writes of rc.9 and earlier: one ties
+  `scheduled_transaction.active` to the new `status` column, the other
+  allows a suggested category only on a row without a category.
+- **Rolling upgrade from rc.9 or earlier: stop, then migrate.** While pods
+  of rc.9 or earlier still run against the migrated database, switching a
+  recurring item on or off, adding one switched off, or setting the
+  category of a transaction that the new release has already given a
+  suggestion fails with an error (nothing is half-written; the person
+  tries again once the new pods serve). Every other write of the old pods
+  still works. Compose always stops the old containers first, so it is not
+  affected. With Helm, scale the api, worker and MCP deployments to zero
+  before `helm upgrade` (see "Database migrations") if you want no such
+  errors; otherwise the window lasts until the old api pods fail
+  `/readyz` (it answers 503 once the database is past their head) and the
+  rollout replaces them. An upgrade from rc.10 or later adds no revision
+  and has no such window.
 - **Your existing categories are kept, and never guessed over.** Every
   transaction that already had a category or a split is marked as
   categorised "before this version" (`legacy`). No merchant list, keyword
