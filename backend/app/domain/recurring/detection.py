@@ -80,7 +80,10 @@ judged against what was uploaded, never against today.
 8. **Habits.** A series whose category is in :data:`HABIT_KEYS` (groceries,
    restaurants, coffee, fuel, parking, fares, shopping) is dropped unless its
    amount is fixed, every gap is regular and it has
-   :data:`HABIT_MIN_COUNT` charges; then it is only suggested.
+   :data:`HABIT_MIN_COUNT` charges; then it is only suggested. So is a series
+   without a category at a store that sells everything (``habit_hint``: the
+   dictionary's ``mixed`` stores, whose rows get a suggestion at most): what
+   is bought there now and then is shopping whether or not anybody filed it.
 9. **Confidence** (0..1, two decimals): ``0.4 * regularity + 0.3 * stability
    + 0.2 * count + 0.1 * known``, where ``stability = 1 - spread / |median
    amount|`` (at least 0; counted as 1 for income and for a bill by its
@@ -231,9 +234,10 @@ class Observed:
     ``transfer``...). ``text_key`` is the letters-only key of the descriptor
     (:func:`normalize_payee`), used only when there is no merchant key and for
     ``p2p``. ``category_key`` is the category's ``system_key`` and
-    ``category_kind`` its kind. ``series_hint`` and ``cadence_hints`` are what
-    the dictionary says about the merchant. ``category_id`` and ``label`` (the
-    text to name a series by) are carried through to the candidate.
+    ``category_kind`` its kind. ``series_hint``, ``cadence_hints`` and
+    ``habit_hint`` (a store that sells everything and bills no series) are
+    what the dictionary says about the merchant. ``category_id`` and ``label``
+    (the text to name a series by) are carried through to the candidate.
     """
 
     id: uuid.UUID
@@ -250,6 +254,7 @@ class Observed:
     category_id: uuid.UUID | None = None
     label: str | None = None
     cadence_hints: frozenset[str] = frozenset()
+    habit_hint: bool = False
 
 
 @dataclass(frozen=True)
@@ -391,6 +396,8 @@ class _Group:
     category_kind: str | None
     loan: bool
     annual_ok: bool
+    #: A store that sells everything, by the dictionary (step 8).
+    general_store: bool = False
 
     @property
     def known(self) -> bool:
@@ -398,6 +405,8 @@ class _Group:
 
     @property
     def habit(self) -> bool:
+        if self.category_key is None:
+            return self.general_store
         return _matches(self.category_key, HABIT_KEYS)
 
     @property
@@ -639,6 +648,7 @@ def _describe(key: str, inflow: bool, members: Sequence[Observed]) -> _Group:
         ),
         loan=_most_common(r.kind for r in members) == "loan_payment",
         annual_ok=not hints or bool(hints & ANNUAL_HINTS),
+        general_store=any(r.habit_hint for r in members),
     )
 
 

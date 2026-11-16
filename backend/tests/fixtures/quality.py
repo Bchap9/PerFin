@@ -7,12 +7,16 @@ scores the series a detector found on ``synth_subscription_ledger.py``. The
 fields are the rows of the design note's table (section 9). Ratios are
 ``None`` when there was nothing to judge (no fact stated, no series found).
 
-``uv run python -m tests.fixtures.quality --today`` prints both for the code
-as it is before the dictionary, the engine and the new detector exist: the
-1,200 lines are imported as a CSV into an empty household of a scratch
-database and their categories read back, and the ledger goes through the
-current ``recurring.detection.detect``. It needs PostgreSQL
-(``PERFIN_TEST_DATABASE_URL``), as the integration tests do.
+``uv run python -m tests.fixtures.quality --now`` prints both for the code as
+it is: the 1,200 lines go through ``engine.identify`` and ``engine.decide``
+as a new household's rows would (:func:`engine_decide`), and the ledger is
+imported month by month into a household of a scratch database with
+detection after each month (:func:`replay`), once with a person filing what
+the engine left open and once with nobody doing so. The second half needs
+PostgreSQL (``PERFIN_TEST_DATABASE_URL``), as the integration tests do;
+``--no-subscriptions`` leaves it out and ``--misses`` lists what was missed.
+The targets are tests: ``tests/unit/test_categorisation_quality.py`` and
+``tests/integration/test_subscription_quality.py``.
 
 **How a line is judged** (the label rules are in ``descriptors.py``):
 
@@ -45,20 +49,27 @@ together from one-off purchases) counts with the decoys; salary is ignored.
 from __future__ import annotations
 
 import argparse
+import calendar
 import re
 import tempfile
 import uuid
 from collections import Counter, defaultdict
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Iterator, Mapping, Sequence
+from contextlib import contextmanager
 from dataclasses import dataclass, field
-from datetime import date, timedelta
+from datetime import UTC, date, datetime, timedelta
+from decimal import Decimal
 from pathlib import Path
 from types import MappingProxyType
-from typing import Final
+from typing import TYPE_CHECKING, Final
 
 from tests.fixtures import synth_subscription_ledger as synth
-from tests.fixtures.descriptors import LABELLED, Labelled
+from tests.fixtures.descriptors import CATEGORY_KEYS, LABELLED, Labelled
 from tests.fixtures.synth_subscription_ledger import Ledger
+
+if TYPE_CHECKING:
+    from app.domain.categorisation.memory import Learned
+    from tests.fixtures.pipeline import Home
 
 #: A failing target prints at most this many misses.
 MISSES_SHOWN: Final = 40
@@ -338,150 +349,242 @@ def subscription_metrics(found: Sequence[FoundSeries], ledger: Ledger) -> Subscr
 
 
 # ---------------------------------------------------------------------------
-# "Today": the code before the dictionary, the engine and the new detector
+# "Now": the clean-up, the dictionary, the engine and the detector as they are
 # ---------------------------------------------------------------------------
 
+#: The moment the figures are taken at: the last day of the planted ledger.
+NOW: Final = datetime(synth.TODAY.year, synth.TODAY.month, synth.TODAY.day, tzinfo=UTC)
+#: What a person files an invented shop under when its label names no category.
+TAUGHT_WHEN_UNLABELLED: Final = "shopping.general"
 
-def _squash(text: str) -> str:
-    return " ".join(text.split())
+#: A new household's categories: every default key, with an id of its own.
+DEFAULT_CATEGORIES: Final[Mapping[str, uuid.UUID]] = MappingProxyType(
+    {key: uuid.uuid5(uuid.NAMESPACE_OID, f"category:{key}") for key in sorted(CATEGORY_KEYS)}
+)
+_KEY_OF: Final[Mapping[uuid.UUID, str]] = MappingProxyType(
+    {category_id: key for key, category_id in DEFAULT_CATEGORIES.items()}
+)
 
 
-def today_categories() -> dict[str, tuple[str | None, bool]]:
-    """Import the labelled lines as one CSV into a new household; what each line got.
+def engine_identify(text: str) -> tuple[str | None, str]:
+    """The merchant key and the kind the engine reads from ``text``."""
+    from app.domain.categorisation import engine
 
-    Squashed descriptor text to (category ``system_key``, is it a fact). A
-    line the importer did not write is absent.
+    identity = engine.identify(text)
+    return identity.key, identity.kind
+
+
+def engine_decide(line: Labelled, learned: Learned | None = None) -> tuple[str | None, bool]:
+    """What a new household's row with this descriptor is given, and whether as a fact.
+
+    No rule, no payee and (unless ``learned`` is passed) nothing learned: the
+    descriptor's kind, the dictionary and the keywords alone.
+    """
+    from app.domain.categorisation import engine
+
+    decision = engine.decide(
+        engine.identify(line.text),
+        "in" if line.sign > 0 else "out",
+        learned=learned,
+        payee_default=None,
+        categories=DEFAULT_CATEGORIES,
+        now=NOW,
+    )
+    if decision.category_id is not None:
+        return _KEY_OF[decision.category_id], True
+    if decision.suggested_category_id is not None:
+        return _KEY_OF[decision.suggested_category_id], False
+    return None, False
+
+
+@dataclass(frozen=True)
+class TeachingMetrics:
+    #: Invented merchants printed twice.
+    merchants: int
+    #: Those whose second line got the taught category as a fact.
+    right: int
+    misses: tuple[str, ...] = field(default=(), compare=False)
+
+    @property
+    def taught_right(self) -> float | None:
+        return _ratio(self.right, self.merchants)
+
+
+def teaching_metrics(lines: Sequence[Labelled] = LABELLED) -> TeachingMetrics:
+    """One correction, then the same merchant again.
+
+    For each invented merchant printed twice, a person files the first line
+    (under the label's category, or :data:`TAUGHT_WHEN_UNLABELLED`). The
+    memory then holds what ``engine.person_decided`` records: one decision
+    for that line's merchant key and direction, if its descriptor is of a
+    teachable kind. The second line is right when the engine states the
+    taught category as a fact.
+    """
+    from app.domain.categorisation import cleanup, engine
+    from app.domain.categorisation.memory import Learned
+
+    by_merchant: dict[str, list[Labelled]] = defaultdict(list)
+    for line in lines:
+        if line.group == "invented" and line.merchant is not None:
+            by_merchant[line.merchant].append(line)
+    pairs = {name: found for name, found in by_merchant.items() if len(found) >= 2}
+    right = 0
+    misses: list[str] = []
+    for name, (first, second, *_) in sorted(pairs.items()):
+        taught = first.category or TAUGHT_WHEN_UNLABELLED
+        corrected = engine.identify(first.text)
+        again = engine.identify(second.text)
+        learned = None
+        if (
+            corrected.key
+            and corrected.kind in cleanup.TEACHABLE
+            and corrected.key == again.key
+            and first.sign == second.sign
+        ):
+            learned = Learned(
+                memory_id=uuid.uuid5(uuid.NAMESPACE_OID, f"memory:{name}"),
+                category_id=DEFAULT_CATEGORIES[taught],
+                decisions=1,
+                total=1,
+                share=Decimal(1),
+                last_decided_at=NOW,
+                merchant_key=corrected.key,
+                direction="in" if first.sign > 0 else "out",
+            )
+        answer = engine_decide(second, learned)
+        if answer == (taught, True):
+            right += 1
+        else:
+            said = f"{answer[0]} ({'fact' if answer[1] else 'suggestion'})" if answer[0] else None
+            misses.append(
+                f"{first.text} [{corrected.key}] then {second.text} [{again.key}] "
+                f"[{taught}] -> {said}"
+            )
+    return TeachingMetrics(merchants=len(pairs), right=right, misses=tuple(misses))
+
+
+def _months(first: date, last: date) -> list[tuple[int, int]]:
+    out = []
+    year, month = first.year, first.month
+    while (year, month) <= (last.year, last.month):
+        out.append((year, month))
+        year, month = (year, month + 1) if month < 12 else (year + 1, 1)
+    return out
+
+
+def replay(home: Home, ledger: Ledger, *, filed: bool) -> list[FoundSeries]:
+    """The ledger through the real pipeline, as a household would live it.
+
+    Each account's rows are uploaded as one CSV per month (the ingest job
+    imports and categorises them), and the daily detection job runs on the
+    last day of every month. Nobody decides anything about a series.
+
+    ``filed``: after each upload the household's person files, in the grid,
+    every new row the engine gave no category whose :attr:`Row.category` names
+    one (the ledger's label is "what a person chose for a local business").
+    What the engine stated is left as it is, right or wrong, and a row the
+    ledger labels with nothing stays open. The corrections teach the memory,
+    so most merchants are filed once. Without it nobody files anything.
+
+    Returns the series the household holds at the end, each with the ledger
+    rows linked to it and the days of its ``price_changed`` events.
     """
     from sqlalchemy import select
 
-    from app.db.rls import set_context
-    from app.db.session import make_sessionmaker
-    from app.domain.imports import service as imports_service
-    from app.domain.transactions.categories import seed_default_categories
-    from app.domain.transactions.models import Category, Transaction
-    from tests.fixtures.factories import Factories
-    from tests.fixtures.imports import make_extracted_document, make_import_mapping, table_result
-    from tests.fixtures.ledger import LedgerFactories
-    from tests.fixtures.scratch_db import scratch_instance
+    from app.domain.transactions.models import Transaction
+    from tests.fixtures.pipeline import Line, squash
 
-    start = date(2026, 1, 1)
-    cells = [["Date", "Description", "Amount"]]
-    for index, line in enumerate(LABELLED):
-        day = start + timedelta(days=index % 270)
-        amount = line.sign * (1000 + index) / 100
-        cells.append([f"{day.month:02d}/{day.day:02d}/{day.year}", line.text, f"{amount:.2f}"])
-    spec = {"date_column": 0, "date_format": "MM/DD/YYYY", "payee_column": 1, "amount_column": 2}
+    household_id = home.household_id
+    accounts = {
+        name: home.ledger.account(household_id, name=name.title(), currency="USD")
+        for name in ledger.coverage
+    }
+    name_of = {account.id: name for name, account in accounts.items()}
+    by_month: dict[tuple[int, int, str], list[int]] = defaultdict(list)
+    for index, planted in enumerate(ledger.rows):
+        by_month[(planted.posted.year, planted.posted.month, planted.account)].append(index)
+    # Ledger rows that wait to be matched to an imported row: by account and line.
+    waiting: dict[tuple[str, date, Decimal, str], list[int]] = defaultdict(list)
+    index_of: dict[uuid.UUID, int] = {}
+    category_ids: dict[str, uuid.UUID] = {}
+    for year, month in _months(synth.START, synth.TODAY):
+        for name, account in accounts.items():
+            indexes = by_month.get((year, month, name), [])
+            if not indexes:
+                continue
+            lines = [
+                Line(ledger.rows[index].posted, ledger.rows[index].amount, ledger.rows[index].text)
+                for index in indexes
+            ]
+            for index, line in zip(indexes, lines, strict=True):
+                waiting[(name, line.posted, Decimal(line.amount), squash(line.text))].append(index)
+            document_id, summary = home.upload(account, lines, f"{name}-{year}-{month:02d}.csv")
+            assert summary["imported"] == len(lines), (name, year, month, summary)
+            imported: list[Transaction] = home.query(
+                select(Transaction).where(Transaction.source_document_id == document_id)
+            )
+            for stored in imported:
+                index_of[stored.id] = waiting[
+                    (name, stored.posted_date, stored.amount, squash(stored.raw_payee))
+                ].pop()
+            for stored in imported if filed else ():
+                label = ledger.rows[index_of[stored.id]].category
+                if stored.category_id is None and label is not None:
+                    if label not in category_ids:
+                        category_ids[label] = home.category(label).id
+                    home.choose(stored.id, category_ids[label])
+        home.detect(date(year, month, calendar.monthrange(year, month)[1]))
+
+    linked: dict[uuid.UUID, set[int]] = defaultdict(set)
+    charges: list[Transaction] = home.query(
+        select(Transaction).where(
+            Transaction.household_id == household_id,
+            Transaction.scheduled_transaction_id.is_not(None),
+        )
+    )
+    for charge in charges:
+        assert charge.scheduled_transaction_id is not None
+        linked[charge.scheduled_transaction_id].add(index_of[charge.id])
+    prices: dict[uuid.UUID, list[date]] = defaultdict(list)
+    for event in home.changes():
+        if event.kind == "price_changed":
+            prices[event.schedule_id].append(event.occurred_on)
+    return [
+        FoundSeries(
+            account=name_of[row.account_id],
+            rows=frozenset(linked[row.id]),
+            status=row.status,
+            kind=row.kind,
+            price_changes=tuple(prices[row.id]),
+        )
+        for row in home.series()
+    ]
+
+
+@contextmanager
+def scratch_home() -> Iterator[Home]:
+    """A new household in a scratch database, for a run outside pytest."""
+    import pytest
+
+    from app.db.session import make_sessionmaker
+    from tests.fixtures.factories import Factories
+    from tests.fixtures.ledger import LedgerFactories
+    from tests.fixtures.pipeline import open_home
+    from tests.fixtures.scratch_db import scratch_instance
 
     with tempfile.TemporaryDirectory() as tmp, scratch_instance() as instance:
         settings = instance.settings(instance.source, Path(tmp))
         engine = instance.source.engine()
         try:
             factories = Factories(make_sessionmaker(engine), settings)
-            owner = factories.user(role="owner")
-            household_id = owner.household_id
-            assert household_id is not None
-            account = LedgerFactories(factories.session_factory).account(household_id)
-            result = table_result(cells)
-            with factories.transaction() as db:
-                set_context(db, household_id)
-                seed_default_categories(db, household_id)
-                mapping = make_import_mapping(db, household_id, spec=spec, rows=cells)
-                document = make_extracted_document(
-                    db, household_id, account=account, result=result, uploaded_by=owner.user.id
-                )
-                imports_service.import_extraction(
-                    db,
-                    document,
-                    result,
-                    mapping_id=mapping.id,
-                    account_id=account.id,
-                    user_id=owner.user.id,
-                )
-            with factories.transaction() as db:
-                set_context(db, household_id)
-                keys: dict[uuid.UUID, str | None] = {}
-                for found_id, key in db.execute(select(Category.id, Category.system_key)):
-                    keys[found_id] = key
-                out: dict[str, tuple[str | None, bool]] = {}
-                for raw, category_id, suggested_id in db.execute(
-                    select(
-                        Transaction.raw_payee,
-                        Transaction.category_id,
-                        Transaction.suggested_category_id,
-                    ).where(Transaction.account_id == account.id)
-                ):
-                    if category_id is not None:
-                        answer: tuple[str | None, bool] = (keys.get(category_id), True)
-                    elif suggested_id is not None:
-                        answer = (keys.get(suggested_id), False)
-                    else:
-                        answer = (None, False)
-                    out[_squash(raw or "")] = answer
-                return out
+            ledger = LedgerFactories(factories.session_factory)
+            with (
+                pytest.MonkeyPatch.context() as patch,
+                open_home(factories, ledger, settings, Path(tmp), patch) as home,
+            ):
+                yield home
         finally:
             engine.dispose()
-
-
-#: The kind of a default category, by the group its key starts with.
-_GROUP_KINDS: Final = MappingProxyType(
-    {"income": "income", "transfers": "transfer", "excluded": "ignore"}
-)
-
-
-def today_series(ledger: Ledger) -> list[FoundSeries]:
-    """The ledger through the detector as it is, with the categories its rows are labelled with.
-
-    Each row is described the way ``recurring.service`` describes a ledger
-    row: who it names (``engine.identify``), what the dictionary says about
-    that merchant, and its category.
-    """
-    from app.domain.categorisation import engine
-    from app.domain.recurring.detection import Observed, detect, normalize_payee
-
-    accounts = {name: uuid.uuid5(uuid.NAMESPACE_OID, name) for name in ledger.coverage}
-    names = {account_id: name for name, account_id in accounts.items()}
-    categories: dict[str, uuid.UUID] = {}
-    index_of: dict[uuid.UUID, int] = {}
-    observed = []
-    for index, row in enumerate(ledger.rows):
-        row_id = uuid.uuid5(uuid.NAMESPACE_OID, f"row:{index}")
-        index_of[row_id] = index
-        category_id = None
-        category_kind = None
-        if row.category is not None:
-            category_id = categories.setdefault(
-                row.category, uuid.uuid5(uuid.NAMESPACE_OID, row.category)
-            )
-            category_kind = _GROUP_KINDS.get(row.category.partition(".")[0], "expense")
-        identity = engine.identify(row.text)
-        merchant = identity.hit.merchant if identity.hit is not None else None
-        observed.append(
-            Observed(
-                id=row_id,
-                account_id=accounts[row.account],
-                posted_date=row.posted,
-                amount=row.amount,
-                merchant_key=identity.key,
-                text_key=normalize_payee(row.text) or None,
-                kind=identity.kind,
-                category_key=row.category,
-                category_kind=category_kind,
-                series_hint=merchant.series if merchant is not None else None,
-                category_id=category_id,
-                label=row.text,
-                cadence_hints=frozenset(merchant.cadences) if merchant is not None else frozenset(),
-            )
-        )
-    clock = {accounts[name]: day for name, day in ledger.coverage.items()}
-    return [
-        FoundSeries(
-            account=names[candidate.account_id],
-            rows=frozenset(index_of[i] for i in candidate.transaction_ids),
-            status=candidate.status,
-            kind=candidate.kind,
-        )
-        for candidate in detect(observed, clock)
-    ]
 
 
 def _percent(value: float | None) -> str:
@@ -501,6 +604,13 @@ def categorisation_report(metrics: CategorisationMetrics) -> list[str]:
     ]
 
 
+def teaching_report(metrics: TeachingMetrics) -> list[str]:
+    return [
+        f"Merchant repeated after one correction: right: {_percent(metrics.taught_right)} "
+        f"({metrics.right} of {metrics.merchants})"
+    ]
+
+
 def subscription_report(metrics: SubscriptionMetrics) -> list[str]:
     return [
         f"Planted series found (active or suggested): {_percent(metrics.found)}",
@@ -516,38 +626,55 @@ def subscription_report(metrics: SubscriptionMetrics) -> list[str]:
     ]
 
 
-def today() -> list[str]:
-    """Both sets of figures for the code as it is now, as lines to print."""
-    from app.domain.categorisation import engine
-
-    got = today_categories()
-
-    def identify(text: str) -> tuple[str | None, str]:
-        identity = engine.identify(text)
-        return identity.key, identity.kind
-
-    def decide(line: Labelled) -> tuple[str | None, bool]:
-        return got.get(_squash(line.text), (None, False))
-
-    ledger = synth.build()
-    lines = [
-        f"Categorisation today ({len(LABELLED)} labelled descriptors, {len(got)} imported):",
-        *(f"  {text}" for text in categorisation_report(categorisation_metrics(identify, decide))),
-        f"Subscriptions today ({len(ledger.rows)} rows, {len(ledger.planted)} planted series, "
-        f"{len(ledger.decoys)} decoys):",
-        *(
-            f"  {text}"
-            for text in subscription_report(subscription_metrics(today_series(ledger), ledger))
-        ),
+def _misses(misses: Mapping[str, Sequence[str]]) -> list[str]:
+    return [
+        f"    {name}: {miss}"
+        for name, found in sorted(misses.items())
+        for miss in found[:MISSES_SHOWN]
     ]
+
+
+def now(*, subscriptions: bool = True, misses: bool = False) -> list[str]:
+    """The figures for the code as it is now, as lines to print."""
+    categorised = categorisation_metrics(engine_identify, engine_decide)
+    taught = teaching_metrics()
+    lines = [
+        f"Categorisation now ({len(LABELLED)} labelled descriptors):",
+        *(f"  {text}" for text in categorisation_report(categorised)),
+        *(f"  {text}" for text in teaching_report(taught)),
+    ]
+    if misses:
+        lines += _misses({**categorised.misses, "taught_right": taught.misses})
+    if subscriptions:
+        ledger = synth.build()
+        lines.append(
+            f"Subscriptions now ({len(ledger.rows)} rows, {len(ledger.planted)} planted series, "
+            f"{len(ledger.decoys)} decoys, imported month by month):"
+        )
+        for filed, who in (
+            (True, "a person files the rows the engine left open (the targets)"),
+            (False, "nobody files anything"),
+        ):
+            with scratch_home() as home:
+                found = subscription_metrics(replay(home, ledger, filed=filed), ledger)
+            lines.append(f"  {who}:")
+            lines += [f"    {text}" for text in subscription_report(found)]
+            if misses:
+                lines += [f"  {miss}" for miss in _misses(found.misses)]
     return lines
 
 
 def main(argv: Sequence[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    parser.add_argument("--today", action="store_true", required=True)
-    parser.parse_args(argv)
-    print("\n".join(today()))
+    parser = argparse.ArgumentParser(description=(__doc__ or "").splitlines()[0])
+    parser.add_argument("--now", action="store_true", required=True)
+    parser.add_argument(
+        "--no-subscriptions",
+        action="store_true",
+        help="the descriptor figures only (these need no database)",
+    )
+    parser.add_argument("--misses", action="store_true", help="also print what was missed")
+    args = parser.parse_args(argv)
+    print("\n".join(now(subscriptions=not args.no_subscriptions, misses=args.misses)))
     return 0
 
 

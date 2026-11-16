@@ -37,7 +37,7 @@ merchants:
 
   # Internet, cable and satellite.
   - {key: xfinity, name: Xfinity (Comcast), category: utilities.internet, series: bill, cadences: [monthly], match: [xfinity, comcast]}
-  - {key: spectrum, name: Spectrum (Charter), category: utilities.internet, series: bill, cadences: [monthly], match: [spectrum internet, spectrum tv, spectrum cable, spectrum charter, charter communications, charter comm, charter spectrum, time warner cable, twc]}
+  - {key: spectrum, name: Spectrum (Charter), category: utilities.internet, series: bill, cadences: [monthly], match: [spectrum mobile internet, spectrum internet, spectrum tv, spectrum cable, spectrum charter, charter communications, charter comm, charter spectrum, time warner cable, twc]}
   - {key: cox communications, name: Cox Communications, category: utilities.internet, series: bill, cadences: [monthly], match: [cox communications, cox comm, cox cable, cox internet]}
   - {key: optimum, name: Optimum (Altice), category: utilities.internet, series: bill, cadences: [monthly], match: [optimum cable, optimum online, optimum internet, altice usa, cablevision, suddenlink]}
   - {key: verizon fios, name: Verizon Fios, category: utilities.internet, series: bill, cadences: [monthly], match: [verizon fios, vz fios, verizon online, fios]}
@@ -76,7 +76,7 @@ merchants:
   - {key: eversource, name: Eversource, category: utilities.electricity, series: bill, cadences: [monthly], match: [eversource]}
   - {key: entergy, name: Entergy, category: utilities.electricity, series: bill, cadences: [monthly], match: [entergy]}
   - {key: ameren, name: Ameren, category: utilities.electricity, series: bill, cadences: [monthly], match: [ameren]}
-  - {key: centerpoint energy, name: CenterPoint Energy, category: utilities.electricity, series: bill, cadences: [monthly], match: [centerpoint energy, centerpoint =]}
+  - {key: centerpoint energy, name: CenterPoint Energy, category: utilities.heating, series: bill, cadences: [monthly], match: [centerpoint energy, centerpoint ener, centerpoint =]}
   - {key: american electric power, name: American Electric Power, category: utilities.electricity, series: bill, cadences: [monthly], match: [american electric power, aep ohio, aep texas, appalachian power, indiana michigan power, aep]}
   - {key: txu energy, name: TXU Energy, category: utilities.electricity, series: bill, cadences: [monthly], match: [txu energy, txu]}
   - {key: reliant energy, name: Reliant Energy, category: utilities.electricity, series: bill, cadences: [monthly], match: [reliant energy]}

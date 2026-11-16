@@ -42,6 +42,7 @@ def rows(
     payee_id: uuid.UUID | None = None,
     account: uuid.UUID = ACCOUNT,
     cadence_hints: frozenset[str] = frozenset(),
+    habit_hint: bool = False,
 ) -> list[Observed]:
     day_list = list(days)
     if isinstance(amounts, (Decimal, str)):
@@ -64,6 +65,7 @@ def rows(
             series_hint=hint,
             payee_id=payee_id,
             cadence_hints=cadence_hints,
+            habit_hint=habit_hint,
         )
         for d, v in zip(day_list, values, strict=True)
     ]
@@ -321,6 +323,20 @@ def test_a_fixed_weekly_car_wash_in_a_habit_category_is_only_suggested() -> None
     assert detect(rows(late, "-12.00", key="glide car wash", category="transport.fuel")) == []
     prices = [f"-{p}.00" for p in (12, 14, 12, 12, 16, 14, 12, 12, 18, 12, 14, 16, 12, 12, 14, 12)]
     assert detect(rows(days, prices, key="glide car wash", category="transport.fuel")) == []
+
+
+def test_a_store_that_sells_everything_is_a_habit_while_nobody_filed_it() -> None:
+    # About monthly and about the same amount, by chance: enough for a series anywhere else.
+    days = monthly(date(2026, 1, 9), 6)
+    amounts = ["-41.20", "-42.05", "-41.10", "-42.60", "-41.95", "-42.40"]
+    assert len(detect(rows(days, amounts, key="everymart"))) == 1
+    assert detect(rows(days, amounts, key="everymart", habit_hint=True)) == []
+    # The same amount on the same day six times is worth a look, and no more.
+    fixed = rows(days, "-14.99", key="everymart", habit_hint=True)
+    assert only(detect(fixed)).status == "suggested"
+    # A category a person or the engine gave says what it is instead of the hint.
+    filed = rows(days, "-14.99", key="everymart", habit_hint=True, category="leisure.subscriptions")
+    assert (only(detect(filed)).status, only(detect(filed)).kind) == ("active", "subscription")
 
 
 def test_two_charges_per_cycle_are_dropped() -> None:

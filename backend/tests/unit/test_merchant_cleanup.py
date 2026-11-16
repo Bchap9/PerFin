@@ -309,7 +309,7 @@ def test_accented_letters_are_folded_not_dropped() -> None:
 def test_the_patterns_are_constants() -> None:
     for pattern, _kind, _signal in (*cleanup.KIND_LINES, *cleanup.KIND_PREFIXES):
         assert isinstance(pattern, re.Pattern)
-    assert cleanup.CLEANER_VERSION == 1
+    assert cleanup.CLEANER_VERSION == 2
 
 
 @pytest.mark.parametrize(
@@ -423,6 +423,8 @@ def test_core(raw: str, core: str, via: str | None) -> None:
         ("ACI*RIVERBEND WATER", "riverbend water", "aci"),
         ("SP * LANTERN BOOKS", "lantern books", "shopify"),
         ("SP LANTERN BOOKS", "lantern books", "shopify"),
+        # Most shops behind Shopify have a name of one word.
+        ("SP LANTERN", "lantern", "shopify"),
     ],
 )
 def test_processors(raw: str, core: str, via: str | None) -> None:
@@ -457,8 +459,9 @@ def test_processors(raw: str, core: str, via: str | None) -> None:
         ("BT CYCLES", "bt cycles"),
         ("FS GARAGE", "fs garage"),
         ("SPORTS HUB", "sports hub"),
-        # Shopify's bare prefix needs two words behind it.
-        ("SP LANTERN", "sp lantern"),
+        # Shopify's bare prefix needs two words behind it, or one of four letters.
+        ("SP AG", "sp ag"),
+        ("SP", "sp"),
         # A processor with nobody behind it is all the line names.
         ("PAYPAL *", "paypal"),
         ("SQ *", "sq"),
@@ -943,3 +946,97 @@ def test_an_order_number_without_a_digit(raw: str, core: str) -> None:
 )
 def test_a_state_behind_one_word(raw: str, core: str) -> None:
     assert clean(raw).core == core
+
+
+# --- found by the quality targets (tests/unit/test_categorisation_quality.py) ---
+
+
+@pytest.mark.parametrize(
+    ("raw", "core", "shorter"),
+    [
+        # Two words in front of a state: the second is the city, or the name's.
+        ("JUNEBUG ASHGROVE OH", "junebug ashgrove", "junebug"),
+        ("SQ *BUTTONWOOD HARLOWTON GA", "buttonwood harlowton", "buttonwood"),
+        ("MASSAGE ENVY CA", "massage envy", "massage"),
+        # One word and a town of two: the town's first word was kept.
+        ("BRAMBLEWOOD MAPLE RIDGE WA", "bramblewood maple", "bramblewood"),
+        (
+            "DEBIT CARD PURCHASE XXXXX9891 WHISTLESTOP RIO VERDANT TX",
+            "whistlestop rio",
+            "whistlestop",
+        ),
+        # A number says where the city begins: nothing is left open.
+        ("JUNEBUG #12 ASHGROVE OH", "junebug", None),
+        ("JUNEBUG 800-555-0142 OH", "junebug", None),
+        # Two words of the name are left: nothing is left open.
+        ("LANTERN BOOKS ALDERTON OH", "lantern books", None),
+        ("LANTERN BOOKS MAPLE RIDGE WA", "lantern books", None),
+        # Two words that are not shaped like a town: one is taken, as before.
+        ("JUNEBUG CEDAR STRAND OR", "junebug cedar", None),
+        # No state, or two letters that are not read as one.
+        ("JUNEBUG ASHGROVE", "junebug ashgrove", None),
+        ("JUNEBUG ASHGROVE CO", "junebug ashgrove", None),
+        ("UNCLE AL", "uncle al", None),
+        ("STARLITE DRIVE IN", "starlite drive in", None),
+        ("TRANSFER TO SAVINGS", "", None),
+    ],
+)
+def test_a_word_that_may_be_the_city_is_kept_and_offered(
+    raw: str, core: str, shorter: str | None
+) -> None:
+    cleaned = clean(raw)
+    assert (cleaned.core, cleaned.shorter) == (core, shorter)
+
+
+@pytest.mark.parametrize(
+    ("raw", "core"),
+    [
+        ("MARATHON PETRO4333 LOWER MERRIT NJ", "marathon petro"),
+        ("PURCHASE 1204 H&M09086 SANTA LUMA CA 31880737734464603054910", "h m"),
+        ("POS PURCHASE AMERICAN AIR001282775083", "american air"),
+        ("LANTERN BOOKS0412 ALDERTON OH", "lantern books"),
+        # Two digits, or a number in front, are part of a name.
+        ("LANTERN STUDIO54", "lantern studio54"),
+        ("FOREVER21 ALDERTON OH", "forever21 alderton"),
+        ("1800LANTERNS", "1800lanterns"),
+        # One letter and four digits is not a word with a number on it.
+        ("LANTERN BOOKS A1234", "lantern books a1234"),
+    ],
+)
+def test_a_number_printed_onto_a_word_goes(raw: str, core: str) -> None:
+    assert clean(raw).core == core
+
+
+@pytest.mark.parametrize(
+    ("raw", "core"),
+    [
+        ("PARAMOUNT+ 866-555-0127 CA", "paramount plus"),
+        ("PURCHASE 0516 PARAMOUNT+ 866-555-0127 CA 28781754327697587437783", "paramount plus"),
+        ("STREAMBOX+", "streambox plus"),
+        ("STREAMBOX+ ANNUAL", "streambox plus annual"),
+        # A sign between two names, or in front of one, is punctuation.
+        ("LANTERN + MAPLE", "lantern maple"),
+        ("LANTERN+MAPLE", "lantern maple"),
+        ("+LANTERN", "lantern"),
+    ],
+)
+def test_a_plus_that_ends_a_name_is_read(raw: str, core: str) -> None:
+    assert clean(raw).core == core
+
+
+@pytest.mark.parametrize(
+    ("raw", "kind", "core"),
+    [
+        ("NAVIENT STDNT LOAN WEB ID: 3829316688", "loan_payment", "navient"),
+        ("ACH DEBIT NELNET STUDNTLOAN 719702316680", "loan_payment", "nelnet"),
+        ("NELNET DES:STUDNTLOAN ID:M1KHGRE5ZV CO ID:2954119753 PPD", "loan_payment", "nelnet"),
+        ("LANTERN SERVICING STUDENT LN PPD ID: 4410772913", "loan_payment", "lantern servicing"),
+        # A shop is not a lender for a word that begins like one.
+        ("STUDENT LOANERS BIKE HIRE", "unknown", "student loaners bike hire"),
+        # A card purchase is a purchase, whatever the shop calls itself.
+        ("POS DEBIT STUDENT LOAN CAFE", "purchase", "student loan cafe"),
+    ],
+)
+def test_a_student_loan_is_a_loan_payment(raw: str, kind: str, core: str) -> None:
+    cleaned = clean(raw)
+    assert (cleaned.kind, cleaned.core) == (kind, core)

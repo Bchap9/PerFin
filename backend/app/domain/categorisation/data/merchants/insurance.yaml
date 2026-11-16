@@ -35,7 +35,7 @@ merchants:
   - {key: aaa insurance, name: AAA Insurance, category: transport.car_insurance, series: bill, cadences: [monthly, half_yearly, annual], mixed: true, match: [aaa insurance, aaa ins, csaa insurance, csaa ins, auto club insurance]}
   - {key: kemper, name: Kemper, category: transport.car_insurance, series: bill, cadences: [monthly, half_yearly], mixed: true, match: [kemper insurance, kemper ins, kemper =]}
   - {key: farm bureau insurance, name: Farm Bureau Insurance, category: transport.car_insurance, series: bill, cadences: [monthly, half_yearly, annual], mixed: true, match: [farm bureau insurance, farm bureau ins, farm bureau mutual]}
-  - {key: lemonade, name: Lemonade, category: housing.insurance, series: bill, cadences: [monthly, annual], mixed: true, match: [lemonade insurance, lemonade ins, lemonade inc]}
+  - {key: lemonade, name: Lemonade, category: housing.insurance, series: bill, cadences: [monthly, annual], mixed: true, match: [lemonade insurance, lemonade ins, lemonade inc, lemonade i lemonade]}
 
   # Home insurance and home warranties.
   - {key: assurant, name: Assurant, category: housing.insurance, series: bill, cadences: [monthly, annual], match: [assurant]}

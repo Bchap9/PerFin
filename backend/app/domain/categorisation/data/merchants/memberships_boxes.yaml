@@ -30,6 +30,17 @@ merchants:
   - {key: regal unlimited, name: Regal Unlimited, category: leisure.events, series: subscription, cadences: [monthly], match: [regal unlimited]}
   - {key: cinemark movie club, name: Cinemark Movie Club, category: leisure.events, series: subscription, cadences: [monthly], match: [cinemark movie club, cinemark club]}
 
+  # Tickets: cinemas and the sites that sell seats. A cinema's membership
+  # (above) has the longer match and wins over the cinema.
+  - {key: amc theatres, name: AMC Theatres, category: leisure.events, match: [amc =, amc theatres, amc theaters, amc theatre, amc online]}
+  - {key: regal, name: Regal, category: leisure.events, match: [regal =, regal cinemas, regal cinema, regal theatres, regal edwards]}
+  - {key: cinemark, name: Cinemark, category: leisure.events, match: [cinemark]}
+  - {key: fandango, name: Fandango, category: leisure.events, match: [fandango]}
+  - {key: ticketmaster, name: Ticketmaster, category: leisure.events, match: [ticketmaster, tm ticketmaster]}
+  - {key: stubhub, name: StubHub, category: leisure.events, match: [stubhub]}
+  - {key: seatgeek, name: SeatGeek, category: leisure.events, match: [seatgeek]}
+  - {key: eventbrite, name: Eventbrite, category: leisure.events, match: [eventbrite]}
+
   # Meal kits and food boxes.
   - {key: hellofresh, name: HelloFresh, category: food.groceries, series: subscription, cadences: [weekly, biweekly, monthly], match: [hellofresh, hello fresh]}
   - {key: blue apron, name: Blue Apron, category: food.groceries, series: subscription, cadences: [weekly, biweekly, monthly], match: [blue apron, blueapron]}

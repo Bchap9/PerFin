@@ -10,7 +10,9 @@
 # A stem that is also a first name or a surname (`wendy`, `mcdonald`,
 # `denny`) is written with ` =`: it is the chain only when it is the whole
 # core, never the start of "Wendy's Flowers" or "McDonald Family Dental".
-# DoorDash and Grubhub are processors in clean-up and have no entry.
+# DoorDash and Grubhub are prefixes in clean-up (`DD *`, `GRUBHUB*`): the
+# engine names the platform as who was paid, by the entries below, which
+# match only the forms a statement prints without the prefix.
 merchants:
   # Burgers, chicken, sandwiches, tacos: counter service.
   - {key: mcdonalds, name: McDonald's, category: food.fast_food, match: [mcdonalds, mcdonald =]}
@@ -148,7 +150,7 @@ merchants:
   - {key: olive garden, name: Olive Garden, category: food.restaurants, match: [olive garden]}
   - {key: red lobster, name: Red Lobster, category: food.restaurants, match: [red lobster]}
   - {key: applebees, name: Applebee's, category: food.restaurants, match: [applebees, applebee =, applebee grill, applebee neighborhood]}
-  - {key: chilis, name: Chili's, category: food.restaurants, match: [chilis, chili grill]}
+  - {key: chilis, name: Chili's, category: food.restaurants, match: [chilis, chili =, chili grill]}
   - {key: tgi fridays, name: TGI Fridays, category: food.restaurants, match: [tgi fridays, tgi friday, tgif]}
   - {key: outback steakhouse, name: Outback Steakhouse, category: food.restaurants, match: [outback steakhouse, outback =]}
   - {key: texas roadhouse, name: Texas Roadhouse, category: food.restaurants, match: [texas roadhouse]}
@@ -216,6 +218,8 @@ merchants:
 
   # Meals brought to the door.
   - {key: uber eats, name: Uber Eats, category: food.delivery, match: [uber eats, ubereats]}
+  - {key: doordash, name: DoorDash, category: food.delivery, match: [doordash inc, doordash order]}
+  - {key: grubhub, name: Grubhub, category: food.delivery, match: [grubhub holdings, grubhubfood]}
   - {key: postmates, name: Postmates, category: food.delivery, match: [postmates]}
   - {key: caviar, name: Caviar, category: food.delivery, match: [trycaviar]}
   - {key: seamless, name: Seamless, category: food.delivery, match: [seamlss]}

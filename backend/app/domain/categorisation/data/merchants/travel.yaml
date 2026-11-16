@@ -12,8 +12,8 @@
 merchants:
   # Airlines.
   - {key: delta air lines, name: Delta Air Lines, category: leisure.travel, match: [delta air, delta airlines]}
-  - {key: american airlines, name: American Airlines, category: leisure.travel, match: [american airlines, american airl]}
-  - {key: united airlines, name: United Airlines, category: leisure.travel, match: [united airlines, united airl]}
+  - {key: american airlines, name: American Airlines, category: leisure.travel, match: [american airlines, american airl, american air =]}
+  - {key: united airlines, name: United Airlines, category: leisure.travel, match: [united airlines, united airl, united =]}
   - {key: southwest airlines, name: Southwest Airlines, category: leisure.travel, match: [southwest airlines, southwest airl, southwes]}
   - {key: jetblue, name: JetBlue, category: leisure.travel, match: [jetblue]}
   - {key: alaska airlines, name: Alaska Airlines, category: leisure.travel, match: [alaska air, alaska airlines, alaska airl]}
@@ -93,8 +93,8 @@ merchants:
 
   # Booking sites and home stays.
   - {key: expedia, name: Expedia, category: leisure.travel, match: [expedia]}
-  - {key: booking com, name: Booking.com, category: leisure.travel, match: [booking com, booking =]}
-  - {key: hotels com, name: Hotels.com, category: leisure.travel, match: [hotels com, hotelscom]}
+  - {key: booking com, name: Booking.com, category: leisure.travel, match: [booking com, booking =, hotel at booking]}
+  - {key: hotels com, name: Hotels.com, category: leisure.travel, match: [hotels com, hotelscom, hotels =]}
   - {key: priceline, name: Priceline, category: leisure.travel, match: [priceline]}
   - {key: orbitz, name: Orbitz, category: leisure.travel, match: [orbitz]}
   - {key: travelocity, name: Travelocity, category: leisure.travel, match: [travelocity]}
@@ -108,7 +108,7 @@ merchants:
   - {key: costco travel, name: Costco Travel, category: leisure.travel, match: [costco travel]}
 
   # Car hire.
-  - {key: hertz, name: Hertz, category: leisure.travel, match: [hertz]}
+  - {key: hertz, name: Hertz, category: leisure.travel, match: [hertz, the hertz]}
   - {key: avis, name: Avis, category: leisure.travel, match: [avis]}
   - {key: budget rent a car, name: Budget Rent a Car, category: leisure.travel, match: [budget rent, budget car rental]}
   - {key: enterprise rent a car, name: Enterprise Rent-A-Car, category: leisure.travel, match: [enterprise rent, enterprise car rental]}

@@ -27,7 +27,7 @@ merchants:
 
   # Furniture, bedding and furnishings.
   - {key: ikea, name: IKEA, category: shopping.home, match: [ikea]}
-  - {key: bed bath and beyond, name: Bed Bath & Beyond, category: shopping.home, match: [bed bath beyond, bed bath and beyond]}
+  - {key: bed bath and beyond, name: Bed Bath & Beyond, category: shopping.home, match: [bed bath beyond, bed bath and beyond, bedbath beyond, bedbathandbeyond]}
   - {key: homegoods, name: HomeGoods, category: shopping.home, match: [homegoods, home goods]}
   - {key: at home, name: At Home, category: shopping.home, match: [at home store, at home stores]}
   - {key: crate and barrel, name: Crate & Barrel, category: shopping.home, match: [crate barrel, crate and barrel]}
@@ -52,8 +52,8 @@ merchants:
   - {key: sleep number, name: Sleep Number, category: shopping.home, match: [sleep number]}
   - {key: tempur pedic, name: Tempur-Pedic, category: shopping.home, match: [tempur pedic, tempurpedic]}
   - {key: casper, name: Casper, category: shopping.home, match: [casper sleep]}
-  - {key: the container store, name: The Container Store, category: shopping.home, match: [container store, the container store]}
-  - {key: kirklands, name: Kirkland's Home, category: shopping.home, match: [kirklands, kirkland home]}
+  - {key: the container store, name: The Container Store, category: shopping.home, match: [container store, the container store, containerstore]}
+  - {key: kirklands, name: Kirkland's Home, category: shopping.home, match: [kirklands, kirkland =, kirkland home]}
   - {key: world market, name: World Market, category: shopping.home, match: [world market, cost plus world]}
   - {key: yankee candle, name: Yankee Candle, category: shopping.home, match: [yankee candle]}
   - {key: z gallerie, name: Z Gallerie, category: shopping.home, match: [z gallerie]}

@@ -451,3 +451,73 @@ def test_a_key_the_household_does_not_have_falls_back_to_the_group_then_nothing(
 def test_a_decision_is_a_fact_or_a_suggestion_never_both() -> None:
     assert Decimal("0.80") == engine.APPLY_MIN
     assert Decision() == Decision(None, None, None, None)
+
+
+# --- found by the quality targets (tests/unit/test_categorisation_quality.py) ---
+
+
+@pytest.mark.parametrize(
+    ("raw", "key"),
+    [
+        # An order through a platform is the platform's, whatever it names.
+        ("DD *DOORDASH PANDAEXPR", "doordash"),
+        ("DOORDASH*LANTERN THAI", "doordash"),
+        ("GRUBHUB*TACOBELL", "grubhub"),
+        ("IC* COSTCO BY INSTACART", "instacart"),
+        ("EB *SUMMER LANTERN FEST 877-555-0136 TX", "eventbrite"),
+        # Without the prefix, when the line begins with its name.
+        ("PP*DOORDASH", "doordash"),
+        ("GRUBHUB HARBOR PIZZA", "grubhub"),
+        ("CHECKCARD 1218 GRUBHUB HOLDINGS INC 04412322799069168386015", "grubhub"),
+        # The platform's own membership stays what it is.
+        ("DD *DOORDASH DASHPASS", "dashpass"),
+        # Any other processor only fronts the merchant.
+        ("PAYPAL *TACOBELL", "taco bell"),
+        ("SQ *LANTERN THAI", "lantern thai"),
+    ],
+)
+def test_an_order_through_a_platform_is_the_platform_s(raw: str, key: str) -> None:
+    assert engine.identify(raw).key == key
+
+
+def test_a_platform_order_is_a_fact_in_the_platform_s_category() -> None:
+    categories = {"food.delivery": CATEGORIES["food.restaurants"], "food.fast_food": OWN}
+    identity = engine.identify("PURCHASE AUTHORIZED ON 02/12 GRUBHUB*TACOBELL S336228209290428")
+    assert identity.hit is not None
+    assert (identity.hit.merchant.category, identity.via) == ("food.delivery", "grubhub")
+    assert _decide(identity, categories=categories) == Decision(
+        category_id=categories["food.delivery"], source="dictionary", confidence=Decimal("0.85")
+    )
+
+
+@pytest.mark.parametrize(
+    ("raw", "key"),
+    [
+        # A shop nobody knows: the word in front of the state is the city.
+        ("JUNEBUG ASHGROVE OH", "junebug"),
+        ("SQ *BUTTONWOOD HARLOWTON GA", "buttonwood"),
+        ("POS PURCHASE STONECROP ELKTON FALLS MT", "stonecrop"),
+        # ... as its other lines say.
+        ("IN *JUNEBUG", "junebug"),
+        ("JUNEBUG #12 ASHGROVE OH", "junebug"),
+        # A word that says what is sold is no town.
+        ("CORNER PHARMACY OH", "corner pharmacy"),
+        ("LANTERN PIZZA TX", "lantern pizza"),
+        # The dictionary knows the longer name.
+        ("MASSAGE ENVY CA", "massage envy"),
+        ("TRADER JOE S WA", "trader joes"),
+        # A chain's name in front of another word is left as printed: it is
+        # neither the chain nor a shop of one word.
+        ("SUBWAY ALDERTON TX", "subway alderton"),
+        ("TARGET SPORTS OH", "target sports"),
+    ],
+)
+def test_an_unknown_shop_in_front_of_a_state_loses_the_city(raw: str, key: str) -> None:
+    assert engine.identify(raw).key == key
+
+
+def test_the_shorter_name_is_only_the_key() -> None:
+    identity = engine.identify("JUNEBUG ASHGROVE OH")
+    # The core, which keywords are read from, is what clean-up gave.
+    assert (identity.key, identity.core, identity.hit) == ("junebug", "junebug ashgrove", None)
+    assert identity.name == "Junebug"

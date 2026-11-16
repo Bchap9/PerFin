@@ -96,7 +96,7 @@ merchants:
   - {key: h mart, name: H Mart, category: food.groceries, match: [h mart, hmart]}
   - {key: 99 ranch market, name: 99 Ranch Market, category: food.groceries, match: [99 ranch]}
 
-  # Groceries brought to the door. DoorDash and Grubhub are processors in
+  # Groceries brought to the door. DoorDash and Grubhub are prefixes in
   # clean-up and have no entry; `IC*` in front of a shop is Instacart acting
   # for that shop, and the shop is found.
   - {key: amazon fresh, name: Amazon Fresh, category: food.groceries, match: [amazon fresh, amzn fresh]}
@@ -109,7 +109,7 @@ merchants:
   - {key: total wine, name: Total Wine & More, category: food.alcohol, match: [total wine, totalwine]}
   - {key: bevmo, name: BevMo!, category: food.alcohol, match: [bevmo]}
   - {key: abc fine wine, name: ABC Fine Wine & Spirits, category: food.alcohol, match: [abc fine wine]}
-  - {key: binnys, name: Binny's Beverage Depot, category: food.alcohol, match: [binnys =, binny beverage]}
-  - {key: specs wines, name: Spec's Wines Spirits & Finer Foods, category: food.alcohol, match: [specs wines, spec wines, specs liquor, spec liquor]}
+  - {key: binnys, name: Binny's Beverage Depot, category: food.alcohol, match: [binnys =, binnys beverage, binny beverage]}
+  - {key: specs wines, name: Spec's Wines Spirits & Finer Foods, category: food.alcohol, match: [specs =, spec =, specs wines, spec wines, specs liquor, spec liquor]}
   - {key: twin liquors, name: Twin Liquors, category: food.alcohol, match: [twin liquors]}
   - {key: drizly, name: Drizly, category: food.alcohol, match: [drizly]}

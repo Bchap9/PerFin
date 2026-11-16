@@ -38,7 +38,7 @@ merchants:
     category: leisure.subscriptions
     series: subscription
     cadences: [monthly, annual]
-    match: [paramount plus, paramountplus]
+    match: [paramount plus, paramountplus, paramntplus]
 
   - key: peacock
     name: Peacock

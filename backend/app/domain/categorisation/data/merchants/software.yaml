@@ -22,11 +22,11 @@ merchants:
   - {key: google workspace, name: Google Workspace, category: leisure.software, series: subscription, cadences: [monthly, annual], match: [google workspace, google gsuite, google g suite]}
   - {key: google cloud, name: Google Cloud, category: leisure.software, series: subscription, cadences: [monthly], match: [google cloud]}
   - {key: google store, name: Google Store, category: shopping.electronics, match: [google store, google google store]}
-  - {key: microsoft 365, name: Microsoft 365, category: leisure.software, series: subscription, cadences: [monthly, annual], match: [microsoft 365, microsoft office, msft office, microsoft365]}
+  - {key: microsoft 365, name: Microsoft 365, category: leisure.software, series: subscription, cadences: [monthly, annual], match: [microsoft 365, microsoft office, msft office, microsoft365, microsoft microsoft 365]}
   - {key: apple icloud, name: iCloud, category: leisure.software, series: subscription, cadences: [monthly], match: [apple icloud, icloud]}
 
   # Creative and office tools.
-  - {key: adobe, name: Adobe, category: leisure.software, series: subscription, cadences: [monthly, annual], match: [adobe =, adobe creative, adobe acropro, adobe acrobat, adobe systems, adobe photogphy, adobe photography, adobe stock, adobe express, adobe premiere, adobe lightroom, adobe cc]}
+  - {key: adobe, name: Adobe, category: leisure.software, series: subscription, cadences: [monthly, annual], match: [adobe =, adobesystem, adobesystems, adobe creative, adobe acropro, adobe acrobat, adobe systems, adobe photogphy, adobe photography, adobe stock, adobe express, adobe premiere, adobe lightroom, adobe cc]}
   - {key: canva, name: Canva, category: leisure.software, series: subscription, cadences: [monthly, annual], match: [canva]}
   - {key: figma, name: Figma, category: leisure.software, series: subscription, cadences: [monthly, annual], match: [figma]}
   - {key: grammarly, name: Grammarly, category: leisure.software, series: subscription, cadences: [monthly, quarterly, annual], match: [grammarly]}

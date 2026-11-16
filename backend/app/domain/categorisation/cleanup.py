@@ -25,13 +25,16 @@ The steps, in order (design note, section 3):
    (:data:`_LEADING_NUMBER`). What is left is read once more for a
    person-to-person service (:data:`_P2P`): behind ``POS DEBIT`` or ``ACH
    DEBIT`` the line is as much a payment between people as with nothing in
-   front of it.
+   front of it. A line that speaks of a student loan (:data:`_STUDENT_LOAN`)
+   is a loan payment to whoever it names.
 4. A processor in front of the merchant (:data:`PROCESSORS`: ``SQ *``,
    ``TST*``, ``PAYPAL *``...) leaves the text and is recorded as ``via``. A
    marketplace or platform (``APPLE.COM/BILL``, ``GOOGLE *``, ``AMZN``,
    ``UBER *``) is not a processor: it is who was paid.
 5. Telephone numbers, a ZIP, and a final state with the city in front of it.
-6. Store, terminal and order numbers.
+6. Store, terminal and order numbers, also one printed onto the end of a
+   word ("PETRO4333"). A "+" at the end of a name is the word it is read as
+   ("PARAMOUNT+" is "paramount plus").
 7. Web endings, possessives and company suffixes.
 
 What is left is the core: lower-case ``a-z0-9`` tokens, at most
@@ -47,6 +50,13 @@ that state. Without a number one word is taken for the city, and a second
 when the pair is shaped like a town's name ("NEW ...", "... FALLS"), as long
 as two words of the name are left. A wrong guess costs a word of the name on
 every line of that shop alike, which a merchant key survives.
+
+Where that rule keeps a word that may as well be the city ("JUNEBUG ASHGROVE
+OH": a shop of one word in Ashgrove, or the shop "Junebug Ashgrove"?), the
+core keeps it and ``shorter`` is the core without it. A card line prints a
+city in front of the state far more often than nothing, so whoever knows the
+name by neither reading (``engine.identify``) takes the shorter one, and the
+shop is then the one a line "SQ *JUNEBUG" names too.
 
 Every pattern is a module constant, anchored or guarded so that it cannot
 backtrack over the line, and none is built from data.
@@ -64,7 +74,7 @@ from app.domain.transactions.models import PAYEE_MAX
 
 #: Bumped when clean-up changes what it returns; a household whose rows were
 #: keyed with an older version is refreshed.
-CLEANER_VERSION: Final = 1
+CLEANER_VERSION: Final = 2
 
 DescriptorKind = Literal[
     "purchase",
@@ -292,7 +302,12 @@ _DESCR_MAX: Final = 16
 _DESCR_PAYROLL: Final = re.compile(
     r"(?:^| )(?:PAYROLL|PAYRL|SALARY|PAYCHECK)(?: |$)|^DIR(?:ECT)? DEP"
 )
-_DESCR_LOAN: Final = re.compile(r"(?:^| )(?:LOAN|LN|MORTGAGE|MTG)(?: |$)")
+_DESCR_LOAN: Final = re.compile(
+    r"(?:^| )(?:(?:STUDENT|STUDNT|STDNT) ?)?(?:LOAN|LN|MORTGAGE|MTG)(?: |$)"
+)
+#: "STUDENT LOAN" as a servicer's ACH entry prints it ("STDNT LOAN", "STUDNTLOAN"),
+#: on a line without labels.
+_STUDENT_LOAN: Final = re.compile(rf"{_START}(?:STUDENT|STUDNT|STDNT) ?(?:LOAN|LN)S?{_END}")
 _DESCR_CARD: Final = "CRCARDPMT"
 _DESCR_PAYMENT: Final = frozenset(
     {
@@ -350,7 +365,7 @@ _LEADING_NUMBER: Final = re.compile(r"(?:0\d{2,}|\d{6,}) (?=\S)")
 #: A payment processor's literal prefix and the ``via`` it gives. The first
 #: prefix the text starts with wins, so a longer prefix stands before any
 #: shorter one it begins with. Each is told from a name by its ``*`` (or its
-#: dot), except the bare ``SP `` (:data:`_NEEDS_TWO`).
+#: dot), except the bare ``SP `` (:data:`_BARE`).
 PROCESSORS: Final[tuple[tuple[str, str], ...]] = (
     ("PADDLE.NET*", "paddle"),
     ("DOORDASH*", "doordash"),
@@ -378,8 +393,10 @@ PROCESSORS: Final[tuple[tuple[str, str], ...]] = (
     ("SP ", "shopify"),
 )
 #: Prefixes with nothing but a space to tell them from a name: read as a
-#: processor only when at least two words follow.
-_NEEDS_TWO: Final = frozenset({"SP "})
+#: processor when two words follow, or one word of at least
+#: :data:`_BARE_WORD_MIN` letters ("SP COPPERLINE"; not "SP 500" or "SP AG").
+_BARE: Final = frozenset({"SP "})
+_BARE_WORD_MIN: Final = 4
 #: First words that make such a prefix part of a company's own name ("SP PLUS").
 _NAME_AFTER: Final = frozenset({"PLUS"})
 
@@ -408,6 +425,12 @@ _VOWELS: Final = frozenset("AEIOU")
 _LONG_NUMBER: Final = re.compile(r"\d{5,}|\d{5}-\d{4}")
 #: A store or terminal code: "F12345", "T-1234".
 _STORE_CODE: Final = re.compile(r"[A-Z]\d{5,}|[A-Z]-\d{3,}")
+#: A store or ticket number printed onto the end of a word ("PETRO4333",
+#: "H&M09086", "AIR001282775083"): four digits or more behind two letters.
+#: "STUDIO54" and "FOREVER21" are names.
+_GLUED_NUMBER: Final = re.compile(rf"(?<=[A-Z&][A-Z])\d{{4,}}{_END}")
+#: "PARAMOUNT+", "DISNEY+": the sign is part of the name and is read "plus".
+_PLUS_SIGN: Final = re.compile(rf"(?<=[A-Z])\+{_END}")
 _NUMBER_DIGITS_MIN: Final = 3
 #: An order number printed without a "*": this long, with this many digits
 #: and changes between letters and digits.
@@ -475,6 +498,9 @@ class Cleaned:
     #: The processor or marketplace the charge came through, when one was read.
     via: str | None = None
     signals: frozenset[str] = frozenset()
+    #: The core without its last word, when that word may be the city in
+    #: front of a state (module doc); ``None`` when the line leaves no doubt.
+    shorter: str | None = None
 
 
 def canonical(raw: str | None) -> str:
@@ -584,10 +610,13 @@ def _processor(text: str) -> tuple[str | None, str]:
         rest = text[len(prefix) :].lstrip(" *")
         words = rest.split()
         named = sum(1 for token in words if any(ch.isalnum() for ch in token))
-        bare = prefix in _NEEDS_TWO
-        if bare and words and words[0] in _NAME_AFTER:
-            return None, text
-        if named >= (_NAME_TOKENS_MIN if bare else 1):
+        if prefix in _BARE:
+            if words and words[0] in _NAME_AFTER:
+                return None, text
+            one_word = named == 1 and words[0].isalpha() and len(words[0]) >= _BARE_WORD_MIN
+            if named < _NAME_TOKENS_MIN and not one_word:
+                return None, text
+        if named >= 1:
             return via, rest
         # Nobody stands behind it: the line names the processor itself.
         return None, text
@@ -634,40 +663,53 @@ def _is_web(token: str) -> bool:
     return any(ending in token for ending in _WEB_ENDINGS)
 
 
-def _strip_place(tokens: list[str]) -> None:
-    """Remove a final ZIP, state and city from ``tokens`` (module doc)."""
+def _town_shaped(first: str, last: str) -> bool:
+    return first in _CITY_FIRST or last in _CITY_LAST
+
+
+def _strip_place(tokens: list[str]) -> bool:
+    """Remove a final ZIP, state and city from ``tokens`` (module doc).
+
+    Returns whether the last token left may be the city as well: the rule
+    that two words of a name stay is all that kept it.
+    """
     while len(tokens) > 1 and (tokens[-1] == _MARK or _LONG_NUMBER.fullmatch(tokens[-1])):
         tokens.pop()
     if len(tokens) < _NAME_TOKENS_MIN or tokens[-1] not in _STATES:
-        return
+        return False
     state = tokens[-1]
     before = len(tokens) - 1
     # A web address where the city goes.
     if before >= _NAME_TOKENS_MIN and _is_web(tokens[-2]):
         del tokens[-2:]
-        return
+        return False
     # A number says where the city begins: everything from there on is the place.
     words = 0
     while words < _CITY_TOKENS_MAX and words < before and _is_word(tokens[before - 1 - words]):
         words += 1
     if before - words >= _NAME_TOKENS_MIN and _is_number(tokens[before - 1 - words]):
         del tokens[before - words :]
-        return
+        return False
     if state in _STATE_NEEDS_NUMBER or (state == "IN" and tokens[-2] in _BEFORE_IN):
-        return
+        return False
     # Two letters behind a single word are as likely its name ("UNCLE AL").
     if before < _NAME_TOKENS_MIN and not _is_web(tokens[0]):
-        return
+        return False
     tokens.pop()
     # No number: one word of city, two when the pair is shaped like a town's name.
-    if len(tokens) > _NAME_TOKENS_MIN and _is_word(tokens[-1]):
-        last = tokens.pop()
-        if (
-            len(tokens) > _NAME_TOKENS_MIN
-            and _is_word(tokens[-1])
-            and (tokens[-1] in _CITY_FIRST or last in _CITY_LAST)
-        ):
-            tokens.pop()
+    if not _is_word(tokens[-1]):
+        return False
+    if len(tokens) <= _NAME_TOKENS_MIN:
+        # "<word> <word> <state>": the second word is the city or the name's.
+        return len(tokens) == _NAME_TOKENS_MIN and _is_word(tokens[0])
+    last = tokens.pop()
+    if not (_is_word(tokens[-1]) and _town_shaped(tokens[-1], last)):
+        return False
+    if len(tokens) > _NAME_TOKENS_MIN:
+        tokens.pop()
+        return False
+    # "<word> <town> <town> <state>": the first word of the town was kept.
+    return _is_word(tokens[0])
 
 
 def _strip_numbers(tokens: list[str]) -> list[str]:
@@ -707,16 +749,8 @@ def _bounded(tokens: list[str]) -> str:
     return " ".join(tokens)[:CORE_MAX].strip()
 
 
-def _core(text: str) -> str:
-    """The merchant in ``text``: no place, no number, no web ending, no company suffix."""
-    text = _PHONE.sub(_MARKED, text)
-    text = _HASH_NUMBER.sub(_MARKED, text)
-    text = _STORE_NUMBER.sub(_MARKED, text)
-    text = _STAR_CODE.sub(_star_code, text)
-    tokens = [
-        token for token in text.split() if token == _MARK or any(ch.isalnum() for ch in token)
-    ]
-    _strip_place(tokens)
+def _name(tokens: list[str]) -> str:
+    """The core made of ``tokens``: no number, no web ending, no company suffix."""
     named = " ".join(_web_name(token) for token in _strip_numbers(tokens))
     folded = _fold(_POSSESSIVE.sub("", named)).split()
     # A possessive printed apart ("TRADER JOE S"), then what kind of company it is.
@@ -724,6 +758,23 @@ def _core(text: str) -> str:
     while len(folded) > 1 and folded[-1] in _COMPANY_SUFFIXES:
         folded.pop()
     return _bounded(folded)
+
+
+def _core(text: str) -> tuple[str, str | None]:
+    """The merchant in ``text`` without place and numbers, and its shorter reading if any."""
+    text = _PHONE.sub(_MARKED, text)
+    text = _PLUS_SIGN.sub(" PLUS", text)
+    text = _GLUED_NUMBER.sub(_MARKED, text)
+    text = _HASH_NUMBER.sub(_MARKED, text)
+    text = _STORE_NUMBER.sub(_MARKED, text)
+    text = _STAR_CODE.sub(_star_code, text)
+    tokens = [
+        token for token in text.split() if token == _MARK or any(ch.isalnum() for ch in token)
+    ]
+    open_city = _strip_place(tokens)
+    core = _name(tokens)
+    shorter = _name(tokens[:-1]) if open_city else ""
+    return core, shorter if shorter and shorter != core else None
 
 
 def clean(raw: str | None) -> Cleaned:
@@ -751,6 +802,9 @@ def clean(raw: str | None) -> Cleaned:
         signals.add(signal)
     if kind in _NO_CORE:
         return Cleaned(core="", kind=kind, signals=frozenset(signals))
+    if kind in _ACH_OPEN and _STUDENT_LOAN.search(rest):
+        kind = "loan_payment"
+        rest = _STUDENT_LOAN.sub(" ", rest)
     rest = _strip_trailers(rest)
     numbered = _LEADING_NUMBER.match(rest) if wording else None
     if numbered is not None:
@@ -762,4 +816,5 @@ def clean(raw: str | None) -> Cleaned:
         core = _fold(service.group(1) or _SQUARE_CASH)
         return Cleaned(core=core, kind="p2p", signals=frozenset(signals))
     via, rest = _processor(rest)
-    return Cleaned(core=_core(rest), kind=kind, via=via, signals=frozenset(signals))
+    core, shorter = _core(rest)
+    return Cleaned(core=core, kind=kind, via=via, signals=frozenset(signals), shorter=shorter)

@@ -7,8 +7,9 @@
 # food under one name, so it is `mixed`: its category is only ever a
 # suggestion. A warehouse club's or a grocer's fuel is its own entry with a
 # longer match than the store's. A brand whose name is an everyday word or a
-# place ("Shell", "Pilot", "Marathon", "Gulf", "Sinclair", "Firestone",
-# "Napa", "Bart") is matched only together with its second word.
+# place ("Shell", "Gulf", "Sinclair", "Bart") is matched only together with
+# its second word; "Pilot", "Marathon", "Firestone", "Napa" and "Love's" also
+# when the word is all the line names (` =`), as a station's own line is.
 merchants:
   # Fuel brands.
   - {key: shell, name: Shell, category: transport.fuel, match: [shell oil, shell service, shell station, shell gas]}
@@ -18,8 +19,8 @@ merchants:
   - {key: texaco, name: Texaco, category: transport.fuel, match: [texaco]}
   - {key: bp, name: BP, category: transport.fuel, match: [bp]}
   - {key: amoco, name: Amoco, category: transport.fuel, match: [amoco]}
-  - {key: arco, name: ARCO, category: transport.fuel, match: [arco =]}
-  - {key: marathon, name: Marathon, category: transport.fuel, match: [marathon petro, marathon petroleum, marathon gas]}
+  - {key: arco, name: ARCO, category: transport.fuel, match: [arco =, arco ampm]}
+  - {key: marathon, name: Marathon, category: transport.fuel, match: [marathon =, marathon petro, marathon petroleum, marathon gas]}
   - {key: speedway, name: Speedway, category: transport.fuel, match: [speedway =]}
   - {key: sunoco, name: Sunoco, category: transport.fuel, match: [sunoco]}
   - {key: valero, name: Valero, category: transport.fuel, match: [valero]}
@@ -30,8 +31,8 @@ merchants:
   - {key: sinclair, name: Sinclair, category: transport.fuel, match: [sinclair oil, sinclair gas]}
   - {key: gulf oil, name: Gulf, category: transport.fuel, match: [gulf oil, gulf gas]}
   - {key: murphy usa, name: Murphy USA, category: transport.fuel, match: [murphy usa, murphy express, murphy oil]}
-  - {key: pilot flying j, name: Pilot Flying J, category: transport.fuel, match: [pilot travel, pilot flying j, flying j]}
-  - {key: loves travel stops, name: Love's Travel Stops, category: transport.fuel, match: [loves =, love travel, love country, love outside, loves travel, loves country]}
+  - {key: pilot flying j, name: Pilot Flying J, category: transport.fuel, match: [pilot =, pilot travel, pilot flying j, flying j]}
+  - {key: loves travel stops, name: Love's Travel Stops, category: transport.fuel, match: [loves =, love =, love travel, love country, love outside, loves travel, loves country]}
   - {key: travelcenters of america, name: TravelCenters of America, category: transport.fuel, match: [ta travel, travelcenters of america, petro stopping]}
   - {key: cenex, name: Cenex, category: transport.fuel, match: [cenex]}
   - {key: kwik fill, name: Kwik Fill, category: transport.fuel, match: [kwik fill]}
@@ -91,7 +92,7 @@ merchants:
   - {key: mbta, name: MBTA, category: transport.public_transit, match: [mbta]}
   - {key: ventra, name: Ventra, category: transport.public_transit, match: [ventra, cta ventra]}
   - {key: metra, name: Metra, category: transport.public_transit, match: [metra]}
-  - {key: clipper, name: Clipper, category: transport.public_transit, match: [clipper systems, clipper card, bart clipper]}
+  - {key: clipper, name: Clipper, category: transport.public_transit, match: [clipper systems, clipper card, clipper service, bart clipper]}
   - {key: caltrain, name: Caltrain, category: transport.public_transit, match: [caltrain]}
   - {key: trimet, name: TriMet, category: transport.public_transit, match: [trimet]}
   - {key: orca, name: ORCA, category: transport.public_transit, match: [orca card, myorca]}
@@ -122,7 +123,7 @@ merchants:
   - {key: jiffy lube, name: Jiffy Lube, category: transport.car_maintenance, match: [jiffy lube]}
   - {key: valvoline, name: Valvoline Instant Oil Change, category: transport.car_maintenance, match: [valvoline]}
   - {key: take 5 oil change, name: Take 5 Oil Change, category: transport.car_maintenance, match: [take 5]}
-  - {key: firestone, name: Firestone Complete Auto Care, category: transport.car_maintenance, match: [firestone complete, firestone auto, firestone tire, firestone store]}
+  - {key: firestone, name: Firestone Complete Auto Care, category: transport.car_maintenance, match: [firestone =, firestone complete, firestone auto, firestone tire, firestone store]}
   - {key: goodyear, name: Goodyear, category: transport.car_maintenance, match: [goodyear =, goodyear tire, goodyear auto]}
   - {key: discount tire, name: Discount Tire, category: transport.car_maintenance, match: [discount tire, america tire, americas tire]}
   - {key: pep boys, name: Pep Boys, category: transport.car_maintenance, match: [pep boys]}
@@ -131,7 +132,7 @@ merchants:
   - {key: autozone, name: AutoZone, category: transport.car_maintenance, match: [autozone, auto zone]}
   - {key: oreilly auto parts, name: O'Reilly Auto Parts, category: transport.car_maintenance, match: [oreilly =, oreilly auto, o reilly auto]}
   - {key: advance auto parts, name: Advance Auto Parts, category: transport.car_maintenance, match: [advance auto]}
-  - {key: napa auto parts, name: NAPA Auto Parts, category: transport.car_maintenance, match: [napa auto]}
+  - {key: napa auto parts, name: NAPA Auto Parts, category: transport.car_maintenance, match: [napa =, napa auto, napa store]}
   - {key: les schwab, name: Les Schwab Tire Centers, category: transport.car_maintenance, match: [les schwab]}
   - {key: big o tires, name: Big O Tires, category: transport.car_maintenance, match: [big o tires]}
   - {key: mavis, name: Mavis Tires & Brakes, category: transport.car_maintenance, match: [mavis tire, mavis tires, mavis discount]}

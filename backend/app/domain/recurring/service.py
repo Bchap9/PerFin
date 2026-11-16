@@ -570,6 +570,7 @@ def _read(
                 category_id=category_id,
                 label=raw_payee,
                 cadence_hints=frozenset(merchant.cadences) if merchant is not None else frozenset(),
+                habit_hint=merchant is not None and merchant.mixed and merchant.series is None,
             )
         )
     return _Ledger(rows, as_of, links)

@@ -122,6 +122,12 @@ KIND_CATEGORIES: Final[Mapping[tuple[DescriptorKind, Direction], tuple[str, Deci
     ("payroll", "in"): ("income.salary", Decimal("0.85")),
     ("refund", "in"): ("income.refunds", Decimal("0.80")),
 }
+#: Processors that are who was paid: an order through a delivery or ticket
+#: platform is the platform's (its ``via`` is the key of its dictionary
+#: entry), whatever restaurant, shop or event the line names behind it. The
+#: platform's own membership, a dictionary entry with a ``series``, stays
+#: what it is.
+PLATFORMS: Final = frozenset({"doordash", "grubhub", "instacart", "eventbrite"})
 #: Kinds that say nothing about what the money was for: never guessed, whatever
 #: the memory, the dictionary or a keyword would say.
 NEVER_GUESSED: Final[frozenset[DescriptorKind]] = frozenset({"check", "deposit", "p2p"})
@@ -189,11 +195,47 @@ def display_name(key: str | None) -> str | None:
     return dictionary.name_for(key) or key.title()
 
 
+def _platform(cleaned: cleanup.Cleaned, hit: Hit | None) -> Hit | None:
+    """The platform an order came through, when that is who was paid (:data:`PLATFORMS`).
+
+    Behind the platform's prefix every line is the platform's, except its own
+    membership. Without the prefix, a line nobody else claims that begins
+    with the platform's name is ("GRUBHUB HARBOR PIZZA", "PAYPAL *DOORDASH").
+    """
+    name: str | None = None
+    if cleaned.via in PLATFORMS:
+        if hit is not None and hit.merchant.series is not None:
+            return hit
+        name = cleaned.via
+    elif hit is None:
+        first = cleaned.core.partition(" ")[0]
+        name = first if first in PLATFORMS else None
+    merchant = dictionary.merchants().get(name) if name is not None else None
+    return hit if merchant is None else Hit(merchant=merchant, how="exact")
+
+
+def _unknown_name(cleaned: cleanup.Cleaned) -> str:
+    """The name of a merchant the dictionary does not know, without a city it may end with.
+
+    Clean-up leaves "JUNEBUG ASHGROVE OH" open (``Cleaned.shorter``). The
+    last word is taken for the city, so that the shop has the key its other
+    lines give it, unless that word says what is sold there (a keyword is no
+    town) or the shorter name is somebody else's: a chain's name in front of
+    another word is left as the line prints it.
+    """
+    shorter = cleaned.shorter
+    if not shorter or dictionary.lookup(shorter) is not None:
+        return cleaned.core
+    if dictionary.keyword(cleaned.core, None) != dictionary.keyword(shorter, None):
+        return cleaned.core
+    return shorter
+
+
 def identify(raw: str | None) -> Identity:
     """Who ``raw`` names: the dictionary's merchant, else the start of the core."""
     cleaned = cleanup.clean(raw)
-    hit = dictionary.lookup(cleaned.core) if cleaned.core else None
-    key = hit.merchant.key if hit is not None else _key_of(cleaned.core)
+    hit = _platform(cleaned, dictionary.lookup(cleaned.core) if cleaned.core else None)
+    key = hit.merchant.key if hit is not None else _key_of(_unknown_name(cleaned))
     name = hit.merchant.name if hit is not None else display_name(key)
     return Identity(
         key=key, name=name, kind=cleaned.kind, via=cleaned.via, hit=hit, core=cleaned.core

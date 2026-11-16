@@ -50,7 +50,8 @@ from a purchase are not here: they are code, in `../cleanup.py`.
     or the letters of a processor prefix.
 - Write one `match` for each form a statement prints, the squashed ones too
   (`disney plus`, `disneyplus`). Punctuation is already gone from a core:
-  `+`, `.`, `*` and `'` become spaces, so `AMC+` arrives as `amc`.
+  `.`, `*` and `'` become spaces, and a `+` that ends a name is read as the
+  word, so `AMC+` arrives as `amc plus`.
 - If the name is an everyday word or is shared with other businesses, match
   only a form that cannot be anyone else, or leave the merchant out. A wrong
   category stated as a fact is worse than no answer.

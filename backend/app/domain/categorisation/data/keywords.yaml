@@ -149,7 +149,7 @@ keywords:
   - {word: inn, category: leisure.travel}
   - {word: resort, category: leisure.travel}
   - {word: airlines, category: leisure.travel}
-  - {word: bookstore, category: leisure.news}
+  - {word: bookstore, category: leisure.hobbies}
 
   # The home.
   - {word: hardware, category: housing.improvement}
