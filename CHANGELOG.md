@@ -187,12 +187,22 @@ What remains (details in docs/ROADMAP.md):
   (process again, a re-run after an answer, a taught table) used to leave
   the rows of the earlier reading beside the new ones. The rows nobody
   touched that the new reading no longer holds are now removed; a row a
-  person edited, confirmed, categorised, linked as a transfer or attached
-  a document to is kept and listed in one finding ("Rows from an earlier
+  person edited, confirmed, categorised, linked as a transfer, attached
+  a document to, or recorded a goal contribution or a loan payment from
+  is kept and listed in one finding ("Rows from an earlier
   reading"), which the reconcile view removes in one step. Rows of other
   documents, rows on other accounts and rows added by hand are never
   touched. Rows imported by an earlier release that a rule changed during
-  their import count as touched and are kept.
+  their import count as touched and are kept. A reading that says it may
+  be incomplete (truncated, or no balance vouches for it and a line was
+  skipped or its figures contradict each other) removes nothing: the row
+  it no longer holds may be the line it could not read. A statement a
+  person moves to another account takes its untouched rows along: the
+  rows it left on the first account are removed when every one of them
+  is a line now imported on the other account. Limit: rows on an account
+  the new reading has no statement for at all are left alone, without a
+  finding. The run summary counts `replaced_rows`, `kept_rows` and
+  `tombstoned_rows`; the audit action is `import.replace`.
 - **The same file uploaded twice is skipped** (INGESTION.md "Receive"). A
   byte-identical upload used to wait in Review as a possible duplicate
   with a question. It is now set aside with a notice naming the earlier
@@ -228,7 +238,11 @@ What remains (details in docs/ROADMAP.md):
   days before the period starts or after it ends no longer puts its
   statement in doubt (a purchase of the last days before a cycle is
   printed on the next statement). Further out the row and its statement
-  wait as before.
+  wait as before. A line outside the period that names a balance or a
+  statement ("Prior statement balance", "Carried over", "Amount owed from
+  last cycle") gets no grace: it is a balance carried over, not a
+  purchase, and on a statement with no balances it would otherwise have
+  been posted as a deposit.
 - **Review: controls that did nothing are removed.** The balance fields
   on a "does not add up" item (the reconcile view replaces them), "Create
   a rule from this" (the endpoint `GET /review/{id}/rule-draft` stays),

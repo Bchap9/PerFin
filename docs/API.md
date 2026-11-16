@@ -382,7 +382,14 @@ and facts (`suggestion`) and why it was not imported on its own
 also when a mapping saved from a suggestion whose sign was read on trust
 meets a liability account, until someone saves its spec or chooses it
 explicitly). `last_import` (and the run
-summary) has `mapping_suggested`; for a brokerage activity export
+summary) has `mapping_suggested`, and counts what a run did to rows the
+document had produced before (INGESTION.md "A document read again"):
+`replaced_rows` (rows of an earlier reading removed because nobody had
+touched them), `kept_rows` (rows of an earlier reading kept because a
+person had changed or linked them; listed in an `earlier_rows_kept` item)
+and `tombstoned_rows` (rows of the file a person had deleted, not written
+again), beside `unverified_statements` (statements of a PDF or image
+imported without a balance that vouches for them); for a brokerage activity export
 (INGESTION.md "Brokerage activity exports") it also has `brokerage_table`
 (`parser`, `statements`, `rows`, `notes`, `unknown_activity`, `skipped`,
 `warnings`), `mapping_bypassed` (the saved mapping the brokerage reading took
@@ -589,7 +596,17 @@ rows an earlier reading of the file left behind and a person had changed
 (each leaves a tombstone) and closes the `earlier_rows_kept` item when
 none is left. An answer given here lasts while a later import of the
 document changes no row of the account (INGESTION.md "Commit", "Answers
-that last").
+that last"). The resolution these actions write on the items they close,
+and the payload of a `reconciliation_failed` / `reconciliation_unavailable`
+item, carry `statement` (its index in the document) and `statement_ref`:
+64 letters `a` to `p`, a digest of the statement's target, account
+digits, account name, currency and its place among the document's
+statements with the same four. It leaves out the period, the rows, the
+balances and the parser version, so an account chosen for a statement
+(`placed` resolutions carry it too) holds after a corrected balance or a
+parser change. The audit row of an acceptance (`statement.accept`) has
+`snapshot_withdrawn`: whether a balance snapshot this document had
+recorded for the statement was taken back.
 
 Review notes (`app.domain.review.service`, router `review`; INGESTION.md
 "Review queue"): an item is `{"id", "kind", "state", "document_id",
@@ -1050,7 +1067,14 @@ the row back (INGESTION.md "Match and deduplicate", "Rows a person
 deleted"; the audit rows say `tombstoned`). It is taken back with `POST
 /documents/{id}/reconciliation/restore`. A row typed by hand has no hash
 and leaves none; deleting a document with its data leaves none either.
-Every write emits a `transaction.*` event.
+Every write emits a `transaction.*` event. An import emits one per account
+instead of one per row: `transaction.created` for the rows it wrote and,
+when a document read again replaces rows of its earlier reading
+(INGESTION.md "A document read again"), `transaction.deleted`; both have
+the server-side payload `{"document_id", "account_id", "count", "ids"}`
+(at most 50 ids). Rows removed this way leave no tombstone and are
+audited as `import.replace` (`account_id`, `replaced`, `kept`,
+`transaction_ids`, `kept_ids`; ids and counts only).
 
 Rules notes (`app.domain.rules`, router `rules`; document format and
 evaluation semantics in DATA_MODEL.md "Ledger"): any household role reads

@@ -206,9 +206,21 @@ The flow (INGESTION.md "Parse", "Match and deduplicate", "Commit"):
      again are dropped. Nothing of this happens for an account a statement
      of the document waits for (an overlap, a sign question, another
      currency), nor for a document with a statement that has no account
-     yet or with brokerage statements. Rows without an ``import_hash``
-     (added by hand), rows of other documents and rows a person touched are
-     never removed here.
+     yet or with brokerage statements, nor for an account whose new reading
+     says it may be incomplete (:func:`_incomplete`: truncated, or no
+     balance vouches for it and a row or a line was skipped, a running
+     balance disagrees or the parser found a contradiction): the row it no
+     longer holds may be the line it could not read. Rows without an
+     ``import_hash`` (added by hand), rows of other documents and rows a
+     person touched are never removed here; "touched" includes a row a
+     goal contribution or a loan payment was recorded from, which leaves
+     the row's timestamps alone. A statement a person **moved to another
+     account** (:func:`_settle_moved`): when the run committed every
+     statement, an account that still holds rows of the document and got no
+     statement of this reading is settled the same way, but only when every
+     such row is a line the run committed elsewhere. Rows on an account the
+     new reading does not account for (a statement it lost) are left as
+     they are, without a finding: nothing says where they went.
    * **Answers given in the reconcile view survive a re-read**
      (:func:`_standing`, :func:`_settle_standing`). A bank statement whose
      record of this document says ``accepted``, or ``reconciled`` although
@@ -286,6 +298,7 @@ from app.domain.documents.models import (
 )
 from app.domain.documents.schemas import Verification
 from app.domain.documents.service import get_visible_document
+from app.domain.goals.models import GoalContribution
 from app.domain.imports import repo
 from app.domain.imports.models import NAME_MAX, ImportMapping, StatementRecord
 from app.domain.imports.payees import PayeeMatcher
@@ -329,11 +342,12 @@ from app.domain.imports.statement_records import (
     table_facts,
 )
 from app.domain.investments.statement_import import import_investment_statements
+from app.domain.loans.models import LoanPayment
 from app.domain.review import repo as review_repo
 from app.domain.review.layout import pages_without_rows, unread_kind, with_layout_tables
 from app.domain.rules.service import apply_rules_to
 from app.domain.transactions import repo as transactions_repo
-from app.domain.transactions.import_hash import HashInput
+from app.domain.transactions.import_hash import HashInput, assign_import_hashes
 from app.domain.transactions.models import (
     MEMO_MAX,
     PAYEE_MAX,
@@ -934,6 +948,13 @@ class _Run:
     #: Accounts a statement of the document was not committed to in this run
     #: (held as an overlap, another currency, its sign waits for an answer).
     waiting: set[uuid.UUID] = field(default_factory=set)
+    #: Accounts a statement of which this run committed although the reading
+    #: says it may not hold every row (:func:`_incomplete`): a row it no
+    #: longer holds is not an earlier reading's.
+    incomplete: set[uuid.UUID] = field(default_factory=set)
+    #: The rows of every statement this run committed, statement by
+    #: statement, as they were hashed (:func:`_settle_moved`).
+    committed: list[list[HashInput]] = field(default_factory=list)
     #: A statement of the document has no account yet, or the document holds
     #: brokerage statements: nothing says which rows are an earlier reading.
     unplaced: bool = False
@@ -1128,6 +1149,30 @@ def clean_read(run: _Run, parsed: ParsedStatement) -> bool:
     ):
         return False
     return not run.parse_skipped and not CONTRADICTION_WARNINGS.intersection(run.parse_warnings)
+
+
+def _incomplete(run: _Run, parsed: ParsedStatement) -> bool:
+    """The reading itself says it may not hold every row of the statement.
+
+    A truncated statement always. Else, unless its own balances vouch for
+    its rows (opening + rows = closing: none is missing), one of which a
+    row was skipped or a running balance disagrees, in a document whose
+    parse counted a skipped line or carries a warning of
+    :data:`CONTRADICTION_WARNINGS`. The rows such a reading no longer holds
+    are not removed as an earlier reading's (:func:`_finish_reading`): the
+    line it could not read may be one of them.
+    """
+    if parsed.truncated:
+        return True
+    check = parsed.reconciliation
+    if check is not None and check.status == "ok":
+        return False
+    return bool(
+        parsed.skipped_rows
+        or parsed.balance_mismatches
+        or run.parse_skipped
+        or CONTRADICTION_WARNINGS.intersection(run.parse_warnings)
+    )
 
 
 def _contradiction(run: _Run, check: Reconciliation) -> str | None:
@@ -1432,12 +1477,11 @@ def _commit_statement(
         ref=ref,
         settled=standing is not None,
     )
-    plan = dedupe(
-        db,
-        run.household_id,
-        account.id,
-        [HashInput(t.posted_date, t.amount, t.raw_payee) for t in rows],
-    )
+    inputs = [HashInput(t.posted_date, t.amount, t.raw_payee) for t in rows]
+    plan = dedupe(db, run.household_id, account.id, inputs)
+    run.committed.append(inputs)
+    if _incomplete(run, parsed):
+        run.incomplete.add(account.id)
     run.duplicates += len(plan.exact)
     # Rows a person deleted are in none of the plan's lists to write.
     run.tombstoned += len(plan.removed)
@@ -2916,40 +2960,76 @@ def _answered_before(run: _Run, finding: Mapping[str, Any]) -> bool:
     return any(payload == finding for payload in resolved)
 
 
-def _replace_earlier(run: _Run, account: Account) -> set[uuid.UUID]:
+def _person_linked(run: _Run, ids: Sequence[uuid.UUID]) -> set[uuid.UUID]:
+    """Which of the transactions ``ids`` a person tied something to.
+
+    A document attached to the row, a goal contribution or a loan payment
+    recorded from it. None of these moves the row's ``updated_at``, and the
+    last two would lose their link with the row (``ON DELETE SET NULL``).
+    """
+    if not ids:
+        return set()
+    db, household_id = run.db, run.household_id
+    found = set(
+        db.execute(
+            select(DocumentLink.target_id).where(
+                DocumentLink.household_id == household_id,
+                DocumentLink.target_type == LinkTarget.TRANSACTION,
+                DocumentLink.target_id.in_(ids),
+            )
+        ).scalars()
+    )
+    for model in (GoalContribution, LoanPayment):
+        found.update(
+            linked
+            for linked in db.execute(
+                select(model.transaction_id).where(
+                    model.household_id == household_id, model.transaction_id.in_(ids)
+                )
+            ).scalars()
+            if linked is not None
+        )
+    return found
+
+
+def _replace_earlier(
+    run: _Run, account: Account, *, moved: Collection[str] | None = None
+) -> set[uuid.UUID]:
     """Settle the rows an earlier reading of the document left on ``account``.
 
     Called once per account, when every statement of the document for it was
     committed by this run. An earlier row
     (``app.domain.review.reconciliation.earlier_rows_of``: a row of this
     document with a hash the run did not read) is **removed** when nobody
-    touched it: ``updated_at == created_at``, no transfer link, no document
-    attached. No tombstone is written: the row was never the person's to
+    touched it: ``updated_at == created_at``, no transfer link, and nothing
+    a person tied to it (:func:`_person_linked`: a document, a goal
+    contribution, a loan payment). No tombstone is written: the row was
+    never the person's to
     delete, and a later reading that holds it again imports it. Every other
     earlier row is **kept** and listed in one ``earlier_rows_kept`` finding
     of the account (ids only, at most :data:`IDS_MAX`), which the reconcile
     view answers; a list a person already answered is not raised again.
     Audited as ``import.replace``. Returns the ids removed.
 
-    Never touched here: rows of another document, rows on another account,
-    rows without an ``import_hash`` (added by hand for the document).
+    ``moved`` (:func:`_settle_moved`): the account got no statement of this
+    reading, and these are the hashes the rows the run committed elsewhere
+    would have on it. Every row of the document on the account is then an
+    earlier row, and the account is settled only when each of them is one
+    of ``moved``; else nothing is done.
+
+    Never touched here: rows of another document, rows on another account
+    that the run did not read again, rows without an ``import_hash`` (added
+    by hand for the document).
     """
     # Imported here: the review package imports this module.
     from app.domain.review.reconciliation import EARLIER_KEPT, earlier_rows_of
 
     db = run.db
-    earlier = earlier_rows_of(db, run.document, account.id, run.read[account.id], lock=True)
-    attached: set[uuid.UUID] = set()
-    if earlier:
-        attached = set(
-            db.execute(
-                select(DocumentLink.target_id).where(
-                    DocumentLink.household_id == run.household_id,
-                    DocumentLink.target_type == LinkTarget.TRANSACTION,
-                    DocumentLink.target_id.in_([row.id for row in earlier]),
-                )
-            ).scalars()
-        )
+    read = run.read[account.id] if moved is None else set()
+    earlier = earlier_rows_of(db, run.document, account.id, read, lock=True)
+    if moved is not None and any(row.import_hash not in moved for row in earlier):
+        return set()
+    attached = _person_linked(run, [row.id for row in earlier])
     removed: list[uuid.UUID] = []
     kept: list[uuid.UUID] = []
     for row in earlier:
@@ -3057,20 +3137,80 @@ def _finish_reading(run: _Run) -> None:
     one whose rows would look like an earlier reading. Then the rows of the
     earlier reading go or are listed (:func:`_replace_earlier`) and the
     statement records of periods the run did not record are dropped
-    (``statement_records.drop_stale_records``). Last, the statements a
-    person had accepted or balanced are decided (:func:`_settle_standing`).
+    (``statement_records.drop_stale_records``). An account whose reading
+    says it may be incomplete (``_Run.incomplete``) is not settled either:
+    what it no longer holds may be what it could not read. Then the
+    statements a person had accepted or balanced are decided
+    (:func:`_settle_standing`). Last, the accounts a statement was moved
+    away from (:func:`_settle_moved`).
     """
     for account_id in list(run.read):
         account = accounts_repo.get_account(run.db, run.household_id, account_id)
         if account is None:  # pragma: no cover - the run has just written to it
             continue
         removed: set[uuid.UUID] = set()
-        if not run.unplaced and account_id not in run.waiting:
+        settled = account_id not in run.waiting and account_id not in run.incomplete
+        if not run.unplaced and settled:
             removed = _replace_earlier(run, account)
             if account_id in run.periods:
                 drop_stale_records(run.db, run.document, account, run.periods[account_id])
         _settle_near(run, account, removed)
         _settle_standing(run, account)
+    _settle_moved(run)
+
+
+def _settle_moved(run: _Run) -> None:
+    """Settle the accounts a statement of the document was moved away from.
+
+    A person put a statement on another account (the Accounts dialog, an
+    answer, a mapping's account), and the run committed it there: the rows
+    its earlier reading left on the first account are the same lines a
+    second time. Only when the run committed every statement of the
+    document (none waits, none is without an account, no brokerage
+    statement), and only for an account the actor may import into that got
+    no statement of this reading. Every row of the document there must be a
+    line the run committed elsewhere (the hash it would have on this
+    account is one of the run's rows); then the untouched ones are removed
+    and the others kept and listed, as :func:`_replace_earlier` does, and
+    with no row of the document left the document's statement records of
+    the account are dropped. An account with a row the new reading does not
+    hold anywhere is left as it is: a statement the reading lost is not a
+    statement that moved.
+    """
+    if run.unplaced or run.waiting or not run.read or not any(run.committed):
+        return
+    db = run.db
+    holding = db.execute(
+        select(Transaction.account_id)
+        .where(
+            Transaction.household_id == run.household_id,
+            Transaction.source_document_id == run.document.id,
+            Transaction.import_hash.is_not(None),
+            Transaction.account_id.not_in(sorted(run.read)),
+        )
+        .distinct()
+        .order_by(Transaction.account_id)
+    ).scalars()
+    for account_id in list(holding):
+        account = _usable_account(run, account_id)
+        if account is None:
+            continue
+        moved = {
+            value for rows in run.committed for value in assign_import_hashes(account.id, rows)
+        }
+        _replace_earlier(run, account, moved=moved)
+        left = run.db.execute(
+            select(Transaction.id)
+            .where(
+                Transaction.household_id == run.household_id,
+                Transaction.account_id == account.id,
+                Transaction.source_document_id == run.document.id,
+                Transaction.import_hash.is_not(None),
+            )
+            .limit(1)
+        ).first()
+        if left is None:
+            drop_stale_records(db, run.document, account, ())
 
 
 def _open_items(db: Session, document: Document) -> int:

@@ -16,6 +16,10 @@ account number and the same six dated rows with signed amounts.
   days before the period starts (:data:`EARLY`): a card or a bank often
   prints a purchase made just before the cycle on the next statement, so a
   row within ``confidence.PERIOD_GRACE_DAYS`` of the period is no doubt.
+* :func:`no_balances_with_a_prior_balance_line`: the first plus one line
+  dated the day before the period starts that is no purchase at all: what
+  was owed when the last statement closed, under a label no reader knows
+  as an opening balance (:data:`PRIOR`). The days of grace are not for it.
 * :func:`no_balances_with_an_unread_line`: the first plus a dated line whose
   amount cell is not an amount; the parser counts it as skipped.
 * :func:`balanced_with_an_unread_line`: an opening balance, a closing
@@ -82,6 +86,13 @@ ROWS: Final[tuple[Row, ...]] = (
 STRAY: Final[Row] = (PERIOD_START - timedelta(days=40), Decimal("-81.15"), "Maple Yard Fuel")
 #: The row of :func:`no_balances_row_five_days_early`: five days before the period.
 EARLY: Final[Row] = (PERIOD_START - timedelta(days=5), Decimal("-23.60"), "Fernhollow Bakery")
+#: The line of :func:`no_balances_with_a_prior_balance_line`: the day before
+#: the period, a balance carried over and not money that moved.
+PRIOR: Final[Row] = (
+    PERIOD_START - timedelta(days=1),
+    Decimal("1204.18"),
+    "Prior statement balance",
+)
 #: The payee and the amount cell of the dated line no reader can read.
 UNREAD_PAYEE: Final = "Adjustment under enquiry"
 UNREAD_AMOUNT: Final = "see branch"
@@ -184,6 +195,11 @@ def no_balances_with_a_stray_row() -> bytes:
 def no_balances_row_five_days_early() -> bytes:
     """The same as the first plus one row dated five days before the period (printed first)."""
     return _pdf([EARLY, *ROWS])
+
+
+def no_balances_with_a_prior_balance_line(label: str = PRIOR[2]) -> bytes:
+    """The same as the first plus a balance carried over, dated the day before the period."""
+    return _pdf([(PRIOR[0], PRIOR[1], label), *ROWS])
 
 
 def no_balances_with_an_unread_line() -> bytes:

@@ -20,7 +20,13 @@ knows about how it read the value:
   period starts or after it ends: at most :data:`INFERRED`
   (:func:`outside_period`). A row within those days keeps its score: a
   purchase of the last days before a cycle is printed on the next
-  statement, and a row posted just after the closing day on this one;
+  statement, and a row posted just after the closing day on this one.
+  The grace is for money that moved: a line dated outside the period whose
+  description names a balance or a statement (:func:`names_a_balance`:
+  "Prior statement balance", "Carried over", "Amount owed from last
+  cycle") gets none (:func:`outside_period_for`). It is what an earlier
+  statement closed with, read as a row, and on a statement with no balance
+  to check nothing else would say so;
 * an amount confirmed by the running balance: 1.0 whatever the other
   factors; contradicted by it: :data:`CONTRADICTED`;
 * OCR: multiplied by the lowest Tesseract word confidence of the cell
@@ -37,6 +43,7 @@ knows about how it read the value:
 
 from __future__ import annotations
 
+import re
 from collections.abc import Collection, Iterable, Mapping
 from datetime import date, timedelta
 from typing import Final
@@ -67,6 +74,29 @@ def outside_period(
         return False
     grace = timedelta(days=max(grace_days, 0))
     return not period[0] - grace <= day <= period[1] + grace
+
+
+#: Whole words of a line that carries a balance over from an earlier
+#: statement rather than money that moved (module doc). Wide on purpose: a
+#: purchase that happens to hold one only loses its days of grace.
+_BALANCE_WORDS: Final = re.compile(
+    r"\b(?:balance|statement|forward|carried|brought|owed|owing|prior|previous"
+    r"|last\s+(?:cycle|period|month|bill))\b",
+    re.IGNORECASE,
+)
+
+
+def names_a_balance(description: str | None) -> bool:
+    """Whether a row's description names a balance or a statement (module doc)."""
+    return bool(description) and _BALANCE_WORDS.search(description or "") is not None
+
+
+def outside_period_for(
+    day: date, period: tuple[date, date] | None, description: str | None
+) -> bool:
+    """:func:`outside_period` for a row: no days of grace when it names a balance."""
+    grace = 0 if names_a_balance(description) else PERIOD_GRACE_DAYS
+    return outside_period(day, period, grace_days=grace)
 
 
 def scaled(base: float, ocr: float | None) -> float:

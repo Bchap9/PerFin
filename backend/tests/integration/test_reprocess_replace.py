@@ -14,7 +14,14 @@ statement, payee and number here is invented.
 * A line the new reading spells another way replaces the untouched row of
   the earlier reading: it is not a "possible duplicate" of the row it
   replaces. Beside a row a person changed it waits, as a near duplicate.
+* A row a goal contribution or a loan payment was recorded from is kept
+  too: the link leaves the row's timestamps alone.
 * A list of kept rows that no longer says what is kept is dismissed.
+* A reading that says it may be incomplete (a skipped line, truncated, a
+  contradiction its parser found) removes nothing, unless its own balances
+  vouch for its rows.
+* A statement a person moved to another account takes its untouched rows
+  along; rows on an account the new reading does not account for stay.
 * Rows of another document on the account, rows of the document on another
   account and a row a person added for the document are never replaced.
 * Nothing is replaced for an account while a statement of the document for
@@ -49,7 +56,7 @@ from app.core.crypto import Keyring
 from app.core.settings import Settings
 from app.db.models import AuditLog
 from app.db.rls import set_context
-from app.domain.accounts.models import Account
+from app.domain.accounts.models import Account, AccountType
 from app.domain.documents.blobstore import LocalFSBlobStore
 from app.domain.documents.models import (
     Document,
@@ -61,9 +68,11 @@ from app.domain.documents.models import (
     ReviewKind,
 )
 from app.domain.documents.schemas import INGEST_JOB_TYPE
+from app.domain.goals.models import GoalContribution
 from app.domain.imports.models import ImportTombstone, StatementRecord
-from app.domain.imports.schemas import APPLY_MAPPING_JOB_TYPE
+from app.domain.imports.schemas import APPLY_MAPPING_JOB_TYPE, Assignment
 from app.domain.imports.service import import_extraction
+from app.domain.loans.models import LoanPayment
 from app.domain.review import teach as teach_service
 from app.domain.review.layout import stored_result
 from app.domain.review.schemas import TeachOut, TeachRequest
@@ -228,8 +237,17 @@ def _month(
     }
 
 
-def _extraction(statements: Sequence[dict[str, Any]], kind: str) -> dict[str, Any]:
-    read = ExtractResult.model_validate({"kind": kind, "ok": True, "statements": list(statements)})
+def _extraction(
+    statements: Sequence[dict[str, Any]], kind: str, parse: dict[str, Any] | None = None
+) -> dict[str, Any]:
+    read = ExtractResult.model_validate(
+        {
+            "kind": kind,
+            "ok": True,
+            "statements": list(statements),
+            **({"parse": parse} if parse is not None else {}),
+        }
+    )
     return read.model_dump(mode="json")
 
 
@@ -239,17 +257,26 @@ def _read(
     *statements: dict[str, Any],
     kind: str = "pdf",
     allow_overlap: Sequence[uuid.UUID] = (),
+    parse: dict[str, Any] | None = None,
+    assignments: Sequence[Assignment] = (),
 ) -> dict[str, Any]:
-    """Store ``statements`` as the document's reading and import it; the run's summary."""
+    """Store ``statements`` as the document's reading and import it; the run's summary.
+
+    ``parse`` is what the document parsers said about the whole reading
+    (lines they skipped, warnings); ``assignments`` the accounts a person
+    chose for its statements.
+    """
     with env.factories.transaction() as db:
         set_context(db, env.household_id)
         document = db.get(Document, document_id)
         assert document is not None
-        document.extraction = _extraction(statements, kind)
+        document.extraction = _extraction(statements, kind, parse)
         db.flush()
         result = stored_result(document.extraction)
         assert result is not None
-        outcome = import_extraction(db, document, result, allow_overlap=allow_overlap)
+        outcome = import_extraction(
+            db, document, result, allow_overlap=allow_overlap, assignments=assignments
+        )
         document.status = outcome.status
         return outcome.summary
 
@@ -423,6 +450,84 @@ def test_a_confirmed_a_categorised_and_a_transfer_row_are_kept(env: Env) -> None
     }
 
 
+def test_a_row_linked_to_a_goal_or_a_loan_payment_is_kept(env: Env) -> None:
+    """A contribution or a payment recorded from a row is a person's work on it.
+
+    Linking leaves the row's own timestamps alone; removing the row would
+    empty the link (``ON DELETE SET NULL``) without a word.
+    """
+    account = env.ledger.account(env.household_id, number_last4="4441", currency="USD")
+    extras: list[Entry] = [
+        (24, "-250.00", "Line saved for the roof"),
+        (25, "-410.00", "Line paid to the lender"),
+        (26, "-50.05", "Line nobody saw"),
+    ]
+    document_id, _ = _stored(env, _month("4441", [*MARCH, *extras]))
+    rows = _by_payee(env.transactions(account))
+    owner = env.client()
+    goal = owner.post(
+        f"{API}/goals",
+        json={
+            "name": "Roof fund",
+            "target": {"amount": "5000.00", "currency": "USD"},
+            "account_ids": [str(account.id)],
+        },
+    )
+    assert goal.status_code in (200, 201), goal.text
+    made = owner.post(
+        f"{API}/goals/{goal.json()['id']}/contributions",
+        json={"transaction_id": str(rows["Line saved for the roof"].id)},
+    )
+    assert made.status_code in (200, 201), made.text
+    home = env.ledger.account(env.household_id, type=AccountType.MORTGAGE, name="Home loan")
+    loan = owner.post(
+        f"{API}/loans",
+        json={
+            "account_id": str(home.id),
+            "principal_original": {"amount": "90000.00", "currency": "USD"},
+            "rate": "0.05",
+            "term_months": 240,
+            "origination_date": "2024-03-01",
+            "payment_day": 1,
+        },
+    )
+    assert loan.status_code == 201, loan.text
+    paid = owner.post(
+        f"{API}/loans/{loan.json()['id']}/payments",
+        json={
+            "paid_on": "2026-03-25",
+            "principal": {"amount": "300.00", "currency": "USD"},
+            "interest": {"amount": "110.00", "currency": "USD"},
+            "transaction_id": str(rows["Line paid to the lender"].id),
+        },
+    )
+    assert paid.status_code == 201, paid.text
+    linked = _by_payee(env.transactions(account))
+    # Neither link moved the row: by its timestamps alone it is untouched.
+    for name in ("Line saved for the roof", "Line paid to the lender"):
+        assert linked[name].updated_at == linked[name].created_at
+
+    summary = _read(env, document_id, _month("4441", MARCH))
+
+    after = _by_payee(env.transactions(account))
+    kept = ["Line saved for the roof", "Line paid to the lender"]
+    assert [name for name in kept if name in after] == kept
+    assert "Line nobody saw" not in after
+    assert (summary["replaced_rows"], summary["kept_rows"]) == (1, 2)
+    contributions: list[GoalContribution] = env.query(
+        select(GoalContribution).where(GoalContribution.goal_id == uuid.UUID(goal.json()["id"]))
+    )
+    assert [c.transaction_id for c in contributions] == [rows["Line saved for the roof"].id]
+    payments: list[LoanPayment] = env.query(
+        select(LoanPayment).where(LoanPayment.id == uuid.UUID(paid.json()["id"]))
+    )
+    assert [p.transaction_id for p in payments] == [rows["Line paid to the lender"].id]
+    (item,) = _kept_items(env, document_id)
+    assert {entry["transaction_id"] for entry in item["transactions"]} == {
+        str(after[name].id) for name in kept
+    }
+
+
 RESPELLED: list[Entry] = [
     (3, "-48.10", "ALDERBANK GROCERS 0303"),
     (9, "-17.25", "Fernhollow Cafe"),
@@ -563,6 +668,209 @@ def test_nothing_is_replaced_while_a_statement_of_the_account_is_held(env: Env) 
         select(StatementRecord).where(StatementRecord.document_id == document_id)
     )
     assert [r.period_start for r in records] == [date(2026, 3, 1)]
+
+
+# ---------------------------------------------------------------------------
+# A reading that says it is incomplete removes nothing
+# ---------------------------------------------------------------------------
+
+UNCHECKED: dict[str, Any] = {"status": "unavailable", "total": "0", "tolerance": "0.01"}
+
+
+def _unchecked(last4: str, entries: Sequence[Entry], **more: Any) -> dict[str, Any]:
+    """A month no balance vouches for, as a document parser stores it (a clean read)."""
+    statement = _month(last4, entries)
+    statement["reconciliation"] = dict(UNCHECKED)
+    for row in statement["transactions"]:
+        row["low_confidence"] = ["reconciliation"]
+    return {**statement, **more}
+
+
+def _balanced(last4: str, entries: Sequence[Entry], opening: str = "500.00") -> dict[str, Any]:
+    """A month whose opening balance and rows make its closing balance."""
+    statement = _month(last4, entries)
+    total = sum((Decimal(amount) for _, amount, _ in entries), Decimal(0))
+    closing = Decimal(opening) + total
+    statement["opening_balance"] = {"amount": opening, "as_of": statement["period_start"]}
+    statement["ledger_balance"] = {"amount": str(closing), "as_of": statement["period_end"]}
+    statement["reconciliation"] = {
+        "status": "ok",
+        "opening": opening,
+        "closing": str(closing),
+        "total": str(total),
+        "tolerance": "0.01",
+    }
+    return statement
+
+
+SKIPPED_ONE: dict[str, Any] = {"threshold": 0.85, "skipped_lines": 1}
+
+
+def test_a_re_read_that_skipped_a_line_removes_nothing(env: Env) -> None:
+    """The line the new reading could not read may be the row it no longer holds."""
+    account = env.ledger.account(env.household_id, number_last4="4442", currency="USD")
+    document_id, first = _stored(env, _unchecked("4442", MARCH))
+    assert first["imported"] == len(MARCH)
+    before = env.transactions(account)
+    assert [r.review_state for r in before] == [ReviewState.NONE] * len(MARCH)
+    fewer = [entry for entry in MARCH if entry[2] != "Wrenfield Payroll"]
+
+    summary = _read(env, document_id, _unchecked("4442", fewer), parse=SKIPPED_ONE)
+
+    assert _ids(env.transactions(account)) == _ids(before)
+    assert (summary["replaced_rows"], summary["kept_rows"], summary["imported"]) == (0, 0, 0)
+    assert env.document(document_id).status is DocumentStatus.NEEDS_REVIEW
+    audits: list[AuditLog] = env.query(
+        select(AuditLog).where(
+            AuditLog.action == "import.replace", AuditLog.target_id == str(document_id)
+        )
+    )
+    assert audits == []
+    # A later reading that reads every line settles the account as before.
+    whole = _read(env, document_id, _unchecked("4442", fewer))
+    assert (whole["replaced_rows"], whole["kept_rows"]) == (1, 0)
+
+
+def test_a_truncated_re_read_removes_nothing(env: Env) -> None:
+    account = env.ledger.account(env.household_id, number_last4="4443", currency="USD")
+    document_id, _ = _stored(env, _unchecked("4443", MARCH))
+    before = _ids(env.transactions(account))
+
+    summary = _read(env, document_id, _unchecked("4443", MARCH[:2], truncated=True))
+
+    assert _ids(env.transactions(account)) == before
+    assert (summary["replaced_rows"], summary["kept_rows"]) == (0, 0)
+    reasons = {item.payload.get("reason") for item in env.open_reviews(document_id)}
+    assert "truncated" in reasons
+    assert env.document(document_id).status is DocumentStatus.NEEDS_REVIEW
+
+
+@pytest.mark.parametrize(
+    "warning", ["summary_totals_mismatch", "section_total_mismatch", "rows_outside_account"]
+)
+def test_a_re_read_its_parser_contradicts_removes_nothing(env: Env, warning: str) -> None:
+    account = env.ledger.account(env.household_id, number_last4="4444", currency="USD")
+    document_id, _ = _stored(env, _unchecked("4444", [*MARCH, BOGUS]))
+    before = _ids(env.transactions(account))
+
+    summary = _read(
+        env,
+        document_id,
+        _unchecked("4444", MARCH),
+        parse={"threshold": 0.85, "warnings": [warning]},
+    )
+
+    assert _ids(env.transactions(account)) == before
+    assert (summary["replaced_rows"], summary["kept_rows"]) == (0, 0)
+
+
+def test_a_re_read_that_adds_up_replaces_whatever_it_skipped(env: Env) -> None:
+    """Opening balance plus the rows is the closing balance: no row is missing."""
+    account = env.ledger.account(env.household_id, number_last4="4445", currency="USD")
+    document_id, _ = _stored(env, _unchecked("4445", [*MARCH, BOGUS]))
+    bogus = _by_payee(env.transactions(account))[BOGUS[2]]
+
+    summary = _read(env, document_id, _balanced("4445", MARCH), parse=SKIPPED_ONE)
+
+    assert bogus.id not in _ids(env.transactions(account))
+    assert (summary["replaced_rows"], summary["kept_rows"]) == (1, 0)
+
+
+# ---------------------------------------------------------------------------
+# A statement a person moved to another account
+# ---------------------------------------------------------------------------
+
+
+def test_a_statement_moved_to_another_account_takes_its_untouched_rows_along(env: Env) -> None:
+    first = env.ledger.account(env.household_id, number_last4="4446", currency="USD")
+    second = env.ledger.account(env.household_id, number_last4="4447", currency="USD")
+    document_id, _ = _stored(env, _month("4446", MARCH))
+    assert len(env.transactions(first)) == len(MARCH)
+    move = [Assignment(target="statement", index=0, account_id=second.id)]
+
+    summary = _read(env, document_id, _month("4446", MARCH), assignments=move)
+
+    assert env.transactions(first) == []
+    assert len(env.transactions(second)) == len(MARCH)
+    assert (summary["imported"], summary["replaced_rows"], summary["kept_rows"]) == (4, 4, 0)
+    assert env.tombstones(first) == []
+    assert env.open_reviews(document_id) == []
+    records: list[StatementRecord] = env.query(
+        select(StatementRecord).where(StatementRecord.document_id == document_id)
+    )
+    assert [r.account_id for r in records] == [second.id]
+    audits: list[AuditLog] = env.query(
+        select(AuditLog).where(
+            AuditLog.action == "import.replace", AuditLog.target_id == str(document_id)
+        )
+    )
+    assert [(a.after or {}).get("replaced") for a in audits] == [4]
+
+
+def test_a_moved_statement_leaves_the_rows_a_person_changed_and_lists_them(env: Env) -> None:
+    first = env.ledger.account(env.household_id, number_last4="4448", currency="USD")
+    second = env.ledger.account(env.household_id, number_last4="4449", currency="USD")
+    document_id, _ = _stored(env, _month("4448", MARCH))
+    mine = _by_payee(env.transactions(first))["Mossgate Hardware"]
+    edited = env.client().patch(f"{API}/transactions/{mine.id}", json={"memo": "For the shed"})
+    assert edited.status_code == 200, edited.text
+    move = [Assignment(target="statement", index=0, account_id=second.id)]
+
+    summary = _read(env, document_id, _month("4448", MARCH), assignments=move)
+
+    (left,) = env.transactions(first)
+    assert (left.id, left.memo) == (mine.id, "For the shed")
+    assert len(env.transactions(second)) == len(MARCH)
+    assert (summary["replaced_rows"], summary["kept_rows"]) == (3, 1)
+    assert _kept_items(env, document_id) == [
+        {
+            "reason": "earlier_rows_kept",
+            "account_id": str(first.id),
+            "count": 1,
+            "transactions": [{"transaction_id": str(mine.id)}],
+        }
+    ]
+
+
+def test_rows_on_an_account_the_new_reading_does_not_account_for_are_left_alone(env: Env) -> None:
+    """A statement the new reading lost is not a statement that moved.
+
+    The first reading held two accounts; the second holds only the first
+    one's statement. Nothing in it says where the second account's rows
+    went, so they stay as they are.
+    """
+    first = env.ledger.account(env.household_id, number_last4="4450", currency="USD")
+    second = env.ledger.account(env.household_id, number_last4="4451", currency="USD")
+    theirs: list[Entry] = [(5, "-91.00", "Thornwick Utilities"), (9, "-17.25", "Fernhollow Cafe")]
+    document_id, _ = _stored(env, _month("4450", MARCH), _month("4451", theirs))
+    before = _ids(env.transactions(second))
+    assert len(before) == 2
+
+    summary = _read(env, document_id, _month("4450", MARCH))
+
+    # One of their rows is a line the first account's statement prints too:
+    # not enough; every row must be accounted for.
+    assert _ids(env.transactions(second)) == before
+    assert len(env.transactions(first)) == len(MARCH)
+    assert (summary["replaced_rows"], summary["kept_rows"]) == (0, 0)
+    assert env.open_reviews(document_id) == []
+
+
+def test_a_moved_statement_is_not_settled_while_another_waits(env: Env) -> None:
+    first = env.ledger.account(env.household_id, number_last4="4452", currency="USD")
+    second = env.ledger.account(env.household_id, number_last4="4453", currency="USD")
+    document_id, _ = _stored(env, _month("4452", MARCH))
+    before = _ids(env.transactions(first))
+    move = [Assignment(target="statement", index=0, account_id=second.id)]
+    stray: list[Entry] = [(6, "-8.80", "Line of nobody")]
+
+    # A second statement of the reading names an account nobody has.
+    summary = _read(
+        env, document_id, _month("4452", MARCH), _month("9999", stray), assignments=move
+    )
+
+    assert _ids(env.transactions(first)) == before
+    assert summary["replaced_rows"] == 0
 
 
 # ---------------------------------------------------------------------------

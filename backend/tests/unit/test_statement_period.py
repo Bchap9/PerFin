@@ -501,10 +501,17 @@ def test_a_one_page_header_band_is_not_a_stated_period() -> None:
 _PLAIN_HEADER: Cells = [(50, "Date"), (130, "Description"), (400, "Amount")]
 
 
-def _dated_rows(days: list[date]) -> ParseOutcome:
-    """A July statement with a labelled period, no balance, and one row per day."""
+def _dated_rows(days: list[date], names: dict[date, str] | None = None) -> ParseOutcome:
+    """A July statement with a labelled period, no balance, and one row per day.
+
+    ``names`` gives the description of a day's row (else ``Corner shop N``).
+    """
     rows: list[Cells] = [
-        [(50, day.strftime("%m/%d/%Y")), (130, f"Corner shop {index}"), (400, "-12.00")]
+        [
+            (50, day.strftime("%m/%d/%Y")),
+            (130, (names or {}).get(day, f"Corner shop {index}")),
+            (400, "-12.00"),
+        ]
         for index, day in enumerate(days)
     ]
     page: list[Cells] = [
@@ -544,6 +551,63 @@ def test_rows_beyond_the_grace_score_inferred() -> None:
     by_day = {t.posted: t for t in statement.transactions}
     assert all(by_day[d].confidence == conf.INFERRED for d in doubted)
     assert (by_day[inside].confidence or 0) > conf.INFERRED
+
+
+@pytest.mark.parametrize(
+    "label",
+    [
+        "Prior statement balance",
+        "Brought over from June",
+        "Amount owed from last cycle",
+        "Carried over",
+        "Total of last statement",
+        "PREVIOUS AMOUNT DUE",
+    ],
+)
+@pytest.mark.parametrize("day", [date(2015, 6, 30), date(2015, 8, 1)])
+def test_a_line_that_names_a_balance_gets_no_grace(label: str, day: date) -> None:
+    """A balance carried over, dated a day outside the period, is no late purchase."""
+    inside, early = date(2015, 7, 14), date(2015, 6, 29)
+    outcome = _dated_rows(sorted([early, day, inside]), {day: label})
+    (statement,) = outcome.statements
+    by_day = {t.posted: t for t in statement.transactions}
+    # Read as a row at all, its date is doubted as it was before the grace.
+    assert day not in by_day or "posted_date" in by_day[day].low_confidence
+    assert day in by_day or outcome.skipped_lines == 0
+    # The purchase next to it keeps its grace.
+    assert "posted_date" not in by_day[early].low_confidence
+    assert "posted_date" not in by_day[inside].low_confidence
+
+
+def test_a_row_inside_the_period_may_name_a_balance() -> None:
+    """Only the grace is withheld: a row of the period is scored as any other."""
+    inside, named = date(2015, 7, 14), date(2015, 7, 20)
+    outcome = _dated_rows([inside, named], {named: "Balance transfer fee"})
+    (statement,) = outcome.statements
+    by_day = {t.posted: t for t in statement.transactions}
+    assert "posted_date" not in by_day[named].low_confidence
+    assert by_day[named].confidence == by_day[inside].confidence
+
+
+@pytest.mark.parametrize(
+    ("text", "named"),
+    [
+        ("Prior statement balance", True),
+        ("Carried over", True),
+        ("Brought over from February", True),
+        ("Amount owed from last cycle", True),
+        ("Total of last statement", True),
+        ("BALANCE FORWARD", True),
+        ("Fernhollow Bakery", False),
+        ("Priory Lane Garage", False),
+        ("Forwarding Depot 12", False),
+        ("Balancer Cycles", False),
+        ("", False),
+        (None, False),
+    ],
+)
+def test_which_descriptions_name_a_balance(text: str | None, named: bool) -> None:
+    assert conf.names_a_balance(text) is named
 
 
 @pytest.mark.parametrize(

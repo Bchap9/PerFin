@@ -316,6 +316,27 @@ def test_a_row_forty_days_outside_is_not(env: Env) -> None:
     assert env.snapshots(account) == []
 
 
+def test_a_balance_carried_over_before_the_period_is_never_posted(env: Env) -> None:
+    """The days of grace are for a purchase; a line that names a balance is no purchase.
+
+    A statement with no balance to check prints, the day before its period,
+    what the last statement closed with, under a label the parser does not
+    know as an opening balance. Read as a row it would be a deposit nobody
+    made: its date is doubted as before the grace, and the statement waits.
+    """
+    account = _account(env)
+    document_id = env.ingest(trust.no_balances_with_a_prior_balance_line())
+
+    rows = env.transactions(account)
+    assert [r for r in rows if r.review_state is ReviewState.NONE] == []
+    assert env.document(document_id).status is DocumentStatus.NEEDS_REVIEW
+    assert env.snapshots(account) == []
+    carried = [r for r in rows if r.posted_date == trust.PRIOR[0]]
+    listed = [str(i.payload) for i in env.open_reviews(document_id)]
+    # Read as a row, it is named with its own doubt: its date.
+    assert all(any(str(r.id) in text and "posted_date" in text for text in listed) for r in carried)
+
+
 def _section_account(env: Env) -> Account:
     institution = env.ledger.institution(env.household_id, name=bank_layouts.SECTION_BANK)
     return env.ledger.account(

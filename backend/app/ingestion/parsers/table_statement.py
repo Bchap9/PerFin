@@ -308,8 +308,11 @@ are read the same way:
    before the period starts or after it ends scores at most
    ``confidence.INFERRED`` on its date and waits for a person; one within
    those days keeps its score (a purchase of the days before a cycle is
-   printed on the next statement). The day/month order of a numeric period comes from its own
-   values when one proves it (``01/07/2015 - 31/07/2015`` is day-first),
+   printed on the next statement), unless its description names a balance
+   or a statement (``confidence.names_a_balance``: a balance carried over
+   under a label that is no opening balance gets no grace). The day/month
+   order of a numeric period comes from its own values when one proves it
+   (``01/07/2015 - 31/07/2015`` is day-first),
    whatever the rows' default; and when the rows fit both orders (or are
    not numeric) the order the period proves is the rows' order too.
    Labels printed **over their values** (a row of labels over a row of
@@ -4509,8 +4512,10 @@ class TableStatementParser(DocumentParser):
                 outcome.skipped_regions.append((row.page, row.bbox))
                 continue
             date_conf = self.base if certain else conf.GUESSED
-            if conf.outside_period(posted, period):
-                # Further from the period than the days of grace around it.
+            if conf.outside_period_for(posted, period, " ".join(row.description)):
+                # Further from the period than the days of grace around it,
+                # or outside it at all and naming a balance: a balance
+                # carried over is no purchase of the days before the cycle.
                 date_conf = min(date_conf, conf.INFERRED)
             if row.carried:
                 # Printed on the row above, once for the day.

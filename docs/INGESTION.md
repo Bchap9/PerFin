@@ -1147,7 +1147,16 @@ a child answering with parser output is `bad_output`.
   layout) scores at most 0.7, so the row and its statement wait; within
   those ten days it keeps its score, because a purchase of the last days
   before a cycle is printed on the next statement and a row posted just
-  after the closing day on this one. On a scanned payslip or loan statement each
+  after the closing day on this one. The grace is for money that moved:
+  in the table statement reader a line dated outside the period at all
+  whose description names a balance or a statement (`names_a_balance`:
+  the whole words balance, statement, forward, carried, brought, owed,
+  owing, prior, previous, "last cycle/period/month/bill") gets none and
+  scores 0.7. Such a line is what the last statement closed with, printed
+  under a label that is no opening balance ("Prior statement balance",
+  "Carried over"); on a statement with no balance to check, nothing else
+  would keep it from being posted as a deposit. A purchase that happens
+  to hold one of those words only loses its grace and waits. On a scanned payslip or loan statement each
   field is scaled by the OCR confidence of its own cells
   (`scaled_fields`: the lowest word confidence among the cells its label
   and value were read from), so one garbled word elsewhere on the page
@@ -2476,7 +2485,9 @@ reconciliation, per-field confidence).
   transfer link) ends it. When a run has committed every statement of the
   document for an account, the rows the document produced there earlier
   whose hash the new reading no longer holds are **removed** when nobody
-  touched them (untouched, no transfer link, no document attached; no
+  touched them (untouched, no transfer link, no document attached, no
+  goal contribution or loan payment recorded from the row: those links
+  leave the row's timestamps alone and would be emptied with it; no
   tombstone, so a later reading that holds the row again imports it), and
   **kept** otherwise and listed in one `low_confidence_field` item
   `earlier_rows_kept` (`account_id`, `count`, `transactions`: ids, at most
@@ -2486,7 +2497,28 @@ reconciliation, per-field confidence).
   account, rows added by hand for the document (they have no hash).
   Nothing is replaced for an account a statement of the document still
   waits for, for a document with a statement that has no account yet, or
-  for a document that holds brokerage statements. A re-read that changes
+  for a document that holds brokerage statements. Nor for an account
+  whose new reading **says it may be incomplete** (`_incomplete`): a
+  truncated statement always; else, unless the statement's own balances
+  agree with its rows (then none is missing), one with a skipped row or a
+  running balance that disagrees, in a document whose parse counted a
+  skipped line or found a contradiction (`CONTRADICTION_WARNINGS`). The
+  row such a reading no longer holds may be the line it could not read,
+  so every earlier row stays (the reconcile view still names them as an
+  earlier reading), and a later reading that reads every line settles the
+  account. **A statement moved to another account** (`_settle_moved`):
+  when a person puts a statement on another account and the run commits
+  every statement of the document, the account it left, which got no
+  statement of this reading, is settled the same way, but only when every
+  row of the document there is a line the run committed elsewhere (the
+  hash it would have on that account is one of the run's rows). The
+  untouched ones are removed, the others kept and listed, and with none
+  left the document's statement records of that account are dropped.
+  Limit: rows on an account the new reading does not account for at all
+  (a statement the reading lost) are left as they are, with no finding;
+  the reconcile view cannot show them, because the reading has no
+  statement for that account. They are removed from the Transactions
+  page. A re-read that changes
   the period leaves no record of the old one
   (`statement_records.drop_stale_records`). Rows imported before this
   rule existed that a rule changed during their import look touched: they
