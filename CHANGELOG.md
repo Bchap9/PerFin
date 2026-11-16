@@ -87,6 +87,10 @@ Stage 4 of four on the way to 1.0.0: the release review.
   model says a cash line has none. They now have no key; the suggestion of
   cash (a withdrawal money out, a cash deposit money in) stays. Rows keyed
   before lose the key in the same refresh after the upgrade.
+- **No recurring series of a line that names nobody.** Rows without a
+  merchant were put together by their text, so rows printed as `E` or `XY
+  #0042` could make one series. Text of fewer than three letters now groups
+  nothing, as for a merchant key.
 - **More of a bank's own lines are read, and more plain wording is
   suggested.** `BANK FEE`, `OVERLIMIT FEE`, `RETURNED CHECK FEE` are bank
   fees, `INTEREST FEE` interest paid and `SAVINGS INTEREST CREDIT`

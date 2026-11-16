@@ -18,7 +18,9 @@ judged against what was uploaded, never against today.
    A row without a merchant key is grouped by its ``text_key``. A
    person-to-person payment is grouped by its ``text_key`` too (its merchant
    key is the service, and the text is what tells two people apart); without
-   one it is ignored.
+   one it is ignored. A ``text_key`` of fewer than
+   :data:`TEXT_KEY_CHARS_MIN` letters is no ``text_key``: such rows are in no
+   group.
 3. **One charge per cycle is one series.** When the whole group has a cadence
    (step 5) and no two charges closer than the cadence allows, it is one
    series whatever the amounts. Its amount is then read from its **price
@@ -141,6 +143,10 @@ FIXED_DAY_SPREAD: Final = 2
 FIXED_DAY_MIN_COUNT: Final = 3
 CONFIDENCE_QUANTUM: Final = Decimal("0.01")
 PAYEE_KEY_MAX: Final = 64
+#: Letters a ``text_key`` needs to group rows (step 2): what is left of "E" or
+#: "XY #0042" names nobody. The same floor as a merchant key's
+#: (``app.domain.categorisation.engine.KEY_CHARS_MIN``).
+TEXT_KEY_CHARS_MIN: Final = 3
 _NOT_WORD: Final = re.compile(r"[^a-z]+")
 
 #: Descriptor kinds that are never a series.
@@ -639,11 +645,17 @@ def _excluded(row: Observed) -> bool:
 
 def group_key(row: Observed) -> str | None:
     """The group ``row`` belongs to (module doc, step 2), ``None`` for a row without one."""
+    text = row.text_key if _names_somebody(row.text_key) else None
     if row.kind == "p2p":
-        return f"p2p:{row.text_key}" if row.text_key else None
+        return f"p2p:{text}" if text else None
     if row.merchant_key:
         return f"merchant:{row.merchant_key}"
-    return f"text:{row.text_key}" if row.text_key else None
+    return f"text:{text}" if text else None
+
+
+def _names_somebody(text_key: str | None) -> bool:
+    """Whether ``text_key`` holds :data:`TEXT_KEY_CHARS_MIN` letters and digits."""
+    return text_key is not None and sum(ch.isalnum() for ch in text_key) >= TEXT_KEY_CHARS_MIN
 
 
 def _describe(key: str, inflow: bool, members: Sequence[Observed]) -> _Group:

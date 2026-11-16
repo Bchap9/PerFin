@@ -615,6 +615,22 @@ def test_rows_without_a_merchant_key_meet_on_their_text() -> None:
     assert found.kind == "other"  # fixed, but nothing says what it is
 
 
+@pytest.mark.parametrize("text", ["e", "xy", "j k"])
+def test_rows_meet_on_no_text_of_fewer_than_three_letters(text: str) -> None:
+    # "E", "XY #0042": what is left names nobody, as for a merchant key
+    # (``engine.KEY_CHARS_MIN``), so such rows are no series of one payee.
+    days = monthly(date(2026, 1, 6), 6)
+    assert detect(rows(days, "-30.00", key=None, text=text)) == []
+    assert detect(rows(days, "-30.00", key="zelle", text=text, kind="p2p")) == []
+    assert detection.group_key(rows(days[:1], "-30.00", key=None, text=text)[0]) is None
+
+
+def test_a_text_key_is_held_to_the_floor_of_a_merchant_key() -> None:
+    from app.domain.categorisation import engine
+
+    assert detection.TEXT_KEY_CHARS_MIN == engine.KEY_CHARS_MIN
+
+
 def test_groups_split_by_account_and_direction() -> None:
     days = monthly(date(2026, 1, 3), 6)
     ledger = (
