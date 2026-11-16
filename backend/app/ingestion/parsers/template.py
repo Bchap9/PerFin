@@ -1305,7 +1305,8 @@ def _transactions(
             "amount": conf.GENERIC,
             "payee": conf.GENERIC if payee else conf.MISSING,
         }
-        if conf.outside_period(posted, period):
+        # A line that names a balance or a statement gets no days of grace.
+        if conf.outside_period_for(posted, period, payee):
             score["posted_date"] = min(score["posted_date"], conf.INFERRED)
         scores.append(score)
         kept = None if several else _amount(row.cells.get("balance"))

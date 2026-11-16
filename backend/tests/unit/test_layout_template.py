@@ -1077,3 +1077,22 @@ def test_a_row_a_few_days_before_the_period_keeps_its_date_score() -> None:
         (date(2026, 4, 10), False),
         (date(2026, 4, 11), True),
     ]
+
+
+def test_a_taught_row_that_names_a_balance_gets_no_grace() -> None:
+    """A balance carried over, dated before the period, is doubted as it was before the grace."""
+    rows = [
+        _row(220.0, "2026-02-24", "Balance Brought Forward", "98.00", "98.00"),
+        _row(235.0, "2026-02-25", "Corner Shop", "-8.00", "90.00"),
+        _row(250.0, "2026-03-05", "Wage Payment", "50.00", "140.00"),
+        _row(220.0, "2026-04-02", "Previous Statement", "140.00", "280.00"),
+    ]
+    taught = read_template(DocumentView.from_result(_result(rows)), _template(), threshold=0.85)
+    statement = taught.statements[0]
+    assert (statement.period_start, statement.period_end) == (date(2026, 3, 1), date(2026, 3, 31))
+    assert [(t.payee, "posted_date" in t.low_confidence) for t in statement.transactions] == [
+        ("Balance Brought Forward", True),
+        ("Corner Shop", False),
+        ("Wage Payment", False),
+        ("Previous Statement", True),
+    ]
