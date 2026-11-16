@@ -43,12 +43,20 @@ from app.core.settings import Settings
 from app.db.rls import set_context
 from app.domain.accounts.models import Account, AccountType, BalanceSnapshot, BalanceSource
 from app.domain.documents.blobstore import LocalFSBlobStore
-from app.domain.documents.models import Document, DocumentStatus, ReviewItem, ReviewItemState
+from app.domain.documents.models import (
+    Document,
+    DocumentStatus,
+    ReviewItem,
+    ReviewItemState,
+    ReviewKind,
+)
 from app.domain.documents.schemas import INGEST_JOB_TYPE
 from app.domain.imports.models import ImportTombstone, StatementRecord
 from app.domain.imports.schemas import APPLY_MAPPING_JOB_TYPE
 from app.domain.imports.service import import_extraction
+from app.domain.review import reconciliation
 from app.domain.review.layout import stored_result
+from app.domain.review.models import ImportHashAlias
 from app.domain.review.reconciliation import read_printed
 from app.domain.transactions.models import ReviewState, Transaction
 from app.ingestion.intake.upload import receive_upload
@@ -57,7 +65,7 @@ from app.ingestion.sandbox.protocol import ExtractResult
 from app.workers.handlers import ingest
 from tests.fixtures import synth_neutral_report as neutral
 from tests.fixtures import synth_pdf_statements as synth
-from tests.fixtures.documents import make_document
+from tests.fixtures.documents import make_document, make_review_item
 from tests.fixtures.factories import AuthedClient, Factories, UserRecord
 from tests.fixtures.households import API, Actors, problem_type
 from tests.fixtures.imports import run_jobs
@@ -498,6 +506,13 @@ def test_two_statements_of_one_document_are_separate(env: Env) -> None:
     assert (may["status"], Decimal(may["difference"])) == ("off", Decimal("9.00"))
     assert may["causes"][0]["kind"] == "transposed_digits"
     assert (april["period_start"], may["period_end"]) == ("2026-04-01", "2026-05-31")
+    # The previous statement is one of another document: April of this file is
+    # not held against May's opening balance.
+    assert [r.period_start for r in records(env, document_id)] == [
+        date(2026, 4, 1),
+        date(2026, 5, 1),
+    ]
+    assert (april["previous_closing"], may["previous_closing"]) == (None, None)
 
     # A row a person adds for the document has no hash: its date says which statement.
     added = owner.post(
@@ -1067,6 +1082,304 @@ def test_confirming_one_statement_leaves_the_other_of_the_account(env: Env) -> N
     assert env.open_reviews(document_id) == []
     assert [r.verification for r in records(env, document_id)] == ["reconciled", "accepted"]
     assert [s.as_of_date for s in snapshots(env, account)] == [date(2026, 4, 30)]
+
+
+def finding(
+    env: Env, document_id: uuid.UUID, kind: ReviewKind, payload: dict[str, Any]
+) -> uuid.UUID:
+    """An open review item of the document, as the importer or the pipeline raises it."""
+    with env.factories.transaction() as db:
+        set_context(db, env.household_id)
+        document = db.get(Document, document_id)
+        assert document is not None
+        return make_review_item(db, document, kind, payload).id
+
+
+def test_a_finding_about_rows_of_the_other_statement_stays_open(env: Env) -> None:
+    account = env.ledger.account(env.household_id, number_last4="7309", name="Everyday")
+    document_id = _stored(
+        env,
+        _month(
+            "7309",
+            4,
+            30,
+            "100.00",
+            "80.50",
+            [(3, "-12.25", "Lamplight Books"), (9, "-7.25", "Corner Bakery")],
+        ),
+        _month(
+            "7309",
+            5,
+            31,
+            "80.50",
+            "113.25",
+            [(9, "-7.25", "Corner Bakery"), (20, "40.00", "Refund Desk")],
+        ),
+    )
+    owner = env.client()
+    april, may = view(owner, document_id)["statements"]
+    assert (april["status"], may["status"]) == ("balanced", "balanced")
+    # A finding that names no statement, only rows: they are May's.
+    doubt = finding(
+        env,
+        document_id,
+        ReviewKind.LOW_CONFIDENCE_FIELD,
+        {
+            "reason": "low_confidence",
+            "account_id": str(account.id),
+            "transactions": [{"transaction_id": r["transaction_id"]} for r in may["rows"]],
+        },
+    )
+    open_before = [i.id for i in env.open_reviews(document_id)]
+    assert doubt in open_before
+
+    status, got = act(owner, document_id, "confirm", statement=0)
+
+    assert status == 200, got
+    assert got["items_closed"] == 0
+    assert [i.id for i in env.open_reviews(document_id)] == open_before
+
+    # Confirming May answers it.
+    status, got = act(owner, document_id, "confirm", statement=1)
+    assert status == 200, got
+    assert got["items_closed"] >= 1
+    assert doubt not in [i.id for i in env.open_reviews(document_id)]
+
+
+def test_lines_nobody_could_read_close_with_the_last_question(env: Env) -> None:
+    account = env.ledger.account(env.household_id, number_last4="7310", name="Everyday")
+    document_id = _stored(
+        env,
+        # 100.00 - 19.50 is 80.50: the reading has 85.50.
+        _month(
+            "7310",
+            4,
+            30,
+            "100.00",
+            "85.50",
+            [(3, "-12.25", "Lamplight Books"), (9, "-7.25", "Corner Bakery")],
+        ),
+        checked=True,
+    )
+    # The pipeline's notice is about the whole file: it names no account.
+    skipped = finding(
+        env, document_id, ReviewKind.LOW_CONFIDENCE_FIELD, {"reason": "lines_skipped", "count": 2}
+    )
+    twin = finding(
+        env,
+        document_id,
+        ReviewKind.POSSIBLE_DUPLICATE,
+        {"reason": "near_matches", "account_id": str(account.id), "rows": [], "count": 0},
+    )
+    owner = env.client()
+
+    status, got = act(owner, document_id, "confirm", statement=0, closing_balance="80.50")
+
+    assert status == 200, got
+    assert got["items_closed"] >= 1
+    # Another question is still open: the notice waits with it.
+    assert sorted(i.id for i in env.open_reviews(document_id)) == sorted([skipped, twin])
+    assert env.document(document_id).status is DocumentStatus.NEEDS_REVIEW
+
+    dismissed = owner.post(f"{API}/review/{twin}/dismiss")
+    assert dismissed.status_code == 200, dismissed.text
+    assert [i.id for i in env.open_reviews(document_id)] == [skipped]
+    status, got = act(owner, document_id, "confirm", statement=0)
+
+    assert status == 200, got
+    assert got["items_closed"] == 1
+    assert env.open_reviews(document_id) == []
+    assert env.document(document_id).status is DocumentStatus.PROCESSED
+    assert len(snapshots(env, account)) == 1
+
+
+def test_a_row_known_by_an_alias_counts(env: Env) -> None:
+    """A statement row confirmed to be a row the ledger already had under another hash."""
+    account = env.ledger.account(env.household_id, number_last4="7311", name="Everyday")
+    document_id = _stored(
+        env,
+        _month(
+            "7311",
+            4,
+            30,
+            "100.00",
+            "80.50",
+            [(3, "-12.25", "Lamplight Books"), (9, "-7.25", "Corner Bakery")],
+        ),
+    )
+    kept = next(r for r in env.transactions(account) if r.amount == Decimal("-12.25"))
+    printed_hash = kept.import_hash
+    assert printed_hash is not None
+    # The kept row came from elsewhere, a day late, with a hash of its own;
+    # the statement's hash for it is an alias.
+    with env.factories.transaction() as db:
+        set_context(db, env.household_id)
+        db.execute(
+            update(Transaction)
+            .where(Transaction.id == kept.id)
+            .values(
+                import_hash=uuid.uuid4().hex + uuid.uuid4().hex,
+                source_document_id=None,
+                posted_date=date(2026, 4, 4),
+            )
+        )
+        db.add(
+            ImportHashAlias(
+                household_id=env.household_id,
+                account_id=account.id,
+                transaction_id=kept.id,
+                import_hash=printed_hash,
+            )
+        )
+
+    got = one(env.client(), document_id)
+
+    assert got["status"] == "balanced"
+    assert Decimal(got["total"]) == Decimal("-19.50")
+    assert len(got["rows"]) == 2
+    shown = next(r for r in got["rows"] if r["transaction_id"] == str(kept.id))
+    assert (shown["origin"], shown["posted_date"]) == ("matched", "2026-04-04")
+
+
+def test_restore_adds_no_second_row_when_the_ledger_holds_it(env: Env) -> None:
+    stmt, account, document_id, forged = tampered(env, 81)
+    owner = env.client()
+    assert owner.delete(f"{API}/transactions/{forged.id}").status_code == 204
+    (removed,) = one(owner, document_id)["removed"]
+    # The row is in the ledger again (another run wrote it) while its tombstone is still there.
+    with env.factories.transaction() as db:
+        set_context(db, env.household_id)
+        db.add(
+            Transaction(
+                household_id=env.household_id,
+                account_id=account.id,
+                posted_date=forged.posted_date,
+                amount=forged.amount,
+                currency=forged.currency,
+                raw_payee=forged.raw_payee,
+                status=forged.status,
+                source_document_id=document_id,
+                import_hash=forged.import_hash,
+                review_state=ReviewState.PENDING,
+            )
+        )
+    before = states(env, account)
+    assert len(before) == len(stmt.transactions) + 1
+
+    status, got = act(owner, document_id, "restore", tombstone_id=removed["tombstone_id"])
+
+    assert status == 200, got
+    assert got["statement"]["removed"] == []
+    assert states(env, account) == before
+    assert env.query(select(ImportTombstone).where(ImportTombstone.account_id == account.id)) == []
+    assert len(got["statement"]["rows"]) == len(before)
+
+
+def test_a_row_in_another_currency_does_not_shift_the_rows_after_it(env: Env) -> None:
+    """The importer leaves a foreign-currency row out before it numbers equal rows."""
+    account = env.ledger.account(env.household_id, number_last4="7312", name="Everyday")
+    month = _month(
+        "7312",
+        4,
+        30,
+        "100.00",
+        "91.00",
+        [
+            (5, "-4.50", "Corner Bakery"),
+            (5, "-4.50", "Corner Bakery"),
+            (5, "-4.50", "Corner Bakery"),
+        ],
+    )
+    boxes = [[40.0, 100.0, 520.0, 110.0], [40.0, 120.0, 520.0, 130.0], [40.0, 140.0, 520.0, 150.0]]
+    for row, box in zip(month["transactions"], boxes, strict=True):
+        row.update(page=1, bbox=box)
+    month["transactions"][0]["currency"] = "EUR"
+    document_id = _stored(env, month)
+    assert [r.amount for r in env.transactions(account)] == [Decimal("-4.50")] * 2
+
+    got = one(env.client(), document_id)
+
+    assert got["status"] == "balanced"
+    # Each ledger row is shown where the statement prints it, not one line up.
+    assert sorted(r["bbox"] for r in got["rows"]) == boxes[1:]
+    assert {r["page"] for r in got["rows"]} == {1}
+
+
+def test_only_the_first_rows_are_listed_and_all_are_summed(
+    env: Env, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _, account, document_id, _ = tampered(env, 82)
+    ledger_rows = env.transactions(account)
+    assert len(ledger_rows) > 2
+    owner = env.client()
+    assert one(owner, document_id)["rows_truncated"] is False
+    monkeypatch.setattr(reconciliation, "ROWS_MAX", 2)
+
+    got = one(owner, document_id)
+
+    assert got["rows_truncated"] is True
+    assert [r["transaction_id"] for r in got["rows"]] == [str(r.id) for r in ledger_rows[:2]]
+    assert Decimal(got["total"]) == sum((r.amount for r in ledger_rows), Decimal(0))
+    assert got["status"] == "off"
+
+
+def test_a_replayed_action_answers_as_the_first_did(env: Env) -> None:
+    _, _, document_id, _ = tampered(env, 83)
+    owner = env.client()
+    url = f"{API}/documents/{document_id}/reconciliation/accept"
+    key = {"Idempotency-Key": uuid.uuid4().hex}
+
+    first = owner.post(url, json={"statement": 0}, headers=key)
+    again = owner.post(url, json={"statement": 0}, headers=key)
+
+    assert (first.status_code, again.status_code) == (200, 200), again.text
+    assert again.json() == first.json()
+    assert first.json()["statement"]["verification"] == "accepted"
+
+
+def test_a_copy_that_imported_nothing_cannot_be_confirmed_or_accepted(env: Env) -> None:
+    account = env.ledger.account(env.household_id, number_last4="7313", name="Everyday")
+    month = _month(
+        "7313",
+        6,
+        30,
+        "100.00",
+        "75.50",
+        [(3, "-4.50", "Corner Bakery"), (9, "-20.00", "Lamplight Books")],
+    )
+    first = _stored(env, month, checked=True)
+    (snapshot,) = snapshots(env, account)
+    assert (snapshot.balance, snapshot.source_document_id) == (Decimal("75.50"), first)
+    # The same statement as another file: held as an overlap, nothing imported from it.
+    copy = _stored(env, month, checked=True)
+    assert records(env, copy) == []
+    assert {r.source_document_id for r in env.transactions(account)} == {first}
+    open_before = [i.id for i in env.open_reviews(copy)]
+    assert open_before
+    owner = env.client()
+    assert one(owner, copy)["status"] == "balanced"
+
+    answers = [
+        act(owner, copy, "confirm", statement=0),
+        act(owner, copy, "confirm", statement=0, closing_balance="70.00"),
+        act(owner, copy, "accept", statement=0),
+    ]
+
+    assert [(status, body["type"].rsplit(":", 1)[-1]) for status, body in answers] == [
+        (409, "statement-unavailable")
+    ] * 3
+    (snapshot,) = snapshots(env, account)
+    assert (snapshot.balance, snapshot.source_document_id) == (Decimal("75.50"), first)
+    assert [i.id for i in env.open_reviews(copy)] == open_before
+    stored = stored_result(env.document(copy).extraction)
+    assert stored is not None
+    balance = stored.statements[0].ledger_balance
+    assert balance is not None
+    assert balance.amount == Decimal("75.50")
+    # The first file's statement is still the one that is reconciled.
+    assert one(owner, first)["verification"] == "reconciled"
+    status, got = act(owner, first, "confirm", statement=0)
+    assert (status, got["snapshot"]) == (200, True)
 
 
 # ---------------------------------------------------------------------------

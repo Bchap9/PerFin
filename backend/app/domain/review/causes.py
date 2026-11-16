@@ -24,7 +24,15 @@ half of it, and a row that is missing is minus the difference.
 7. ``transposed_digits``: the difference in cents divides by nine, and
    none of 3 to 6 was found;
 8. ``out_of_period``: rows dated outside the statement's period;
-9. ``missing_row``: the difference is not zero and none of 3 to 7 was found.
+9. ``missing_row``: the difference is not zero and none of 3 to 6 was
+   found. It carries the amount that is missing, also beside
+   ``transposed_digits``: a difference that divides by nine may just as
+   well be a row that is not there.
+
+A row a person removed from the statement whose amount is exactly the
+missing amount is the plainest explanation there is: ``missing_row`` is
+then named before 3 to 6 (the view lists the removed row beside it, with
+"Put back"), and no transposition is guessed at.
 
 Kinds 3 to 6 name one candidate each (one row, one pair, one line): each
 is something a person can act on by itself. A kind is listed at most
@@ -131,8 +139,12 @@ def rank_causes(
     previous_closing: Decimal | None,
     fee_lines: Sequence[PageAmount] = (),
     grace_days: int = 0,
+    removed: Sequence[Decimal] = (),
 ) -> list[Cause]:
-    """What may explain ``difference``, most likely first (module doc)."""
+    """What may explain ``difference``, most likely first (module doc).
+
+    ``removed``: the amounts of the statement's rows a person removed.
+    """
     causes: list[Cause] = []
     earlier = tuple(r.id for r in rows if r.earlier)
     if earlier:
@@ -148,7 +160,9 @@ def rank_causes(
         return (causes + outside)[:CAUSES_MAX]
 
     half = difference / 2
-    explained: list[Cause] = []
+    missing = Cause("missing_row", (), -difference)
+    taken_out = any(_same(amount, -difference) for amount in removed)
+    explained: list[Cause] = [missing] if taken_out else []
     for found in (
         [Cause("extra_row", (r.id,), r.amount) for r in rows if _same(r.amount, difference)],
         [Cause("sign_flipped", (r.id,), r.amount) for r in rows if _same(r.amount, half)],
@@ -160,12 +174,13 @@ def rank_causes(
         ],
     ):
         explained.extend(found[:PER_KIND_MAX])
-    if not explained and _divides_by_nine(difference):
+    unexplained = not explained
+    if unexplained and _divides_by_nine(difference):
         explained.append(Cause("transposed_digits"))
     causes.extend(explained)
     causes.extend(outside)
-    if not explained:
-        causes.append(Cause("missing_row", (), -difference))
+    if unexplained:
+        causes.append(missing)
     return causes[:CAUSES_MAX]
 
 

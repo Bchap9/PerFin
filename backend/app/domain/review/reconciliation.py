@@ -53,6 +53,9 @@ must be one the caller may edit (``404`` otherwise, as for any account).
   its closing balance is recorded as a statement snapshot, its record
   becomes ``reconciled`` and its findings are closed. ``409
   statement-does-not-reconcile`` otherwise, and nothing is kept.
+  Neither this nor accepting is offered for a statement the document
+  imported nothing of (no record, no row of its own: a second copy that
+  waits as an overlap): ``409 statement-unavailable``.
 * :func:`accept`: the statement is taken as read. Its pending rows are
   confirmed and its findings closed; the record becomes ``accepted`` and
   **no balance is recorded**. ``409 statement-balanced`` for a statement
@@ -533,6 +536,7 @@ def _statement_out(
     if opening is not None and closing is not None:
         difference = opening + total - closing
         status = "balanced" if abs(difference) <= TOLERANCE else "off"
+    taken_out = tombstones.list_tombstones(db, account.household_id, account.id, list(group.read))
     causes = rank_causes(
         difference,
         [LedgerRow(row.id, row.posted_date, row.amount) for row in group.rows],
@@ -540,6 +544,7 @@ def _statement_out(
         opening=opening,
         previous_closing=previous,
         fee_lines=_fee_lines(result, statement) if status == "off" else (),
+        removed=[t.amount for t in taken_out if t.amount is not None],
     )
     rows: list[ReconcileRow] = []
     for row in group.rows[:ROWS_MAX]:
@@ -570,7 +575,7 @@ def _statement_out(
             amount=_text(t.amount) if t.amount is not None else None,
             deleted_at=t.deleted_at,
         )
-        for t in tombstones.list_tombstones(db, account.household_id, account.id, list(group.read))
+        for t in taken_out
     ]
     return StatementReconciliation(
         statement=placed.index,
@@ -723,6 +728,29 @@ def _view(db: Session, opened: _Open) -> StatementReconciliation:
     )
 
 
+def _require_imported(opened: _Open) -> None:
+    """``409 statement-unavailable`` for a statement this document imported nothing of.
+
+    A second copy of a statement that waits as an overlap has no record
+    and no row of its own; the rows it would be checked against are the
+    first file's. Confirming it would post nothing and make the copy the
+    source of the account's balance, which then goes with the copy when it
+    is deleted. Its own question (the same statement, or import anyway) is
+    answered first.
+    """
+    if opened.placed.record is not None:
+        return
+    if any(row.source_document_id == opened.document.id for row in opened.group.rows):
+        return
+    raise ProblemError(
+        409,
+        "statement-unavailable",
+        "Nothing imported from this document",
+        "Nothing was imported from this document for the statement yet; "
+        "answer the document's open question first.",
+    )
+
+
 def _settle(
     db: Session,
     principal: Principal,
@@ -783,6 +811,7 @@ def confirm(
     balances differ, or a balance is missing; nothing is kept then.
     """
     opened = _open(db, principal, document_id, body.statement)
+    _require_imported(opened)
     typed = {
         name: read_printed(text) if text is not None else None
         for name, text in (("opening", body.opening_balance), ("closing", body.closing_balance))
@@ -868,6 +897,7 @@ def accept(
     confirmed, which records its balance.
     """
     opened = _open(db, principal, document_id, body.statement)
+    _require_imported(opened)
     shown = _view(db, opened)
     if shown.status == "balanced":
         raise ProblemError(

@@ -84,6 +84,7 @@ def post_confirm(
         scope="POST /documents/{document_id}/reconciliation/confirm",
         payload=payload_of(body, document_id=document_id),
         run=run,
+        status_code=200,
     )
 
 
@@ -111,6 +112,7 @@ def post_accept(
         scope="POST /documents/{document_id}/reconciliation/accept",
         payload=payload_of(body, document_id=document_id),
         run=run,
+        status_code=200,
     )
 
 
@@ -138,6 +140,7 @@ def post_restore(
         scope="POST /documents/{document_id}/reconciliation/restore",
         payload=payload_of(body, document_id=document_id),
         run=run,
+        status_code=200,
     )
 
 
@@ -165,4 +168,5 @@ def post_remove_earlier(
         scope="POST /documents/{document_id}/reconciliation/remove-earlier",
         payload=payload_of(body, document_id=document_id),
         run=run,
+        status_code=200,
     )

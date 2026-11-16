@@ -55,6 +55,12 @@ editable by the caller as well. A closed item is ``409 review-item-closed``.
   the table waited (``scope: mapping``) the answer is the layout's: it is
   saved on the item's mapping (or on one made from the item's suggestion),
   which is then no longer on trust, and the document is imported with it.
+  A mapping that already read files (``use_count``), or that is another
+  account's, is never rewritten: other accounts' files of the layout were
+  imported with its sign and would be turned on their next import. The
+  answer is then saved on a mapping of the item's account, which the
+  importer prefers for that account's files (``422`` when the item names
+  no account to keep it for).
   When the table's other accounts were imported (``scope: account``) the
   mapping is left alone: the resolution records the sign for that account
   of that document (``statement_answers.sign_answer``) and the importer
@@ -160,6 +166,7 @@ from app.domain.imports.schemas import (
     ApplyMapping,
     AssignmentTarget,
     MappingCreate,
+    MappingOut,
     MappingSpec,
     MappingUpdate,
     Sign,
@@ -1145,6 +1152,53 @@ def _answered_mapping_name(db: Session, household_id: uuid.UUID) -> str:
     return f"{ANSWERED_MAPPING_NAME} ({uuid.uuid4().hex[:8]})"
 
 
+def _answers_in_place(mapping: MappingOut, account_id: uuid.UUID | None) -> bool:
+    """A sign answer may be saved on ``mapping`` itself.
+
+    Only when no file of another account can have been read with it: it is
+    this account's own mapping, or it is no account's and has imported
+    nothing yet.
+    """
+    if mapping.account_id is not None:
+        return mapping.account_id == account_id
+    return mapping.use_count == 0
+
+
+def _account_mapping(
+    db: Session,
+    principal: Principal,
+    document: Document,
+    named: MappingOut,
+    signed: MappingSpec,
+    account_id: uuid.UUID,
+    *,
+    request: HTTPConnection | None,
+) -> uuid.UUID:
+    """The mapping of ``account_id`` that reads ``named``'s layout as ``signed``; made if need be.
+
+    An earlier answer for the account (another file of the layout that
+    waited at the same time) is used again rather than saved twice.
+    """
+    wanted = signed.model_dump(mode="json")
+    for known in imports_repo.mappings_by_fingerprint(
+        db, document.household_id, {named.header_fingerprint}
+    ):
+        if known.account_id == account_id and not known.sign_unverified and known.spec == wanted:
+            return known.id
+    return imports_service.create_mapping(
+        db,
+        principal,
+        MappingCreate(
+            name=_answered_mapping_name(db, document.household_id),
+            spec=signed,
+            document_id=document.id,
+            account_id=account_id,
+            institution_id=named.institution_id,
+        ),
+        request=request,
+    ).id
+
+
 def _answer_sign(
     db: Session,
     principal: Principal,
@@ -1191,15 +1245,17 @@ def _answer_sign(
         }
     # Every statement of the table waited: the answer is the layout's sign.
     mapping_id = _uuid(payload.get("mapping_id"))
+    named: MappingOut | None = None
     if mapping_id is not None:
         try:
-            spec = imports_service.get_mapping(db, principal, mapping_id).spec
+            named = imports_service.get_mapping(db, principal, mapping_id)
         except ProblemError as exc:
             if exc.status != 404:
                 raise
             raise _stale(
                 "The column mapping this item names is gone; import the document again."
             ) from exc
+        spec = named.spec
     else:
         try:
             spec = MappingSpec.model_validate(payload.get("suggested_spec"))
@@ -1208,10 +1264,24 @@ def _answer_sign(
                 "This item carries no columns to read the file with; map its columns instead."
             ) from exc
     signed = MappingSpec.model_validate({**spec.model_dump(mode="json"), "sign": sign.value})
-    if mapping_id is not None:
+    if named is not None and _answers_in_place(named, account_id):
         # Saving a spec says a person stands behind it: no longer on trust.
         imports_service.update_mapping(
-            db, principal, mapping_id, MappingUpdate(spec=signed), request=request
+            db, principal, named.id, MappingUpdate(spec=signed), request=request
+        )
+    elif named is not None:
+        # The mapping read files of another account (or is another
+        # account's): turning its sign would turn every later file of that
+        # account, and a re-run of the ones imported. It is left as it is
+        # and the answer is kept on a mapping of this account, which the
+        # importer prefers for this account's files.
+        if account_id is None:
+            raise _invalid(
+                "Choose the account this file is for first: its column mapping also read "
+                "other files, so the answer is kept for one account."
+            )
+        mapping_id = _account_mapping(
+            db, principal, document, named, signed, account_id, request=request
         )
     else:
         mapping_id = imports_service.create_mapping(

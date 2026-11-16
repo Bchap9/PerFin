@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import uuid
 from collections.abc import Iterator
+from datetime import date
 from decimal import Decimal
 from pathlib import Path
 from typing import Any
@@ -21,7 +22,7 @@ from app.auth.models import GrantLevel
 from app.core.settings import Settings
 from app.db.models import Job
 from app.db.rls import set_context
-from app.domain.accounts.models import Account
+from app.domain.accounts.models import Account, AccountType
 from app.domain.documents.blobstore import LocalFSBlobStore
 from app.domain.documents.models import (
     BlobArea,
@@ -43,8 +44,19 @@ from tests.fixtures.factories import AuthedClient, Factories
 from tests.fixtures.households import API, Actors, household_audit, household_events, problem_type
 from tests.fixtures.imports import make_import_mapping, run_jobs, table_result
 from tests.fixtures.ledger import DEFAULT_DATE, household_context, make_account, make_transaction
+from tests.fixtures.synth_statements import (
+    SynthStatement,
+    csv_bytes,
+    layout_statement,
+    statement,
+    synth_ledger,
+)
+from tests.integration import test_structured_import as structured
 
 pytestmark = pytest.mark.integration
+
+#: The real pipeline on temporary stores (the importer's own tests' fixture).
+import_env = structured.env
 
 REVIEW = f"{API}/review"
 
@@ -639,11 +651,21 @@ def sign_item(
     )
 
 
-def on_trust_mapping(factories: Factories, household_id: uuid.UUID) -> ImportMapping:
+def on_trust_mapping(
+    factories: Factories,
+    household_id: uuid.UUID,
+    *,
+    used: int = 0,
+    account: Account | None = None,
+) -> ImportMapping:
+    """A mapping saved from a suggestion on trust; ``used``: imports it has read."""
     with factories.transaction() as db:
-        mapping = make_import_mapping(db, household_id, spec=CARD_SPEC, rows=CARD_ROWS)
+        mapping = make_import_mapping(
+            db, household_id, spec=CARD_SPEC, rows=CARD_ROWS, account=account
+        )
         with household_context(db, household_id):
             mapping.sign_unverified = True
+            mapping.use_count = used
             db.flush()
         return mapping
 
@@ -735,6 +757,154 @@ def test_sign_answer_for_one_account_leaves_the_mapping(
     )
     assert response.status_code == 200, response.text
     assert response.json()["resolution"]["sign"] == "inflow_positive"
+
+
+@pytest.mark.parametrize("bound", [False, True])
+def test_sign_answer_leaves_a_mapping_that_already_imported(
+    home: dict[str, AuthedClient], factories: Factories, store: LocalFSBlobStore, bound: bool
+) -> None:
+    """The layout's mapping read another account's file, or is another account's (``bound``)."""
+    owner = home["owner"]
+    hh = hh_of(owner)
+    doc, card = card_document(factories, store, hh)
+    other = new_account(factories, hh, {}) if bound else None
+    mapping = on_trust_mapping(factories, hh, used=0 if bound else 1, account=other)
+    row = sign_item(factories, doc, card, "mapping", mapping_id=str(mapping.id))
+    response = resolve(
+        owner, row.id, {"kind": "unparsed", "action": "answer_sign", "positive_is": "money_out"}
+    )
+    assert response.status_code == 200, response.text
+    resolution = response.json()["resolution"]
+    assert (resolution["sign"], resolution["scope"]) == ("outflow_positive", "mapping")
+    # The mapping other files were read with is as it was: still on trust, its sign unchanged.
+    kept = load(factories, hh, ImportMapping, mapping.id)
+    assert (kept.spec, kept.sign_unverified) == (mapping.spec, True)
+    assert kept.account_id == (other.id if other is not None else None)
+    assert resolution["mapping_id"] != str(mapping.id)
+    answered = load(factories, hh, ImportMapping, uuid.UUID(resolution["mapping_id"]))
+    assert answered.spec["sign"] == "outflow_positive"
+    assert (answered.account_id, answered.sign_unverified) == (card.id, False)
+    assert answered.header_fingerprint == kept.header_fingerprint
+    (job,) = jobs_of(factories, hh, APPLY_MAPPING_JOB_TYPE)
+    assert job.payload["mapping_id"] == str(answered.id)
+    assert run_jobs(factories, hh, APPLY_MAPPING_JOB_TYPE, done=set())
+    with factories.transaction() as db:
+        set_context(db, hh)
+        amounts = sorted(
+            db.execute(
+                select(Transaction.amount).where(Transaction.source_document_id == doc.id)
+            ).scalars()
+        )
+    assert amounts == [Decimal("-41.000000"), Decimal("-18.400000"), Decimal("-6.250000")]
+    # Another file of the layout that waited meanwhile: the same answer is not saved twice.
+    later = sign_item(factories, doc, card, "mapping", mapping_id=str(mapping.id))
+    response = resolve(
+        owner, later.id, {"kind": "unparsed", "action": "answer_sign", "positive_is": "money_out"}
+    )
+    assert response.status_code == 200, response.text
+    assert response.json()["resolution"]["mapping_id"] == str(answered.id)
+    with factories.transaction() as db:
+        set_context(db, hh)
+        assert len(list(db.execute(select(ImportMapping.id)).scalars())) == 2
+
+
+def test_sign_answer_without_an_account_never_rewrites_a_used_mapping(
+    home: dict[str, AuthedClient], factories: Factories, store: LocalFSBlobStore
+) -> None:
+    """No account to keep the answer for, and the mapping read other files: nothing is changed."""
+    owner = home["owner"]
+    hh = hh_of(owner)
+    doc, card = card_document(factories, store, hh)
+    mapping = on_trust_mapping(factories, hh, used=3)
+    row = sign_item(factories, doc, card, "mapping", mapping_id=str(mapping.id), account_id=None)
+    response = resolve(
+        owner, row.id, {"kind": "unparsed", "action": "answer_sign", "positive_is": "money_out"}
+    )
+    assert response.status_code == 422, response.text
+    assert problem_type(response) == "invalid-resolution"
+    kept = load(factories, hh, ImportMapping, mapping.id)
+    assert (kept.spec, kept.sign_unverified) == (mapping.spec, True)
+    assert load(factories, hh, ReviewItem, row.id).state is ReviewItemState.OPEN
+    assert jobs_of(factories, hh, APPLY_MAPPING_JOB_TYPE) == []
+    with factories.transaction() as db:
+        set_context(db, hh)
+        assert len(list(db.execute(select(ImportMapping.id)).scalars())) == 1
+
+
+def test_sign_answer_for_a_card_never_turns_the_other_accounts_files(
+    import_env: structured.Env,
+) -> None:
+    """One layout, a checking account and a card: the card's answer is the card's alone.
+
+    Through the real pipeline: the checking file imports with the layout's
+    sign on trust; the card file of the same header waits; "money out"
+    writes the card's rows as spending. The next checking file, and a
+    re-run of the first, read as they did before.
+    """
+    env, layout = import_env, structured.TRUSTED_LAYOUT
+    amounts_of, expected_of = structured._amounts, structured._expected
+
+    def month(seed: int, start: date, end: date) -> SynthStatement:
+        return layout_statement(
+            statement(synth_ledger(seed, days=120), start, end, seed=seed), layout
+        )
+
+    checking = env.ledger.account(env.household_id, type="checking")
+    card = env.ledger.account(env.household_id, type=AccountType.CREDIT_CARD)
+    january = month(25, date(2026, 1, 1), date(2026, 1, 31))
+    first = env.ingest(csv_bytes(january, layout), account=checking, name="a.csv")
+    assert amounts_of(env.transactions(checking)) == expected_of(january)
+    (mapping,) = structured._mappings(env)
+    assert (mapping.sign_unverified, mapping.account_id) == (True, None)
+    february = month(26, date(2026, 2, 1), date(2026, 2, 28))
+    second = env.ingest(csv_bytes(february, layout), account=card, name="b.csv")
+    (held,) = env.open_reviews(second)
+    assert (held.payload["auto_import"], held.payload["scope"]) == ("sign_unverified", "mapping")
+    assert held.payload["mapping_id"] == str(mapping.id)
+    assert env.transactions(card) == []
+
+    with Actors.open(env.settings, env.factories) as people:
+        owner = people.login(env.owner)
+        answered = resolve(
+            owner,
+            held.id,
+            {"kind": "unparsed", "action": "answer_sign", "positive_is": "money_out"},
+        )
+        assert answered.status_code == 200, answered.text
+        env.run(APPLY_MAPPING_JOB_TYPE)
+        # The card's rows are spending: every sign of the file turned.
+        assert amounts_of(env.transactions(card)) == sorted(
+            (posted, -amount) for posted, amount in expected_of(february)
+        )
+        assert env.open_reviews(second) == []
+        by_id = {m.id: m for m in structured._mappings(env)}
+        assert len(by_id) == 2
+        kept = by_id.pop(mapping.id)
+        assert (kept.spec, kept.sign_unverified, kept.account_id) == (mapping.spec, True, None)
+        (own,) = by_id.values()
+        assert (own.account_id, own.sign_unverified) == (card.id, False)
+
+        # Next month's checking file reads as January's did, and nobody is asked.
+        march = month(27, date(2026, 3, 1), date(2026, 3, 31))
+        third = env.ingest(csv_bytes(march, layout), account=checking, name="c.csv")
+        assert env.open_reviews(third) == []
+        assert amounts_of(env.transactions(checking)) == sorted(
+            expected_of(january) + expected_of(march)
+        )
+        # January's document run again adds nothing and turns nothing.
+        again = owner.post(f"{API}/imports/{first}/apply-mapping", json={})
+        assert again.status_code == 202, again.text
+        env.run(APPLY_MAPPING_JOB_TYPE)
+        assert amounts_of(env.transactions(checking)) == sorted(
+            expected_of(january) + expected_of(march)
+        )
+        # The card's next file is read with the card's answer: asked once.
+        april = month(28, date(2026, 4, 1), date(2026, 4, 30))
+        fourth = env.ingest(csv_bytes(april, layout), account=card, name="d.csv")
+        assert env.open_reviews(fourth) == []
+        assert amounts_of(env.transactions(card)) == sorted(
+            (posted, -amount) for posted, amount in expected_of(february) + expected_of(april)
+        )
 
 
 def test_sign_answer_on_another_item_is_422(

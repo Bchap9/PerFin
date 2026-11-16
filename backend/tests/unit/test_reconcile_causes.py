@@ -81,8 +81,9 @@ def test_half_the_difference_is_a_sign() -> None:
 def test_multiple_of_nine_cents_is_a_transposition() -> None:
     # 81.45 read as 18.45: the difference is 63.00, 6300 cents, 9 * 700.
     causes = _rank("63.00", [_row("-18.45"), _row("-7.77", 12)])
-    assert causes == [Cause("transposed_digits")]
-    assert _kinds(_rank("-0.27", [_row("-18.45")])) == ["transposed_digits"]
+    # The amount that is missing is still named: a transposition is only a guess.
+    assert causes == [Cause("transposed_digits"), Cause("missing_row", (), Decimal("-63.00"))]
+    assert _kinds(_rank("-0.27", [_row("-18.45")])) == ["transposed_digits", "missing_row"]
     # Not a multiple of nine cents.
     assert _kinds(_rank("63.01", [_row("-18.45")])) == ["missing_row"]
 
@@ -151,6 +152,42 @@ def test_rows_outside_the_period_with_grace() -> None:
     assert _rank("0", rows, grace_days=10) == []
     # Without a period no row is outside it.
     assert rank_causes(Decimal("0"), rows, period=None, opening=None, previous_closing=None) == []
+
+
+def test_a_removed_row_of_the_missing_amount_is_named_first() -> None:
+    # Two purchases of 4.50 on one day, one removed: 450 cents divide by nine.
+    twin = _row("-4.50", 3)
+    rows = [twin, _row("-20.00", 9)]
+    causes = rank_causes(
+        Decimal("4.50"),
+        rows,
+        period=PERIOD,
+        opening=None,
+        previous_closing=None,
+        removed=[Decimal("-4.50")],
+    )
+    assert causes == [Cause("missing_row", (), Decimal("-4.50"))]
+    # A removed row of another amount explains nothing.
+    other = rank_causes(
+        Decimal("4.50"),
+        rows,
+        period=PERIOD,
+        opening=None,
+        previous_closing=None,
+        removed=[Decimal("-20.00")],
+    )
+    assert _kinds(other) == ["transposed_digits", "missing_row"]
+    # It comes before a row that happens to be as large as the difference.
+    extra = _row("-4.50", 5)
+    both = rank_causes(
+        Decimal("-4.50"),
+        [extra],
+        period=PERIOD,
+        opening=None,
+        previous_closing=None,
+        removed=[Decimal("4.50")],
+    )
+    assert _kinds(both) == ["missing_row", "extra_row"]
 
 
 def test_nothing_explains_it_names_the_missing_amount() -> None:
