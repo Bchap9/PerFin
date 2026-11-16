@@ -2,7 +2,7 @@
 import { screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 
-import { json, mockApi, renderApp } from "../auth/testing";
+import { json, mockApi, renderApp, type Handler } from "../auth/testing";
 import { ACCOUNT_CHECKING, money, ownerSession, referenceHandlers } from "../planning/testing";
 
 const ASSET = "20000000-0000-4000-8000-000000000001";
@@ -21,12 +21,47 @@ const asset = {
 };
 
 describe("assets", () => {
-  it("lists assets with their current value", async () => {
-    mockApi({ ...ownerSession(), ...referenceHandlers(), "GET /api/v1/assets": () => json({ items: [asset], next_cursor: null }) });
+  it("shows each asset's kind and how it is valued on its account in the property group", async () => {
+    const home: Handler = async (call) => {
+      const base = referenceHandlers()["GET /api/v1/accounts"] ?? (() => json({ items: [], next_cursor: null }));
+      const body = (await (await base(call)).json()) as { items: Record<string, unknown>[] };
+      return json({ items: body.items.map((entry) => ({ ...entry, name: "Family home", type: "manual_asset", balance: money("330000.00"), balance_date: "2026-06-01" })), next_cursor: null });
+    };
+    mockApi({ ...ownerSession(), ...referenceHandlers(), "GET /api/v1/accounts": home, "GET /api/v1/assets": () => json({ items: [asset], next_cursor: null }) });
     renderApp("/assets");
-    const row = within(await screen.findByRole("table", { name: "Manual assets" })).getByRole("row", { name: /Family home/ });
-    expect(within(row).getByText("$330,000.00")).toBeInTheDocument();
-    expect(within(row).getByText("Appraisal")).toBeInTheDocument();
+    const group = await screen.findByRole("region", { name: "Property and other" });
+    expect(within(within(group).getByRole("list", { name: "Property and other" })).getByText("$330,000.00")).toBeInTheDocument();
+    expect(await within(group).findByText("Property · Appraisal")).toBeInTheDocument();
+    expect(within(group).getByText("Your estimate, June 2026")).toBeInTheDocument();
+    expect(within(group).getByRole("link", { name: "Valuations of Family home" })).toHaveAttribute("href", `/accounts/${ACCOUNT_CHECKING}?tab=valuations`);
+  });
+
+  it("adds details to a manual asset account that has none yet", async () => {
+    const home: Handler = async (call) => {
+      const base = referenceHandlers()["GET /api/v1/accounts"] ?? (() => json({ items: [], next_cursor: null }));
+      const body = (await (await base(call)).json()) as { items: Record<string, unknown>[] };
+      return json({ items: body.items.map((entry) => ({ ...entry, name: "Family home", type: "manual_asset" })), next_cursor: null });
+    };
+    const api = mockApi({
+      ...ownerSession(),
+      ...referenceHandlers(),
+      "GET /api/v1/accounts": home,
+      "GET /api/v1/assets": () => json({ items: [], next_cursor: null }),
+      "POST /api/v1/assets": () => json(asset, 201),
+    });
+    renderApp("/accounts?group=property");
+    const user = userEvent.setup();
+    await user.click(await screen.findByRole("button", { name: "Add asset details for Family home" }));
+    const dialog = await screen.findByRole("dialog", { name: "Asset details for Family home" });
+    await user.selectOptions(within(dialog).getByLabelText("How you value it"), "appraisal");
+    await user.type(within(dialog).getByLabelText(/^First value/), "330000");
+    await user.click(within(dialog).getByRole("button", { name: "Add asset" }));
+    await vi.waitFor(() => { expect(api.callsTo("POST", "/api/v1/assets")).toHaveLength(1); });
+    expect(api.callsTo("POST", "/api/v1/assets")[0]?.body).toMatchObject({
+      account_id: ACCOUNT_CHECKING,
+      valuation_method: "appraisal",
+      value: { amount: "330000", currency: "USD" },
+    });
   });
 
   it("shows the valuation history and adds a value", async () => {

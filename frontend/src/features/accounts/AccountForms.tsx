@@ -1,5 +1,9 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-/** Create/edit and close dialogs for accounts. */
+/**
+ * Create/edit and close dialogs for accounts. "Add account" also makes a
+ * loan with its terms (one `POST /loans`, which opens the account) and a
+ * manual asset with its first value (`POST /accounts`, then `POST /assets`).
+ */
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { useState, type FormEvent } from "react";
 
@@ -14,6 +18,19 @@ import { errorMessage } from "../../lib/api/client";
 import { isIsoDate, todayIsoDate } from "../../lib/dates";
 import { isDecimalString } from "../../lib/money";
 import { queryRoots } from "../../lib/queryKeys";
+import { createAsset, ASSET_KINDS, KIND_LABELS, type AssetKind } from "../assets/api";
+import {
+  assetCreateBody,
+  AssetFields,
+  checkAssetForm,
+  emptyAssetForm,
+  type AssetForm,
+  type AssetProblems,
+} from "../assets/NewAssetDialog";
+import { labelOf } from "../investments/format";
+import { createLoan } from "../loans/api";
+import { buildLoanCreate, emptyLoanForm, type LoanAccountType, type LoanForm, type LoanProblems } from "../loans/loanForm";
+import { LoanTermsFields } from "../loans/LoanTermsFields";
 import {
   ACCOUNT_TYPES,
   closeAccount,
@@ -32,6 +49,23 @@ const TYPE_OPTIONS = ACCOUNT_TYPES.map(({ type, label }) => ({
 
 function isAccountType(value: string): value is AccountType {
   return ACCOUNT_TYPES.some((entry) => entry.type === value);
+}
+
+const KIND_OPTIONS = ASSET_KINDS.map((kind) => ({ value: kind, label: labelOf(KIND_LABELS, kind) }));
+
+function isAssetKind(value: string): value is AssetKind {
+  return ASSET_KINDS.some((kind) => kind === value);
+}
+
+function loanType(type: AccountType): LoanAccountType | null {
+  return type === "loan" || type === "mortgage" || type === "line_of_credit" ? type : null;
+}
+
+/** What "Add account" made, and a part that could not be saved after the account was. */
+interface Created {
+  title: string;
+  account: Account | null;
+  partFailed: string | null;
 }
 
 export interface AccountFormDialogProps {
@@ -65,9 +99,19 @@ export function AccountFormDialog({
     account?.include_in_net_worth ?? true,
   );
   const [errors, setErrors] = useState<Record<string, string>>({});
+  const [assetKind, setAssetKind] = useState<AssetKind>("property");
+  const [assetForm, setAssetForm] = useState<AssetForm>(() => emptyAssetForm(todayIsoDate()));
+  const [assetProblems, setAssetProblems] = useState<AssetProblems>({});
+  const [withTerms, setWithTerms] = useState(true);
+  const [loanForm, setLoanForm] = useState<LoanForm>(() => emptyLoanForm(todayIsoDate()));
+  const [loanProblems, setLoanProblems] = useState<LoanProblems>({});
+  const asLoan = editing ? null : loanType(type);
+  const termsNow = asLoan !== null && withTerms;
+  const asAsset = !editing && type === "manual_asset";
+  const code = currency.trim().toUpperCase();
 
   const mutation = useMutation({
-    mutationFn: async (): Promise<Account> => {
+    mutationFn: async (): Promise<Created> => {
       const common = {
         name: name.trim(),
         nickname: nickname.trim() === "" ? null : nickname.trim(),
@@ -76,30 +120,73 @@ export function AccountFormDialog({
         subtype: subtype === "" ? null : subtype,
       };
       if (account !== undefined) {
-        return updateAccount(account.id, { ...common, type });
+        const saved = await updateAccount(account.id, { ...common, type });
+        return { title: "Account updated", account: saved, partFailed: null };
       }
-      return createAccount({
+      if (asLoan !== null && withTerms) {
+        const built = buildLoanCreate(loanForm, { name: name.trim(), type: asLoan, currency: code });
+        if (!built.ok) {
+          throw new Error("The loan terms are not complete.");
+        }
+        const loan = await createLoan(built.body);
+        const extras =
+          common.nickname !== null || common.number_last4 !== null || common.subtype !== null || !inNetWorth;
+        if (!extras) {
+          return { title: "Loan added", account: null, partFailed: null };
+        }
+        try {
+          const saved = await updateAccount(loan.account_id, {
+            nickname: common.nickname,
+            number_last4: common.number_last4,
+            subtype: common.subtype,
+            include_in_net_worth: inNetWorth,
+          });
+          return { title: "Loan added", account: saved, partFailed: null };
+        } catch (caught) {
+          return {
+            title: "Loan added",
+            account: null,
+            partFailed: `The loan was added, but its nickname, digits, kind or net worth choice were not saved: ${errorMessage(caught)} Edit the account to set them.`,
+          };
+        }
+      }
+      const saved = await createAccount({
         ...common,
         type,
-        currency: currency.trim().toUpperCase(),
-        ...(opening.trim() === ""
+        currency: code,
+        ...(asAsset ? { asset_kind: assetKind } : {}),
+        ...(asAsset || opening.trim() === ""
           ? {}
           : {
-              opening_balance: {
-                amount: opening.trim(),
-                currency: currency.trim().toUpperCase(),
-              },
+              opening_balance: { amount: opening.trim(), currency: code },
               opening_balance_date: openingDate,
             }),
       });
+      if (asAsset) {
+        try {
+          await createAsset(assetCreateBody(assetForm, { id: saved.id, currency: saved.currency }));
+        } catch (caught) {
+          return {
+            title: "Account created",
+            account: saved,
+            partFailed: `The account was created, but its asset details were not saved: ${errorMessage(caught)} Add them from the Accounts page.`,
+          };
+        }
+      }
+      return { title: "Account created", account: saved, partFailed: null };
     },
-    onSuccess: (saved) => {
-      void queryClient.invalidateQueries({ queryKey: queryRoots.accounts });
-      toast.notify({
-        title: editing ? "Account updated" : "Account created",
-        tone: "success",
-      });
-      onSaved?.(saved);
+    onSuccess: (created) => {
+      for (const root of [queryRoots.accounts, queryRoots.loans, queryRoots.assets, queryRoots.netWorth]) {
+        void queryClient.invalidateQueries({ queryKey: root });
+      }
+      if (created.partFailed === null) {
+        toast.notify({ title: created.title, tone: "success" });
+      } else {
+        toast.notify({ title: created.partFailed, tone: "error" });
+      }
+      if (created.account !== null) {
+        onSaved?.(created.account);
+      }
       onClose();
     },
     onError: (error) => {
@@ -117,7 +204,7 @@ export function AccountFormDialog({
       if (!/^[A-Za-z]{3}$/.test(currency.trim())) {
         found["currency"] = "Use a three-letter currency code.";
       }
-      if (opening.trim() !== "") {
+      if (!asAsset && !termsNow && opening.trim() !== "") {
         if (!isDecimalString(opening.trim())) {
           found["opening"] = "Enter an amount such as 1250.00.";
         }
@@ -129,8 +216,21 @@ export function AccountFormDialog({
     if (last4.trim() !== "" && !/^\d{4}$/.test(last4.trim())) {
       found["last4"] = "Enter the last four digits.";
     }
+    let detailsOk = true;
+    if (asAsset) {
+      const problems = checkAssetForm(assetForm);
+      setAssetProblems(problems);
+      detailsOk = Object.keys(problems).length === 0;
+    }
+    if (asLoan !== null && withTerms) {
+      // The name and currency are checked above; here only the terms.
+      const built = buildLoanCreate(loanForm, { name: name.trim() === "" ? "-" : name.trim(), type: asLoan, currency: "USD" });
+      const problems = built.ok ? {} : built.problems;
+      setLoanProblems(problems);
+      detailsOk = detailsOk && built.ok;
+    }
     setErrors(found);
-    if (Object.keys(found).length === 0) {
+    if (Object.keys(found).length === 0 && detailsOk) {
       mutation.mutate();
     }
   };
@@ -239,7 +339,50 @@ export function AccountFormDialog({
             }}
           />
         </Field>
-        {editing ? null : (
+        {asAsset ? (
+          <>
+            <Field label="What it is">
+              <Select
+                options={KIND_OPTIONS}
+                value={assetKind}
+                onChange={(event) => {
+                  if (isAssetKind(event.target.value)) {
+                    setAssetKind(event.target.value);
+                  }
+                }}
+              />
+            </Field>
+            <AssetFields
+              form={assetForm}
+              problems={assetProblems}
+              currency={code === "" ? "USD" : code}
+              onChange={(key, value) => {
+                setAssetForm((current) => ({ ...current, [key]: value }));
+              }}
+            />
+          </>
+        ) : null}
+        {asLoan === null ? null : (
+          <Checkbox
+            label="Record the loan terms now"
+            hint="With its terms a loan gets a schedule, a payoff date and the extra payment simulator."
+            checked={withTerms}
+            onChange={(event) => {
+              setWithTerms(event.target.checked);
+            }}
+          />
+        )}
+        {termsNow ? (
+          <LoanTermsFields
+            form={loanForm}
+            problems={loanProblems}
+            currency={code === "" ? "USD" : code}
+            onChange={(key, value) => {
+              setLoanForm((current) => ({ ...current, [key]: value }));
+            }}
+          />
+        ) : null}
+        {editing || asAsset || termsNow ? null : (
           <>
             <Field
               label="Opening balance"

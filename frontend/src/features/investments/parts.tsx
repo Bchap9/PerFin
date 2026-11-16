@@ -2,11 +2,12 @@
 import "../networth/wealth.css";
 
 import { MoneyText } from "../../components/MoneyText";
+import { ProgressBar } from "../../components/ProgressBar";
 import type { Money } from "../../lib/money";
 import { formatDate } from "../../lib/dates";
 import { amountSign, tryParseDecimal } from "../../lib/money";
 import type { Allocation, Holding } from "./api";
-import { gainDisplay, formatFraction, weightWidth } from "./format";
+import { gainDisplay, formatFraction } from "./format";
 
 /** A gain or loss with its percent of cost; the sign and the words carry the meaning, colour only helps. */
 export function GainText({ gain, cost }: { gain: Money; cost: Money }) {
@@ -51,9 +52,7 @@ export function AllocationBars({ title, slices, labels }: { title: string; slice
         return (
           <li key={slice.key} className="bar-row">
             <span>{name}</span>
-            <span className="bar" role="img" aria-label={`${name}: ${formatFraction(slice.weight, 1)} of the portfolio`}>
-              <span className="bar__fill" style={{ width: weightWidth(slice.weight) }} />
-            </span>
+            <ProgressBar className="bar" value={weightValue(slice.weight)} max={1} label={`${name}: ${formatFraction(slice.weight, 1)} of the portfolio`} />
             <span>
               <MoneyText amount={slice.value.amount} currency={slice.value.currency} tone="none" /> ({formatFraction(slice.weight, 1)})
             </span>
@@ -62,6 +61,12 @@ export function AllocationBars({ title, slices, labels }: { title: string; slice
       })}
     </ul>
   );
+}
+
+/** A weight fraction ("0.4") as a number for the bar, clamped to 0..1; 0 when malformed. */
+export function weightValue(weight: string): number {
+  const value = Number(weight);
+  return Number.isFinite(value) ? Math.min(1, Math.max(0, value)) : 0;
 }
 
 export function titleCase(key: string): string {

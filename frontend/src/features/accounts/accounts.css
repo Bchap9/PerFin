@@ -1,0 +1,116 @@
+/* SPDX-License-Identifier: AGPL-3.0-or-later */
+/* The Accounts page: the net worth header, the group panels and their rows.
+   Every colour is a token; the widths are the plan's 720 and 820 px. */
+.accounts-home {
+  display: flex;
+  flex-direction: column;
+  gap: 1.25rem;
+}
+
+.accounts-worth {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: var(--space-3);
+  padding: 1.125rem;
+}
+
+.accounts-worth__figure {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  min-width: 0;
+}
+
+.accounts-worth__actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.accounts-group__header {
+  flex-wrap: wrap;
+}
+
+.accounts-group__header .card__title:focus-visible {
+  outline: 2px solid var(--color-focus);
+  outline-offset: 2px;
+  border-radius: var(--radius-sm);
+}
+
+.accounts-group__total {
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+.account-rows {
+  display: flex;
+  flex-direction: column;
+  margin: 0;
+  padding: var(--space-2) 1.125rem var(--space-3);
+  list-style: none;
+}
+
+.account-row {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--space-3);
+  padding: var(--space-3) 0;
+  border-top: 1px solid var(--color-border);
+}
+
+.account-row:first-child {
+  border-top: 0;
+}
+
+.account-row__main {
+  display: flex;
+  flex-direction: column;
+  gap: 0.125rem;
+  min-width: 0;
+}
+
+.account-row__name {
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+
+.account-row__meta,
+.account-row__detail {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+  color: var(--color-text-muted);
+  font-size: var(--font-size-sm);
+}
+
+.account-row__balance {
+  flex: none;
+  font-weight: 600;
+  text-align: end;
+}
+
+.accounts-closed__summary {
+  min-height: 24px;
+  padding: 1.125rem;
+  cursor: pointer;
+  font-weight: 600;
+}
+
+.accounts-closed[open] .accounts-closed__summary {
+  padding-bottom: var(--space-2);
+}
+
+@media (max-width: 719px) {
+  .account-row {
+    flex-wrap: wrap;
+  }
+
+  .accounts-worth {
+    align-items: flex-start;
+  }
+}

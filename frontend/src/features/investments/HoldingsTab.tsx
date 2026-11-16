@@ -235,7 +235,7 @@ export function HoldingsTab({ account }: { account: string }) {
           {data.holdings.length === 0 ? (
             <EmptyState
               title="No holdings yet"
-              description="Upload your broker's positions export (a CSV of what each account holds) or a statement, or record a buy under Transactions."
+              description="Upload your broker's positions export (a CSV of what each account holds) or a statement, or record a buy under Activity."
             />
           ) : (
             <>
