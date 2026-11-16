@@ -67,6 +67,30 @@ describe("calendar", () => {
     expect(within(table).getByText("$1,184.51")).toBeInTheDocument();
   });
 
+  it("the look-ahead is a compact control on the tab row, for the calendar only", async () => {
+    const api = mockApi({
+      ...ownerSession(),
+      ...referenceHandlers(),
+      "GET /api/v1/cashflow/calendar": () => json(CALENDAR),
+      "GET /api/v1/recurring": () => json({ items: [SCHEDULE] }),
+    });
+    renderApp("/plan/upcoming");
+    await screen.findByRole("table", { name: "Upcoming days" });
+    const user = userEvent.setup();
+    const ahead = screen.getByRole("combobox", { name: "Look ahead" });
+    // On the tab row, outside the panel, so it is not as wide as the content.
+    expect(ahead.closest(".tabs__aside")).not.toBeNull();
+    expect(within(screen.getByRole("tabpanel")).queryByRole("combobox", { name: "Look ahead" })).not.toBeInTheDocument();
+    expect(within(ahead).getByRole("option", { name: "Next 90 days" })).toBeInTheDocument();
+    await user.selectOptions(ahead, "90");
+    await vi.waitFor(() => {
+      expect(api.calls.some((call) => call.path === "/api/v1/cashflow/calendar" && call.search.includes("90"))).toBe(true);
+    });
+    await user.click(screen.getByRole("tab", { name: "Recurring items" }));
+    await screen.findByRole("table", { name: "Recurring items" });
+    expect(screen.queryByRole("combobox", { name: "Look ahead" })).not.toBeInTheDocument();
+  });
+
   it("the figures for the period are a description list", async () => {
     mockApi({ ...ownerSession(), ...referenceHandlers(), "GET /api/v1/cashflow/calendar": () => json(CALENDAR) });
     renderApp("/plan/upcoming");
