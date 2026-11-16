@@ -59,10 +59,40 @@ without an event. The first run of a household (``quiet``: it has no series
 with a merchant key yet) announces only what is new inside the window:
 series that stopped long ago are ended without a word.
 
-The list, one series, a decision and the events list are the declaration the
-router is built against: the events list is empty for now, and the other
-operations answer ``409 not-ready`` once the caller and the series they name
-are checked.
+The view
+--------
+
+* :func:`list_subscriptions`: the series of kind ``subscription`` and
+  ``bill`` on the accounts the caller sees (every status but ``dismissed``
+  unless statuses are named), series with an open change first, then the
+  soonest. ``amount`` is the latest charge, else the middle of the range;
+  ``monthly_cost`` and ``yearly_cost`` spread its size over the cadence, in
+  the account's currency, rounded to the minor unit. The two totals are what
+  the ``active`` and ``confirmed`` series of each kind cost, converted into
+  the household's currency at today's rate; a series without a rate is named
+  in ``unconverted`` and left out of the sums and of ``count``. The totals
+  and ``needs_look`` (suggested series plus series with an open change, a
+  dismissed one never) follow the account filter and nothing else: choosing
+  a kind or a status chooses rows, not what things cost. ``overdue`` is
+  judged against the account's data clock: the due date plus its grace lies
+  before the account's latest row. A series that is ended or dismissed has
+  no ``next_due``.
+* :func:`get_subscription`: one series (of any kind: a person may say that
+  an "other" one is a bill) with its linked charges, newest first, and its
+  changes, newest first.
+* :func:`decide`: a person's word, by a member who may edit the series'
+  account. ``confirm``, ``resume`` and ``reopen`` make it ``confirmed``,
+  ``pause`` ``paused``, ``end`` ``ended`` as of today, and ``dismiss``
+  ``dismissed`` with its charges unlinked (the pinned write: the rows stay
+  untouched). The status is the person's from then on, and so is the kind
+  when one is given; detection changes neither. The open changes of the
+  series become seen. Audited as ``subscription.decide`` (ids, the decision,
+  kind and status before and after: never a name) and announced live as
+  ``schedule.updated``.
+* :func:`list_events` and :func:`mark_seen`: the changes on visible
+  accounts, newest first (the day, then the id), and marking some of them
+  seen. An id of another household or of an account the caller cannot see
+  is ignored, not an error.
 """
 
 from __future__ import annotations
@@ -72,31 +102,47 @@ from collections.abc import Collection, Iterable, Sequence
 from dataclasses import dataclass
 from datetime import date, timedelta
 from decimal import Decimal, localcontext
-from typing import TYPE_CHECKING, Final
+from typing import TYPE_CHECKING, Final, cast
 
-from sqlalchemy import func, select
+from sqlalchemy import and_, func, select, tuple_
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.orm import Session
 
 from app.auth.authz import forbidden, role_at_least
 from app.auth.models import HouseholdRole
 from app.auth.principal import Principal
-from app.core.errors import ProblemError
+from app.core.audit import audit
 from app.core.events import emit
 from app.core.ids import uuid7
-from app.core.money import calc_context, to_storage
+from app.core.money import Money, calc_context, round_to_minor, to_storage
+from app.domain.accounts.visibility import require_visible_accounts, visible_account_filter
+from app.domain.budgets.reports import midpoint
+from app.domain.categorisation import engine as categorisation
+from app.domain.fx.service import FxConverter, base_currency
 from app.domain.notifications.routing import notify
 from app.domain.recurring import service as recurring_service
-from app.domain.recurring.detection import Candidate
+from app.domain.recurring.detection import Candidate, monthly_cost, yearly_cost
 from app.domain.recurring.models import SubscriptionEvent
 from app.domain.recurring.schemas import (
+    MAX_CHARGES,
+    MAX_EVENTS,
+    MAX_SCHEDULES,
+    Decider,
+    EventKind,
     EventsSeen,
     EventsSeenOut,
+    EventState,
+    PriceChange,
+    SeriesKind,
+    SeriesStatus,
+    SubscriptionCharge,
     SubscriptionDecision,
     SubscriptionDetail,
+    SubscriptionEventOut,
     SubscriptionEventPage,
     SubscriptionList,
     SubscriptionOut,
+    SubscriptionTotals,
 )
 from app.domain.reports.dates import add_months
 from app.domain.transactions.models import (
@@ -140,6 +186,20 @@ WATCHED: Final = ("active", "confirmed", "suggested")
 #: The kinds :func:`renewals` announces.
 RENEWAL_KINDS: Final = ("subscription", "bill")
 LIVE_EVENT: Final = "subscription.changed"
+#: The kinds the subscriptions view lists and totals.
+LISTED_KINDS: Final = ("subscription", "bill")
+#: A series in one of these statuses expects no next charge.
+OVER: Final = ("ended", "dismissed")
+#: What each decision of a person makes of a series.
+DECISIONS: Final = {
+    "confirm": "confirmed",
+    "dismiss": "dismissed",
+    "pause": "paused",
+    "resume": "confirmed",
+    "end": "ended",
+    "reopen": "confirmed",
+}
+ZERO: Final = Decimal(0)
 
 _DAY_STEPS: Final = {Cadence.DAILY: 1, Cadence.WEEKLY: 7}
 _MONTH_STEPS: Final = {Cadence.MONTHLY: 1, Cadence.QUARTERLY: 3, Cadence.YEARLY: 12}
@@ -608,12 +668,8 @@ def renewals(db: Session, household_id: uuid.UUID, on: date) -> int:
 
 
 # ---------------------------------------------------------------------------
-# The list, one series, a decision, the events (declared; Task 21 fills them)
+# The view: the list with its cost, one series, a decision, the events
 # ---------------------------------------------------------------------------
-
-
-def not_ready() -> ProblemError:
-    return ProblemError(409, "not-ready", "Not available yet", "This is not available yet.")
 
 
 def _household(principal: Principal, minimum: HouseholdRole) -> uuid.UUID:
@@ -624,6 +680,159 @@ def _household(principal: Principal, minimum: HouseholdRole) -> uuid.UUID:
     return principal.household_id
 
 
+@dataclass(frozen=True)
+class _Around:
+    """What a series' row does not say about it (:func:`_around`)."""
+
+    #: Per account, the day of its latest row, never later than today.
+    clock: dict[uuid.UUID, date]
+    #: Per series, how many of its changes nobody has looked at.
+    open_events: dict[uuid.UUID, int]
+    #: Per series with a price change, its charges since the day of the change.
+    since_change: dict[uuid.UUID, int]
+
+
+def _around(db: Session, household_id: uuid.UUID, rows: Sequence[ScheduledTransaction]) -> _Around:
+    """The data clocks, open changes and charges at the new price of ``rows``."""
+    if not rows:
+        return _Around({}, {}, {})
+    ids = [row.id for row in rows]
+    today = recurring_service.today()
+    latest = db.execute(
+        select(Transaction.account_id, func.max(Transaction.posted_date))
+        .where(
+            Transaction.household_id == household_id,
+            Transaction.account_id.in_({row.account_id for row in rows}),
+        )
+        .group_by(Transaction.account_id)
+    )
+    clock = {account_id: min(today, day) for account_id, day in latest}
+    opened = db.execute(
+        select(SubscriptionEvent.schedule_id, func.count())
+        .where(
+            SubscriptionEvent.household_id == household_id,
+            SubscriptionEvent.schedule_id.in_(ids),
+            SubscriptionEvent.state == "open",
+        )
+        .group_by(SubscriptionEvent.schedule_id)
+    )
+    open_events = {schedule_id: count for schedule_id, count in opened}  # noqa: C416 - Row tuples
+    changed = [row.id for row in rows if row.price_changed_on is not None]
+    since_change: dict[uuid.UUID, int] = {}
+    if changed:
+        counted = db.execute(
+            select(ScheduledTransaction.id, func.count())
+            .join(
+                Transaction,
+                and_(
+                    Transaction.household_id == ScheduledTransaction.household_id,
+                    Transaction.scheduled_transaction_id == ScheduledTransaction.id,
+                    Transaction.posted_date >= ScheduledTransaction.price_changed_on,
+                ),
+            )
+            .where(
+                ScheduledTransaction.household_id == household_id,
+                ScheduledTransaction.id.in_(changed),
+            )
+            .group_by(ScheduledTransaction.id)
+        )
+        since_change = {schedule_id: count for schedule_id, count in counted}  # noqa: C416
+    return _Around(clock, open_events, since_change)
+
+
+def _amount(row: ScheduledTransaction) -> Decimal:
+    """The latest charge, else the middle of the range (signed)."""
+    if row.last_amount is not None:
+        return row.last_amount
+    return midpoint(row.amount_min, row.amount_max)
+
+
+def _costs(row: ScheduledTransaction) -> tuple[Decimal, Decimal]:
+    """What ``row`` costs per month and per year (sizes, not rounded)."""
+    size = abs(_amount(row))
+    cycle = (row.cadence, row.interval_count)
+    return monthly_cost(size, *cycle), yearly_cost(size, *cycle)
+
+
+def _price(row: ScheduledTransaction, since_change: int) -> PriceChange | None:
+    if row.previous_amount is None or row.last_amount is None or row.price_changed_on is None:
+        return None
+    return PriceChange(
+        previous=Money.of(row.previous_amount, row.currency),
+        current=Money.of(row.last_amount, row.currency),
+        on=row.price_changed_on,
+        pending=since_change < 2 and not is_long(row.cadence, row.interval_count),
+    )
+
+
+def _overdue(row: ScheduledTransaction, as_of: date | None) -> bool:
+    """The expected charge did not arrive, on the account's data clock."""
+    if as_of is None or row.status not in WATCHED:
+        return False
+    grace = grace_days(row.cadence, row.interval_count)
+    return row.next_due + timedelta(days=grace) < as_of
+
+
+def subscription_out(row: ScheduledTransaction, around: _Around) -> SubscriptionOut:
+    monthly, yearly = _costs(row)
+    return SubscriptionOut(
+        id=row.id,
+        account_id=row.account_id,
+        name=row.name,
+        merchant=categorisation.display_name(row.merchant_key),
+        kind=cast("SeriesKind", row.kind),
+        kind_source=cast("Decider", row.kind_source),
+        status=cast("SeriesStatus", row.status),
+        status_source=cast("Decider", row.status_source),
+        origin=row.origin,
+        cadence=row.cadence,
+        interval_count=row.interval_count,
+        amount=Money.of(_amount(row), row.currency),
+        amount_min=Money.of(row.amount_min, row.currency),
+        amount_max=Money.of(row.amount_max, row.currency),
+        monthly_cost=Money.of(round_to_minor(monthly, row.currency), row.currency),
+        yearly_cost=Money.of(round_to_minor(yearly, row.currency), row.currency),
+        next_due=None if row.status in OVER else row.next_due,
+        overdue=_overdue(row, around.clock.get(row.account_id)),
+        first_seen_on=row.first_seen_on,
+        last_seen_on=row.last_seen_on,
+        occurrences=row.occurrences,
+        confidence=f"{row.confidence:.2f}" if row.confidence is not None else None,
+        category_id=row.category_id,
+        payee_id=row.payee_id,
+        price_change=_price(row, around.since_change.get(row.id, 0)),
+        open_events=around.open_events.get(row.id, 0),
+    )
+
+
+def _totals(
+    rows: Iterable[ScheduledTransaction], kind: str, fx: FxConverter, on: date
+) -> SubscriptionTotals:
+    """What the counted series of ``kind`` cost, in the converter's currency."""
+    monthly = yearly = ZERO
+    count = 0
+    unconverted: list[uuid.UUID] = []
+    for row in rows:
+        if row.kind != kind or row.status not in ACTIVE_STATUSES:
+            continue
+        per_month, per_year = _costs(row)
+        month_base = fx.try_convert(per_month, row.currency, on)
+        year_base = fx.try_convert(per_year, row.currency, on)
+        if month_base is None or year_base is None:
+            unconverted.append(row.id)
+            continue
+        monthly += month_base
+        yearly += year_base
+        count += 1
+    return SubscriptionTotals(
+        currency=fx.target,
+        monthly=Money.of(round_to_minor(monthly, fx.target), fx.target),
+        yearly=Money.of(round_to_minor(yearly, fx.target), fx.target),
+        count=count,
+        unconverted=unconverted,
+    )
+
+
 def list_subscriptions(
     db: Session,
     principal: Principal,
@@ -632,18 +841,108 @@ def list_subscriptions(
     status: Collection[str] | None,
     account_ids: Collection[uuid.UUID] | None,
 ) -> SubscriptionList:
-    """Subscriptions and bills on visible accounts, with what they cost."""
-    del db, kind, status, account_ids
-    _household(principal, HouseholdRole.VIEWER)
-    raise not_ready()
+    """Subscriptions and bills on visible accounts, with what they cost (module doc)."""
+    household_id = _household(principal, HouseholdRole.VIEWER)
+    stmt = select(ScheduledTransaction).where(
+        ScheduledTransaction.household_id == household_id,
+        visible_account_filter(principal, ScheduledTransaction.account_id),
+        ScheduledTransaction.kind.in_(LISTED_KINDS),
+    )
+    if account_ids:
+        require_visible_accounts(db, principal, account_ids)
+        stmt = stmt.where(ScheduledTransaction.account_id.in_(list(account_ids)))
+    rows = list(db.execute(stmt.order_by(ScheduledTransaction.id)).scalars())
+    around = _around(db, household_id, rows)
+    today = recurring_service.today()
+    fx = FxConverter(db, household_id, base_currency(db, household_id))
+
+    def opened(row: ScheduledTransaction) -> int:
+        return around.open_events.get(row.id, 0)
+
+    kinds = set(kind) if kind else set(LISTED_KINDS)
+    statuses = set(status) if status else None
+    chosen = [
+        row
+        for row in rows
+        if row.kind in kinds
+        and (row.status in statuses if statuses is not None else row.status != "dismissed")
+    ]
+    chosen.sort(key=lambda row: (opened(row) == 0, row.next_due, row.id.bytes))
+    return SubscriptionList(
+        as_of=today,
+        subscriptions=_totals(rows, "subscription", fx, today),
+        bills=_totals(rows, "bill", fx, today),
+        items=[subscription_out(row, around) for row in chosen[:MAX_SCHEDULES]],
+        needs_look=sum(
+            1
+            for row in rows
+            if row.status != "dismissed" and (row.status == "suggested" or opened(row) > 0)
+        ),
+    )
+
+
+def _event_out(event: SubscriptionEvent, name: str, currency: str) -> SubscriptionEventOut:
+    def money(amount: Decimal | None) -> Money | None:
+        return Money.of(amount, currency) if amount is not None else None
+
+    return SubscriptionEventOut(
+        id=event.id,
+        schedule_id=event.schedule_id,
+        name=name,
+        kind=cast("EventKind", event.kind),
+        occurred_on=event.occurred_on,
+        amount_before=money(event.amount_before),
+        amount_after=money(event.amount_after),
+        transaction_id=event.transaction_id,
+        state=cast("EventState", event.state),
+    )
 
 
 def get_subscription(
     db: Session, principal: Principal, schedule_id: uuid.UUID
 ) -> SubscriptionDetail:
-    """One series with its charges and its changes."""
-    recurring_service.get_row(db, principal, schedule_id)
-    raise not_ready()
+    """One series with its charges and its changes, both newest first."""
+    row = recurring_service.get_row(db, principal, schedule_id)
+    charges = db.execute(
+        select(Transaction.id, Transaction.posted_date, Transaction.amount, Transaction.currency)
+        .where(
+            Transaction.household_id == row.household_id,
+            Transaction.scheduled_transaction_id == row.id,
+            visible_account_filter(principal, Transaction.account_id),
+        )
+        .order_by(Transaction.posted_date.desc(), Transaction.id.desc())
+        .limit(MAX_CHARGES)
+    )
+    events = db.execute(
+        select(SubscriptionEvent)
+        .where(
+            SubscriptionEvent.household_id == row.household_id,
+            SubscriptionEvent.schedule_id == row.id,
+        )
+        .order_by(SubscriptionEvent.occurred_on.desc(), SubscriptionEvent.id.desc())
+        .limit(MAX_EVENTS)
+    ).scalars()
+    return SubscriptionDetail(
+        subscription=subscription_out(row, _around(db, row.household_id, [row])),
+        charges=[
+            SubscriptionCharge(
+                transaction_id=charge_id, posted_date=posted_date, amount=Money.of(amount, currency)
+            )
+            for charge_id, posted_date, amount, currency in charges
+        ],
+        events=[_event_out(event, row.name, row.currency) for event in events],
+    )
+
+
+def _see(db: Session, events: Iterable[SubscriptionEvent]) -> int:
+    """Mark ``events`` seen; how many were open."""
+    seen = 0
+    for event in events:
+        if event.state == "open":
+            event.state = "seen"
+            seen += 1
+    db.flush()
+    return seen
 
 
 def decide(
@@ -654,10 +953,47 @@ def decide(
     *,
     request: HTTPConnection | None,
 ) -> SubscriptionOut:
-    """Record a person's decision about a series; detection never undoes it."""
-    del data, request
-    recurring_service.require_editable(db, principal, schedule_id)
-    raise not_ready()
+    """Record a person's decision about a series; detection never undoes it (module doc)."""
+    row = recurring_service.require_editable(db, principal, schedule_id)
+    before = {"kind": row.kind, "status": row.status}
+    status = DECISIONS[data.decision]
+    row.status = status
+    row.status_source = PERSON
+    row.active = status in ACTIVE_STATUSES
+    row.ended_on = recurring_service.today() if status == "ended" else None
+    if data.kind is not None:
+        row.kind, row.kind_source = data.kind, PERSON
+    db.flush()
+    if status == "dismissed":
+        recurring_service.unlink_charges(db, row)
+    _see(
+        db,
+        db.execute(
+            select(SubscriptionEvent).where(
+                SubscriptionEvent.household_id == row.household_id,
+                SubscriptionEvent.schedule_id == row.id,
+                SubscriptionEvent.state == "open",
+            )
+        ).scalars(),
+    )
+    audit(
+        db,
+        action="subscription.decide",
+        target_type="scheduled_transaction",
+        target_id=row.id,
+        before=before,
+        after={"decision": data.decision, "kind": row.kind, "status": row.status},
+        household_id=row.household_id,
+        user_id=principal.user_id,
+        request=request,
+    )
+    emit(
+        db,
+        row.household_id,
+        "schedule.updated",
+        {"schedule_id": str(row.id), "account_id": str(row.account_id)},
+    )
+    return subscription_out(row, _around(db, row.household_id, [row]))
 
 
 def list_events(
@@ -668,14 +1004,84 @@ def list_events(
     cursor: uuid.UUID | None,
     limit: int,
 ) -> SubscriptionEventPage:
-    """One page of what changed on visible accounts, newest first."""
-    del db, state, cursor, limit
-    _household(principal, HouseholdRole.VIEWER)
-    return SubscriptionEventPage(items=[], next_cursor=None, open=0)
+    """One page of what changed on visible accounts, newest first (the day, then the id).
+
+    ``cursor`` is the id of the last event of the page before; one the
+    caller cannot see ends the list. ``open`` counts every open change the
+    caller can see, whatever the page and the ``state`` asked for.
+    """
+    household_id = _household(principal, HouseholdRole.VIEWER)
+    visible = (
+        SubscriptionEvent.household_id == household_id,
+        visible_account_filter(principal, SubscriptionEvent.account_id),
+    )
+    still_open = db.execute(
+        select(func.count())
+        .select_from(SubscriptionEvent)
+        .where(*visible, SubscriptionEvent.state == "open")
+    ).scalar_one()
+    stmt = (
+        select(SubscriptionEvent, ScheduledTransaction.name, ScheduledTransaction.currency)
+        .join(
+            ScheduledTransaction,
+            and_(
+                ScheduledTransaction.household_id == SubscriptionEvent.household_id,
+                ScheduledTransaction.id == SubscriptionEvent.schedule_id,
+            ),
+        )
+        .where(*visible)
+    )
+    if state is not None:
+        stmt = stmt.where(SubscriptionEvent.state == state)
+    if cursor is not None:
+        after = db.execute(
+            select(SubscriptionEvent.occurred_on).where(*visible, SubscriptionEvent.id == cursor)
+        ).scalar_one_or_none()
+        if after is None:
+            return SubscriptionEventPage(items=[], next_cursor=None, open=still_open)
+        stmt = stmt.where(
+            tuple_(SubscriptionEvent.occurred_on, SubscriptionEvent.id) < tuple_(after, cursor)
+        )
+    found = db.execute(
+        stmt.order_by(SubscriptionEvent.occurred_on.desc(), SubscriptionEvent.id.desc()).limit(
+            limit + 1
+        )
+    ).all()
+    page = found[:limit]
+    return SubscriptionEventPage(
+        items=[_event_out(event, name, currency) for event, name, currency in page],
+        next_cursor=page[-1][0].id if len(found) > limit and page else None,
+        open=still_open,
+    )
 
 
 def mark_seen(db: Session, principal: Principal, data: EventsSeen) -> EventsSeenOut:
-    """Mark changes as seen; ids the caller cannot see are ignored."""
-    del db, data
-    _household(principal, HouseholdRole.MEMBER)
-    raise not_ready()
+    """Mark changes as seen; ids the caller cannot see are ignored.
+
+    How many were open until now is returned. Each series one of them
+    belongs to is announced live (``subscription.changed``).
+    """
+    household_id = _household(principal, HouseholdRole.MEMBER)
+    events = list(
+        db.execute(
+            select(SubscriptionEvent)
+            .where(
+                SubscriptionEvent.household_id == household_id,
+                visible_account_filter(principal, SubscriptionEvent.account_id),
+                SubscriptionEvent.id.in_(data.ids),
+                SubscriptionEvent.state == "open",
+            )
+            .order_by(SubscriptionEvent.id)
+            .with_for_update()
+        ).scalars()
+    )
+    series = dict.fromkeys((event.account_id, event.schedule_id) for event in events)
+    seen = _see(db, events)
+    for account_id, schedule_id in series:
+        emit(
+            db,
+            household_id,
+            LIVE_EVENT,
+            {"account_id": str(account_id), "schedule_id": str(schedule_id)},
+        )
+    return EventsSeenOut(seen=seen)
