@@ -231,10 +231,55 @@ describe("upload zone", () => {
     finish(xhrs[0], "d-7");
     const uploads = within(await screen.findByRole("list", { name: "Uploads" }));
     const below = await uploads.findByRole("link", { name: "Waiting on you below" });
-    expect(below).toHaveAttribute("href", "#inbox-document-d-7");
+    expect(below).toHaveAttribute("href", "/inbox#inbox-document-d-7");
     // The card it points to carries that anchor.
     const waiting = await screen.findByRole("list", { name: "Waiting on you" });
     expect(waiting.querySelector("#inbox-document-d-7")).not.toBeNull();
+  });
+
+  it("a file that was read says whether it was imported", async () => {
+    const api = zoneApi();
+    const xhrs = fakeUploads();
+    renderApp("/inbox");
+    const user = userEvent.setup();
+    await user.upload(await screen.findByLabelText("Choose files"), [
+      new File(["a"], "clean.csv", { type: "text/csv" }),
+      new File(["b"], "blurry.png", { type: "image/png" }),
+    ]);
+    await waitFor(() => {
+      expect(xhrs[1]?.body).toBeInstanceOf(FormData);
+    });
+    const row = (id: string, status: string) => ({
+      id,
+      status,
+      original_filename: null,
+      kind: "statement",
+      source: "upload",
+      size: 1,
+      mime_detected: "text/csv",
+      sha256: "0".repeat(64),
+      uploaded_by: null,
+      account_id: null,
+      institution_id: null,
+      period_start: null,
+      period_end: null,
+      tax_year: null,
+      parser_version: null,
+      error: null,
+      unchecked: false,
+      created_at: NOW,
+      updated_at: NOW,
+    });
+    api.on("GET /api/v1/documents", () =>
+      json({ items: [row("d-4", "processed"), row("d-5", "failed")], next_cursor: null }),
+    );
+    finish(xhrs[0], "d-4");
+    finish(xhrs[1], "d-5");
+    const uploads = within(await screen.findByRole("list", { name: "Uploads" }));
+    const clean = (await uploads.findByRole("link", { name: "clean.csv" })).closest("li");
+    const blurry = (await uploads.findByRole("link", { name: "blurry.png" })).closest("li");
+    expect(within(present(clean)).getByText("Imported")).toBeInTheDocument();
+    expect(within(present(blurry)).getByText("Could not be read")).toBeInTheDocument();
   });
 
   it("the Upload button opens the file picker", async () => {

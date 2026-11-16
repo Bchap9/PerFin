@@ -21,7 +21,14 @@ import { Select } from "../../components/Select";
 import { errorMessage } from "../../lib/api/client";
 import { queryRoots } from "../../lib/queryKeys";
 import { accountLabel, useAccounts, useCanWrite } from "../accounts/api";
-import { importKeys, isAbort, listRecentDocuments, uploadDocument, type DocumentStatus } from "../imports/api";
+import {
+  importKeys,
+  isAbort,
+  listRecentDocuments,
+  STATUS_LABELS,
+  uploadDocument,
+  type DocumentStatus,
+} from "../imports/api";
 import { listReviewCards, reviewKeys } from "../review/api";
 import { documentAnchor } from "../review/ReviewPage";
 
@@ -49,18 +56,22 @@ function DoneText({
     return <span>{item.message}</span>;
   }
   if (item.documentId !== null && waiting.has(item.documentId)) {
+    // To the whole Inbox, so the card is on the page even under `?document=`.
     return (
-      <a href={`#${documentAnchor(item.documentId)}`} className="link-action">
+      <Link to="/inbox" hash={documentAnchor(item.documentId)} className="link-action">
         Waiting on you below
-      </a>
+      </Link>
     );
   }
   const status = item.documentId === null ? undefined : statuses.get(item.documentId);
   if (status === "processed") {
     return <span>Imported</span>;
   }
-  if (status === "failed" || status === "rejected") {
+  if (status === "failed") {
     return <span>Could not be read</span>;
+  }
+  if (status === "rejected") {
+    return <span>{STATUS_LABELS.rejected}</span>;
   }
   return <span>Uploaded</span>;
 }

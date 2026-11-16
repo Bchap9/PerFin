@@ -193,6 +193,15 @@
   min-width: 0;
 }
 
+/* Links in a row of their own get a 24 px target (WCAG 2.5.8). */
+.upload-zone__name,
+.recent-imports__name,
+.recent-imports__meta a {
+  display: inline-flex;
+  align-items: center;
+  min-height: 24px;
+}
+
 .upload-zone__name {
   min-width: 0;
   overflow-wrap: anywhere;
